@@ -15,9 +15,11 @@ import { describe, it, expect } from "vitest";
 import {
   activeTab,
   copyFrom,
+  cronAnswer,
   cronRow,
   elapsed,
   format,
+  nextRunText,
   nextSummary,
   noticeEntry,
   queuedGoalEntry,
@@ -45,6 +47,7 @@ const COPY = {
   pause: "Pause",
   drop: "Drop it",
   retry: "Try it again",
+  resume: "Resume",
   helper_lead: "A helper is doing part of this for Rob.",
   helper_body: "Helpers cannot spend money or change your files.",
   helper_goal: "Working on {goal}",
@@ -52,6 +55,7 @@ const COPY = {
   status_waiting: "waiting",
   status_triage: "being sorted",
   status_blocked: "stopped after repeated failures",
+  status_paused: "paused by you",
   unreachable: "The console could not reach the server.",
   secs: "{count}s",
   mins: "{count}m",
@@ -59,13 +63,21 @@ const COPY = {
   days: "{count}d",
   sched_loading: "Reading the clock.",
   sched_empty: "Nothing runs on a clock yet.",
-  sched_disabled: "Nothing runs on a clock here.",
+  sched_disabled: "The scheduler is off — nothing will run.",
+  sched_next: "next {when}",
   sched_unreadable: "I could not read the schedule.",
   sched_unreadable_why: "Why it failed",
   sched_cancel: "Cancel",
   sched_last_never: "not yet run",
   sched_ran_ago: "{elapsed} ago",
   sched_unreachable: "The console could not reach the server.",
+  sched_pause: "Pause",
+  sched_resume: "Resume",
+  sched_run: "Run now",
+  sched_done_pause: "Paused.",
+  sched_done_run: "It will run on the next tick.",
+  sched_refused: "Not changed: the job is {status}.",
+  sched_outcome: "last: {outcome}",
 };
 
 const NOW_MS = 1_000_000_000_000; // fixed clock for deterministic elapsed
@@ -126,7 +138,7 @@ describe("a running goal renders with elapsed and a Stop", () => {
     expect(entry.querySelector(".entry-body").textContent).toBe("started 2m ago");
     const stop = entry.querySelector("button[data-verb]");
     expect(stop.textContent).toBe("Stop");
-    expect(stop.dataset.verb).toBe("cancel"); // Stop is the decisive verb
+    expect(stop.dataset.verb).toBe("stop"); // 080: /goal stop, once
     expect(stop.dataset.id).toBe("g1");
     expect(entry.dataset.goalId).toBe("g1");
   });
@@ -175,6 +187,18 @@ describe("the Next count is status_counts, never the goals array order", () => {
 });
 
 describe("Now & next distinguishes its answers", () => {
+  it("goals switched off still lists the stored goals under the banner", () => {
+    const ctx = nowCtx();
+    const drew = renderNowNext(ctx, { enabled: false, counts: { ready: 1 }, goals: [
+      { id: "q1", title: "Stored goal", status: "ready" },
+      { id: "p1", title: "Held goal", status: "paused" },
+    ] }, null, COPY);
+    expect(drew).toBe("rows");
+    expect(ctx.running.textContent).toContain("switched off");
+    expect(ctx.next.textContent).toContain("Stored goal");
+    expect(ctx.next.textContent).toContain("Held goal");
+  });
+
   it("goals switched off is a plain notice, not an error", () => {
     const ctx = nowCtx();
     const drew = renderNowNext(ctx, { enabled: false }, null, COPY);
@@ -307,8 +331,34 @@ describe("a queued goal offers the verb its state allows", () => {
       { id: "b1", title: "x", status: "blocked" }, COPY, false);
     const verbs = [...entry.querySelectorAll("button[data-verb]")]
       .map((b) => b.dataset.verb);
-    expect(verbs).toEqual(["retry", "cancel"]);
+    expect(verbs).toEqual(["retry", "drop"]); // Drop it = /goal stop --forever
     expect(entry.className).toContain("is-stopped");
+  });
+
+  it("a blocked goal shows its reason", () => {
+    const entry = queuedGoalEntry(
+      { id: "b1", title: "x", status: "blocked",
+        status_reason: "Failed twice: x_post 401." }, COPY, false);
+    expect(entry.textContent).toContain("Failed twice: x_post 401.");
+  });
+
+  it("a paused goal says paused by you and offers Resume (retry)", () => {
+    const entry = queuedGoalEntry(
+      { id: "p1", title: "x", status: "paused", status_reason: "Paused by you." },
+      COPY, false);
+    expect(entry.querySelector(".entry-body").textContent).toBe("paused by you");
+    const resume = entry.querySelector("button[data-verb]");
+    expect(resume.textContent).toBe("Resume");
+    expect(resume.dataset.verb).toBe("retry");
+    expect(entry.textContent).not.toContain("repeated failures");
+  });
+
+  it("a ready goal held by an ask names the decision", () => {
+    const entry = queuedGoalEntry(
+      { id: "q1", title: "x", status: "ready",
+        status_reason: "Waiting on your answer to ask abcd1234 “Approve x_post”." },
+      COPY, false);
+    expect(entry.textContent).toContain("Approve x_post");
   });
 
   it("a ready goal offers Pause", () => {
@@ -352,11 +402,30 @@ describe("On a clock lists jobs and offers Cancel", () => {
     expect(ctx.rows.querySelector("tr").textContent).toContain("not yet run");
   });
 
+  it("cron off lists the stored jobs under a nothing-will-run banner", () => {
+    const ctx = schedCtx();
+    const drew = renderSchedule(ctx, { enabled: false, jobs: [
+      { id: "j1", task: "Console digest", schedule_spec: "every day 08:00",
+        next_run_at: new Date(NOW_MS + 3600 * 1000).toISOString(), last_run_at: null },
+    ] }, COPY, { nowMs: NOW_MS });
+    expect(drew).toBe("rows");
+    expect(ctx.table.hidden).toBe(false);
+    expect(ctx.notice.textContent).toContain("nothing will run");
+    expect(ctx.rows.textContent).toContain("Console digest");
+    expect(ctx.rows.textContent).toContain("next ");
+  });
+
+  it("On a clock draws the next run from next_run_at, and none when absent", () => {
+    expect(nextRunText({ next_run_at: new Date(NOW_MS).toISOString() }, COPY))
+      .toMatch(/^next /);
+    expect(nextRunText({ next_run_at: null }, COPY)).toBe("");
+  });
+
   it("cron off is a plain notice; a failed read is a dashed reason", () => {
     let ctx = schedCtx();
     expect(renderSchedule(ctx, { enabled: false }, COPY)).toBe("disabled");
     expect(ctx.table.hidden).toBe(true);
-    expect(ctx.notice.textContent).toContain("Nothing runs on a clock here");
+    expect(ctx.notice.textContent).toContain("nothing will run");
 
     ctx = schedCtx();
     expect(renderSchedule(ctx, { enabled: true, error: "IOError: gone" }, COPY))
@@ -422,5 +491,33 @@ describe("the honest-state primitives", () => {
     const node = noticeEntry("nothing here");
     expect(node.className).toBe("entry");
     expect(node.querySelector(".entry-body").textContent).toBe("nothing here");
+  });
+});
+
+
+describe("080 WS-2: a job row offers its own verbs", () => {
+  it("a scheduled job offers Pause, Run now and Cancel; a paused one Resume", () => {
+    const live = cronRow({ id: "j1", task: "Digest", status: "scheduled",
+      last_outcome: "done 10-13 08:00" }, COPY, NOW_MS, false);
+    const verbs = Array.from(live.querySelectorAll("button[data-cron]")).map((b) => b.dataset.cron);
+    expect(verbs).toEqual(["pause", "run", "cancel"]);
+    expect(live.textContent).toContain("last: done 10-13 08:00");
+    const held = cronRow({ id: "j2", task: "Digest", status: "paused" }, COPY, NOW_MS, false);
+    expect(Array.from(held.querySelectorAll("button[data-cron]")).map((b) => b.dataset.cron))
+      .toEqual(["resume", "cancel"]);
+  });
+
+  it("read-only draws no job verb", () => {
+    const row = cronRow({ id: "j1", task: "Digest", status: "scheduled" }, COPY, NOW_MS, true);
+    expect(row.querySelectorAll("button").length).toBe(0);
+  });
+
+  it("the answer carries the scheduler note, and a refusal names the status", () => {
+    expect(cronAnswer("pause", true, { ok: true, scheduler_note: "The scheduler is off." }, COPY))
+      .toBe("Paused. The scheduler is off.");
+    expect(cronAnswer("run", false, { ok: false, status: "paused" }, COPY))
+      .toBe("Not changed: the job is paused.");
+    expect(cronAnswer("cancel", true, { ok: true, message: "cancelled j1" }, COPY))
+      .toBe("cancelled j1");
   });
 });

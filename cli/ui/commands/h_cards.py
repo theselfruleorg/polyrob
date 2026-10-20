@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
+from core.surfaces import card_groups  # noqa: F401 — installs the 084 settle hook
 from core.surfaces import cards
 
 
@@ -103,15 +104,42 @@ async def _press(registry: Any, cid: str, act: str, ctx: Any) -> None:
         ctx.emit(p.reply, title="cards")
         return
     if act != "ok":
-        await registry.dispatch(p.run, ctx)
+        # 084: the quote card it makes joins this card's session + group; no
+        # new card (a refused quote) → the printed reply is this card's outcome.
+        cap = None
+        try:
+            with _Capture(ctx) as cap, cards.lineage(p.card):
+                await registry.dispatch(p.run, ctx)
+        finally:
+            # A child of THIS card, not any new card (another may land meanwhile).
+            made = any(c.parent_id == cid for c in
+                       cards.store().open_cards(_tenant(ctx), limit=50))
+            if not made:
+                cards.note_result(cid, "\n".join(cap.lines if cap else []) or "no quote")
         return
-    with _Capture(ctx) as cap:
+    with _Capture(ctx) as cap, cards.lineage(p.card):
         try:
             await registry.dispatch(p.run, ctx)
         except Exception as e:   # never leave the card "running"
             cards.finish(cid, f"Command failed: {str(e)[:200]}")
             raise
-    cards.finish(cid, "\n".join(cap.lines))
+    out = "\n".join(cap.lines)
+    cards.finish(cid, out)
+    _record_out(ctx, out)
+
+
+def _record_out(ctx: Any, text: str) -> None:
+    """084 R19: a REPL card confirm's result joins the ONE owner thread as an
+    owner-verb row, as on Telegram — the agent read nothing of it before."""
+    try:
+        if not (text or "").strip():
+            return
+        from core.surfaces.owner_thread import record_owner_out
+        record_owner_out(getattr(ctx, "container", None), _tenant(ctx), text, via="cli",
+                         session_id=str(getattr(ctx, "session_id", "") or ""),
+                         source="owner_verb")
+    except Exception:
+        pass
 
 
 def h_cards(ctx) -> Any:

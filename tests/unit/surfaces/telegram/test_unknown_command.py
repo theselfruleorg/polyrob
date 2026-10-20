@@ -127,8 +127,9 @@ async def test_help_verb_returns_only_that_verb(tmp_path):
     agent = _Agent(str(tmp_path))
     reply = await _handle_command(agent, _cmd("/help", "/help goal"), spawn=None)
     assert "/goal" in reply
-    assert "/goal objective" in reply  # subverb lines included
     assert "/settle" not in reply      # not the whole catalog
+    reply = await _handle_command(agent, _cmd("/help", "/help wallet"), spawn=None)
+    assert "/wallet tokens" in reply   # subverb lines included
 
 
 @pytest.mark.asyncio

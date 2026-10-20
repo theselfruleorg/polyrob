@@ -337,16 +337,6 @@ def test_every_gated_status_carries_a_remedy():
     assert silent == [], f"gated with no remedy: {silent}"
 
 
-def test_the_money_remedy_names_a_verb_the_owner_can_actually_type():
-    """The 2026-09-12 failure in one assertion: the owner asked for a bridge and
-    was handed a list of grants instead of the verb that was already deployed."""
-    text = resolve_tool_status("defi_trade", container=FakeContainer(set()),
-                               loaded_ids=set()).remedy
-    assert "/trade" in text or "/bridge" in text, (
-        "when the OWNER is asking, the remedy must name the chat verb that "
-        "reaches the capability from their seat")
-
-
 # --- custody-no-browser (2026-09-17) -----------------------------------------
 
 def test_browser_bearing_tools_gated_when_rail_unusable(monkeypatch):
@@ -359,7 +349,7 @@ def test_browser_bearing_tools_gated_when_rail_unusable(monkeypatch):
         st = resolve_tool_status(
             tid, container=FakeContainer({"browser_manager"}), loaded_ids={tid})
         assert st.status == "gated" and st.reason == "custody-no-browser", tid
-        assert "polyrob browser install" in st.remedy
+        assert "install the browser service" in st.remedy
 
 
 def test_browser_loaded_when_rail_ok(monkeypatch):
@@ -380,18 +370,18 @@ def test_non_browser_tools_ignore_the_rail(monkeypatch):
     assert st.status == "loaded"
 
 
-def test_owner_authored_cron_job_loads_beyond_the_self_goal_ceiling(monkeypatch):
-    """Natural work: an OWNER-authored cron job loads a non-money tool its task
-    needs (e.g. git) — the ceiling bounds agent-authored work only. Money stays
-    explicit-grant-only, and an agent-authored job keeps the ceiling (AGT-14)."""
+def test_a_cron_job_loads_beyond_the_self_goal_ceiling(monkeypatch):
+    """Natural work: a standing cron job loads a non-money tool its task needs
+    (e.g. git). Money stays explicit-grant-only, and a run with no recorded job
+    (a planner run) keeps the ceiling."""
     from agents.task import session_class
     from core import autonomy_marker as am
     from tools import goal_tools
     monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: True)
     monkeypatch.setattr(goal_tools, 'allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
     am.mark_autonomous('owner-job-run', cron_job_id='job-owner')
-    am.note_owner_job('job-owner', 'Daily: run the release check')
-    am.mark_autonomous('agent-job-run', cron_job_id='job-agent')
+    am.note_job('job-owner', 'Daily: run the release check')
+    am.mark_autonomous('agent-job-run')
     try:
         owner = FakeController(services={'coding', 'hyperliquid'})
         owner.session_id = 'owner-job-run'
@@ -410,4 +400,13 @@ def test_owner_authored_cron_job_loads_beyond_the_self_goal_ceiling(monkeypatch)
         for sid in ('owner-job-run', 'agent-job-run'):
             am._SESSIONS.pop(sid, None)
             am._CRON_JOBS.pop(sid, None)
-        am._OWNER_JOBS.pop('job-owner', None)
+        am._JOBS.pop('job-owner', None)
+
+
+def test_the_catalog_states_the_money_remedy_once():
+    """081 B-8: several money tools share ONE money note, not one paragraph each."""
+    from core.tool_gates import remedy_text
+    text = render_tool_catalog(container=FakeContainer(set()), loaded_ids=set())
+    money_lines = [l for l in text.splitlines() if "[gated:money" in l]
+    assert len(money_lines) >= 2
+    assert text.count(remedy_text("money_owner_move")) == 1

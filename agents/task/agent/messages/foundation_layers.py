@@ -67,30 +67,35 @@ class FoundationLayer:
 	#: a layer added after F13 shipped: a persisted blob without its key is
 	#: still whole (the key reads as "unset when saved").
 	optional: bool = False
+	#: 2026-10-13 review A2: on a reload (restart / eviction) a layer whose FRESH
+	#: render differs from the persisted bytes keeps the fresh render — the owner's
+	#: rules, a deployed prompt fix, a newly approved skill and the live
+	#: environment must reach a resumed chat. A cache miss once beats a stale
+	#: rule. Byte-identical layers still replay (the cache survives).
+	refresh_on_reload: bool = False
 
 
 #: THE foundation order, in wire order. Everything else derives from it.
 FOUNDATION_LAYERS: Tuple[FoundationLayer, ...] = (
 	FoundationLayer("system_prompt", "_system_message", "_system_message_tokens",
-	                None, FROZEN),
+	                None, FROZEN, refresh_on_reload=True),
 	FoundationLayer("runtime_identity", "_runtime_identity_message",
 	                "_runtime_identity_tokens", MessageOrigin.RUNTIME_IDENTITY, FROZEN),
 	FoundationLayer("environment", "_environment_message", "_environment_tokens",
-	                MessageOrigin.ENVIRONMENT, FROZEN),
+	                MessageOrigin.ENVIRONMENT, FROZEN, refresh_on_reload=True),
 	FoundationLayer("self_context", "_self_context_message", "_self_context_tokens",
-	                MessageOrigin.SELF_CONTEXT, STANDING, group="self_context"),
+	                MessageOrigin.SELF_CONTEXT, STANDING, group="self_context",
+	                refresh_on_reload=True),
 	# 060 WS-1: the same tier, unwelded — one message per declared block
 	# (SELF_CONTEXT_BLOCKS below). Exactly one of the two self-context layers is
 	# set in a session; set_self_context_blocks always fills this one.
 	FoundationLayer("self_context_blocks", "_self_context_blocks",
 	                "_self_context_blocks_tokens", MessageOrigin.SELF_CONTEXT, STANDING,
-	                group="self_context", optional=True),
+	                group="self_context", optional=True, refresh_on_reload=True),
 	FoundationLayer("project_context", "_project_context_message",
 	                "_project_context_tokens", MessageOrigin.PROJECT_CONTEXT, STANDING),
-	FoundationLayer("initial_task", "_initial_task_message", "_initial_task_tokens",
-	                None, SCOPED),
 	FoundationLayer("skill_catalog", "_skill_message", "_skill_message_tokens",
-	                MessageOrigin.SKILL, STANDING),
+	                MessageOrigin.SKILL, STANDING, refresh_on_reload=True),
 	# 041 phase 2: the approved named workers (WORKERS_ENABLED). Frozen at
 	# session start and unset when the flag is OFF or no worker is approved, so
 	# the prefix is byte-identical then. STANDING: owner-approved offers, like
@@ -99,6 +104,15 @@ FOUNDATION_LAYERS: Tuple[FoundationLayer, ...] = (
 	                MessageOrigin.WORKER_CATALOG, STANDING, optional=True),
 	FoundationLayer("tool_catalog", "_tool_catalog_message", "_tool_catalog_tokens",
 	                MessageOrigin.TOOL_CATALOG, FROZEN),
+	# 081 WS-3.3: everything above is the same for two runs of one job (or two
+	# chats on one install); the two rows below differ per session — the
+	# workspace path and the task (a cron task carries per-run text). They
+	# come LAST, so a byte-prefix cache serves the catalogs to every run.
+	FoundationLayer("workspace", "_workspace_message", "_workspace_tokens",
+	                MessageOrigin.ENVIRONMENT, FROZEN, optional=True,
+	                refresh_on_reload=True),
+	FoundationLayer("initial_task", "_initial_task_message", "_initial_task_tokens",
+	                None, SCOPED),
 )
 
 #: H-MEM — the one VOLATILE block the assembly places itself. Not a replay slot:

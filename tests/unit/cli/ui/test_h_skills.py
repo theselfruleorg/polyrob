@@ -129,6 +129,20 @@ def test_query_filters_by_description_case_insensitive(monkeypatch):
     assert "web-research" not in out
 
 
+def test_multi_word_query_uses_every_word_like_telegram(monkeypatch):
+    """`/skills clean data` filters on the whole phrase (Telegram parity), not just 'clean'."""
+    manager = _FakeManager([
+        _FakeSkill("data-cleaner", "Clean data quickly"),
+        _FakeSkill("clean-room", "Clean the room"),
+    ])
+    _patch_manager(monkeypatch, manager)
+    ctx, buf = _plain_ctx(args=["clean", "data"])
+    _run(ctx)
+    out = buf.getvalue()
+    assert "data-cleaner" in out
+    assert "clean-room" not in out
+
+
 def test_query_no_match_is_graceful(monkeypatch):
     manager = _FakeManager([_FakeSkill("web-research", "Research on the web")])
     _patch_manager(monkeypatch, manager)

@@ -1,5 +1,5 @@
 """CR-M07: a defi_data read that DEFAULTS to the operator wallet is an owner
-read, and reconcile reads its ledger from the caller's own tree only."""
+read, and reconcile reads the caller's own book only."""
 import pytest
 
 import core.wallet.factory as wf
@@ -54,27 +54,20 @@ async def test_nft_and_lp_defaults_refuse_a_non_owner(_owner):
 
 @pytest.mark.asyncio
 async def test_reconcile_default_wallet_refuses_a_non_owner(_owner, tmp_path):
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text("## Open positions\n")
-    res = await DefiDataTool().reconcile(
-        ReconcileParams(chain="base", ledger_path=str(ledger)),
-        execution_context=STRANGER)
+    res = await DefiDataTool().reconcile(ReconcileParams(chain="base"),
+                                         execution_context=STRANGER)
     assert res.error and "owner" in res.error
     assert _owner == []
 
 
 @pytest.mark.asyncio
-async def test_reconcile_non_owner_ledger_is_confined_to_own_workspace(
-        tmp_path, monkeypatch):
+async def test_reconcile_reads_only_the_callers_own_book(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    other = tmp_path / "auto" / "u_victim" / "ledger.md"
-    other.parent.mkdir(parents=True)
-    other.write_text("## Open positions\n")
-    mine = tmp_path / "auto" / "u_stranger" / "ws"
-    mine.mkdir(parents=True)
-    monkeypatch.chdir(tmp_path)
+    from core.open_positions import PositionDelta, apply_delta, open_positions_db_path
+    apply_delta("u_victim", PositionDelta("base", "0x" + "ab" * 20, "V", 5.0, 1.0),
+                db_path=open_positions_db_path())
     tool = DefiDataTool(holder="0xHOLDER", index_fn=lambda h, chain: {})
-    res = await tool.reconcile(
-        ReconcileParams(chain="base", ledger_path=str(other)),
-        execution_context=_Ctx("u_stranger", workspace_dir=str(mine)))
-    assert res.error and "refusing to read it" in res.error
+    res = await tool.reconcile(ReconcileParams(chain="base"),
+                               execution_context=_Ctx("u_stranger"))
+    assert res.error is None, res.error
+    assert res.metadata["report"]["rail_rows"] == 0

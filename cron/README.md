@@ -67,7 +67,7 @@ cron/
   Both are validated by `CronService.schedule`/`edit` before a write.
 - **Deterministic write job (`write_job.py`):** `payload.write_verb` runs the ONE
   allowlisted write verb (`agent_nft.agent_nft_collection_reveal`) with no model turn — off unless
-  `CRON_WRITE_JOBS_ENABLED`, owner-authored jobs only, through `tx_guard`. Read and
+  `CRON_WRITE_JOBS_ENABLED`, written only by an owner turn, through `tx_guard`. Read and
   write jobs may recur every minute; every other job keeps the 5-minute floor.
 
 ## Related

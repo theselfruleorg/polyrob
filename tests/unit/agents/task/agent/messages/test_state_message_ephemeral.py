@@ -134,7 +134,8 @@ def test_a_re_queued_stale_state_message_is_dropped():
 	assembled = mm.get_messages_for_llm()
 	states = [m for m in assembled if _is_state(m)]
 	assert len(states) == 1
-	assert "Current step: 2/20" in str(states[0].content)
+	assert "Current step: 2 |" in str(states[0].content)
+	assert "/20" not in str(states[0].content)  # 083 WS-5: no denominator
 	# The correspondent reply is NOT collateral damage.
 	assert any("a correspondent reply" in str(m.content) for m in assembled)
 

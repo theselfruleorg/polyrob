@@ -1066,23 +1066,9 @@ def _override_is_owner(container: Any, user_id: str, recipient_override: Optiona
 
 def _rail_for_session(session_id: Optional[str]) -> tuple:
     """``(rail_id, rail_label)`` for an autonomous run, else ``("", "")``.
-
-    Reads the in-process autonomy marker (the allowlisted core→agents edge this
-    module already carries); a session no marker knows is interactive.
-    """
-    if not session_id:
-        return "", ""
-    try:
-        from core.autonomy_marker import cron_job_for_session, goal_for_session
-        job = cron_job_for_session(session_id)
-        if job:
-            return f"cron:{job}", ""
-        goal = goal_for_session(session_id)
-        if goal:
-            return f"goal:{goal}", ""
-    except Exception:
-        pass
-    return "", ""
+    The rail is ``owner_thread.rail_for_session`` — one answer for every writer."""
+    from core.surfaces.owner_thread import rail_for_session
+    return rail_for_session(session_id), ""
 
 
 def _record_thread(container: Any, user_id: str, body: str, *, via: str,

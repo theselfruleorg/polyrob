@@ -80,20 +80,6 @@ def install_controller_policy(controller):
 	from tools.controller.wallet_authority import make_wallet_authority_hook
 	controller.register_pre_tool_call_hook(make_wallet_authority_hook(controller), fail_mode="closed")
 
-	# 022: the send-time gate. Every outbound verb (tools/controller/
-	# financial_claim_gate.py::OUTBOUND_TEXT_FIELDS) that claims money moved
-	# must be backed by a settled record, or the send is refused by name.
-	from tools.controller.financial_claim_gate import make_financial_claim_hook
-	controller.register_pre_tool_call_hook(make_financial_claim_hook(controller), fail_mode="closed")
-
-	# A refused money verb holds the rest of its run off every public rail:
-	# the record hook taints the run, the gate refuses a non-owner send
-	# (tools/controller/refusal_taint_gate.py). Owner sends still go.
-	from tools.controller.refusal_taint_gate import (
-		make_refusal_taint_gate_hook, make_refusal_taint_record_hook)
-	controller.register_pre_tool_call_hook(make_refusal_taint_gate_hook(controller), fail_mode="closed")
-	controller.register_post_tool_call_hook(make_refusal_taint_record_hook(controller), fail_mode="open")
-
 	# 033: the ONE effect classification. The gate (pre, fail-closed) refuses an
 	# autonomous social/comms/public/money write while the owner's pause covers
 	# it, BEFORE any approval ask is queued; the recorder (post, fail-open) writes
@@ -460,15 +446,11 @@ def seat_pipeline(*, tool_id, user_id):
 	"""A HookPipeline holding :data:`SEAT_STAGES`, for an owner-seat call."""
 	from tools.controller.hooks import HookPipeline
 	from tools.controller.effect_hooks import make_effect_gate_hook, make_effect_record_hook
-	from tools.controller.refusal_taint_gate import (
-		make_refusal_taint_gate_hook, make_refusal_taint_record_hook)
 	controller = _SeatController(tool_id=tool_id, user_id=user_id)
 	pipe = HookPipeline(controller.logger)
 	denied = _resolve_denylist(controller, _pref_home(controller))
 	if denied:
 		pipe.register_pre(make_denylist_hook(denied), "closed")
-	pipe.register_pre(make_refusal_taint_gate_hook(controller), "closed")
-	pipe.register_post(make_refusal_taint_record_hook(controller), "open")
 	pipe.register_pre(make_effect_gate_hook(controller), "closed")
 	pipe.register_post(make_effect_record_hook(controller), "open")
 	return pipe

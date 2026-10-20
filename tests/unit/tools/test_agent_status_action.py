@@ -1,6 +1,6 @@
 """I-6 — `agent_status` in-context introspection action.
 
-Read-only runtime self-report (steps used/remaining, active tools, context-token
+Read-only runtime self-report (steps used of the cap, active tools, context-token
 usage, wallet + tenant ledger), gated AGENT_STATUS_TOOL (default OFF; ON under
 POLYROB_LOCAL via _SAFE_LOCAL_FLAGS). Every section fails soft independently.
 """
@@ -63,21 +63,54 @@ def test_agent_status_registered_when_flag_on(monkeypatch):
     assert "agent_status" in c.registry.registry.actions
 
 
-def test_agent_status_absent_when_flag_off(monkeypatch):
+def test_agent_status_registered_when_flag_off(monkeypatch):
+    # 080 WS-5: the read-only part is on EVERY posture; the flag gates detail.
     monkeypatch.setenv("AGENT_STATUS_TOOL", "false")
     c = _controller()
     c._register_agent_status_action()
-    assert "agent_status" not in c.registry.registry.actions
+    assert "agent_status" in c.registry.registry.actions
 
 
-def test_agent_status_absent_by_default_on_server(monkeypatch):
-    # No explicit flag + not local mode => server default is OFF.
+def test_agent_status_registered_by_default_on_server(monkeypatch):
     monkeypatch.delenv("AGENT_STATUS_TOOL", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.delenv("ROB_LOCAL", raising=False)
     c = _controller()
     c._register_agent_status_action()
-    assert "agent_status" not in c.registry.registry.actions
+    assert "agent_status" in c.registry.registry.actions
+
+
+@pytest.mark.asyncio
+async def test_agent_status_withholds_detail_when_flag_off(monkeypatch):
+    monkeypatch.setenv("AGENT_STATUS_TOOL", "false")
+    c = _controller(user_id="tenant-A")
+    c.orchestrator = _Orchestrator()
+    c.list_tools = lambda: ["browser"]
+    called = {}
+
+    async def _no_ledger(*a, **k):
+        called["ledger"] = True
+        raise AssertionError("ledger read on a gated posture")
+
+    import modules.credits.unified_ledger as ul
+    monkeypatch.setattr(ul, "build_ledger", _no_ledger)
+    import tools.controller.agent_status_action as asa
+
+    async def _no_wallet():
+        raise AssertionError("wallet read on a gated posture")
+
+    monkeypatch.setattr(asa, "_wallet_lines", _no_wallet)
+    c._register_agent_status_action()
+    action = c.registry.registry.actions["agent_status"]
+    res = await action.function(action.param_model(), execution_context=None)
+    out = res.extracted_content
+    assert "withheld on this posture" in out
+    assert "steps:" in out and "tools: browser" in out
+    assert "posture: compute=" not in out
+    assert "ledger" not in called
+    rn = await action.function(action.param_model(release_notes="unreleased"),
+                               execution_context=None)
+    assert rn.extracted_content.startswith("running:")
 
 
 def test_agent_status_default_on_under_local(monkeypatch):
@@ -244,7 +277,7 @@ async def test_agent_status_everything_down_still_answers(monkeypatch):
     assert "net:" not in text  # the ledger statements themselves never render
     assert "config:" in text
     # 031: the pause line leads every seat (the agent's own view included), THEN health
-    assert text.startswith(("▶ RUNNING", "⏸ PAUSED", "autonomy: unavailable"))
+    assert text.startswith(("▶ RUNNING", "⏸ PAUSED", "■ IDLE", "autonomy: unavailable"))
     assert text.splitlines()[1].startswith("Health:")
     assert result.error is None
 
@@ -383,7 +416,7 @@ async def test_agent_status_total_blackout_composition(monkeypatch, tmp_path):
     assert "autonomy_loops:" not in text
     # and the shared health block leads the report on every path
     # 031: the pause line leads every seat (the agent's own view included), THEN health
-    assert text.startswith(("▶ RUNNING", "⏸ PAUSED", "autonomy: unavailable"))
+    assert text.startswith(("▶ RUNNING", "⏸ PAUSED", "■ IDLE", "autonomy: unavailable"))
     assert text.splitlines()[1].startswith("Health:")
     assert result.error is None
 

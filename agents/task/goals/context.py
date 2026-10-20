@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from agents.task.goals.board import Goal
+from agents.task.goals.board_types import clip_keep_end
 # Canonical home moved to the runtime layer (§2/§5.0 — goals consume runtime
 # contracts, never the reverse). Re-exported here for existing callers.
 from agents.task.runtime.run_outcome import (  # noqa: F401
@@ -127,9 +128,40 @@ _OUTCOME_INSTRUCTION = (
 )
 
 
-def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
+def _banner_ask_id(goal: Goal) -> str:
+    """The ask whose answer the OWNER UNBLOCKED banner quotes, or ``""``."""
+    p = goal.payload or {}
+    unblocked = p.get("owner_unblocked") or {}
+    attempts = p.get("attempts") or []
+    if not unblocked or not attempts or not str(unblocked.get("answer") or "").strip():
+        return ""
+    last = attempts[-1] if isinstance(attempts[-1], dict) else {}
+    try:
+        if float(unblocked.get("ts") or 0) >= float(last.get("ts") or 0):
+            return str(unblocked.get("ask_id") or "")
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
+def owner_decisions_block(goal: Goal, *, skip_ask_id: str = "") -> str:
+    """The OWNER DECISIONS block from ``payload.owner_answers``, or ``""``."""
+    records = [r for r in ((goal.payload or {}).get("owner_answers") or [])
+               if isinstance(r, dict) and (not skip_ask_id
+                                           or str(r.get("ask_id") or "") != skip_ask_id)]
+    if not records:
+        return ""
+    from agents.task.goals.rail_answers import render_decisions
+    return render_decisions(
+        records, "OWNER DECISIONS on what this goal asked (they stay in force until "
+                 "the owner changes them; read these before anything else):")
+
+
+def build_goal_run_task(goal: Goal, *,
                         workspace_root: Optional[Path] = None,
-                        prior_artifacts: Optional[list] = None) -> str:
+                        prior_artifacts: Optional[list] = None,
+                        previous_runs: str = "",
+                        upstream: Optional[list] = None) -> str:
     """``workspace_root`` is opt-in (default None = byte-identical to before T9):
     when provided, the goal's title/body/acceptance are stamped with
     ``stamp_artifact_references`` so a retried goal sees what's ACTUALLY on disk
@@ -141,7 +173,13 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
     it restarts from the title. 46 goals died on "ran out of steps" last week
     and each retry re-did the same first 20 steps, which means a goal needing 25
     steps could never finish — it only burned its retries. Empty/omitted =>
-    byte-identical to before."""
+    byte-identical to before.
+
+    ``previous_runs`` (2026-10-13 review B6/B9) is the goal's own
+    ``<previous-runs>`` block (outcome, why, what each run sent, did and
+    signed). ``upstream`` (B10) is ``[(id, title, status, result)]`` of the
+    goals this one depends on — "research, then write" used to hand the writer
+    the title only."""
     parts = []
     # 057 WS-C (B9): `payload.resume_note` was WRITTEN by the yield path and read
     # NOWHERE — a pre-empted goal restarted with no idea it had been pre-empted,
@@ -150,12 +188,6 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
     resume_note = (goal.payload or {}).get("resume_note")
     if resume_note:
         parts.append(f"RESTART NOTE (you were pre-empted): {str(resume_note)[:1200]}")
-    if objective is not None:
-        parts.append(
-            "STANDING OBJECTIVE (all work must advance it):\n"
-            f"{objective.title}\n{objective.body}".rstrip())
-    else:
-        parts.append("This is a one-off goal (no standing objective attached).")
     goal_title = goal.title
     goal_body = goal.body or ""
     acceptance = (goal.payload or {}).get("acceptance")
@@ -167,6 +199,16 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
     parts.append(f"GOAL: {goal_title}\n{goal_body}".rstrip())
     if acceptance:
         parts.append(f"Definition of done (acceptance): {acceptance}")
+    # 2026-10-13 review B1–B3: every owner decision on an ask about THIS goal
+    # (its own `owner_ask`, or a `goal_ask` that held it), stamped by
+    # `decide_ask` whatever the goal's status. Rendered on EVERY run, not only
+    # the first retry after the unblock — a later failure must not make the
+    # run forget the owner's answer. The unblock banner below already quotes
+    # its own ask's answer; that one is not repeated here.
+    unblocked = (goal.payload or {}).get("owner_unblocked") or {}
+    decisions = owner_decisions_block(goal, skip_ask_id=_banner_ask_id(goal))
+    if decisions:
+        parts.append(decisions)
     # §5.2: retries are no longer amnesiac — the compact attempt ledger
     # (payload.attempts, appended by board.record_failure) rides into the
     # retry prompt so the run can address the SPECIFIC prior gap instead of
@@ -177,7 +219,6 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
         # 2026-07-14 night-2: when the OWNER fulfilled the blocking ask AFTER the
         # last failure, the failure ledger is stale — say so explicitly, or the
         # run declares BLOCKED from memory without ever retrying the real action.
-        unblocked = (goal.payload or {}).get("owner_unblocked") or {}
         try:
             unblocked_after_failure = float(unblocked.get("ts") or 0) >= float(last.get("ts") or 0)
         except (TypeError, ValueError):
@@ -189,7 +230,7 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
                 "changed. Do NOT declare BLOCKED based on past failure memory; actually "
                 "retry the real actions first and only report BLOCKED if a fresh attempt "
                 "fails now.",
-                f"- previously failed with: {str(last.get('error') or 'unknown')[:300]}",
+                f"- previously failed with: {clip_keep_end(last.get('error') or 'unknown', 400)}",
             ]
             owner_answer = str(unblocked.get("answer") or "").strip()
             if owner_answer:
@@ -201,11 +242,13 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
         else:
             lines = [
                 "PREVIOUS ATTEMPT (this goal was retried — address the gap, don't repeat it):",
-                f"- last failure: {str(last.get('error') or 'unknown')[:500]}",
+                f"- last failure: {clip_keep_end(last.get('error') or 'unknown', 600)}",
             ]
             if len(attempts) > 1:
                 lines.append(f"- attempts so far: {len(attempts)}")
         parts.append("\n".join(lines))
+    if upstream:
+        parts.append(upstream_block(upstream))
     # What earlier attempts actually SHIPPED. Verified against the ledger by the
     # caller, so this never promises a file that is no longer there.
     if prior_artifacts:
@@ -217,7 +260,31 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
             lines.append(f"- {name} ({size} bytes)")
         lines.append("Read what you need, then do the REMAINING work only.")
         parts.append("\n".join(lines))
+    if previous_runs:
+        parts.append(previous_runs)
     parts.append(_OUTCOME_INSTRUCTION)
     return "\n\n".join(parts)
+
+
+UPSTREAM_RESULT_CHARS = 500
+
+
+def upstream_block(upstream: list) -> str:
+    """B10: what the goals this one depends on recorded, as quoted DATA."""
+    rows = []
+    for gid, title, status, result in list(upstream)[:6]:
+        r = " ".join(str(result or "").split())
+        if len(r) > UPSTREAM_RESULT_CHARS:
+            r = r[:UPSTREAM_RESULT_CHARS - 1] + "…"
+        rows.append(f"- {str(gid)[:12]} \"{' '.join(str(title or '').split())[:120]}\" "
+                    f"[{status}]: {r or '(no result recorded)'}")
+    data = "\n".join(rows)
+    try:
+        from core.security.untrusted_wrap import wrap_untrusted
+        data = wrap_untrusted("upstream_goals", data)
+    except Exception:
+        pass
+    return ("UPSTREAM GOALS this goal depends on — what each recorded as its result "
+            "(build on it; read their files rather than redoing the work):\n" + data)
 
 

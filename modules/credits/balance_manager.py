@@ -15,6 +15,39 @@ def validate_credit_amount(amount: int) -> None:
 
 
 
+async def _joins_own_transaction(conn) -> bool:
+    """True when *conn* has an open transaction that the CURRENT task began.
+
+    ``DatabaseConnection`` records the owner task (``_txn_owner``, H8). A
+    connection that records no owner keeps the old behavior (join it)."""
+    if not await conn.in_transaction():
+        return False
+    owner = getattr(conn, "_txn_owner", None)
+    return owner is None or owner is asyncio.current_task()
+
+
+async def _begin_own_transaction(conn) -> None:
+    """Begin a transaction of our own; wait while another task holds one.
+
+    An owner task that ENDED without commit/rollback never sets ``_txn_done``:
+    one statement from this task makes ``DatabaseConnection.execute`` roll that
+    abandoned span back and clear it (H8), then the BEGIN is tried again."""
+    while True:
+        try:
+            await conn.begin_transaction()
+            return
+        except Exception:
+            done = getattr(conn, "_txn_done", None)
+            owner = getattr(conn, "_txn_owner", None)
+            if (done is None or not await conn.in_transaction()
+                    or owner is None or owner is asyncio.current_task()):
+                raise
+            if owner.done():
+                await conn.execute("SELECT 1")
+                continue
+            await done.wait()
+
+
 class CreditBalanceManager:
     """Manage user credit balances."""
 
@@ -177,10 +210,14 @@ class CreditBalanceManager:
         # DepositMonitor._process_deposit wraps credit + dedup-row in ONE outer
         # transaction, and a nested BEGIN raises (while an inner COMMIT would
         # end the outer transaction early, breaking its rollback guarantee).
-        owns_tx = not await self.db.connection.in_transaction()
+        # 085 L-5: join only a transaction THIS task opened. Another task's open
+        # transaction is not ours to join: the old `not in_transaction()` check
+        # then ran the UPDATE and the INSERT outside any transaction of our own
+        # (each waited for the other task, then auto-committed one by one).
+        owns_tx = not await _joins_own_transaction(self.db.connection)
         try:
             if owns_tx:
-                await self.db.connection.begin_transaction()
+                await _begin_own_transaction(self.db.connection)
             try:
                 # SECURITY FIX (C2): atomic relative UPDATE, mirroring deduct_credits.
                 # The previous read-modify-write (get_balance -> SET balance=<abs>)

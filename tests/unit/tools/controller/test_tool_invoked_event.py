@@ -73,3 +73,42 @@ def test_both_result_paths_call_the_one_helper():
     error = body[body.index("async def _observe_error_result("):body.index("async def act(")]
     assert success.count("self._record_invocation(") == 1, "success path records once"
     assert error.count("self._record_invocation(") == 1, "every error path funnels through _observe_error_result"
+
+
+# --- D-9 (review 2026-10-14): model + error_class on every row ---------------
+
+def test_row_carries_model_from_context_metadata_and_no_error_class_on_success(monkeypatch):
+    seen = _capture(monkeypatch)
+    ctx = SimpleNamespace(user_id="u1", session_id="s1", metadata={"model": "z-ai/glm-5.3"})
+    _Ctrl()._record_invocation("read_file", SimpleNamespace(error=None), ctx, started_ns=0)
+    attrs = seen[0][1]["attrs"]
+    assert attrs["model"] == "z-ai/glm-5.3" and attrs["error_class"] is None
+
+
+def test_model_falls_back_to_the_orchestrators_agent(monkeypatch):
+    seen = _capture(monkeypatch)
+    ctrl = _Ctrl()
+    agent = SimpleNamespace(llm=SimpleNamespace(model_name="deepseek/deepseek-v4.1-flash"))
+    ctrl.orchestrator = SimpleNamespace(agents={"a1": agent})
+    ctx = SimpleNamespace(user_id="u1", session_id="s1", agent_id="a1", metadata={})
+    ctrl._record_invocation("read_file", SimpleNamespace(error="Action 1/1 (x) timed out after 30 seconds"), ctx)
+    attrs = seen[0][1]["attrs"]
+    assert attrs["model"] == "deepseek/deepseek-v4.1-flash"
+    assert attrs["error_class"] == "timeout"
+
+
+def test_no_model_source_records_none_not_a_guess(monkeypatch):
+    seen = _capture(monkeypatch)
+    _Ctrl()._record_invocation("x", SimpleNamespace(error=None), None, started_ns=0)
+    assert seen[0][1]["attrs"]["model"] is None
+
+
+def test_error_classes():
+    from tools.controller.tool_error_class import classify_tool_error as c
+    assert c(None) is None and c("") is None
+    assert c("Action 2/3 (shell_run) timed out after 60 seconds") == "timeout"
+    assert c("Error executing action write_file: 1 validation error for WriteFileAction") == "validation"
+    assert c("refused: this input matches the owner's shell deny list") == "refused"
+    assert c("Error executing action read_file: [Errno 2] No such file or directory: 'a'") == "not_found"
+    assert c("Error in action 1/1: Error code: 503 service unavailable") == "provider"
+    assert c("Error in action 1/1: division by zero") == "other"

@@ -1,6 +1,8 @@
-"""Owner write verbs for chat: cron, goals, wallet, invoices, settle (G13).
+"""Owner write verbs for chat: goals, wallet, invoices, settle (G13).
 
-Before this, creating a cron job, steering a goal, reading the wallet, listing
+Scheduled jobs (`/jobs`, `/job …`) live in ``surfaces/telegram/job_ops.py``.
+
+Before this, creating a scheduled job, steering a goal, reading the wallet, listing
 invoices or attesting a payment existed on exactly ONE seat — the `polyrob` CLI.
 A phone-only owner could watch all of it and change none of it.
 
@@ -17,7 +19,7 @@ Two rules every handler follows:
 - **Phone-sized replies.** Lists cap at :data:`_LIST_LIMIT` with a count line;
   every id and path rides in backticks so the renderer emits ``<code>`` and the
   client stops linkifying it.
-- **Honest about what will actually happen.** A stored cron job with the ticker
+- **Honest about what will actually happen.** A stored job with the scheduler
   off, an invoice settled with no watcher running, a cap that needs a restart —
   each says so rather than showing a green checkmark on a no-op.
 """
@@ -27,16 +29,12 @@ import logging
 import os
 from typing import Any, List, Optional, Tuple
 
+from core.surfaces.cards import is_go_word
+
 logger = logging.getLogger(__name__)
 
 #: Rows one chat listing renders before collapsing the rest into a count.
 _LIST_LIMIT = 10
-
-#: Separator for `/cron add <schedule> | <task>`. A schedule spec contains
-#: spaces ("every monday 09:00") and so does a task, so positional splitting
-#: cannot tell them apart.
-_CRON_SEP = "|"
-
 
 def _code(text: Any) -> str:
     return f"`{text}`"
@@ -71,173 +69,6 @@ def resolve_prefix(prefix: str, ids: List[str]) -> Tuple[Optional[str], Optional
         return None, (f"{_code(p)} matches {len(matches)} ids — "
                       f"use more characters")
     return matches[0], None
-
-
-# ---------------------------------------------------------------------------
-# /cron
-# ---------------------------------------------------------------------------
-
-def _cron_service(data_dir: str):
-    from cron.jobs import CronJobStore
-    from cron.service import CronService
-    from core.runtime_paths import cron_db_path
-    return CronService(CronJobStore(cron_db_path(data_dir)))
-
-
-def _cron_off_note() -> str:
-    """A stored job only runs if the ticker is on — never mislead the owner.
-
-    ⚠️ D41: a PROBE FAULT used to return ``""``, i.e. the same answer as "the
-    ticker is on" — so the one case where we know least produced the most
-    reassuring reply. An unreadable probe now says it is unreadable.
-
-    ⚠️ D72: names what the owner can DO from the chat he is in. A server
-    command is not reachable from a phone; `/status` is. D7 (2026-10-10):
-    CRON_ENABLED is a posture member, set only by AUTONOMY_POSTURE or the
-    POLYROB_OVERRIDES line (Access file) — so the reply names the host verb.
-    """
-    try:
-        from tools.cronjob_tools import cron_enabled
-        if cron_enabled():
-            return ""
-    except Exception as exc:
-        logger.warning("cron enablement probe failed", exc_info=True)
-        return (f"\n⚠️ I could not check whether my scheduler is running "
-                f"({type(exc).__name__}) — the job is stored, but I cannot "
-                f"promise anything will run it. Check with /status.")
-    return ("\n⚠️ My scheduler is switched off — the job is stored but nothing "
-            "will run it. Turn it on on the host with `polyrob config set "
-            "CRON_ENABLED true` (applies on the next restart).")
-
-
-_CRON_ADD_USAGE = (
-    f"Usage: /cron add <schedule> {_CRON_SEP} <task> [tools=a,b] "
-    "[target=<token address> chain=<chain>]\n"
-    "Schedules: a duration (30m), 'every monday 09:00', a 5-field "
-    "cron line, or an ISO timestamp.\n"
-    "e.g. /cron add every monday 09:00 | summarise the week\n"
-    "tools= grants the job those tools; target= is the one token it may buy.")
-_CRON_EDIT_USAGE = ("Usage: /cron edit <id> schedule <schedule> · "
-                    "/cron edit <id> task <new task text>")
-
-
-def _cron_grant_note(payload) -> str:
-    """What the owner granted the job, read back from the stored payload."""
-    p = payload or {}
-    parts = []
-    if p.get("tools"):
-        parts.append("tools " + ", ".join(p["tools"]))
-    t = p.get("target_token")
-    if t:
-        parts.append(f"target {t['address']} on {t['chain']}")
-    return ("\nGranted: " + "; ".join(parts) + ".") if parts else ""
-
-
-def _fmt_job(job) -> str:
-    nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
-    shot = "once" if job.one_shot else "recurring"
-    return (f"• {_code(job.id[:8])} [{job.status}] {job.task}\n"
-            f"   {job.schedule_spec} · {shot} · next {nxt}")
-
-
-def cron_reply(user_id: str, data_dir: str, args: List[str]) -> str:
-    """`/cron` — list / show / add / cancel durable scheduled runs."""
-    svc = _cron_service(data_dir)
-    sub = (args[0].lower() if args else "list")
-    rest = args[1:]
-
-    if sub in ("list", "ls"):
-        jobs = svc.list_jobs(user_id=user_id)
-        if not jobs:
-            return ("No cron jobs.\n"
-                    f"Add one: /cron add <schedule> {_CRON_SEP} <task>\n"
-                    "e.g. /cron add every monday 09:00 | summarise the week")
-        shown = jobs[:_LIST_LIMIT]
-        lines = [f"{len(jobs)} cron job(s):"] + [_fmt_job(j) for j in shown]
-        more = _tail(len(shown), len(jobs), "job(s)")
-        if more:
-            lines.append(more)
-        return "\n".join(lines)
-
-    if sub == "show":
-        if not rest:
-            return "Usage: /cron show <id>"
-        jobs = svc.list_jobs(user_id=user_id)
-        job_id, err = resolve_prefix(rest[0], [j.id for j in jobs])
-        if err:
-            return f"{err} — see /cron."
-        job = next(j for j in jobs if j.id == job_id)
-        out = [_fmt_job(job),
-               f"   created {job.created_at} · last run {job.last_run_at or '-'}",
-               f"   max duration {job.max_duration_seconds}s"]
-        # 060 WS-4: the job's prose IS an instruction (the SCOPED tier) — show it
-        # as one, with the precedence that governs it and the skills it pins.
-        from core.rules_sweep import rail_instruction_lines
-        out += ["   " + l for l in rail_instruction_lines(job.task, job.payload)]
-        if job.payload:
-            out.append(f"   payload: {_code(job.payload)}")
-        return "\n".join(out)
-
-    if sub in ("add", "schedule", "new"):
-        from core.owner_create import (create_cron, cron_options_payload,
-                                       split_cron_options)
-        try:
-            rest, options = split_cron_options(rest)
-            tools, extra = cron_options_payload(options)
-        except ValueError as e:
-            return f"❌ {e}\n{_CRON_ADD_USAGE}"
-        raw = " ".join(rest)
-        if _CRON_SEP not in raw:
-            return _CRON_ADD_USAGE
-        spec, _, task = raw.partition(_CRON_SEP)
-        spec, task = spec.strip(), task.strip()
-        if not spec or not task:
-            return f"Both parts are required: /cron add <schedule> {_CRON_SEP} <task>"
-        from cron.schedule import ScheduleError
-        try:
-            job = create_cron(svc, task=task, schedule_spec=spec, user_id=user_id,
-                              tools=tools, via="telegram", extra_payload=extra)
-        except ScheduleError as e:
-            return f"Invalid schedule {_code(spec)}: {e}"
-        except ValueError as e:
-            return f"❌ {e}"
-        nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
-        return (f"✅ Scheduled {_code(job.id[:8])} — next run {nxt}."
-                + _cron_grant_note(job.payload) + _cron_off_note())
-
-    if sub == "edit":
-        if len(rest) < 3:
-            return _CRON_EDIT_USAGE
-        jobs = svc.list_jobs(user_id=user_id)
-        job_id, err = resolve_prefix(rest[0], [j.id for j in jobs])
-        if err:
-            return f"{err} — see /cron."
-        job = next(j for j in jobs if j.id == job_id)
-        from core.owner_create import edit_cron
-        from cron.schedule import ScheduleError
-        try:
-            changed = edit_cron(svc, job, user_id=user_id, field=rest[1],
-                                value=" ".join(rest[2:]), via="telegram")
-        except (ScheduleError, ValueError) as e:
-            return f"❌ {e}\n{_CRON_EDIT_USAGE}"
-        if not changed:
-            return f"Nothing changed on {_code(job_id[:8])}."
-        return f"✅ Edited {_code(job_id[:8])}: {', '.join(changed)}. The rest of the job is kept."
-
-    if sub in ("cancel", "rm", "delete"):
-        if not rest:
-            return "Usage: /cron cancel <id>"
-        jobs = svc.list_jobs(user_id=user_id)
-        job_id, err = resolve_prefix(rest[0], [j.id for j in jobs])
-        if err:
-            return f"{err} — see /cron."
-        if svc.cancel(job_id, user_id=user_id, via="telegram"):
-            return f"✅ Cancelled {_code(job_id[:8])}."
-        return f"Could not cancel {_code(job_id[:8])} — see /cron."
-
-    return ("Usage: /cron [list] · /cron show <id> · "
-            f"/cron add <schedule> {_CRON_SEP} <task> · "
-            "/cron edit <id> schedule|task <value> · /cron cancel <id>")
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +137,7 @@ def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
             title=f"Owner-launched: {task}"[:200],
             body=body,
             priority=9,                     # the owner asked; it goes first
-            payload={"tools": list(_TRADE_TOOLS), "max_steps": 40,
-                     "owner_granted": True},
+            payload={"tools": list(_TRADE_TOOLS), "owner_granted": True},
             actor="owner_seat",   # 036 §3.3: the owner asking IS the grant (audited)
         )
     except Exception as e:
@@ -359,19 +189,6 @@ def _trade_run_notes(data_dir: str) -> List[str]:
 # /goal
 # ---------------------------------------------------------------------------
 
-#: verb -> (target status, reset failures, allowed source statuses or None,
-#: past participle for the refusal message — `f"{verb}ed"` produces "retryed")
-_GOAL_TRANSITIONS = {
-    "ready": ("ready", False, ("triage", "blocked"), "marked ready"),
-    "pause": ("blocked", False, None, "paused"),
-    "resume": ("ready", False, ("blocked",), "resumed"),
-    "retry": ("ready", True, ("blocked",), "retried"),
-    "cancel": ("cancelled", False, None, "cancelled"),
-}
-
-
-_OBJECTIVE_STATUS_VERBS = {"pause": "paused", "activate": "active", "drop": "dropped"}
-
 #: How many recent rows a short-id prefix is resolved against (D11/E21).
 #: ``list_recent`` is newest-first, so this window holds what an owner is
 #: plausibly looking at; a FULL id still resolves through ``board.get``
@@ -418,83 +235,6 @@ def _resolve_goal(board: Any, user_id: str, ref: str):
     return next(g for g in recent if g.id == goal_id), None
 
 
-def _objective_reply(user_id: str, board: Any, rest: List[str]) -> str:
-    """`/goal objective <list|pause|activate|drop> [id]` — steer a whole stream.
-
-    Objectives were CLI-only: a phone-only owner could steer one goal but could
-    not see, pause or resume the standing stream behind it. Read plus the three
-    lifecycle transitions is the whole surface; CREATE stays on the CLI, because a
-    stream needs a body, success criteria and a toolset that chat cannot express
-    well (and, for a money stream, a manifest entry rather than a board row).
-    """
-    from agents.task.goals.board import OBJ_ACTIVE
-    sub = (rest[0].lower() if rest else "list")
-    if sub == "list":
-        objs = board.objectives(user_id=user_id)
-        if not objs:
-            return ("No objectives. Create one on the CLI: "
-                    "polyrob goals objective add \"<title>\"")
-        lines = [f"{len(objs)} objective(s):"]
-        for o in objs:
-            # D39: an unreadable child list is NOT zero children. Rendering "0
-            # live" over a read fault told the owner his objective had gone
-            # quiet when in fact nothing had been read.
-            try:
-                live = str(len(board.children_of(user_id, o.id)))
-            except Exception:
-                logger.warning("objective children unreadable for %s", o.id,
-                               exc_info=True)
-                live = "?"
-            lines.append(f"• {_code(o.id[:8])} [{o.status}] {o.title} — {live} live")
-        lines.append("Steer with /goal objective <pause|activate|drop> <id>.")
-        return "\n".join(lines)
-
-    if sub not in _OBJECTIVE_STATUS_VERBS:
-        return ("Usage: /goal objective <list|pause|activate|drop> [id]\n"
-                "Create an objective on the CLI: polyrob goals objective add \"<title>\"")
-    if len(rest) < 2:
-        return f"Usage: /goal objective {sub} <id> (see /goal objective list)"
-
-    mine = board.objectives(user_id=user_id)
-    oid, err = resolve_prefix(rest[1], [o.id for o in mine])
-    if err:
-        return f"{err} — see /goal objective list."
-    target = _OBJECTIVE_STATUS_VERBS[sub]
-    if not board.set_objective_status(oid, target, user_id=user_id):
-        return f"Could not update {_code(oid[:8])}."
-    note = ("\nIts goals keep running; the planner stops adding new ones."
-            if target != OBJ_ACTIVE else "")
-    return f"✅ {_code(oid[:8])} → {target}.{note}"
-
-
-def _cancel_for_good(user_id: str, board: Any, goal: Any, reason: str) -> str:
-    """034 §11.1 — ``/goal cancel <id>`` means NEVER AGAIN (owner decision).
-
-    Cancels the row (when it is still open) AND switches the title OFF in
-    ``goal_suppressions``: the stream seeder, ``goal_create``/the planner and
-    ``board.create(force=True)`` all refuse it until ``/goal allow``.
-    """
-    from core.goal_suppressions import SCOPE_TITLE, suppress
-    gid = _code(goal.id[:8])
-    note = ""
-    if goal.status not in ("done", "cancelled"):
-        if goal.status == "running":
-            note = "\n⚠️ It is running right now — this run finishes; no new one starts."
-        if not board.update_status(goal.id, "cancelled", user_id=user_id):
-            return f"Could not update {gid} — see /goals."
-    try:
-        suppress(board.db_path, user_id=user_id, scope=SCOPE_TITLE, value=goal.title,
-                 label=goal.title, reason=(reason or "").strip())
-    except Exception as exc:
-        logger.warning("goal suppression not written", exc_info=True)
-        return (f"✅ {gid} → cancelled, but I could NOT switch it off for good "
-                f"({type(exc).__name__}: {str(exc)[:80]}) — it may be created again.")
-    return (f"✅ {gid} → cancelled and switched OFF: “{goal.title}” will not be "
-            f"created again — not by a stream, the planner or me.{note}\n"
-            f"Turn it back on: /goal allow {goal.id[:8]} · just this run next "
-            f"time: /goal cancel <id> --once")
-
-
 def _allow_reply(user_id: str, board: Any, rest: List[str]) -> str:
     """``/goal allow <id|title>`` — turn a switched-off goal back on."""
     from core.goal_suppressions import SCOPE_TITLE, allow, match
@@ -517,93 +257,159 @@ def _allow_reply(user_id: str, board: Any, rest: List[str]) -> str:
                 + " — use more of the title.")
     h = hits[0]
     allow(board.db_path, user_id=user_id, scope=h.scope, value=h.key)
-    return (f"✅ Back ON: “{h.label}”. It can be created again — a stream leg is "
-            f"seeded on its next cadence.")
+    return f"✅ Back ON: “{h.label}”. It can be created again."
+
+
+_GOAL_USAGE = (
+    "Usage: /goal new <what> · /goal <show|retry|pause|stop|allow> <id>\n"
+    "  /goal stop <id> stops it once; add --forever so it is never created again.\n"
+    "  /goal retry <id> re-queues a blocked or paused goal (a stopped one stays stopped).\n"
+    "See /goals for the board.")
+
+
+def _goals_off_note() -> str:
+    """A stored goal only runs while the dispatcher is on — say so (F-5)."""
+    try:
+        from core.config_policy import AutonomyConfig
+        if AutonomyConfig.goals_enabled():
+            return ""
+    except Exception as exc:
+        logger.warning("goals enablement probe failed", exc_info=True)
+        return (f"\n⚠️ I could not check whether my own work is switched on "
+                f"({type(exc).__name__}) — the goal is stored. Check with /status.")
+    return ("\n⚠️ My own work is switched off — the goal is stored, but nothing "
+            "will run it until it is on (/status says how).")
+
+
+def _goal_new(user_id: str, board: Any, rest: List[str]) -> str:
+    """``/goal new <what>`` — a background goal with the owner's grant, the SAME
+    ``core.owner_create.create_goal`` the console and the CLI use (F-11)."""
+    from agents.task.goals.board import DuplicateGoalError, SuppressedGoalError
+    from core.owner_create import create_goal, cron_options_payload, split_cron_options
+    try:   # 085 W3: the same tools=/rig=/target=/chain=/skills= grant as /job new
+        rest, options = split_cron_options(rest)
+        tools, extra = cron_options_payload(options)
+    except ValueError as e:
+        return f"❌ {e}"
+    text = " ".join(rest).strip()
+    if not text:
+        return "Usage: /goal new <what to do> — I work on it in the background."
+    title, body = text, ""
+    if len(text) > 120:
+        title, body = text[:117].rstrip() + "…", text
+    try:
+        goal = create_goal(board, user_id=user_id, title=title, body=body,
+                           tools=tools, extra_payload=extra)
+    except SuppressedGoalError:
+        return ("You switched that goal off for good. Turn it back on first: "
+                "/goal allow <title>")
+    except DuplicateGoalError as e:
+        return (f"I already have a goal much like that: {_code(e.match_id[:8])} "
+                f"“{e.match_title}” — /goal show {e.match_id[:8]}")
+    except ValueError as e:
+        return f"I could not add that goal: {e}"
+    return (f"✅ Goal {_code(goal.id[:8])} [{goal.status}]: {goal.title}\n"
+            f"Follow it: /goal show {goal.id[:8]}{_goals_off_note()}")
+
+
+def _goal_grant(user_id: str, board: Any, rest: List[str]) -> str:
+    """``/goal grant <id> tools=… [rig=…] [target=… chain=…]`` — the owner's
+    grant on an existing goal (085 W3: the line an agent's money ``goal_update``
+    card carries). Written with the owner seat's actor."""
+    usage = "Usage: `/goal grant <id> tools=a,b [rig=<rig>] [target=0x… chain=<network>]`"
+    if len(rest) < 2:
+        return usage
+    goal, err = _resolve_goal(board, user_id, rest[0])
+    if err:
+        return err
+    from core.owner_create import grant_payload
+    try:
+        patch = grant_payload(rest[1:])
+    except ValueError as e:
+        return f"❌ {e}\n{usage}"
+    patch["owner_granted"] = True
+    if not board.update_fields(goal.id, user_id=user_id, payload_patch=patch):
+        return f"Goal {_code(goal.id[:8])} is finished or gone — nothing granted."
+    granted = ", ".join(f"{k} {v}" for k, v in patch.items()
+                        if k not in ("actor", "owner_granted", "target_authored_by"))
+    return f"✅ Granted goal {_code(goal.id[:8])}: {granted}."
+
+
+def _goal_show(user_id: str, board: Any, goal: Any) -> str:
+    """``/goal show`` — what it is, why it is where it is, what it produced, what
+    it cost (when a run recorded it) and the session to open (F-12)."""
+    from core.goal_owner_verbs import reason
+    out = [f"{_code(goal.id[:8])} [{goal.status}] {goal.title}",
+           reason(board, goal, user_id)]
+    if goal.body and goal.body != goal.title:
+        out.append(goal.body[:400])
+    out.append(f"priority {goal.priority} · failures "
+               f"{goal.consecutive_failures}/{goal.max_retries}")
+    if goal.result:
+        res = str(goal.result)
+        out.append("result: " + (res[:1500] + "…" if len(res) > 1500 else res))
+    cost = (goal.payload or {}).get("cost_usd")
+    if cost is not None:
+        try:
+            out.append(f"cost: ${float(cost):.2f}")
+        except (TypeError, ValueError):
+            out.append(f"cost: unavailable (unreadable value {cost!r})")
+    if goal.session_id:
+        out.append(f"session: {goal.session_id}")
+    return "\n".join(out)
+
+
+#: `--forever` as typed, and as a phone keyboard turns `--` into a dash.
+FOREVER_FLAGS = ("--forever", "—forever", "–forever")
 
 
 def goal_reply(user_id: str, data_dir: str, args: List[str],
                board: Optional[Any] = None) -> str:
-    """`/goal <verb> <id>` — the WRITE counterpart to the read-only `/goals`.
+    """`/goal <verb> …` — the WRITE counterpart to the read-only `/goals`.
+
+    080 WS-2: ``new`` creates; ``retry`` is the ONE re-queue (``ready`` and
+    ``resume`` are deleted); ``pause`` writes ``paused``; ``stop`` is once by
+    default and ``--forever`` switches the title off — the SAME
+    ``core.goal_suppressions.stop_goal`` every path calls.
 
     ``board`` lets the caller share an already-open GoalBoard (the harness opens
     one per request) instead of opening a second connection to the same file.
     """
     from agents.task.goals.board import GoalBoard
+    from core import goal_owner_verbs as V
+    from core.goal_suppressions import stop_goal
     if board is None:
         from core.runtime_paths import goals_db_path
         board = GoalBoard(goals_db_path(data_dir))
 
     verb = (args[0].lower() if args else "")
     rest = args[1:]
-    if verb == "objective":
-        return _objective_reply(user_id, board, rest)
     if verb == "allow":
         return _allow_reply(user_id, board, rest)
-    if verb not in _GOAL_TRANSITIONS and verb != "show":
-        return ("Usage: /goal <show|ready|pause|resume|retry|cancel|allow> <id>\n"
-                "  /goal cancel <id> switches it off for good; add --once to stop "
-                "just this run.\n"
-                "See /goals for the board.")
-    once = "--once" in rest
-    rest = [a for a in rest if a != "--once"]
+    if verb == "new":
+        return _goal_new(user_id, board, rest)
+    if verb == "grant":
+        return _goal_grant(user_id, board, rest)
+    if verb not in V.OWNER_GOAL_VERBS:
+        return _GOAL_USAGE
+    forever = any(a in FOREVER_FLAGS for a in rest)
+    rest = [a for a in rest if a not in FOREVER_FLAGS]
     if not rest:
         return f"Usage: /goal {verb} <id> (see /goals)"
 
     goal, err = _resolve_goal(board, user_id, rest[0])
     if err:
         return err
-    goal_id = goal.id
-
     if verb == "show":
-        out = [f"{_code(goal.id[:8])} [{goal.status}] {goal.title}"]
-        if goal.body:
-            out.append(goal.body[:400])
-        out.append(f"priority {goal.priority} · failures {goal.consecutive_failures}")
-        if goal.last_failure_error:
-            out.append(f"last failure: {goal.last_failure_error[:200]}")
-        return "\n".join(out)
-
-    if verb == "cancel" and not once:
-        return _cancel_for_good(user_id, board, goal, " ".join(rest[1:]))
-
-    target, reset, allowed, participle = _GOAL_TRANSITIONS[verb]
-    if allowed is not None and goal.status not in allowed:
-        base = (f"{_code(goal.id[:8])} is {goal.status} — only "
-                f"{'/'.join(allowed)} goals can be {participle}.")
-        # `waiting` is the ORDINARY state for a seeded chain whose prerequisite
-        # has not run, and the bare refusal above was a dead end: the owner was
-        # told no with no reason, no prerequisite and no next step
-        # (2026-09-08). Forcing the transition would be wrong — the dependency
-        # is doing its job — so explain it instead.
-        if goal.status == "waiting":
-            try:
-                pending = [d for d in (board.dependencies(goal.id) or [])
-                           if (board.get(d) is not None
-                               and getattr(board.get(d), "status", None) != "done")]
-            except Exception:
-                pending = []
-            if pending:
-                out = [base, "It is queued behind:"]
-                for dep_id in pending:
-                    dep = board.get(dep_id)
-                    out.append(f"  • {_code(dep_id[:8])} [{dep.status}] {dep.title}")
-                out.append("That runs first, then this one is picked up "
-                           "automatically. Detail: /goal show <id>")
-                return "\n".join(out)
-            return (f"{base}\nNothing unfinished is blocking it — it looks "
-                    f"stranded and should be picked up on the next sweep. "
-                    f"Detail: /goal show {goal.id[:8]}")
-        return base
-    if goal.status == target:
-        return f"{_code(goal.id[:8])} is already {target}."
-    warning = ""
-    if verb == "pause" and goal.status == "running":
-        warning = "\n⚠️ It is running right now — the pause takes effect after this run."
-    ok = board.update_status(goal_id, target, reset_failures=reset, user_id=user_id)
-    if not ok:
-        return f"Could not update {_code(goal.id[:8])} — see /goals."
-    suffix = " (failures cleared)" if reset else ""
-    return f"✅ {_code(goal.id[:8])} → {target}{suffix}.{warning}"
+        return _goal_show(user_id, board, goal)
+    if verb == "stop":
+        res = stop_goal(board, user_id=user_id, goal=goal, forever=forever,
+                        reason=" ".join(rest[1:]))
+    elif verb == "pause":
+        res = V.pause_goal(board, user_id=user_id, goal=goal)
+    else:
+        res = V.retry_goal(board, user_id=user_id, goal=goal)
+    return ("✅ " if res.ok else "") + res.message
 
 
 # ---------------------------------------------------------------------------
@@ -1036,7 +842,7 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
 
     tokens = list(args)
     execute = False
-    if tokens and tokens[-1].lower() in ("go", "execute", "confirm"):
+    if tokens and is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
 
@@ -1092,8 +898,9 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
     if not execute:
         _as = ((f" from {token_in}" if token_in != "native" else "")
                + (f" as {token_out}" if token_out != "native" else ""))
-        body += ("\n\nAdd `go` to execute: "
-                 f"/bridge {from_chain} {to_chain} {amount_raw}{_as} go")
+        from core.surfaces.cards import with_go_hint
+        body = with_go_hint(body, "\n\nAdd `go` to execute: "
+                            f"/bridge {from_chain} {to_chain} {amount_raw}{_as} go")
     return body
 
 

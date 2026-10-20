@@ -33,7 +33,7 @@ capabilities = ["high_impact", "delegate_blocked", "shared_identity", "writes_so
 untrusted_output = true
 cli = "static"
 permissions = ["network.read", "network.write", "social.post"]
-gate = { tier = "disabled", label = "TWITTER_ENABLED", remedy = "owner configures X user credentials; POLYROB_OVERRIDES=TWITTER_ENABLED=true unlocks writes" }
+gate = { tier = "disabled", label = "TWITTER_ENABLED", remedy = "x_credentials" }
 
 [tools.twitter.verbs.twitter_get_dms]
 effect = "none"
@@ -49,29 +49,24 @@ effect = "none"
 effect = "none"
 [tools.twitter.verbs.twitter_whoami]
 effect = "none"
-# outbound = "write": the words ARE the act (produced output; the refusal-taint
-# gate holds it). text_fields: what the send-time financial-claim gate reads.
+# outbound = "write": the words ARE the act (produced output).
 # late_send: a late owner approval sends the approved params once
 # (polyrob_x.twitter_tool.send_approved), never re-running the job.
 [tools.twitter.verbs.twitter_post]
 effect = "social"
 outbound = "write"
-text_fields = ["text", "poll_options"]
 late_send = true
 [tools.twitter.verbs.twitter_thread]
 effect = "social"
 outbound = "write"
-text_fields = ["texts"]
 late_send = true
 [tools.twitter.verbs.twitter_reply]
 effect = "social"
 outbound = "write"
-text_fields = ["text"]
 late_send = true
 [tools.twitter.verbs.twitter_quote]
 effect = "social"
 outbound = "write"
-text_fields = ["text"]
 late_send = true
 [tools.twitter.verbs.twitter_retweet]
 effect = "social"
@@ -98,7 +93,6 @@ effect = "social"
 [tools.twitter.verbs.twitter_dm]
 effect = "comms"
 outbound = "write"
-text_fields = ["text"]
 late_send = true
 # Inherits the tool's ceiling by design (tests/test_effect_classification_ratchet.py
 # INHERIT_BY_DESIGN); the row exists because a pack's unrowed action is refused.
@@ -112,7 +106,7 @@ capabilities = ["high_impact", "delegate_blocked", "shared_identity", "writes_so
 untrusted_output = true
 cli = "static"
 permissions = ["network.read", "network.write", "social.post"]
-gate = { flag = "X_BROWSER_ENABLED", tier = "disabled", label = "X_BROWSER_ENABLED + captured X session", remedy = "owner enables X_BROWSER_ENABLED and runs `polyrob x-account capture-session`" }
+gate = { flag = "X_BROWSER_ENABLED", tier = "disabled", label = "X_BROWSER_ENABLED + captured X session", remedy = "x_browser_session" }
 
 [tools.x_browser.verbs.x_browser_x_login_check]
 effect = "none"
@@ -120,7 +114,6 @@ effect = "none"
 effect = "social"
 approval = ["recommended", "always_queued"]
 outbound = "write"
-text_fields = ["text"]
 # Registering an X account is an identity-creating act: owner-queued even
 # under autonomous mode.
 [tools.x_browser.verbs.x_browser_x_signup_start]
@@ -129,11 +122,9 @@ approval = ["always_queued"]
 [tools.x_browser.verbs.x_browser_x_reply]
 approval = ["recommended", "always_queued"]
 outbound = "write"
-text_fields = ["text"]
 [tools.x_browser.verbs.x_browser_x_dm]
 approval = ["recommended", "always_queued"]
 outbound = "write"
-text_fields = ["text"]
 # Inherits the ceiling by design (INHERIT_BY_DESIGN).
 [tools.x_browser.verbs.x_browser_x_read_dms]
 

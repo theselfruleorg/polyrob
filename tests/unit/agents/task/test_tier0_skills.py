@@ -1,22 +1,14 @@
-"""P1 — Tier-0 standard skill library: each body exists, validates, and trigger-matches.
+"""P1 — Tier-0 standard skill library: each body exists and validates.
 
 These are the minimum "basic required" skills a general agent must ship. Each must have
-a loadable, valid SKILL.md and a representative task that activates it.
+a loadable, valid SKILL.md (081 Q2: the model loads it from the index; no keyword match).
 """
 import pytest
 
 from agents.task.agent.skill_manager import SkillManager
 
-# id -> a representative task string that SHOULD activate the skill
-TIER0 = {
-    "presentation-creator": "make me a slideshow about our roadmap",
-    "web-research": "research the latest on small modular reactors and cite sources",
-    "file-data-ops": "parse this csv and extract the rows where status is open",
-    "document-writing": "draft a report summarizing the findings",
-    "coding-workflow": "fix the bug in the auth handler and run tests",
-    "task-planning": "how should i approach building this feature, break it down",
-    "email-comms": "draft an email to the team and follow up",
-}
+TIER0 = ["presentation-creator", "web-research", "file-data-ops", "document-writing",
+         "coding-workflow", "task-planning", "email-comms"]
 
 
 @pytest.fixture(scope="module")
@@ -32,12 +24,8 @@ def test_tier0_body_present_and_valid(sm, skill_id):
     assert res.is_valid, f"{skill_id} body invalid: {res.errors}"
 
 
-@pytest.mark.parametrize("skill_id,task", sorted(TIER0.items()))
-def test_tier0_trigger_matches(sm, skill_id, task):
-    matched = sm.get_skills_for_session(task=task, max_skills=20)
-    assert skill_id in {m.skill_id for m in matched}, (
-        f"task {task!r} did not activate {skill_id}; got {[m.skill_id for m in matched]}"
-    )
+def test_tier0_skills_are_index_lines(sm):
+    assert set(TIER0) <= {m.skill_id for m in sm.get_catalog_skills(tool_ids=[], max_skills=500)}
 
 
 def test_tier0_rules_declare_known_tools(sm):

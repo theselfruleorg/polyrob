@@ -16,7 +16,8 @@ Layout::
     [caps]
     per_tx_usd = 250.0          # hard per-transaction cap
     daily_usd = 100.0           # hard rolling-24h cap (the signer's own ledger)
-    x402_per_payment_usd = 250.0   # optional, default per_tx_usd
+    x402_per_payment_usd = 5.0  # optional, default $5 (085 D4); above it: root approval
+    x402_daily_usd = 25.0       # optional x402 venue cap; a file without it = daily_usd
 
     [policy]
     chains = ["base"]           # EVM chains the signer will sign for
@@ -58,8 +59,16 @@ from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+#: 085 D4: the per-payment x402 cap when ``signer.toml`` names none. Never the
+#: per-tx cap: an EIP-3009 signature skips ``tx_guard``, so it gets its own small cap.
+DEFAULT_X402_PER_PAYMENT_USD = 5.0
+#: 085 W4: the x402 venue rolling-24h cap a FRESH provision writes when the operator
+#: env names none. A ``signer.toml`` without the key keeps the old behaviour: the
+#: venue cap is ``daily_usd`` (no new refusal on an existing box).
+DEFAULT_X402_DAILY_USD = 25.0
+
 _TABLES = {
-    "caps": {"per_tx_usd", "daily_usd", "x402_per_payment_usd"},
+    "caps": {"per_tx_usd", "daily_usd", "x402_per_payment_usd", "x402_daily_usd"},
     "policy": {"chains", "approval_ttl_sec", "x402_max_window_sec", "hyperliquid_orders"},
     "server": {"socket", "socket_group", "state_dir", "client_uids", "peer_check"},
     "identity": {"network", "operational_venue", "treasury", "x402", "polymarket",
@@ -101,11 +110,17 @@ class SignerConfig:
     sweep_destination: Optional[str] = None
     sweep_tokens: Dict[str, str] = field(default_factory=dict)
     env: Dict[str, str] = field(default_factory=dict, repr=False)
+    x402_daily_usd: Optional[float] = None
+
+    def __post_init__(self):
+        if self.x402_daily_usd is None:
+            object.__setattr__(self, "x402_daily_usd", float(self.daily_usd))
 
     def summary(self) -> Dict[str, object]:
         """What ``ping`` reports: the caps, never the env (RPC URLs carry keys)."""
         return {"per_tx_usd": self.per_tx_usd, "daily_usd": self.daily_usd,
                 "x402_per_payment_usd": self.x402_per_payment_usd,
+                "x402_daily_usd": self.x402_daily_usd,
                 "x402_max_window_sec": self.x402_max_window_sec,
                 "chains": list(self.chains), "network": self.network,
                 "operational_venue": self.operational_venue,
@@ -159,7 +174,9 @@ def parse_signer_config(data: dict) -> SignerConfig:
     sweep = data.get("sweep", {})
     per_tx = _cap(caps, "per_tx_usd")
     daily = _cap(caps, "daily_usd")
-    x402 = _cap(caps, "x402_per_payment_usd", required=False, default=per_tx)
+    x402 = _cap(caps, "x402_per_payment_usd", required=False,
+                default=DEFAULT_X402_PER_PAYMENT_USD)
+    x402_daily = _cap(caps, "x402_daily_usd", required=False, default=daily)
     chains = policy.get("chains", [])
     if not isinstance(chains, list) or not all(isinstance(c, str) and c for c in chains):
         raise SignerConfigError("[policy] chains must be a list of chain names")
@@ -205,7 +222,7 @@ def parse_signer_config(data: dict) -> SignerConfig:
         raise SignerConfigError("[identity] operational_venue must be treasury or x402")
     return SignerConfig(
         per_tx_usd=per_tx, daily_usd=daily, x402_per_payment_usd=x402,
-        chains=tuple(chains),
+        x402_daily_usd=x402_daily, chains=tuple(chains),
         socket=str(server.get("socket") or "/run/polyrob-signer/signer.sock"),
         socket_group=(str(server["socket_group"]) if server.get("socket_group") else None),
         state_dir=str(server.get("state_dir") or "/var/lib/polyrob-signer"),
@@ -248,6 +265,7 @@ def render_signer_toml(cfg: SignerConfig) -> str:
              f"per_tx_usd = {cfg.per_tx_usd!r}",
              f"daily_usd = {cfg.daily_usd!r}",
              f"x402_per_payment_usd = {cfg.x402_per_payment_usd!r}",
+             f"x402_daily_usd = {cfg.x402_daily_usd!r}",
              "", "[policy]",
              "chains = [" + ", ".join(_toml_str(c) for c in cfg.chains) + "]",
              f"approval_ttl_sec = {cfg.approval_ttl_sec}",

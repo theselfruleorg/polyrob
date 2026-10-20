@@ -183,7 +183,7 @@ class _FakeContainer:
 @pytest.mark.asyncio
 async def test_notify_owner_pending_sends_when_flag_on(tmp_path, monkeypatch):
     monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     _seed_self_pending(tmp_path)
     sink = _FakeSink()
     ok = await self_evolution.maybe_notify_owner_pending(
@@ -196,7 +196,7 @@ async def test_notify_owner_pending_sends_when_flag_on(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_notify_owner_pending_noop_when_flag_off(tmp_path, monkeypatch):
     monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "false")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     _seed_self_pending(tmp_path)
     sink = _FakeSink()
     ok = await self_evolution.maybe_notify_owner_pending(
@@ -245,7 +245,7 @@ async def test_push_owner_message_records_notice_when_no_sink(monkeypatch):
 async def test_push_owner_message_no_notice_when_delivered(monkeypatch):
     import core.self_evolution as se
     import core.surfaces.user_delivery as ud
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     calls = []
     monkeypatch.setattr(
         ud, "_record_notice",
@@ -269,7 +269,7 @@ async def test_push_owner_message_dedups_identical_content(monkeypatch):
     """§3.2: the shared push rail now has a memory — the same text twice within
     the dedup window sends once (the watermark duplicate-spam class)."""
     import core.self_evolution as se
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     sent = []
 
     class _Sink:

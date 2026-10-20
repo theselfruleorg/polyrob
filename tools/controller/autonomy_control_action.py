@@ -1,7 +1,7 @@
 """031: the owner-only `autonomy_control` action — the agent's hand on the ONE
 pause record (``core.autonomy_control``), so "stop trading for 6 hours" said in
 chat becomes durable STATE every loop reads, not a row cancellation the next
-stream cycle undoes.
+cycle undoes.
 
 Registered UNCONDITIONALLY by the Controller (``tools/controller/service.py``,
 next to ``_register_default_actions``) — not a tool_id, so it is present in
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 #: ``tests/unit/tools/controller/test_autonomy_action_scopes.py`` pins the two
 #: together: a scope the record accepts but this Literal rejects is a pause the
 #: owner can write from every seat EXCEPT by asking the agent.
-_SCOPE = Literal["all", "trading", "streams", "planner", "cron", "social",
+_SCOPE = Literal["all", "trading", "cron", "social",
                  "oversight", "pings", "apps", "release"]
 
 
@@ -51,8 +51,8 @@ def register_autonomy_control_action(controller) -> None:
 	"""Register `autonomy_control` on *controller*'s registry (unconditional)."""
 
 	@controller.registry.action(
-		"Pause your own autonomous/background work (goal dispatch, planner, stream "
-		"seeding, cron, self-wake, social posts, the dev/ops loops) — durable across "
+		"Pause your own autonomous/background work (goal dispatch, cron, self-wake, "
+		"social posts, the dev/ops loops) — durable across "
 		"restarts. Call pause ONLY when the owner explicitly asks you to stop, pause or "
 		"halt your autonomous or background work, then quote the result verbatim. A "
 		"bare \"stop\" in the middle of the owner's own request means stop the current "

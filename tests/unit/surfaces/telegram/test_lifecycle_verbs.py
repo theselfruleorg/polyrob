@@ -12,6 +12,9 @@ from core.surfaces import cards
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "unit")
+    # supervisor() also needs this process's cgroup to be a `.service`; a pytest
+    # under a login shell sits in a `.scope`, which made the suite host-dependent.
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)
     d = tmp_path / "data"
     lc.record_boot(data_home=d)  # this live, supervised process is "the service"
     return str(d)

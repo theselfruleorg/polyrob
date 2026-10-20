@@ -1,7 +1,7 @@
 """<environment> foundation block (proposal 014-C1).
 
-The agent gets told WHERE IT LIVES — instance, platform, data dir, absolute
-workspace path + persistence semantics, capability-axis levels, host executable
+The agent gets told WHERE IT LIVES — instance, platform, data dir, workspace
+persistence semantics, capability-axis levels, host executable
 probe — as a foundation message pinned after runtime identity. Emitted ONLY
 under local mode or effective autonomous mode (D-3); a plain multi-tenant
 server session is byte-identical (no message).
@@ -21,7 +21,6 @@ def test_block_emitted_under_local(monkeypatch, tmp_path):
     from agents.task.agent.core.env_context import build_environment_context
     text = build_environment_context(session_id="s1", user_id="rob")
     assert text and "<environment>" in text and "</environment>" in text
-    assert "Workspace" in text
     assert "persist" in text.lower()  # the persistence sentence
     assert "compute posture" in text.lower()
 
@@ -90,3 +89,21 @@ def test_retrieval_injects_environment_between_identity_and_self_context():
     env = attrs.index("_environment_message")
     self_ctx = attrs.index("_self_context_message")
     assert ident < env < self_ctx
+
+
+def test_workspace_path_is_its_own_message_after_the_catalogs(monkeypatch, tmp_path):
+    """081 WS-3.3: the per-session path is not in <environment> (which is then
+    the same for every session on the install); it rides its own row after the
+    catalogs, with the task, so two runs of one job share the prefix."""
+    _local(monkeypatch, tmp_path)
+    from agents.task.agent.core.env_context import (build_environment_context,
+                                                    build_workspace_note)
+    from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
+    env = build_environment_context(session_id="s1", user_id="rob")
+    assert "Workspace (absolute)" not in env and "sessions/rob" not in env
+    assert build_environment_context(session_id="s2", user_id="rob") == env
+    note = build_workspace_note("s1", "rob")
+    assert "Workspace (absolute)" in note and "sessions/rob" in note
+    keys = [layer.key for layer in FOUNDATION_LAYERS]
+    assert keys[-2:] == ["workspace", "initial_task"]
+    assert keys.index("tool_catalog") < keys.index("workspace")

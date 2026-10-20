@@ -5,9 +5,15 @@ skills actually get reused?* Two tiny tenant-scoped tables in
 ``<data_dir>/skill_usage.db`` (shared WAL+jitter helpers):
 
 - ``skill_provenance`` — who authored a skill and when (``user``/``agent``/
-  ``background_review``);
+  ``background_review``), and the reviewed revision (``content_sha256``) an
+  active tenant skill must match to load;
 - ``skill_usage`` — per-(skill,user) load_count + last_used_at, bumped each time the
-  agent pulls a skill body via ``load_skill``.
+  agent pulls a skill body via ``load_skill``;
+- ``skill_provenance_log`` — the change ledger (081 WS-5.2): one row per skill
+  mutation (``action``, ``actor``, ``before_sha``/``after_sha``, the ``archive_path``
+  that holds the prior body, ``absorbed_into`` for a consolidation delete, and the
+  ``scope`` — ``user`` for a tenant skill, ``bundled`` for a seeded bundled copy).
+  ``skill_manage rollback`` reads it; it is append-only.
 
 Feeds W5 (curator: archive unused authored skills) and W7 (`/insights`: authored-skill
 reuse %). Pure storage; fail-open at the call sites (a metrics write must never break
@@ -56,6 +62,22 @@ class SkillUsageStore:
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
+                CREATE TABLE IF NOT EXISTS skill_provenance_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    skill_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'user',
+                    action TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    before_sha TEXT,
+                    after_sha TEXT,
+                    archive_path TEXT,
+                    absorbed_into TEXT,
+                    pending INTEGER NOT NULL DEFAULT 0,
+                    ts REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_skill_provenance_log_skill
+                    ON skill_provenance_log (skill_id, scope, user_id, id);
                 CREATE TABLE IF NOT EXISTS skill_install_audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -67,6 +89,12 @@ class SkillUsageStore:
                 );
                 """
             )
+            # 081 WS-4.2: the reviewed revision of an ACTIVE tenant skill lives
+            # here (it lived in the tenant rules.json). Added in place on an
+            # older db; NULL = no revision recorded here (see get_revision).
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(skill_provenance)")}
+            if "content_sha256" not in cols:
+                conn.execute("ALTER TABLE skill_provenance ADD COLUMN content_sha256 TEXT")
             conn.commit()
         finally:
             conn.close()
@@ -91,6 +119,65 @@ class SkillUsageStore:
             (skill_id, user_id), fetch="one",
         )
         return dict(row) if row else None
+
+    # --- revision (the hash an active tenant skill must match to load) --------
+
+    def record_revision(self, skill_id: str, user_id: str, content_sha256: Optional[str],
+                        created_by: str) -> None:
+        """Commit the reviewed revision of an active tenant skill (``None`` clears
+        it). Not skipped for any tenant id: an integrity record is not a metric.
+        Raises on a db error — the caller's write must fail, not load unverified."""
+        execute_retry(
+            self.db_path,
+            """INSERT INTO skill_provenance (skill_id,user_id,created_by,created_at,content_sha256)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(skill_id,user_id) DO UPDATE SET content_sha256=excluded.content_sha256""",
+            (skill_id, user_id, created_by, self._now(), content_sha256),
+        )
+
+    def get_revision(self, skill_id: str, user_id: str) -> Optional[str]:
+        """The recorded revision, or ``None`` when none is recorded here. Raises
+        when the store cannot be read (an unreadable store is not an empty one)."""
+        row = execute_retry(
+            self.db_path,
+            "SELECT content_sha256 FROM skill_provenance WHERE skill_id=? AND user_id=?",
+            (skill_id, user_id), fetch="one",
+        )
+        return row["content_sha256"] if row else None
+
+    # --- the change ledger (081 WS-5.2) ----------------------------------------
+
+    def record_change(self, skill_id: str, user_id: str, *, action: str, actor: str,
+                      before_sha: Optional[str] = None, after_sha: Optional[str] = None,
+                      archive_path: Optional[str] = None,
+                      absorbed_into: Optional[str] = None, pending: bool = False,
+                      scope: str = "user") -> None:
+        """Append one mutation row. Raises on a db error; the writer logs it and
+        never fails a write that already landed on disk over it."""
+        execute_retry(
+            self.db_path,
+            """INSERT INTO skill_provenance_log
+                   (skill_id,user_id,scope,action,actor,before_sha,after_sha,
+                    archive_path,absorbed_into,pending,ts)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (skill_id, user_id, scope, action, actor, before_sha, after_sha,
+             archive_path, absorbed_into, int(bool(pending)), self._now()),
+        )
+
+    def list_changes(self, skill_id: str, user_id: Optional[str] = None, *,
+                     scope: str = "user", limit: int = 50) -> List[Dict]:
+        """The newest-first ledger rows of one skill. A ``bundled`` row is not
+        tenant-scoped (the seeded copy serves every tenant): pass no ``user_id``.
+        Raises when the store cannot be read."""
+        sql = "SELECT * FROM skill_provenance_log WHERE skill_id=? AND scope=?"
+        params: list = [skill_id, scope]
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params.append(user_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(int(limit))
+        rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+        return [dict(r) for r in rows]
 
     # --- usage ---------------------------------------------------------------
 
@@ -208,23 +295,16 @@ _STORE: Optional[SkillUsageStore] = None
 
 
 def _default_data_dir() -> str:
-    """Stable ABSOLUTE data dir so the singleton resolves the same file regardless of
-    cwd. Otherwise the relative ``"data"`` default (used by the load_skill/provenance
-    call sites) could resolve to a different directory than the curator's
-    ``config.data_dir`` (absolute), silently splitting reuse counts from the curator
-    and /insights.
+    """Stable ABSOLUTE data dir (cwd-independent), so the load_skill/provenance call
+    sites and the curator's ``config.data_dir`` share one file.
 
-    WS-3 (2026-07-16): routes through the data-home SSOT (``resolve_data_home()`` —
-    ``POLYROB_DATA_DIR`` else ``cwd/.polyrob``) instead of anchoring to the repo/install
-    tree, so the usage DB lands with the other sidecar DBs (goals.db/cron.db/…) and the
-    curator/insights read the same file. The explicit ``POLYROB_DATA_DIR`` short-circuit
-    is kept for byte-identical behaviour when it is set.
+    The sidecar-db rule (``core.runtime_paths.data_home_db_path``): the db lives
+    beside goals.db/cron.db. It equals the skills tree's ``effective_data_home()``
+    whenever ``POLYROB_DATA_DIR`` is set (every deploy sets it); a server without it
+    keeps the db where its history already is.
     """
-    env = os.getenv("POLYROB_DATA_DIR")
-    if env:
-        return os.path.abspath(env)
-    from core.runtime_paths import resolve_data_home
-    return str(resolve_data_home())
+    from core.runtime_paths import data_home_db_path
+    return os.path.dirname(os.path.abspath(data_home_db_path("skill_usage.db")))
 
 
 def get_skill_usage_store(data_dir: Optional[str] = None) -> SkillUsageStore:

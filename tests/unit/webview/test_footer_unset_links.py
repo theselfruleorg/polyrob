@@ -3,7 +3,7 @@
 ``webgate.branding_config()`` used to default ``brand_url``/``org_url`` (and the
 ``terms``/``privacy`` URLs derived from ``brand_url``) to a placeholder host
 (``https://your-polyrob-host.example``) or the framework author's own org site
-(``https://theselfrule.org``) when the operator never set the corresponding
+when the operator never set the corresponding
 env var. Every page rendered those as real ``<a>`` footer links, so a fresh,
 unconfigured deploy shipped three dead links on every page. The fix: an unset
 env var renders as an empty string, and ``layout.html`` only emits a footer
@@ -32,6 +32,8 @@ def _clear_branding_env(monkeypatch):
         "POLYROB_ORG_URL",
         "POLYROB_TERMS_URL",
         "POLYROB_PRIVACY_URL",
+        "POLYROB_SUPPORT_URL",
+        "POLYROB_SUPPORT_HANDLE",
     ):
         monkeypatch.delenv(k, raising=False)
 
@@ -45,8 +47,10 @@ def test_branding_config_returns_empty_strings_when_unset(monkeypatch):
     assert cfg["org_url"] == ""
     assert cfg["terms_url"] == ""
     assert cfg["privacy_url"] == ""
-    # support_url keeps its real Telegram default — not a placeholder host.
-    assert cfg["support_url"] == "https://t.me/tmachinrobot"
+    # support_url/support_handle have no default either: an install never
+    # points its users at another operator's support channel.
+    assert cfg["support_url"] == ""
+    assert cfg["support_handle"] == ""
 
 
 def test_footer_hides_unset_links(monkeypatch):
@@ -54,7 +58,7 @@ def test_footer_hides_unset_links(monkeypatch):
     body = _layout_html(monkeypatch)
     assert body.strip(), "the layout rendered nothing"
     assert "your-polyrob-host.example" not in body
-    assert "theselfrule.org" not in body
+    assert "t.me/" not in body
     # No terms/privacy footer-link anchors at all when both are unset.
     assert 'href="">' not in body
 

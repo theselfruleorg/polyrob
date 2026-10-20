@@ -18,3 +18,25 @@ def test_junk_and_disable_idioms_fall_back_to_default(monkeypatch):
     for raw in ("abc", "", "  ", "off", "none"):
         monkeypatch.setenv("RUN_BUDGET_USD", raw)
         assert run_budget_usd() == 0.0, raw
+
+
+# --- 083 WS-3: AUTONOMOUS_RUN_BUDGET_USD ---
+from core.config_policy.policy import autonomous_run_budget_usd
+
+
+def test_autonomous_run_budget_default_is_two_dollars(monkeypatch):
+    monkeypatch.delenv("AUTONOMOUS_RUN_BUDGET_USD", raising=False)
+    assert autonomous_run_budget_usd() == 2.0
+
+
+def test_autonomous_run_budget_live_read_and_zero_is_off(monkeypatch):
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "0.75")
+    assert autonomous_run_budget_usd() == 0.75
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "0")
+    assert autonomous_run_budget_usd() == 0.0
+
+
+def test_autonomous_run_budget_junk_falls_back_to_default(monkeypatch):
+    for raw in ("abc", "", "  "):
+        monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", raw)
+        assert autonomous_run_budget_usd() == 2.0, raw

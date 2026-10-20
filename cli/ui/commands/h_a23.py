@@ -28,8 +28,6 @@ def register(reg, Command) -> None:
     h_attach.register(reg, Command)
     h_steer.register(reg, Command)         # /steer (new on every seat)
     h_goal_one.register(reg, Command)      # /goal
-    from cli.ui.commands import h_rail
-    h_rail.register(reg, Command)          # /rail (036)
     h_reject.register(reg, Command)        # /reject
     h_money_verbs.register(reg, Command)   # /wallet /trade /bridge /dev
     h_mode.register(reg, Command)          # /mode

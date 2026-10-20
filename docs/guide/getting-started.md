@@ -235,14 +235,14 @@ $ polyrob
 ```
 /help                    the grouped command list; /help <verb> explains one
 /status                  live session status: tokens, cost, context
-/usage                   authoritative usage and cost breakdown
+/usage [days]            AI cost by kind of work, job, model and day
 /model <provider> <model>  swap the model live and persist it as the default
 /memory [search <query>]   the memory provider, or recall across sessions
 /tools                   the agent's registered tools
 /goals                   the goal board summary
 /autonomy                loops, scheduled cron jobs, open goals
 /inbox                   everything waiting on a decision from you
-/thread [n | <hours>h]   our conversation across every session and rail, newest last
+/thread [n | <hours>h]   our conversation across every session and background run, newest last
 /pause [word…] [for 6h]  stop autonomous work now; /resume lifts it
 /context                 what is in the context window, and what the provider billed
 /compact                 age old tool results, then compact the rest through the model
@@ -299,7 +299,7 @@ it again: [configuration.md §6](configuration.md#6-the-autonomy-dial).
     ├── goals.db            # the goal board
     ├── cron.db             # scheduled runs
     ├── conversations.db    # per-correspondent conversation log (third parties)
-    ├── owner_thread.db     # your ONE conversation with the agent, every session and rail
+    ├── owner_thread.db     # your ONE conversation with the agent, every session and background run
     ├── telemetry_events.db # events, costs, wallet spend
     └── sessions/
         └── session-abc123/

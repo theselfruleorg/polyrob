@@ -159,8 +159,12 @@ class AgentConstructionHelpersMixin:
 			_local = local_mode_enabled()
 			# Server tier searches the tenant's session workspace, NEVER the process
 			# CWD (install dir); on any failure leave it None so server-mode loads nothing.
+			# C-2: a local process running FROM the code root (the service under
+			# POLYROB_LOCAL=1, cwd /opt/polyrob) takes the workspace too.
+			from agents.task.agent.core.project_context import is_code_root_dir
+			_cwd = os.getcwd()
 			_workspace_dir = None
-			if not _local:
+			if not _local or is_code_root_dir(_cwd):
 				try:
 					from agents.task.path import pm
 					_workspace_dir = str(pm().get_workspace_dir(
@@ -187,7 +191,7 @@ class AgentConstructionHelpersMixin:
 				local=_local,
 				autoload=AutonomyConfig.project_context_autoload(),
 				server_mode=AutonomyConfig.project_context_server_mode(),
-				cwd=os.getcwd(),
+				cwd=_cwd,
 				workspace_dir=_workspace_dir,
 				cap_tokens=_cap_tokens,
 				context_window=_context_window,

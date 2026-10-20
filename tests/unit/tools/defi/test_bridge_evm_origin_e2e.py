@@ -14,7 +14,7 @@ import pytest
 from core.wallet import bridge_guard
 from tools.defi import bridge_verb as bv
 
-HOLDER = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+HOLDER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 DEPOSITORY = "0x4cd00e387622c35bddb9b4c962c136462338bc31"  # pinned RelayDepository
 BASE_ID, ROBINHOOD_ID = 8453, 4663
 AMOUNT_ETH = 0.036
@@ -178,10 +178,17 @@ def rig(monkeypatch, tmp_path):
     monkeypatch.setattr("core.wallet.broadcast.evm.EvmRail", _Rail)
     monkeypatch.setattr(bridge_guard, "bridges_db_path",
                         lambda: str(tmp_path / "bridges.db"))
-    # Destination balance: before, then after the arrival.
-    seq = iter([10 ** 15, 10 ** 15 + OUT_RAW, 10 ** 15 + OUT_RAW])
+    # Destination balance: before (the early read and the 085 B-2 re-read
+    # inside the reservation), then after the arrival.
+    seq = iter([10 ** 15, 10 ** 15, 10 ** 15 + OUT_RAW])
     monkeypatch.setattr(bridge_guard, "native_balance_raw",
                         lambda addr, chain: next(seq, 10 ** 15 + OUT_RAW))
+    # 085 B-2: an EVM arrival is proven by Relay's destination tx too.
+    import time as _time
+    monkeypatch.setattr("core.wallet.bridge_status.read_out_txs",
+                        lambda rid: ["0x" + "f" * 64])
+    monkeypatch.setattr(bridge_guard, "evm_tx_inflow",
+                        lambda h, r, c, n, **k: (OUT_RAW, int(_time.time())))
     # The guard itself is exercised in tests/unit/core/wallet; here it answers.
     monkeypatch.setattr(
         "core.wallet.tx_guard.authorize",
@@ -300,6 +307,7 @@ def test_an_above_ceiling_leg_asks_the_owner_then_proceeds(rig, monkeypatch):
     # otherwise every attempt mints a new tap and no approval is ever redeemable.
     assert asked["grant_key"] == {
         "from_chain": "base", "to_chain": "robinhood", "amount": AMOUNT_ETH,
+        "token_in": "native",   # 085 bridge L-3
         "token_out": "native", "recipient": HOLDER}
     assert "request_id" not in asked["grant_key"]
     assert "min_out" not in asked["grant_key"]
@@ -376,10 +384,12 @@ def delivered(monkeypatch):
     paid = {"raw": SOL_OUT_RAW, "seen": []}
     monkeypatch.setattr("core.wallet.bridge_status.read_out_txs", lambda rid: ["5igSig"])
 
+    import time as _time
+
     def _inflow(sig, owner, mint=None, **_kw):
         paid["seen"].append((sig, owner, mint))
-        return paid["raw"]
-    monkeypatch.setattr("core.wallet.solana_onchain.tx_inflow", _inflow)
+        return paid["raw"], int(_time.time())   # (inflow, blockTime) — 085 B-1
+    monkeypatch.setattr("core.wallet.solana_onchain.tx_inflow_at", _inflow)
     return paid
 
 

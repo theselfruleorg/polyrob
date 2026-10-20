@@ -2,7 +2,7 @@
 config (DEFAULT_PROVIDER pin > first keyed provider > openai/gpt-5 last resort)
 instead of the hardcoded openai/gpt-5 dataclass literals.
 
-Live-prod evidence (2026-08-14, Rob #1): every telegram-spawned session asked
+Live-prod evidence (2026-08-14): every telegram-spawned session asked
 for openai/gpt-5 on a box whose only working seat was the operator-pinned
 zai-coding plan. With OpenRouter out of credits the fallback walk found
 nothing, so EVERY inbound telegram turn (voice and text) died with
@@ -57,32 +57,6 @@ def test_default_model_pin_honored(monkeypatch):
     monkeypatch.setenv("DEFAULT_MODEL", "glm-5.2")
     req = SessionRequest(task="hello")
     assert req.provider == "zai-coding"
-    assert req.model == "glm-5.2"
-
-
-def test_chat_model_pin_honored(monkeypatch):
-    """CHAT_MODEL must be honored alongside CHAT_PROVIDER — the pin pair is
-    read as a unit (``_resolve_chat_runtime`` reads CHAT_MODEL or DEFAULT_MODEL).
-    Reading only DEFAULT_MODEL silently dropped an operator's CHAT_MODEL and
-    served the registry default instead."""
-    _clear_pins(monkeypatch)
-    monkeypatch.delenv("DEFAULT_PROVIDER", raising=False)
-    monkeypatch.setenv("CHAT_PROVIDER", "zai-coding")
-    monkeypatch.setenv("CHAT_MODEL", "glm-5.2")
-    req = SessionRequest(task="hello")
-    assert req.provider == "zai-coding"
-    assert req.model == "glm-5.2"
-
-
-def test_chat_model_pin_beats_default_model(monkeypatch):
-    """CHAT_ is the more specific pin tier — it wins over DEFAULT_, matching
-    ``operator_provider_pin``'s CHAT_PROVIDER > DEFAULT_PROVIDER order."""
-    _clear_pins(monkeypatch)
-    monkeypatch.delenv("DEFAULT_PROVIDER", raising=False)
-    monkeypatch.setenv("CHAT_PROVIDER", "zai-coding")
-    monkeypatch.setenv("CHAT_MODEL", "glm-5.2")
-    monkeypatch.setenv("DEFAULT_MODEL", "glm-4.6")
-    req = SessionRequest(task="hello")
     assert req.model == "glm-5.2"
 
 

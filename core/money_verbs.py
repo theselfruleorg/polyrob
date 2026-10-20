@@ -19,7 +19,7 @@ MONEY_VERBS: tuple = (
     Verb("/invoices", "money", "What I have billed and who owes me"),
     Verb("/settle", "money", "Mark an invoice paid"),
     Verb("/trade", "money", "Start a run that carries the money verb"),
-    Verb("/bridge", "money", "Move native value from one chain to another",
+    Verb("/bridge", "money", "Move value between chains: ETH/native or USDC in; native, WETH or USDC out",
          background="Bridge"),
     Verb("/launch", "money", "Launch a token on the launchpad",
          background="Launch"),

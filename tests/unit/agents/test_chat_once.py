@@ -166,9 +166,9 @@ def test_chat_once_different_chat_id_is_separate_session():
     assert ta._chat_sessions["chat:u1:c2"] == "sess-2"
 
 
-def test_chat_once_honors_chat_provider_model_env(monkeypatch):
-    monkeypatch.setenv("CHAT_PROVIDER", "openrouter")
-    monkeypatch.setenv("CHAT_MODEL", "z-ai/glm-5.2")
+def test_chat_once_honors_default_provider_model_env(monkeypatch):
+    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("DEFAULT_MODEL", "z-ai/glm-5.2")
     ta = _bare_taskagent()
     orch = MagicMock()
     orch.agents = {"a1": _agent_with_reply("hi")}
@@ -218,7 +218,7 @@ def test_chat_once_default_model_unchanged(monkeypatch):
     ta.run_session = fake_run_session
     ta.session_manager.get_session_info.return_value = {"id": "sess-1"}
     asyncio.run(ta.chat_once("u1", "hi", chat_id="c1"))
-    # No CHAT_PROVIDER/CHAT_MODEL set => SessionRequest defaults preserved.
+    # No DEFAULT_PROVIDER/DEFAULT_MODEL set => SessionRequest defaults preserved.
     assert captured["request"].provider == "openai"
     assert captured["request"].model == "gpt-5"
 
@@ -395,8 +395,14 @@ def _reused_session_taskagent(agent):
     ta._registry.get.return_value = orch
     ta._chat_sessions["chat:u1:c1"] = "sess-1"
     ta.session_manager.get_session_info.return_value = {"id": "sess-1"}
+    # 2026-10-13 C7: the reply must be produced BY the run — a reply already in
+    # history before the turn is the previous turn's answer and is never returned.
+    msgs = agent.message_manager.history.messages
+    reply = msgs.pop() if isinstance(msgs, list) and msgs else None
 
     async def fake_run_session(user_id, session_id):
+        if reply is not None:
+            msgs.append(reply)
         return ""
 
     ta.run_session = fake_run_session

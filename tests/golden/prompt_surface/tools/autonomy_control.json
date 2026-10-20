@@ -1,0 +1,55 @@
+{
+  "function": {
+    "description": "Pause your own autonomous/background work (goal dispatch, cron, self-wake, social posts, the dev/ops loops) — durable across restarts. Call pause ONLY when the owner explicitly asks you to stop, pause or halt your autonomous or background work, then quote the result verbatim. A bare \"stop\" in the middle of the owner's own request means stop the current attempt — end the turn and report; it is NOT a pause. If it is unclear which one the owner means, ask one short question first. \"Resume\", \"continue\" or \"restart X\" must NEVER call pause. scopes narrows it — pick the scope the owner named (e.g. trading, cron); use all only when the owner means everything. duration_minutes makes it temporary; cancel_goals=true also cancels the ready goal rows the pause held. Cancelling goals alone is NOT a stop. You cannot lift a pause — only the owner can, with /resume; if they ask you to start again, tell them that.",
+    "name": "autonomy_control",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "pause",
+            "resume",
+            "status"
+          ],
+          "type": "string"
+        },
+        "cancel_goals": {
+          "default": false,
+          "type": "boolean"
+        },
+        "duration_minutes": {
+          "default": null,
+          "maximum": 43200,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
+        "reason": {
+          "default": "",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "enum": [
+              "all",
+              "trading",
+              "cron",
+              "social",
+              "oversight",
+              "pings",
+              "apps",
+              "release"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

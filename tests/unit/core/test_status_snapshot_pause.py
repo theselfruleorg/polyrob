@@ -51,8 +51,11 @@ def test_violation_after_pause_is_critical(home):
     assert "self_wake" not in v[0].text
 
 
-def test_running_headline_names_live_actors(home):
+def test_running_headline_names_live_actors(home, monkeypatch):
     from agents.task.goals.board import GoalBoard
+    from core.config_policy import AutonomyConfig
+    # 080 WS-4: RUNNING only while a loop is on (else the headline says IDLE).
+    monkeypatch.setattr(AutonomyConfig, "goals_enabled", staticmethod(lambda: True))
     from core.status_render import pause_headline
     GoalBoard(str(home / "goals.db"))  # a board exists; nothing is running
     snap = _snap(home)

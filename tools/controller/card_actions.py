@@ -35,6 +35,18 @@ logger = logging.getLogger(__name__)
 #: How long ``present_choice`` waits by default, and at most.
 DEFAULT_WAIT_S = 300
 MAX_WAIT_S = 900
+#: Headroom over the wait for delivery, the expiry transition and the result.
+_TIMEOUT_GRACE_S = 30
+
+
+def choice_action_timeout(params, base: float) -> float:
+    """The controller's timeout for one ``present_choice`` call: never less
+    than the wait it declared (the generic 180 s cut a 300 s wait, 2026-10-15)."""
+    try:
+        wait = int((params or {}).get("wait_seconds") or DEFAULT_WAIT_S)
+    except (TypeError, ValueError, AttributeError):
+        wait = DEFAULT_WAIT_S
+    return max(float(base), float(min(wait, MAX_WAIT_S) + _TIMEOUT_GRACE_S))
 
 
 def _refusal(controller, execution_context, user_id: str) -> Optional[str]:
@@ -65,6 +77,41 @@ def _session_id(controller, execution_context) -> str:
                or getattr(controller, "session_id", "") or "")
 
 
+def _joined(group_id: str, then: str) -> None:
+    try:
+        from core.surfaces import card_groups as G
+        from core.surfaces import cards
+        G.rejoin(group_id, cards.store())
+        if then:
+            G.groups(cards.store()).set_then(group_id, then)
+    except Exception:
+        logger.warning("card group %s: the follow-up was not stored", group_id,
+                       exc_info=True)
+
+
+def _group_for(user_id: str, session_id: str) -> Optional[str]:
+    """084: the session's open card group (a goal or cron run names its goal /
+    job as the origin). None without a session — such a card wakes nobody."""
+    if not session_id:
+        return None
+    try:
+        from core.autonomy_marker import (cron_job_for_session, goal_for_session,
+                                          is_autonomous)
+        from core.surfaces import card_groups as G
+        origin, ref = G.ORIGIN_CHAT, ""
+        if is_autonomous(session_id):
+            goal, job = goal_for_session(session_id), cron_job_for_session(session_id)
+            origin, ref = ((G.ORIGIN_GOAL, goal) if goal else
+                           (G.ORIGIN_CRON, job) if job else (G.ORIGIN_CRON, ""))
+        from core.surfaces import cards
+        gs = G.groups(cards.store())
+        return gs.open_group_for(user_id, session_id, origin=origin, origin_ref=ref or "")
+    except Exception:
+        logger.warning("card group could not be opened — the card wakes nobody",
+                       exc_info=True)
+        return None
+
+
 async def _deliver(controller, user_id: str, card, session_id: str) -> str:
     from core.surfaces import cards
     from core.surfaces.user_delivery import deliver_user_message
@@ -92,6 +139,51 @@ async def _terminal_pick(card) -> Optional[str]:
     except Exception:
         return None
     return answer if answer.isdigit() and 1 <= int(answer) <= n else ""
+
+
+def _send_recipient(args) -> Optional[str]:
+    """The address after ``to`` in /send arguments, or None."""
+    low = [str(a).lower() for a in args]
+    if "to" in low and low.index("to") + 1 < len(args):
+        return str(args[low.index("to") + 1])
+    return None
+
+
+def _open_sends_to(cards, user_id: str, words) -> list:
+    """OPEN /send proposal cards that pay the same address as ``words``."""
+    if not words or words[0].lower() != "/send":
+        return []
+    to = _send_recipient(words[1:])
+    if not to:
+        return []
+    from core.wallet.addresses import same_address
+    try:
+        open_ = cards.store().open_cards(user_id, limit=100)
+    except Exception:
+        return []
+    return [c for c in open_ if c.kind == cards.KIND_PROPOSAL and c.verb == "/send"
+            and _send_recipient(c.args) and same_address(_send_recipient(c.args), to)]
+
+
+def _send_precheck(words) -> Optional[str]:
+    """Why a /send card would be dead on arrival, or None — the seat's OWN parser
+    (``tools.defi.send_order``) and the address-poisoning rule, before the card
+    exists (2026-10-17: six cards were proposed twice and none could quote). The
+    full dry run stays on the owner's tap: an agent tool never builds an owner
+    context (tests/test_owner_context_ratchet.py)."""
+    if not words or words[0].lower() != "/send":
+        return None
+    from tools.defi.send_order import parse
+    order, err = parse(words[1:])
+    if err:
+        return err.split("\n\n")[0]
+    try:
+        from core.wallet import address_lookalike
+        poisoned = address_lookalike.poisoning_refusal(
+            order["to"], chain="solana" if order["chain"] == "solana" else "evm")
+    except Exception:
+        poisoned = None
+    return poisoned
 
 
 def register_card_actions(controller) -> None:
@@ -157,6 +249,12 @@ def register_card_actions(controller) -> None:
         if got is not None and got.state == cards.S_DONE and got.answer:
             return ActionResult(extracted_content=f"The owner picked: {got.answer}",
                                 include_in_memory=True)
+        if got is not None and (got.result or "").startswith(cards.TEXT_REPLY_RESULT):
+            return ActionResult(
+                extracted_content=("The owner did not tap an option; they replied in text "
+                                   "instead (queued for you as their next message). Read "
+                                   "that message as their answer; do not assume an option."),
+                include_in_memory=True)
         if got is not None and got.state == cards.S_OPEN:
             expired = cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
                                                cards.S_EXPIRED)
@@ -180,14 +278,24 @@ def register_card_actions(controller) -> None:
             "to 0xToken… on base`, `/bridge solana base "
             "0.9`, `/pay https://api.x/y 0.10`, `/claim 0xToken…`."))
         why: str = Field("", max_length=600, description="One line: why you propose it.")
+        replaces: List[str] = Field(default_factory=list, max_length=20, description=(
+            "Ids of OPEN cards this one supersedes (they are closed as replaced) — "
+            "e.g. a re-split payout to the same address."))
+        also_owed: bool = Field(False, description=(
+            "true only when an open /send card already pays this address AND both "
+            "payments are owed (e.g. two different bounty rounds)."))
+        then: str = Field("", max_length=400, description=(
+            "What you will do once the owner has decided every card you raised in this "
+            "conversation. You are woken with each card's outcome; this text is shown "
+            "back to you then."))
 
     @controller.registry.action(
         "Propose a money action to the OWNER as a card. Nothing moves: the owner taps "
         "'Get a quote', sees the real simulated price and caps, and only then can "
-        "Confirm. Use it instead of describing a command for the owner to type. Verbs: "
+        "Confirm. Use it instead of describing a command for the owner to type, and when "
+        "the owner only ASKS about a money move (execute one only on an imperative line). Verbs: "
         "/send /swap /bridge /pay /claim /launch /deploy /nft /identity "
-        "/writeoff /unquarantine /wallet (trust|untrust), /adopt <id> (the owner makes "
-        "a cron job or goal you wrote his own), and /restart or /update (your own background "
+        "/writeoff /unquarantine /wallet (trust|untrust), and /restart or /update (your own background "
         "service: it finishes its work, restarts and reports back).",
         param_model=ProposeAction,
     )
@@ -198,20 +306,53 @@ def register_card_actions(controller) -> None:
         if why:
             return ActionResult(error=why, include_in_memory=True)
         words = (params.command or "").split()
+        dead = _send_precheck(words)
+        if dead:
+            return ActionResult(error=(f"propose_action: this /send could not quote, so "
+                                       f"no card was made: {dead}"), include_in_memory=True)
         from core.surfaces import cards
+        clash = _open_sends_to(cards, user_id, words)
+        unlisted = [c for c in clash if c.card_id not in params.replaces]
+        if unlisted and not params.also_owed:
+            listed = "; ".join(f"{c.card_id} ({c.line})" for c in unlisted)
+            return ActionResult(error=(
+                f"An open card already pays this address: {listed}. Pass "
+                f"replaces=[<id>] to supersede it, or also_owed=true if BOTH payments "
+                f"are owed. Nothing was proposed."), include_in_memory=True)
+        sid = _session_id(controller, execution_context)
+        group_id = _group_for(user_id, sid)
         try:
             card = cards.proposal_card(user_id, words[0] if words else "", words[1:],
-                                       why=params.why,
-                                       session_id=_session_id(controller, execution_context)
-                                       or None)
+                                       why=params.why, session_id=sid or None,
+                                       group_id=group_id)
         except ValueError as e:
             return ActionResult(error=f"propose_action: {e}", include_in_memory=True)
+        if group_id:
+            # Only once the card exists: a refused proposal leaves no follow-up.
+            _joined(group_id, (params.then or "").strip())
+        replaced = []
+        for cid in params.replaces:
+            # Only this owner's own PROPOSAL cards: an id is not authority to close
+            # an owner's quote awaiting Confirm, a choice, or another tenant's card.
+            old = cards.store().get(cid)
+            if old is None or old.user_id != user_id or old.kind != cards.KIND_PROPOSAL:
+                continue
+            done = cards.store().transition(cid, frozenset({cards.S_OPEN}), cards.S_REPLACED,
+                                            result=f"replaced by card {card.card_id}")
+            if done is not None:
+                replaced.append(cid)
+                cards._notify(done)
         outcome = await _deliver(controller, user_id, card,
                                  _session_id(controller, execution_context))
-        where = ("on the owner's chat" if outcome in ("sent", "queued")
+        where = ("on the owner's chat" if outcome == "sent"
+                 else "queued for the owner's chat (quiet hours)" if outcome == "queued"
                  else "in the owner's /cards list (no live chat reached)")
         return ActionResult(
             extracted_content=(f"Proposed card {card.card_id} is {where}: {card.line}. "
                                f"NOTHING was sent or spent. The owner taps 'Get a quote', then "
-                               f"Confirm. Do not say it is done, queued or pending approval."),
+                               f"Confirm. Do not say it is done, queued or pending approval."
+                               + (" When the owner has decided every card you raised, you are "
+                                  "woken with each card's outcome — do not ask the owner to "
+                                  "tell you." if group_id else "")
+                               + (f" Replaced (closed): {', '.join(replaced)}." if replaced else "")),
             include_in_memory=True)

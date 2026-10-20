@@ -1,0 +1,27 @@
+{
+  "function": {
+    "description": "Search every tool this deployment knows about — built-ins AND the tools behind connected MCP servers — by keyword. Read-only. Each hit shows where it lives and its honest status (loaded/loadable/gated). Use tool_describe for full detail on one hit.",
+    "name": "tool_search",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 8,
+          "description": "Max results to return (1-25)",
+          "maximum": 25,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "description": "Keyword(s) to match against tool ids and descriptions",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

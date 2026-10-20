@@ -5,16 +5,24 @@ A chat keyed by a stable `session_key` (`agent:main:{surface}:{type}:{chat}[:{us
 see `core/surfaces/session_chat_registry.py::build_session_key`)
 continues the SAME underlying session_id until a boundary fires; then the next message
 starts a fresh session. Boundaries:
-  - idle:  `now - row.updated_at > idle_minutes` (last-activity based; updated_at is
-           bumped on every STEER via SessionChatRegistry.touch).
+  - idle:  `now - last_activity > idle_minutes`. Last activity is the newer of
+           `row.updated_at` (bumped on every STEER via SessionChatRegistry.touch)
+           and `row.last_outbound_at` — the agent's own last line to the owner in
+           this session (2026-10-13 review C3: the owner writes 08:00, the agent
+           asks "which wallet?" at 10:00, the owner answers 20:30 — that is an
+           answer to a 10:00 question, not a cold start). `with_agent_activity`
+           fills `last_outbound_at` from the owner thread.
   - daily: the wall-clock crossed the local reset hour since last activity.
   - both:  whichever fires first (default).  none: never reset (legacy behavior).
 
 Pure + `now` injected → unit-testable without a clock. Fail-safe: any odd input
 returns (False, ...) so a policy bug can never spuriously wipe a live conversation.
 """
+import logging
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def _last_reset_instant(now_dt: datetime, daily_hour: int) -> datetime:
@@ -44,6 +52,12 @@ def should_start_fresh(
         now = float(now)
     except (TypeError, ValueError):
         return (False, "bad-timestamp")
+    try:
+        outbound = row.get("last_outbound_at")
+        if outbound is not None and float(outbound) > last:
+            last = min(float(outbound), now)
+    except (TypeError, ValueError):
+        pass  # an odd outbound stamp never decides anything
 
     if mode in ("idle", "both") and idle_minutes and idle_minutes > 0:
         if now - last > idle_minutes * 60:
@@ -60,3 +74,35 @@ def should_start_fresh(
             return (False, "bad-clock")
 
     return (False, "continue")
+
+
+def with_agent_activity(row: Optional[dict], container: Any) -> Optional[dict]:
+    """``row`` plus ``last_outbound_at``: the agent's newest line to the owner in
+    this row's session, read from the owner thread (C3).
+
+    Fail-open: any error (no store, no session id, an unreadable db) returns the
+    row unchanged, so the idle boundary falls back to ``updated_at`` alone —
+    exactly the pre-C3 behaviour. Never creates the store.
+    """
+    if not row or not row.get("session_id") or not row.get("user_id"):
+        return row
+    try:
+        from core.surfaces.owner_thread import resolve_store
+        store = resolve_store(container, create=False)
+        if store is None:
+            return row
+        from core.sqlite_util import execute_retry
+        found = execute_retry(
+            store.db_path,
+            "SELECT MAX(ts) AS t FROM owner_thread WHERE user_id=? AND session_id=? "
+            "AND direction='out'",
+            (str(row["user_id"]), str(row["session_id"])), fetch="one")
+        ts = found["t"] if found is not None else None
+        if ts is None:
+            return row
+        enriched = dict(row)
+        enriched["last_outbound_at"] = float(ts)
+        return enriched
+    except Exception:
+        logger.debug("session policy: agent-activity read skipped (fail-open)", exc_info=True)
+        return row

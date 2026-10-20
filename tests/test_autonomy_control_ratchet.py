@@ -10,8 +10,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 STARTERS = [
-    "agents/task/goals/dispatcher.py",              # dispatch + plan
-    "agents/task/goals/streams.py",                 # seed_stream
+    "agents/task/goals/dispatcher.py",              # dispatch
     "cron/runner.py",                               # cron_run + digest
     "agents/task/task_agent_delivery.py",           # self_wake + resume_session
     "agents/task_agent_lite.py",                    # the async-delegation wake kick

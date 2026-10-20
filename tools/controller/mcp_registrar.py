@@ -12,7 +12,7 @@ carry their item type; objects stay lenient ``dict``) is preserved verbatim.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Type
+from typing import Any, Dict, List, Type
 
 from pydantic import BaseModel
 
@@ -48,8 +48,12 @@ class MCPActionRegistrar:
             all_tools = mcp_tool.server_manager.get_all_tools()
             self.logger.info(f"🔧 Found {len(all_tools)} MCP servers with tools")
             registered_count = 0
+            # 085 A5: the actions of a server the owner marked `"money": true`.
+            money_actions = []
+            _is_money = getattr(mcp_tool, "is_money_server", None)
 
             for server_name, tools in all_tools.items():
+                money_server = bool(callable(_is_money) and _is_money(server_name) is True)
                 for tool_meta in tools:
                     try:
                         # Create namespaced action name: server_toolname
@@ -114,15 +118,71 @@ class MCPActionRegistrar:
                         )
 
                         registered_count += 1
+                        if money_server:
+                            money_actions.append(action_name)
                         self.logger.debug(f"Registered MCP action: {action_name}")
 
                     except Exception as e:
                         self.logger.warning(f"Failed to register MCP tool {server_name}_{tool_meta.name}: {e}")
 
             self.logger.info(f"✅ Registered {registered_count} MCP tools as direct actions")
+            if money_actions:
+                self.install_money_gate(money_actions)
 
         except Exception as e:
             self.logger.error(f"Failed to register MCP tools as direct actions: {e}", exc_info=True)
+
+    def install_money_gate(self, names: List[str]) -> None:
+        """085 A5: an owner-marked money server's actions are money actions.
+
+        1. ``core.money.classify`` learns the names, so every money predicate
+           (the wallet-authority principal hook, the room gate, the approval
+           queue's owner check) treats them as money.
+        2. One fail-closed pre-hook on this Controller: the leaf bar (a
+           delegated sub-agent never spends) and then the owner's approval
+           through the durable ``owner_queue`` (a money spend is never
+           act-and-report). No approval path = refuse, never run ungated.
+        """
+        from core.money.authorize import SpendIntent, authorize_spend
+        from core.money.classify import register_money_actions
+
+        gated = frozenset(names)
+        register_money_actions(gated)
+        controller = self._controller
+        approval = None
+        try:
+            import tools.controller.approval_queue  # noqa: F401  (registers owner_queue)
+            from core.config_policy import payment_approval_timeout_sec
+            from core.security.taints import correspondent_probe
+            from tools.controller.approval import (
+                get_approval_provider_or_deny, make_approval_hook)
+            from tools.controller.approval_queue import OwnerQueueApprover
+            from tools.controller.policy_chain import _pref_home
+            provider = get_approval_provider_or_deny(
+                "owner_queue", user_id=controller.user_id, home_dir=_pref_home(controller))
+            if isinstance(provider, OwnerQueueApprover):
+                provider.set_taint_probe(correspondent_probe(controller.orchestrator))
+            approval = make_approval_hook(provider, gated,
+                                          timeout=payment_approval_timeout_sec())
+        except Exception as e:
+            self.logger.error(f"money MCP approval could not be wired: {e}")
+
+        async def _money_mcp_gate(action_name, params, context):
+            if action_name not in gated:
+                return None
+            verdict = authorize_spend(
+                SpendIntent.verb_gate("call a money MCP server", tool="mcp",
+                                      action=action_name),
+                context, session_user=controller.user_id)
+            if verdict.refused:
+                return verdict.reason
+            if approval is None:
+                return (f"denied: '{action_name}' is on a money MCP server and its "
+                        "owner approval could not be wired this session")
+            return await approval(action_name, params, context)
+
+        controller.register_pre_tool_call_hook(_money_mcp_gate, fail_mode="closed")
+        self.logger.info(f"🔒 Money MCP actions gated: {sorted(gated)}")
 
     def create_param_model(self, action_name: str, schema: Dict[str, Any]) -> Type[BaseModel]:
         """Create a dynamic Pydantic model from a JSON schema.

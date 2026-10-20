@@ -3,7 +3,7 @@
 Rob could build a page or an API and had no way to give anyone a URL. Every
 "ship" goal therefore terminated in a request to the owner: "Ship x402 ecosystem
 map: static HTML visualization" completed with a file nobody could reach, and
-"Owner deploy package: mainnet-ready x402 endpoint for api.theselfrule.org"
+"Owner deploy package: mainnet-ready x402 endpoint for api.example.org"
 blocked outright. Combined with the workspace cleanup that then deleted the file,
 a week of building produced nothing anyone could open.
 

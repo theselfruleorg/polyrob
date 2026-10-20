@@ -82,11 +82,13 @@ def test_constructor_args_round_trip():
     assert _decode(args) == ("Rob Coin", "ROB", 18, 10 ** 27)
 
 
-def test_a_multibyte_name_round_trips():
-    args = T.encode_constructor_args(name="\u5c71\u7f8a\u30b3\u30a4\u30f3",
-                                     symbol="\u5c71\u7f8a",
-                                     decimals=6, supply_raw=1_000)
-    assert _decode(args) == ("\u5c71\u7f8a\u30b3\u30a4\u30f3", "\u5c71\u7f8a", 6, 1_000)
+def test_a_multibyte_name_refuses():
+    """085 W7 (D6): printable ASCII only — a non-ASCII name cannot be told
+    apart from its homoglyph on somebody's screen."""
+    with pytest.raises(T.TokenTemplateError):
+        T.encode_constructor_args(name="\u5c71\u7f8a\u30b3\u30a4\u30f3",
+                                  symbol="\u5c71\u7f8a",
+                                  decimals=6, supply_raw=1_000)
 
 
 def test_build_init_code_is_the_pinned_code_plus_the_args():
@@ -157,8 +159,8 @@ def test_the_supply_is_EXACT_not_float_scaled(supply, decimals, expected):
     part. The token would have been minted with a supply nobody asked for, on a
     contract with no mint function, forever.
     """
-    # A FLOAT is the real shape: `DeployTokenParams.supply` is `float`, which
-    # is how the live run got a float into the multiplication in the first place.
+    # A FLOAT was the live shape (`DeployTokenParams.supply` was `float` until
+    # 085 W7); a short float still converts exactly through repr().
     got = T.whole_to_raw(float(supply), decimals)
     assert got == expected, f"{supply}e{decimals} -> {got}, wanted {expected}"
     assert T.whole_to_raw(supply, decimals) == expected

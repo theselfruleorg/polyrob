@@ -6,8 +6,8 @@ Depth for the "Skills & learning" section of `polyrob-user-guide/SKILL.md`.
 
 A folder with a `SKILL.md` (agentskills.io-compliant Markdown + YAML
 frontmatter) plus optional `references/`, `assets/`, `scripts/` resources —
-the same open format Claude Code and other agents use. When a task matches a
-skill's triggers, or you pick it from the catalog, you pull the full body
+the same open format Claude Code and other agents use. A pinned skill loads when a
+chat or job starts; for any other, you pick it from the catalog and pull the full body
 with `load_skill(skill_id=...)` and follow it; resources under it are read
 (never executed) with `read_skill_resource`.
 
@@ -83,8 +83,8 @@ create/patch/delete/promote skills via the `skill_manage` action. Safety:
   result, delegated worker, autonomous goal/cron run) can NEVER auto-activate
   a skill and NEVER patch/delete an active one** — it always quarantines,
   regardless of the review flag.
-- Active authored skills need real keyword **triggers** to actually be
-  match-eligible — a triggers-less write is a dead write.
+- An authored skill needs a `when` line (60 characters or fewer): it is the
+  skill's one line in the catalog, and the only way the agent finds it.
 
 ## Read-before-edit
 

@@ -116,7 +116,7 @@ def test_goal_create_inference_covers_mission_surfaces(tmp_path):
     cases = {
         "Use rob mailbox for registrations": ("send email signups", "email"),
         "Find x402 services and earn": ("issue an invoice for value", "x402_invoice"),
-        "Introduce yourself in t.me/thepublicden": ("post in the telegram group", "message"),
+        "Introduce yourself in t.me/examplegroup": ("post in the telegram group", "message"),
         "Re-learn POLYROB docs": ("fetch polyrob.dev and update notes", "web_fetch"),
     }
     for title, (body, expected) in cases.items():

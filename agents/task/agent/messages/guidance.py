@@ -21,6 +21,14 @@ _FORGED_KIND_ORIGINS = {
 }
 
 
+#: The label every A2A peer line carries in history. The compactor keys on it
+#: (``compactor._is_owner_turn``): a peer's words are never quoted as owner
+#: instructions. Origin stays USER, so the label is the durable marker — it also
+#: survives a save/reload, unlike in-process state.
+PEER_LINE_PREFIX = "[from a peer agent via A2A — not the owner]"
+PEER_FRAME_HEADER = "NEW MESSAGE FROM A PEER AGENT (A2A)"
+
+
 def _is_peer_kind(kind: Any) -> bool:
 	"""A2A kinds (``a2a_initial`` / ``a2a_message``, stamped server-side in
 	api/a2a/task_handler.py): a peer agent speaking, framed with an honest source
@@ -42,6 +50,58 @@ def _elide_middle(text: str, keep_head: int, keep_tail: int) -> str:
 		return text
 	elided = len(text) - limit
 	return f"{text[:keep_head]}\n[... {elided} chars elided ...]\n{text[-keep_tail:]}"
+
+
+#: E-A7 (coherency review 2026-10-13): where an over-cap owner message is kept in
+#: full, relative to the session workspace — so the elision names a real file.
+OWNER_INBOX_DIR = "inbox"
+
+
+def _offload_owner_message(session_id: Optional[str], text: str,
+                           workspace_root: Optional[str] = None) -> Optional[str]:
+	"""Write an over-cap owner message IN FULL to ``workspace/inbox/<ts>.md``.
+
+	*workspace_root* is the session's REAL workspace (``MessageManager.workspace_root``,
+	stamped from the orchestrator): a child's MessageManager carries its VIRTUAL
+	session id, whose directory the filesystem tool never reads. Without it the
+	path manager resolves *session_id*.
+
+	Returns the workspace-relative path, or None (no session, a shared project
+	folder as the workspace, or any write error — fail-open: the elided text
+	still goes in). The file is created exclusively and never through a symlink
+	(the workspace is writable from the code sandbox; the result-offload H09 rule).
+	"""
+	if not session_id and not workspace_root:
+		return None
+	try:
+		import os
+		import secrets
+		from agents.task.path import pm
+		manager = pm()
+		if getattr(manager, "is_project_root_workspace", False):
+			return None  # never write into the owner's project folder
+		root = str(workspace_root) if workspace_root else str(manager.get_workspace_dir(session_id))
+		inbox = os.path.join(root, OWNER_INBOX_DIR)
+		os.makedirs(inbox, exist_ok=True)
+		stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+		name = f"{stamp}_{secrets.token_hex(3)}.md"
+		flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+		fd = os.open(os.path.join(inbox, name), flags, 0o600)
+		with os.fdopen(fd, "wb") as fh:
+			fh.write(text.encode("utf-8", errors="replace"))
+		return f"{OWNER_INBOX_DIR}/{name}"
+	except Exception:
+		return None
+
+
+def _elide_owner_message(text: str, keep_head: int, keep_tail: int,
+                         saved_path: Optional[str]) -> str:
+	"""Head+tail elision whose marker names the saved full text (E-A7)."""
+	if not saved_path:
+		return _elide_middle(text, keep_head, keep_tail)
+	elided = len(text) - keep_head - keep_tail
+	return (f"{text[:keep_head]}\n[... {elided} chars elided — the FULL message is saved; "
+	        f'read it with filesystem_read_file(file_path="{saved_path}") ...]\n{text[-keep_tail:]}')
 
 
 class GuidanceMixin:
@@ -99,6 +159,11 @@ class GuidanceMixin:
 		# Genuine messages get head+tail elision so a long paste keeps both its ask and
 		# its trailing detail instead of a hard [:500] cut.
 		drained = messages[:config.MAX_USER_MESSAGES_PER_STEP]
+		# C10 (2026-10-13): a MIXED batch (an owner line + a self-wake /
+		# delegation result) is framed as the user speaking, so each forged part
+		# carries its own "not the owner" label — the A2A peer rule, applied to
+		# the runtime's own re-entries.
+		_mixed = any(m.get('kind', 'comment') not in _FORGED_KIND_ORIGINS for m in drained)
 		message_texts = []
 		for msg in drained:
 			text = msg.get('text', '')
@@ -111,14 +176,18 @@ class GuidanceMixin:
 					keep_tail=config.FORGED_MESSAGE_KEEP_TAIL,
 				)
 			elif len(text) > config.USER_MESSAGE_TRUNCATE_LENGTH:
-				text = _elide_middle(
+				text = _elide_owner_message(
 					text,
 					keep_head=config.USER_MESSAGE_TRUNCATE_LENGTH - config.USER_MESSAGE_KEEP_TAIL,
 					keep_tail=config.USER_MESSAGE_KEEP_TAIL,
+					saved_path=_offload_owner_message(getattr(self, "session_id", None), text,
+					                                  getattr(self, "workspace_root", None)),
 				)
+			if _mixed and kind in _FORGED_KIND_ORIGINS:
+				text = f"[{kind.replace('_', ' ')} from the agent runtime — not the owner] {text}"
 			if _is_peer_kind(kind):
 				# A peer agent's words are never the owner's, even in a mixed batch.
-				text = f"[from a peer agent via A2A — not the owner] {text}"
+				text = f"{PEER_LINE_PREFIX} {text}"
 			message_texts.append(text)
 
 		# P0-1: never silently drop queued messages beyond the per-step cap — the HITL
@@ -180,7 +249,7 @@ previous user questions and do NOT send the user redundant status messages.{rela
 			# never "the user uploaded" — a snapshot diff cannot name the writer.
 			peer = all(_is_peer_kind(k) for k in kinds)
 			if peer:
-				header = "🔄 NEW MESSAGE FROM A PEER AGENT (A2A) - PRIORITY INPUT"
+				header = f"🔄 {PEER_FRAME_HEADER} - PRIORITY INPUT"
 				sender = "A peer agent (A2A caller — NOT the owner) sent you a message:"
 			else:
 				header = "🔄 NEW USER MESSAGE - PRIORITY INPUT"

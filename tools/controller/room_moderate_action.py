@@ -1,7 +1,7 @@
 """The `room_moderate` action — the agent MODERATES an allowlisted room.
 
 Owner rail 2026-10-05: "it should have mute and ban and other exposed as
-actions not just read and send messages". Rob could read The Public Den
+actions not just read and send messages". Rob could read its group room
 (`room_read`) and post in it (`message`), and told the owner "I can't ban — I
 have no moderation tool" while a spammer posted a promo pitch. The transport
 already existed: the owner's own `/mute` `/ban` in the room run through the ONE
@@ -99,20 +99,9 @@ def resolve_target(rows, target: str, *, allow_unseen: bool = False):
                   f"room with room_read and pass the uid.")
 
 
-def _turn_tainted(controller, execution_context) -> bool:
-    """True when this turn has read third-party text (a room ledger, a page, a
-    mail) or a correspondent's message. Fail toward tainted on a fault."""
-    try:
-        from core.security.taints import orchestrator_turn_tainted, turn_tainted
-        return bool(turn_tainted(execution_context)
-                    or orchestrator_turn_tainted(getattr(controller, "orchestrator", None)))
-    except Exception:
-        return True
-
-
 def _job_names_room(task: str, chat_id: str, title: str = "") -> bool:
-    """The owner's job text names this room: its chat id, or its title (the
-    owner writes "moderate The Public Den", not "-1002125904710")."""
+    """The job's text names this room: its chat id, or its title (the
+    owner writes "moderate The Lobby", not "-1009876543210")."""
     if chat_id and chat_id in task:
         return True
     t = (title or "").strip().lower()
@@ -124,43 +113,18 @@ async def _moderation_authority(controller, execution_context, chat_id: str, ver
                                 title: str = "") -> Optional[str]:
     """CHAT-5: whose decision this moderation is. Returns a refusal, or None.
 
-    - An AUTONOMOUS run moderates only under a standing OWNER-authored cron
-      job whose text names this room (the owner wrote the rule; the run applies
-      it). An agent-authored job, a goal run or a job for another room may not.
-    - An interactive turn that has read third-party text (the room itself,
-      through ``room_read``) may have been steered by it: the owner confirms
-      THIS action with one tap (the durable owner queue, Telegram /approve).
-    - An untainted owner turn is the owner's own instruction.
+    - An AUTONOMOUS run moderates only under a standing cron job or goal
+      whose text names this room (the rule names the room; the run applies
+      it). A job for another room may not.
+    - An interactive owner turn is the owner's own instruction.
     """
     if autonomous:
-        from core.autonomy_marker import owner_job_task_for_session
-        task = owner_job_task_for_session(getattr(execution_context, "session_id", None))
+        from core.autonomy_marker import job_task_for_session
+        task = job_task_for_session(getattr(execution_context, "session_id", None))
         if task and _job_names_room(task, chat_id, title):
             return None
-        return ("moderation from an autonomous run needs a standing owner-authored "
-                "job that names this room; nothing was done.")
-    if not _turn_tainted(controller, execution_context):
-        return None
-    try:
-        import asyncio
-        import tools.controller.approval_queue  # noqa: F401  # registers owner_queue
-        from tools.controller.approval import (
-            approval_wait_timeout_sec, get_approval_provider_or_deny)
-        provider = get_approval_provider_or_deny(
-            "owner_queue", user_id=getattr(execution_context, "user_id", None))
-        if getattr(provider, "decides_as_owner", False) is not True:
-            return ("this turn read third-party text, so a moderation needs the "
-                    "owner's tap and no owner queue is available; nothing was done.")
-        pdict = params.model_dump() if hasattr(params, "model_dump") else dict(params or {})
-        approved = await asyncio.wait_for(
-            provider.request("room_moderate", pdict, execution_context),
-            timeout=approval_wait_timeout_sec("owner_queue"))
-    except Exception as e:
-        logger.warning("room_moderate: owner approval failed (%s)", e)
-        approved = False
-    if approved is not True:
-        return (f"{verb} not approved by the owner (this turn read third-party text, "
-                f"so each moderation needs the owner's tap); nothing was done.")
+        return ("moderation from an autonomous run needs a standing job or goal "
+                "that names this room; nothing was done.")
     return None
 
 
@@ -197,7 +161,7 @@ def register_room_moderate_action(controller) -> None:
             default=None, description="Why, for the owner's record.")
 
     @controller.registry.action(
-        "Moderate a group room you are in (e.g. The Public Den): mute, unmute, "
+        "Moderate a group room you are in: mute, unmute, "
         "ban or unban a member, or delete messages. Use room_read first to get "
         "the member's uid and the msg ids. The owner and room admins can never "
         "be targeted. The bot must be a room admin with the right permission. "

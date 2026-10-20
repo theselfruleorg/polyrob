@@ -87,6 +87,7 @@ class OwnerThreadInjectMixin:
                 return
             if not self._owner_thread_applicable():
                 return
+            self._inject_card_outcomes()
             from core.surfaces.owner_thread import (
                 rail_slice, referent, render_block, thread_tail)
             container = getattr(self, "container", None)
@@ -144,6 +145,32 @@ class OwnerThreadInjectMixin:
                                                      this_session=self.session_id))
         except Exception as e:
             self.logger.debug(f"owner thread delta skipped: {e}")
+
+    def _inject_card_outcomes(self) -> None:
+        """084: the owner's decisions on the cards this session raised (an
+        autonomous run: the cards its goal / cron job raised), once each. The
+        group is then consumed, so a pending wake for it is dropped."""
+        try:
+            from core.autonomy_marker import (
+                cron_job_for_session, goal_for_session, is_autonomous)
+            from core.surfaces import card_groups as G
+            from core.surfaces import cards
+            origin = ref = ""
+            if is_autonomous(self.session_id):
+                goal = goal_for_session(self.session_id)
+                job = cron_job_for_session(self.session_id)
+                origin, ref = ((G.ORIGIN_GOAL, goal) if goal else
+                               (G.ORIGIN_CRON, job) if job else ("", ""))
+                if not origin:
+                    return
+            text = G.take_outcomes(session_id=self.session_id,
+                                   user_id=getattr(self, "user_id", ""),
+                                   origin=origin, origin_ref=ref or "",
+                                   st=cards.existing_store())
+            if text:
+                self._owner_thread_push(text)
+        except Exception as e:
+            self.logger.debug(f"card outcomes skipped: {e}")
 
     def _inject_owner_thread_referents(self, messages: List[dict]) -> None:
         """A drained STEER batch: render the referent of each quote-reply."""

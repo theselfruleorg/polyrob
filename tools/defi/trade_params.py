@@ -3,9 +3,11 @@
 Split out of ``trade_tool.py`` (W9). ``trade_tool`` re-exports every name here,
 so ``from tools.defi.trade_tool import SwapParams`` keeps working.
 """
+from decimal import Decimal
 from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import (BaseModel, BeforeValidator, Field, PlainSerializer,
+                      WithJsonSchema)
 
 from tools.defi.account_mode import ACCOUNT_DESC as _ACCOUNT_DESC, NFT_DESC as _NFT_DESC
 
@@ -15,6 +17,35 @@ from tools.defi.account_mode import ACCOUNT_DESC as _ACCOUNT_DESC, NFT_DESC as _
 #: by `base`, and a fake USDC bought as `BASE` passed the identity gate.
 ChainName = Annotated[str, BeforeValidator(
     lambda v: v.strip().lower() if isinstance(v, str) else v)]
+
+
+def _exact_supply(value):
+    """085 W7: a token supply parses EXACTLY — a string or an int as-is, a JSON
+    number through ``repr`` and only when it has 15 significant digits or fewer.
+    A ``float`` field rounded 123456789.123456789 before any check saw it."""
+    from core.wallet.token_template import to_exact_supply
+    return to_exact_supply(value)
+
+
+def _supply_out(value) -> str:
+    from core.wallet.token_template import format_supply
+    return format_supply(value)
+
+
+#: The ONE supply type for both deploy verbs.
+#:
+#: ⚠️ The schema is a plain ``string``, not ``anyOf [number, string]``: the
+#: Gemini converter (``modules/llm/gemini_client.py`` ``dict_to_schema``) reads
+#: only ``type`` and drops ``anyOf``, which left the property TYPELESS. A
+#: string is the exact form anyway, and the validator still takes a JSON number
+#: from a model that sends one (no provider here runs strict tool schemas).
+#: The serializer dumps the exact plain digits, so ``model_dump()`` stays
+#: ``json.dumps``-safe (history files, cards) and 1e9 and 1000000000 dump and
+#: hash the same.
+ExactSupply = Annotated[
+    Decimal, BeforeValidator(_exact_supply),
+    PlainSerializer(_supply_out, return_type=str, when_used="always"),
+    WithJsonSchema({"type": "string"})]
 
 
 def _chain_field_description(verb: str) -> str:
@@ -42,6 +73,9 @@ class TransferParams(BaseModel):
     dry_run: bool = Field(True, description=(
         "TRUE (default) simulates and returns the guard's verdict without "
         "broadcasting. Set false to actually move funds."))
+    send_anyway: bool = Field(False, description=(
+        "Only for a token whose value is NOT VERIFIED (no spend-grade price). "
+        "It sends only on the owner's own turn; your call goes to the owner."))
     account: Optional[str] = Field(None, description=_ACCOUNT_DESC)
     nft: Optional[str] = Field(None, description=_NFT_DESC)
 
@@ -187,11 +221,14 @@ class SolanaSwapParams(BaseModel):
 
 class DeployTokenParams(BaseModel):
     chain: ChainName = Field("base", description=_chain_field_description("deploy on"))
-    name: str = Field(..., description="Token name, e.g. 'Rob Coin'. Max 64 characters.")
-    symbol: str = Field(..., description="Ticker, e.g. 'ROB'. Max 16 characters.")
-    supply: float = Field(..., gt=0, description=(
+    name: str = Field(..., description=(
+        "Token name, e.g. 'Rob Coin'. Max 64 characters, printable ASCII only."))
+    symbol: str = Field(..., description=(
+        "Ticker, e.g. 'ROB'. Max 16 characters, printable ASCII only."))
+    supply: ExactSupply = Field(..., gt=0, description=(
         "TOTAL supply in WHOLE units, minted in full to the agent wallet. There "
-        "is no mint function, so this is the supply forever."))
+        "is no mint function, so this is the supply forever. A string of digits, "
+        "e.g. \"1000000000\" (1e9 and 1,000,000,000 also parse)."))
     decimals: int = Field(18, ge=0, le=18, description=(
         "Decimal places. 18 is the ERC-20 norm and what every DEX assumes."))
     max_spend_usd: float = Field(..., gt=0, description=(
@@ -243,16 +280,18 @@ class DeployContractParams(BaseModel):
 class SolanaDeployTokenParams(BaseModel):
     name: str = Field("", description=(
         "Token name, e.g. 'Rob Coin'. Written ON-CHAIN via Token-2022 metadata, "
-        "so every explorer and wallet shows it. Defaults to the symbol."))
+        "so every explorer and wallet shows it. Defaults to the symbol. Max 64 "
+        "characters, printable ASCII only."))
     symbol: str = Field(..., description=(
-        "Ticker, e.g. 'ROB'. Written ON-CHAIN alongside the name."))
+        "Ticker, e.g. 'ROB'. Written ON-CHAIN alongside the name. Max 16 "
+        "characters, printable ASCII only."))
     uri: str = Field("", description=(
         "Optional https:// or ipfs:// URI of a JSON metadata file "
         "({name, symbol, description, image}). This is where a LOGO comes "
         "from — without it the token shows with no picture anywhere. Host it "
         "yourself; any public HTTPS URL works."))
-    supply: float = Field(..., gt=0, description=(
-        "TOTAL supply in WHOLE units, minted in full to the agent's Solana "
+    supply: ExactSupply = Field(..., gt=0, description=(
+        "TOTAL supply in WHOLE units (a string is exact), minted in full to the agent's Solana "
         "token account. The mint authority is revoked in the same transaction, "
         "so this is the supply forever."))
     decimals: int = Field(9, ge=0, le=9, description=(

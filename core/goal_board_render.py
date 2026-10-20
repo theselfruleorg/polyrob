@@ -180,7 +180,7 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         lines.append(f"…and {hidden} more open goal(s).")
     lines.extend(off)
     lines.append("")
-    lines.append("Detail: /goal show <id> · stop one for good: /goal cancel <id> · "
+    lines.append("Detail: /goal show <id> · stop one: /goal stop <id> [--forever] · "
                  "asks: /asks · approvals: /pending")
     return "\n".join(lines)
 

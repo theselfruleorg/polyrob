@@ -1,0 +1,12 @@
+{
+  "function": {
+    "description": "Show insights about your own learning: how many durable skills you've authored and how often you reuse them (authored-skill reuse rate).",
+    "name": "insights",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

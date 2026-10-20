@@ -1,0 +1,29 @@
+{
+  "function": {
+    "description": "Append content to a file in the workspace. Pass after_anchor to insert immediately AFTER the first line containing that exact text instead of at the end — use it to add a row to the TOP of a newest-first table (anchor on the table's |---|---| separator) without rewriting the file. An anchor that matches nothing, or matches more than one line, refuses and writes nothing.",
+    "name": "filesystem_append_file",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for appending content to a file in the workspace",
+      "properties": {
+        "afterAnchor": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filePath",
+        "content"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

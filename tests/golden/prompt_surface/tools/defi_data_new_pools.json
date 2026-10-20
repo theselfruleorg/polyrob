@@ -1,0 +1,37 @@
+{
+  "function": {
+    "description": "List the POOLS most recently indexed on a chain — the fresh-launch frontier. Returns places to look, NOT vetted tokens: nothing here is screened, and most minutes-old pools go to zero. Screen every candidate with token_info (honeypot + sell tax) before acting on it.",
+    "name": "defi_data_new_pools",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "base",
+          "description": "Chain to discover pools on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many pools to list.",
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_liquidity_usd": {
+          "default": 0.0,
+          "description": "Exclude pools whose reported liquidity is BELOW this. A pool whose liquidity is UNKNOWN is never excluded by this floor — unknown is not a number, and dropping it would hide it from you silently.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "min_volume_h24_usd": {
+          "default": 0.0,
+          "description": "Exclude pools whose 24h volume is below this. Same unknown rule.",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

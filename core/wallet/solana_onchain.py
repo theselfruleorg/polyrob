@@ -21,16 +21,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-#: SPL Token program. The classic one; Token-2022 accounts live under a
-#: different program id and are deliberately NOT enumerated here — their
-#: transfer-hook and fee extensions change what a balance even means, and
-#: reporting them as ordinary SPL would overstate what is spendable.
+#: SPL Token program (the classic one).
 SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
-#: Token-2022. Enumerated ONLY by the display read (`token_holdings`), never by
-#: `token_balances`, which spend-side callers use to decide what is spendable.
-#: The agent's own SPL launches are Token-2022 (`spl_token.py`), so a display
-#: read that skipped this program could not see the agent's own token (071 R3).
+#: Token-2022. Enumerated by `token_holdings` (071 R3: the agent's own SPL
+#: launches are Token-2022) and by `token_balances` (085 W8 L4: a Token-2022
+#: holding is held — the guard, not this read, decides what may be spent).
 TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 
 SYSTEM_PROGRAM = "11111111111111111111111111111111"
@@ -120,6 +116,16 @@ def tx_inflow(signature: str, owner: str, mint: Optional[str] = None, *,
     cannot say whose rise it is when the same wallet trades, but the delivering
     transaction's own pre/post balances can.
     """
+    got = tx_inflow_at(signature, owner, mint, rpc=rpc)
+    return None if got is None else got[0]
+
+
+def tx_inflow_at(signature: str, owner: str, mint: Optional[str] = None, *,
+                 rpc: Optional[Callable] = None) -> Optional[tuple]:
+    """:func:`tx_inflow` plus the transaction's ``blockTime``:
+    ``(raw inflow, block time | None)``, or None (same cases as
+    :func:`tx_inflow`). The block time lets a bridge refuse an EARLIER transfer
+    offered as this one's delivery (085 B-1)."""
     call = rpc or _rpc
     try:
         tx = call("getTransaction", [signature, {
@@ -133,6 +139,11 @@ def tx_inflow(signature: str, owner: str, mint: Optional[str] = None, *,
     meta = tx.get("meta") or {}
     if meta.get("err") is not None:
         return None
+    block_time = tx.get("blockTime")
+    try:
+        block_time = None if block_time is None else int(block_time)
+    except (TypeError, ValueError):
+        block_time = None
     try:
         if mint is None:
             keys = tx["transaction"]["message"]["accountKeys"]
@@ -140,7 +151,8 @@ def tx_inflow(signature: str, owner: str, mint: Optional[str] = None, *,
             if owner not in names:
                 return None
             i = names.index(owner)
-            return int(meta["postBalances"][i]) - int(meta["preBalances"][i])
+            return (int(meta["postBalances"][i]) - int(meta["preBalances"][i]),
+                    block_time)
 
         def _sum(rows) -> int:
             return sum(int(r["uiTokenAmount"]["amount"]) for r in (rows or [])
@@ -150,7 +162,7 @@ def tx_inflow(signature: str, owner: str, mint: Optional[str] = None, *,
         pre = meta.get("preTokenBalances")
         if post is None or pre is None:
             return None
-        return _sum(post) - _sum(pre)
+        return _sum(post) - _sum(pre), block_time
     except (KeyError, TypeError, ValueError, IndexError):
         return None
 
@@ -178,27 +190,39 @@ def token_balances(address: str, *,
     an empty wallet. Zero-balance accounts are dropped: a closed-out position
     leaves its (rent-funded) token account behind, and listing it would put a
     permanent phantom row in the portfolio.
+
+    085 W8 L4: BOTH token programs are scanned. A Token-2022 holding that read
+    as "not held" made the exit lanes refuse a real sell and under-reported the
+    wallet. If either program's read fails, the whole read is UNKNOWN.
     """
     call = rpc or _rpc
-    try:
-        res = call("getTokenAccountsByOwner",
-                   [address, {"programId": SPL_TOKEN_PROGRAM},
-                    {"encoding": "jsonParsed"}])
-    except Exception as exc:
-        logger.debug("solana: getTokenAccountsByOwner failed for %s (%s)", address, exc)
-        return None
     out: Dict[str, int] = {}
-    for entry in ((res or {}).get("value") or []):
+    seen: set = set()
+    for program in (SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM):
         try:
-            info = entry["account"]["data"]["parsed"]["info"]
-            mint = info["mint"]
-            amount = int(info["tokenAmount"]["amount"])
-        except (KeyError, TypeError, ValueError):
-            # A shape we do not recognise is skipped, never guessed at — but the
-            # rest of the wallet still reports.
-            continue
-        if amount:
-            out[mint] = amount
+            res = call("getTokenAccountsByOwner",
+                       [address, {"programId": program},
+                        {"encoding": "jsonParsed"}])
+        except Exception as exc:
+            logger.debug("solana: getTokenAccountsByOwner(%s) failed for %s (%s)",
+                         program, address, exc)
+            return None
+        for entry in ((res or {}).get("value") or []):
+            try:
+                pubkey = entry.get("pubkey")
+                if pubkey is not None:
+                    if pubkey in seen:
+                        continue  # one account is counted once
+                    seen.add(pubkey)
+                info = entry["account"]["data"]["parsed"]["info"]
+                mint = info["mint"]
+                amount = int(info["tokenAmount"]["amount"])
+            except (AttributeError, KeyError, TypeError, ValueError):
+                # A shape we do not recognise is skipped, never guessed at — but the
+                # rest of the wallet still reports.
+                continue
+            if amount:
+                out[mint] = out.get(mint, 0) + amount
     return out
 
 

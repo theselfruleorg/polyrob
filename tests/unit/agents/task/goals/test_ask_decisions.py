@@ -190,7 +190,7 @@ def test_decide_ask_answer_rides_into_the_unblocked_goal(board):
     assert board.get(a.id).payload["answer"] == "use the SANDBOX key \n please".strip()
     dep = board.get(g.id)
     assert dep.payload["owner_unblocked"]["answer"].startswith("use the SANDBOX key")
-    prompt = build_goal_run_task(dep, None)
+    prompt = build_goal_run_task(dep)
     # H04: quoted DATA with provenance, the newline collapsed (no forged line).
     assert "the owner answered (quoted):" in prompt
     assert "use the SANDBOX key   please" in prompt or "use the SANDBOX key please" in prompt

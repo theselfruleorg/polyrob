@@ -8,9 +8,20 @@
 * L17: an oversized ERC-1155 TransferBatch or a 1-topic legacy Transfer
   touching the holder was silently skipped.
 """
+import pytest
+
 from core.wallet import simulation, tx_guard
 from core.wallet.policy import PolicyGate
 from core.wallet.simulation import Deltas
+
+
+@pytest.fixture(autouse=True)
+def _zero_fee_context(monkeypatch):
+    """085 W8: these tests read events and balances. The fee context (latest base
+    fee, payer balance, validation) is tested in test_085_w8_simulation_fees.py."""
+    monkeypatch.setattr(simulation, "_fee_context",
+                        lambda rpc, payer: simulation._FeeContext(0, 30_000_000, 10 ** 18))
+
 
 HOLDER = "0x2222222222222222222222222222222222222222"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"

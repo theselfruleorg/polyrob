@@ -40,6 +40,7 @@ from core.exceptions import (
 
 # Import billing exception for fail-fast handling
 from core.exceptions import InsufficientCreditsError
+from core.config_policy import INTERACTIVE_MAX_STEPS
 
 # Import centralized utilities to avoid repeated inline imports
 from agents.task.utils_json import normalize_action_schema
@@ -101,7 +102,9 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from agents.task.agent.core.run_budget import check_run_budget
+from agents.task.agent.core.run_budget import check_run_budget, snapshot_run_baseline
+from agents.task.runtime.stop_reason import StopReason, describe_stop_reason, done_stop_reason, set_stop
+from agents.task.agent.core.budget_notice import maybe_push_budget_notice
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -151,7 +154,7 @@ class RunLoopMixin:
 			return False
 
 	@controlled_run
-	async def run(self, max_steps: int = 100, _continue_session: bool = False) -> AgentHistoryList:
+	async def run(self, max_steps: int = INTERACTIVE_MAX_STEPS, _continue_session: bool = False) -> AgentHistoryList:
 			"""Run agent for the task.
 
 			Runs the agent to complete the task set during initialization.
@@ -172,9 +175,14 @@ class RunLoopMixin:
 			# Initialize step counter - will be managed by step() method
 			self.state.n_steps = 0  # Start at 0, will be incremented by step() method
 			# I-6: persist the run's step budget so in-context introspection
-			# (the `agent_status` action) can report steps used/remaining.
+			# (the `agent_status` action) can report steps used (of the cap).
 			# `AgentState.max_steps` existed but was never assigned before this.
 			self.state.max_steps = max_steps
+			self.state.stop_reason = None  # 083 WS-1: set by the exit that ends this run
+			self.state.exhausted_summary = None  # 083 WS-2: the last report at the step limit
+			self._budget_notice_sent = False  # 083 WS-5: the one 80 % step notice
+			# 083 WS-3: session spend at run start; the per-run cap compares the delta.
+			await snapshot_run_baseline(self)
 
 			# I-3 / H3 (D1): bounded verify-before-done nudge counter — reset
 			# per run() call, same lifetime as n_steps/max_steps above.
@@ -353,10 +361,12 @@ class RunLoopMixin:
 
 				for step_num in range(max_steps):
 					if not await control_checkpoint(self):
+						set_stop(self, StopReason.CANCELLED)
 						break
 					# Check for cancellation first
 					if self._cancelled:
 						self.logger.warning(f"❌ Agent execution cancelled at step {step_num}")
+						set_stop(self, StopReason.CANCELLED)
 						break
 
 					# Create step info with correct step number
@@ -413,11 +423,13 @@ class RunLoopMixin:
 						# Set error state before breaking
 						self.state.consecutive_failures = self.max_failures
 						# Mark as failed and break
+						set_stop(self, StopReason.STALL)
 						break
 
 					if self._too_many_failures():
 						max_failures_reached = True
 						self.logger.warning(f"Too many consecutive failures ({self.state.consecutive_failures}/{self.max_failures})")
+						set_stop(self, StopReason.FAILURES)
 						break
 
 					# T1.1: session $-budget gate — halt honestly BEFORE the next paid
@@ -429,16 +441,23 @@ class RunLoopMixin:
 						self.logger.warning(f"💸 {budget_halt}")
 						self.state.stopped = True
 						self._last_result = self.append_terminal_error_item(budget_halt)
+						set_stop(self, StopReason.RUN_BUDGET)
 						break
 
-					if await self._handle_control_flags():
+					try:
+						_control_stop = await self._handle_control_flags()
+					except InterruptedError:
+						set_stop(self, StopReason.CONTROL)
+						raise
+					if _control_stop:
 						self.logger.info("Agent execution stopped by control flags")
+						set_stop(self, StopReason.CONTROL)
 						break
 
-					# Check for context overflow before executing step
-					if self._check_context_overflow():
-						self.logger.info("Context overflow detected and mitigated - continuing")
+					# Context size is decided by the ONE compaction ladder inside
+					# step() (step.py: 85 % summarise, 95 % prune) — no second check here.
 
+					maybe_push_budget_notice(self, step_num, max_steps)  # 083 WS-5
 					# Execute one step with the correct step info
 					try:
 						await self.step(step_info=step_info)
@@ -448,6 +467,7 @@ class RunLoopMixin:
 						# cooperative ``self._cancelled`` path handled above.  Swallowing
 						# it makes asyncio.wait_for report success and lets an incomplete
 						# rail be recorded as done.
+						set_stop(self, StopReason.CANCELLED)
 						raise
 
 					# FIX 10: Update last activity time after successful step
@@ -510,6 +530,7 @@ class RunLoopMixin:
 						except Exception:
 							pass
 						self.state.stopped = True
+						set_stop(self, StopReason.MONEY_INFRA)
 						break
 
 					# R1: track consecutive reply-only steps. A reply-only step is one
@@ -612,6 +633,7 @@ class RunLoopMixin:
 						# 4. Agent continues with new task phase
 						#
 						# This eliminates race conditions from the old 1.5s wait pattern
+						set_stop(self, done_stop_reason(results))
 						break
 
 					# R1 conversational exit: the agent has produced a run of reply-only
@@ -633,8 +655,14 @@ class RunLoopMixin:
 							f'💬 {consecutive_reply_steps} consecutive reply-only steps — '
 							f'ending turn (R1 conversational exit)'
 						)
+						set_stop(self, StopReason.CONVERSATIONAL_EXIT)
 						break
-					
+				else:
+					# 083 WS-1: the loop ran out of steps (no break) — unless the last step was stopped.
+					set_stop(self, StopReason.CONTROL if getattr(self.state, "stopped", False) else StopReason.MAX_STEPS)
+					# 083 WS-2: one extra call for the agent's last report; no action runs.
+					from agents.task.agent.core.exhaustion_summary import run_exhaustion_summary
+					await run_exhaustion_summary(self, max_steps)
 
 				if max_failures_reached:
 					self.logger.warning(f'Too many consecutive failures')
@@ -716,7 +744,8 @@ class RunLoopMixin:
 				if self._last_result and any(result.is_done for result in self._last_result):
 					self.logger.info(f"Task completed successfully in {self.state.n_steps-1} steps")
 				else:
-					self.logger.warning(f"Task not completed after {self.state.n_steps-1} steps")
+					self.logger.warning(f"Task not completed after {self.state.n_steps-1} steps: "
+						f"{describe_stop_reason(self.state.stop_reason, self.state.n_steps - 1, max_steps)}")
 
 				# Save hierarchical memory session
 				if self.task_context_manager:
@@ -776,8 +805,10 @@ class RunLoopMixin:
 						agent_id=self.agent_id,
 						success=self.history.is_done(),
 						steps=self.state.n_steps,
-						max_steps_reached=self.state.n_steps >= max_steps,
+						max_steps_reached=getattr(self.state, 'stop_reason', None) == StopReason.MAX_STEPS.value,
 						errors=self.history.errors(),
+						stop_reason=getattr(self.state, 'stop_reason', None),
+						max_steps=max_steps,
 					)
 				)
 

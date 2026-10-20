@@ -69,7 +69,7 @@ def _resolve_configured_db_path(
 def resolve_update_context(*, local: bool = True) -> UpdateContext:
     """Resolve snapshot inputs from the live runtime paths (fail-soft)."""
     from core.db_manifest import all_sqlite_dbs
-    from core.runtime_paths import resolve_runtime_paths
+    from core.runtime_paths import resolve_runtime_paths, update_snapshots_root
 
     rp = resolve_runtime_paths(local=local)
     data_home = Path(rp.data_home)
@@ -97,8 +97,8 @@ def resolve_update_context(*, local: bool = True) -> UpdateContext:
         # Snapshot the user-level env layers the runtime actually reads (R-1):
         # ~/.polyrob/.env plus the legacy ~/.rob/.env transition fallback, which
         # still holds live keys on migrated boxes — a rollback must restore both.
-        for cand in env_file_candidates(local_mode=True):
-            if cand.tier in ("home", "legacy-home") and cand.path.is_file() \
+        for cand in env_file_candidates():
+            if cand.tier in ("instance", "home", "legacy-home") and cand.path.is_file() \
                     and cand.path not in config_paths:
                 config_paths.append(cand.path)
     except Exception:
@@ -138,11 +138,18 @@ def resolve_update_context(*, local: bool = True) -> UpdateContext:
                 extra.append(legacy)
     except Exception:
         pass
+    # A 1.4.0 server tree not yet moved up (core/legacy_data_tree.py): its
+    # stores ride the snapshot at their legacy paths, so a rollback restores them.
+    from core.legacy_data_tree import LEGACY_SUBDIR
+    legacy_tree = data_home / LEGACY_SUBDIR
+    if legacy_tree.is_dir():
+        extra.extend(p for p in sorted(legacy_tree.glob("*.db")) if p.is_file())
+        dir_paths.extend(p for p in (legacy_tree / "characters",) if p.is_dir())
     db_paths = all_sqlite_dbs(data_home, extra_dbs=extra or None)
 
     return UpdateContext(
         data_home=data_home,
-        snapshots_root=data_home / "snapshots",
+        snapshots_root=update_snapshots_root(data_home),
         config_paths=config_paths,
         dir_paths=dir_paths,
         db_paths=db_paths,

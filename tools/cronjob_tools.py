@@ -20,8 +20,51 @@ from pydantic import BaseModel, ConfigDict, Field
 from tools.base_tool import BaseTool
 from agents.task.loop_types.controller_types import ActionResult
 from cron.jobs import CronJobStore
+from core.cron_lanes import LaneStopped
 from cron.schedule import ScheduleError
-from cron.service import AGENT_MAX_ACTIVE_JOBS, CronService
+from cron.service import CronService
+
+
+# --- the job toolset ---------------------------------------------------------
+# 2026-10-14 review C-9: ONE resolver for the runner (``cron/runner.py``
+# re-exports both names) and this tool's results, so the agent cannot tell the
+# owner a job "posts by itself" on a rig with no posting tool. It lives here,
+# not in its own module, so the cron cycle gains no member (layering ratchet).
+
+
+def default_cron_tools() -> list:
+    """Posture-aware default cron toolset (WS-8). Posture 0: ['filesystem','task']
+    (byte-identical). Posture>=1: + the compute tools so a scheduled build/self-env
+    run isn't tool-starved. Mirrors ``goals.dispatcher.default_goal_tools``; resolved
+    at call time so posture 0 is unchanged."""
+    try:
+        from agents.task.goals.dispatcher import default_goal_tools
+        return default_goal_tools()
+    except Exception:
+        from agents.task.constants import BASE_DEFAULT_TOOLS
+        return list(BASE_DEFAULT_TOOLS)
+
+
+def resolve_cron_tools(payload: Optional[dict]) -> list:
+    """057 WS-A: the job's toolset — ``payload.tools`` (verbatim) >
+    ``payload.rig`` > ``AUTONOMOUS_RIG_DEFAULT`` > :func:`default_cron_tools`.
+    Byte-identical while the env is unset, which is the shipped default
+    (``full``)."""
+    from core.config_policy.rigs import resolve_rig_tools, rig_tools
+    tools = resolve_rig_tools(payload, default_cron_tools())
+    data = dict(payload or {})
+    # 085 W8 A4: the job's DECLARED set, re-judged against its stored actor.
+    from core.tool_grants import dispatch_recheck
+    from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
+    kept, refused = dispatch_recheck(
+        tools, data, declared=data.get("tools") or rig_tools(data.get("rig")) or [],
+        agent_ceiling=set(allowed_self_goal_tools()) | set(_SELF_GOAL_BASELINE_TOOLS))
+    if refused:
+        import logging
+        logging.getLogger(__name__).warning(
+            "cron job: dropped %s — its writer (%s) cannot grant them", refused,
+            data.get("actor"))
+    return kept
 
 
 # --- param models ------------------------------------------------------------
@@ -80,6 +123,15 @@ class CronScheduleAction(BaseModel):
                     "defi_data.wallet_holdings (public reads only). A price/value watch adds "
                     "'alert': {'field': '<key of the verb result metadata>', 'below': n, "
                     "'above': n} — the verb compares, you never do; an unreadable value alerts.")
+    precheck: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="For a WATCH job (monitor/scout/exit/watcher): a $0 check that runs BEFORE "
+                    "the model each tick — {'verb': <a read_verb verb>, 'params': {...}, "
+                    "'alert': {'field', 'below'?, 'above'?}, 'move_pct': 5, 'field': "
+                    "'price_usd', 'max_quiet_hours': 24}. When the read is clean, no alert "
+                    "fires and the field moved less than move_pct since the last model run, "
+                    "the tick is skipped at $0. Otherwise the run starts with the read "
+                    "attached. Use it on every price/pool watch.")
     write_verb: Optional[Dict[str, Any]] = Field(
         default=None,
         description="OWNER TURN ONLY: make this a deterministic WRITE job — the one allowlisted "
@@ -102,6 +154,10 @@ class CronListAction(BaseModel):
 class CronCancelAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str = Field(..., description="The id of the cron job to cancel.")
+    forever: bool = Field(
+        False, description="Only when the OWNER asked in this turn: also stop the job's "
+                           "lane (its pinned skill, else its rig), so no new job in it is "
+                           "created until the owner re-arms it (/job allow <lane>).")
 
 
 class CronShowAction(BaseModel):
@@ -121,7 +177,10 @@ class CronEditAction(BaseModel):
     new_text: Optional[str] = Field(default=None,
                                     description="Replacement for old_text ('' deletes the passage).")
     schedule: Optional[str] = Field(default=None,
-                                    description="New schedule spec; the next run is recomputed from now.")
+                                    description="New schedule spec; the next run is recomputed from now. "
+                                                "This is how you run a job SOONER: set a one-shot ISO "
+                                                "time a minute ahead. A one-shot spec makes a recurring "
+                                                "job one-shot — set its recurring spec back after that run.")
     max_duration_seconds: Optional[int] = Field(default=None, ge=60, le=1800,
                                                 description="New hard cap per run (60-1800s).")
     rig: Optional[str] = Field(default=None,
@@ -136,6 +195,9 @@ class CronEditAction(BaseModel):
         description="Replace the declared buy target {'chain', 'address'}; {} clears it.")
     read_verb: Optional[Dict[str, Any]] = Field(
         default=None, description="Replace the job's read verb (see cronjob_schedule); {} clears it.")
+    precheck: Optional[Dict[str, Any]] = Field(
+        default=None, description="Replace the job's $0 pre-check (see cronjob_schedule); "
+                                  "{} clears it.")
     write_verb: Optional[Dict[str, Any]] = Field(
         default=None, description="OWNER TURN ONLY: replace the job's write verb (see "
                                   "cronjob_schedule); {} clears it.")
@@ -148,24 +210,18 @@ _WRITE_VERB_OWNER_ONLY = (
     "so only a genuine owner turn may create or change one. Ask the owner.")
 
 
-def _authored_by(job) -> str:
-    return str((job.payload or {}).get("authored_by") or "")
-
-
-def _author_tag(job) -> str:
-    """``owner-authored`` / ``agent-authored`` for the job list: the author, not
-    the task text, decides whether its posts need a per-post owner approval."""
-    return "owner-authored" if _authored_by(job) == "owner" else "agent-authored"
-
-
-def _author_line(job) -> str:
-    who = _authored_by(job) or "unstamped (not the owner)"
-    if _authored_by(job) == "owner":
-        return f"authored by: {who}"
-    return (f"authored by: {who} — its X posts and room actions each need an owner "
-            f"approval, whatever its task text says; the owner can make it his own "
-            f"with `/adopt {job.id}`")
-
+def _precheck_line(payload: dict) -> str:
+    pc = payload.get("precheck")
+    if not pc:
+        return "precheck: none (every run calls the model)"
+    bits = [str(pc.get("verb") or "?")]
+    if pc.get("alert"):
+        bits.append(f"alert {pc['alert']}")
+    if pc.get("move_pct"):
+        bits.append(f"runs on a {pc['move_pct']}% move of {pc.get('field')}")
+    if pc.get("max_quiet_hours"):
+        bits.append(f"runs anyway after {pc['max_quiet_hours']} h quiet")
+    return "precheck ($0, quiet ticks skip the model): " + "; ".join(bits)
 
 
 def _provider_line(payload: dict) -> str:
@@ -188,6 +244,38 @@ def _provider_line(payload: dict) -> str:
     except Exception:
         pass
     return line
+
+
+def _same_minute_line(svc, job, user_id) -> str:
+    """Name every other live job whose next run is this job's next run (2026-10-17:
+    a judge "24h after the announce" had the announce's own spec), or ''."""
+    if job.next_run_at is None:
+        return ""
+    try:
+        twins = [j for j in svc.list_jobs(user_id=user_id)
+                 if j.id != job.id and j.status == "scheduled" and j.next_run_at == job.next_run_at]
+    except Exception:
+        return ""
+    if not twins:
+        return ""
+    names = "; ".join(f"`{j.id}` ({j.task[:40].strip()})" for j in twins)
+    return (f"⚠ next run {job.next_run_at.isoformat()} is the SAME minute as {names} — "
+            "they fire together, not one after the other.")
+
+
+def _tools_line(payload: Optional[dict]) -> str:
+    """The tools this job's runs actually carry — the runner's own resolver
+    (2026-10-14 review C-9: the agent told the owner a job "posts by itself"
+    on a rig that had no posting tool). Fail-open to a named unknown."""
+    try:
+        ids = resolve_cron_tools(dict(payload or {})) or []
+    except Exception as exc:
+        return f"its runs carry: UNKNOWN (could not resolve the toolset: {type(exc).__name__})"
+    if not ids:
+        return "its runs carry: no tools"
+    return (f"its runs carry: {', '.join(ids)} — a run can only do what these tools do; "
+            f"never tell the owner it will post, trade or send with a tool not listed here")
+
 
 class CronJobTool(BaseTool):
     """Agent tool exposing schedule/list/show/edit/cancel over the cron job store."""
@@ -246,10 +334,8 @@ class CronJobTool(BaseTool):
         refusal = self._self_scheduling_refusal(execution_context)
         if refusal:
             return ActionResult(error=refusal, include_in_memory=True)
-        # One rule (tools.goal_tools.owner_authored_turn): a genuine owner turn
-        # that has read no third-party content authors the job; else the agent.
-        from tools.goal_tools import owner_authored_turn
-        owner_turn = owner_authored_turn(execution_context)
+        from tools.goal_tools import owner_seat_turn
+        owner_turn = owner_seat_turn(execution_context)
         # Carry delivery routing in the free-form payload the runner reads (W3). The
         # action model stays extra="forbid" — these are typed fields, validated here.
         payload = {}
@@ -269,20 +355,17 @@ class CronJobTool(BaseTool):
                     error=f"Unknown tool rig '{params.rig}'. Valid rigs: "
                           f"{', '.join(rig_names())}.",
                     include_in_memory=True)
-            # H05: the agent may not grant itself a rig past the self-goal
-            # ceiling (money_rail -> defi_trade, ops -> cronjob/goal, ...).
-            from tools.goal_tools import agent_rig_refusal, read_taint_authorship_note
+            # A turn that is not an owner seat may not request a rig past the
+            # self-goal ceiling (money_rail -> defi_trade, ops -> cronjob/goal, ...).
+            from tools.goal_tools import agent_rig_refusal
             refusal = None if owner_turn else agent_rig_refusal(params.rig)
             if refusal:
-                refusal += read_taint_authorship_note(execution_context)
                 return ActionResult(error=refusal, include_in_memory=True)
             payload["rig"] = params.rig.strip().lower()
         # 060 WS-5: the job pins its doctrine (seeded every run; no tool granted).
         from core.config_policy.rigs import pinned_skills
         if pinned_skills({"skills": params.skills}):
             payload["skills"] = pinned_skills({"skills": params.skills})
-        # H05: provenance — resolve_cron_tools intersects an agent-authored rig;
-        # an owner-authored one (owner_authored_turn) is honoured as written.
         # 068 G2: the buy target is DATA on the job, validated before it is stored.
         # 068 B4: a job created by a target-bound run inherits the target (it
         # may only restate the same one).
@@ -293,7 +376,7 @@ class CronJobTool(BaseTool):
             return ActionResult(error=f"invalid target_token: {exc}", include_in_memory=True)
         if _target:
             payload[PAYLOAD_KEY] = _target
-            # DEFI-5: an address the owner did not type is restrict-only.
+            # DEFI-5: owner-typed = trust; an address the owner did not type is restrict-only.
             from core.wallet.buy_target import TARGET_AUTHOR_KEY, target_provenance
             _tp = target_provenance(execution_context, _target, owner_turn)
             if _tp:
@@ -303,34 +386,75 @@ class CronJobTool(BaseTool):
             payload["read_verb"] = params.read_verb
         if params.pause_windows:
             payload["pause_windows"] = params.pause_windows
+        if params.precheck:
+            payload["precheck"] = params.precheck   # validated by CronService.schedule
         # Impl handoff E: a scheduled WRITE (it spends gas unattended) is the owner's act.
         if params.write_verb:
             if not owner_turn:
-                from tools.goal_tools import read_taint_authorship_note
-                return ActionResult(error=_WRITE_VERB_OWNER_ONLY
-                                    + read_taint_authorship_note(execution_context),
-                                    include_in_memory=True)
+                return ActionResult(error=_WRITE_VERB_OWNER_ONLY, include_in_memory=True)
             payload["write_verb"] = params.write_verb
-        from core.config_policy.rigs import AGENT_AUTHOR, AUTHORED_BY_KEY, OWNER_AUTHOR
-        payload[AUTHORED_BY_KEY] = OWNER_AUTHOR if owner_turn else AGENT_AUTHOR
+        # 085 W3 (D3): an owner turn's standing MONEY job waits for the owner's tap.
+        from tools.goal_tools import money_job_reasons
+        _money = money_job_reasons(rig=payload.get("rig"), target=_target) if owner_turn else []
+        if _money:
+            return await self._money_job_card(params, payload, _target, _money,
+                                              execution_context)
+        # 085 W8 A4: who wrote the job — the dispatch re-check reads it. A model
+        # call stamps the owner seat only for work that is not money (above).
+        payload["actor"] = "owner_seat" if owner_turn else "agent"
         try:
             job = self._resolve_service().schedule(
                 task=params.task, schedule_spec=params.schedule,
                 user_id=self._user(execution_context),
                 payload=payload or None,
                 max_duration_seconds=params.max_duration_seconds,
-                max_agent_jobs=AGENT_MAX_ACTIVE_JOBS,
+                # 0011: the model's call is never the owner's re-arm, even on an
+                # owner turn (it may come from recall) — only a typed seat lifts a stop.
+                owner_seat=False,
             )
+        except LaneStopped as e:
+            return ActionResult(error=f"cronjob_schedule refused: {e}", include_in_memory=True)
         except ScheduleError as e:
             return ActionResult(error=f"Invalid schedule: {e}", include_in_memory=True)
         when = job.next_run_at.isoformat() if job.next_run_at else "?"
         kind = "one-shot" if job.one_shot else "recurring"
-        from tools.goal_tools import read_taint_authorship_note
-        auth_note = "" if owner_turn else read_taint_authorship_note(execution_context)
+        from core.cron_lanes import schedule_notes
+        notes = "".join(f" {n}" for n in schedule_notes(job))
         return ActionResult(
-            extracted_content=f"Scheduled {kind} cron job `{job.id}` — next run {when}.{auth_note}",
+            extracted_content=(f"Scheduled {kind} cron job `{job.id}` — next run {when}; "
+                               f"{_tools_line(job.payload)}.{notes}"),
             include_in_memory=True,
         )
+
+    async def _money_job_card(self, params, payload: dict, target, reasons,
+                              execution_context) -> ActionResult:
+        """085 W3: the ``/job new <when> | <what> …`` line for this job, as a card."""
+        from core.surfaces.cards import card_words
+        from tools.goal_tools import grant_option_words, prose_words, raise_job_card
+        from core.cron_lanes import check_pinned_skills
+        try:   # a card the seat would refuse is not made (an unknown pinned skill)
+            check_pinned_skills(payload, user_id=self._user(execution_context))
+        except Exception as exc:
+            return ActionResult(error=f"cronjob_schedule refused: {exc}", include_in_memory=True)
+        grant = grant_option_words(rig=payload.get("rig"), target=target,
+                                   skills=payload.get("skills"),
+                                   deliver=payload.get("deliver"))
+        try:
+            words = (["/job", "new"] + card_words(params.schedule) + ["|"]
+                     + prose_words(params.task) + grant)
+        except ValueError as exc:
+            return ActionResult(error=f"Nothing was written: {exc}.", include_in_memory=True)
+        skipped = [name for name, value in (
+            ("max_duration_seconds", params.max_duration_seconds != 600),
+            ("deliver_target", params.deliver_target), ("wake_agent", not params.wake_agent),
+            ("read_verb", params.read_verb), ("precheck", params.precheck),
+            ("write_verb", params.write_verb), ("pause_windows", params.pause_windows))
+            if value]
+        return await raise_job_card(
+            self, execution_context, words, what="scheduled job", reasons=reasons,
+            details=[f"When: {params.schedule}"] + [f"Grant: {w}" for w in grant],
+            not_carried=skipped,
+            later="find the job with cronjob_list and set those fields with cronjob_edit.")
 
     @BaseTool.action("List scheduled cron jobs for the current user.", param_model=CronListAction)
     async def cronjob_list(self, params: CronListAction, execution_context=None) -> ActionResult:
@@ -338,7 +462,7 @@ class CronJobTool(BaseTool):
         if not jobs:
             return ActionResult(extracted_content="No scheduled cron jobs.", include_in_memory=True)
         lines = [
-            f"- `{j.id}` [{j.status}] [{_author_tag(j)}] {j.schedule_spec} -> "
+            f"- `{j.id}` [{j.status}] {j.schedule_spec} -> "
             f"{j.next_run_at.isoformat() if j.next_run_at else '-'}: {j.task[:60]}"
             for j in jobs
         ]
@@ -346,7 +470,7 @@ class CronJobTool(BaseTool):
                             include_in_memory=True)
 
     @BaseTool.action("Show one cron job in full: its complete task text, schedule, cap, "
-                     "rig, delivery, pinned skills and who authored it. Read this before "
+                     "rig, delivery and pinned skills. Read this before "
                      "cronjob_edit.", param_model=CronShowAction)
     async def cronjob_show(self, params: CronShowAction, execution_context=None) -> ActionResult:
         job = self._resolve_service().store.get(params.job_id, user_id=self._user(execution_context))
@@ -360,13 +484,18 @@ class CronJobTool(BaseTool):
             f"last run: {job.last_run_at.isoformat() if job.last_run_at else '-'}",
             f"max duration: {job.max_duration_seconds}s",
             f"rig: {p.get('rig') or '(default)'}",
+            _tools_line(p),
+            _precheck_line(p),
             _provider_line(p),
             f"deliver: {p.get('deliver') or '(silent)'}",
             f"skills: {', '.join(p.get('skills') or []) or '(keyword match)'}",
-            _author_line(job),
         ]
         if job.status == "cancelled":
             lines.append(_cancel_line(job.id))
+        else:
+            lines.append(_same_minute_line(self._resolve_service(), job,
+                                           self._user(execution_context)))
+        lines = [ln for ln in lines if ln]
         lines += [
             "task:",
             job.task,
@@ -376,7 +505,8 @@ class CronJobTool(BaseTool):
     @BaseTool.action("Amend a live cron job IN PLACE — patch its task (old_text -> new_text, "
                      "the rest kept verbatim), or change its schedule, cap, rig, delivery or "
                      "pinned skills. Use this instead of cancel + re-schedule, which re-types "
-                     "the task and loses its rules.", param_model=CronEditAction)
+                     "the task and loses its rules. To run a job sooner, set a new schedule "
+                     "(e.g. a one-shot ISO time a minute ahead).", param_model=CronEditAction)
     async def cronjob_edit(self, params: CronEditAction, execution_context=None) -> ActionResult:
         # Same seat rule as cronjob_schedule: an edit changes what a job that
         # outlives this run will do.
@@ -384,21 +514,13 @@ class CronJobTool(BaseTool):
         if refusal:
             return ActionResult(error=refusal.replace("cronjob_schedule", "cronjob_edit"),
                                 include_in_memory=True)
-        from tools.goal_tools import owner_authored_turn
-        owner_turn = owner_authored_turn(execution_context)
+        from tools.goal_tools import owner_seat_turn
+        owner_turn = owner_seat_turn(execution_context)
         svc = self._resolve_service()
         user = self._user(execution_context)
         job = svc.store.get(params.job_id, user_id=user)
         if job is None:
             return ActionResult(error=f"No such cron job `{params.job_id}`.", include_in_memory=True)
-        # Provenance: an autonomous run amends only the jobs it scheduled itself.
-        # A job the owner scheduled (or a legacy row with no stamp) — e.g. a money
-        # rail and its safety rules — changes only on a genuine owner turn.
-        if not owner_turn and _authored_by(job) != "agent":
-            return ActionResult(
-                error=(f"cronjob_edit denied: `{job.id}` was scheduled by the owner; only an "
-                       "owner turn may amend it. Raise it with owner_ask instead."),
-                include_in_memory=True)
         updates: dict = {}
         if params.rig is not None:
             from core.config_policy.rigs import is_rig, rig_names
@@ -422,7 +544,6 @@ class CronJobTool(BaseTool):
         if params.skills is not None:
             from core.config_policy.rigs import pinned_skills
             updates["skills"] = pinned_skills({"skills": params.skills}) or None
-        # 068 G2. An owner job reaches here only on an owner turn (above).
         # 068 B4: a target-bound run stamps its own target on any job it edits.
         from core.wallet.buy_target import PAYLOAD_KEY, inherit_target, target_from_context
         if params.target_token is not None or target_from_context(execution_context):
@@ -432,21 +553,48 @@ class CronJobTool(BaseTool):
                 return ActionResult(error=f"invalid target_token: {exc}", include_in_memory=True)
             # DEFI-5: a new target is trust only when the owner typed it.
             from core.wallet.buy_target import TARGET_AUTHOR_KEY, target_provenance
-            # (None drops the stamp: no target, or one the owner typed.)
+            # (owner when the owner typed it, agent otherwise; None with no target.)
             updates[TARGET_AUTHOR_KEY] = target_provenance(
-                execution_context, updates[PAYLOAD_KEY], True)
+                execution_context, updates[PAYLOAD_KEY], owner_turn)
         # W9: validated (and normalized) by CronService.edit; empty clears.
         if params.read_verb is not None:
             updates["read_verb"] = params.read_verb or None
         if params.pause_windows is not None:
             updates["pause_windows"] = params.pause_windows or None
+        if params.precheck is not None:
+            updates["precheck"] = params.precheck or None
         if params.write_verb is not None:
             if not owner_turn:
                 return ActionResult(error=_WRITE_VERB_OWNER_ONLY, include_in_memory=True)
             updates["write_verb"] = params.write_verb or None
-        # One rule: an edit never upgrades a job. A non-owner-authored turn only
-        # reaches an agent job (refused above otherwise), which stays the agent's;
-        # an owner-authored turn keeps the job's authorship as it is.
+        # 085 W3 (D3): a NEW money grant (a money rig, a buy target) on an owner turn
+        # waits for the owner's tap; clearing one, or any other field, does not.
+        new_target = updates.get(PAYLOAD_KEY) if params.target_token else None
+        from tools.goal_tools import money_job_reasons
+        _money = (money_job_reasons(rig=updates.get("rig"), target=new_target)
+                  if owner_turn else [])
+        if _money:
+            return await self._money_edit_card(job, updates, new_target, _money,
+                                               execution_context)
+        # 085 W8 A4: a rig's writer is who set it — the dispatch re-check judges a
+        # rig against the stored actor. An agent rig never demotes a job whose
+        # declared set is its explicit ``tools`` (they win over the rig at dispatch).
+        if updates.get("rig") and owner_turn:
+            updates["actor"] = "owner_seat"
+        elif "rig" in updates and not owner_turn and not (job.payload or {}).get("tools"):
+            updates["actor"] = "agent"
+        # 0011: an edit may not pin a lane the owner stopped (on any turn).
+        if "skills" in updates or "rig" in updates:
+            from core.cron_lanes import check_pinned_skills, gated_lanes, lane_gate
+            had = set(gated_lanes(job.payload))
+            added = [x for x in gated_lanes({**(job.payload or {}), **updates})
+                     if x not in had]
+            try:
+                lane_gate(svc.store, user_id=user, lanes=added, owner_seat=False)
+                check_pinned_skills({"skills": updates.get("skills")}, user_id=user)
+            except LaneStopped as e:
+                return ActionResult(error=f"cronjob_edit refused: {e}",
+                                    include_in_memory=True)
         try:
             changed = svc.edit(
                 job.id, user_id=user, via="agent",
@@ -459,31 +607,62 @@ class CronJobTool(BaseTool):
         if not changed:
             return ActionResult(error="Nothing to change: pass old_text/new_text, schedule, "
                                       "max_duration_seconds, rig, deliver, skills, target_token, "
-                                      "read_verb, write_verb or pause_windows.",
+                                      "read_verb, precheck, write_verb or pause_windows.",
                                 include_in_memory=True)
+        edited = svc.store.get(job.id, user_id=user) or job
+        when = edited.next_run_at.isoformat() if edited.next_run_at else "-"
+        twin = _same_minute_line(svc, edited, user)
         return ActionResult(
-            extracted_content=f"Edited cron job `{job.id}`: {', '.join(changed)}.",
+            extracted_content=(f"Edited cron job `{job.id}`: {', '.join(changed)}; "
+                               f"next run {when}; {_tools_line(edited.payload)}."
+                               + (f" {twin}" if twin else "")),
             include_in_memory=True)
+
+    async def _money_edit_card(self, job, updates: dict, target, reasons,
+                               execution_context) -> ActionResult:
+        """085 W3: the ``/job edit <id> grant …`` line for a money edit, as a card.
+        The edit's other fields are not written either: the card names them."""
+        from core.wallet.buy_target import PAYLOAD_KEY, TARGET_AUTHOR_KEY
+        from tools.goal_tools import grant_option_words, raise_job_card
+        grant = grant_option_words(rig=updates.get("rig"), target=target)
+        others = sorted(k for k in updates if k not in ("rig", PAYLOAD_KEY, TARGET_AUTHOR_KEY))
+        return await raise_job_card(
+            self, execution_context, ["/job", "edit", job.id, "grant"] + grant,
+            what="scheduled job grant", reasons=reasons,
+            details=[f"Job `{job.id}`: {(job.task or '')[:80]}"]
+                    + [f"Grant: {w}" for w in grant],
+            not_carried=others,
+            later="call cronjob_edit again with only those fields (no rig or target).")
 
     @BaseTool.action("Cancel a scheduled cron job by id.", param_model=CronCancelAction)
     async def cronjob_cancel(self, params: CronCancelAction, execution_context=None) -> ActionResult:
-        # DATA-7 without the collateral: a leaf never cancels; a run may cancel
-        # the jobs the agent scheduled (that only stops work); a job the owner
-        # set is cancelled only by an owner-authored turn.
-        from tools.goal_tools import _is_leaf_context, owner_authored_turn
+        # A leaf never cancels.
+        from tools.goal_tools import _is_leaf_context
         if _is_leaf_context(execution_context):
             return ActionResult(error="Refused: a leaf/sub-agent cannot cancel a cron job.",
                                 include_in_memory=True)
-        svc = self._resolve_service()
-        job = svc.store.get(params.job_id, user_id=self._user(execution_context))
-        if job is not None and _authored_by(job) != "agent" and \
-                not owner_authored_turn(execution_context):
+        # 0011: a cancel on a genuine owner turn is the OWNER's stop (via
+        # owner_turn); only such a turn may stop the job's lane for good.
+        from core.cron_lanes import OWNER_TURN_VIA, stop_job
+        from tools.goal_tools import owner_seat_turn
+        owner_turn = owner_seat_turn(execution_context)
+        if params.forever and not owner_turn:
             return ActionResult(
-                error=(f"cronjob_cancel denied: `{job.id}` was scheduled by the owner; only "
-                       "the owner can cancel it (a new owner message, or /cron cancel)."),
+                error="cronjob_cancel forever=true refused: only the owner stops a lane "
+                      "for good, and this is not an owner turn. Cancel without forever, "
+                      "or ask the owner (/job stop <id> --forever).",
                 include_in_memory=True)
-        ok = svc.cancel(params.job_id, user_id=self._user(execution_context),
-                                            via="agent")
+        svc = self._resolve_service()
+        user = self._user(execution_context)
+        via = OWNER_TURN_VIA if owner_turn else "agent"
+        if params.forever:
+            job = svc.store.get(params.job_id, user_id=user)
+            if job is None:
+                return ActionResult(extracted_content=f"No such cron job `{params.job_id}`.",
+                                    include_in_memory=True)
+            return ActionResult(extracted_content=stop_job(
+                svc, job, user_id=user, via=via, forever=True), include_in_memory=True)
+        ok = svc.cancel(params.job_id, user_id=user, via=via)
         msg = f"Cancelled cron job `{params.job_id}`." if ok else f"No such cron job `{params.job_id}`."
         return ActionResult(extracted_content=msg, include_in_memory=True)
 

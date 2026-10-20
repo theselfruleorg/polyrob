@@ -1,0 +1,93 @@
+{
+  "function": {
+    "description": "Provide Uniswap v3 liquidity, creating the pool when initial_price is supplied, or increase your token_id. Needs exact token approvals first. Both legs are bounded by the guard. A Pons graduated v4 pool pays LP fee 0; v3 is a separate market. dry_run defaults true.",
+    "name": "defi_trade_lp_add",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_a": {
+          "description": "Most of token_a to deposit, in whole token units (not raw).",
+          "minimum": 0,
+          "type": "number"
+        },
+        "amount_b": {
+          "description": "Most of token_b to deposit, in whole token units (not raw).",
+          "minimum": 0,
+          "type": "number"
+        },
+        "chain": {
+          "default": "robinhood",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) simulates and asserts without broadcasting.",
+          "type": "boolean"
+        },
+        "fee": {
+          "default": 3000,
+          "description": "Millionths: 100, 500, 3000 or 10000. 3000 = 0.3%.",
+          "type": "integer"
+        },
+        "fragment": {
+          "default": false,
+          "description": "Set true ONLY to knowingly open a separate pool for a Pons token still on its bonding curve (that fragments its market); otherwise such a deposit is refused.",
+          "type": "boolean"
+        },
+        "initial_price": {
+          "default": null,
+          "description": "Only to CREATE a pool that does not exist yet: the starting price as token_b per token_a. Omit for an existing pool.",
+          "exclusiveMinimum": 0,
+          "nullable": true,
+          "type": "number"
+        },
+        "max_spend_usd": {
+          "description": "The most USD both legs plus gas may cost.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "protocol": {
+          "default": "v3",
+          "description": "'v3', or 'v4' for a new FULL-RANGE position on a Pons graduated pool (token_a/token_b = 'native' + the Pons token; needs an ERC-20 allowance to Permit2 and approve_token(via='permit2') first; capped by LP_ETH_CAP).",
+          "type": "string"
+        },
+        "range": {
+          "default": "full",
+          "description": "full, low,high prices in token_b/token_a, or ticks:low,high in sorted token order.",
+          "type": "string"
+        },
+        "slippage_bps": {
+          "default": 100,
+          "description": "Deposit minimums, in basis points (max 1000).",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token_a": {
+          "description": "Contract address or 'native'.",
+          "type": "string"
+        },
+        "token_b": {
+          "description": "Contract address or 'native'.",
+          "type": "string"
+        },
+        "token_id": {
+          "default": null,
+          "description": "Your existing position NFT id to ADD to. Omit to mint a new position.",
+          "minimum": 0,
+          "nullable": true,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "token_a",
+        "token_b",
+        "amount_a",
+        "amount_b",
+        "max_spend_usd"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

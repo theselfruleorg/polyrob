@@ -371,6 +371,10 @@ class RelayBridgeProvider:
         except Exception:
             return None
         hashes = raw.get("txHashes")
+        if hashes is None:
+            # A readable status that names no destination tx: an empty answer,
+            # not an unreadable one (085: EVM may fall back to balance-only).
+            return []
         if not isinstance(hashes, list):
             return None
         return [str(h) for h in hashes if isinstance(h, str) and h.strip()]

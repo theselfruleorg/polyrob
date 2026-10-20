@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from core.db_manifest import all_sqlite_dbs
+from core.runtime_paths import UPDATE_SNAPSHOT_CONFIG_SUBDIR
 
 MANIFEST_NAME = "manifest.json"
 DONE_MARKER = "DONE"
 _DB_SUBDIR = "db"
-_FILE_SUBDIR = "config"
+_FILE_SUBDIR = UPDATE_SNAPSHOT_CONFIG_SUBDIR  # the custody file gap reads these copies (085 W1)
 _DIR_SUBDIR = "dirs"
 
 

@@ -630,10 +630,10 @@ async def test_autonomous_write_needs_a_real_owner_approval(monkeypatch, provide
 
 
 @pytest.mark.asyncio
-async def test_tainted_owner_turn_needs_approval(monkeypatch):
+async def test_correspondent_tainted_owner_turn_needs_approval(monkeypatch):
     t = _tool(monkeypatch, require_approval=False)
     ctx = ActionExecutionContext(session_id="s1", user_id="u1", role="orchestrator")
-    ctx.metadata = {"untrusted_read": True}
+    ctx.metadata = {"correspondent_tainted": True}
     import tools.controller.approval as approval
     monkeypatch.setattr(approval, "get_approval_provider_or_deny",
                         lambda name, **k: approval.DenyByDefaultApprover())
@@ -653,17 +653,17 @@ async def test_owner_turn_posts_with_no_provider_configured(monkeypatch, require
     t.client.create_tweet.assert_called_once()
 
 
-# --- an OWNER-authored standing cron job posts as its author wrote it ---------
+# --- a standing cron job posts as its task says --------------------------------
 
-def _cron_ctx(monkeypatch, sid, job_id, *, owner_job=True, tainted=False,
+def _cron_ctx(monkeypatch, sid, job_id, *, recorded=True, tainted=False,
               sub_agent=False):
     from core import autonomy_marker as am
     am.mark_autonomous(sid, cron_job_id=job_id)
-    if owner_job:
-        am.note_owner_job(job_id, "Daily 09:00: post the buyback notice on X")
+    if recorded:
+        am.note_job(job_id, "Daily 09:00: post the buyback notice on X")
     ctx = ActionExecutionContext(session_id=sid, user_id="u1",
                                  role="leaf" if sub_agent else "orchestrator")
-    ctx.metadata = {"untrusted_read": True} if tainted else {}
+    ctx.metadata = {"correspondent_tainted": True} if tainted else {}
     return ctx
 
 
@@ -685,7 +685,7 @@ def _owner_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_owner_authored_standing_cron_posts_without_a_queue(monkeypatch):
+async def test_standing_cron_posts_without_a_queue(monkeypatch):
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
     t = _tool(monkeypatch, require_approval=False)
     asked = _owner_queue(monkeypatch)
@@ -697,13 +697,13 @@ async def test_owner_authored_standing_cron_posts_without_a_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("shape", ["agent_authored", "tainted", "sub_agent"])
-async def test_agent_authored_tainted_or_delegated_cron_still_needs_the_owner(monkeypatch, shape):
+@pytest.mark.parametrize("shape", ["unrecorded", "tainted", "sub_agent"])
+async def test_unrecorded_tainted_or_delegated_cron_still_needs_the_owner(monkeypatch, shape):
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
     t = _tool(monkeypatch, require_approval=False)
     asked = _owner_queue(monkeypatch)
     ctx = _cron_ctx(monkeypatch, f"cron-{shape}", f"job-{shape}",
-                    owner_job=(shape != "agent_authored"),
+                    recorded=(shape != "unrecorded"),
                     tainted=(shape == "tainted"), sub_agent=(shape == "sub_agent"))
     res = await t.twitter_post(TwitterPostAction(text="x"), execution_context=ctx)
     assert res.error and "approval denied" in res.error
@@ -740,7 +740,7 @@ async def test_prod_shape_agent_cron_post_asks_and_says_it_is_waiting(monkeypatc
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
     t = _tool(monkeypatch, require_approval=False)
     board, pushed = _real_queue(monkeypatch, tmp_path)
-    ctx = _cron_ctx(monkeypatch, "cron-prod-1", "job-4def", owner_job=False)
+    ctx = _cron_ctx(monkeypatch, "cron-prod-1", "job-4def", recorded=False)
     res = await t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of PNL."),
                                execution_context=ctx)
     assert res.error and "waiting for the owner's approval" in res.error
@@ -758,7 +758,7 @@ async def test_prod_shape_agent_cron_post_goes_out_when_the_owner_taps(monkeypat
     t = _tool(monkeypatch, require_approval=False)
     t.client.create_tweet.return_value = _resp()
     board, _pushed = _real_queue(monkeypatch, tmp_path, wait_s=5.0)
-    ctx = _cron_ctx(monkeypatch, "cron-prod-2", "job-4def-b", owner_job=False)
+    ctx = _cron_ctx(monkeypatch, "cron-prod-2", "job-4def-b", recorded=False)
 
     async def _owner_taps():
         for _ in range(100):
@@ -801,8 +801,8 @@ async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swa
     store = CronJobStore(str(tmp_path / "cron.db"))
     later = datetime.now() + timedelta(days=2)
     store.add(CronJob(id="job-agent-buyback", task="PNL buyback: swap, then post", schedule_spec="4h",
-                      user_id="u1", next_run_at=later, payload={"authored_by": "agent"}))
-    ctx = _cron_ctx(monkeypatch, "cron-late-1", "job-agent-buyback", owner_job=False)
+                      user_id="u1", next_run_at=later, payload={}))
+    ctx = _cron_ctx(monkeypatch, "cron-late-1", "job-agent-buyback", recorded=False)
     text = "Bought 0.05 ETH of PNL.\n\ntx 0xabc"
 
     res = await t.twitter_post(TwitterPostAction(text=text), execution_context=ctx)
@@ -841,7 +841,7 @@ async def test_an_approval_inside_the_wait_is_sent_by_the_run_not_the_drain(
     t = _tool(monkeypatch, require_approval=False)
     t.client.create_tweet.return_value = _resp()
     board, _ = _real_queue(monkeypatch, tmp_path, wait_s=5.0)
-    ctx = _cron_ctx(monkeypatch, "cron-late-2", "job-x", owner_job=False)
+    ctx = _cron_ctx(monkeypatch, "cron-late-2", "job-x", recorded=False)
 
     async def _tap():
         for _ in range(100):
@@ -874,7 +874,7 @@ async def test_approval_wait_ends_inside_the_controller_action_timeout(monkeypat
     board, _pushed = _real_queue(monkeypatch, tmp_path, wait_s=300.0)
     monkeypatch.setitem(TimeoutConfig.TOOL_TIMEOUTS, "default", 1)
     monkeypatch.delitem(TimeoutConfig.TOOL_TIMEOUTS, "twitter", raising=False)
-    ctx = _cron_ctx(monkeypatch, "cron-prod-3", "job-4def-c", owner_job=False)
+    ctx = _cron_ctx(monkeypatch, "cron-prod-3", "job-4def-c", recorded=False)
     res = await _asyncio.wait_for(
         t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of PNL."),
                        execution_context=ctx),

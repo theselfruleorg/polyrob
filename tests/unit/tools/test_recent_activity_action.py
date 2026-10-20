@@ -76,6 +76,23 @@ async def test_recent_activity_since_and_footer(provider):
     assert "<untrusted_tool_result" in text             # DATA-framed
 
 
+@pytest.mark.asyncio
+async def test_recent_activity_names_the_skills_a_run_used(provider):
+    # 080 WS-5: "which skill did last night's job use?" has a per-run answer.
+    from modules.memory.episodic import finalize_episode
+    await finalize_episode(session_id="s9", user_id="u1", kind="cron",
+                           task="morning scan", outcome="done",
+                           meta={"source": "cron", "job_id": "j1"},
+                           skills_loaded=["market-scan", "polyrob-user-guide"])
+    c = _controller(user_id="u1")
+    c._register_recent_activity_action()
+    action = c.registry.registry.actions["recent_activity"]
+
+    class Ctx: user_id = "u1"; session_id = "cur"
+    result = await action.function(action.param_model(since="8h"), execution_context=Ctx())
+    assert "[skills: market-scan, polyrob-user-guide]" in result.extracted_content
+
+
 def test_prompt_steering_gated(provider, monkeypatch):
     """FIX 1 (+ ME-D1/SK-F5): the recent_activity steering sentence in the
     memory-system prompt section is only present when EPISODIC_MEMORY_ENABLED

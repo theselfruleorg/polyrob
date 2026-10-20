@@ -66,8 +66,8 @@ def read_off(user_id: str) -> Tuple[Optional[List[Any]], Optional[str]]:
     if not os.path.exists(path):
         return [], None
     try:
-        from core.goal_suppressions import active
-        return active(path, user_id=user_id), None
+        from core.goal_suppressions import SCOPE_TITLE, active
+        return active(path, user_id=user_id, scope=SCOPE_TITLE), None
     except Exception as exc:  # unreadable — never a confident "nothing is off"
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -97,13 +97,8 @@ def goals_view(user_id: str, *, limit: int = _VIEW_LIMIT) -> str:
         return "\n".join([candy.empty("goals", "nothing on the board")] + off)
     if not rows:
         # E17: one grammar, no flag names — name a verb the owner can RUN.
-        # ⚠️ `/goal` steers an EXISTING goal (show|ready|pause|resume|retry|
-        # cancel); there is no `/goal create`, so naming it sent the owner to a
-        # usage line instead of a board. `/trade` is the chat seat that seeds a
-        # run; `polyrob goals create` is the general one.
-        return candy.empty("goals",
-                           "seed one with `/trade <what to do>`, or "
-                           "`polyrob goals create` for anything else")
+        # 080 WS-2: `/goal new <what>` creates a goal on every seat.
+        return candy.empty("goals", "add one with `/goal new <what to do>`")
     # 034 §3.1: every row says who asked for it (derived, never narrated).
     from core.goal_legibility import bucket_line, origin_tag
     lines = [candy.status_line(g.status, f"{g.id[:8]}: {g.title[:40]}  {origin_tag(g)}")

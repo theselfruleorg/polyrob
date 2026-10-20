@@ -102,17 +102,28 @@ def named_truncation(
     )
 
 
-def truncate_tool_result(content: str, max_tokens: int = -1) -> str:
+#: the way out when the tool HAS paging parameters (the historical default).
+PAGING_WAY_OUT = "use offset/limit to read more"
+#: 2026-10-13 review A4: the way out when the tool has NO paging parameters —
+#: "use offset/limit" sent the model to params that do not exist.
+NO_PAGING_WAY_OUT = ("this tool has no offset/limit and the rest was not saved; "
+                     "narrow the request (a filter, a smaller page, a query) to see more")
+
+
+def truncate_tool_result(content: str, max_tokens: int = -1, *,
+                         way_out: str | None = None) -> str:
     """Return *content*, cut to *max_tokens* with an honest tail.
 
     *max_tokens* defaults to reading the env. A non-str, an empty string, or a
     value already within budget is returned unchanged (identity, not a copy).
     Head-only, byte-identical to the pre-F25 output — this is the one call that
-    pins :func:`named_truncation`'s no-tail branch.
+    pins :func:`named_truncation`'s no-tail branch. *way_out* defaults to
+    :data:`PAGING_WAY_OUT`; a caller that knows the tool has no paging passes
+    :data:`NO_PAGING_WAY_OUT`.
     """
     if not isinstance(content, str) or not content:
         return content
     budget = tool_result_max_tokens() if max_tokens < 0 else max_tokens
     return named_truncation(
-        content, budget, way_out="use offset/limit to read more"
+        content, budget, way_out=way_out or PAGING_WAY_OUT
     )

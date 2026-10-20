@@ -62,11 +62,15 @@ async def test_sub_agent_author_is_quarantined_even_review_off(monkeypatch, tmp_
     action = c.registry.registry.actions["skill_manage"]
     ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=True, role="leaf")
     params = action.param_model(
-        action="create", skill_id="auto-skill",
+        action="create", skill_id="auto-skill", when="When a run repeats this",
         content="# Auto Skill\n\nA reusable procedure distilled from the run, long enough.\n",
     )
     res = await action.function(params, execution_context=ctx)
     assert res.extracted_content and "pending review" in res.extracted_content
+    # 2026-10-14: "saved (pending review)" read as done — Rob told the owner a
+    # promo-bounty rule was "Fixed" while it sat in .pending. Say it is inert.
+    assert "NOT YET IN EFFECT" in res.extracted_content
+    assert "saved (pending review)" not in res.extracted_content
     # proof on disk: pending, NOT active
     assert (tmp_path / "user_u1" / ".pending" / "auto-skill" / "SKILL.md").exists()
     assert not (tmp_path / "user_u1" / "auto-skill" / "SKILL.md").exists()

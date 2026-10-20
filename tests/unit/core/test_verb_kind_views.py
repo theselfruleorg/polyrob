@@ -24,32 +24,17 @@ EMAIL_WRITES = {"email_send", "email_reply", "email_forward"}
 # -- the row columns ------------------------------------------------------------
 
 def test_a_row_validates_its_outbound_columns():
-    VerbPolicy("a", outbound="write", text_fields=["text"], late_send=True)
+    VerbPolicy("a", outbound="write", late_send=True)
     with pytest.raises(ValueError, match="outbound"):
         VerbPolicy("a", outbound="loud")
-    with pytest.raises(ValueError, match="text_fields"):
-        VerbPolicy("a", text_fields=("text",))           # words leave only on an outbound verb
     with pytest.raises(ValueError, match="late_send"):
         VerbPolicy("a", outbound="text", late_send=True)  # a late send is a pure write
     with pytest.raises(ValueError, match="read_job"):
         VerbPolicy("a", effect="money", read_job=True)
-    row = VerbPolicy("a", outbound="write", text_fields=["text", "body"])
-    assert row.text_fields == ("text", "body")            # a TOML list lands as a tuple
-    hash(row)
+    hash(VerbPolicy("a", outbound="write"))
 
 
 # -- outbound ---------------------------------------------------------------------
-
-def test_the_claim_gate_fields_are_the_rows():
-    from tools.controller.financial_claim_gate import OUTBOUND_TEXT_FIELDS
-    assert OUTBOUND_TEXT_FIELDS == {
-        n: vp.policy_for(n).text_fields for n in vp.ids_where(text_fields=bool)}
-    assert {"message", "send_message", "agent_nft_journal", "agent_nft_bind_identity"} \
-        | TWITTER_TEXT_WRITES | EMAIL_WRITES | X_BROWSER_WRITES <= set(OUTBOUND_TEXT_FIELDS)
-    assert OUTBOUND_TEXT_FIELDS["twitter_post"] == ("text", "poll_options")
-    assert OUTBOUND_TEXT_FIELDS["email_send"] == ("subject", "body", "html")
-    assert not {"x_post", "x_reply", "x_dm"} & set(OUTBOUND_TEXT_FIELDS)
-
 
 def test_the_late_send_writes_are_the_rows():
     from tools.controller.approval_queue import OUTBOUND_WRITE_TOOLS
@@ -77,15 +62,6 @@ def test_the_twitter_write_gate_is_the_rows():
         "twitter_delete_tweet", "twitter_like", "twitter_unlike", "twitter_retweet",
         "twitter_unretweet", "twitter_follow", "twitter_unfollow", "twitter_mute",
         "twitter_unmute", "twitter_block", "twitter_dm"}
-
-
-def test_the_refusal_taint_outbound_set_keeps_every_old_member():
-    from tools.controller import refusal_taint_gate as g
-    names = g.outbound_names()
-    assert names == vp.ids_where(outbound=bool)
-    assert {"publish", "github_issue_create", "github_pr_comment", "message",
-            "send_message", "agent_nft_journal"} | TWITTER_TEXT_WRITES | EMAIL_WRITES \
-        | X_BROWSER_WRITES <= names
 
 
 # -- reads ------------------------------------------------------------------------
@@ -133,9 +109,9 @@ def test_the_telegram_room_and_background_sets_are_the_verb_rows():
         "/trade", "/wallet", "/deploy", "/lp", "/launch", "/bridge", "/dev", "/claim",
         "/pay", "/nft", "/dapp", "/identity", "/pause", "/halt", "/resume", "/approve",
         "/reject", "/run", "/allow", "/deny", "/config", "/prefs", "/mcp", "/apps",
-        "/invoices", "/settle", "/cron", "/goal", "/fulfill", "/rail", "/contacts",
+        "/invoices", "/settle", "/job", "/goal", "/fulfill", "/contacts",
         "/thread", "/why", "/send", "/swap", "/writeoff", "/unquarantine", "/cards",
-        "/adopt", "/check", "/restart", "/update"}
+        "/check", "/restart", "/update", "/model", "/skills"}
     assert {v.name: v.background for v in V.VERB_TABLE if v.background} == {
         "/bridge": "Bridge", "/send": "Send", "/swap": "Swap", "/lp": "Liquidity move",
         "/claim": "Claim", "/nft": "NFT transaction", "/launch": "Launch",

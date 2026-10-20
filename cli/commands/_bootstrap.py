@@ -60,7 +60,7 @@ def ensure_env_loaded() -> None:
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
-    load_env(local_mode=True)
+    load_env()
     _env_loaded = True
 
 
@@ -94,7 +94,7 @@ async def cli_container(log_level: str = "ERROR", require_llm: bool = True):
                 sys.exit(1)
         # else: no preflight — env layering still happens at the same point it does
         # on the keyed path (the very top of build_cli_container calls
-        # load_env(local_mode=True) before any flag-freezing agent import), so e.g.
+        # load_env() before any flag-freezing agent import), so e.g.
         # POLYROB_DATA_DIR from ~/.polyrob/.env is honored keyless too. Deliberately
         # NO ensure_env_loaded() here: tests that mock build_cli_container would
         # otherwise leak the developer's real env files into the test process.

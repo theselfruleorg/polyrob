@@ -6,22 +6,19 @@ import json
 from pathlib import Path
 
 from agents.task.agent.skill_manager import SkillManager
+from tests.support.skill_library import write_library
 
 
 def _make_manager(tmp_path: Path, rules: dict, bodies: dict) -> SkillManager:
-    (tmp_path / "rules.json").write_text(json.dumps(rules))
-    for sid, body in bodies.items():
-        d = tmp_path / sid
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "SKILL.md").write_text(body)
+    write_library(tmp_path, rules, bodies)
     return SkillManager(skills_dir=tmp_path)
 
 
 _RULES = {
-    "web-research": {"priority": 5, "auto_activate": True, "triggers": {"keywords": ["research"]}},
+    "web-research": {"priority": 5, "auto_activate": True, "triggers": {}},
     "polymarket-trading": {
         "priority": 5, "auto_activate": False,
-        "triggers": {"tool_ids": ["polymarket"], "action_names": ["place_limit_order"]},
+        "triggers": {"tool_ids": ["polymarket"]},
     },
 }
 _BODIES = {
@@ -97,63 +94,13 @@ def test_external_scan_fails_closed_on_raise(tmp_path, monkeypatch):
     assert sm._external_content_suspicious("x", "desc", "body") is True
 
 
-# ---- P2-19: word-boundary keyword matching --------------------------------
-
-
-def test_p2_19_keyword_word_boundary_no_substring_false_positive(tmp_path):
-    """A short keyword must not fire on a substring of an unrelated word."""
-    rules = {"trade-safety": {"priority": 1, "auto_activate": True,
-                              "triggers": {"keywords": ["sell", "buy", "trade"]}}}
-    bodies = {"trade-safety": "# Trade safety\nBe careful."}
-    sm = _make_manager(tmp_path, rules, bodies)
-    # "counselling" contains "sell", "busy" contains "buy" — must NOT match
-    matched = sm.get_skills_for_session(task="I need counselling because I'm busy", tool_ids=[])
-    assert not any(m.skill_id == "trade-safety" for m in matched)
-
-
-def test_p2_19_keyword_matches_real_word(tmp_path):
-    rules = {"trade-safety": {"priority": 1, "auto_activate": True,
-                              "triggers": {"keywords": ["sell", "buy", "trade"]}}}
-    bodies = {"trade-safety": "# Trade safety\nBe careful."}
-    sm = _make_manager(tmp_path, rules, bodies)
-    matched = sm.get_skills_for_session(task="should I sell my position now", tool_ids=[])
-    assert any(m.skill_id == "trade-safety" for m in matched)
-
-
-def test_p2_19_punctuation_keyword_matches(tmp_path):
-    """P2-19 Fusion follow-up: a keyword starting/ending with a non-word char (c++,
-    .net) must still match — conditional \\b anchoring, not \\b<kw>\\b (which never
-    matched such keywords, a silent false-negative the re.error fallback couldn't catch)."""
-    rules = {
-        "cpp-help": {"priority": 5, "auto_activate": True, "triggers": {"keywords": ["c++"]}},
-        "dotnet-help": {"priority": 5, "auto_activate": True, "triggers": {"keywords": [".net"]}},
-    }
-    bodies = {"cpp-help": "# C++\nhelp", "dotnet-help": "# .NET\nhelp"}
-    sm = _make_manager(tmp_path, rules, bodies)
-    m1 = sm.get_skills_for_session(task="how do I use c++ templates", tool_ids=[])
-    assert any(x.skill_id == "cpp-help" for x in m1)
-    m2 = sm.get_skills_for_session(task="build a .net web api", tool_ids=[])
-    assert any(x.skill_id == "dotnet-help" for x in m2)
-
-
-def test_p2_19_word_boundary_still_holds_for_plain_keywords(tmp_path):
-    """Regression guard: the substring false-positive fix still holds ('sell' must not
-    fire on 'counselling')."""
-    rules = {"trade": {"priority": 1, "auto_activate": True, "triggers": {"keywords": ["sell"]}}}
-    bodies = {"trade": "# trade\nx"}
-    sm = _make_manager(tmp_path, rules, bodies)
-    assert not any(x.skill_id == "trade" for x in sm.get_skills_for_session(task="counselling please", tool_ids=[]))
-    assert any(x.skill_id == "trade" for x in sm.get_skills_for_session(task="should I sell", tool_ids=[]))
-
-
-# ---- 067 P0.1: auto_activate money playbooks, catalog == load == trigger --------
+# ---- 067 P0.1: auto_activate money playbooks, catalog == load ----------------
 
 _MONEY_RULES = {
-    "web-research": {"priority": 5, "auto_activate": True, "triggers": {"keywords": ["research"]}},
+    "web-research": {"priority": 5, "auto_activate": True, "triggers": {}},
     "treasury-trading": {
         "priority": 5, "auto_activate": True,
-        "triggers": {"tool_ids": ["defi_trade", "defi_data", "launchpad", "dapp_browser"],
-                     "keywords": ["buy"]},
+        "triggers": {"tool_ids": ["defi_trade", "defi_data", "launchpad", "dapp_browser"]},
     },
 }
 _MONEY_BODIES = {
@@ -168,8 +115,6 @@ def test_money_playbook_not_in_session_catalog_without_money_tools(tmp_path):
     assert "treasury-trading" not in ids
     assert "web-research" in ids
     assert sm.may_load_skill("treasury-trading", tool_ids=["browser"]) is False
-    trig = {m.skill_id for m in sm.get_skills_for_session(tool_ids=["browser"], task="buy a token")}
-    assert "treasury-trading" not in trig
 
 
 def test_money_playbook_listed_and_loadable_with_a_declared_tool(tmp_path):

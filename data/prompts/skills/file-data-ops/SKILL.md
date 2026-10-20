@@ -3,9 +3,9 @@ name: file-data-ops
 description: Read, transform and organize local files and structured data safely
 license: MIT
 metadata:
+  polyrob-when: 'Reading, converting or organizing local files and data'
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["read file","csv","json","parse","extract data","convert","organize files","transform data","spreadsheet"],"task_patterns":["(read|parse|convert|extract).*(csv|json|md|txt|file)","organize.*files","transform.*data"],"tool_ids":[]}'
   polyrob-version: '1'
 ---
 # File & Data Ops

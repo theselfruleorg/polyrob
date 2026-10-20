@@ -350,7 +350,8 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             return self._ar(error=f"the launchpad is off — set {FLAG}=true to arm it.")
         who = self._signer_address()
         if who is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         # 069 v4 A3: `account=` / `nft=` — the escrow credits an ADDRESS, so claiming for an
         # NFT's account claims what is owed to the account; the treasury signs as its owner.
         held = None
@@ -477,7 +478,8 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             return self._ar(error=_why)
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         creator = wallet.operational_signer().address
 
         try:
@@ -513,7 +515,8 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             return self._ar(error=f"refused: {exc}")
 
         header = (
-            f"launch {params.symbol} ({params.name}) on Pons V2 / {P.CHAIN}\n"
+            f"launch {params.symbol.strip()!r} ({params.name.strip()!r}) on "
+            f"Pons V2 / {P.CHAIN}\n"
             f"  supply:      {terms.supply_raw} raw (fixed by the launchpad)\n"
             f"  launch fee:  {terms.launch_fee_wei} wei\n"
             f"  opening buy: "

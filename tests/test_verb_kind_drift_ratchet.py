@@ -76,7 +76,7 @@ def test_no_hand_list_of_a_derived_verb_kind():
     hits = {p: sorted(n) for p, n in _hits().items() if p not in ALLOWED}
     assert not hits, (
         "a literal collection names verbs whose KIND is a policy-row column "
-        f"(outbound / text_fields / late_send / output / read_job): {hits}. "
+        f"(outbound / late_send / output / read_job): {hits}. "
         "Derive it from core.verb_policy.ids_where instead (W4).")
 
 

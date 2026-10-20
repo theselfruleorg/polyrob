@@ -158,8 +158,14 @@ class HITLIngressMixin:
         """
         from core.exceptions import MessageQueueFullError
 
-        if metadata is None:
-            metadata = {}
+        # 085 W3 (A1): the owner's TYPED words, before @-references expand below.
+        # A surface that appended attachment/caption content passes its own
+        # ``typed_text``; the drain builds the owner's words from this key only.
+        # Only an owner-intake kind carries it; a forged kind (self-wake, a
+        # delegation result) has no typed words at all.
+        metadata = dict(metadata or {})
+        if kind in _TRUSTED_CONTEXT_REF_KINDS:
+            metadata.setdefault("typed_text", text if isinstance(text, str) else "")
 
         # C1: expand @file/@folder/@diff/@url references for trusted human intake only
         # (allowlist). Forged/system kinds are never expanded — see _TRUSTED_CONTEXT_REF_KINDS.
@@ -247,8 +253,8 @@ class HITLIngressMixin:
         A correspondent's reply enters as a CORRESPONDENT-origin CONTROL message
         (``<correspondent-message>`` envelope + inner ``<untrusted_tool_result>`` wrap),
         the same non-obey channel hierarchical memory uses — NOT the user "PRIORITY
-        INPUT" guidance frame. Pushed as a one-shot ephemeral message so the running
-        loop reads it on its next step. Returns True if delivered to a resident agent,
+        INPUT" guidance frame. Appended to the DURABLE history (C1) so every step
+        of the turn that answers it can still read it. Returns True if delivered to a resident agent,
         False if none is available (the caller drops + audits — the honest behaviour).
         """
         if not getattr(self, "agents", None):
@@ -267,14 +273,22 @@ class HITLIngressMixin:
         from core.surfaces.group_turn import defang
         safe = defang(text or "")
         msg = make_control_message(wrap_untrusted(source, safe), MessageOrigin.CORRESPONDENT)
-        mm.push_ephemeral_message(msg)
+        # 2026-10-13 review C1: DURABLE, like the owner-thread tail (061). An
+        # ephemeral rode ONE LLM call: the agent looked something up on step 1 and
+        # wrote the reply on step 2-3 without the contact's text. Still a
+        # CORRESPONDENT-origin control message, still untrusted-wrapped.
+        push_durable = getattr(mm, "push_control_message", None)
+        if callable(push_durable):
+            push_durable(msg)
+        else:
+            mm.push_ephemeral_message(msg)
         # Taint the session: the capability gate now blocks high-impact tools until the
         # owner drives again (cleared in submit_user_message on a genuine owner turn).
         # The source label doubles as the address when the caller doesn't split them.
         self._set_correspondent_taint(surface, address or source)
         logger = getattr(self, "logger", None)
         if logger is not None:
-            logger.info(f"Injected correspondent DATA from {source} (ephemeral, untrusted)")
+            logger.info(f"Injected correspondent DATA from {source} (durable, untrusted)")
         return True
 
     async def record_decision(

@@ -65,7 +65,7 @@ def test_unknown_name_fails_loudly():
 
 
 def test_names_by_prefix_keep_table_order():
-    assert P.names("rig") == ("money_rail", "social", "research", "ops")
+    assert P.names("rig") == ("money_rail", "social", "research", "ops", "owner")
     assert P.names("toolset:")[0] == "minimal"
 
 

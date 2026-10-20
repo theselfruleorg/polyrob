@@ -8,6 +8,7 @@ properties that a hand-rolled scrape kept losing.
 """
 import pytest
 
+from tools.defi.data_params import ScanParams
 from tools.defi.data_tool import DefiDataTool, DiscoverParams
 from tools.defi.providers import geckoterminal as gt
 
@@ -83,8 +84,9 @@ def test_a_junk_payload_yields_nothing_rather_than_raising():
     assert gt.parse_pools({"data": [None, 7]}, "base", "base") == []
 
 
-def test_a_chain_the_indexer_does_not_cover_returns_nothing(monkeypatch):
-    """Never another chain's pools. 'We could not look' is the honest answer.
+def test_a_chain_the_indexer_does_not_cover_raises_not_empty(monkeypatch):
+    """Never another chain's pools, and never an empty list either: 'we could
+    not look' must reach the caller as an error, not as 'nothing is there'.
 
     Proved against a row stripped of its id rather than a named chain: every
     chain in the registry is covered now (Robinhood gained coverage 2026-08-25),
@@ -94,17 +96,58 @@ def test_a_chain_the_indexer_does_not_cover_returns_nothing(monkeypatch):
     from core.wallet import chains
     bare = dataclasses.replace(chains.get("base"), geckoterminal_id=None)
     monkeypatch.setattr(chains, "get", lambda name: bare if name == "base" else None)
-    assert gt.new_pools("base", fetch=lambda url: _payload()) == []
+    with pytest.raises(gt.DiscoveryUnavailable, match="does not cover"):
+        gt.new_pools("base", fetch=lambda url: _payload())
 
 
-def test_an_unknown_chain_returns_nothing():
-    assert gt.new_pools("nosuchchain", fetch=lambda url: _payload()) == []
+def test_an_unknown_chain_raises_not_empty():
+    with pytest.raises(gt.DiscoveryUnavailable):
+        gt.new_pools("nosuchchain", fetch=lambda url: _payload())
 
 
-def test_an_outage_is_empty_not_an_exception():
+def test_an_outage_raises_not_empty():
+    """2026-10-12 prod: a 429 burst came back as `[]` on robinhood, base and
+    solana, the verbs printed '(no pools matched)', and the agent reported the
+    discovery rail as EMPTY on all three chains. A refusal is not a market."""
     def _boom(url):
-        raise RuntimeError("503")
-    assert gt.new_pools("base", fetch=_boom) == []
+        raise RuntimeError("HTTP Error 429 (https://api.geckoterminal.com/...)")
+    with pytest.raises(gt.DiscoveryUnavailable, match="rate-limited"):
+        gt.trending_pools("base", fetch=_boom)
+
+
+def test_a_rate_limit_retries_with_backoff_then_answers(monkeypatch):
+    import importlib
+    # the autouse network guard swaps `_get` out; reload to get the REAL one and
+    # exercise it against a stubbed transport (the stub keeps this network-free)
+    real_get = importlib.reload(gt)._get
+    calls, sleeps = [], []
+
+    def _get_json(url, *, timeout, **kw):
+        calls.append(url)
+        if len(calls) < 3:
+            raise RuntimeError("HTTP Error 429")
+        return _payload()
+
+    monkeypatch.setattr("tools.defi.providers._http.get_json", _get_json)
+    monkeypatch.setattr(gt, "_sleep", sleeps.append)
+    assert gt.new_pools("base", fetch=real_get)
+    assert len(calls) == 3
+    assert sleeps == list(gt._RETRY_BACKOFF_SEC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["new_pools", "trending", "scan"])
+async def test_a_failed_read_is_an_error_not_no_pools(verb):
+    def _refused(chain, kind):
+        raise gt.DiscoveryUnavailable("geckoterminal rate-limited this read (HTTP 429)")
+    tool = DefiDataTool(discover_fn=_refused)
+    params = ScanParams() if verb == "scan" else DiscoverParams()
+    result = await getattr(tool, verb)(params)
+    out = (result.extracted_content or "") + (result.error or "")
+    assert result.error
+    assert "no pools matched" not in out
+    assert "could not read" in out.lower()
+    assert "429" in out
 
 
 # --------------------------------------------------------------------------

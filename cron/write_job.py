@@ -13,9 +13,8 @@ its write twin, and it is deliberately narrow:
   pre-069 name is refused at validation, never run.)
 * OFF unless the owner sets ``CRON_WRITE_JOBS_ENABLED=true``; a tick with the flag off is a
   $0 refusal (``cron_run skipped/write_jobs_disabled``), never a send.
-* Only an OWNER-authored job runs: an owner seat, or ``cronjob_schedule`` on a genuine owner
-  turn (``is_agent_authored`` false). ``cronjob_schedule``/``edit`` refuse ``write_verb`` on
-  any other turn as well.
+* Only the owner writes one: an owner seat, or ``cronjob_schedule``/``edit`` on a genuine
+  owner turn; they refuse ``write_verb`` on any other turn.
 * The owner pause (``cron_run``, checked by the runner before this) and ``pause_windows`` hold
   it; the verb re-checks the pause, and ``tx_guard`` checks it a third time.
 
@@ -99,11 +98,6 @@ def refusal(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         return ("write_jobs_disabled",
                 f"write job refused: {FLAG} is off — the owner enables scheduled write jobs. "
                 f"Nothing was broadcast.")
-    from core.config_policy.rigs import is_owner_authored
-    if not is_owner_authored(payload):
-        return ("write_job_not_owner",
-                "write job refused: only a job the owner scheduled may run a write verb. "
-                "Nothing was broadcast.")
     return None
 
 

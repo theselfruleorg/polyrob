@@ -33,10 +33,10 @@ SEVERITY_WARN = "warn"
 # the same names, and the contract test still pins them equal).
 from core.remedy import flag_command as _flag_command  # noqa: E402
 from core.goal_vocab import (  # noqa: E402
-    KIND_GOAL as _KIND_GOAL, KIND_OBJECTIVE as _KIND_OBJECTIVE, KIND_ASK as _KIND_ASK,
+    KIND_GOAL as _KIND_GOAL, KIND_ASK as _KIND_ASK,
     STATUS_READY as _ST_READY, STATUS_RUNNING as _ST_RUNNING,
     STATUS_BLOCKED as _ST_BLOCKED, STATUS_WAITING as _ST_WAITING,
-    ASK_OPEN as _ASK_OPEN, OBJ_ACTIVE as _OBJ_ACTIVE,
+    ASK_OPEN as _ASK_OPEN,
     ASK_KIND_TOKEN_IDENTITY, has_own_surface,
 )
 _TOOL_APPROVAL_ASK_KIND = "tool_approval"

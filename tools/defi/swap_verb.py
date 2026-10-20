@@ -12,7 +12,7 @@ import time
 
 async def perform_swap(tool, params, execution_context=None):
     from tools.defi.trade_tool import (  # call-time: tests patch these
-        PRECONDITION, _QUOTE_MAX_AGE_SEC, _SYMBOL_NOTE, _intent_idem,
+        _QUOTE_MAX_AGE_SEC, _SYMBOL_NOTE, _intent_idem,
         _max_slippage_bps, _no_swap_route, _route_drift_max_pct, _shown_symbol,
         _unsupported_chain)
     from core.wallet import tx_guard
@@ -27,7 +27,8 @@ async def perform_swap(tool, params, execution_context=None):
         return tool._ar(error=chain_err)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     from core.wallet import chains as _chains_mod
     from tools.defi.providers import routes as _routes
     try:
@@ -44,9 +45,12 @@ async def perform_swap(tool, params, execution_context=None):
 
     id_out = get_token_identity(params.chain, token_out)
     from tools.defi.buy_screen import evm_buy_refusal, unchecked_route_refusal
-    if not params.dry_run:
-        if why := await evm_buy_refusal(params.chain, token_out, id_out):
-            return tool._ar(error=why)
+    # Dry run included (2026-10-16): a dry run that skipped the screen told the
+    # owner "the guard would allow this" for a USDG buy the live send refused.
+    if why := await evm_buy_refusal(params.chain, token_out, id_out,
+                                    owner_pinned=_owner_pinned(params.chain, token_out)):
+        return tool._ar(error=why if not params.dry_run
+                        else f"dry run — the live send would be {why}")
     if native_in:
         # The native asset has no contract to ask, and every EVM chain this
         # rail supports denominates it in 18 decimals (the ChainRow records
@@ -116,8 +120,7 @@ async def perform_swap(tool, params, execution_context=None):
     if route is None:
         return tool._ar(error=(
             f"cannot route {in_label if (native_in or not id_in.symbol) else _shown_symbol(id_in.symbol, token_in)} -> "
-            f"{_shown_symbol(id_out.symbol, token_out)}: {route_why}"),
-            error_kind=PRECONDITION)
+            f"{_shown_symbol(id_out.symbol, token_out)}: {route_why}"))
 
     # Freshness window (§1.3): quoted_at is enforced, not decorative. An
     # aggregator quote is MORE perishable than a pool read, not less.
@@ -126,13 +129,29 @@ async def perform_swap(tool, params, execution_context=None):
         return tool._ar(error=(
             f"refused: the quote is stale ({age:.0f}s old, max "
             f"{_QUOTE_MAX_AGE_SEC:.0f}s) — prices move; re-quote and execute "
-            f"promptly. Nothing was broadcast."), error_kind=PRECONDITION)
+            f"promptly. Nothing was broadcast."))
 
     amount_out_min = route.amount_out_min_raw
     if not amount_out_min or amount_out_min <= 0:
         return tool._ar(error="the route carries no minimum output — refused")
 
-    if params.minimum_output_raw is not None and amount_out_min < params.minimum_output_raw:
+    confirmed_min = params.minimum_output_raw
+    if (confirmed_min is not None and amount_out_min < confirmed_min
+            and route.amount_out_raw > confirmed_min):
+        # 2026-10-16: a Confirm re-quote a hair below the card refused the
+        # owner's swap 4 times. Its OUTPUT still clears the confirmed floor, so
+        # re-request it at the slippage that keeps the on-chain floor >= it.
+        # 10 bps of headroom: the second quote moves too. The check below
+        # still refuses anything under the confirmed floor.
+        gap_bps = int((1 - confirmed_min / route.amount_out_raw) * 10_000)
+        tight = gap_bps - 10 if gap_bps > 20 else gap_bps
+        if tight >= 1:
+            retry, _ = tool._route(params.chain, token_in, token_out, amount_in_raw,
+                                   holder=holder_addr, slippage_bps=tight)
+            if retry is not None and retry.amount_out_min_raw >= confirmed_min:
+                route, slippage = retry, tight
+                amount_out_min = route.amount_out_min_raw
+    if confirmed_min is not None and amount_out_min < confirmed_min:
         return tool._ar(error="The minimum received fell below the confirmed quote; nothing was built")
 
     from tools.defi.identity_gate import trusted_buy
@@ -145,8 +164,24 @@ async def perform_swap(tool, params, execution_context=None):
                                                      out_trusted=out_trusted)
     # Dry run included: a dry run that reports "authorized" for a send this
     # check will refuse told the 2026-10-10 buyback to go, then refused it.
-    if why := unchecked_route_refusal(sanity_verdict, params.max_spend_usd,
-                                      trusted=out_trusted):
+    # 085 EV-2: the $5 ticket tests trust on the asset AT RISK. For a sell
+    # into the canonical quote asset that is token_in (the quote asset is
+    # always trusted, so testing token_out lifted the ticket on every sell);
+    # an untrusted unpriced sell above the ticket goes to the owner (D5).
+    from core.wallet.tokens import canonical_token
+    from tools.defi.buy_screen import (is_sell_into_quote, owner_confirms,
+                                       unpriced_sell_owner_queue)
+    if is_sell_into_quote(canonical_token(params.chain, token_out) is not None,
+                          native_in or canonical_token(params.chain, token_in) is not None):
+        why = unpriced_sell_owner_queue(
+            sanity_verdict, params.max_spend_usd,
+            trusted_in=trusted_buy(id_in, chain=params.chain, token_out=token_in,
+                                   execution_context=execution_context),
+            owner_ok=owner_confirms(tool, execution_context, params))
+    else:
+        why = unchecked_route_refusal(sanity_verdict, params.max_spend_usd,
+                                      trusted=out_trusted)
+    if why:
         return tool._ar(error=why if not params.dry_run
                         else f"dry run — the live send would be {why}")
     # 068 G1: WHICH contract this buys is checked by the verb, not left
@@ -207,7 +242,7 @@ async def perform_swap(tool, params, execution_context=None):
                 f"insufficient allowance: the spender may pull {allowance} but this "
                 f"swap needs {amount_in_raw}. Call approve_token(token="
                 f"{token_in}, spender={spender}, amount={params.amount_in}) "
-                f"first, then swap, then revoke_approval."), error_kind=PRECONDITION)
+                f"first, then swap, then revoke_approval."))
 
     if (held is not None and not native_in
             and str(route.to).lower() != str(spender).lower()):
@@ -320,3 +355,16 @@ async def perform_swap(tool, params, execution_context=None):
             journal_skipped=journal_skipped)
         result.metadata = dict(result.metadata or {}, min_out_raw=amount_out_min)
         return result
+
+
+def _owner_pinned(chain: str, token_out: str) -> bool:
+    """The owner pinned ``token_out`` (``/wallet trust``) and has not marked it
+    NOT trusted. Fails closed to False."""
+    try:
+        from core.wallet.token_pins import norm_chain, owner_pin, rejection
+        chain = norm_chain(chain)
+        if rejection(chain, token_out, strict=True):
+            return False
+        return owner_pin(chain, token_out, strict=True) is not None
+    except Exception:
+        return False

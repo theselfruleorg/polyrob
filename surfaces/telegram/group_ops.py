@@ -839,7 +839,7 @@ async def _moderation_reply(task_agent: Any, result: Any, args: List[str], verb:
 #: Refusals a plain MEMBER is told IN THE ROOM.
 #:
 #: ⚠️ 2026-09-15, Playground Env: a member replied to his own message with
-#: `/ban@tmachinroBot 1h`, the self-target guard fired correctly, and the
+#: `/ban@ExampleBot 1h`, the self-target guard fired correctly, and the
 #: refusal went to his DM as a bare string — so the room saw NOTHING and three
 #: people concluded the feature was broken. The offer and the receipt already
 #: go to the room; a refusal that names only the member belongs there too.

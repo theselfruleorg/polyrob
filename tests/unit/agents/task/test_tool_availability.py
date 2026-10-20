@@ -59,18 +59,6 @@ def test_grantable_matches_mode(monkeypatch):
     assert set(constants.AUTONOMOUS_MODE_TOOLS) <= set(ta.grantable_autonomous_tools())
 
 
-def test_planner_prompt_contains_tool_ceiling_guard(tmp_path):
-    from agents.task.goals.board import GoalBoard
-    from agents.task.goals.planner import build_planner_prompt
-
-    board = GoalBoard(str(tmp_path / "g.db"))
-    board.create_objective(user_id="rob", title="Grow the substack")
-    prompt = build_planner_prompt(board, "rob", None)
-    assert "NEVER the ceiling" in prompt
-    assert ("goals carry their OWN tools" in prompt
-            or "carry their own tools" in prompt.lower())
-
-
 # --- SystemPrompt injection -------------------------------------------------
 
 def _prompt(tool_ids=("filesystem", "task")):
@@ -165,3 +153,10 @@ def test_compute_gate_helper_fails_open_to_registry(monkeypatch):
     monkeypatch.setattr(ta, "_compute_limbs", lambda: (_ for _ in ()).throw(RuntimeError("x")))
     gate, tier, remedy = ta.compute_gate("code_execution")
     assert (gate, tier, remedy) == ta.GATED_TOOL_REGISTRY["code_execution"]
+
+
+def test_a_session_that_creates_no_goal_is_not_told_about_goal_tools():
+    """A leaf, a room and a correspondent session create no goal: no goal line."""
+    from agents.task.agent.core.tool_availability import build_tool_availability_note
+    assert "Goals you create" in build_tool_availability_note(set())
+    assert "Goals you create" not in build_tool_availability_note(set(), can_create_goals=False)

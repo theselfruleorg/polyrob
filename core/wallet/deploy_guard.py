@@ -415,6 +415,20 @@ def assert_deploy(intent, deltas, *, holder: str, nonce: Optional[int]):
     except Exception as exc:
         return None, f"refused: could not predict the deployment address ({exc})"
 
+    endowment = int(getattr(intent, "amount_raw", 0) or 0)
+    if endowment > 0:
+        # 085 W2: the endowment must STAY in the new contract. A constructor that
+        # CALLs it out to another address is a payout wearing a deploy's name.
+        watched = getattr(deltas, "watched_native_deltas", None) or {}
+        landed = watched.get(address.lower())
+        if landed is None:
+            return None, (f"refused: the simulation did not measure the balance of "
+                          f"{address}, so the endowment cannot be proven to stay there")
+        if int(landed) != endowment:
+            return None, (f"refused: the new contract at {address} holds {landed} wei "
+                          f"after its constructor, not the {endowment} wei endowment — "
+                          f"the constructor forwards value elsewhere")
+
     expected_mint = getattr(intent, "expected_holder_mint_raw", None)
     if expected_mint is not None:
         minted = _minted_to_holder(deltas, address, holder)

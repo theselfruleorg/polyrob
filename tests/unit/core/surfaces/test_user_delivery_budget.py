@@ -1,6 +1,6 @@
 """Delivery-rail budget + record honesty (prod review 2026-09-15).
 
-Four defects this pins, all measured on Rob #1 prod over 2026-09-08..15
+Four defects this pins, all measured on a production install over 2026-09-08..15
 in the delivery-suppression review:
 
 * **C1** the shared daily cap counted CRITICAL-lane sends, which are exempt from

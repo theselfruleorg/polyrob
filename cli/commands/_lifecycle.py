@@ -295,6 +295,18 @@ def install_stop_signals(loop: asyncio.AbstractEventLoop, *, data_home: Path,
                 pass  # SIGTERM may be unavailable on some platforms/threads
 
 
+def _seed_note() -> str:
+    """081 WS-5.3: what this start's bundled-skill seed kept or could not do
+    (a bundled skill the owner changed is not replaced by the update). "" when
+    nothing needs the owner."""
+    try:
+        from modules.skills.seed import last_report
+        rep = last_report()
+        return "".join(f"\n{line}" for line in rep.owner_lines()) if rep else ""
+    except Exception:
+        return ""
+
+
 def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str, str]:
     """(outcome, owner text) for the request a healthy boot answers."""
     took = max(0, int(now - float(req.created_at or now)))
@@ -304,7 +316,8 @@ def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str
         if res.get("ok"):
             return (lc.OUTCOME_UPDATED,
                     f"✅ Updated and back online on {label} "
-                    f"(was {lc.version_label(req.from_version, req.from_sha)}) — took {took} s.")
+                    f"(was {lc.version_label(req.from_version, req.from_sha)}) — took {took} s."
+                    + _seed_note())
         if res.get("boot_failed"):
             return (lc.OUTCOME_BOOT_FAILED,
                     f"⚠️ The update to {res.get('to_version') or 'the new version'} did not "

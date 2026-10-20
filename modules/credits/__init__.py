@@ -2,7 +2,7 @@
 
 from .balance_manager import CreditBalanceManager
 from .usage_tracker import LLMUsageTracker, UsageRecord, CostBreakdown
-from .pricing import pricing, PricingConfig, WELCOME_BONUS, DEN_SIGNUP_ALLOWANCE, compute_llm_cost
+from .pricing import pricing, PricingConfig, WELCOME_BONUS, compute_llm_cost
 from .cost_utils import calculate_cost_from_tokens, calculate_user_cost, get_cost_breakdown
 
 
@@ -17,7 +17,6 @@ __all__ = [
     'compute_llm_cost',  # G-24: single LLM billing cost entry point
     # Credit bonus constants (single source of truth)
     'WELCOME_BONUS',
-    'DEN_SIGNUP_ALLOWANCE',
     # Shared utilities
     'calculate_cost_from_tokens',
     'calculate_user_cost',

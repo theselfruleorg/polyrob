@@ -3,9 +3,10 @@ name: x-engagement
 description: Operate X account communication on the API rail (the captured-browser rail only where the owner chose it)—read inboxes, post/reply, and send DMs with correct routing, approval, and completion evidence
 license: MIT
 metadata:
+  polyrob-when: 'Posting, replying or sending DMs on X'
   polyrob-priority: '7'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["twitter_post","twitter_reply","twitter_quote","twitter_thread","twitter_dm","twitter_get_dms","twitter_get_mentions","twitter_get_timeline","x_post","x_dm","x_read_dms","twitter_poll_results","x_browser_x_post","x_browser_x_reply","x_browser_x_dm","x_browser_x_read_dms"],"keywords":["post on x","post on twitter","tweet","reply on x","quote tweet","quote-tweet","dm on x","send a dm on x","read x dms","check x inbox","reply to x dm","engage on x","engage on twitter","x thread","twitter thread","publish on x","x poll","twitter poll","x poll results","ask the community on x","x community vote"],"task_patterns":["\\b(post|publish|tweet|thread)\\b.*\\b(on x|to x|x\\.com|twitter)\\b","\\b(reply|respond|quote)\\b.*\\b(tweet|x thread|x post|on x|twitter)\\b","\\b(read|check|review|reply to|send)\\b.*\\b(dms?|direct messages?|inbox)\\b.*\\b(on x|x account|twitter)\\b","\\b(x|twitter) (dms?|inbox)\\b","\\bengage\\b.*\\b(on x|twitter)\\b"],"tool_ids":["twitter","x_browser"]}'
+  polyrob-triggers: '{"tool_ids":["twitter","x_browser"]}'
   polyrob-version: '5'
 ---
 # X Engagement

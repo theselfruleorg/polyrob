@@ -6,8 +6,10 @@ missed the other and the owner's money/activity numbers could diverge. Both now
 delegate here (their module-level ``_ledger``/``_episodes`` seams stay, as thin
 delegates, so existing test monkeypatching keeps working).
 
-Every read fails open (a missing source contributes nothing, never an exception)
-and is loop-safe via ``run_coroutine_sync`` — a bare ``asyncio.run`` would raise
+The fail-open reads (``ledger_rollup`` / ``recent_episodes``) take an
+``errors`` list and append ``"<source>: <reason>"`` to it when the read fails —
+a caller that renders the result names the failure instead of "none"/"0"
+(080 WS-4). The ``*_strict`` twins raise. Every read is loop-safe via ``run_coroutine_sync`` — a bare ``asyncio.run`` would raise
 inside a running loop (cron runner / REPL dispatch) and silently empty the
 section.
 """
@@ -19,8 +21,13 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def ledger_rollup(user_id: str, days: int, *,
-                  include_balances: bool = False) -> Dict[str, Any]:
+def _note(errors: Optional[List[str]], source: str, exc: BaseException) -> None:
+    if errors is not None:
+        errors.append(f"{source}: {type(exc).__name__}: {str(exc)[:120]}")
+
+
+def ledger_rollup(user_id: str, days: int, *, include_balances: bool = False,
+                  errors: Optional[List[str]] = None) -> Dict[str, Any]:
     """Unified-ledger rollup for the tenant. Fail-open to ``{}``.
 
     ``{}`` (or an all-zero rollup) means "nothing to show" — callers must not
@@ -35,12 +42,13 @@ def ledger_rollup(user_id: str, days: int, *,
         from modules.credits.unified_ledger import build_ledger
         return run_coroutine_sync(build_ledger(
             user_id, days=max(1, int(days)), include_balances=include_balances)) or {}
-    except Exception:
+    except Exception as e:
         # Sibling fail-opens (_costs_leg, _wallet_leg, _inbound_leg) all warn
         # before swallowing — a silent `return {}` here made a signature drift
-        # indistinguishable from "no data yet". Fail-open behavior unchanged;
-        # only the observability of a genuine error changes.
+        # indistinguishable from "no data yet". 080 WS-4: the reason also goes
+        # to the caller's ``errors`` so the owner-facing line can name it.
         logger.warning("ledger_rollup: unified-ledger read failed (fail-open -> {})", exc_info=True)
+        _note(errors, "ledger", e)
         return {}
 
 
@@ -64,24 +72,34 @@ def ledger_note(ledger: Dict[str, Any]) -> Optional[str]:
     return ledger_availability_note(ledger)
 
 
-def recent_episodes(user_id: str, since_ts: Optional[float],
-                    limit: int = 20) -> List[Dict[str, Any]]:
+def recent_episodes_strict(user_id: str, since_ts: Optional[float],
+                           limit: int = 20) -> List[Dict[str, Any]]:
     """Newest-first episode rows for the tenant, normalized to plain dicts with
-    the superset fields (kind/outcome/spend_usd/task/ts). Fail-open to ``[]``."""
+    the superset fields (kind/outcome/spend_usd/task/ts). RAISES on a failed
+    read — the caller names it."""
+    from core.async_bridge import run_coroutine_sync
+    from modules.memory.registry import memory_recall_episodes
+    rows = run_coroutine_sync(memory_recall_episodes(
+        user_id=user_id, since_ts=int(since_ts) if since_ts else None,
+        limit=limit, order="newest", raise_errors=True))
+    out: List[Dict[str, Any]] = []
+    for r in rows or []:
+        # rows may be EpisodeRecord-like or dicts — normalize.
+        get = (r.get if isinstance(r, dict) else lambda k, d=None: getattr(r, k, d))
+        out.append({"kind": get("kind"), "outcome": get("outcome"),
+                    "spend_usd": get("spend_usd", 0.0) or 0.0,
+                    "task": get("task") or get("summary") or "",
+                    "ts": get("ts")})
+    return out
+
+
+def recent_episodes(user_id: str, since_ts: Optional[float], limit: int = 20, *,
+                    errors: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """``recent_episodes_strict`` that fails open to ``[]`` and appends the
+    reason to *errors*."""
     try:
-        from core.async_bridge import run_coroutine_sync
-        from modules.memory.registry import memory_recall_episodes
-        rows = run_coroutine_sync(memory_recall_episodes(
-            user_id=user_id, since_ts=int(since_ts) if since_ts else None,
-            limit=limit, order="newest"))
-        out: List[Dict[str, Any]] = []
-        for r in rows or []:
-            # rows may be EpisodeRecord-like or dicts — normalize.
-            get = (r.get if isinstance(r, dict) else lambda k, d=None: getattr(r, k, d))
-            out.append({"kind": get("kind"), "outcome": get("outcome"),
-                        "spend_usd": get("spend_usd", 0.0) or 0.0,
-                        "task": get("task") or get("summary") or "",
-                        "ts": get("ts")})
-        return out
-    except Exception:
+        return recent_episodes_strict(user_id, since_ts, limit)
+    except Exception as e:
+        logger.warning("recent_episodes: episode read failed (fail-open -> [])", exc_info=True)
+        _note(errors, "episodes", e)
         return []

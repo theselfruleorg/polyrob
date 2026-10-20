@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Navigate to a URL and get page snapshot.",
+    "name": "browser_go_to_url",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for navigating to a URL.",
+      "properties": {
+        "URL": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "URL"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -9,7 +9,7 @@ import pytest
 from core.wallet import abi
 from tools.launchpad import pons, pons_abi as P
 
-HOLDER = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+HOLDER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
 #: Live curve state of 0xd8c32c…3ab2's bonding curve, read 2026-09-13.
 LIVE_CURVE = dict(

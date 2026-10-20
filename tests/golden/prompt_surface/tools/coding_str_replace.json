@@ -1,0 +1,41 @@
+{
+  "function": {
+    "description": "Replace an exact, unique string in a file (fails loudly on 0 or >1 matches unless replace_all)",
+    "name": "coding_str_replace",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "coerced_note": {
+          "default": null,
+          "description": "Set when old/new_string were coerced from an object.",
+          "nullable": true,
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Path to the file to edit (relative to the workspace, or absolute within it)",
+          "type": "string"
+        },
+        "new_string": {
+          "description": "Replacement text (a JSON object is coerced to its compact single line)",
+          "type": "string"
+        },
+        "old_string": {
+          "description": "Exact text to replace; must be unique unless replace_all=true. For a JSONL row pass the row's exact text (a JSON object is coerced to its compact line).",
+          "type": "string"
+        },
+        "replace_all": {
+          "default": false,
+          "description": "Replace every occurrence instead of failing on ambiguity",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

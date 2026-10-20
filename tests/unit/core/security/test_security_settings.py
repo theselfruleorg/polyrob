@@ -28,10 +28,10 @@ def test_defaults_do_not_refuse_natural_work():
 
 
 def test_the_owner_value_wins(monkeypatch):
-    monkeypatch.setenv(ss.ENV, "host_exec_under_custody=refuse, READ_TAINT = off")
+    monkeypatch.setenv(ss.ENV, "host_exec_under_custody=refuse, PACKS_UNDER_CUSTODY = refuse")
     assert ss.value("host_exec_under_custody") == "refuse"
-    assert ss.value("read_taint") == "off"
-    assert ss.value("packs_under_custody") == "allow"
+    assert ss.value("packs_under_custody") == "refuse"
+    assert ss.value("unattended_dangerous_shell") == "sandbox"
     assert ss.invalid_entries() == []
 
 
@@ -69,14 +69,15 @@ def test_the_floor_is_small_and_enumerated():
 
 
 def test_the_status_line_names_every_row_and_its_source(monkeypatch):
-    monkeypatch.setenv(ss.ENV, "read_taint=off,bogus=1")
+    monkeypatch.setenv(ss.ENV, "packs_under_custody=refuse,bogus=1")
     data = ss.effective()
     by = {r["name"]: r for r in data}
     assert set(by) == {r.name for r in ss.SETTINGS}
-    assert by["read_taint"] == {**by["read_taint"], "value": "off", "source": "owner"}
+    assert by["packs_under_custody"] == {**by["packs_under_custody"], "value": "refuse",
+                                         "source": "owner"}
     assert by["host_exec_under_custody"]["source"] == "default"
     line = ss.status_line()
-    assert "read_taint=off (owner)" in line and "host_exec_under_custody=allow" in line
+    assert "packs_under_custody=refuse (owner)" in line and "host_exec_under_custody=allow" in line
 
 
 def test_the_custody_status_slot_shows_the_effective_settings(monkeypatch):
@@ -100,16 +101,3 @@ def test_settings_module_is_pure():
             "raise SystemExit(1 if leaked else 0)")
     root = Path(__file__).resolve().parents[4]
     assert subprocess.run([sys.executable, "-c", code], cwd=root, timeout=60).returncode == 0
-
-
-def test_the_financial_claim_gate_is_an_owner_row(monkeypatch):
-    """W4 owner note (2026-10-10): the claim gate (all rails, the X browser rail
-    included) refuses outbound text, so it is a settings row; default on."""
-    from tools.controller.financial_claim_gate import gate_enabled
-    monkeypatch.delenv("FINANCIAL_CLAIM_GATE_ENABLED", raising=False)
-    assert ss.value("financial_claim_gate") == "on" and gate_enabled()
-    monkeypatch.setenv(ss.ENV, "financial_claim_gate=off")
-    assert not gate_enabled()
-    monkeypatch.delenv(ss.ENV)
-    monkeypatch.setenv("FINANCIAL_CLAIM_GATE_ENABLED", "false")   # the older flag still works
-    assert not gate_enabled()

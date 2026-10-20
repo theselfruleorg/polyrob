@@ -4,7 +4,7 @@ The gap this closes: Rob could BUILD a page or an API and had no verb that put
 it at an address. Every "ship" goal therefore terminated in a request to the
 owner. "Ship x402 ecosystem map: static HTML visualization" was recorded done
 with a file nobody could open; "Owner deploy package: mainnet-ready x402
-endpoint for api.theselfrule.org" blocked outright and stayed blocked.
+endpoint for api.example.org" blocked outright and stayed blocked.
 
 Shape, deliberately the same as ``hf_deploy``: a FIRST publish of a NEW public
 address needs an approving provider (interactive by default, the durable

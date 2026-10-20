@@ -277,7 +277,9 @@ def h_missed(ctx) -> None:
         # never received live (fix round 1, 2026-09-14).
         lines.extend(format_notice_lines(r.get("ts") or 0, kind, text,
                                          gutter=candy.GUTTER))
-    lines.append(f"{candy.GUTTER}raise the cap: /config set delivery.daily_cap N")
+    from core.surfaces.missed import cap_caused
+    if cap_caused(rows):
+        lines.append(f"{candy.GUTTER}raise the cap: /config set delivery.daily_cap N")
     ctx.emit("\n".join(lines), title="missed")
 
 

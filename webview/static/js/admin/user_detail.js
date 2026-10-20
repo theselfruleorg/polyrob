@@ -187,12 +187,12 @@
                 container.classList.add('has-token');
                 container.classList.remove('no-token');
                 icon.textContent = '✓';
-                count.textContent = `${result.new_count} DEN Token(s)`;
+                count.textContent = `${result.new_count} Access Token(s)`;
             } else {
                 container.classList.remove('has-token');
                 container.classList.add('no-token');
                 icon.textContent = '✗';
-                count.textContent = 'No DEN Tokens';
+                count.textContent = 'No Access Tokens';
             }
 
             verified.textContent = `Last verified: ${formatDateTime(result.verified_at)}`;
@@ -208,12 +208,6 @@
             message += `Previous: ${result.previous_count} -> New: ${result.new_count}\n`;
             if (result.tier_changed) {
                 message += `Tier changed: ${result.previous_tier} -> ${result.new_tier}\n`;
-            }
-            if (result.bonuses_granted > 0) {
-                message += `Bonuses granted: ${result.bonuses_granted}\n`;
-            }
-            if (result.bonuses_already_claimed > 0) {
-                message += `Bonuses already claimed: ${result.bonuses_already_claimed}`;
             }
             alert(message);
 

@@ -1,9 +1,8 @@
-"""`polyrob cron` — owner management of durable scheduled agent runs.
+"""`polyrob job` — owner management of scheduled jobs (080 WS-2).
 
-Closes parity gap G4 (2026-07-12 UI-surface review): cron jobs could not be
-created or cancelled from any human surface — REPL ``/cron``, webview
-``/autonomy`` and Telegram ``/status`` are read-only, so scheduling was
-agent-tool-only. This group rides the SAME ``cron.service.CronService`` +
+The owner word is "job" on every seat (`/jobs`, `/job …` in chat). `polyrob
+cron` stays as an alias of this group for ONE minor release because prod ops
+scripts call it; it is then deleted. This group rides the SAME ``cron.service.CronService`` +
 ``cron.db`` the lifespan ticker (``polyrob/app/autonomy_runtime.py``) and the webview
 ``/api/webgate/cron`` endpoint use, at the ADMIN data home
 (``cli/_admin_home.py::admin_data_dir`` — the 031 rule, which adopts the
@@ -76,40 +75,74 @@ def _resolve_job_id(svc, job_id: str, tenant: str) -> str:
 
 
 def _warn_if_cron_off() -> None:
-    """A stored job only runs if the ticker is on — never mislead the owner."""
-    from cli._flag_warn import warn_if_flag_off
-    from core.remedy import flag_command
-
-    def _enabled() -> bool:
-        from tools.cronjob_tools import cron_enabled
-        return cron_enabled()
-
-    warn_if_flag_off(
-        "CRON_ENABLED",
-        "the job is stored but no ticker will run it.",
-        enabled_fn=_enabled,
-        remedy=(f"{flag_command('CRON_ENABLED')}` or `"
-                f"{flag_command('AUTONOMY_POSTURE', 'full')}"),
-    )
+    """A stored job only runs if the scheduler is on — the ONE sentence every
+    seat prints (``cron.service.scheduler_off_note``)."""
+    from cron.service import scheduler_off_note
+    note = scheduler_off_note()
+    if note:
+        click.echo(click.style(f"  note: {note}", fg="yellow"))
 
 
 def _fmt(job) -> str:
-    status_color = {"scheduled": "green", "running": "yellow", "done": "blue",
-                    "failed": "red", "cancelled": "white"}.get(job.status, "white")
-    nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
+    from cron.service import last_outcome, next_run_text
+    status_color = {"scheduled": "green", "running": "yellow", "paused": "cyan",
+                    "done": "blue", "failed": "red", "cancelled": "white"}.get(job.status, "white")
     shot = "once" if job.one_shot else "recurring"
     return (f"{click.style(job.status.ljust(10), fg=status_color)} "
-            f"{job.id}  [{job.schedule_spec} · {shot} · next {nxt}]  {job.task}")
+            f"{job.id}  [{job.schedule_spec} · {shot} · next {next_run_text(job)} · "
+            f"last {last_outcome(job)}]  {job.task}")
 
 
-@click.group("cron")
-def cron():
-    """Schedule, inspect and cancel durable cron jobs."""
+@click.group("job")
+def job():
+    """Scheduled jobs: add, list, change, pause, resume, run now, stop."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
 
-@cron.command("schedule")
+def _create(svc, *, task: str, schedule_spec: str, tenant: str,
+            max_duration: int):
+    from cron.schedule import ScheduleError
+    dup = svc.find_duplicate(user_id=tenant, task=task, schedule_spec=schedule_spec)
+    if dup is not None:
+        raise click.ClickException(
+            f"job {dup.id} already does this on {schedule_spec!r} ({dup.status}) — "
+            f"nothing added; change it with `polyrob job edit` or stop it")
+    try:
+        created = svc.schedule(task=task, schedule_spec=schedule_spec,
+                               user_id=tenant, max_duration_seconds=max_duration,
+                               via="cli", owner_seat=True)
+    except ScheduleError as e:
+        raise click.ClickException(f"invalid schedule: {e}")
+    from core.cron_lanes import schedule_notes
+    from cron.service import next_run_text
+    click.echo(f"scheduled {click.style(created.id, bold=True)} — next run "
+               f"{next_run_text(created)}")
+    for note in schedule_notes(created):
+        click.echo(f"  {note}")
+    _warn_if_cron_off()
+
+
+@job.command("new")
+@click.argument("words", nargs=-1, required=True)
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+@click.option("--max-duration", default=600, type=int,
+              help="Per-run hard cap in seconds (default 600)")
+@as_root_option
+def new(words, user: Optional[str], max_duration: int):
+    """Add a job: WHEN WHAT — e.g. `polyrob job new "every monday 09:00" summarise the week`
+    (or `every monday 09:00 | summarise the week`)."""
+    from cron.schedule import ScheduleError
+    from cron.service import parse_new_job_args
+    try:
+        spec, what = parse_new_job_args(list(words))
+    except ScheduleError as e:
+        raise click.ClickException(str(e))
+    _create(_service(write=True), task=what, schedule_spec=spec, tenant=_tenant(user),
+            max_duration=max_duration)
+
+
+@job.command("schedule", hidden=True)
 @click.argument("task")
 @click.argument("schedule_spec")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
@@ -117,21 +150,9 @@ def cron():
               help="Per-run hard cap in seconds (default 600)")
 @as_root_option
 def schedule(task: str, schedule_spec: str, user: Optional[str], max_duration: int):
-    """Schedule TASK on SCHEDULE_SPEC (e.g. '30m', 'every monday 09:00')."""
-    from cron.schedule import ScheduleError
-
-    svc = _service(write=True)
-    try:
-        # The owner's CLI: the row is owner-authored (an unstamped row has no
-        # standing owner authority — core.config_policy.rigs.is_owner_authored).
-        job = svc.schedule(task=task, schedule_spec=schedule_spec,
-                           user_id=_tenant(user), max_duration_seconds=max_duration,
-                           payload={"authored_by": "owner"})
-    except ScheduleError as e:
-        raise click.ClickException(f"invalid schedule: {e}")
-    nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
-    click.echo(f"scheduled {click.style(job.id, bold=True)} — next run {nxt}")
-    _warn_if_cron_off()
+    """One-release alias of `new` with the old argument order (TASK SCHEDULE_SPEC)."""
+    _create(_service(write=True), task=task, schedule_spec=schedule_spec,
+            tenant=_tenant(user), max_duration=max_duration)
 
 
 #: The digest job's task string is a MARKER, never a prompt — `cron/runner.py`
@@ -146,7 +167,7 @@ def _digest_jobs(svc, tenant: str) -> list:
             if (j.payload or {}).get("digest") and j.status != "cancelled"]
 
 
-@cron.command("digest")
+@job.command("digest")
 @click.argument("schedule_spec", required=False)
 @click.option("--off", is_flag=True, default=False, help="Cancel the digest job.")
 @click.option("--deliver", default="telegram", help="Surface to deliver on (default telegram).")
@@ -175,14 +196,14 @@ def digest(schedule_spec: Optional[str], off: bool, deliver: str, days: int,
             click.echo(empty("digest job scheduled", "nothing to cancel", yet=False))
             return
         for job in existing:
-            svc.cancel(job.id, user_id=tenant)
+            svc.cancel(job.id, user_id=tenant, via="cli")
         click.echo(f"cancelled {len(existing)} digest job(s)")
         return
     if not schedule_spec:
         if not existing:
             from cli.ui.candy import empty
             click.echo(empty("digest job scheduled",
-                             "schedule one:  polyrob cron digest 'every day 08:00'"))
+                             "schedule one:  polyrob job digest 'every day 08:00'"))
             return
         for job in existing:
             click.echo(_fmt(job))
@@ -190,16 +211,20 @@ def digest(schedule_spec: Optional[str], off: bool, deliver: str, days: int,
     try:
         job = svc.schedule(
             task=_DIGEST_TASK, schedule_spec=schedule_spec, user_id=tenant,
-            payload={"digest": True, "wake_agent": False, "authored_by": "owner",
-                     "deliver": deliver, "days": max(1, int(days))})
+            payload={"digest": True, "wake_agent": False,
+                     "deliver": deliver, "days": max(1, int(days))},
+            via="cli", owner_seat=True)
     except ScheduleError as e:
         raise click.ClickException(f"invalid schedule: {e}")
     # AFTER the new one is persisted: a failed reschedule must not leave the
     # owner with no digest at all.
     for old in existing:
-        svc.cancel(old.id, user_id=tenant)
+        svc.cancel(old.id, user_id=tenant, via="cli")
     nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
     click.echo(f"digest scheduled {click.style(job.id, bold=True)} — next run {nxt}")
+    from core.cron_lanes import schedule_notes
+    for note in schedule_notes(job):
+        click.echo(f"  {note}")
     _warn_if_digest_off()
     _warn_if_cron_off()
 
@@ -221,7 +246,7 @@ def _warn_if_digest_off() -> None:
         click.echo(click.style("  note: could not read the digest flags", dim=True))
 
 
-@cron.command("list")
+@job.command("list")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @click.option("--all", "all_tenants", is_flag=True, default=False,
               help="List jobs across all tenants AND include cancelled rows")
@@ -230,7 +255,7 @@ def _warn_if_digest_off() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def list_jobs(user: Optional[str], all_tenants: bool, show_cancelled: bool,
               as_json: bool):
-    """List cron jobs (newest schedule first).
+    """List scheduled jobs: next run, last outcome, who wrote each.
 
     057 WS-C (B12): cancelled rows are HIDDEN unless you ask for them. The store
     is used as a config editor — prod carried ~70 cancelled rows, several of them
@@ -255,18 +280,32 @@ def list_jobs(user: Optional[str], all_tenants: bool, show_cancelled: bool,
         # cannot both be true. One sentence, and it names what it left out.
         from cli.ui.candy import empty
         if hidden:
-            click.echo(empty("live cron jobs",
+            click.echo(empty("live scheduled jobs",
                              f"{hidden} cancelled row(s) are hidden — "
                              f"--cancelled to show them", yet=False))
         else:
-            click.echo(empty("cron jobs", "nothing is scheduled for this tenant"))
+            click.echo(empty("scheduled jobs", "nothing is scheduled for this tenant"))
+        if not all_tenants:
+            _echo_stopped_lanes(svc, _tenant(user))
+        _warn_if_cron_off()
         return
     for job in jobs:
         click.echo(_fmt(job))
     if hidden:
         click.echo(click.style(
             f"  ({hidden} cancelled job(s) hidden — --cancelled to show, "
-            f"'polyrob cron prune' to remove)", dim=True))
+            f"'polyrob job prune' to remove)", dim=True))
+    if not all_tenants:
+        _echo_stopped_lanes(svc, _tenant(user))
+    _warn_if_cron_off()
+
+
+def _echo_stopped_lanes(svc, tenant: str) -> None:
+    """0011: the lanes the owner stopped (``polyrob job allow <lane>`` re-arms)."""
+    from core.cron_lanes import stopped_lines
+    lines = stopped_lines(svc.store, user_id=tenant)
+    for line in lines:
+        click.echo(line.replace("/job allow", "polyrob job allow"))
 
 
 def _parse_age_days(spec: str) -> float:
@@ -284,7 +323,7 @@ def _parse_age_days(spec: str) -> float:
             f"unreadable age {spec!r} — use 7d, 48h or a number of days")
 
 
-@cron.command("prune")
+@job.command("prune")
 @click.option("--cancelled-older-than", "older_than", default="7d",
               help="Age cutoff for cancelled rows (e.g. 7d, 48h). Default 7d.")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
@@ -294,7 +333,7 @@ def _parse_age_days(spec: str) -> float:
               help="Say what would be removed without removing it.")
 @as_root_option
 def prune(older_than: str, user: Optional[str], all_tenants: bool, dry_run: bool):
-    """Delete CANCELLED cron jobs older than a cutoff (057 WS-C B12).
+    """Delete STOPPED jobs older than a cutoff (057 WS-C B12).
 
     Only ``cancelled`` rows are touched — a live, failed or completed job is
     never removed by this verb.
@@ -341,7 +380,7 @@ def prune(older_than: str, user: Optional[str], all_tenants: bool, dry_run: bool
             f"changed the table between the count and the delete.", fg="yellow"))
 
 
-@cron.command("show")
+@job.command("show")
 @click.argument("job_id")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 def show(job_id: str, user: Optional[str]):
@@ -358,7 +397,7 @@ def show(job_id: str, user: Optional[str]):
         click.echo(f"  payload:      {job.payload}")
 
 
-@cron.command("edit")
+@job.command("edit")
 @click.argument("job_id")
 @click.option("--max-duration", type=click.IntRange(1, 1800), default=None,
               help="New hard cap in seconds (1-1800, the same ceiling the agent tool has).")
@@ -381,33 +420,40 @@ def show(job_id: str, user: Optional[str]):
               help="Replace the job's task PROSE with this file's text (schedule, next run, cap "
                    "and payload untouched). The alternative was cancel + re-schedule, which loses "
                    "last_run_at and every payload edit.")
-@click.option("--slot-cap", default=None,
-              help="$0 preflight in payload.preflight: skip the run (cron_run skipped/no_slot) while "
-                   "the ledger's `## Open positions` table already holds N or more rows — the "
-                   "SCOUT rail's rule-10 cap, evaluated in-process before any model call "
-                   "(or 'none' to drop it).")
+@click.option("--post-spacing-hours", type=click.FloatRange(0, 168), default=None,
+              help="Minimum hours between this job's own X posts, ENFORCED by the X tool "
+                   "(payload.post_spacing_hours; 0 clears it).")
+@click.option("--tools", default=None,
+              help="Explicit toolset in payload.tools, comma-separated tool ids "
+                   "(e.g. twitter,filesystem,task; 'none' clears it). Wins over --rig.")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @as_root_option
 def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
          priority: Optional[str], preempts: Optional[bool], rig: Optional[str],
-         deliver: Optional[str], task_file: Optional[str], slot_cap: Optional[str],
+         deliver: Optional[str], task_file: Optional[str],
+         post_spacing_hours: Optional[float], tools: Optional[str],
          user: Optional[str]):
-    """Change a job's cap, schedule, priority, pre-emption and/or rig (tenant-scoped).
-
-    Why: the EXIT/SCOUT treasury rails were created with a 240 s cap and timed
-    out on 22 of 24 runs (2026-09-17) — until now the only remedy was a raw
-    sqlite UPDATE on the live db. The ceiling is 1800 s: the hourly buyback rail
-    (reconcile → quote → gates → swap → ledger → report) runs 1-5 min per step
-    and was cut at step 6 by the old 600 s ceiling before it could swap.
-    """
+    """Change a job's cap, schedule, priority, pre-emption, rig, tools, delivery
+    or instruction in place (tenant-scoped); everything else on the job is kept.
+    The cap ceiling is 1800 s."""
     svc = _service(write=True)
     tenant = _tenant(user)
     if max_duration is None and schedule is None and priority is None \
             and rig is None and preempts is None and deliver is None and task_file is None \
-            and slot_cap is None:
+            and post_spacing_hours is None and tools is None:
         raise click.ClickException(
             "nothing to change: pass --max-duration, --schedule, --priority, "
-            "--preempts, --rig, --deliver, --slot-cap and/or --task-file")
+            "--preempts, --rig, --tools, --deliver, --post-spacing-hours and/or --task-file")
+    _tool_ids: Optional[list] = None
+    if tools is not None and tools.strip().lower() not in ("none", "", "-"):
+        from core.packs.index import first_party_tool_ids
+        from core.skills.catalog import VALID_TOOL_IDS
+        _valid = set(VALID_TOOL_IDS) | first_party_tool_ids()
+        _tool_ids = [t.strip() for t in tools.split(",") if t.strip()]
+        _bad = [t for t in _tool_ids if t not in _valid]
+        if _bad:
+            raise click.ClickException(
+                f"unknown tool id(s) {', '.join(_bad)} (valid: {', '.join(sorted(_valid))})")
     job_id = _resolve_job_id(svc, job_id, _tenant(user))
     if max_duration is not None:
         if svc.store.set_max_duration(job_id, max_duration, user_id=tenant):
@@ -461,22 +507,19 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
             click.echo(f"{job_id}: deliver → {'(dropped)' if _drop else deliver.strip().lower()}")
         else:
             raise click.ClickException(f"could not set deliver on {job_id!r} (no job for this tenant)")
-    if slot_cap is not None:
-        from cron.rig_edit import set_job_preflight_slot_cap
-        _drop = slot_cap.strip().lower() in ("none", "", "-")
-        cap = None
-        if not _drop:
-            try:
-                cap = int(slot_cap)
-            except ValueError:
-                cap = 0
-            if cap <= 0:
-                raise click.ClickException(
-                    f"--slot-cap must be a positive row count (or 'none' to drop it), got {slot_cap!r}")
-        if set_job_preflight_slot_cap(svc.store, job_id, cap, user_id=_tenant(user)):
-            click.echo(f"{job_id}: preflight slot_cap → {'(dropped)' if _drop else cap}")
+    if post_spacing_hours is not None:
+        from cron.rig_edit import set_job_payload_key
+        _val = float(post_spacing_hours) or None
+        if set_job_payload_key(svc.store, job_id, "post_spacing_hours", _val, user_id=tenant):
+            click.echo(f"{job_id}: post spacing → {f'{_val:g} h' if _val else '(cleared)'}")
         else:
-            raise click.ClickException(f"could not set slot-cap on {job_id!r} (no job for this tenant)")
+            raise click.ClickException(f"could not set post spacing on {job_id!r} (no job for this tenant)")
+    if tools is not None:
+        from cron.rig_edit import set_job_payload_key
+        if set_job_payload_key(svc.store, job_id, "tools", _tool_ids, user_id=tenant):
+            click.echo(f"{job_id}: tools → {', '.join(_tool_ids) if _tool_ids else '(cleared)'}")
+        else:
+            raise click.ClickException(f"could not set tools on {job_id!r} (no job for this tenant)")
     if task_file is not None:
         with open(task_file, "r", encoding="utf-8") as fh:
             text = fh.read()
@@ -488,15 +531,103 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
             raise click.ClickException(f"could not set task on {job_id!r} (no job for this tenant)")
 
 
-@cron.command("cancel")
+def _stop(job_id: str, user: Optional[str], *, forever: bool = False,
+          reason: str = "") -> None:
+    svc = _service(write=True)
+    tenant = _tenant(user)
+    job_id = _resolve_job_id(svc, job_id, tenant)
+    if not forever:
+        if svc.cancel(job_id, user_id=tenant, via="cli"):
+            click.echo(f"stopped {job_id} — it will not run again")
+            return
+        raise click.ClickException(f"no job {job_id!r} for this tenant")
+    job = svc.store.get(job_id, user_id=tenant)
+    if job is None:
+        raise click.ClickException(f"no job {job_id!r} for this tenant")
+    from core.cron_lanes import stop_job
+    msg = stop_job(svc, job, user_id=tenant, via="cli", forever=forever, reason=reason)
+    if msg.startswith("Could not"):
+        raise click.ClickException(msg)
+    click.echo(msg)
+
+
+@job.command("stop")
+@click.argument("job_id")
+@click.option("--forever", is_flag=True, default=False,
+              help="Also stop the job's lane (its pinned skill, else its rig): no new "
+                   "job in it is created except by you, until `polyrob job allow`.")
+@click.option("--reason", default="", help="Your words, kept with a --forever stop.")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+@as_root_option
+def stop(job_id: str, forever: bool, reason: str, user: Optional[str]):
+    """Stop a job (tenant-scoped; the row records that the CLI stopped it)."""
+    _stop(job_id, user, forever=forever, reason=reason)
+
+
+@job.command("allow")
+@click.argument("lane")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+@as_root_option
+def allow(lane: str, user: Optional[str]):
+    """Re-arm a lane you stopped with `polyrob job stop --forever`."""
+    from core.cron_lanes import allow_lane
+    click.echo(allow_lane(_service(write=True).store, user_id=_tenant(user), lane=lane))
+
+
+@job.command("cancel", hidden=True)
 @click.argument("job_id")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @as_root_option
 def cancel(job_id: str, user: Optional[str]):
-    """Cancel a job (tenant-scoped — you can only cancel your own)."""
+    """One-release alias of `stop`."""
+    _stop(job_id, user)
+
+
+@job.command("pause")
+@click.argument("job_id")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+@as_root_option
+def pause(job_id: str, user: Optional[str]):
+    """Pause one job: it shows as paused, with no next run, until `resume`."""
     svc = _service(write=True)
-    job_id = _resolve_job_id(svc, job_id, _tenant(user))
-    if svc.cancel(job_id, user_id=_tenant(user), via="cli"):
-        click.echo(f"cancelled {job_id}")
-    else:
-        raise click.ClickException(f"no job {job_id!r} for this tenant")
+    tenant = _tenant(user)
+    job_id = _resolve_job_id(svc, job_id, tenant)
+    if not svc.pause(job_id, user_id=tenant, via="cli"):
+        row = svc.store.get(job_id, user_id=tenant)
+        raise click.ClickException(f"job {job_id} is {row.status if row else 'gone'} — nothing to pause")
+    click.echo(f"paused {job_id} — `polyrob job resume {job_id[:8]}` to resume")
+
+
+@job.command("resume")
+@click.argument("job_id")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+@as_root_option
+def resume(job_id: str, user: Optional[str]):
+    """Resume a paused job at its next slot."""
+    from cron.service import next_run_text
+    svc = _service(write=True)
+    tenant = _tenant(user)
+    job_id = _resolve_job_id(svc, job_id, tenant)
+    if not svc.resume(job_id, user_id=tenant, via="cli"):
+        row = svc.store.get(job_id, user_id=tenant)
+        raise click.ClickException(f"job {job_id} is {row.status if row else 'gone'}, not paused")
+    click.echo(f"resumed {job_id} — next run {next_run_text(svc.store.get(job_id, user_id=tenant))}")
+    _warn_if_cron_off()
+
+
+@job.command("run")
+@click.argument("job_id")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+@as_root_option
+def run_now(job_id: str, user: Optional[str]):
+    """Run a job on the next scheduler pass (its schedule is kept)."""
+    svc = _service(write=True)
+    tenant = _tenant(user)
+    job_id = _resolve_job_id(svc, job_id, tenant)
+    why = svc.run_now(job_id, user_id=tenant, via="cli")
+    if why == "paused":
+        raise click.ClickException(f"job {job_id} is paused — `polyrob job resume` it first")
+    if why:
+        raise click.ClickException(f"job {job_id} is {why} — it cannot run now")
+    click.echo(f"{job_id} runs on the next scheduler pass")
+    _warn_if_cron_off()

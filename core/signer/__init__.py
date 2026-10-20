@@ -35,6 +35,8 @@ Modules:
 """
 import logging
 import os
+from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,54 @@ def signer_mode() -> str:
         _warned.add(raw)
         logger.warning("WALLET_SIGNER=%r is not one of %s; using local", raw, "|".join(MODES))
     return MODE_LOCAL
+
+
+#: 085 W8: after the cut-over ``WALLET_SIGNER=remote`` lives only in the agent
+#: units' own file, loaded AFTER the shared one (a later EnvironmentFile wins).
+SHARED_ENV_FILE = "/etc/polyrob/polyrob.env"
+AGENT_SIGNER_ENV_FILE = "/etc/polyrob/agent-signer.env"
+_KEY = "WALLET_SIGNER"
+
+
+def declared_mode(shared: Optional[str] = None,
+                  agent: Optional[str] = None) -> Optional[str]:
+    """085 W8: the ONE reader of ``polyrob.env`` + ``agent-signer.env`` for the
+    agent units' mode (the root approvals listing, the deploy via
+    ``python -I -m core.signer.deployed_mode``, wallet_continuity). It never
+    changes :func:`signer_mode`: a unit that does not load the agent file stays
+    signer-free.
+
+    The agent units' mode as the two files declare it, or None when neither
+    declares one. ``agent`` wins over ``shared`` (the drop-in order). A file this
+    user may not read (the agent file is 0600 root) declares nothing here; an
+    unknown value reads ``local``, as :func:`core.signer.signer_mode` does."""
+    value = None
+    for path in (shared or SHARED_ENV_FILE, agent or AGENT_SIGNER_ENV_FILE):
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            # systemd EnvironmentFile semantics: `KEY=value`, `#` comments, the
+            # last assignment wins. (No core.env_file import: it closes a cycle.)
+            name, sep, raw = line.strip().partition("=")
+            if not sep or name.strip() != _KEY:
+                continue
+            raw = raw.strip().strip('"').strip("'").strip().lower()
+            if raw:
+                value = raw
+    if value is None:
+        return None
+    return value if value in MODES else MODE_LOCAL
+
+
+def agent_signer_mode() -> str:
+    """This process's own ``WALLET_SIGNER`` when it has one (an agent unit),
+    else the mode the deployment declares for the agent units."""
+    mode = signer_mode()
+    if mode != MODE_LOCAL:
+        return mode
+    return declared_mode() or MODE_LOCAL
 
 
 def socket_path() -> str:

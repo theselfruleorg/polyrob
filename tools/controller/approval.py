@@ -461,7 +461,8 @@ def make_approval_hook(
     ONLY for an already-gated action, and it FAILS CLOSED: a raising predicate
     gates normally rather than waving the call through. A predicate with
     ``takes_context = True`` also receives the execution context (073 D3: the
-    shell guard's smart triage stamps its verdict there).
+    shell guard's smart triage stamps its verdict there). A predicate with
+    ``off_loop = True`` may block (a price read) and runs in a worker thread.
     """
     required = {t for t in (required_tools or []) if t}
 
@@ -470,10 +471,16 @@ def make_approval_hook(
             return None  # not gated -> allow
         if exempt_fn is not None:
             try:
-                if getattr(exempt_fn, "takes_context", False):
-                    exemption = exempt_fn(action_name, params or {}, context)
+                args = ((action_name, params or {}, context)
+                        if getattr(exempt_fn, "takes_context", False)
+                        else (action_name, params or {}))
+                if getattr(exempt_fn, "off_loop", False):
+                    # 085 W2: a predicate that may do blocking I/O (the payout
+                    # shape prices a declared inflow) never runs on the event
+                    # loop — a stalled loop freezes the owner's chat.
+                    exemption = await asyncio.to_thread(exempt_fn, *args)
                 else:
-                    exemption = exempt_fn(action_name, params or {})
+                    exemption = exempt_fn(*args)
             except Exception as e:
                 # Fail CLOSED: a broken predicate must never widen the gate.
                 logger.error(
@@ -510,8 +517,8 @@ def make_approval_hook(
                                session_id=getattr(context, "session_id", None) or "")
                 return (f"approval denied (timeout) for '{action_name}'; owner can approve "
                         "via /pending — a decision recorded after this timeout still "
-                        "applies to the next identical attempt (one-shot grant), or "
-                        "loosen via the approvals.require pref")
+                        "applies to the next identical attempt (one-shot grant)"
+                        + _denial_remedy(action_name))
             except Exception as e:
                 logger.error(
                     f"approval.error action={action_name} exc={type(e).__name__}: {e}"
@@ -525,8 +532,9 @@ def make_approval_hook(
                                user_id=getattr(context, "user_id", None) or "",
                                session_id=getattr(context, "session_id", None) or "",
                                detail=f"provider crashed: {type(e).__name__}: {e}")
-                return (f"approval denied (error) for '{action_name}'; owner can approve "
-                        "via /pending or loosen via the approvals.require pref")
+                return (f"approval denied (error: approval provider crashed) for "
+                        f"'{action_name}'; owner can approve via /pending"
+                        + _denial_remedy(action_name))
             decision = "approved" if approved else "denied"
             if approved and getattr(provider, "decides_as_owner", False) is True:
                 _stamp_owner_grant(context, params or {})
@@ -535,8 +543,8 @@ def make_approval_hook(
                 record_refusal("approval_denied", tool=action_name,
                                user_id=getattr(context, "user_id", None) or "",
                                session_id=getattr(context, "session_id", None) or "")
-                return (f"approval denied for '{action_name}'; owner can approve via /pending "
-                        "or loosen via the approvals.require pref")
+                return (f"approval denied for '{action_name}'; owner can approve via /pending"
+                        + _denial_remedy(action_name))
             return None
         finally:
             _emit_approval_event(
@@ -545,6 +553,28 @@ def make_approval_hook(
             )
 
     return _hook
+
+
+def _denial_remedy(action_name: str) -> str:
+    """The tail of an approval denial: what the owner can change (2026-10-13 R4).
+
+    A money verb must NOT be told "loosen via the approvals.require pref" — that
+    pref only ADDS gates, the money lane is decided by the spend caps, and the
+    advice sent the agent to explain a wrong fix to the owner. Name the real
+    levers instead: the owner's one-shot approval, and the live caps in the
+    Spend limits block of ``<live-health>``.
+    """
+    try:
+        from core.money.classify import money_action
+        money = money_action(action_name)
+    except Exception:  # pragma: no cover - defensive
+        money = False
+    if money:
+        return ("; this is a money verb: the owner decides it — the live caps, and "
+                "whether any spend may skip the owner at all, are in the Spend limits "
+                "block of <live-health> — do not tell the owner a preference will "
+                "unblock it")
+    return " or loosen via the approvals.require pref"
 
 
 # 067 P4 prerequisite: the three approval lanes, built on first read.

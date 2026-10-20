@@ -1,0 +1,30 @@
+{
+  "function": {
+    "description": "Create a new file in the workspace (fails if it exists unless overwrite=true)",
+    "name": "coding_create_file",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "default": "",
+          "description": "Initial file content",
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Path of the new file (relative to the workspace)",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "description": "Allow overwriting an existing file",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

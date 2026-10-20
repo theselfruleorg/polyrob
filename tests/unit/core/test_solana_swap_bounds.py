@@ -238,3 +238,23 @@ def test_route_v2_recipient_must_be_the_wallet():
     accounts = list(ix.accounts)
     accounts[2] = V6
     assert "associated account" in refusal([replace(ix, accounts=tuple(accounts))], BOUNDS, owner=OWNER)
+
+
+# -- 085 reval: Jupiter's executable minimum sits ~1.7 bp under verified_floor --
+
+def test_an_instruction_minimum_1_7_bp_below_the_floor_is_allowed():
+    # BOUNDS floor 990_000; quoted 999_830 at 100 bps -> 989_831 (1.7 bp below).
+    assert refusal([route(quoted=999_830)], BOUNDS, owner=OWNER) is None
+
+
+def test_an_instruction_minimum_6_bp_below_the_floor_refuses():
+    # quoted 999_400 at 100 bps -> 989_406 (6 bp below; the grace is 5 bp).
+    assert "minimum output" in refusal([route(quoted=999_400)], BOUNDS, owner=OWNER)
+
+
+def test_the_grace_is_5_bp_and_never_more():
+    from core.wallet.solana_swap_bounds import FLOOR_GRACE_BPS, min_acceptable
+    assert FLOOR_GRACE_BPS == 5
+    assert min_acceptable(990_000) == 989_505
+    assert min_acceptable(10_000) == 9_995
+    assert min_acceptable(1) == 1

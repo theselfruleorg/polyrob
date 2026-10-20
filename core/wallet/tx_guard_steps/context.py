@@ -60,3 +60,5 @@ class GuardContext:
     amount_usd: Optional[float] = None
     #: step 7: which side supplied the USD estimate.
     valuation_basis: str = "outflow"
+    #: step 7: a send valued below spend grade — step 9 lets only the owner run it.
+    owner_only: bool = False

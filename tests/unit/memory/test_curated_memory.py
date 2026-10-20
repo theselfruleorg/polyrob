@@ -66,3 +66,17 @@ def test_curated_memory_does_not_persist_credential_shapes(provider):
     secret = "sk-" + "a" * 24
     assert asyncio.run(provider.curated_add("alice", secret))
     assert secret not in asyncio.run(provider.curated_read("alice"))
+
+
+def test_d14_curated_read_failure_raises_not_empty(tmp_path, monkeypatch):
+    """D14 (review 2026-10-13): a read error rendered "Your curated memory is empty."."""
+    import modules.memory.sqlite_curated_store as cs
+    monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
+    from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
+    p = SqliteMemoryProvider(str(tmp_path / "m.db"))
+
+    def boom(*a, **k):
+        raise RuntimeError("disk I/O error")
+    monkeypatch.setattr(cs, "execute_retry", boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(p.curated_read("alice"))

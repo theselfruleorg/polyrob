@@ -212,6 +212,13 @@ def _quote_slippage_bps() -> int:
         return 100
 
 
+def _discovery_error(chain: str, exc: BaseException) -> str:
+    """A failed indexer read, worded so it is never taken for an empty market
+    (2026-10-12: a 429 burst read as "the discovery rail is empty")."""
+    return (f"pool discovery could not read {chain}: {exc}. This is NOT "
+            f"'no pools' — the list was not read.")
+
+
 class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileReadsMixin,
                    HoldingsReadsMixin, BaseTool):
     """Read-only token sight. Seams are injectable so unit tests never hit the network."""
@@ -800,7 +807,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         try:
             pools = self._discover(params.chain, kind) or []
         except Exception as exc:
-            return self._ar(error=f"pool discovery failed: {exc}")
+            return self._ar(error=_discovery_error(params.chain, exc))
 
         kept, excluded = [], 0
         for pool in pools:
@@ -991,7 +998,8 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             return self._solana_portfolio_sync(params)
         holder = self._resolve_holder()
         if not holder:
-            return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true) "
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT + " "
                                   "— no address to report holdings for")
         from tools.defi import account_mode
         if account_mode.requested(params):
@@ -1003,17 +1011,17 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         return self._evm_holdings_report(holder, params.chain)
 
     @BaseTool.action(
-        "Compare the position ledger's '## Open positions' table against "
-        "ACTUAL on-chain holdings and report every disagreement, loudly. Run "
-        "this at the START of every trading run and before ANY public claim "
-        "about positions or track record — its output is authoritative over "
-        "your memory and over the ledger's own run-log narrative.",
+        "Compare the money rail's position book (open_positions, written from "
+        "landed receipts) against ACTUAL on-chain holdings and report every "
+        "disagreement, loudly. Run this at the START of every trading run and "
+        "before ANY public claim about positions or track record — its output "
+        "is authoritative over your memory.",
         param_model=ReconcileParams)
     async def reconcile(self, params: ReconcileParams, execution_context=None):
         """The money rails' step-1 gate. A refusal or error here is a durable
         FACT (`rail_precondition_failed`), never only the returned error text:
-        on 2026-09-21 this verb refused every call for 9 h (ledger > 1 MB) and
-        six rails ran without their gate while every status seat read healthy."""
+        on 2026-09-21 this verb refused every call for 9 h and six rails ran
+        without their gate while every status seat read healthy."""
         try:
             # Blocking body — see the note on `token_info`. EVERY money rail
             # begins with this read, so a reconcile that holds the loop is the
@@ -1035,8 +1043,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         "arithmetic done: per token the size (measured or quoted), the cost "
         "basis (average cost) or 'basis unknown', the current price, value, "
         "unrealized P&L in USD and %, realized P&L, and the high-water price. "
-        "Holdings open only in the position ledger are listed as LEDGER-ONLY, "
-        "basis unknown. Repeat its figures; never compute or convert a money figure yourself. "
+        "Repeat its figures; never compute or convert a money figure yourself. "
         "Reveals own funds — owner-only. For SOMEONE ELSE's wallet use "
         "wallet_holdings.",
         param_model=PositionsParams)
@@ -1072,11 +1079,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             return self._ar(error="no tenant on this call — cannot pick whose book to read")
         from core import open_positions
         try:
-            # Every chain's rows, so a ledger holding tracked on ANOTHER chain
-            # is never mistaken for ledger-only; the scope filter runs here.
-            all_entries = open_positions.positions_for(uid)
-            entries = [e for e in all_entries
-                       if not chain or str(e.chain).strip().lower() == chain]
+            entries = open_positions.positions_for(uid, chain=chain)
             realized = open_positions.realized_for(uid, chain=chain)
         except Exception as exc:
             return self._ar(error=(
@@ -1089,18 +1092,8 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             return open_positions.observe_price(
                 uid, entry.chain, entry.address, price, account=entry.account)
 
-        def _ledger_read():
-            from core.position_ledger import read_open_positions, resolve_position_ledger_path
-            from core.runtime_paths import resolve_data_home
-            path = resolve_position_ledger_path(str(resolve_data_home()))
-            return read_open_positions(path=path) if path else (None, None)
-
-        # Read-only: ledger holdings with no store row are listed, never backfilled.
-        ledger = positions_view.ledger_only(_ledger_read, all_entries,
-                                            self._price_for, chain=chain)
         text, meta = positions_view.build(
-            entries, realized, self._price_for, chain=chain, observe_fn=_observe,
-            ledger=ledger)
+            entries, realized, self._price_for, chain=chain, observe_fn=_observe)
         return self._ar(content=text, metadata=meta)
 
     @BaseTool.action(
@@ -1150,7 +1143,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             pools = self._discover(params.chain, kind) or []
         except Exception as exc:
             logger.debug("discovery failed on %s (%s)", params.chain, exc)
-            return self._ar(error=f"pool discovery failed: {exc}")
+            return self._ar(error=_discovery_error(params.chain, exc))
 
         kept, excluded = [], 0
         for pool in pools:

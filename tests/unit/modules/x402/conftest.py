@@ -7,7 +7,7 @@ import pytest_asyncio
 def _no_leaked_alchemy_key(monkeypatch):
     """Assert RPC defaults against a CLEAN env.
 
-    A CLI test earlier in a full run calls ``load_env(local_mode=True)``, which
+    A CLI test earlier in a full run calls ``load_env()``, which
     leaks the developer's real ``~/.polyrob/.env`` — including
     ``ALCHEMY_API_KEY`` — into ``os.environ``. Since 2026-08-24
     ``core.wallet.onchain.rpc_url_for_chain`` composes an Alchemy endpoint from

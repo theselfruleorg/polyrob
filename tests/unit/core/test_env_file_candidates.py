@@ -26,49 +26,31 @@ def _make_local_layout(tmp_path, monkeypatch):
 def test_local_candidate_order_and_tiers(tmp_path, monkeypatch):
     home, proj = _make_local_layout(tmp_path, monkeypatch)
     from core.paths import env_file_candidates
-    cands = env_file_candidates("development", local_mode=True)
+    cands = env_file_candidates()
     assert [c.tier for c in cands] == ["home", "legacy-home"]
     assert cands[0].path == home / ".polyrob" / ".env"
     assert cands[1].path == home / ".rob" / ".env"
 
 
-def test_server_candidate_order_and_tiers(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_there_is_no_server_ladder(tmp_path, monkeypatch):
+    """080 WS-1: config/.env.* is never read — no tier beats the process env."""
     from core.paths import env_file_candidates
-    cands = env_file_candidates("production", local_mode=False)
-    assert [c.tier for c in cands] == ["config-env-local", "config-env", "root"]
-    assert cands[0].path == Path("config") / ".env.production.local"
+    _make_local_layout(tmp_path, monkeypatch)
+    assert all(c.tier in ("instance", "home", "legacy-home") for c in env_file_candidates())
 
 
 def test_helper_order_is_load_env_resolution_local(tmp_path, monkeypatch):
     """Peel candidates off the front: the winner is always the first existing file."""
     _make_local_layout(tmp_path, monkeypatch)
     from core.paths import env_file_candidates
-    cands = env_file_candidates("development", local_mode=True)
+    cands = env_file_candidates()
     for c in cands:
         c.path.parent.mkdir(parents=True, exist_ok=True)
         c.path.write_text(f"{PROBE}={c.tier}\n")
     from polyrob.app.bootstrap import load_env
     for i, expected in enumerate(cands):
         monkeypatch.delenv(PROBE, raising=False)
-        load_env("development", local_mode=True)
-        assert os.environ[PROBE] == expected.tier, (
-            f"round {i}: expected tier {expected.tier!r} to win")
-        expected.path.unlink()
-    monkeypatch.delenv(PROBE, raising=False)
-
-
-def test_helper_order_is_load_env_resolution_server(tmp_path, monkeypatch):
-    _make_local_layout(tmp_path, monkeypatch)  # provides config/ + cwd isolation
-    from core.paths import env_file_candidates
-    cands = env_file_candidates("development", local_mode=False)
-    for c in cands:
-        c.path.parent.mkdir(parents=True, exist_ok=True)
-        c.path.write_text(f"{PROBE}={c.tier}\n")
-    from polyrob.app.bootstrap import load_env
-    for i, expected in enumerate(cands):
-        monkeypatch.delenv(PROBE, raising=False)
-        load_env("development", local_mode=False)
+        load_env("development")
         assert os.environ[PROBE] == expected.tier, (
             f"round {i}: expected tier {expected.tier!r} to win")
         expected.path.unlink()

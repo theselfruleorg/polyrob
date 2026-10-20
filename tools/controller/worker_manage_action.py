@@ -40,7 +40,6 @@ class WorkerManageAction(BaseModel):
 		default=None,
 		description="propose: tool ids the worker may use. Never wider than yours; "
 		            "money, exec and publish tools are stripped at dispatch.")
-	max_steps: Optional[int] = Field(default=None, ge=1, le=50)
 
 
 def _line(spec) -> str:
@@ -101,7 +100,6 @@ def register_worker_manage_action(controller) -> None:
 				return ActionResult(error=f"no worker '{wid}'.", include_in_memory=True)
 			spec = WorkerSpec(model)
 			body = [_line(spec), f"state: {state}",
-			        f"max_steps: {spec.max_steps or 'default'}",
 			        f"model: {spec.model or 'inherits'}"]
 			if spec.instructions:
 				body.append("instructions:\n" + spec.instructions)
@@ -112,7 +110,7 @@ def register_worker_manage_action(controller) -> None:
 			                    include_in_memory=True)
 		data = build_worker_profile(
 			wid, description=params.description or "", instructions=params.instructions or "",
-			tools=params.tools, max_steps=params.max_steps)
+			tools=params.tools)
 		res = store.save_profile(data, user_id=user_id, created_by=PROVENANCE_BACKGROUND)
 		if not res.ok:
 			return ActionResult(error="propose failed: " + "; ".join(res.errors),

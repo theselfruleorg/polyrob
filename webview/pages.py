@@ -37,7 +37,7 @@ from fastapi.templating import Jinja2Templates
 from webview import webgate
 from webview.audit import console_write
 from core.event_kinds import (
-    CONSOLE_CONFIG_WRITE, CONSOLE_CRON_CANCEL, CONSOLE_GOAL_VERB,
+    CONSOLE_CONFIG_WRITE, CONSOLE_GOAL_VERB,
     CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE,
     CONSOLE_PREF_WRITE,
 )
@@ -63,7 +63,7 @@ from core.prefs import (
 )
 from core.surfaces import owner_admin
 from cron.jobs import CronJobStore
-from cron.service import CronService
+from cron.service import CronService, last_outcome as job_last_outcome
 from core.version import get_version
 from modules.credits.unified_ledger import build_ledger, ledger_availability_note
 # One reader over EVERY money chain (043 A34) — the loop lives in the tools
@@ -296,7 +296,7 @@ def _cron_dict(j) -> dict:
         "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
         "one_shot": j.one_shot,
         "enabled": j.enabled,
-        "status": j.status,
+        "status": j.status, "last_outcome": job_last_outcome(j),
         "last_run_at": j.last_run_at.isoformat() if getattr(j, "last_run_at", None) else None,
     }
 
@@ -419,39 +419,53 @@ async def api_goals(request: Request):
     ``api_cron``'s honest-failure shape: a read error is named in ``error``,
     never swallowed into a confident empty board.
     """
-    if not AutonomyConfig.goals_enabled():
-        return JSONResponse({"enabled": False, "goals": []})
+    # 080 F-5: the stored goals are listed whether or not the dispatcher is on;
+    # ``enabled: false`` makes the page say nothing will run them. Hiding them
+    # read as "my goal vanished" right after "I added it to my work."
+    enabled = AutonomyConfig.goals_enabled()
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
+        from core.goal_legibility import status_reason
         board = GoalBoard(goals_db_path(_data_dir()))
         goals = board.list_recent(user_id=user_id)
         counts = board.status_counts(user_id=user_id)
         asks = board.asks(user_id=user_id, status="open")
+        held: dict = {}
+        for a in asks:
+            for gid in (a.payload or {}).get("blocks_goal_ids") or []:
+                held.setdefault(gid, []).append(a)
+        rows = []
+        for g in goals:
+            row = _goal_dict(g)
+            row["status_reason"] = status_reason(g, held.get(g.id, ()))
+            rows.append(row)
         return JSONResponse({
-            "enabled": True,
-            "goals": [_goal_dict(g) for g in goals],
+            "enabled": enabled,
+            "goals": rows,
             "counts": counts,
             "asks": [_goal_dict(a) for a in asks],
         })
     except Exception as exc:
         # 030 D4: a failed read is NOT "no goals" — name it (still 200).
-        return JSONResponse({"enabled": True, "goals": [], "counts": {}, "asks": [],
+        return JSONResponse({"enabled": enabled, "goals": [], "counts": {}, "asks": [],
                              "error": _safe_reason(exc)})
 
 
 @router.get("/api/webgate/cron")
 async def api_cron(request: Request):
-    """Cron job board for the effective tenant — reuse ``CronService.list_jobs()``."""
-    if not _cron_enabled():
-        return JSONResponse({"enabled": False, "jobs": []})
+    """Cron job board for the effective tenant — reuse ``CronService.list_jobs()``.
+
+    080 F-5: the stored jobs are listed with the scheduler off too; ``enabled:
+    false`` makes the page say "the scheduler is off — nothing will run"."""
+    enabled = _cron_enabled()
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
         service = CronService(CronJobStore(cron_db_path(_data_dir())))
         jobs = service.list_jobs(user_id=user_id)
-        return JSONResponse({"enabled": True, "jobs": [_cron_dict(j) for j in jobs]})
+        return JSONResponse({"enabled": enabled, "jobs": [_cron_dict(j) for j in jobs]})
     except Exception as exc:
         # 030 D4: a failed read is NOT "no cron jobs" — name it (still 200).
-        return JSONResponse({"enabled": True, "jobs": [],
+        return JSONResponse({"enabled": enabled, "jobs": [],
                              "error": _safe_reason(exc)})
 
 
@@ -758,20 +772,18 @@ async def api_ledger(request: Request, days: int = 7):
 
 
 @money_router.get("/api/webgate/positions")
-async def api_positions(request: Request, chain: str = "base", ledger: str = ""):
-    """The agent's on-chain BOOK — portfolio + ledger⟷chain reconcile (2026-08-27).
+async def api_positions(request: Request, chain: str = "base"):
+    """The agent's on-chain BOOK — portfolio + book⟷chain reconcile (2026-08-27).
 
     The console showed money totals but never the positions behind them — the
     UI counterpart of the position-recall incident. Read-only: ``portfolio``
     and ``reconcile`` are read verbs (no signer, nothing broadcast). Honors
     ``DEFI_DATA_ENABLED``; every failure degrades to a LABELED unavailability,
-    never a fabricated empty book. The ledger path is confined by the tool
-    itself (data home / cwd only, credential files refused)."""
-    _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
-    if ledger:
-        raise HTTPException(status_code=400, detail="Use the server-resolved wallet ledger")
+    never a fabricated empty book. The positions are the rail-written book
+    (``core/open_positions.py``) of the effective tenant."""
+    user_id = _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
     out = {"chain": chain, "enabled": None, "addresses": {}, "portfolio": None,
-           "reconcile": None, "ledger_path": None, "error": None,
+           "reconcile": None, "error": None,
            "verdict": None, "rows": None}
     try:
         from tools.defi import defi_data_enabled
@@ -804,36 +816,26 @@ async def api_positions(request: Request, chain: str = "base", ledger: str = "")
         tool = DefiDataTool()
         pres = await tool.portfolio(PortfolioParams(chain=chain))
         out["portfolio"] = {"text": pres.extracted_content, "error": pres.error}
-        lp = (ledger or "").strip()
-        if not lp:
-            try:
-                from core.position_ledger import resolve_position_ledger_path
-                lp = resolve_position_ledger_path(_data_dir()) or ""
-            except Exception:
-                lp = ""
-        if lp:
-            out["ledger_path"] = lp
-            rres = await tool.reconcile(
-                ReconcileParams(chain=chain, ledger_path=lp))
-            out["reconcile"] = {"text": rres.extracted_content,
-                                "error": rres.error}
-            from core.book import verdict_from_report
-            if rres.error:
-                # An errored read (wallet not enabled, ledger outside the data
-                # home, a ledger without the Open-positions heading, an
-                # oversized file — see DefiDataTool.reconcile) carries no
-                # report to derive a verdict from. Rendering CLEAN over an
-                # error the page ALSO shows is the exact false-all-clear this
-                # task exists to remove — the honest state is "could not
-                # verify", never green.
-                out["verdict"] = "unverified"
-                out["rows"] = {}
-            else:
-                d = (getattr(rres, "metadata", None) or {}).get("report") or {}
-                out["verdict"] = verdict_from_report(d, ledger_found=True).value
-                out["rows"] = d
+        from core.exec_identity import reset_exec_identity, set_exec_identity
+        token = set_exec_identity(user_id, None)  # reconcile reads THIS tenant's book
+        try:
+            rres = await tool.reconcile(ReconcileParams(chain=chain))
+        finally:
+            reset_exec_identity(token)
+        out["reconcile"] = {"text": rres.extracted_content, "error": rres.error}
+        from core.book import verdict_from_report
+        if rres.error:
+            # An errored read (wallet not enabled, an unreadable book — see
+            # DefiDataTool.reconcile) carries no report to derive a verdict
+            # from. Rendering CLEAN over an error the page ALSO shows is the
+            # false-all-clear this route must never produce: the honest state
+            # is "could not verify", never green.
+            out["verdict"] = "unverified"
+            out["rows"] = {}
         else:
-            out["verdict"] = "no_ledger"
+            d = (getattr(rres, "metadata", None) or {}).get("report") or {}
+            out["verdict"] = verdict_from_report(d, ledger_found=True).value
+            out["rows"] = d
     except Exception as exc:
         out["error"] = f"positions read failed: {exc}"
     return JSONResponse(out)
@@ -935,8 +937,8 @@ async def api_config_set(request: Request, key: str):
     Prefs keep the EXACT preferences-PATCH trust ladder (guarded scalar needs
     ``confirm:true`` → the service queues otherwise); env-flag writes are
     additionally restricted to the local/own_ops postures (an authenticated
-    OWNER console — never multitenant) and land in ./.polyrob/.env or
-    ~/.polyrob/.env with the catalog shape-check, restart-effective."""
+    OWNER console — never multitenant) and land in the instance env file
+    (``config_service.home_env_path``), shape-checked, restart-effective."""
     user_id = _effective_user_id(request)
     from core import config_service
     from core.prefs import PREF_SCHEMA
@@ -947,9 +949,9 @@ async def api_config_set(request: Request, key: str):
     # 024 §2.6 + S8 (2026-09-14): flags that can hand the instance over — owner
     # binding, money bounds, approval policy, trust posture, credential/inference
     # surface, any secret — are never console-writable, at ANY posture. The write
-    # lands in ./.polyrob/.env, which polyrob.service loads AFTER its own env
-    # file, so a console write would OUTRANK the operator on the next restart.
-    # Use the local CLI (`polyrob config set …`).
+    # lands in the instance env file every process reads (080 WS-1), and is
+    # refused when /etc/polyrob/polyrob.env pins the key. Use the local CLI
+    # (`polyrob config set …`).
     try:
         body = await request.json()
     except Exception:
@@ -1130,8 +1132,8 @@ def _webgate_goal_board():
 def _console_task_agent():
     """The ``TaskAgent`` living in THIS process, or None (043 W10). Passed to
     ``decide_tool_approval`` so an approval decided in the SAME process that owns
-    the session wakes it in-process; when the console is a SEPARATE service (prod
-    Rob #1) this returns a monitoring agent that does NOT own the session (or
+    the session wakes it in-process; when the console is a SEPARATE service (a
+    split-service install) this returns a monitoring agent that does NOT own the session (or
     None), and ``decide_tool_approval`` writes a durable cross-process wake row
     instead — it checks ``route_session().is_local``, never trusts mere presence."""
     return webgate.in_process_task_agent()
@@ -1147,7 +1149,7 @@ def _webgate_correspondent_registry():
 
 @router.get("/api/webgate/pending")
 async def api_pending(request: Request):
-    """The tenant's pending items — the SAME body the Inbox renders (043 A8/E2).
+    """The tenant's pending approvals — the Inbox's ``pending`` view (080 WS-3).
 
     ⚠️ This endpoint used to run its own three collectors and swallow each
     failure into an empty contribution, so a locked approval store read as
@@ -1161,9 +1163,9 @@ async def api_pending(request: Request):
     store that REFUSED, ``sources`` carries each one's reason, ``count`` counts
     decisions only and ``uncertain`` says the count is a floor.
     """
-    from webview.inbox import build_inbox
+    from webview.inbox import build_view
     user_id = _effective_user_id(request)
-    body = build_inbox(user_id)
+    body = build_view(user_id, "pending")  # 080: the same set the chat /pending lists
     body["user_id"] = user_id
     return JSONResponse(body)
 
@@ -1224,6 +1226,11 @@ def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tup
                                     task_agent=_console_task_agent())
     if kind == "correspondent":
         return _decide_correspondent(item_id, kw["user_id"], approved=approved)
+    if kind == "signer_approval":
+        # 066 D5: the signer's own decider (it names the root-only remedy);
+        # the self-evolution promoter answered "unknown pending kind".
+        from core.signer.approvals import decide
+        return decide(item_id, approve=approved)
     if kind == "token_identity":
         # W1: which contract is the real token — the SAME decider every seat uses.
         from tools.defi.token_identity_ask import decide_item
@@ -1281,7 +1288,9 @@ async def api_pending_reject(request: Request, kind: str, item_id: str):
 
 #: The webview's goal write verbs (subset of the Telegram `/goal` table —
 #: exactly the four the C3 decision granted).
-_WEBGATE_GOAL_VERBS = ("pause", "resume", "retry", "cancel")
+#: 080 WS-2: the console's goal buttons — the SAME verbs as `/goal`: Pause,
+#: Resume / Try it again (retry), Stop (stop once) and Drop it (stop forever).
+_WEBGATE_GOAL_VERBS = ("pause", "retry", "stop", "drop")
 
 def _invoice_statuses() -> tuple:
     """The ONE invoice-status vocabulary (``modules.x402.invoicing``).
@@ -1453,14 +1462,14 @@ async def api_resume(request: Request):
 
 @router.post("/api/webgate/goals/{goal_id}/{verb}", dependencies=webgate.MUTATION_DEPS)
 async def api_goal_verb(request: Request, goal_id: str, verb: str):
-    """Per-goal owner write verb (030 C3, owner decision Q2 = yes) — the same
-    ``GoalBoard.update_status`` transitions Telegram's `/goal` uses, via the
-    SAME transition table (``surfaces.telegram.owner_ops._GOAL_TRANSITIONS``).
+    """Per-goal owner write verb (030 C3) — the SAME core verbs `/goal` runs on
+    every seat (080 WS-2): ``pause`` → paused, ``retry`` re-queues (also the
+    Resume of a paused goal), ``stop`` stops it once and ``drop`` stops it
+    forever (``core.goal_suppressions.stop_goal``).
 
-    ⚠️ ``board.get()`` is NOT tenant-scoped — the id is resolved within the
-    CALLER's own goals and the write passes ``user_id=``, exactly as
-    ``owner_ops.goal_reply`` does. A goal id belonging to another tenant is a
-    404 miss, never a cross-tenant mutation."""
+    ⚠️ The id is resolved within the CALLER's own goals and the write passes
+    ``user_id=``. A goal id belonging to another tenant is a 404 miss, never a
+    cross-tenant mutation."""
     if verb not in _WEBGATE_GOAL_VERBS:
         return JSONResponse(
             {"ok": False,
@@ -1469,65 +1478,33 @@ async def api_goal_verb(request: Request, goal_id: str, verb: str):
             status_code=400)
     user_id = _effective_user_id(request)
     from agents.task.goals.board import KIND_GOAL
+    from core import goal_owner_verbs as V
+    from core.goal_suppressions import stop_goal
     board = _webgate_goal_board()
     # 043 A5 / E21: ``board.list`` is the dispatcher's priority-ordered CLAIM
-    # queue and is forbidden as a view — resolving an id inside a 1000-row
-    # window meant the 1001st goal simply did not exist to this verb. ``get``
-    # is the id lookup; the tenant is asserted here and again on the write.
+    # queue and is forbidden as a view; ``get`` is the id lookup.
     goal = board.get(goal_id, user_id=user_id)
     if goal is not None and goal.kind != KIND_GOAL:
-        goal = None  # an ask/objective id is not a goal id
+        goal = None  # an ask id is not a goal id
     if goal is None:
         return JSONResponse(
             {"ok": False, "message": f"no goal {goal_id} for this tenant"},
             status_code=404)
-    target, reset, allowed, participle = owner_ops._GOAL_TRANSITIONS[verb]
-    if allowed is not None and goal.status not in allowed:
-        return JSONResponse(
-            {"ok": False,
-             "message": (f"goal is {goal.status} — only {'/'.join(allowed)} "
-                         f"goals can be {participle}")},
-            status_code=409)
-    if goal.status == target:
-        return JSONResponse({"ok": True, "status": target,
-                             "message": f"already {target}"})
-    warning = None
-    if verb == "pause" and goal.status == "running":
-        warning = ("it is running right now — the pause takes effect after "
-                   "this run")
-    ok = board.update_status(goal_id, target, reset_failures=reset,
-                             user_id=user_id)
-    if not ok:
-        return JSONResponse(
-            {"ok": False, "message": f"could not update {goal_id}"},
-            status_code=409)
+    if verb in ("stop", "drop"):
+        res = stop_goal(board, user_id=user_id, goal=goal, forever=(verb == "drop"))
+        status = "cancelled" if res.ok else goal.status
+    elif verb == "pause":
+        res = V.pause_goal(board, user_id=user_id, goal=goal)
+        status = res.status
+    else:
+        res = V.retry_goal(board, user_id=user_id, goal=goal)
+        status = res.status
+    if not res.ok:
+        return JSONResponse({"ok": False, "status": goal.status, "message": res.message},
+                            status_code=409)
     console_write(CONSOLE_GOAL_VERB, user_id=user_id,
-                  attrs={"goal_id": goal_id, "verb": verb, "status": target})
-    suffix = " (failures cleared)" if reset else ""
-    return JSONResponse({"ok": True, "status": target,
-                         "message": f"goal → {target}{suffix}",
-                         "warning": warning})
-
-
-@router.post("/api/webgate/cron/{job_id}/cancel", dependencies=webgate.MUTATION_DEPS)
-async def api_cron_cancel(request: Request, job_id: str):
-    """Cancel a cron job — mirrors Telegram `/cron cancel` (``CronService.
-    cancel`` with ``user_id=``). The id is resolved within the caller's OWN
-    jobs first, so another tenant's job id is a 404 miss."""
-    user_id = _effective_user_id(request)
-    service = CronService(CronJobStore(cron_db_path(_data_dir())))
-    mine = {j.id for j in service.list_jobs(user_id=user_id)}
-    if job_id not in mine:
-        return JSONResponse(
-            {"ok": False, "message": f"no cron job {job_id} for this tenant"},
-            status_code=404)
-    ok = service.cancel(job_id, user_id=user_id, via="webview")
-    if not ok:
-        return JSONResponse(
-            {"ok": False, "message": f"could not cancel {job_id}"},
-            status_code=409)
-    console_write(CONSOLE_CRON_CANCEL, user_id=user_id, attrs={"job_id": job_id})
-    return JSONResponse({"ok": True, "message": f"cancelled {job_id}"})
+                  attrs={"goal_id": goal_id, "verb": verb, "status": status})
+    return JSONResponse({"ok": True, "status": status, "message": res.message})
 
 
 async def _with_owner_money_db(coro_factory):

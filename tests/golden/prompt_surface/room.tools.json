@@ -1,0 +1,208 @@
+{
+  "tools": [
+    {
+      "name": "agent_avatar",
+      "sha": "414a85c0b80e"
+    },
+    {
+      "name": "agent_status",
+      "sha": "a7c396bae5f1"
+    },
+    {
+      "name": "autonomy_control",
+      "sha": "1f2e50255e3a"
+    },
+    {
+      "name": "contact_history",
+      "sha": "cd5b9107df8e"
+    },
+    {
+      "name": "defi_data_contract_read",
+      "sha": "6bf0958bcfbb"
+    },
+    {
+      "name": "defi_data_lp_pool_info",
+      "sha": "18f04a850ef0"
+    },
+    {
+      "name": "defi_data_lp_positions",
+      "sha": "9989db9be5c5"
+    },
+    {
+      "name": "defi_data_lp_quote",
+      "sha": "79898fd9294f"
+    },
+    {
+      "name": "defi_data_new_pools",
+      "sha": "49635064f50f"
+    },
+    {
+      "name": "defi_data_nft_holdings",
+      "sha": "c7c6f08dbe6a"
+    },
+    {
+      "name": "defi_data_nft_info",
+      "sha": "34cb78c83188"
+    },
+    {
+      "name": "defi_data_ohlcv",
+      "sha": "0cbd08aebe62"
+    },
+    {
+      "name": "defi_data_pool_metrics",
+      "sha": "caaff748a02b"
+    },
+    {
+      "name": "defi_data_portfolio",
+      "sha": "42beba8f4e3b"
+    },
+    {
+      "name": "defi_data_positions",
+      "sha": "70e0105c7d62"
+    },
+    {
+      "name": "defi_data_price",
+      "sha": "21c197133f98"
+    },
+    {
+      "name": "defi_data_reconcile",
+      "sha": "f62dc2757b04"
+    },
+    {
+      "name": "defi_data_scan",
+      "sha": "5996573fc317"
+    },
+    {
+      "name": "defi_data_swap_quote",
+      "sha": "36b346a8d427"
+    },
+    {
+      "name": "defi_data_token_holders",
+      "sha": "647bace2b375"
+    },
+    {
+      "name": "defi_data_token_info",
+      "sha": "a96e585143e8"
+    },
+    {
+      "name": "defi_data_token_origin",
+      "sha": "aae00e28019b"
+    },
+    {
+      "name": "defi_data_token_resolve",
+      "sha": "1fff74265b20"
+    },
+    {
+      "name": "defi_data_trending",
+      "sha": "9547d7b31d52"
+    },
+    {
+      "name": "defi_data_wallet_activity",
+      "sha": "dcee34656528"
+    },
+    {
+      "name": "defi_data_wallet_holdings",
+      "sha": "4cbd3983d089"
+    },
+    {
+      "name": "delegate_task",
+      "sha": "99c7f57cb8f9"
+    },
+    {
+      "name": "done",
+      "sha": "d52ce43147c8"
+    },
+    {
+      "name": "insights",
+      "sha": "40a717ccaee9"
+    },
+    {
+      "name": "load_skill",
+      "sha": "1cf2893b4073"
+    },
+    {
+      "name": "load_tool",
+      "sha": "a7b2720e3dbc"
+    },
+    {
+      "name": "message",
+      "sha": "a477faab6c1f"
+    },
+    {
+      "name": "owner_ask",
+      "sha": "fff14dbc6121"
+    },
+    {
+      "name": "owner_doc_manage",
+      "sha": "d4315aebe58c"
+    },
+    {
+      "name": "preferences",
+      "sha": "ad8318905601"
+    },
+    {
+      "name": "present_choice",
+      "sha": "e65bf115d368"
+    },
+    {
+      "name": "propose_action",
+      "sha": "bb1c23b06a81"
+    },
+    {
+      "name": "read_skill_resource",
+      "sha": "5157194c3386"
+    },
+    {
+      "name": "room_moderate",
+      "sha": "47c4b36dfcef"
+    },
+    {
+      "name": "room_read",
+      "sha": "9af7efe8d3e0"
+    },
+    {
+      "name": "self_context_manage",
+      "sha": "8977db1c077b"
+    },
+    {
+      "name": "send_message",
+      "sha": "5639154a5361"
+    },
+    {
+      "name": "skill_manage",
+      "sha": "1a9acba12d5a"
+    },
+    {
+      "name": "task_todo_add",
+      "sha": "11502431e548"
+    },
+    {
+      "name": "task_todo_complete",
+      "sha": "5dd6ac7cf5af"
+    },
+    {
+      "name": "task_todo_list",
+      "sha": "e1cd22ac08bd"
+    },
+    {
+      "name": "task_todo_next",
+      "sha": "1164773d627d"
+    },
+    {
+      "name": "task_todo_progress",
+      "sha": "20d5a866a3d7"
+    },
+    {
+      "name": "tool_describe",
+      "sha": "5b897a46f500"
+    },
+    {
+      "name": "tool_search",
+      "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "web_fetch_fetch_url",
+      "sha": "3bbc659950d4"
+    }
+  ]
+}

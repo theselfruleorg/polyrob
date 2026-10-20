@@ -704,6 +704,8 @@ def _settling_app(monkeypatch, *, fail_at):
         return True
 
     monkeypatch.setattr(xm.X402PaymentMiddleware, "_init_facilitator", _init)
+    # 085 x402in L1: the settlement is proven on-chain before service.
+    monkeypatch.setattr("modules.x402.facilitator.receipt_pays", lambda *a, **k: True)
     monkeypatch.setattr(xm, "get_x402_config", lambda: {
         "network": "base-sepolia", "pay_to": "0x" + "a" * 40, "enabled": True})
     monkeypatch.setattr(xm, "get_x402_price_usd", lambda: 0.01)

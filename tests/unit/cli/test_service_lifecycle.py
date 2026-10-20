@@ -114,13 +114,7 @@ def test_launchd_plist_marks_the_supervisor():
 def test_deployment_units_carry_the_restart_contract():
     from cli.commands.profile import PROFILE_UNIT_TEMPLATE
     assert "RestartForceExitStatus=75" in PROFILE_UNIT_TEMPLATE
-    root = Path(__file__).resolve().parents[3]
-    if not (root / "deployment").is_dir():
-        pytest.skip("deployment/ is not in the public tree")
-    for name in ("polyrob.service", "polyrob-gateway.service", "polyrob-email.service",
-                 "polyrob@.service"):
-        body = (root / "deployment" / name).read_text()
-        assert "RestartForceExitStatus=75" in body and "SuccessExitStatus=75" in body, name
+    # The deployment/ units' half lives in ops/tests/deployment (private tree).
 
 
 # ---- restart -----------------------------------------------------------------

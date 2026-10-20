@@ -42,8 +42,11 @@ Four kinds:
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
+import math
 import re
 import secrets
 import time
@@ -58,6 +61,11 @@ KIND_CHOICE = "choice"
 #: A /send or /swap built from buttons, one field per step (surfaces/card_builder.py).
 #: A pick advances the SAME card; the last pick runs the verb's QUOTE.
 KIND_BUILDER = "builder"
+#: 085 W3 (D3): standing MONEY work the agent wrote on an owner turn — a goal
+#: or a job carrying a money tool, a money rig or a buy target. The card holds
+#: the owner seat's own line (``/goal new …``, ``/job new …``); Confirm runs it
+#: on the seat, which writes the row with the owner's grant.
+KIND_JOB = "job"
 
 ORIGIN_SYSTEM = "system"
 ORIGIN_AGENT = "agent"
@@ -94,7 +102,6 @@ MAX_BODY_CHARS = 3000
 CONFIRMABLE_VERBS = frozenset({
     "/send", "/swap", "/bridge", "/pay", "/claim", "/launch", "/deploy",
     "/nft", "/identity", "/writeoff", "/unquarantine", "/wallet",
-    "/adopt",  # 2026-10-08: not money, but the same quote -> owner confirm shape
     "/restart", "/update",  # 077: restart / update the agent, quote -> owner confirm
 })
 
@@ -113,7 +120,13 @@ ACTS = ("ok", "no", "re") + tuple(str(i) for i in range(1, MAX_OPTIONS + 1))
 #: backtick or angle bracket (a usage placeholder like ``<max_usd>`` is not an
 #: argument), bounded.
 _ARG_RE = re.compile(r"^[^\s`<>\x00-\x1f]{1,256}$")
-_GO_WORDS = ("go", "execute", "confirm")
+#: The ONE set of words that turn a quoting money verb into an executing one.
+GO_WORDS = ("go", "execute", "confirm")
+
+
+def is_go_word(word: str) -> bool:
+    """True when *word* is one of :data:`GO_WORDS` (any case)."""
+    return str(word or "").lower() in GO_WORDS
 
 
 #: Verbs with subcommands: the only ones a PROPOSAL may name. ``/wallet
@@ -127,11 +140,21 @@ _PROPOSAL_SUBCOMMANDS = {
 }
 
 
+#: 085 W3: the seat lines a JOB card may carry — the owner verbs that WRITE
+#: standing work. ``/job edit`` only as ``/job edit <id> grant …``.
+JOB_CARD_SUBCOMMANDS = {
+    "/goal": frozenset({"new", "grant"}),
+    "/job": frozenset({"new", "edit"}),
+}
+#: The most words one job card line holds (a task is prose).
+MAX_JOB_WORDS = 400
+
+
 def executes(args: List[str]) -> bool:
     """True when these words would EXECUTE rather than quote: a `go` word
     ANYWHERE (``/pay`` strips ``id=`` first; ``/writeoff`` reads `go` as its
     third word, before a free-text reason)."""
-    return any(str(a).lower() in _GO_WORDS for a in (args or []))
+    return any(is_go_word(a) for a in (args or []))
 
 
 def card_token(card_id: str, act: str) -> str:
@@ -173,6 +196,12 @@ class Card:
     #: seat added to the confirm line. A refresh re-runs THESE, so a new quote
     #: computes a new bound instead of inheriting the stale one.
     typed: List[str] = field(default_factory=list)
+    #: 084: the cards one session raised form a GROUP; when every card of the
+    #: group is decided, the session is woken once (``core.surfaces.card_groups``).
+    #: A quote, extra-check or recovery card inherits the group of the card it
+    #: came from (``parent_id``) through :func:`lineage`.
+    group_id: Optional[str] = None
+    parent_id: Optional[str] = None
     created_at: float = 0.0
     expires_at: float = 0.0
     updated_at: float = 0.0
@@ -208,7 +237,13 @@ def card_actions(card: Card) -> list:
         return [Action("Confirm", card_token(cid, "ok"), "primary"),
                 Action("Refresh", card_token(cid, "re")),
                 Action("Cancel", card_token(cid, "no"), "danger")]
+    if card.kind == KIND_JOB:
+        return [Action("Confirm", card_token(cid, "ok"), "primary"),
+                Action("Dismiss", card_token(cid, "no"), "danger")]
     if card.kind == KIND_PROPOSAL:
+        if card.origin == ORIGIN_SYSTEM and is_ack_step(card.args):
+            return [Action("I understand — continue", card_token(cid, "re"), "primary"),
+                    Action("Cancel", card_token(cid, "no"), "danger")]
         return [Action("Get a quote", card_token(cid, "re"), "primary"),
                 Action("Dismiss", card_token(cid, "no"), "danger")]
     out = [Action(_short(opt, 40), card_token(cid, str(i)))
@@ -249,7 +284,7 @@ def render_text(card: Card) -> str:
         lines.append("")
         for i, opt in enumerate(card.options, start=1):
             lines.append(f"  {i}. {opt}")
-    if card.kind in (KIND_QUOTE, KIND_PROPOSAL) and card.line:
+    if card.kind in (KIND_QUOTE, KIND_PROPOSAL, KIND_JOB) and card.line:
         lines.append("")
         lines.append(f"Command: {card.confirm_line if card.kind == KIND_QUOTE else card.line}")
     lines.append("")
@@ -260,6 +295,13 @@ def render_text(card: Card) -> str:
             lines.append(f"Confirm: {card_token(cid, 'ok')}   Refresh: {card_token(cid, 're')}"
                          f"   Cancel: {card_token(cid, 'no')}")
             lines.append(f"(the quote can be confirmed for {mins} min, once)")
+        elif card.kind == KIND_JOB:
+            lines.append(f"Confirm: {card_token(cid, 'ok')}   Dismiss: {card_token(cid, 'no')}")
+            lines.append("(Confirm runs the command above as if you typed it — nothing is "
+                         "written before)")
+        elif card.kind == KIND_PROPOSAL and card.origin == ORIGIN_SYSTEM and is_ack_step(card.args):
+            lines.append(f"I understand: {card_token(cid, 're')}   Cancel: {card_token(cid, 'no')}")
+            lines.append("(nothing moves from this card — the next quote has the Confirm)")
         elif card.kind == KIND_PROPOSAL:
             lines.append(f"Quote it: {card_token(cid, 're')}   Dismiss: {card_token(cid, 'no')}")
             lines.append("(nothing moves from this card — the quote comes first)")
@@ -308,7 +350,7 @@ CREATE TABLE IF NOT EXISTS card_refs (
 """
 
 _DOC_KEYS = ("title", "body", "verb", "args", "options", "answer", "result", "session_id",
-             "draft", "typed")
+             "draft", "typed", "group_id", "parent_id")
 
 
 class CardStore:
@@ -337,6 +379,7 @@ class CardStore:
                     answer=doc.get("answer"), result=doc.get("result", ""),
                     session_id=doc.get("session_id"), draft=dict(doc.get("draft") or {}),
                     typed=list(doc.get("typed") or []),
+                    group_id=doc.get("group_id"), parent_id=doc.get("parent_id"),
                     created_at=r["created_at"], expires_at=r["expires_at"],
                     updated_at=r["updated_at"])
 
@@ -424,6 +467,38 @@ class CardStore:
             if c is not None:
                 out.append(c)
         return out
+
+    def sweep_expired(self, *, now: Optional[float] = None) -> List[Card]:
+        """084 WS2: every tenant's OPEN card past its expiry → ``expired``, and
+        every card stuck ``confirmed`` → failed (``sweep_stuck``). Expiry used to
+        happen only on a tap or ``/cards``, so a group the owner walked away
+        from never settled. The caller notifies (the settle hook runs there)."""
+        now = time.time() if now is None else now
+        conn = self._conn()
+        try:
+            rows = conn.execute("SELECT card_id FROM cards WHERE state=? AND expires_at < ?",
+                                (S_OPEN, now)).fetchall()
+            users = conn.execute("SELECT DISTINCT user_id FROM cards WHERE state=? "
+                                 "AND updated_at < ?",
+                                 (S_CONFIRMED, now - STUCK_AFTER_S)).fetchall()
+        finally:
+            conn.close()
+        out = [c for c in (self.transition(r["card_id"], frozenset({S_OPEN}), S_EXPIRED)
+                           for r in rows) if c is not None]
+        for u in users:
+            out.extend(self.sweep_stuck(u["user_id"]))
+        return out
+
+    def group_cards(self, user_id: str, group_id: str) -> List[Card]:
+        """Every card of one 084 group, oldest first."""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM cards WHERE user_id=? AND json_extract(doc, '$.group_id')=? "
+                "ORDER BY created_at, card_id", (str(user_id), str(group_id))).fetchall()
+        finally:
+            conn.close()
+        return [self._row(r) for r in rows]
 
     def prune(self, *, now: Optional[float] = None,
               retention_s: float = DECIDED_RETENTION_S) -> int:
@@ -515,6 +590,16 @@ def store() -> CardStore:
     return _STORE
 
 
+def existing_store() -> Optional[CardStore]:
+    """The process card store when its file exists, else None — a READ never
+    mints an empty ``cards.db`` (084: every turn's first step reads groups)."""
+    if _STORE is not None:
+        return _STORE
+    import os
+    from core.runtime_paths import data_home_db_path
+    return store() if os.path.exists(data_home_db_path("cards.db")) else None
+
+
 def set_store(s: Optional[CardStore]) -> None:
     """Test seam: point the process at another store (None = the default)."""
     global _STORE
@@ -524,6 +609,17 @@ def set_store(s: Optional[CardStore]) -> None:
 # ── listeners: a seat that can edit a card in place registers here ──────────
 
 _LISTENERS: List[Callable[[Card], Any]] = []
+
+
+#: 084: ``core.surfaces.card_groups.on_transition``, installed when that module
+#: is imported (every seat that presses or raises cards imports it). A hook,
+#: not an import: cards sits in the big core cycle and card_groups must not.
+_GROUP_HOOK: Optional[Callable[[Card, "CardStore"], Any]] = None
+
+
+def set_group_hook(fn: Optional[Callable[[Card, "CardStore"], Any]]) -> None:
+    global _GROUP_HOOK
+    _GROUP_HOOK = fn
 
 
 def add_listener(fn: Callable[[Card], Any]) -> None:
@@ -556,6 +652,13 @@ def _notify(card: Card) -> None:
                     res.close()
         except Exception:
             logger.debug("card listener failed (fail-open)", exc_info=True)
+    if card.group_id and _GROUP_HOOK is not None:
+        # 084: every state change passes here, so this is the ONE place a
+        # group can settle (and wake the session that raised it).
+        try:
+            _GROUP_HOOK(card, store())
+        except Exception:
+            logger.warning("card group settle check failed (fail-open)", exc_info=True)
 
 
 _PENDING_EDITS: set = set()
@@ -570,22 +673,65 @@ def _valid_args(args: List[str]) -> bool:
 def _new(user_id: str, kind: str, origin: str, title: str, *, body: str = "",
          verb: str = "", args: Optional[List[str]] = None,
          options: Optional[List[str]] = None, session_id: Optional[str] = None,
-         typed: Optional[List[str]] = None,
+         typed: Optional[List[str]] = None, group_id: Optional[str] = None,
          ttl: float, st: Optional[CardStore] = None) -> Card:
     now = time.time()
+    parent = _PARENT.get()
+    parent_id = None
+    if parent is not None and str(parent.user_id) == str(user_id):
+        # 084: a card made while a seat runs another card's line (its quote,
+        # its extra check, its recovery) belongs to that card's session + group.
+        session_id = session_id or parent.session_id
+        group_id = group_id or parent.group_id
+        parent_id = parent.card_id
     card = Card(card_id=new_card_id(), user_id=str(user_id), kind=kind, origin=origin,
                 title=_short(title, MAX_TITLE_CHARS), body=(body or "")[:MAX_BODY_CHARS],
                 verb=verb, args=list(args or []), options=list(options or []),
-                session_id=session_id, typed=list(typed or []), created_at=now,
-                expires_at=now + ttl, updated_at=now)
+                session_id=session_id, typed=list(typed or []), group_id=group_id,
+                parent_id=parent_id, created_at=now, expires_at=now + ttl, updated_at=now)
     return (st or store()).insert(card)
 
 
-def _is_number(word: str) -> bool:
+#: 084: the card whose line a seat is running right now (a contextvar: it
+#: crosses ``await`` and is copied into the background task of a confirm).
+_PARENT: "contextvars.ContextVar[Optional[Card]]" = contextvars.ContextVar(
+    "card_parent", default=None)
+
+
+@contextlib.contextmanager
+def lineage(parent: Optional[Card]):
+    """Run a card's line so that any card it makes inherits ``parent``'s
+    session and group (084 WS1). A no-op for ``None``."""
+    token = _PARENT.set(parent) if parent is not None else None
     try:
-        return float(word) > 0
+        yield
+    finally:
+        if token is not None:
+            _PARENT.reset(token)
+
+
+def note_result(card_id: str, text: str, *, st: Optional[CardStore] = None) -> Optional[Card]:
+    """Store what a REPLACED card's line produced when it made no new card (a
+    refused quote, an error), so its group can settle and report it (084)."""
+    st = st or store()
+    cur = st.get(card_id)
+    if cur is None or cur.state != S_REPLACED:
+        return None
+    done = st.transition(card_id, frozenset({S_REPLACED}), S_REPLACED,
+                         expect_updated_at=cur.updated_at,
+                         result=_short_block(text or _NO_RESULT, 1500))
+    if done:
+        _notify(done)
+    return done
+
+
+def _is_number(word: str) -> bool:
+    """A positive FINITE number (money L-2: ``inf`` and ``nan`` are not bounds)."""
+    try:
+        value = float(word)
     except ValueError:
         return False
+    return math.isfinite(value) and value > 0
 
 
 def _bound_only(extra: List[str]) -> bool:
@@ -648,17 +794,54 @@ def confirm_line_in(verb: str, typed_args: List[str], text: str) -> Optional[Lis
     return found
 
 
+#: 079 W5: the guard's STRUCTURED refusal, as the money rails print it — the
+#: ``lane: refuse`` line of a tx_guard verdict (any spacing, ``; lane: refuse``
+#: on the LP verbs) or the ``RESULT: NOT SENT`` line. Narrower than
+#: :func:`failed_result` on purpose: that one matches any "refused" or "Nothing
+#: was" in a quote body (a value-check note, a token name) and would hide good
+#: quotes; this one matches only the guard saying no.
+_REFUSE_LANE_RE = re.compile(r"\blane:\s*refuse\b", re.IGNORECASE)
+_NOT_SENT_MARK = "RESULT: NOT SENT"
+
+#: Confirmable verbs with no dry run under them (no guard verdict to read), so
+#: the refusal check never applies: the quote IS the plan.
+_NO_GUARD_VERBS = frozenset({"/restart", "/update"})
+
+
+def refused_quote(text: Any) -> bool:
+    """True when a quote reply carries the guard's structured refusal — the
+    same order with ``go`` would be refused too, so it is not confirmable."""
+    if not isinstance(text, str) or not text:
+        return False
+    return _NOT_SENT_MARK in text or bool(_REFUSE_LANE_RE.search(text))
+
+
+def with_go_hint(body: str, hint: str) -> str:
+    """``body + hint`` — the "add `go` to …" line a quote ends with — unless
+    the body is a guard refusal. A refused quote that still said "add `go` to
+    execute" invited a second act the guard refuses again (079 R6). The ONE
+    rule every money seat (``surfaces/telegram/*_ops.py``) applies."""
+    return body if refused_quote(body) else body + hint
+
+
 def quote_card(user_id: str, verb: str, typed_args: List[str], reply: str, *,
                st: Optional[CardStore] = None,
                title: Optional[str] = None) -> Tuple[str, Optional[Card]]:
     """After a seat ran a quote: ``(text to show, card or None)``.
 
     No card when the verb is not confirmable, the owner already said ``go``,
-    or the reply printed no confirm line for this command (an error, a usage
-    text, a refusal). Then the reply is returned unchanged."""
+    the reply carries the guard's refusal (:func:`refused_quote`; never for
+    ``/restart``, ``/update``, which have no guard), or the reply
+    printed no confirm line for this command (an error, a usage text). Then
+    the reply is returned unchanged."""
     verb = (verb or "").lower()
     if not user_id or verb not in CONFIRMABLE_VERBS or not isinstance(reply, str):
         return reply, None
+    if verb not in _NO_GUARD_VERBS and refused_quote(reply):
+        return reply, None
+    ack = _ack_step_card(user_id, verb, list(typed_args or []), reply, st=st)
+    if ack is not None:
+        return render_text(ack), ack
     args = confirm_line_in(verb, list(typed_args or []), reply)
     if args is None:
         return reply, None
@@ -671,6 +854,42 @@ def quote_card(user_id: str, verb: str, typed_args: List[str], reply: str, *,
         logger.warning("quote card could not be stored — plain quote shown", exc_info=True)
         return reply, None
     return render_text(card), card
+
+
+#: The /send word for the extra confirmation of a NOT VERIFIED value.
+ACK_WORD = "anyway"
+
+
+def is_ack_step(args: List[str]) -> bool:
+    """True for the args of the extra-confirmation step (they end in ``anyway``)."""
+    return bool(args) and str(args[-1]).lower() == ACK_WORD
+
+
+def _ack_step_card(user_id: str, verb: str, typed: List[str], reply: str, *,
+                   st: Optional[CardStore] = None) -> Optional[Card]:
+    """A ``/send`` quote whose value is NOT VERIFIED and that does not carry
+    ``anyway`` yet: the extra confirmation (owner, 2026-10-17 — a wallet sends
+    any token, after one more deliberate step). The card's one action runs the
+    typed words plus ``anyway`` as a NEW quote; only that quote's Confirm sends.
+    The args are the typed words only, never text from the quote."""
+    from core.wallet.tx_guard_steps.value import UNVERIFIED_MARK
+    typed = [a for a in typed if a]
+    if (verb != "/send" or not typed or UNVERIFIED_MARK not in reply
+            or any(a.lower() == ACK_WORD for a in typed)):
+        return None
+    args = typed + [ACK_WORD]
+    if executes(args) or not _valid_args(args):
+        return None
+    body = "\n".join(ln for ln in reply.splitlines()
+                     if not ln.strip().startswith("To continue:")).rstrip()
+    try:
+        return _new(user_id, KIND_PROPOSAL, ORIGIN_SYSTEM,
+                    f"{verb} — ⚠️ value not verified", body=body, verb=verb,
+                    args=args, ttl=QUOTE_TTL_S, st=st)
+    except Exception:
+        logger.warning("extra-check card could not be stored — plain text shown",
+                       exc_info=True)
+        return None
 
 
 def _strip_go_hint(text: str, verb: str) -> str:
@@ -729,9 +948,9 @@ def newest_quote_for(user_id: str, verb: str, args: List[str], *, since: float =
 
 
 def proposal_card(user_id: str, verb: str, args: List[str], *, why: str = "",
-                  session_id: Optional[str] = None,
+                  session_id: Optional[str] = None, group_id: Optional[str] = None,
                   st: Optional[CardStore] = None) -> Card:
-    """An agent-proposed owner action (money, ``/adopt``, ``/restart``,
+    """An agent-proposed owner action (money, ``/restart``,
     ``/update``). Raises ValueError on a bad shape."""
     verb = (verb or "").strip().lower()
     if not verb.startswith("/"):
@@ -745,6 +964,12 @@ def proposal_card(user_id: str, verb: str, args: List[str], *, why: str = "",
     if executes(args) or any(a.lower().startswith("id=") for a in args):
         raise ValueError("a proposal never carries `go` (or a payment id) — the owner "
                          "confirms the quote")
+    if any(a.lower() == ACK_WORD for a in args):
+        # money L-1: `anyway` is the OWNER's extra step for a value that is not
+        # verified (the seat's own card adds it). A proposal carrying it would
+        # skip that step and land straight on a confirmable quote.
+        raise ValueError(f"a proposal never carries `{ACK_WORD}` — the owner takes that "
+                         f"extra step on the quote's own card")
     first = args[0].lower() if args else ""
     shape = _PROPOSAL_SUBCOMMANDS.get(verb)
     if shape is not None and first not in shape:
@@ -752,9 +977,85 @@ def proposal_card(user_id: str, verb: str, args: List[str], *, why: str = "",
     if len(args) > 24 or not _valid_args(args):
         raise ValueError("each argument must be one word with no spaces, "
                          "backticks or angle brackets")
+    if verb == "/send":
+        _refuse_send_ticker(args)
     return _new(user_id, KIND_PROPOSAL, ORIGIN_AGENT, f"Proposed: {verb}",
                 body=_short_block(why, 600), verb=verb, args=args,
+                session_id=session_id, group_id=group_id, ttl=PROPOSAL_TTL_S, st=st)
+
+
+def card_words(text: Any) -> List[str]:
+    """Free text (a task, a goal title) as card-line words: whitespace-split, a
+    backtick or angle bracket replaced (``_ARG_RE`` refuses them). Raises
+    ValueError for one word longer than an argument may be.
+
+    The words must come back as the SAME prose when a seat runs the line:
+    a quote mark or backslash is replaced by a typographic one (the REPL splits
+    a line with ``shlex``, where ``it's`` is an open quote). The job card's
+    builder (``tools.goal_tools.prose_words``) also disarms a prose word shaped
+    like a grant option (085 W3)."""
+    table = {i: " " for i in range(32)}
+    table.update({ord("`"): "\u2019", ord("<"): "(", ord(">"): ")",
+                  ord("'"): "\u2019", ord('"'): "\u201d", ord("\\"): "/"})
+    raw = str(text or "").translate(table)
+    words = raw.split()
+    if any(len(w) > 256 for w in words):
+        raise ValueError("one word is longer than 256 characters")
+    return words
+
+
+def job_card(user_id: str, words: List[str], *, title: str, body: str = "",
+             session_id: Optional[str] = None, st: Optional[CardStore] = None) -> Card:
+    """085 W3 (D3): the agent's standing money work as ONE owner decision.
+
+    ``words`` is the owner seat's own line (``/goal new …``, ``/goal grant <id> …``,
+    ``/job new …``, ``/job edit <id> grant …``). Confirm runs it on the seat exactly
+    as if the owner typed it, so the seat's own owner gate, room refusal and lane
+    gate run again; the seat writes the row with ``actor="owner_seat"``. Raises
+    ValueError on any other shape."""
+    words = [str(w) for w in (words or []) if str(w).strip()]
+    verb = words[0].lower() if words else ""
+    shape = JOB_CARD_SUBCOMMANDS.get(verb)
+    if shape is None or len(words) < 3 or words[1].lower() not in shape:
+        raise ValueError("a job card carries only /goal new|grant or /job new|edit")
+    if verb == "/job" and words[1].lower() == "edit" and (
+            len(words) < 5 or words[3].lower() != "grant"):
+        raise ValueError("a job card edits a job only as /job edit <id> grant …")
+    args = words[1:]
+    if len(args) > MAX_JOB_WORDS or not _valid_args(args):
+        raise ValueError("the line is too long or has a word a command cannot carry")
+    return _new(user_id, KIND_JOB, ORIGIN_AGENT, title, body=body, verb=verb, args=args,
                 session_id=session_id, ttl=PROPOSAL_TTL_S, st=st)
+
+
+_TICKER = re.compile(r"^[A-Za-z][A-Za-z0-9.]{0,11}$")
+
+
+def _refuse_send_ticker(args: List[str]) -> None:
+    """``/send`` takes `native`, the chain's own symbol or a contract address —
+    never a ticker. A card carrying one fails on the owner's tap (2026-10-14:
+    `/send 30 USDC … on base`), so refuse it here, naming the pinned USDC."""
+    token = args[1] if len(args) > 1 else ""
+    if token.lower() == "native" or not _TICKER.match(token):
+        return
+    chain = ""
+    for i, w in enumerate(args[:-1]):
+        if w.lower() == "on":
+            chain = args[i + 1].lower()
+    try:
+        from core.wallet import chains
+        row = chains.get(chain)
+    except Exception:
+        row = None
+    own = "SOL" if chain == "solana" else str(getattr(row, "native_symbol", "") or "")
+    if own and token.upper() == own.upper():
+        return
+    hint = ""
+    usdc = str(getattr(row, "usdc", "") or "")
+    if token.upper() == "USDC" and usdc:
+        hint = f" USDC on {chain} is {usdc}."
+    raise ValueError(f"/send needs `native` or the token's contract address, not the "
+                     f"ticker {token!r} — the owner's tap would fail.{hint}")
 
 
 def choice_card(user_id: str, question: str, options: List[str], *,
@@ -803,6 +1104,15 @@ def press(card_id: str, act: str, user_id: str, *,
     if card.state != S_OPEN:
         return Press(reply=f"That card is already decided — "
                            f"{_STATE_WORDS.get(card.state, card.state)}", card=card)
+    if card.expired() and act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL):
+        # 084 R14: the Refresh button is still drawn on an expired quote — it
+        # runs a fresh quote (the old card is REPLACED by it, so its group
+        # waits for the new quote instead of settling on "expired").
+        done = st.transition(card_id, frozenset({S_OPEN}), S_REPLACED)
+        if not done:
+            return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
+        _notify(done)
+        return Press(run=done.refresh_line, card=done)
     if card.expired():
         done = st.transition(card_id, frozenset({S_OPEN}), S_EXPIRED)
         if done:
@@ -815,13 +1125,15 @@ def press(card_id: str, act: str, user_id: str, *,
             _notify(done)
             return Press(reply=_STATE_WORDS[S_CANCELLED], card=done)
         return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
-    if card.kind == KIND_QUOTE and act == "ok":
+    if card.kind in (KIND_QUOTE, KIND_JOB) and act == "ok":
         done = st.transition(card_id, frozenset({S_OPEN}), S_CONFIRMED)
         if not done:
             return Press(reply="That card was decided a moment ago — nothing was "
                                "run twice.", card=st.get(card_id))
         _notify(done)
-        return Press(run=done.confirm_line, card=done)
+        # A job card's line is the seat's own write verb: no `go` exists for it.
+        return Press(run=done.line if done.kind == KIND_JOB else done.confirm_line,
+                     card=done)
     if card.kind in (KIND_QUOTE, KIND_PROPOSAL) and act == "re":
         done = st.transition(card_id, frozenset({S_OPEN}), S_REPLACED)
         if not done:
@@ -844,6 +1156,37 @@ def press(card_id: str, act: str, user_id: str, *,
         _notify(done)
         return Press(reply=f"Noted: {pick}", card=done)
     return Press(reply="That button does not apply to this card.", card=card)
+
+
+def tap_line(text: str, user_id: str, *, st: Optional[CardStore] = None) -> str:
+    """The owner-thread words for a card tap: the LINE the tap stands for, not
+    the opaque ``/card_<id>_ok`` token (079 R5 — the agent read "/card_3f…_ok"
+    and could not say what the owner had confirmed). Read BEFORE the press, so
+    the card is still the one the owner saw. Any other text, an unknown card or
+    an unreadable store returns ``text`` unchanged. Never raises."""
+    try:
+        words = (text or "").strip().split()
+        cid, act = parse_card_token(text)
+        if cid is None and len(words) == 3 and words[0].lower() == "/cards":
+            cid, act = words[1].lower(), words[2].lower()
+        if cid is None:
+            return text
+        card = (st or store()).get(cid)
+        if card is None or str(card.user_id) != str(user_id):
+            return text
+        if act == "ok" and card.kind == KIND_QUOTE:
+            return card.confirm_line
+        if act == "ok" and card.kind == KIND_JOB:
+            return card.line
+        if act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL):
+            return card.refresh_line
+        if act == "no":
+            return f"(cancelled the card: {card.title})"
+        if act.isdigit() and 1 <= int(act) <= len(card.options):
+            return f"(picked \"{card.options[int(act) - 1]}\" on the card: {card.title})"
+    except Exception:
+        logger.debug("card tap line unreadable (fail-open)", exc_info=True)
+    return text
 
 
 _NO_RESULT = "No result was reported — check /book before trying again."
@@ -886,6 +1229,15 @@ def finish(card_id: str, result_text: str, *, st: Optional[CardStore] = None) ->
     return done
 
 
+def sweep(*, st: Optional[CardStore] = None) -> int:
+    """The timed sweep (084): expire overdue cards and close stuck ones, with
+    the listeners + settle hook run for each. Returns how many moved."""
+    moved = (st or store()).sweep_expired()
+    for c in moved:
+        _notify(c)
+    return len(moved)
+
+
 def list_reply(user_id: str, *, st: Optional[CardStore] = None) -> str:
     """``/cards`` — the owner's open cards, newest first."""
     try:
@@ -907,6 +1259,42 @@ def list_reply(user_id: str, *, st: Optional[CardStore] = None) -> str:
     return "\n".join(out)
 
 
+#: ``result`` of a choice the owner answered by TYPING instead of tapping.
+TEXT_REPLY_RESULT = "owner replied in text: "
+
+
+def close_choices_for_text(user_id: str, session_id: str, text: str, *,
+                           st: Optional[CardStore] = None) -> List[Card]:
+    """A typed line into a session with an OPEN choice card closes that card,
+    so ``present_choice`` stops waiting and the agent reads the line. The text
+    is never parsed into a pick (prod 2026-10-15: "Judge" sat 2.5 min)."""
+    if not session_id:
+        return []
+    try:
+        st = st or store()
+        open_ = st.open_cards(user_id)
+    except Exception:
+        logger.debug("choice close: card store unreadable", exc_info=True)
+        return []   # fail open: never block the owner's line over a card
+    closed = []
+    for c in open_:
+        if c.kind != KIND_CHOICE or c.session_id != session_id:
+            continue
+        try:
+            done = st.transition(c.card_id, frozenset({S_OPEN}), S_CANCELLED,
+                                 result=TEXT_REPLY_RESULT + " ".join(str(text or "").split())[:300])
+        except Exception:
+            logger.debug("choice close: transition failed", exc_info=True)
+            continue
+        if done is not None:
+            closed.append(done)
+            try:
+                _notify(done)
+            except Exception:
+                logger.debug("choice close notify failed", exc_info=True)
+    return closed
+
+
 def wait_for_answer(card_id: str, timeout_s: float, *, poll_s: float = 1.0,
                     st: Optional[CardStore] = None) -> Optional[Card]:
     """Block (a worker thread) until the card leaves ``open`` or the time is up."""
@@ -922,10 +1310,10 @@ def wait_for_answer(card_id: str, timeout_s: float, *, poll_s: float = 1.0,
 
 
 __all__ = [
-    "ACTS", "CONFIRMABLE_VERBS", "Card", "CardStore", "KIND_BUILDER", "KIND_CHOICE",
+    "ACTS", "CONFIRMABLE_VERBS", "Card", "CardStore", "TEXT_REPLY_RESULT", "KIND_BUILDER", "KIND_CHOICE",
     "KIND_PROPOSAL",
-    "KIND_QUOTE", "Press", "add_listener", "card_actions", "card_token", "choice_card",
+    "KIND_QUOTE", "Press", "add_listener", "card_actions", "card_token", "choice_card", "close_choices_for_text",
     "confirm_line_in", "finish", "list_reply", "parse_card_token", "press",
-    "proposal_card", "quote_card", "remove_listener", "render_text", "set_store",
-    "store", "wait_for_answer",
+    "proposal_card", "quote_card", "refused_quote", "remove_listener", "render_text",
+    "set_store", "store", "tap_line", "wait_for_answer", "with_go_hint",
 ]

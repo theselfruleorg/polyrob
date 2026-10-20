@@ -17,8 +17,51 @@ import asyncio
 import logging
 import math
 import types
+from typing import Optional
 
 logger = logging.getLogger("tools.defi.trade_tool")
+
+
+#: 085 L3: the Token-2022 extensions that trap a BOUGHT position. The send
+#: verb's ``extension_refusal`` judges their active state (a fee > 0, a hook
+#: program, default-frozen, paused); ``nonTransferable`` always refuses;
+#: ``permanentDelegate`` is benign for a send (we give the token away) but on a
+#: buy its delegate can move our position out at any time.
+_BUY_TRAP_EXTENSIONS = frozenset({"transferFeeConfig", "transferHook",
+                                  "defaultAccountState", "pausableConfig"})
+
+
+def _read_mint(mint: str):
+    """The mint account, ``jsonParsed``, from the wallet's Solana RPC (seam)."""
+    from tools.defi.solana_send_verb import _rpc
+    return _rpc("getAccountInfo", [mint, {"encoding": "jsonParsed"}])
+
+
+def mint_trap_refusal(mint: str) -> Optional[str]:
+    """Why buying ``mint`` is refused on its ON-CHAIN extensions, or None.
+
+    Refuses an active permanent delegate, transfer hook, transfer fee > 0, a
+    default-frozen account state, a nonTransferable mint or a paused
+    pausableConfig, regardless of any screen. A mint that cannot
+    be read is refused too: a check that did not run is not a pass."""
+    from core.wallet import spl_token
+    from tools.defi.solana_send_verb import extension_refusal
+    try:
+        state = spl_token.decode_mint_account(_read_mint(mint))
+    except Exception as exc:
+        return f"could not read the mint {mint} on-chain ({exc}), so its extensions are unknown"
+    if state is None or state.get("type") not in (None, "mint"):
+        return f"{mint} does not read on-chain as an SPL mint"
+    exts = tuple(state.get("extensions") or ())
+    for name, ext_state in exts:
+        if name == "nonTransferable":
+            return ("the mint is nonTransferable — a bought position could never "
+                    "be sold or moved")
+        if name == "permanentDelegate" and (ext_state or {}).get("delegate"):
+            return (f"the mint carries an active permanentDelegate "
+                    f"({(ext_state or {}).get('delegate')}) — it can move a bought "
+                    f"position out of our account at any time")
+    return extension_refusal(tuple(e for e in exts if e[0] in _BUY_TRAP_EXTENSIONS))
 
 
 async def _prepare(tool, params, execution_context, s):
@@ -36,7 +79,8 @@ async def _prepare(tool, params, execution_context, s):
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     try:
         signer = wallet.solana_signer()
     except Exception as exc:
@@ -147,6 +191,11 @@ async def _screen_buy(tool, params, execution_context, s):
                 f"refused: {token_out} carries {', '.join(blocking)} — a "
                 f"position in it may be skimmed, frozen or unsellable. "
                 f"Nothing was quoted or broadcast."))
+        # 085 L3: the screen is a third party. The mint's own extensions are
+        # read from the chain and refuse the trap shapes whatever it said.
+        why = await asyncio.to_thread(mint_trap_refusal, token_out)
+        if why:
+            return tool._ar(error=f"refused: {why}. Nothing was quoted or broadcast.")
         # 068 G1 (Solana): WHICH mint this buys. The symbol/name are the
         # mint's self-reported metadata from the same screen; verified means
         # owner-pinned (USDC/wSOL never reach this branch). The identity
@@ -178,7 +227,6 @@ async def _screen_buy(tool, params, execution_context, s):
 
 async def _quote_and_build(tool, params, execution_context, s):
     """The Jupiter quote, its floor, the route sanity check, and the built transaction."""
-    from tools.defi.trade_tool import PRECONDITION  # call-time
     _exit_shaped = s._exit_shaped
     _held_raw = s._held_raw
     _ident = s._ident
@@ -195,8 +243,7 @@ async def _quote_and_build(tool, params, execution_context, s):
         return tool._ar(error=(
             f"no route for {token_in} -> {token_out} on solana, or the "
             f"lookup failed. Either way this is UNKNOWN, not a zero-value "
-            f"trade — retry before concluding the token is unreachable."),
-            error_kind=PRECONDITION)
+            f"trade — retry before concluding the token is unreachable."))
 
     # CR-H03: the quote is an untrusted third-party document. It must be
     # a quote for THIS request — same mints, same input amount — or its
@@ -241,10 +288,27 @@ async def _quote_and_build(tool, params, execution_context, s):
         out_trusted=out_trusted)
     if sanity_verdict == "DISAGREES":
         return tool._ar(error=f"refused: {sanity_note}")
-    from tools.defi.buy_screen import unchecked_route_refusal
+    from tools.defi.buy_screen import (is_sell_into_quote, owner_confirms,
+                                       unchecked_route_refusal,
+                                       unpriced_sell_owner_queue)
+    from tools.defi.trade_tool import _WSOL_MINT  # call-time
+    _quote_assets = {m for m in (s.usdc_mint, _WSOL_MINT) if m}
     if not params.dry_run:
-        if why := unchecked_route_refusal(sanity_verdict, params.max_spend_usd,
-                                          trusted=out_trusted):
+        # 085 EV-2 (Solana): a sell of a non-quote mint into USDC/wSOL tests
+        # trust on the mint SOLD; untrusted + unpriced above the ticket goes
+        # to the owner (D5) — before 085 it was a plain refusal here.
+        if is_sell_into_quote(token_out in _quote_assets, token_in in _quote_assets):
+            in_trusted = await asyncio.to_thread(
+                trusted_buy, types.SimpleNamespace(address=token_in, verified=False),
+                chain="solana", token_out=token_in,
+                execution_context=execution_context)
+            why = unpriced_sell_owner_queue(
+                sanity_verdict, params.max_spend_usd, trusted_in=in_trusted,
+                owner_ok=owner_confirms(tool, execution_context, params))
+        else:
+            why = unchecked_route_refusal(sanity_verdict, params.max_spend_usd,
+                                          trusted=out_trusted)
+        if why:
             return tool._ar(error=why)
 
     raw_tx = await asyncio.to_thread(tool._solana_build, quote, signer.address)
@@ -279,11 +343,9 @@ async def _simulate_and_assert(tool, params, execution_context, s):
                                                              amount_in_raw, floor, slippage)))
     if deltas is None or not deltas.ok:
         reason = getattr(deltas, "reason", "no result") if deltas else "no result"
-        from core.security.refusal_taint import simulation_kind
         return tool._ar(error=(
             f"refused: the simulation did not pass ({reason}). A simulation "
-            f"that did not run is not a simulation that passed."),
-            error_kind=simulation_kind(deltas))
+            f"that did not run is not a simulation that passed."))
 
     # The Solana replacement for the undeclared-Approval refusal. A swap
     # grants nothing: any delegate, close authority, ownership change or
@@ -450,7 +512,10 @@ async def _simulate_and_assert(tool, params, execution_context, s):
             f"arrived. Nothing was broadcast."))
     else:
         received_raw = out_delta_raw
-    if received_raw < floor:
+    # The same 5 bp grace the instruction bound allows (solana_swap_bounds):
+    # one bound for both checks, so nothing further below the floor slips.
+    from core.wallet.solana_swap_bounds import min_acceptable
+    if received_raw < min_acceptable(floor):
         return tool._ar(error=(
             f"refused: the simulation delivers {received_raw} raw of "
             f"{token_out}, below the route's floor {floor}. A swap that "
@@ -634,9 +699,8 @@ async def _broadcast(tool, params, execution_context, s):
         try:
             signature = await asyncio.to_thread(tool._solana_send, raw_tx, signer)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc))
         if _lane != "autonomous" and hasattr(gate, "note_lane"):
             gate.note_lane(idem, _lane)
         gate.record(venue="defi", action="solana_swap",

@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Remove a source (or entire collection) from the knowledge base.",
+    "name": "knowledge_kb_remove",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "description": "KB collection name.",
+          "type": "string"
+        },
+        "source": {
+          "default": null,
+          "description": "Source path to remove (omit to clear entire collection).",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "collection"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

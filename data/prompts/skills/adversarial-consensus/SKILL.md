@@ -3,9 +3,9 @@ name: adversarial-consensus
 description: 'For a large or hard-to-reverse decision, or when the owner asks for it: several delegate_task children answer blind and independently, then each critiques the others'' anonymised answers, and you judge — naming agreements, disagreements and what nobody checked. Never averages. Costs about 2N child runs.'
 license: MIT
 metadata:
+  polyrob-when: 'A big or hard-to-reverse decision needs blind second views'
   polyrob-priority: '5'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["adversarial consensus","adversarial review","adversarial panel","blind panel","consensus panel","red team this","red-team this","independent opinions","independent second opinions"],"task_patterns":["\\b(run|convene|use|get|start)\\b.{0,20}\\b(an? )?(adversarial|blind|independent) (panel|council|review|consensus)\\b","\\b(stress[- ]test|red[- ]team)\\b.{0,30}\\b(this|the|my|our)\\b.{0,20}\\b(decision|plan|proposal|thesis|design|strategy)\\b"],"tool_ids":[]}'
   polyrob-version: '1'
 ---
 # Adversarial Consensus

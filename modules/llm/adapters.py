@@ -427,6 +427,19 @@ class LLMClientAdapter(BaseChatModel):
                 usage_metadata[key] = usage_data[key]
         return usage_metadata
 
+    def _plain_call_usage(self) -> Optional[dict]:
+        """No-tools path usage from the client's last response (A-4); None if unknown."""
+        extract = getattr(self._client, '_extract_usage_data', None)
+        if not callable(extract):
+            return None
+        try:
+            usage = self._usage_metadata_from(extract())
+        except Exception:
+            return None
+        if not usage or not (usage.get('input_tokens') or usage.get('output_tokens')):
+            return None
+        return usage
+
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
         """Generate a response asynchronously.
 
@@ -572,8 +585,10 @@ class LLMClientAdapter(BaseChatModel):
                 self._logger.info(f"[DEBUG] Client.generate_response completed in {client_duration:.1f}s")
                 self._logger.info(f"[DEBUG] Response type: {type(response).__name__}")
 
-                # Convert to flat format
-                ai_message = AIMessage(content=self._scrub_content(response))
+                # A-4 (2026-10-14): usage was missing here, so every aux call recorded
+                # 0 tokens / $0. Read synchronously: no await since the call returned.
+                ai_message = AIMessage(content=self._scrub_content(response),
+                                       usage_metadata=self._plain_call_usage())
                 generation = ChatGeneration(message=ai_message)
 
             # Get the raw response with token usage if available

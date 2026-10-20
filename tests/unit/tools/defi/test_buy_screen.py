@@ -52,3 +52,38 @@ def test_a_trusted_token_with_no_price_source_is_not_ticket_capped():
 def test_trust_never_lifts_a_disagreeing_route_or_an_untrusted_token():
     assert buy_screen.unchecked_route_refusal("DISAGREES", 144, trusted=True)
     assert buy_screen.unchecked_route_refusal("UNAVAILABLE", 144, trusted=False)
+
+
+def test_the_refusal_names_the_owner_trust_verb():
+    # Prod 2026-10-16 13:52Z: the refusal said "owner pin" without naming the
+    # verb; the agent invented `/config set budget.unchecked_route_usd 300` (no
+    # such key) and the owner's own /swap failed twice. Name the real lever.
+    why = buy_screen.unchecked_route_refusal("UNAVAILABLE", 293)
+    assert "/wallet trust <chain> <address> <SYMBOL> go" in why
+
+
+def test_an_owner_pinned_token_passes_an_unanswered_check_only():
+    # Prod 2026-10-16 13:58Z: GoPlus covers USDG on robinhood but never answers
+    # is_honeypot, so every live buy of the owner-pinned contract was refused.
+    # The owner's pin covers an UNANSWERED check; a hard failure or a high sell
+    # tax still refuses.
+    screen = clean()
+    screen.checks = [c for c in screen.checks if c.name != "is_honeypot"]
+    assert buy_screen.screen_refusal(screen)
+    assert buy_screen.screen_refusal(screen, owner_pinned=True) is None
+    hard = clean()
+    hard.hard_fails.append("is_honeypot (goplus)")
+    assert buy_screen.screen_refusal(hard, owner_pinned=True)
+    taxed = clean()
+    taxed.flags.append("sell_tax_high")
+    assert buy_screen.screen_refusal(taxed, owner_pinned=True)
+
+
+@pytest.mark.asyncio
+async def test_live_screen_honours_the_owner_pin_for_unanswered_checks(monkeypatch):
+    monkeypatch.setattr(buy_screen.goplus, "screen", lambda *a: None)
+    monkeypatch.setattr(token_screen, "gather_facts", lambda *a: [])
+    identity = SimpleNamespace(source="rpc")
+    assert await buy_screen.evm_buy_refusal("robinhood", "t", identity)
+    assert await buy_screen.evm_buy_refusal("robinhood", "t", identity,
+                                            owner_pinned=True) is None

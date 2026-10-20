@@ -129,14 +129,12 @@ def test_gates_lists_the_gate_set():
     assert "provider:" in out
 
 
-def test_approve_list_is_a_deprecated_alias_that_still_works():
-    """An owner with the old grammar gets the ANSWER and the new name."""
-    from cli.ui.commands.h_gates import h_approve
-    ctx, buf = _ctx(["list"])
-    h_approve(ctx)
-    out = buf.getvalue()
-    assert "approval gate" in out.lower()          # it still ran
-    assert "gate management moved to `/gates`" in out
+def test_approve_list_is_no_longer_the_gate_manager():
+    """080: the deprecated ``/approve list|add|remove`` alias is DELETED —
+    ``/approve`` decides; the gate manager is ``/gates`` only."""
+    from cli.ui.commands import h_gates
+    assert not hasattr(h_gates, "_GATE_SUBCOMMANDS")
+    assert not hasattr(h_gates, "_DEPRECATION")
 
 
 def test_both_verbs_are_registered():

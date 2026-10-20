@@ -3,9 +3,9 @@ name: browser-automation
 description: Web scraping and automation workflow patterns
 license: MIT
 metadata:
+  polyrob-when: 'Driving a website: scrape, click, fill forms'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["scrape","crawl","login to","fill form","navigate to website"],"task_patterns":["scrape.*","crawl.*","login.*to","fill.*form"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Browser Automation Workflows

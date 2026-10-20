@@ -1,10 +1,8 @@
-"""W5 (D3): TurnFacts, built once; one owner-seat context constructor."""
-from types import SimpleNamespace
-
+"""W5 (D3): one owner-seat context constructor."""
 import pytest
 
 from core.security import turn_facts
-from core.security.turn_facts import facts_of, owner_seat_context
+from core.security.turn_facts import owner_seat_context
 
 
 @pytest.fixture(autouse=True)
@@ -14,8 +12,6 @@ def _owner(monkeypatch):
     monkeypatch.delenv("SECURITY_SETTINGS", raising=False)
     import core.autonomy_marker as marker
     monkeypatch.setattr(marker, "is_autonomous", lambda sid: sid == "auto-sid")
-    from core.security import refusal_taint
-    monkeypatch.setattr(refusal_taint, "is_tainted", lambda sid: False)
 
 
 def test_seat_context_shape():
@@ -40,27 +36,9 @@ def test_unknown_seat_is_refused():
 
 
 @pytest.mark.parametrize("seat", turn_facts.SEATS)
-def test_seat_context_is_the_owner_driving(seat):
-    facts = facts_of(owner_seat_context("owner-1", seat=seat))
-    assert facts.origin == "owner"
-    assert facts.principal == "owner-1"
-    assert facts.seat == seat
-    assert facts.owner_driving
-
-
-def test_origins():
-    base = dict(user_id="owner-1", role="orchestrator", is_sub_agent=False,
-                session_id="s", metadata={})
-    assert facts_of(None).origin == "direct"
-    assert facts_of(SimpleNamespace(**{**base, "role": "leaf"})).origin == "leaf"
-    assert facts_of(SimpleNamespace(**{**base, "metadata": {"turn_kind": "self_wake"}})).origin \
-        == "forged"
-    assert facts_of(SimpleNamespace(**{**base, "metadata": {"turn_kind": "group"}})).origin \
-        == "room"
-    assert facts_of(SimpleNamespace(**{**base, "session_id": "auto-sid"})).origin == "autonomous"
-    orch = SimpleNamespace(_correspondent_tainted=True, session_id="s")
-    f = facts_of(SimpleNamespace(**base), orchestrator=orch)
-    assert f.origin == "correspondent" and f.taints.correspondent and not f.owner_driving
+def test_seat_context_is_a_genuine_owner_turn(seat):
+    from core.security.owner_turn import is_genuine_owner_turn
+    assert is_genuine_owner_turn(owner_seat_context("owner-1", seat=seat))
 
 
 def test_seat_contexts_have_one_shape():

@@ -24,7 +24,7 @@ from tools.defi import bridge_verb as bv
 RELAY = next(iter(RELAY_PROGRAM_IDS))
 SENDER = str(Keypair().pubkey())
 VAULT = str(Pubkey.new_unique())
-EVM = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+EVM = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 AMOUNT = 0.5
 AMOUNT_RAW = 500_000_000
 FLOOR = 28 * 10 ** 15

@@ -152,7 +152,7 @@ class AutonomyStateStore:
     # design on cancellation, see async_delegation.py) and 'interrupted' (the
     # sibling running-delegation sweep pass already best-effort surfaced it, and
     # it has no real child result to redeliver).
-    _TERMINAL_DELIVERABLE_STATUSES = ("completed", "error", "timeout")
+    _TERMINAL_DELIVERABLE_STATUSES = ("completed", "incomplete", "error", "timeout")
 
     def list_completed_undelivered(self) -> List[dict]:
         """Terminal rows whose already-computed result was never surfaced.
@@ -451,7 +451,8 @@ async def recover_interrupted_delegations(task_agent: Any, db_path: str) -> int:
 
 # Honest per-status framing for a redelivered result (T1.6). Never claims a
 # delegation "completed" when it actually errored/timed out.
-_STATUS_VERBS = {"completed": "completed", "error": "failed", "timeout": "timed out"}
+_STATUS_VERBS = {"completed": "completed", "incomplete": "stopped before it finished (partial)",
+                 "error": "failed", "timeout": "timed out"}
 
 
 async def _sweep_completed_undelivered(task_agent: Any, store: "AutonomyStateStore") -> int:

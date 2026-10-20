@@ -6,7 +6,8 @@ model half reached chat only: live prod 2026-10-12 ran every cron/goal/planner r
 the registry default (``z-ai/glm-5.2``) while chat served the pinned DeepSeek model.
 Read the pin through ``operator_provider_pin``/``operator_model_pin``/
 ``operator_model_for``, and a provider's default model through ``get_default_model``
-(which applies the pin). Writers (``polyrob init``, ``polyrob config set``) are fine —
+(which applies the pin). ``CHAT_*`` is retired (a refusing alias of ``DEFAULT_*``);
+the pattern still forbids a hand-written read of it. Writers (``polyrob init``, ``polyrob config set``) are fine —
 this ratchet matches READS only.
 """
 import pathlib

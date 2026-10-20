@@ -331,27 +331,6 @@ class TestIsProtectedConfigPath:
         assert is_protected_config_path(Path("/data/identity/rob/user_1/README.md")) is False
         assert is_protected_config_path(Path("/data/identity/rob/user_1/data.json")) is False
 
-    # -- the declarative stream manifest (money-tool grant) --
-
-    def test_stream_manifest_is_protected(self):
-        """`data/streams/streams.yaml` is the ONE place an autonomous goal may be
-        granted a money verb (`allowed_self_goal_tools()` never contains one), so
-        it must be unreachable from every agent-writable file surface —
-        `self_env patch_source` at AGENT_COMPUTE_POSTURE>=2 would otherwise
-        permit writing it."""
-        assert is_protected_config_path(
-            Path("/opt/polyrob/data/streams/streams.yaml")) is True
-        assert is_protected_config_path(Path("data/streams/streams.yaml")) is True
-        assert is_protected_config_path(
-            Path("/data/Streams/streams.yaml")) is True     # case-insensitive FS
-
-    def test_unrelated_streams_yaml_is_not_protected(self):
-        """Segment-scoped like the identity rule: a file that merely shares the
-        name, outside a `streams/` directory, is ordinary."""
-        assert is_protected_config_path(Path("/repo/streams.yaml")) is False
-        assert is_protected_config_path(Path("/repo/data/other/streams.yaml")) is False
-        assert is_protected_config_path(Path("/repo/data/streams/notes.md")) is False
-
     # -- review-fix regressions: case-insensitivity + segment robustness --
 
     def test_mixed_case_identity_segment_is_protected(self):

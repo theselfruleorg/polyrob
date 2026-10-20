@@ -1,0 +1,39 @@
+{
+  "function": {
+    "description": "Ingest a file or directory into the agent's knowledge base so future kb_search calls can retrieve it. Skips secrets, binaries, and unchanged files (dedup by hash).",
+    "name": "knowledge_kb_ingest",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "default": "default",
+          "description": "KB collection name.",
+          "type": "string"
+        },
+        "globs": {
+          "default": null,
+          "description": "Optional glob patterns to restrict which files are included.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "path": {
+          "description": "File or directory path to ingest into the KB.",
+          "type": "string"
+        },
+        "recursive": {
+          "default": true,
+          "description": "Recurse into subdirectories.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

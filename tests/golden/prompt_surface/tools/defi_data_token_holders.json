@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "WHO owns this token: top holders with their share, wallet vs contract, LP holders and whether the LP is locked, and the creator's own stake. This is the concentration read — a holder-cluster map in text. It does NOT prove wallets are unrelated: one person can hold ten addresses, and nothing here traces funding between them.",
+    "name": "defi_data_token_holders",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The TOKEN's address: on EVM chains its contract (0x…, 40 hex); on solana its MINT (base58). A ticker is not accepted — use token_resolve first. A WALLET is not a token: to see what a wallet holds use wallet_holdings.",
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to look the token up on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

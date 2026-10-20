@@ -1,0 +1,13 @@
+{
+  "function": {
+    "description": "Go back to the previous page.",
+    "name": "browser_go_back_action",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model that accepts and discards all parameters.\n\nAccepts absolutely anything in the incoming data\nand discards it, so the final parsed model is empty.",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

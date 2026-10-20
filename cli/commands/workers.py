@@ -3,7 +3,7 @@
 A worker is a reusable, named agent configuration the orchestrator dispatches
 with ``delegate_task(profile="<id>")``: a description (WHEN to use it), a
 standing brief, an optional tool list (never wider than the parent's), an
-optional pinned model and step budget. Files live under the deployed data home
+optional pinned model. Files live under the deployed data home
 (``<home>/profiles/user_{uid}/``) and are written through
 ``agents.task.agent.profile_store.ProfileStore`` — the same scan / quarantine /
 archive-never-delete lane the agent's ``worker_manage`` proposal rides.
@@ -83,7 +83,6 @@ def render_show(store, user_id: str, worker_id: str) -> str:
            f"  when to use: {spec.description or '(no description)'}",
            f"  tools:       {', '.join(spec.tool_ids) if spec.tool_ids is not None else 'inherits the parent’s'}",
            f"  model:       {spec.model or 'inherits the parent’s'}",
-           f"  max steps:   {spec.max_steps or 'the delegation default'}",
            f"  written by:  {'you' if spec.owner_authored else 'the agent'}"]
     if spec.instructions:
         out.append("  brief:")
@@ -106,15 +105,14 @@ def render_live(manager) -> str:
 
 def write_worker(store, user_id: str, worker_id: str, *, description: str,
                  instructions: str = "", tools: Optional[List[str]] = None,
-                 model: str = "", provider: str = "", max_steps: Optional[int] = None) -> str:
+                 model: str = "", provider: str = "") -> str:
     """Owner write (new / edit). Returns one honest line."""
     from agents.task.agent.profile_store import (PROVENANCE_USER, build_worker_profile,
                                                  is_valid_profile_id)
     if not is_valid_profile_id(worker_id):
         return f"'{worker_id}' is not a valid worker id (lowercase letters, digits, dashes)."
     data = build_worker_profile(worker_id, description=description, instructions=instructions,
-                                tools=tools, model=model, provider=provider,
-                                max_steps=max_steps)
+                                tools=tools, model=model, provider=provider)
     res = store.save_profile(data, user_id=user_id, created_by=PROVENANCE_USER)
     if not res.ok:
         return "Not saved: " + "; ".join(res.errors)
@@ -155,7 +153,7 @@ def workers_list(as_json: bool):
         from agents.task.agent.profile_store import WorkerSpec
         click.echo(json.dumps({
             "approved": [{"id": s.id, "description": s.description, "tools": s.tool_ids,
-                          "model": s.model or None, "max_steps": s.max_steps,
+                          "model": s.model or None,
                           "owner_authored": s.owner_authored}
                          for s in (WorkerSpec(m) for m in store.list_approved(uid))],
             "pending": store.list_pending(uid)}, indent=2))
@@ -171,8 +169,6 @@ def workers_show(worker_id: str):
 
 
 def _write_options(f):
-    f = click.option("--max-steps", type=click.IntRange(1, 50), default=None,
-                     help="Pin the step budget.")(f)
     f = click.option("--provider", default="", help="Provider for --model.")(f)
     f = click.option("--model", default="", help="Pin a model (else the parent's).")(f)
     f = click.option("--tools", default=None,
@@ -189,21 +185,21 @@ def _tools(raw: Optional[str]) -> Optional[List[str]]:
 @click.argument("worker_id")
 @click.option("--description", required=True, help="WHEN the agent should use it.")
 @_write_options
-def workers_new(worker_id, description, instructions, tools, model, provider, max_steps):
+def workers_new(worker_id, description, instructions, tools, model, provider):
     """Create a worker (approved: you are the owner)."""
     store, uid = _store(write=True), _owner()
     if store.get_approved(worker_id, user_id=uid) is not None:
         raise click.ClickException(f"'{worker_id}' exists — use `polyrob workers edit`.")
     click.echo(write_worker(store, uid, worker_id, description=description,
                             instructions=instructions, tools=_tools(tools), model=model,
-                            provider=provider, max_steps=max_steps))
+                            provider=provider))
 
 
 @workers.command("edit")
 @click.argument("worker_id")
 @click.option("--description", default=None, help="WHEN the agent should use it.")
 @_write_options
-def workers_edit(worker_id, description, instructions, tools, model, provider, max_steps):
+def workers_edit(worker_id, description, instructions, tools, model, provider):
     """Change a worker; unset options keep their current value."""
     from agents.task.agent.profile_store import WorkerSpec
     store, uid = _store(write=True), _owner()
@@ -217,8 +213,7 @@ def workers_edit(worker_id, description, instructions, tools, model, provider, m
         description=cur.description if description is None else description,
         instructions=instructions or cur.instructions,
         tools=cur.tool_ids if tools is None else _tools(tools),
-        model=model or cur.model, provider=provider or cur.provider,
-        max_steps=max_steps if max_steps is not None else cur.max_steps))
+        model=model or cur.model, provider=provider or cur.provider))
 
 
 @workers.command("approve")

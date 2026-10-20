@@ -1,5 +1,5 @@
-"""057 WS-D — the identity-doc writers stamp provenance and enforce the claim
-FORMAT guard. Covers BOTH docs (owner.md + self.md) and both write paths
+"""057 WS-D — the identity-doc writers stamp provenance and never refuse a
+write for its wording. Covers BOTH docs (owner.md + self.md) and both write paths
 (update via propose/apply_now, and patch)."""
 import pytest
 
@@ -10,7 +10,6 @@ from core.self_context_writer import PROVENANCE_USER, SelfContextWriter
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    monkeypatch.delenv("DOC_CLAIM_PROVENANCE_REQUIRED", raising=False)
     return tmp_path
 
 
@@ -69,42 +68,21 @@ def test_stamp_counts_toward_the_cap(home):
     assert "chars" in res.errors[0]
 
 
-def test_claim_guard_off_by_default(home):
+def test_an_unsourced_claim_is_written_as_given(home):
     w = _owner(home)
-    assert w.propose("X posting is broken", user_id="u1",
-                     created_by=PROVENANCE_USER, pending=False).ok
-
-
-def test_claim_guard_refuses_an_unsourced_claim(home, monkeypatch):
-    monkeypatch.setenv("DOC_CLAIM_PROVENANCE_REQUIRED", "true")
-    w = _owner(home)
-    res = w.propose("X posting is broken", user_id="u1",
+    res = w.propose("X posting is broken since July", user_id="u1",
                     created_by=PROVENANCE_USER, pending=False)
-    assert not res.ok
-    assert "X posting is broken" in res.errors[0]
-    assert "source=" in res.errors[0]
-    assert w.read("u1") == ""       # nothing was written
+    assert res.ok
+    assert w.read("u1").strip() == "X posting is broken since July"
 
 
-def test_claim_guard_lets_a_sourced_claim_through(home, monkeypatch):
-    monkeypatch.setenv("DOC_CLAIM_PROVENANCE_REQUIRED", "true")
+def test_a_sourced_claim_is_stamped(home):
     w = _owner(home)
     res = w.propose("X posting is broken", user_id="u1",
                     created_by=PROVENANCE_USER, pending=False,
                     source="room_read", observed_at="2026-09-19")
     assert res.ok
     assert stamp_of(w.read("u1")) == "2026-09-19"
-
-
-def test_claim_guard_ignores_unchanged_claim_lines(home, monkeypatch):
-    w = _owner(home)
-    w.propose("X posting is broken", user_id="u1", created_by=PROVENANCE_USER,
-              pending=False)
-    monkeypatch.setenv("DOC_CLAIM_PROVENANCE_REQUIRED", "true")
-    # re-stating the SAME claim while adding a plain fact is not a new claim
-    res = w.propose("X posting is broken\nI live in Berlin", user_id="u1",
-                    created_by=PROVENANCE_USER, pending=False)
-    assert res.ok
 
 
 def test_pending_write_diffs_against_the_pending_draft(home):

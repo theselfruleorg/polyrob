@@ -68,7 +68,7 @@ class ProviderProfile:
 # NOTE: insertion order IS the canonical preference order for "first provider with
 # a key" (see ``providers_with_keys`` / ``core.runtime_config``). OpenRouter is FIRST
 # (2026-06-24): it is the preferred default client whenever its key is present —
-# explicit ``-p`` and operator pins (DEFAULT_PROVIDER/CHAT_PROVIDER) still win.
+# explicit ``-p`` and operator pin (DEFAULT_PROVIDER) still win.
 #
 def _profiles_from_specs(specs=None) -> Dict[str, ProviderProfile]:
     """Derive the profile view from the ProviderSpec registry (proposal 024)."""

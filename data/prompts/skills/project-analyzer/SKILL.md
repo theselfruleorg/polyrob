@@ -3,9 +3,9 @@ name: project-analyzer
 description: Company/project analysis workflow with social presence and sentiment
 license: MIT
 metadata:
+  polyrob-when: 'Analyzing a company or crypto project'
   polyrob-priority: '1'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["analyze company","company analysis","analyze project","social presence","brand analysis","competitor analysis","sentiment analysis"],"task_patterns":["analyze.*company","analyze.*project","social.*presence","brand.*analysis","company.*research","competitor.*","sentiment.*analysis"],"tool_ids":[]}'
   polyrob-version: '1'
 ---
 # Project Analyzer

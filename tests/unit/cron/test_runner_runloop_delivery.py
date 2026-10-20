@@ -328,7 +328,8 @@ async def test_an_already_told_echo_is_recorded_in_the_ledger(monkeypatch, caplo
     events = []
     import cron.runner as cr
     monkeypatch.setattr(cr, "_delivery_ev",
-                        lambda job, outcome, target: events.append((job.id, outcome, target)))
+                        lambda job, outcome, target, session_id=None: events.append(
+                            (job.id, outcome, target)))
     runner = make_agent_runner(_FakeTaskAgent())
     with caplog.at_level(logging.INFO, logger="cron.runner"):
         await runner(_job(payload={"deliver": "telegram"}))

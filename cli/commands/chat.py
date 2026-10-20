@@ -98,6 +98,7 @@ async def _conversation_loop(
             # not a recognized slash → fall through and treat as a turn
 
         from cli.ui.input_policy import prepare_text
+        typed = line   # 085 W3 (A1): the owner's words, before @-references expand
         try:
             line = prepare_text(line)
         except Exception as exc:
@@ -121,7 +122,8 @@ async def _conversation_loop(
             try:
                 from core.interactive_gate import interactive_turn
                 with interactive_turn():
-                    answer = await convo.respond(line)
+                    answer = await (convo.respond(line) if typed == line
+                                    else convo.respond(line, typed_text=typed))
             except KeyboardInterrupt:
                 # T16: interrupt-and-redirect — when INTERRUPT_REDIRECT is ON, prompt the
                 # user for a redirect instruction instead of silently dropping the turn.
@@ -436,7 +438,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     # Load env layers up front (./.polyrob/.env, ~/.polyrob/.env, root .env, config/.env.*)
     # so the API-key presence check below sees file-based keys, not just process
     # env. build_cli_container loads them again (idempotent with override=False).
-    load_env(local_mode=True)
+    load_env()
     # Make the OAuth/store credential rungs visible to the key gate + resolver,
     # which run before build_cli_container sets this. setdefault preserves an
     # explicit POLYROB_LOCAL=0 opt-out. (See the same fix in cli/commands/run.py.)
@@ -671,7 +673,8 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         "model": model,
         "provider": provider,
         "tools": repl_tools,   # filesystem/task + enabled autonomy tools (local mode)
-        "max_steps": 50,
+        # No max_steps: each turn runs Conversation.respond() with its own
+        # DEFAULT_TURN_BUDGET (20).
         "temperature": 0.0,
         "use_vision": False,
     }

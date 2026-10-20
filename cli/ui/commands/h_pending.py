@@ -113,9 +113,6 @@ def _h_pending(ctx: CommandContext) -> None:
             "pending", f"[{label}] {it['kind']}:{it['id']}  ({it['chars']} chars)"
         ))
         lines.append(f"{candy.GUTTER}  {it['preview']}")
-        # 035 P0-5: name the ACTIVE rule this draft contradicts.
-        for c in (it.get("conflicts") or []):
-            lines.append(f"{candy.GUTTER}  ⚠ CONFLICT — {c}")
     lines.append("")
     if pending_set.unavailable:
         lines.append(pending_set.degraded_line())

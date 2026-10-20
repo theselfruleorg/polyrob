@@ -47,8 +47,8 @@ from core.wallet import abi
 MINT_SIGNATURE = "mint(address,uint256,uint256)"
 MINT_SELECTOR = "0x156e29f6"  # abi.selector(MINT_SIGNATURE), a literal for a bare install
 
-#: The collection's spec — ``uint256 public constant PRICE = 0.042 ether``.
-MINT_PRICE_WEI = 42 * 10 ** 15
+#: The collection's spec — ``uint256 public constant PRICE = 0.033 ether``.
+MINT_PRICE_WEI = 33 * 10 ** 15
 #: The collection's spec — ``MAX_PER_TX = 10`` (the contract reverts ``BadQty`` above it).
 MAX_MINT_QTY = 10
 

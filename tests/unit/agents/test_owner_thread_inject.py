@@ -71,7 +71,7 @@ def _texts(mm):
 
 
 def test_replay_prod_2026_09_22_fresh_session_sees_the_exit_rail_text(container):
-    t0 = time.time() - 12 * 3600 - 60
+    t0 = time.time() - 25 * 3600
     ot.record_owner_in(container, "12345", "yesterday's chat", via="telegram", session_id="8edb9168", now=t0)
     ot.record_owner_out(container, "12345", "Exit rail ran. No trade — but I found a real problem "
                         "in the rules … Please pick A or B.", via="telegram", session_id="90ea25a2",
@@ -84,7 +84,7 @@ def test_replay_prod_2026_09_22_fresh_session_sees_the_exit_rail_text(container)
     assert len(texts) == 1 and 'kind="tail"' in texts[0]
     assert "pick A or B" in texts[0]
     assert "owner→you (this session): Explin better" in texts[0]
-    assert "yesterday's chat" not in texts[0]          # outside the 6 h window
+    assert "yesterday's chat" not in texts[0]          # outside the 24 h window (OWNER_THREAD_TAIL_HOURS default)
     assert agent.message_manager.ephemeral == []       # durable, not one-shot
     assert getattr(agent.orchestrator, "_owner_thread_seen_ts", None)
 

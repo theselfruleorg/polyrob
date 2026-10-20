@@ -430,11 +430,12 @@ def branding_config() -> Dict[str, str]:
     043 A12: ``brand_url``/``org_url``/``terms_url``/``privacy_url`` have NO
     placeholder-host default — an operator who never set the corresponding env
     var gets an empty string, not a fake domain (``your-polyrob-host.example``)
-    or the framework author's own org site (``theselfrule.org``). The template
-    only renders a footer link when its URL is non-empty. ``support_url`` is
-    unaffected — its Telegram default is a real, working support channel.
+    or the framework author's own org site. The template only renders a link
+    when its URL is non-empty. ``support_url``/``support_handle`` follow the
+    same rule: no default, so an install never points its users at another
+    operator's support channel.
     """
-    support_url = os.environ.get("POLYROB_SUPPORT_URL", "https://t.me/tmachinrobot").strip()
+    support_url = os.environ.get("POLYROB_SUPPORT_URL", "").strip()
     brand_url = os.environ.get("POLYROB_BRAND_URL", "").strip()
     org_url = os.environ.get("POLYROB_ORG_URL", "").strip()
     terms_url = os.environ.get("POLYROB_TERMS_URL", "").strip()
@@ -446,7 +447,7 @@ def branding_config() -> Dict[str, str]:
     return {
         "support_url": support_url,
         "support_display": _strip_scheme(support_url),
-        "support_handle": os.environ.get("POLYROB_SUPPORT_HANDLE", "@TMACHINROBOT").strip(),
+        "support_handle": os.environ.get("POLYROB_SUPPORT_HANDLE", "").strip(),
         "brand_url": brand_url,
         "brand_display": _strip_scheme(brand_url) if brand_url else "",
         "org_url": org_url,
@@ -459,8 +460,9 @@ def branding_config() -> Dict[str, str]:
 def data_dir() -> str:
     """Runtime data home the console reads sidecar DBs from (goals.db/cron.db/
     memory.db/identity/…) — the webview-side wrapper over the ONE core policy
-    seam ``core.runtime_paths.resolve_data_home`` shared with the CLI admin
-    verbs. Env is honored here too so a standalone webview deploy
+    seam ``core.runtime_paths.effective_data_home``, the same home every
+    container's ``config.data_dir`` resolves to (080 WS-1), so the console
+    pages and the console chat verbs read one store. Env is honored here too so a standalone webview deploy
     (``scripts/deploy_webview.sh``) where ``core`` isn't importable still
     respects ``POLYROB_DATA_DIR`` and falls back to the legacy ``./data``
     instead of raising. Do NOT re-implement resolution logic at call sites.
@@ -469,8 +471,9 @@ def data_dir() -> str:
     if env:
         return env
     try:
-        from core.runtime_paths import resolve_data_home
-        return str(resolve_data_home())
+        # 080 WS-1: the SAME rule as every container's ``config.data_dir``.
+        from core.runtime_paths import effective_data_home
+        return str(effective_data_home())
     except Exception:
         return "data"
 
@@ -493,7 +496,7 @@ def in_process_task_agent():
     """The ``TaskAgent`` living in THIS process, or None.
 
     On a single-service console deploy it is the agent that owns the sessions;
-    when the console is a SEPARATE service (prod Rob #1) it is a monitoring
+    when the console is a SEPARATE service (a split-service install) it is a monitoring
     agent that does NOT own them (or None) — a caller must check
     ``route_session().is_local``, never trust mere presence. ``pages`` and
     ``server`` each carried this lookup by hand.

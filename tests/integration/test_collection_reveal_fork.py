@@ -38,7 +38,7 @@ CONTRACTS = Path(os.environ["AGENT_NFT_CONTRACTS_DIR"]) if os.environ.get("AGENT
     else Path(__file__).resolve().parents[3] / "polyrob-drop" / "contracts"
 CONTRACT = os.environ.get("AGENT_NFT_CONTRACT", "Polyrob")
 ARACHNID = "0x4e59b44847b379578588920cA78FbF26c0B4956C"
-PRICE = 42 * 10 ** 15
+PRICE = 33 * 10 ** 15
 
 
 def _rpc(method, params):

@@ -3,9 +3,10 @@ name: hyperliquid-market-data
 description: 'Read Hyperliquid perp/spot markets: mids, funding rates, orderbook depth, and funding as a sentiment signal (no wallet)'
 license: MIT
 metadata:
+  polyrob-when: 'Reading Hyperliquid markets, funding and depth'
   polyrob-priority: '5'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["hyperliquid","perps","perp funding rate","hyperliquid funding","hyperliquid mids","hyperliquid orderbook","perp price"],"task_patterns":["hyperliquid.*(price|market|funding|perp|spot)","perp.*funding","perp.*(price|market)"],"tool_ids":["hyperliquid_data"]}'
+  polyrob-triggers: '{"tool_ids":["hyperliquid_data"]}'
   polyrob-version: '2'
 ---
 # Hyperliquid Market Data

@@ -17,7 +17,7 @@ import pytest
 from core.wallet.solana_strays import (StrayAccount, find_stray_accounts,
                                        format_stray_warning)
 
-CANONICAL = "BrsPwATRZcb2PWsEZba9Bh1mwcxU6M7R64nPgRneCpmL"
+CANONICAL = "2cyLycfUPcu8Zhmdpzf13vQHEZcoWrRkiQGFHvJ5xveW"
 STRAY = "6ZRiHb2YbrYWVWtSJwyAi5CmCfbj3spuxjFsUTbK8Mak"
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 

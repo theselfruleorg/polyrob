@@ -73,7 +73,7 @@ const CARD_TOKEN = /\/card_[0-9a-f]{10}_(?:ok|no|re|[1-6])(?![\w])/g;
  *  answer to any other verb (`/thread` quotes the agent's own words) gets none,
  *  exactly the Telegram rule in core/surfaces/actions.py. */
 const CARD_VERBS = new Set(['/send', '/swap', '/bridge', '/pay', '/claim', '/launch',
-  '/deploy', '/nft', '/identity', '/writeoff', '/unquarantine', '/wallet', '/adopt']);
+  '/deploy', '/nft', '/identity', '/writeoff', '/unquarantine', '/wallet']);
 // ⚠️ `/cards` is deliberately absent: its answer lists each card's title, and a
 // choice card's title is the MODEL's question. The Inbox draws those buttons
 // from the store instead.

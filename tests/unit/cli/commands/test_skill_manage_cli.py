@@ -185,10 +185,10 @@ def test_skill_remove_archives_not_deletes(tmp_path, monkeypatch):
     mgr = get_skill_manager()
     active = mgr._user_root("7") / "removeme"
     archived = mgr._user_root("7") / ".archived" / "removeme"
-    # delete_skill moves just SKILL.md into .archived/ (the emptied active dir
-    # itself is left behind) — the SKILL.md file is what actually moved.
+    # delete_skill archives the body content-addressed (`<sha256>-SKILL.md`,
+    # 081 WS-5.2); the emptied active dir itself is left behind.
     assert not (active / "SKILL.md").exists()
-    assert (archived / "SKILL.md").is_file()
+    assert list(archived.glob("*-SKILL.md"))
 
 
 def test_skill_remove_unknown_id_errors(tmp_path, monkeypatch):

@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Click on an element by its index from the previous observation.",
+    "name": "browser_click_element",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for clicking an element on the page.",
+      "properties": {
+        "elementIndex": {
+          "type": "integer"
+        },
+        "xPath": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "elementIndex"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

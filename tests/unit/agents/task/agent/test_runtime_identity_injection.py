@@ -101,3 +101,15 @@ def test_identity_tokens_included_in_totals():
     mm.set_runtime_identity("z-ai/glm-5.2", "openrouter")
     assert mm.get_total_tokens() == before_total + mm._runtime_identity_tokens
     assert mm.get_token_count() == before_count + mm._runtime_identity_tokens
+
+
+def test_runtime_identity_names_product_version_and_instance(monkeypatch):
+    # 080 WS-5 (D5): POLYROB <version>, instance <name> — on every posture.
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob-test")
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    from core.version import get_version
+    mm = _mm()
+    mm.set_runtime_identity("m", "p")
+    block = next(_text(m) for m in mm.get_messages_for_llm() if "runtime-identity" in _text(m))
+    assert f"POLYROB v{get_version()}" in block
+    assert 'instance "rob-test"' in block

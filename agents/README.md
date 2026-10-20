@@ -72,8 +72,7 @@ agents/
     │   ├── hitl_manager.py         # Human-in-the-loop
     │   ├── profile_manager.py / profile_registry.py / scenario_registry.py
     │   ├── conversation.py         # Conversation / Turn (chat plumbing)
-    │   ├── skill_manager.py        # SkillManager(SkillWriterMixin) — skill match/load
-    │   ├── skill_writer.py         # SkillWriterMixin — create/patch/delete/promote (writable skills)
+    │   ├── skill_manager.py        # SkillManager — session match + delivery (catalog: core/skills, writer: modules/skills)
     │   ├── sub_agent_manager.py    # SubAgentManager — delegation (run_subtask / parallel)
     │   ├── async_delegation.py     # AsyncDelegationRegistry — background delegation results
     │   ├── log_sanitize.py
@@ -198,7 +197,7 @@ class SessionRequest:
     model: str = "gpt-5"                       # LLM model (overridden by env/key resolution)
     provider: str = "openai"                   # LLM provider
     tools: List[str] = None                    # → ["browser", "filesystem", "task"] if None
-    max_steps: int = 50                        # Maximum automation steps
+    max_steps: int = INTERACTIVE_MAX_STEPS     # 50 (core.config_policy)
     use_vision: bool = True                    # Enable vision capabilities
 ```
 Note: actual provider/model are resolved at chat/session time from whichever API key is present
@@ -241,7 +240,7 @@ Construction uses two dataclasses — `Agent.__init__(self, config: AgentConfig,
 `pause()` / `resume()` / `cancel()` methods on `Agent`; execution is the run loop plus per-step
 phases.
 
-**Run loop** — `RunLoopMixin.run(max_steps=100, _continue_session=False)` (`task/agent/core/run_loop.py`)
+**Run loop** — `RunLoopMixin.run(max_steps=INTERACTIVE_MAX_STEPS, _continue_session=False)` (`task/agent/core/run_loop.py`)
 drives the session, returning an `AgentHistoryList`. It calls `step()` repeatedly until the agent is
 done, an error halts it, or a guard (conversational-exit, loop-detection, max-steps) fires.
 
@@ -420,7 +419,10 @@ character = await character_manager.load_character("researcher")
 5. **Fail fast with clear errors** — don't paper over problems with cascades of fallbacks.
 
 ### Task automation
-1. **Step limits**: set an appropriate `max_steps`.
+1. **Step limits**: an interactive request may set `max_steps` (`polyrob run`/API/A2A default 50,
+   `INTERACTIVE_MAX_STEPS`); a REPL turn runs `DEFAULT_TURN_BUDGET` (20) and a chat-surface turn
+   `CHAT_MAX_STEPS` (8); an autonomous run (goal, cron, delegation, worker) has no per-run budget — it
+   stops at the operator's `AUTONOMOUS_MAX_STEPS` (default 150, 083).
 2. **Tool selection**: only enable necessary tools (MCP/browser/coding are opt-in, not defaults).
 3. **Session cleanup**: clean up completed/failed sessions.
 4. **Human-in-the-loop**: support HITL for critical actions.

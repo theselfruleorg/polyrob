@@ -35,7 +35,7 @@ def serve(host, port, workers):
     # also works here.
     from polyrob.app.bootstrap import load_env
     from modules.llm.profiles import usable_providers_with_credentials, no_key_message
-    load_env(local_mode=True)
+    load_env()
     if not usable_providers_with_credentials(os.environ):
         click.echo(no_key_message(), err=True)
         sys.exit(1)

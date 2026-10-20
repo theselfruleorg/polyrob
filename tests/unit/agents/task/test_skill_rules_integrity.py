@@ -1,28 +1,47 @@
-"""P0 — skill rules ↔ body integrity (drift guard).
+"""Skill rule integrity — the frontmatter is the ONLY metadata source (081 WS-4.2).
 
-A rule in rules.json with ``auto_activate:true`` but no on-disk ``SKILL.md`` body is a
-SILENT failure: get_skills_for_session matches it, _load_skill_content returns "", and
-the match is dropped with only a WARNING log. These tests are the regression lock for
-that whole class of drift.
+Before 081 a skill's triggers lived twice: in a ``rules.json`` index (what the
+matcher loaded) and in the SKILL.md frontmatter (what a human edited). They
+drifted, silently, and the drift disabled real doctrine: measured on prod
+2026-09-12 with the trading rail granted, "should I hunt on robinhood chain
+today" matched NO skill, because the index still carried old triggers. Now the
+index is built from the frontmatter, so there is nothing to drift from; these
+tests keep every shipped rule well-formed.
+
+081 Q2: there are no keyword or pattern triggers. ``triggers`` carries only
+``tool_ids`` — the domain a money playbook or a gated skill needs.
 """
-import json
 from pathlib import Path
+
+import pytest
 
 from agents.task.agent.skill_manager import SkillManager, VALID_TOOL_IDS
 from agents.task.tool_defaults import server_default_tools
+from core.skills.catalog import rule_from_frontmatter
+from core.skills.frontmatter import parse_frontmatter
+from tests.support.skill_library import write_library
+
+ROOT = Path(__file__).resolve().parents[4]
+SKILLS_DIR = ROOT / "data" / "prompts" / "skills"
+PACK_SKILL_DIRS = sorted(ROOT.glob("packs/*/polyrob_*/skills"))
+_TRIGGER_KEYS = {"tool_ids"}
 
 
-SKILLS_DIR = Path(__file__).resolve().parents[4] / "data" / "prompts" / "skills"
+def _shipped():
+    for root in [SKILLS_DIR, *PACK_SKILL_DIRS]:
+        for md in sorted(root.glob("*/SKILL.md")):
+            if not md.parent.name.startswith(("user_", ".")):
+                yield md.parent.name, md
 
 
-def test_no_orphan_rules():
-    """Every auto_activate system rule must have a readable SKILL.md body."""
-    rules = json.loads((SKILLS_DIR / "rules.json").read_text())
-    orphans = [
-        sid for sid, r in rules.items()
-        if r.get("auto_activate", True) and not (SKILLS_DIR / sid / "SKILL.md").exists()
-    ]
-    assert orphans == [], f"orphan rules (auto_activate, no body): {orphans}"
+SHIPPED = list(_shipped())
+
+
+def test_no_second_metadata_file_ships():
+    """A shipped `rules.json` would be a second metadata source to drift from."""
+    stray = [str(p.relative_to(ROOT)) for p in [SKILLS_DIR, *PACK_SKILL_DIRS]
+             if (p / "rules.json").exists()]
+    assert stray == []
 
 
 def test_valid_tool_ids_cover_server_defaults():
@@ -31,88 +50,52 @@ def test_valid_tool_ids_cover_server_defaults():
     assert missing == [], f"server default tools missing from VALID_TOOL_IDS: {missing}"
 
 
-def _make_manager(tmp_path: Path, rules: dict, bodies: dict) -> SkillManager:
-    (tmp_path / "rules.json").write_text(json.dumps(rules))
-    for sid, body in bodies.items():
-        d = tmp_path / sid
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "SKILL.md").write_text(body)
-    return SkillManager(skills_dir=tmp_path)
+@pytest.mark.parametrize("sid,md", SHIPPED, ids=[s for s, _ in SHIPPED])
+def test_every_shipped_skill_declares_a_well_formed_rule(sid, md):
+    meta, _ = parse_frontmatter(md.read_text(encoding="utf-8"))
+    rule = rule_from_frontmatter(meta)
+    assert rule is not None, f"{sid}: no metadata.polyrob-* rule in the frontmatter"
+    triggers = rule["triggers"]
+    assert set(triggers) <= _TRIGGER_KEYS, \
+        f"{sid}: dead trigger keys {set(triggers) - _TRIGGER_KEYS} (no keyword matcher exists)"
+    assert 1 <= rule["priority"] <= 10
+    assert set(triggers.get("tool_ids") or []) <= VALID_TOOL_IDS, sid
 
 
-def test_bodiless_auto_activate_rule_is_pruned(tmp_path):
-    """A rule with auto_activate but no body is pruned from skill_rules at load."""
-    sm = _make_manager(
-        tmp_path,
-        rules={
-            "real-skill": {"auto_activate": True, "triggers": {"keywords": ["real"]}},
-            "ghost-skill": {"auto_activate": True, "triggers": {"keywords": ["ghost"]}},
-        },
-        bodies={"real-skill": "# Real\nbody"},
-    )
+def test_every_requires_names_a_shipped_skill():
+    shipped = {sid for sid, _ in SHIPPED}
+    dangling = {}
+    for sid, md in SHIPPED:
+        rule = rule_from_frontmatter(parse_frontmatter(md.read_text(encoding="utf-8"))[0]) or {}
+        missing = [r for r in rule.get("requires") or [] if r not in shipped]
+        if missing:
+            dangling[sid] = missing
+    assert dangling == {}
+
+
+def test_the_prerequisites_still_ride_with_their_parents():
+    """R5 of 081: `requires` is live on the seed path. The frontmatter carries it."""
+    by_id = {sid: rule_from_frontmatter(parse_frontmatter(md.read_text(encoding="utf-8"))[0])
+             for sid, md in SHIPPED}
+    assert by_id["treasury-trading"]["requires"] == ["token-identity", "pre-trade-check"]
+    assert by_id["hyperliquid-trading"]["requires"] == ["crypto-trading-safety"]
+    assert by_id["polymarket-trading"]["requires"] == ["crypto-trading-safety"]
+
+
+def test_a_gated_rule_loads_from_the_frontmatter(tmp_path):
+    """`polyrob-auto-activate: 'false'` is a gated rule, kept in the index."""
+    write_library(tmp_path, {"manual-skill": {"auto_activate": False,
+                                              "triggers": {"tool_ids": ["browser"]}}})
+    sm = SkillManager(skills_dir=tmp_path)
     sm._ensure_rules_loaded()
-    assert "real-skill" in sm.skill_rules
-    assert "ghost-skill" not in sm.skill_rules, "bodiless auto_activate rule should be pruned"
+    assert sm.skill_rules["manual-skill"]["auto_activate"] is False
 
 
-def test_pruned_orphan_never_matches(tmp_path):
-    """After pruning, a task that would have matched the orphan loads nothing for it."""
-    sm = _make_manager(
-        tmp_path,
-        rules={"ghost-skill": {"auto_activate": True, "triggers": {"keywords": ["ghost"]}}},
-        bodies={},
-    )
-    matched = sm.get_skills_for_session(task="please ghost this")
-    assert all(m.skill_id != "ghost-skill" for m in matched)
-
-
-def test_inactive_bodiless_rule_not_pruned(tmp_path):
-    """A non-auto_activate rule with no body is left alone (not an orphan footgun)."""
-    sm = _make_manager(
-        tmp_path,
-        rules={"manual-skill": {"auto_activate": False, "triggers": {"keywords": ["x"]}}},
-        bodies={},
-    )
+def test_a_plain_agentskills_body_is_not_a_rule(tmp_path):
+    """A SKILL.md with no polyrob metadata is an index entry with no rule."""
+    (tmp_path / "plain").mkdir()
+    (tmp_path / "plain" / "SKILL.md").write_text(
+        "---\nname: plain\ndescription: a plain skill\n---\n# Plain\nplain ghost body text\n")
+    sm = SkillManager(skills_dir=tmp_path)
     sm._ensure_rules_loaded()
-    assert "manual-skill" in sm.skill_rules
-
-
-def test_rules_json_triggers_match_the_skill_frontmatter():
-    """`rules.json` is what SkillManager LOADS; SKILL.md frontmatter is what a
-    human edits. They drifted, silently, and the drift disabled real doctrine.
-
-    Measured on live prod 2026-09-12 with the trading rail fully granted:
-    "should I hunt on robinhood chain today" -> NO SKILLS, "reconcile the
-    ledger" -> NO SKILLS, "bridge SOL to robinhood" -> NO SKILLS. The
-    treasury-trading body had reached v7 with a Robinhood section, a Solana
-    section and a reconcile step; rules.json still carried the v-something
-    triggers, so none of it was reachable by name.
-
-    Note `scripts/skills_frontmatter_sync.py` syncs rules.json -> frontmatter and
-    hardcodes `polyrob-version: "1"`, so it is a one-time normalizer, NOT a
-    maintenance tool — running it resets every skill's version. Edit both, or fix
-    the script first.
-    """
-    import json
-    import re
-    from pathlib import Path
-
-    base = Path(__file__).resolve().parents[4] / "data" / "prompts" / "skills"
-    rules = json.loads((base / "rules.json").read_text())
-
-    drifted = {}
-    for sid, rule in rules.items():
-        md = base / sid / "SKILL.md"
-        if not md.exists():
-            continue
-        m = re.search(r"polyrob-triggers: '(.+?)'\n", md.read_text(), re.S)
-        if not m:
-            continue
-        fm = json.loads(m.group(1))
-        for key in ("keywords", "task_patterns", "action_names", "tool_ids"):
-            if sorted(fm.get(key) or []) != sorted(rule.get("triggers", {}).get(key) or []):
-                drifted.setdefault(sid, []).append(key)
-
-    assert not drifted, (
-        "SKILL.md frontmatter and rules.json triggers disagree — rules.json is "
-        f"what actually loads, so the frontmatter half is dead: {drifted}")
+    assert "plain" not in sm.skill_rules

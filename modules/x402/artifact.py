@@ -173,10 +173,23 @@ def _format_token_amount(raw: int, decimals: int) -> str:
     return text
 
 
+def usdc_at_par(chain: str, address: Optional[str], symbol: Optional[str]) -> bool:
+    """True when the invoice may read as "$X USDC": the symbol is USDC AND the
+    address is the PINNED USDC of ``chain`` (085 M-2 — a token's ``symbol()`` is
+    its own claim). No address (a legacy invoice whose asset did not resolve)
+    keeps the par line it always had."""
+    if (symbol or "").strip().upper() != "USDC":
+        return False
+    if not address:
+        return True
+    from core.wallet.chains import is_usd_pegged
+    return is_usd_pegged(chain, address)
+
+
 def _build_pay_text(*, request_id: str, amount_usd: float, chain: str,
                      recipient: str, purpose: str, expiry_text: str,
                      symbol: str = "USDC", amount_raw: int = 0,
-                     decimals: int = 6) -> str:
+                     decimals: int = 6, at_par: Optional[bool] = None) -> str:
     """Human pay instructions — same facts as the x402_request result text
     (tools/x402/invoice_tool.py:97-106), reused by the card's "how to pay" block.
 
@@ -187,11 +200,11 @@ def _build_pay_text(*, request_id: str, amount_usd: float, chain: str,
     amount_text = format_invoice_amount(amount_usd)
     # 046: name the ACTUAL token. "Pay $0.50 USDC" on a ROB invoice tells the
     # payer to send the wrong asset, which is money they do not get back.
+    # ``at_par`` (085 M-2): the caller's pinned-address answer; None = the symbol.
+    par = (not symbol or symbol.upper() == "USDC") if at_par is None else at_par
     token_text = (f"{_format_token_amount(amount_raw, decimals)} {symbol}"
-                  if symbol and symbol.upper() != "USDC"
-                  else f"${amount_text} USDC")
-    priced = (f"{token_text} (${amount_text})"
-              if symbol and symbol.upper() != "USDC" else token_text)
+                  if not par else f"${amount_text} USDC")
+    priced = f"{token_text} (${amount_text})" if not par else token_text
     lines = [
         f"Pay {priced} on {chain} to {recipient}"
         if recipient else f"Pay {priced} on {chain}",
@@ -246,6 +259,7 @@ def build_payment_artifact(invoice: Dict[str, Any]) -> Dict[str, Optional[str]]:
         request_id=request_id, amount_usd=amount_usd, chain=chain,
         recipient=recipient, purpose=purpose, expiry_text=expiry_text,
         symbol=symbol, amount_raw=amount_raw, decimals=decimals,
+        at_par=usdc_at_par(chain, token_address, symbol),
     )
 
     pay_uri: Optional[str] = None

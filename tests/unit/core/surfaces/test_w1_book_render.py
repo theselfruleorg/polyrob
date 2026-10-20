@@ -2,8 +2,8 @@
 
 * the reconcile ``collisions`` warning reaches the CLI/Telegram book (it was
   dropped: ``_ISSUE_SECTIONS`` never named it);
-* ``open_positions`` rows the ledger does not list render as "tracked by the
-  rail", with their lifecycle and the owner's /writeoff | /unquarantine;
+* book rows that wait on an owner decision render with their lifecycle and
+  the owner's /writeoff | /unquarantine;
 * a DISAGREEMENT no longer promises "I will not trade" — no trade verb reads it.
 """
 import types
@@ -44,15 +44,18 @@ def test_tracked_rows_and_lifecycle_render_with_the_owner_verbs():
     rows = [{"symbol": "OLD", "address": "0xdef", "lifecycle": "written_off",
              "lifecycle_reason": "rug"}]
     text = " ".join(render_book(_body(tracked=tracked, rows=rows), width=200).split())
-    assert "Tracked by the rail, not in my ledger" in text
+    assert "Waiting on your decision" in text
     assert "cost $134.54" in text and f"/unquarantine robinhood {FAKE}" in text
     assert "Not open" in text and "written off (rug)" in text
 
 
-def test_tracked_rows_skip_what_the_ledger_lists():
-    rec = types.SimpleNamespace(symbol="PNL", chain="robinhood", address=FAKE, qty=2.0,
-                                entry_usd=10.0, status="quarantined", status_reason="x")
-    ledger = [types.SimpleNamespace(address=FAKE.upper().replace("0X", "0x"))]
-    assert tracked_rows(ledger, {FAKE: rec}) == []
-    [row] = tracked_rows([], {FAKE: rec})
-    assert row["lifecycle"] == "quarantined" and row["entry"] == 10.0
+def test_tracked_rows_are_the_rows_that_wait_on_a_decision():
+    from core.book import BookRow
+    def _row(state, lifecycle):
+        return BookRow(symbol="PNL", address=FAKE, chain="robinhood", qty=2.0, usd=None,
+                       state=state, entry=10.0, lifecycle=lifecycle)
+    assert tracked_rows([_row("matched", "open")]) == []
+    [q] = tracked_rows([_row("matched", "quarantined")])
+    assert q["lifecycle"] == "quarantined" and q["entry"] == 10.0
+    [u] = tracked_rows([_row("unbacked", "open")])
+    assert u["lifecycle"] == "open" and u["chain"] == "robinhood"

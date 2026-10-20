@@ -74,7 +74,7 @@ def _resolve_context() -> tuple:
     config_path = None
     try:
         from core.paths import env_file_candidates
-        for c in env_file_candidates(local_mode=local_mode_enabled()):
+        for c in env_file_candidates():
             if c.path.exists():
                 config_path = str(c.path)
                 break

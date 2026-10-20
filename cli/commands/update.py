@@ -641,6 +641,8 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
         else:
             click.echo(click.style(
                 f"✓ Updated to {status.latest}. (snapshot: {res.snapshot.name})", fg="green"))
+            for line in _seed_bundled_skills():
+                click.echo(line)
             for line in _restart_hints():
                 click.echo(line)
         sys.exit(EXIT_UP_TO_DATE)
@@ -663,6 +665,19 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
             for error in res.rollback_errors:
                 click.echo(f"  {error}")
     sys.exit(EXIT_ERROR)
+
+
+def _seed_bundled_skills() -> list:
+    """081 WS-5.3: seed the bundled skills with the NEW code (a child process —
+    this one still runs the old code) and return its report lines: the bundled
+    skills you changed that the update kept, and any problem."""
+    import subprocess
+    try:
+        out = subprocess.run([sys.executable, "-m", "modules.skills.seed"],
+                             capture_output=True, text=True, timeout=120)
+        return [ln for ln in (out.stdout or "").splitlines() if ln.strip()]
+    except Exception as exc:  # noqa: BLE001 — the next start seeds anyway
+        return [f"bundled skills: not seeded now ({type(exc).__name__}); the next start seeds them"]
 
 
 def _restart_hints() -> list:

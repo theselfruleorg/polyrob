@@ -197,7 +197,7 @@ def test_a_payload_that_is_not_a_command_is_dropped():
 
 @pytest.mark.asyncio
 async def test_a_non_owner_press_is_refused_exactly_like_the_typed_form(monkeypatch):
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "28436760")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "100000001")
     import surfaces.telegram.harness as hz
 
     drops = []

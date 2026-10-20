@@ -1,4 +1,4 @@
-from agents.task.agent.skill_frontmatter import (
+from core.skills.frontmatter import (
     parse_frontmatter, strip_frontmatter, emit_frontmatter, parse_bool,
     encode_triggers, decode_triggers,
 )

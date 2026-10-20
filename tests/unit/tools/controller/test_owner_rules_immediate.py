@@ -9,6 +9,12 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+def test_rules_immediate_is_false_on_every_turn():
+    from tools.controller.doc_authoring import _rules_immediate
+    assert _rules_immediate(False) is False
+    assert _rules_immediate(True) is False
+
+
 def _bare_controller(data_dir):
     c = object.__new__(Controller)
     c.logger = logging.getLogger("rules-immediate-test")
@@ -42,18 +48,13 @@ def _action(c, which):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("flag", [None, "false", "true"])
 @pytest.mark.parametrize("which,name,enable", [
     ("owner_doc_manage", "owner.md", "OWNER_DOC_WRITABLE"),
     ("self_context_manage", "self.md", "SELF_CONTEXT_WRITABLE"),
 ])
-async def test_model_rule_requires_review_even_on_owner_turn(monkeypatch, tmp_path, flag, which, name, enable):
+async def test_model_rule_requires_review_even_on_owner_turn(monkeypatch, tmp_path, which, name, enable):
     monkeypatch.setenv(enable, "true")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
-    if flag is None:
-        monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
-    else:
-        monkeypatch.setenv("OWNER_RULES_IMMEDIATE", flag)
     c = _bare_controller(tmp_path)
     action = _action(c, which)
     result = await action.function(
@@ -76,7 +77,6 @@ async def test_model_rule_requires_review_even_on_owner_turn(monkeypatch, tmp_pa
 @pytest.mark.asyncio
 async def test_new_draft_never_replaces_active_rules(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
     from core.owner_doc_writer import OwnerDocWriter
     writer = OwnerDocWriter(tmp_path, instance_id="polyrob")
     writer.apply_now("Keep customer data private.", user_id="rob", created_by="agent")

@@ -14,6 +14,7 @@ must keep producing exactly one ``voice`` Media so ``voice_guard`` and
 import logging
 from typing import Any, List, Optional, Tuple
 
+from core.surfaces.inbound_attachments import owner_typed_text, with_typed_text
 from core.surfaces.media import Media
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,8 @@ async def absorb_for_session(task_agent: Any, result: Any, session_id: str,
                        "downloader wired — naming them on the turn instead",
                        len(media))
         return _absorb_failure_text(
-            base_text, media, RuntimeError("no downloader on this seat")), None
+            base_text, media, RuntimeError("no downloader on this seat")), \
+            with_typed_text(None, base_text)
 
     # A session with no on-disk metadata is about to be replaced by a fresh one (the
     # STEER "gone" branch). Absorbing here would create an orphan workspace and store
@@ -142,12 +144,15 @@ async def absorb_for_session(task_agent: Any, result: Any, session_id: str,
         # runs: a named failure is recoverable, a silent one is not.
         logger.warning("telegram media absorb failed for %s: %s", session_id, e,
                        exc_info=True)
-        return _absorb_failure_text(base_text, media, e), None
+        return _absorb_failure_text(base_text, media, e), with_typed_text(None, base_text)
 
     text = _with_captions(text, media, base_text)
     logger.info("telegram media absorbed: session=%s files=%d images=%d",
                 session_id, len(media), len(images or []))
-    return text, ({"image_attachments": images} if images else None)
+    # 085 W3 (A1): the file content and captions appended above are DATA; the
+    # owner's own words for this turn are only what he typed (``base_text``).
+    return text, with_typed_text({"image_attachments": images} if images else None,
+                                 base_text)
 
 
 def _absorb_failure_text(base_text: str, media: list, exc: Exception) -> str:
@@ -208,6 +213,10 @@ async def queue_attachments_for_new_session(task_agent: Any, result: Any,
         return False
     if extra_metadata:
         metadata = {**(metadata or {}), **extra_metadata}
+    # 085 W3: this is the FIRST message the new session drains; it carries the
+    # opening line's typed words (already the session's request, "" when
+    # forwarded or in a room), so the drain keeps — never erases — them.
+    metadata = with_typed_text(metadata, owner_typed_text(inbound))
     try:
         await task_agent.ensure_session_and_deliver(
             inbound.identity.user_id, session_id, text.strip(),

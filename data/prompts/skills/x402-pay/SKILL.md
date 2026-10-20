@@ -3,10 +3,11 @@ name: x402-pay
 description: 'Pay for an API over x402: what the payer supports (Base USDC, exact scheme), the caps and the autonomous ceiling, request_id for deliberate repeat calls, quote and probe before paying, the result headers, and the send interlock after an unknown outcome.'
 license: MIT
 metadata:
+  polyrob-when: 'Paying for an API over x402'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["x402_pay_x402_fetch","x402_pay_x402_quote","x402_pay_x402_probe"],"keywords":["x402","paid api","paywall","402 payment","payment required","pay for the api","pay for data","x402_fetch"],"task_patterns":["\\bpay\\b.*(endpoint|api|resource|per call)"],"tool_ids":["x402_pay"]}'
-  polyrob-version: '2'
+  polyrob-triggers: '{"tool_ids":["x402_pay"]}'
+  polyrob-version: '3'
 ---
 # x402 Pay — paying for an API with the wallet
 
@@ -33,8 +34,7 @@ whole rail.
 - Every payment is capped by the `max_amount_usd` you declare; a challenge above
   it is refused before anything is signed. The wallet's per-transaction and
   daily caps (and the x402 daily venue cap) apply on top.
-- Autonomous payments go up to `X402_AUTONOMOUS_MAX_USD` (default $1.00). A
-  larger payment goes to the owner queue and waits for the owner. When autonomy
+- Autonomous payments go up to `X402_AUTONOMOUS_MAX_USD`. A larger payment goes to the owner queue and waits for the owner. When autonomy
   is armed, a goal you write yourself CAN carry `x402_pay` (as it can carry
   `defi_trade`); the same caps bound it. A sub-agent, a self-wake, a delegation
   result and a correspondent-tainted turn cannot pay.
@@ -43,7 +43,7 @@ whole rail.
 - A payment whose outcome is unknown (timeout, rejected settlement) holds the
   wallet's send interlock until it is reconciled. That blocks later payments
   AND on-chain sends — do not retry blindly; report it.
-- The authorization window the server asks for is capped (600 s).
+- The authorization window the server asks for is capped.
 
 ## The procedure
 

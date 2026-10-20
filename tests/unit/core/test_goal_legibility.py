@@ -16,10 +16,7 @@ def _g(**payload):
     ({"owner_granted": True, "stream": "x"}, "OWNER"),        # /trade wins
     ({"stream": "treasury-trading"}, "GRANTED"),
     ({"cycle": "legacy-tag"}, "GRANTED"),
-    ({"origin_session_id": "s1", "created_by_session_id": "s1",
-      "authored_by": "owner"}, "ASKED"),                       # genuine owner chat turn
-    ({"authored_by": "owner"}, "OWNER"),                       # an owner seat
-    ({"created_by_session_id": "s9", "authored_by": "agent"}, "SELF"),
+    ({"origin_session_id": "s1", "created_by_session_id": "s1"}, "ASKED"),  # owner chat
     ({"created_by_session_id": "s9"}, "SELF"),
     ({}, "LEGACY"),
 ])

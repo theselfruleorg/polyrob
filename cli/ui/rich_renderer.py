@@ -423,9 +423,6 @@ class RichRenderer(Renderer):
                 or not norm
                 or dialog.is_plumbing_string(norm)
                 or norm == self._last_bubble_text
-                # OR-1: a bookkeeping done()-recap after a real reply is a confusing
-                # 2nd bubble in one-shot — suppress it (REPL already does).
-                or dialog.is_redundant_recap(norm, self._last_bubble_text)
             ):
                 self._teardown_box()
                 return

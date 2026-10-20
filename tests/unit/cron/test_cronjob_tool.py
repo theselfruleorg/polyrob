@@ -156,33 +156,6 @@ def test_minimum_interval_allows_five_minutes_and_up(tmp_path, spec):
     assert svc.schedule(task="fine", schedule_spec=spec, user_id="u1")
 
 
-@pytest.mark.asyncio
-async def test_agent_job_cap_counts_only_self_scheduled_jobs(tmp_path):
-    from cron.service import AGENT_MAX_ACTIVE_JOBS
-    t = _tool(tmp_path)
-    svc = t._cron_service
-    # Owner-created jobs never count against the agent's cap.
-    for i in range(3):
-        svc.schedule(task=f"owner job {i}", schedule_spec="1h", user_id="u1")
-    # A turn that has read third-party content schedules AGENT jobs.
-    agent_ctx = _ctx()
-    agent_ctx.metadata = {"untrusted_read": True}
-    for i in range(AGENT_MAX_ACTIVE_JOBS):
-        res = await t.cronjob_schedule(
-            CronScheduleAction(task=f"agent job number {i}", schedule="1h"),
-            execution_context=agent_ctx)
-        assert res.error is None, res.error
-    res = await t.cronjob_schedule(
-        CronScheduleAction(task="one agent job too many", schedule="1h"),
-        execution_context=agent_ctx)
-    assert res.error and "cap" in res.error
-    # Another tenant is unaffected.
-    res = await t.cronjob_schedule(
-        CronScheduleAction(task="other tenant job", schedule="1h"),
-        execution_context=_ctx("u2"))
-    assert res.error is None
-
-
 def test_tenant_backstop_cap(tmp_path, monkeypatch):
     import cron.service as cs
     from cron.schedule import ScheduleError

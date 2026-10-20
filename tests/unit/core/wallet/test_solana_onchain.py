@@ -33,12 +33,19 @@ def test_a_native_balance_is_returned_in_sol():
     assert so.native_balance(ME, rpc=lambda m, p: {"value": 2_500_000_000}) == 2.5
 
 
+def _classic_only(payload):
+    """An RPC that answers *payload* for the classic token program, nothing for Token-2022."""
+    def _rpc(method, params):
+        return payload if params[1]["programId"] == so.SPL_TOKEN_PROGRAM else {"value": []}
+    return _rpc
+
+
 def test_token_balances_parse_amount_and_decimals():
     payload = {"value": [{"account": {"data": {"parsed": {"info": {
         "mint": USDC,
         "tokenAmount": {"amount": "11910340", "decimals": 6},
     }}}}}]}
-    out = so.token_balances(ME, rpc=lambda m, p: payload)
+    out = so.token_balances(ME, rpc=_classic_only(payload))
     assert out == {USDC: 11_910_340}
 
 
@@ -61,7 +68,7 @@ def test_a_malformed_account_entry_is_skipped_not_fatal():
         {"nonsense": True},
         {"account": {"data": {"parsed": {"info": {"mint": "x"}}}}},
     ]}
-    assert so.token_balances(ME, rpc=lambda m, p: payload) == {USDC: 5}
+    assert so.token_balances(ME, rpc=_classic_only(payload)) == {USDC: 5}
 
 
 def test_zero_balance_token_accounts_are_dropped():
@@ -81,3 +88,45 @@ def test_the_rpc_url_falls_back_to_the_registry(monkeypatch):
     monkeypatch.delenv("DEFI_SOLANA_RPC", raising=False)
     from core.wallet import chains
     assert so.rpc_url() == chains.get("solana").public_rpc
+
+
+# -- 085 W8 solana L4: Token-2022 holdings are held -------------------------
+
+T22_MINT = "So11111111111111111111111111111111111111112"
+
+
+def _entry(pubkey, mint, amount):
+    return {"pubkey": pubkey, "account": {"data": {"parsed": {"info": {
+        "mint": mint, "tokenAmount": {"amount": str(amount), "decimals": 6}}}}}}
+
+
+def test_token_balances_scans_both_token_programs():
+    asked = []
+
+    def _rpc(method, params):
+        program = params[1]["programId"]
+        asked.append(program)
+        if program == so.SPL_TOKEN_PROGRAM:
+            return {"value": [_entry("acctA", USDC, 7)]}
+        if program == so.TOKEN_2022_PROGRAM:
+            return {"value": [_entry("acctB", T22_MINT, 9)]}
+        raise AssertionError(program)
+
+    assert so.token_balances(ME, rpc=_rpc) == {USDC: 7, T22_MINT: 9}
+    assert asked == [so.SPL_TOKEN_PROGRAM, so.TOKEN_2022_PROGRAM]
+
+
+def test_a_failed_token_2022_read_is_unknown_not_a_classic_only_wallet():
+    def _rpc(method, params):
+        if params[1]["programId"] == so.TOKEN_2022_PROGRAM:
+            raise RuntimeError("429")
+        return {"value": [_entry("acctA", USDC, 7)]}
+
+    assert so.token_balances(ME, rpc=_rpc) is None
+
+
+def test_one_account_reported_twice_is_counted_once():
+    def _rpc(method, params):
+        return {"value": [_entry("acctA", USDC, 7)]}
+
+    assert so.token_balances(ME, rpc=_rpc) == {USDC: 7}

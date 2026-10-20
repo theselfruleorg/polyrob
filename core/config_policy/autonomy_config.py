@@ -161,10 +161,6 @@ class AutonomyConfig(GoalFlagsMixin):
         return member_flag("CRON_ENABLED")
 
     @staticmethod
-    def goal_planner_enabled() -> bool:
-        return member_flag("GOAL_PLANNER_ENABLED")
-
-    @staticmethod
     def goal_self_wake_enabled() -> bool:
         # Was unconditional; redundant-cost finding (grok livetest 2026-06-27).
         # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
@@ -206,18 +202,6 @@ class AutonomyConfig(GoalFlagsMixin):
         blocked by it. Fail CLOSED, same as the halt."""
         from core.autonomy_control import allows
         return not allows("trade_entry").allowed
-
-    @staticmethod
-    def stream_seeding_paused() -> bool:
-        """Owner stream-pause: refuse NEW stream-manifest reseeds while leaving
-        everything else alone — the ``streams`` scope of the 031 pause record
-        (the legacy stream-pause file/env are read as facets of it).
-
-        2026-09-02 incident: an owner "stop all ghosts" directive cancelled every
-        live goal, but the standing streams kept reseeding on schedule because
-        they had no code-level awareness of it. Fail CLOSED."""
-        from core.autonomy_control import allows
-        return not allows("seed_stream").allowed
 
     # §4.3 (intelligence-stack finalization, 2026-07-09) — evidence-grounded
     # completion review for autonomous runs, DEFAULT ON: the claim (done() text)
@@ -264,12 +248,6 @@ class AutonomyConfig(GoalFlagsMixin):
     def goal_blocker_escalation() -> bool:
         # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
         return member_flag("GOAL_BLOCKER_ESCALATION")
-
-    @staticmethod
-    def goal_empty_pipeline_escalate_after() -> int:
-        """Consecutive planner runs that leave the ready queue EMPTY before the
-        stall escalates to the owner (rides GOAL_BLOCKER_ESCALATION)."""
-        return _int_env("GOAL_EMPTY_PIPELINE_ESCALATE_AFTER", 2)
 
     # 044 T20 — how many lines ONE room service run may answer. Bounds a
     # catch-up run that finds a long backlog: the hourly `GROUP_REPLY_CAP_PER_HOUR`
@@ -333,8 +311,9 @@ class AutonomyConfig(GoalFlagsMixin):
     def insights_tool() -> bool:
         return member_flag("INSIGHTS_TOOL")
 
-    # I-6 — agent_status introspection tool (read-only runtime self-report:
-    # steps used/remaining, active tools, context usage, wallet+ledger)
+    # I-6 — agent_status DETAIL (wallet + ledger + resolved config). The tool
+    # itself (snapshot, steps, tools, context, release notes) is registered on
+    # every posture (080 WS-5); this member gates only the detail.
     @staticmethod
     def agent_status_tool() -> bool:
         return member_flag("AGENT_STATUS_TOOL")

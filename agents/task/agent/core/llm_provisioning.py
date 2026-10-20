@@ -121,7 +121,8 @@ class LLMProvisioningMixin:
         """
         from agents.task.constants import resolve_aux_chain
 
-        chain = resolve_aux_chain(task, getattr(self, "provider_name", None))
+        chain = resolve_aux_chain(task, getattr(self, "provider_name", None),
+                                  main_model=getattr(self, "model_name", None))
         if not chain:
             return None
         try:
@@ -165,7 +166,8 @@ class LLMProvisioningMixin:
         """
         from agents.task.constants import resolve_aux_chain
 
-        chain = resolve_aux_chain(task, getattr(self, "provider_name", None))
+        chain = resolve_aux_chain(task, getattr(self, "provider_name", None),
+                                  main_model=getattr(self, "model_name", None))
         if not chain:
             return None
         try:
@@ -195,7 +197,7 @@ class LLMProvisioningMixin:
 
     def _provision_compaction_llm(self) -> Optional[Any]:
         """A5/A1: cheap aux model used ONLY for `llm_compact_history`. Thin wrapper over
-        _provision_aux_llm('compaction') — honours AUX_MODEL_COMPACTION / COMPACTION_AUTO_AUX
+        _provision_aux_llm('compaction') — honours AUX_MODEL_COMPACTION / AUX_AUTO
         and keeps all existing callers. Inert by default (None => main model)."""
         return self._provision_aux_llm("compaction")
 

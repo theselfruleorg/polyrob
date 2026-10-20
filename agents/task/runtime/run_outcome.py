@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,35 @@ def leading_blocked_declaration(text: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Ledger readers
 # ---------------------------------------------------------------------------
+
+def _main_stop_facts(orchestrator: Any) -> tuple:
+    """``(stop_reason, max_steps, exhausted_summary)`` from the main agent's
+    state (083 WS-1/WS-2); Nones when unreadable."""
+    for agent in _main_agents(orchestrator):
+        try:
+            state = getattr(agent, "state", None)
+            reason = getattr(state, "stop_reason", None)
+            reason = reason if isinstance(reason, str) and reason else None
+            cap = getattr(state, "max_steps", None)
+            cap = cap if isinstance(cap, int) and not isinstance(cap, bool) else None
+            summary = getattr(state, "exhausted_summary", None)
+            summary = summary if isinstance(summary, str) and summary.strip() else None
+            if reason or cap or summary:
+                return (reason, cap, summary)
+        except Exception:
+            continue
+    return (None, None, None)
+
+
+def session_stop_reason(task_agent: Any, session_id: Optional[str]) -> Optional[str]:
+    """083 WS-1: the resident main agent's last stop reason for *session_id*,
+    or None (no orchestrator in this process, nothing run yet). Never raises."""
+    try:
+        get_orch = getattr(task_agent, "get_orchestrator", None)
+        return _main_stop_facts(get_orch(session_id) if callable(get_orch) else None)[0]
+    except Exception:
+        return None
+
 
 def _main_agents(orchestrator: Any) -> list:
     if orchestrator is None:
@@ -209,6 +238,25 @@ def collect_user_messages(orchestrator: Any, *, limit: int = 50) -> List[str]:
 _COMMUNICATION_ACTIONS = frozenset({"done", "send_message"})
 
 
+_RETRY_AFTER_RE = re.compile(r"retry_after_sec=(\d+)")
+
+
+def retry_after_from(orchestrator: Any) -> Optional[int]:
+    """The largest ``retry_after_sec=N`` a rate guard put in this run's action
+    results (the X post cooldown says it in every refusal), or None. A goal run
+    cut short by such a guard is deferred, not failed (prod 2026-10-14)."""
+    best: Optional[int] = None
+    for agent in _main_agents(orchestrator):
+        for step in _steps(agent):
+            for result in list(getattr(step, "result", None) or []):
+                text = f"{getattr(result, 'extracted_content', '') or ''} " \
+                       f"{getattr(result, 'error', '') or ''}"
+                for m in _RETRY_AFTER_RE.finditer(text):
+                    n = int(m.group(1))
+                    best = n if best is None else max(best, n)
+    return best
+
+
 def all_actions_errored(orchestrator: Any) -> bool:
     """§4.2 invariant input: did EVERY substantive action in the run error?
 
@@ -258,9 +306,22 @@ class RunOutcome:
     artifacts: List[Any] = field(default_factory=list)
     steps: int = 0
     spend_usd: float = 0.0
+    skills_loaded: List[str] = field(default_factory=list)  # 080 WS-5
+    skills_activation: Dict[str, Any] = field(default_factory=dict)  # 081 WS-4.6
     evidence: Any = None                  # EvidencePack (§4.1)
     all_actions_errored: bool = False     # §4.2 invariant input
     verified: str = "unverified"          # verified|unverified|failed_verification
+    retry_after_sec: Optional[int] = None  # a rate guard's reopen time (defer, not fail)
+    stop_reason: Optional[str] = None     # 083 WS-1: runtime.stop_reason.StopReason value
+    max_steps: Optional[int] = None       # the step budget the main agent ran with
+    exhausted_summary: Optional[str] = None  # 083 WS-2: last report at the cap (agent's words)
+
+    @property
+    def stop_description(self) -> str:
+        """The stop reason in plain words with ``steps/max_steps`` (083 WS-1).
+        The ONE renderer the goal, cron and delegation records read."""
+        from agents.task.runtime.stop_reason import describe_stop_reason
+        return describe_stop_reason(self.stop_reason, self.steps, self.max_steps)
 
     def result_text(self) -> str:
         """Canonical RECORD string (episode summary, board result, OUTCOME
@@ -329,6 +390,13 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
     except Exception:
         orch = None
 
+    try:
+        outcome.retry_after_sec = retry_after_from(orch)
+    except Exception:
+        outcome.retry_after_sec = None
+    # 083 WS-1: both branches — a RUN_BUDGET_USD halt is a refusal.
+    outcome.stop_reason, outcome.max_steps, outcome.exhausted_summary = _main_stop_facts(orch)
+
     if outcome.refusal:
         # T1.1 validation fix (2026-07-23): a refusal is not always pre-loop —
         # a RUN_BUDGET_USD halt refuses AFTER paid steps, and zeroing its
@@ -341,6 +409,8 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
             prov = await collect_provenance(orch)
             outcome.steps = int(prov.get("steps", 0) or 0)
             outcome.spend_usd = float(prov.get("spend_usd", 0.0) or 0.0)
+            outcome.skills_loaded = list(prov.get("skills_loaded") or [])
+            outcome.skills_activation = dict(prov.get("skills_activation") or {})
         except Exception:
             pass
         return outcome
@@ -365,6 +435,8 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
         prov = await collect_provenance(orch)
         outcome.steps = int(prov.get("steps", 0) or 0)
         outcome.spend_usd = float(prov.get("spend_usd", 0.0) or 0.0)
+        outcome.skills_loaded = list(prov.get("skills_loaded") or [])
+        outcome.skills_activation = dict(prov.get("skills_activation") or {})
     except Exception:
         pass
 

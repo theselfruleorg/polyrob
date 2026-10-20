@@ -312,12 +312,17 @@ class LLMUsageTracker:
             # per-token table; on a router (OpenRouter) that table cannot model
             # the upstream it picked, its discounts, or a `cache_discount` at all.
             # The estimate is kept in metadata so the two stay comparable.
+            # A-1 (2026-10-14): both figures are kept whenever a billed figure was
+            # USED, even when it equals the estimate, so the doctor's billed-vs-
+            # catalog ratio is not biased toward the rows that disagree.
             estimated_cost_usd = costs.api_cost_usd
+            estimated_costs = costs
             costs = self._apply_billed_cost(costs, billed_cost_usd)
-            if costs.api_cost_usd != estimated_cost_usd or cache_discount_usd is not None:
+            billed_used = costs is not estimated_costs
+            if billed_used or cache_discount_usd is not None:
                 metadata = dict(metadata or {})
                 metadata["estimated_cost_usd"] = estimated_cost_usd
-                if costs.api_cost_usd != estimated_cost_usd:
+                if billed_used:
                     metadata["billed_cost_usd"] = costs.api_cost_usd
                 if cache_discount_usd is not None:
                     metadata["cache_discount_usd"] = cache_discount_usd
@@ -863,3 +868,64 @@ def build_usage_tracker(*, db, balance_manager, telemetry_manager,
 # Export for use
 __all__ = ['LLMUsageTracker', 'UsageRecord', 'TokenUsage', 'CostBreakdown',
            'InsufficientCreditsError', 'build_usage_tracker']
+
+
+# ---------------------------------------------------------------------------
+# A-1 / B-9 (review 2026-10-14): billed vs catalog cost.
+#
+# For 12 days prod paid exactly 2.00× what the model catalog said, and nothing
+# showed it until a review recomputed it by hand. `record_llm_usage` keeps BOTH
+# figures in the row's metadata whenever a provider reports what it billed;
+# this is the one reader `polyrob doctor` prints, so a drift shows in a day.
+# ---------------------------------------------------------------------------
+
+BILLED_RATIO_HIGH = 1.5
+BILLED_RATIO_LOW = 0.67
+
+
+def billed_vs_catalog(db_path: str, hours: int = 24) -> Optional[Dict[str, Any]]:
+    """``{"calls", "billed_usd", "catalog_usd", "ratio"}`` over the last *hours*
+    of usage rows that carry both figures. ``calls == 0`` when none do; None
+    when the database cannot be read (an unreadable store is not an empty one).
+    ``ratio`` is None when the catalog total is 0."""
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT COUNT(*), "
+                "COALESCE(SUM(json_extract(metadata, '$.billed_cost_usd')), 0), "
+                "COALESCE(SUM(json_extract(metadata, '$.estimated_cost_usd')), 0) "
+                "FROM usage_records WHERE resource_type = 'llm_call' "
+                "AND timestamp >= datetime('now', ?) "
+                "AND json_extract(metadata, '$.billed_cost_usd') IS NOT NULL "
+                "AND json_extract(metadata, '$.estimated_cost_usd') IS NOT NULL",
+                (f"-{int(hours)} hours",)).fetchone()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    calls, billed, catalog = int(row[0] or 0), float(row[1] or 0), float(row[2] or 0)
+    return {"calls": calls, "billed_usd": billed, "catalog_usd": catalog,
+            "ratio": (billed / catalog) if catalog > 0 else None}
+
+
+def billed_vs_catalog_line(db_path: str, hours: int = 24) -> str:
+    """The doctor line; a ``!`` prefix when the ratio is outside 0.67–1.5."""
+    label = f"billed vs catalog cost, last {hours} h"
+    if not os.path.isfile(db_path):
+        return f"{label}: no bot.db yet"
+    data = billed_vs_catalog(db_path, hours)
+    if data is None:
+        return f"{label}: unreadable (could not query usage_records)"
+    if not data["calls"]:
+        return f"{label}: no calls with a billed cost"
+    ratio = data["ratio"]
+    figures = (f"{data['calls']} calls, ${data['billed_usd']:.4f} billed vs "
+               f"${data['catalog_usd']:.4f} catalog")
+    if ratio is None:
+        return f"{label}: catalog price 0 ({figures})"
+    if ratio > BILLED_RATIO_HIGH or ratio < BILLED_RATIO_LOW:
+        return (f"! {label}: x{ratio:.2f} ({figures}) — the model catalog price is "
+                "wrong for this upstream; trust billed_cost_usd")
+    return f"{label}: x{ratio:.2f} ({figures})"

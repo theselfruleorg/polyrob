@@ -1,9 +1,12 @@
-"""Every run honors the operator's model pin (``DEFAULT_MODEL``/``CHAT_MODEL``).
+"""Every run honors the operator's model pin (``DEFAULT_MODEL``).
 
 Live prod 2026-10-12: DEFAULT_PROVIDER=openrouter + DEFAULT_MODEL=deepseek/... served
 chat on DeepSeek, but cron/goal/planner runs filled the model via
 ``get_default_model`` and got the registry default (``z-ai/glm-5.2``).
 """
+import pytest
+
+from core.config_policy.retired_flags import RetiredFlagError
 from core.runtime_config import (operator_model_for, operator_provider_pin,
                                  resolve_default_provider)
 from modules.llm.llm_client_registry import DEFAULT_MODELS, get_default_model
@@ -23,9 +26,18 @@ def test_pinned_provider_gets_pinned_model():
     assert operator_model_for("openrouter", env=PIN) == "deepseek/deepseek-v4.1-flash"
 
 
-def test_chat_model_wins_over_default_model():
-    env = dict(PIN, CHAT_MODEL="x-ai/grok-4.3")
-    assert operator_model_for("openrouter", env=env) == "x-ai/grok-4.3"
+def test_retired_chat_pin_alone_refuses():
+    """CHAT_* is a refusing alias of DEFAULT_*: alone it refuses, never ignored."""
+    with pytest.raises(RetiredFlagError, match="DEFAULT_MODEL"):
+        operator_model_for("openrouter", env={"DEFAULT_PROVIDER": "openrouter",
+                                              "CHAT_MODEL": "x-ai/grok-4.3"})
+    with pytest.raises(RetiredFlagError, match="DEFAULT_PROVIDER"):
+        operator_provider_pin({"CHAT_PROVIDER": "openrouter"})
+
+
+def test_default_pin_wins_over_a_stale_chat_line():
+    env = dict(PIN, CHAT_PROVIDER="anthropic", CHAT_MODEL="x-ai/grok-4.3")
+    assert operator_model_for("openrouter", env=env) == "deepseek/deepseek-v4.1-flash"
 
 
 def test_other_provider_never_inherits_the_pinned_model():
@@ -46,11 +58,11 @@ def test_get_default_model_serves_the_pin_for_the_pinned_provider(monkeypatch):
     assert get_default_model("anthropic") == DEFAULT_MODELS["anthropic"]
 
 
-def test_pin_wins_over_the_per_provider_override(monkeypatch):
+def test_retired_per_provider_override_is_not_read(monkeypatch):
     _env(monkeypatch, POLYROB_OPENROUTER_MODEL="x-ai/grok-4.3", **PIN)
     assert get_default_model("openrouter") == "deepseek/deepseek-v4.1-flash"
     _env(monkeypatch, POLYROB_OPENROUTER_MODEL="x-ai/grok-4.3")
-    assert get_default_model("openrouter") == "x-ai/grok-4.3"
+    assert get_default_model("openrouter") == DEFAULT_MODELS["openrouter"]
 
 
 def test_autonomous_default_resolution_carries_the_model(monkeypatch):
@@ -59,20 +71,5 @@ def test_autonomous_default_resolution_carries_the_model(monkeypatch):
 
 
 def test_provider_pin_is_stripped(monkeypatch):
-    _env(monkeypatch, CHAT_PROVIDER="  ", DEFAULT_PROVIDER="openrouter")
+    _env(monkeypatch, CHAT_PROVIDER="  ", DEFAULT_PROVIDER=" openrouter ")
     assert operator_provider_pin() == "openrouter"
-
-
-def test_a_chat_provider_never_takes_the_default_providers_model():
-    env = {"CHAT_PROVIDER": "openrouter", "DEFAULT_PROVIDER": "anthropic",
-           "DEFAULT_MODEL": "claude-opus-5-5"}
-    assert operator_model_for("openrouter", env=env) is None
-    assert operator_model_for("anthropic", env=env) is None
-    env["CHAT_MODEL"] = "deepseek/deepseek-v4.1-flash"
-    assert operator_model_for("openrouter", env=env) == "deepseek/deepseek-v4.1-flash"
-
-
-def test_the_same_provider_in_both_slots_keeps_default_model():
-    env = {"CHAT_PROVIDER": "openrouter", "DEFAULT_PROVIDER": "openrouter",
-           "DEFAULT_MODEL": "deepseek/deepseek-v4.1-flash"}
-    assert operator_model_for("openrouter", env=env) == "deepseek/deepseek-v4.1-flash"

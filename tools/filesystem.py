@@ -301,7 +301,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             text = params.text
@@ -355,7 +355,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             file_path = params.file_path
@@ -567,7 +567,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             file_path = params.file_path
@@ -682,7 +682,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             file_path = params.file_path
@@ -1073,7 +1073,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             directory = params.directory or "."
@@ -1132,7 +1132,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             file_path = params.file_path
@@ -1189,7 +1189,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             if execution_context and hasattr(execution_context, 'session_id') and execution_context.session_id:
@@ -1294,7 +1294,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     async def jsonl_append(self, params: JsonlAppendAction, execution_context=None) -> str:
         await self.ensure_initialized()
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
         try:
             self._adopt_context(execution_context)
             items = params.record if isinstance(params.record, list) else [params.record]
@@ -1333,7 +1333,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     async def jsonl_remove(self, params: JsonlRemoveAction, execution_context=None) -> str:
         await self.ensure_initialized()
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
         try:
             self._adopt_context(execution_context)
             path = self._normalize_path(params.file_path)
@@ -1387,7 +1387,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     async def jsonl_validate(self, params: JsonlValidateAction, execution_context=None) -> str:
         await self.ensure_initialized()
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
         try:
             self._adopt_context(execution_context)
             path = self._normalize_path(params.file_path)
@@ -1426,7 +1426,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             directory_path = params.directory_path

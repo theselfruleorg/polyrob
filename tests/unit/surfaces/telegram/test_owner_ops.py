@@ -1,4 +1,4 @@
-"""Chat write verbs for cron / goals / wallet / invoices (G13).
+"""Chat write verbs for goals / wallet / invoices (G13); jobs: test_job_ops.py.
 
 Each is thin plumbing over the same primitive the `polyrob` CLI calls, so these
 tests assert the PLUMBING and the honesty rules — that a short id resolves, that
@@ -36,120 +36,6 @@ def test_resolve_prefix_refuses_to_guess():
 
 
 # ---------------------------------------------------------------------------
-# /cron
-# ---------------------------------------------------------------------------
-
-def test_cron_empty_state_teaches_the_syntax(env):
-    out = owner_ops.cron_reply("u1", env, [])
-    assert "No cron jobs" in out
-    assert "/cron add" in out and "|" in out
-
-
-def test_cron_add_list_show_cancel_round_trip(env, monkeypatch):
-    monkeypatch.setenv("CRON_ENABLED", "true")
-    out = owner_ops.cron_reply("u1", env, ["add", "every", "monday", "09:00",
-                                           "|", "summarise", "the", "week"])
-    assert "Scheduled" in out and "next run" in out
-
-    listing = owner_ops.cron_reply("u1", env, [])
-    assert "summarise the week" in listing
-    assert "every monday 09:00" in listing
-
-    from cron.jobs import CronJobStore
-    from core.runtime_paths import cron_db_path
-    job = CronJobStore(cron_db_path(env)).list(user_id="u1")[0]
-
-    shown = owner_ops.cron_reply("u1", env, ["show", job.id[:8]])
-    assert "summarise the week" in shown
-
-    out = owner_ops.cron_reply("u1", env, ["cancel", job.id[:8]])
-    assert "Cancelled" in out
-    assert CronJobStore(cron_db_path(env)).list(user_id="u1")[0].status == "cancelled"
-
-
-def test_cron_add_says_when_no_ticker_will_run_it(env, monkeypatch):
-    """A stored job with the ticker off is not a scheduled job — say so."""
-    monkeypatch.setenv("CRON_ENABLED", "false")
-    out = owner_ops.cron_reply("u1", env, ["add", "30m", "|", "check the treasury"])
-    assert "Scheduled" in out
-    # D41/D72: the note names what the owner can DO from the chat he is in —
-    # a chat verb, never a server command he cannot reach from a phone.
-    assert "scheduler is switched off" in out
-    assert "polyrob config set CRON_ENABLED true" in out   # D7: a host verb
-    assert "polyrob autonomy" not in out
-
-
-def test_cron_add_rejects_a_bad_schedule(env):
-    out = owner_ops.cron_reply("u1", env, ["add", "not-a-schedule", "|", "do it"])
-    assert "Invalid schedule" in out
-
-
-def test_cron_add_without_the_separator_explains(env):
-    out = owner_ops.cron_reply("u1", env, ["add", "every", "monday", "do", "it"])
-    assert "Usage:" in out and "|" in out
-
-
-def test_cron_is_tenant_scoped(env, monkeypatch):
-    monkeypatch.setenv("CRON_ENABLED", "true")
-    owner_ops.cron_reply("u1", env, ["add", "30m", "|", "mine"])
-    assert "No cron jobs" in owner_ops.cron_reply("other", env, [])
-
-
-_ADDR = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
-
-
-def _only_job(env, user="u1"):
-    from cron.jobs import CronJobStore
-    from core.runtime_paths import cron_db_path
-    return CronJobStore(cron_db_path(env)).list(user_id=user)[0]
-
-
-def test_cron_add_carries_tools_and_target(env, monkeypatch):
-    """O13/A14: a money job made from chat carries its grant and its buy
-    target as DATA, stamped owner-authored — like the console and
-    cronjob_schedule on an owner turn."""
-    monkeypatch.setenv("CRON_ENABLED", "true")
-    out = owner_ops.cron_reply("u1", env, [
-        "add", "1d", "|", "buy", "back", f"target={_ADDR}", "chain=base",
-        "tools=defi_trade,defi_data"])
-    assert "Scheduled" in out and "Granted:" in out
-    job = _only_job(env)
-    assert job.task == "buy back"
-    assert job.payload["tools"] == ["defi_trade", "defi_data"]
-    assert job.payload["target_token"]["chain"] == "base"
-    assert job.payload["target_token"]["address"].lower() == _ADDR
-    assert job.payload["authored_by"] == "owner"
-
-
-@pytest.mark.parametrize("opts, needle", [
-    ([f"target={_ADDR}"], "chain="),
-    (["target=0xnothex", "chain=base"], ""),
-    (["chain=base"], "target="),
-])
-def test_cron_add_refuses_a_bad_target(env, opts, needle):
-    out = owner_ops.cron_reply("u1", env, ["add", "1d", "|", "buy"] + opts)
-    assert out.startswith("❌") and needle in out
-    from cron.jobs import CronJobStore
-    from core.runtime_paths import cron_db_path
-    assert CronJobStore(cron_db_path(env)).list(user_id="u1") == []
-
-
-def test_cron_edit_changes_one_field_and_keeps_the_payload(env, monkeypatch):
-    monkeypatch.setenv("CRON_ENABLED", "true")
-    owner_ops.cron_reply("u1", env, ["add", "1d", "|", "buy", "back",
-                                     "tools=defi_trade"])
-    job = _only_job(env)
-    out = owner_ops.cron_reply("u1", env, ["edit", job.id[:8], "schedule", "2h"])
-    assert "Edited" in out and "schedule" in out
-    out = owner_ops.cron_reply("u1", env, ["edit", job.id[:8], "task", "sell", "half"])
-    assert "Edited" in out and "task" in out
-    job = _only_job(env)
-    assert job.schedule_spec == "2h" and job.task == "sell half"
-    assert job.payload["tools"] == ["defi_trade"]
-    assert "Usage" in owner_ops.cron_reply("u1", env, ["edit", job.id[:8], "rig", "x"])
-
-
-# ---------------------------------------------------------------------------
 # /goal
 # ---------------------------------------------------------------------------
 
@@ -163,15 +49,42 @@ def _seed_goal(env, *, user_id="u1", status="ready", title="do the thing"):
     return _board(env).create(user_id=user_id, title=title, status=status).id
 
 
-def test_goal_pause_and_resume(env):
+def test_goal_pause_writes_paused_and_retry_lifts_it(env):
     goal_id = _seed_goal(env)
     out = owner_ops.goal_reply("u1", env, ["pause", goal_id[:8]])
-    assert "→ blocked" in out
-    assert _board(env).get(goal_id).status == "blocked"
+    assert "paused by you" in out
+    assert _board(env).get(goal_id).status == "paused"
 
-    out = owner_ops.goal_reply("u1", env, ["resume", goal_id[:8]])
+    out = owner_ops.goal_reply("u1", env, ["retry", goal_id[:8]])
     assert "→ ready" in out
     assert _board(env).get(goal_id).status == "ready"
+
+
+def test_goal_ready_and_resume_are_deleted(env):
+    goal_id = _seed_goal(env, status="blocked")
+    for verb in ("ready", "resume", "cancel"):
+        out = owner_ops.goal_reply("u1", env, [verb, goal_id[:8]])
+        assert out.startswith("Usage:")
+    assert _board(env).get(goal_id).status == "blocked"
+
+
+def test_goal_new_creates_an_owner_goal(env):
+    out = owner_ops.goal_reply("u1", env, ["new", "research", "the", "top", "agents"])
+    assert out.startswith("✅ Goal") and "research the top agents" in out
+    [g] = [g for g in _board(env).list_recent(user_id="u1")]
+    assert g.payload.get("owner_granted") is True and g.status == "ready"
+
+
+def test_goal_show_prints_result_reason_cost_and_session(env):
+    board = _board(env)
+    g = board.create(user_id="u1", title="write the report",
+                     payload={"cost_usd": 0.42})
+    from core.sqlite_util import execute_retry
+    execute_retry(board.db_path, "UPDATE goals SET status='done', result=?, session_id=? "
+                  "WHERE id=?", ("the report is in reports/x.md", "sess-1", g.id))
+    out = owner_ops.goal_reply("u1", env, ["show", g.id[:8]])
+    assert "Done." in out and "reports/x.md" in out
+    assert "cost: $0.42" in out and "session: sess-1" in out
 
 
 def test_goal_retry_clears_failures(env):
@@ -187,14 +100,14 @@ def test_goal_retry_clears_failures(env):
 def test_goal_refuses_an_illegal_transition(env):
     goal_id = _seed_goal(env, status="ready")
     out = owner_ops.goal_reply("u1", env, ["retry", goal_id[:8]])
-    assert "only blocked goals can be retried" in out
+    assert "already queued" in out
     assert _board(env).get(goal_id).status == "ready"
 
 
-def test_goal_cancel(env):
+def test_goal_stop(env):
     goal_id = _seed_goal(env)
-    out = owner_ops.goal_reply("u1", env, ["cancel", goal_id[:8]])
-    assert "→ cancelled" in out
+    out = owner_ops.goal_reply("u1", env, ["stop", goal_id[:8]])
+    assert "stopped" in out
     assert _board(env).get(goal_id).status == "cancelled"
 
 
@@ -202,7 +115,7 @@ def test_goal_cannot_touch_another_tenants_goal(env):
     """`board.get()` is not tenant-scoped, so the handler must scope it itself —
     otherwise any chat id could steer any tenant's goal by id."""
     goal_id = _seed_goal(env, user_id="someone-else")
-    out = owner_ops.goal_reply("u1", env, ["cancel", goal_id[:8]])
+    out = owner_ops.goal_reply("u1", env, ["stop", goal_id[:8]])
     assert "no match" in out
     assert _board(env).get(goal_id).status == "ready"
 
@@ -216,7 +129,7 @@ def test_goal_show_is_read_only(env):
 
 def test_goal_unknown_verb_lists_the_verbs(env):
     out = owner_ops.goal_reply("u1", env, ["explode", "abc"])
-    assert "Usage:" in out and "cancel" in out
+    assert "Usage:" in out and "stop" in out and "new" in out
 
 
 # ---------------------------------------------------------------------------

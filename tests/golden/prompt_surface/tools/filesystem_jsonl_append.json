@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Append one record (or a list of records) to a JSON-lines file: each object becomes ONE compact line. Use this for targets.jsonl / contact-log.jsonl — never write_file or a pretty-printed object.",
+    "name": "filesystem_jsonl_append",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "056 WS2: append one record (or a list of records) to a JSON-lines file —\nONE compact line per object, the shape Rob's stores (`targets.jsonl`,\n`contact-log.jsonl`) require.",
+      "properties": {
+        "filePath": {
+          "description": "JSONL file (workspace-relative); created if absent.",
+          "type": "string"
+        },
+        "record": {
+          "description": "A JSON object, or a list of JSON objects. Each becomes one compact line."
+        }
+      },
+      "required": [
+        "filePath",
+        "record"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

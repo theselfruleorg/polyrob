@@ -47,7 +47,7 @@ async def test_allowlist_drop_is_recorded(tele_db, monkeypatch):
     """044 T7: the raw allowlist is the DM lock — a non-allowlisted DM sender is
     dropped here; a room sender now falls through to route_inbound instead
     (raw_allowlist_applies is False for every non-private chat.type)."""
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "28436760")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "100000001")
     from surfaces.telegram.harness import TelegramHarness
 
     h = TelegramHarness.__new__(TelegramHarness)
@@ -70,7 +70,7 @@ async def test_recording_failure_does_not_break_the_drop(tele_db, monkeypatch):
     branch (raw_allowlist_applies is only True for a private chat since Task 7),
     or `_boom` never runs and the assertion below passes for the wrong reason —
     the outer catch-all swallowing an unrelated AttributeError instead."""
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "28436760")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "100000001")
     import surfaces.telegram.harness as hz
 
     called = []

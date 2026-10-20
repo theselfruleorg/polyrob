@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Discover AnySite endpoints BEFORE calling anysite_api: pass search=<keyword> to list matching endpoint paths, then endpoint=<path> to read that endpoint's exact input params and output fields. Guessing paths wastes steps on Not Found and param-validation errors.",
+    "name": "anysite_describe",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "default": null,
+          "description": "One endpoint to describe in full (input params + output fields), e.g. '/api/twitter/search/posts' or 'twitter.search.posts'.",
+          "nullable": true,
+          "type": "string"
+        },
+        "search": {
+          "default": null,
+          "description": "Keyword to find endpoints, e.g. 'twitter', 'company', 'github'. Returns the matching paths only.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

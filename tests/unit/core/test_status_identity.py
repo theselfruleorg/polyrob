@@ -184,18 +184,18 @@ def test_identity_names_missing_email_and_x_with_remedies(tmp_path, monkeypatch)
 def test_identity_reports_provisioned_inbox_and_x_api(tmp_path, monkeypatch):
     _clear_reach_env(monkeypatch)
     (tmp_path / "agent_mail.json").write_text(json.dumps(
-        {"inbox_id": "i1", "address": "dangerob@agentmail.to"}))
+        {"inbox_id": "i1", "address": "exampleagent@agentmail.to"}))
     for k in ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN",
               "TWITTER_ACCESS_TOKEN_SECRET"):
         monkeypatch.setenv(k, "x" * 20)
-    monkeypatch.setenv("TWITTER_BOT_USERNAME", "dangerob")
+    monkeypatch.setenv("TWITTER_BOT_USERNAME", "exampleagent")
     monkeypatch.setenv("TWITTER_ENABLED", "true")
-    sec = _identity_section("dangerob", str(tmp_path))
+    sec = _identity_section("exampleagent", str(tmp_path))
     text = "\n".join(sec.lines)
-    assert sec.data["email"] == "dangerob@agentmail.to"
-    assert "email: dangerob@agentmail.to" in text
-    assert sec.data["x_api"] == "configured" and sec.data["x_handle"] == "dangerob"
-    assert "x: api configured @dangerob" in text and "writes ON" in text
+    assert sec.data["email"] == "exampleagent@agentmail.to"
+    assert "email: exampleagent@agentmail.to" in text
+    assert sec.data["x_api"] == "configured" and sec.data["x_handle"] == "exampleagent"
+    assert "x: api configured @exampleagent" in text and "writes ON" in text
     # secret hygiene: no key VALUE leaks into a status line
     assert "x" * 20 not in text
 

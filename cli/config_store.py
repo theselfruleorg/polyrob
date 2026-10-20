@@ -100,7 +100,7 @@ def env_default_override_note(saved_provider: str) -> Optional[str]:
     default for new sessions, else None.
 
     ``/model`` and ``polyrob model set-default`` persist to ``~/.polyrob/cli.json``
-    (precedence 3), but a ``CHAT_PROVIDER``/``DEFAULT_PROVIDER`` env pin (precedence
+    (precedence 3), but a ``DEFAULT_PROVIDER`` env pin (precedence
     2, e.g. written by ``polyrob init``) wins for new sessions — so the "saved as
     default" message would be misleading. Detect that by asking the shared resolver
     what a fresh session would actually pick and comparing the provider. Fail-open.

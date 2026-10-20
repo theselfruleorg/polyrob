@@ -157,10 +157,10 @@ def fake_transport(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_g6_settled_amount_reconciled_and_not_marked_estimate(fake_transport):
-    """G-6: server raises the price between our probe and the SDK's own paid
-    retry. The recorded amount must be the ACTUAL settled amount decoded from
-    X-PAYMENT-RESPONSE (not the stale probe estimate), and must NOT be marked
-    an estimate."""
+    """G-6 as amended by 085 W4 (X402OUT-1): the SDK signed $0.04 and the
+    seller's settle header claims $0.06. EIP-3009 cannot move more than the
+    signed value, so the header is hostile: the result keeps the signed amount
+    and marks it an estimate."""
     fake_transport.challenge_amount = "40000"  # probe sees $0.04
     fake_transport.settle_amount = "60000"     # actually settles at $0.06
 
@@ -170,8 +170,9 @@ async def test_g6_settled_amount_reconciled_and_not_marked_estimate(fake_transpo
         signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
     )
     assert res.paid is True
-    assert res.amount_usd == pytest.approx(0.06)
-    assert res.amount_is_estimate is False
+    assert res.amount_usd == pytest.approx(0.04)
+    assert res.amount_is_estimate is True
+    assert res.authorized_amount_usd == pytest.approx(0.04)
     assert res.tx_hash == "0xTXHASH"
     assert res.pay_to == PAY_TO
 
@@ -850,3 +851,65 @@ async def test_quote_discloses_recipient_for_approval(fake_transport):
     details = await RealX402Client().quote_details("http://fake/paid", network=NETWORK)
     assert details["pay_to"] == PAY_TO
     assert details["amount"] == .05
+
+
+# --- 085 reval W4: a payload never created leaves no open attempt ------------
+
+@pytest.mark.asyncio
+async def test_a_signer_refusal_releases_the_unsent_attempt(fake_transport, monkeypatch):
+    """The remote signer's approval lane (or any refusal) raises inside payload
+    creation: nothing signed left the process, so the attempt row closes and the
+    next payment is not refused as an unaccounted submission."""
+    from core.signer import protocol
+    from core.signer.client import SignerRefused
+    from core.wallet import submission_journal as journal
+
+    class _Refusing:
+        address = LocalEoaSigner(KEY).address
+
+        def sign_typed_data(self, *a, **k):
+            raise SignerRefused(protocol.APPROVAL_REQUIRED,
+                                "x402 payment $0.05 is above the signer's per-payment cap; "
+                                "`sudo polyrob owner promote signer_approval sig-abc`",
+                                {"approval_id": "sig-abc"})
+
+    signer = LocalEoaSigner(KEY)
+    monkeypatch.setattr(type(signer), "account", property(lambda self: _Refusing()))
+    with pytest.raises(Exception) as caught:
+        await RealX402Client().fetch_with_payment(expected_pay_to=PAY_TO,
+            url="http://fake/paid", method="POST", body=None,
+            signer=signer, network=NETWORK, max_amount_usd=0.1)
+    from tools.x402.service import _signer_hold_text
+    held = _signer_hold_text(caught.value)
+    assert held and "sig-abc" in held and "Nothing was paid" in held
+    assert journal.unresolved() == []
+    assert not any(paid for _m, _u, paid in fake_transport.requests[1:])
+
+
+@pytest.mark.asyncio
+async def test_after_a_released_attempt_the_next_payment_pays(fake_transport, monkeypatch):
+    from core.wallet import submission_journal as journal
+    signer = LocalEoaSigner(KEY)
+    calls = {"n": 0}
+    real_account = signer.account
+
+    class _OnceRefusing:
+        address = real_account.address
+
+        def sign_typed_data(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("signer refused")
+            return real_account.sign_typed_data(*a, **k)
+
+    acct = _OnceRefusing()
+    monkeypatch.setattr(type(signer), "account", property(lambda self: acct))
+    with pytest.raises(Exception):
+        await RealX402Client().fetch_with_payment(expected_pay_to=PAY_TO,
+            url="http://fake/paid", method="POST", body=None,
+            signer=signer, network=NETWORK, max_amount_usd=0.1)
+    assert journal.unresolved() == []
+    res = await RealX402Client().fetch_with_payment(expected_pay_to=PAY_TO,
+        url="http://fake/paid", method="POST", body=None,
+        signer=signer, network=NETWORK, max_amount_usd=0.1)
+    assert res.paid is True and res.submission_ref

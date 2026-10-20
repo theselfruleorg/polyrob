@@ -20,6 +20,12 @@ def _share_with_parent_group(directory: int, name: str, *, is_dir: bool) -> None
     approved skills root:root 0700 — unreadable by the agent.)"""
     try:
         if os.geteuid() != 0:
+            # The service user writing into a setgid shared store (2770): the
+            # entry already has the group; open its group bits too (prod
+            # 2026-10-15: a promoted SKILL.md landed 0600 beside 660 siblings).
+            if os.fstat(directory).st_mode & stat.S_ISGID:
+                os.chmod(name, 0o770 if is_dir else 0o660, dir_fd=directory,
+                         follow_symlinks=False)
             return
         parent_gid = os.fstat(directory).st_gid
         if parent_gid == 0:

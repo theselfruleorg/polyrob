@@ -98,17 +98,32 @@ def paid_counterparties(*, path: Optional[str] = None,
     return out
 
 
+def own_addresses() -> List[str]:
+    """Addresses that are OURS (085 W2, evmverbs L1): the owner's configured
+    addresses — the wallets that fund this one — and the agent's own wallets.
+    A dusted lookalike of one of them is the same attack as one of a payee.
+    Fail-soft: an unresolvable list adds nothing."""
+    try:
+        from core.wallet.own_addresses import agent_wallet_addresses, owner_wallet_addresses
+        return list(owner_wallet_addresses()) + list(agent_wallet_addresses())
+    except Exception:
+        logger.debug("own addresses unresolved for the lookalike check", exc_info=True)
+        return []
+
+
 def poisoning_refusal(to: str, *, path: Optional[str] = None,
                       now: Optional[float] = None, chain: str = "evm") -> Optional[str]:
-    """The refusal text when `to` imitates a recent payee, else None."""
+    """The refusal text when `to` imitates a recent payee or one of our own
+    addresses, else None."""
     try:
-        real = lookalike_of(to, paid_counterparties(path=path, now=now, chain=chain), chain=chain)
+        known = paid_counterparties(path=path, now=now, chain=chain) + own_addresses()
+        real = lookalike_of(to, known, chain=chain)
     except Exception:
         logger.warning("wallet history is unreadable for the lookalike check")
         return "refused: wallet history is unreadable; repair the audit ledger before sending. Nothing was sent."
     if real is None:
         return None
-    return (f"refused: {to} looks like {real}, which we recently paid. Their full "
+    return (f"refused: {to} looks like {real}, which we recently paid or own. Their full "
             f"addresses differ despite similar characters: a likely ADDRESS-"
             f"POISONING lookalike. Nothing was sent. Re-check the full address "
             f"against the owner's CURRENT message; never take a payee from wallet history.")

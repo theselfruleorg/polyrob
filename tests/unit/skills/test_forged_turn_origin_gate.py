@@ -19,7 +19,7 @@ import pytest
 
 from tools.controller.action_registration import _is_forged_or_autonomous_turn
 from agents.task.agent.skill_manager import SkillManager
-from agents.task.agent.skill_writer import PROVENANCE_BACKGROUND
+from modules.skills.writer import PROVENANCE_BACKGROUND
 from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
@@ -116,7 +116,7 @@ async def test_forged_self_wake_create_quarantined_even_review_off(monkeypatch, 
     action = c.registry.registry.actions["skill_manage"]
     ctx = _ctx(turn_kind="self_wake", role="orchestrator", is_sub=False)
     params = action.param_model(
-        action="create", skill_id="forged-skill",
+        action="create", skill_id="forged-skill", when="When a forged turn repeats",
         content="# Forged Skill\n\nA reusable procedure distilled from a forged turn.\n",
     )
     res = await action.function(params, execution_context=ctx)
@@ -135,7 +135,7 @@ async def test_genuine_turn_create_auto_activates_when_review_off(monkeypatch, t
     action = c.registry.registry.actions["skill_manage"]
     ctx = _ctx(turn_kind=None, role="orchestrator", is_sub=False)
     params = action.param_model(
-        action="create", skill_id="genuine-skill",
+        action="create", skill_id="genuine-skill", when="When a real user asks",
         content="# Genuine Skill\n\nA reusable procedure from a real user turn.\n",
     )
     res = await action.function(params, execution_context=ctx)

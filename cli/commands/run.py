@@ -16,6 +16,7 @@ from typing import Optional
 
 import click
 from cli.commands._errors import remedy_line, session_exit_code
+from core.config_policy import INTERACTIVE_MAX_STEPS
 from core.runtime_paths import data_dir_or_home
 
 # The resolver moved to cli/toolset.py (shared with the REPL); re-imported under
@@ -35,7 +36,7 @@ from cli.toolset import resolve_tool_list as _resolve_tool_list  # noqa: F401
 @click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, or any provider declared in ~/.polyrob/providers.yaml; DeepSeek via openrouter + deepseek/deepseek-chat)")
 @click.option("--tools", "-t", default=None, help="Comma-separated tool list (e.g. browser,mcp,filesystem). Takes precedence over --toolset.")
 @click.option("--toolset", default=None, help="Named toolset (minimal/default/research/coding/development/browser/full/safe). Ignored when --tools is given.")
-@click.option("--max-steps", default=50, type=click.IntRange(min=1), help="Maximum steps (default: 50)")
+@click.option("--max-steps", default=INTERACTIVE_MAX_STEPS, type=click.IntRange(min=1), help=f"Maximum steps (default: {INTERACTIVE_MAX_STEPS})")
 @click.option("--plain", is_flag=True, help="Force plain, line-oriented output (no ANSI / panels)")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
 def run(
@@ -141,7 +142,7 @@ async def _run_session(
     # exit. build_cli_container re-loads env idempotently (override=False).
     from polyrob.app.bootstrap import load_env
     from cli.keys import preflight_or_onboard
-    load_env(local_mode=True)
+    load_env()
     # POLYROB_LOCAL gates the OAuth/store credential rungs. build_cli_container
     # setdefaults it, but the key gate + provider resolution run BEFORE the
     # container is built — so without this a connected OAuth seat is invisible to
@@ -248,6 +249,7 @@ async def _run_session(
     # Confined to the invocation CWD so a reference can't read outside the working
     # dir or hit a private host; fails soft (oversized/unsafe refs become notes).
     from core.config_policy import AutonomyConfig
+    typed_task = task   # 085 W3 (A1): the owner's words, before @-references expand
     if task and AutonomyConfig.context_references_enabled():
         try:
             from agents.task.agent.messages.context_references import (
@@ -325,6 +327,9 @@ async def _run_session(
                     request=request,
                     skip_credit_check=True,
                     creator="cli",
+                    # 085 W3 (A1): turn 1's owner words are the typed task, not
+                    # the file content an @-reference expanded into it.
+                    **({"typed_text": typed_task} if typed_task != task else {}),
                 )
             session_id = session_info["id"]
             # A session this terminal created is rendered here, live; a

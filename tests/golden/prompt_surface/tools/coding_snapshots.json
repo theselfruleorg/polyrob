@@ -1,0 +1,19 @@
+{
+  "function": {
+    "description": "List pre-edit shadow-git snapshots (I-4/H2), optionally for one file; requires CODING_SNAPSHOT_ENABLED",
+    "name": "coding_snapshots",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "default": null,
+          "description": "Limit to pre-edit snapshots of this file (relative to the workspace); omit for the whole shadow history",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

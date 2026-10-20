@@ -1,0 +1,44 @@
+{
+  "function": {
+    "description": "Read a file from the workspace. For large files (>25K tokens), use offset and limit parameters to read specific line ranges (or coding_grep to search for content, when the coding tool is loaded).",
+    "name": "filesystem_read_file",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for reading a file from the workspace",
+      "properties": {
+        "char_limit": {
+          "default": null,
+          "description": "Number of characters to read from char_offset",
+          "nullable": true,
+          "type": "integer"
+        },
+        "char_offset": {
+          "default": null,
+          "description": "Starting character position (0-indexed)",
+          "nullable": true,
+          "type": "integer"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "description": "Number of lines to read from offset",
+          "nullable": true,
+          "type": "integer"
+        },
+        "offset": {
+          "default": null,
+          "description": "Starting line number (1-indexed, inclusive)",
+          "nullable": true,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filePath"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

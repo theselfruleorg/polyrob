@@ -314,7 +314,7 @@ async def test_start_autonomy_orphan_reap_never_added_to_recurring_entries(monke
     await asyncio.sleep(0.01)
 
     names = [name for name, _task, _stop in handles._entries]
-    assert sorted(names) == ["cron", "curator", "goals", "rails", "sandbox_reap", "surface_gc"]
+    assert sorted(names) == ["cron", "curator", "goals", "sandbox_reap", "surface_gc"]
     # The AGE-based sweep is still forbidden as a recurring entry — `sandbox_reap`
     # above is the ownership-keyed one, which cannot kill an idle live session.
     assert "orphan_reap" not in names and "docker_reap" not in names
@@ -402,7 +402,7 @@ async def test_start_autonomy_records_autonomy_started_event(monkeypatch):
     from core.event_log import get_event_log
     rows = get_event_log().query(kind="autonomy_started")  # newest-first
     assert rows, "no autonomy_started row recorded"
-    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals", "rails"]
+    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals"]
     await handles.stop()
 
 

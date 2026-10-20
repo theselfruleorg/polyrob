@@ -108,6 +108,17 @@ def missed_notices(user_id: str, data_dir: str, n: int = 5) -> List[Dict]:
     return out
 
 
+def cap_caused(rows: List[Dict]) -> bool:
+    """True when at least one of *rows* was suppressed by the daily CAP.
+
+    080 (D F-18): every seat closed ``/missed`` with "raise the cap" — under
+    an UNDELIVERED notice (no live sink, a send that failed) that is the wrong
+    cause and a remedy that changes nothing. Seats offer it only when this
+    says so.
+    """
+    return any(str(r.get("kind") or "") == "capped" for r in rows or ())
+
+
 def _delivered_later(path: str, user_id: str, content_hash, ts: float) -> bool:
     """True when this notice's body was later DELIVERED to the same tenant.
 

@@ -13,7 +13,7 @@ import pytest
 
 from modules.x402 import solana_settlement as ss
 
-TREASURY = "BrsPwATRZcb2PWsEZba9Bh1mwcxU6M7R64nPgRneCpmL"
+TREASURY = "2cyLycfUPcu8Zhmdpzf13vQHEZcoWrRkiQGFHvJ5xveW"
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 

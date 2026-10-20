@@ -24,4 +24,3 @@ def test_goal_show_dependency_titles_never_leak_across_tenants(board):
     # every tenant-facing board.get in the goal tool carries the tenant filter
     assert "board.get(params.goal_id, user_id=user_id)" in src
     assert "board.get(dep_id, user_id=user_id)" in src
-    assert "board.get(params.objective_id, user_id=user_id)" in src

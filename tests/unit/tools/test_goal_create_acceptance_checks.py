@@ -49,10 +49,3 @@ def test_goal_create_rejects_malformed_checks(tmp_path):
     assert board.list(user_id="u1") == [], "invalid checks must not produce an unchecked goal"
 
 
-def test_planner_prompt_encourages_checks(tmp_path):
-    from agents.task.goals.board import GoalBoard
-    from agents.task.goals.planner import build_planner_prompt
-
-    board = GoalBoard(str(tmp_path / "goals.db"))
-    prompt = build_planner_prompt(board, "u1", str(tmp_path))
-    assert "acceptance_checks" in prompt

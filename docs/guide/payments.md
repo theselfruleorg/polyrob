@@ -39,15 +39,12 @@ Four invariants hold across the whole surface:
    correspondent's payment or message can never gain steering rights; a
    forged / self-wake / delegated-leaf turn can never reach a money-moving verb; caps
    apply everywhere.
-4. **A money claim needs a money record.** An outbound message — a chat message,
-   an email, a post, a reply, a thread, a DM — that says money moved ("I paid $5",
-   "we earned $12", "first x402 transaction completed") is refused before it
-   leaves, by name (`refused (financial_claim_unverified)`), unless the wallet
-   audit log (money out) or the settled invoices (money in) hold a matching
-   record: the same amount within 30 days, or, for a claim with no amount, any
-   record within 24 hours. An honest report — failed, pending, attempted, a plan,
-   a question — is never a claim. `FINANCIAL_CLAIM_GATE_ENABLED=false` is the
-   emergency off switch.
+4. **A payout needs the owner.** A spend whose shape can pay an address that is not the
+   wallet, a pinned venue or a pinned own account goes to the owner's tap on every lane,
+   whatever verb expresses it (a plain send, a generic contract call that declares
+   nothing back, an endowed deploy, a page-authored native send). A number from a seller,
+   an API or a bridge (a settle header, a hash list, a token's `symbol()`) is evidence the
+   code checks, never a value it records.
 
 **Crypto is the only rail today.** Payments are USDC on Base (via the
 [x402 protocol](https://www.linuxfoundation.org/x402foundation), now a Linux
@@ -98,6 +95,13 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   reads it and gets a wallet that answers every address and refuses every signature with
   `WalletSigningUnavailable`. No flag — absence of the seed is the signal; with no record
   published, an unconfigured deploy still fails fast exactly as before.
+- **A seed in a readable file is not isolated.** A local `polyrob wallet init` writes the
+  seed to `~/.polyrob/.env` (0600, but Rob's own OS user can read it). While a seed
+  came from an env file this user can read, the host refuses model-written code
+  (`run_tests`, `run_code`, the host shell) and names the fix: move the seed to the signer
+  (`polyrob signer install`) or run code in a sandbox backend (`CODE_EXEC_BACKEND=docker`).
+  Git, LSP, `rg` and `MCP stdio` children stay allowed: they do not run code the model
+  wrote. A seed from the process env (the systemd `EnvironmentFile`) is no file gap.
 - **Network** — `AGENT_WALLET_NETWORK` (default `testnet`). On mainnet, `x402_wallet_status`
   surfaces the live on-chain USDC/gas balance via public read-only RPCs
   (`core/wallet/onchain.py`; canonical USDC = `0x8335…2913` Base mainnet, `0x036C…CF7e`
@@ -126,9 +130,10 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   refused until the ledger is repaired. A seedless process neither seals nor verifies;
   under `WALLET_SIGNER=remote` the signer's own ledger is the authoritative one.
 - **Address poisoning** — a transfer to an address that only looks like a payee of the
-  last 30 days (matching first and last characters, a different body) is refused, and
-  unreadable payment history refuses the send. Copy an address from its source, not from
-  the wallet's history.
+  last 30 days, one of `OWNER_WALLET_ADDRESSES` or Rob's own wallet (matching first
+  and last characters, a different body) is refused, and unreadable payment history
+  refuses the send. The same check runs on `nft_transfer` and on the payee of a generic
+  call (§10.8). Copy an address from its source, not from the wallet's history.
 - **The declared bound** — `max_spend_usd` asserts what the transaction moves or grants;
   the network fee is charged to the per-tx and daily caps only. A deploy, claim or mint,
   whose fee is its value, keeps the fee in the declared check.
@@ -158,13 +163,21 @@ The agent sends an intent; the signer runs the same transaction guard again and 
 
 With the signer installed (`shadow` or `remote`), its hard caps are the envelope: the agent enforces the
 lower of its own per-tx/daily cap and the signer's. A raise from chat stops at the signer's cap; raise that
-one as root in `/etc/polyrob/signer.toml` `[caps]`, then restart `polyrob-signer`.
+one as root in `/etc/polyrob/signer.toml` `[caps]`, then restart `polyrob-signer`. An x402 signature has
+two limits of its own: a limit per payment (a fresh install writes `X402_AUTONOMOUS_MAX_USD`, else $5,
+never the per-transaction limit) and an x402 daily limit. Under `remote`, an authorization above either
+waits for the same on-box root approval as an EVM send: `x402_fetch` answers with the approval id and
+pays nothing; after `sudo polyrob owner promote signer_approval <id>` (it prints the signer's review of
+the request and asks `y`), a retry of that same payment (same payee, same amount) signs once. Under
+`shadow` Rob signs locally, so it refuses a payment above either limit before it pays.
 
 An unknown value reads as `local`. On a server, install the `polyrob-signer` unit (it runs
 from its own venv, never the agent's), set `shadow`, and change to `remote` only after a
 clean week of shadow results. The installer checks that week in the signer's own decision
 log, which the agent cannot rewrite: a refused verdict, no agreed verdict, fewer than 7 days
-of data or an unreadable log stops the cut-over. The
+of data or an unreadable log stops the cut-over. The cut-over writes `WALLET_SIGNER=remote`
+only into `/etc/polyrob/agent-signer.env`, which only Rob's own units load, so the x402-api
+unit stays signer-free. The
 `WALLET_SIGNER` row in the configuration reference has the full detail.
 
 ### 2.1 Create the wallet in one command
@@ -320,7 +333,9 @@ The `x402_fetch` flow (`tools/x402/service.py`, `real_client.py`):
   day. Once armed, a goal the agent writes for ITSELF can carry `x402_pay` too, exactly
   as it can carry `defi_trade` (`tools/goal_tools.allowed_self_goal_tools` folds in the
   whole autonomous grant); what bounds an injected goal is the lane and the caps above,
-  not the toolset. Unarmed, a self-written goal cannot request it.
+  not the toolset. Unarmed, a self-written goal cannot request it. A money goal or job
+  that the model writes during YOUR turn is not written: it becomes a decision that
+  you Confirm.
 - Never a leaf/sub-agent, a self-wake, a delegation-result re-entry or a
   correspondent-tainted turn.
 
@@ -482,6 +497,10 @@ polyrob wallet asset verify rob
 ```
 
 `--verify` reads `decimals()` and `symbol()` on-chain **once** and freezes them.
+A stablecoin symbol does not make an asset a dollar: only the pinned USDC and
+stables of each network are priced at $1. `--verify` warns when the contract
+calls itself `USDC` (or another stable) at an address that is not pinned; such an
+asset needs a live quote, `--min-amount` and `--liquidity-floor`.
 A later differing read reports `metadata_changed` and leaves the pin alone:
 decimals denominate every amount comparison the settlement scan makes, so a
 token that reports 6 at mint and 18 at settlement must not be able to move the
@@ -736,7 +755,7 @@ constructed and nothing is broadcast**, so this tool cannot move value:
 | `price` | USD price for one contract address | all, incl. Solana |
 | `swap_quote` | Prices a swap through the *same* route seam `defi_trade.swap` uses — see what a trade would do for $0 | EVM |
 | `portfolio` | The agent's own holdings on one chain, USD-valued, with explicit coverage — includes the wallet's own address in the header | all, incl. Solana |
-| `reconcile` | Diffs the chain against the position ledger's `## Open positions` table AND the rail's own position store; an unpriced token neither book holds is `unsolicited`, not a disagreement — see §10.4 | all, incl. Solana |
+| `reconcile` | Diffs the chain against the rail's own position book (`open_positions.db`); an unpriced token neither book holds is `unsolicited`, not a disagreement — see §10.4 | all, incl. Solana |
 | `token_holders` | Top holders with their share, wallet-vs-contract, LP holders and lock state, creator stake — the concentration read. Solana reads the largest token accounts from the chain (a public RPC often rate-limits this read: it then says NOT CHECKED) | all, incl. Solana |
 | `ohlcv` | Price history as candles; pool-scoped, and the pool read is named | all, incl. Solana |
 | `new_pools` | Newest-indexed pools (the fresh-launch frontier), unscreened | all, incl. Solana |
@@ -893,7 +912,17 @@ Nine ordered gates, every one fail-closed:
    USD cap cannot bound, because the drain happens in a later transaction the cap never
    sees.
 7. **Pricing** — an unpriceable outflow or unknown decimals refuses. No cap can bound a
-   number you do not have.
+   number you do not have. A pinned USD stablecoin (a row's `usdc` and `stables`, e.g.
+   USDG on Robinhood — decided by the pinned network and address, never by the token's
+   `symbol()`) is valued at its peg while every source is within 2% of $1, and
+   the WETH of an ETH-native network that grades below `high` takes Ethereum mainnet's
+   ETH price. **A plain send is the exception** (`defi_trade.transfer`,
+   `solana_transfer`, `/send`): a wallet sends any token it holds. With no spend-grade
+   price the quote says `VALUE NOT VERIFIED` and the owner confirms one extra step
+   (`/send … anyway` typed by the owner, or Confirm on the quote — the model cannot
+   set it); the send is valued at the weaker
+   exit price, else charged the spend-without-asking limit plus a cent, and only the
+   owner's own turn runs it — when Rob asks for it, the owner decides.
 8. **Caps** — the per-tx ceiling, rolling daily cap and replay guard, held under a
    reservation across authorize → broadcast → record so two concurrent transfers cannot
    both clear a nearly-exhausted cap.
@@ -909,7 +938,8 @@ the owner asks — in chat, with an owner verb (`/send … go`, `/swap … go`, 
 `/pay`), or with Confirm on an action card (the same line, run for him) —
 the pause and the autonomous ceiling do not apply (`lane=owner_direct`); they bound what
 the agent does on its own. A model-built spend in the owner's chat above the ceiling is
-still tapped once by the owner, because the model wrote the address. The per-tx cap,
+still tapped once by the owner, because the model wrote the address; a payout-shaped
+`call` or an endowed deploy is tapped at ANY value, in the owner's turn too. The per-tx cap,
 the daily cap, the simulation and the declared bound bind everyone. A call with no
 context (the remote signer, an internal call) is never treated as the owner.
 
@@ -1002,14 +1032,13 @@ The treasury figure is **cash flow** (income − spend) and structurally cannot 
 held bag. Two mechanisms close that gap, and neither ever reports a clean book it did
 not verify.
 
-`defi_data.reconcile(chain, ledger_path)` is the per-chain comparison, a server-side
+`defi_data.reconcile(chain)` is the per-chain comparison, a server-side
 check no step budget or partial read can dilute:
 
-- parses the ledger's `## Open positions` **table** (state only, never the
-  narrative), enumerates actual chain holdings through the same seams
-  `portfolio` uses, and reports every disagreement in both directions — table
-  rows the chain does not back, chain holdings the table does not explain,
-  size mismatches;
+- reads the rail's position book (`open_positions.db`), enumerates actual chain
+  holdings through the same seams `portfolio` uses, and reports every
+  disagreement in both directions — book rows the chain does not back, chain
+  holdings the book does not explain, size mismatches;
 - a failed read renders `UNVERIFIED`, never zero; quote asset and wrapped
   native are working capital; confidently-priced sub-$0.25 holdings classify
   as dust.
@@ -1026,12 +1055,8 @@ Money page read the same function through the same renderer, so no two seats can
 describe one book differently. **A chain it could not read is `unverified`, never
 clean.**
 
-The ledger it compares against is resolved by `POSITION_LEDGER_PATH`: that variable if
-set (it wins even when the file is missing, so a typo surfaces as "not found"), else
-the default filename in the project directory, else a single `*position-ledger.md`
-there. **Two or more candidates resolve to none** — refusing to guess which book is
-live is the point — and an absent, ambiguous or unreadable ledger renders open
-positions as `UNKNOWN`, never `none`.
+The book it compares against is the rail's position store (`open_positions.db`);
+an unreadable book is an error, never a clean verdict.
 
 > ⚠️ **The caps are global and chain-blind.** `AGENT_WALLET_MAX_PER_TX_USD`,
 > `WALLET_DAILY_CAP_USD` and `DEFI_AUTONOMOUS_MAX_USD` are one number across
@@ -1060,6 +1085,12 @@ once, in `/pending`**: each contract with its name, where it came from and when
 it was first seen, with a *trust it* and a *not trusted* tap. Trusting one
 quarantines the held look-alike (it keeps its cost and no longer blocks the
 real token); *not trusted* means the agent never buys it and never asks again.
+
+The ticket follows the token at risk. On a **sell** (a token into USDC, a stable or
+the wrapped native) that is the token sold: if it is not trusted and no price check
+agrees, a sell above $5 needs you. Rob suggests the `/swap` as a decision, and your
+Confirm runs it. A `/swap` you type yourself is not held. An exit is never refused
+outright, and a sell whose price check DISAGREES is always refused.
 
 From chat (Telegram, the REPL, the console) — no shell needed:
 
@@ -1101,13 +1132,21 @@ same ledger every other verb counts.
    is this wallet, the destination chain is in the pinned registry, and the arrival floor
    is positive. The durable row in `bridges.db` is written **before** the send.
 2. *After confirmation* — arrival is proved by **measuring the destination balance**
-   against `quoted_out − the route's destination slippage`. A provider reporting success
-   over a balance that did not move is not believed; an unreadable balance is `unknown`,
-   never zero.
+   against `quoted_out − the route's destination slippage`, with the baseline read inside
+   the limit reservation just before the broadcast. A provider reporting success over a
+   balance that did not move is not believed; an unreadable balance is `unknown`, never
+   zero. When Relay returns destination transaction hashes, the delivering transaction
+   must also show the inflow to your wallet: repeated hashes count once, a transaction
+   older than the bridge does not count, and one proving transaction can prove only one
+   bridge row (a hash another row claimed refuses). An EVM route that reports `filled`
+   with no hash at all arrives on the balance rise alone, and the row records that basis;
+   Solana never falls back to the balance alone.
 
 ⚠️ **A bridge that has not arrived by the deadline is `in_flight` — never `failure`.**
 A re-sent bridge pays twice, so the row stays an open question handed to you rather than
-an error to dismiss.
+an error to dismiss. A Relay request id that is already on a row refuses the bridge
+before anything is sent, and a `pending` row that never got a transaction is closed as
+`never_sent` after an hour, so it stops holding the balance.
 
 The origin is **native** or the origin chain's **pinned USDC** (`token_in="usdc"`; on an
 EVM chain the verb approves exactly the amount to the pinned Relay depository and revokes
@@ -1137,7 +1176,8 @@ ERC-1155 outflow, and for any observed `ApprovalForAll` grant, run whether or no
 set: a security refusal behind a default-off switch is not a refusal.
 
 `nft_transfer` is **always owner-approved** (see §10.2): a collectible has no reliable
-price, so no USD cap can bound it. Enumeration needs `ALCHEMY_API_KEY`; without it the
+price, so no USD cap can bound it.
+It runs the address-poisoning check of §2 first. Enumeration needs `ALCHEMY_API_KEY`; without it the
 read says so rather than returning an empty list.
 
 ### 10.7 Deploying a contract (`DEFI_DEPLOY_ENABLED`, default OFF)
@@ -1169,6 +1209,18 @@ worst-case sized gas and charged to the same caps.
 polyrob wallet deploy-token ROB 1000000000 Rob Coin --chain base   # quote
 polyrob wallet deploy-token ROB 1000000000 Rob Coin --execute      # deploy
 ```
+
+**Names and supply.** A token's name and symbol are printable ASCII only (no
+accents, no emoji, no look-alike letters from another alphabet) — the same rule for
+`deploy_token`, `solana_deploy_token`, `launchpad_launch` and `deploy-token`, because a
+name never changes and a look-alike name reads as somebody else's token. The supply
+is exact: `1000000000`, `1e9`, `1_000_000` and `1,000,000` all parse (a comma only
+between groups of three digits, so `1,5` refuses). A supply with more fractional digits
+than the decimals refuses instead of rounding. The quote, the confirm prompt and the
+Telegram `/deploy` "add go" line print the exact supply, never `1e+09`, and the
+approval text shows the name in quotes so a hidden character is visible. The pinned
+bytes rebuild from `core/wallet/contracts/FixedSupplyToken.sol` with solc 0.8.24 (the
+command is in the `token_template` docstring).
 
 **No vanity or salt for a token.** `deploy-token` refuses `--vanity` and
 `--salt`. The template mints the whole supply to the deployer, and through the
@@ -1207,8 +1259,20 @@ polyrob wallet deploy-token ROB 1e9 Rob Coin --chain solana   # quote
 
 `defi_trade.call` executes caller-supplied calldata, so a protocol nobody
 integrated ahead of time becomes usable. Declare BOTH directions — at most this
-much leaves, **at least this much must come back** — and the simulation decides
-whether that held. A call that spends and returns nothing is refused.
+much leaves, **at least this much must come back** (`receive_token` and
+`receive_min_raw > 0`) — and the simulation decides whether that held. A call that
+declares its inflow (a swap through a router, a claim, a mint that pays the wallet)
+keeps the `defi` lane and the spend-without-asking limit.
+
+A call that moves value (native `value > 0` or a `spend_token` outflow) and declares
+nothing coming back is **payout-shaped**: it can pay any address, so it goes to the
+owner's tap on every lane, an owner turn included, whatever its value. When the target
+is the declared token and the selector is `transfer`/`transferFrom`, the guard binds
+its destination check to the decoded payee, and the address-poisoning check runs on
+that payee and on a payout-shaped target. An `allow_spender` grant follows the same
+router rule `approve_token` does. A deploy with `value > 0` is payout-shaped too, and
+the guard also asserts that the new contract still holds the whole endowment after its
+constructor.
 
 ⚠️ The bound `tx_guard` records still applies: delta assertion proves the
 transaction does what the intent SAYS, never that the intent is legitimate. Turn
@@ -1246,8 +1310,10 @@ and makes no decision.
 
 `eth_sendTransaction` becomes a `TxIntent` bounded by the envelope declared at
 connect time and goes through `tx_guard`; above the autonomous ceiling a call the agent starts waits
-on the durable owner queue under a deadline. **Off-chain signatures are refused
-always** — a permit is submitted by someone else later, so no simulation can
+on the durable owner queue under a deadline. A page-authored native send to an
+address with no code is a payout: it waits for the owner's tap even when that address is
+in `allow_contracts`. A page tx that moves a token is undeclared and the guard refuses
+it. **Off-chain signatures are refused always** — a permit is submitted by someone else later, so no simulation can
 catch what it authorizes.
 
 ⚠️ `dapp_connect` **is** the money verb (the spend happens in a browser callback),

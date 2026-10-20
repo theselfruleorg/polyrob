@@ -3,10 +3,12 @@ name: dca
 description: 'Dollar-cost averaging on a schedule: majors only, an owner budget and end date, the target by address, cronjob_schedule with the money_rail rig and pinned skills, the per-run steps and the stop rules. There is no native recurring-order verb.'
 license: MIT
 metadata:
+  polyrob-when: 'Buying a fixed amount on a schedule (DCA)'
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["dca","dollar cost averaging","dollar-cost averaging","recurring buy","accumulate weekly","accumulate daily"],"task_patterns":["(buy|accumulate)\\b.*\\b(eth|sol|btc|wbtc|usdc|token|coin|crypto)\\b.*\\b(every|each) (day|week|month)","(buy|accumulate)\\b.*\\b(every|each) (day|week|month)\\b.*\\b(eth|sol|btc|wbtc|token|coin|crypto)\\b"],"tool_ids":["defi_trade","defi_data","cronjob"]}'
-  polyrob-version: '2'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data","cronjob"]}'
+  polyrob-requires: '["token-identity","pre-trade-check"]'
+  polyrob-version: '3'
 ---
 # DCA — buy a fixed amount on a schedule
 
@@ -48,20 +50,21 @@ prediction, and the safest one to run unattended.
    `cronjob`. Both rigs are honoured when the OWNER asks for the DCA in chat; a
    job you create on your own is refused a rig outside your ceiling ("Tool rig
    '…' NOT granted"). Then give the owner the job id and the end date instead.
-4. **Write the plan into the ledger** (`position-journal`) with the budget,
-   the running total spent and the job ids.
+4. **Put the plan in the job's task text**: the total budget, the per-buy
+   amount, the end date and the job ids. Tell the owner the same.
 
 ## Each run
 
 1. `defi_data.portfolio` — enough of `token_in`, and gas for this buy.
-2. Budget left? Sum the spent total from the ledger. If this buy would pass the
+2. Budget left? `defi_data.positions(chain=…)` gives the target's cost basis:
+   a DCA only buys, so that is the total spent. If this buy would pass the
    total or the end date is past, do NOT buy: report "DCA budget spent — cancel
    job <id>" to the owner. The run cannot cancel the job itself.
 3. `pre-trade-check` in short: quote, cross-check, gas under 1% of the buy.
    Skip this run (do not double the next one) if the quote is `SUSPECT`, the
    stable is off its peg (`stable-cash`), or gas is above 1% of the buy.
 4. `trade-execution` with `max_spend_usd` = the per-buy amount, then
-   `post-trade-verify`, then add the fill to the ledger.
+   `post-trade-verify`.
 
 ## Stop rules
 

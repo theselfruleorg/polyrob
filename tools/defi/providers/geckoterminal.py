@@ -330,10 +330,23 @@ def parse_pools(payload: Any, chain: str, gt_network: str) -> List[PoolCandidate
     return out
 
 
-# 2026-09-19: the free tier answers 429 when a step batches several reads; one
-# short retry turns a transient refusal into an answer, and a 429 that survives it
-# must PROPAGATE (the caller renders it) — it is not "nothing indexed".
-_RETRY_SLEEP_SEC = 2.0
+# 2026-09-19: the free tier answers 429 when a step batches several reads; a
+# short backoff turns a transient refusal into an answer, and a 429 that survives
+# it must PROPAGATE (the caller renders it) — it is not "nothing indexed".
+# 2026-10-12: one 2 s retry did not survive a burst (six discovery asks on three
+# chains all 429'd), so the backoff is two steps; the whole read stays well under
+# the controller's 60 s guard.
+_RETRY_BACKOFF_SEC = (2.0, 6.0)
+
+
+def _sleep(seconds: float) -> None:
+    import time as _time
+    _time.sleep(seconds)
+
+
+class DiscoveryUnavailable(RuntimeError):
+    """The indexer could not be read. Never "no pools": the verbs render it as
+    an error so a refusal is not mistaken for an empty market."""
 
 
 def _is_rate_limited(exc: BaseException) -> bool:
@@ -342,29 +355,35 @@ def _is_rate_limited(exc: BaseException) -> bool:
 
 def _get(url: str) -> Any:
     from tools.defi.providers import _http
-    try:
-        return _http.get_json(url, timeout=TIMEOUT_SEC)
-    except Exception as exc:
-        if not _is_rate_limited(exc):
-            raise
-        import time as _time
-        _time.sleep(_RETRY_SLEEP_SEC)
-        return _http.get_json(url, timeout=TIMEOUT_SEC)
+    for delay in _RETRY_BACKOFF_SEC:
+        try:
+            return _http.get_json(url, timeout=TIMEOUT_SEC)
+        except Exception as exc:
+            if not _is_rate_limited(exc):
+                raise
+            _sleep(delay)
+    return _http.get_json(url, timeout=TIMEOUT_SEC)
 
 
 def _fetch(chain: str, endpoint: str, *, fetch=None) -> List[PoolCandidate]:
     from core.wallet import chains
     row = chains.get(chain)
     if row is None or not row.geckoterminal_id:
-        # A chain this indexer does not cover returns NOTHING rather than
-        # another chain's pools. "We could not look" is the honest answer.
-        return []
+        # Never another chain's pools — and never `[]`, which the verbs render
+        # as "no pools matched". "We could not look" is the honest answer.
+        raise DiscoveryUnavailable(
+            f"could not read {endpoint} on {chain}: the indexer does not cover this chain")
     url = f"{BASE_URL}/networks/{row.geckoterminal_id}/{endpoint}"
     try:
         payload = (fetch or _get)(url)
     except Exception as exc:
         logger.info("geckoterminal: %s failed for %s (%s)", endpoint, chain, exc)
-        return []
+        why = ("geckoterminal rate-limited this read (HTTP 429) — wait about a "
+               "minute and retry, or batch fewer discovery reads per step"
+               if _is_rate_limited(exc) else f"geckoterminal error: {exc}")
+        raise DiscoveryUnavailable(
+            f"could not read {endpoint} on {chain} — {why}. This is NOT an "
+            f"empty market.") from exc
     return parse_pools(payload, chain, row.geckoterminal_id)
 
 

@@ -70,8 +70,9 @@ Both projects use `SKILL.md` with YAML frontmatter, but the frontmatter differs.
 POLYROB follows the agentskills.io standard: the only valid top-level keys are
 `name`, `description`, `license`, `compatibility`, `metadata` and `allowed-tools`,
 and everything POLYROB-specific is namespaced under `metadata` as flat `polyrob-*`
-string values. OpenClaw's top-level `triggers:` becomes `metadata.polyrob-triggers`,
-JSON-encoded as one string:
+string values. POLYROB has no keyword triggers: Rob sees one line per skill and loads
+the skill whose line fits. OpenClaw's top-level `triggers:` becomes that line,
+`metadata.polyrob-when` (60 characters or fewer, it says when to load the skill):
 
 ```yaml
 ---
@@ -79,8 +80,7 @@ name: task-automation
 description: Automates repetitive tasks
 license: MIT
 metadata:
-  polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["automate"],"task_patterns":[],"tool_ids":[]}'
+  polyrob-when: 'When a task repeats the same steps each time'
 ---
 ```
 
@@ -193,7 +193,7 @@ Stated once, with detail in [comparison.md](../../comparison.md):
   denied, with high-impact tools gated off while a session is correspondent-tainted.
   OpenClaw's pairing gates *channel access*, not individual actions. See
   [security-model.md](../security-model.md).
-- **A durable goal board** with objectives, dependencies and restart-safe claims,
+- **A durable goal board** with dependencies and restart-safe claims, scheduled jobs,
   plus **proactive self-wake**. See [streams.md](../streams.md).
 - **A durable owner-approval queue** you can answer from your phone.
 - **MCP server as well as client** — expose POLYROB's own tools to Claude Desktop or

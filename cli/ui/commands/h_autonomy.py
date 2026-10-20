@@ -58,11 +58,10 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
         from core.wallet import bridge_watcher
         return bridge_watcher.enabled()
 
-    # 043 A8/A42: the panel used to omit the planner and the five
-    # autonomy_runtime loops that carry no other on/off surface (sandbox-reap,
-    # surface-gc, quiet-release, settlement, bridges) — all 8 loops
-    # `start_autonomy` can start, plus the planner, are named here so the
-    # owner can see the same liveness set the status snapshot checks.
+    # 043 A8/A42: the panel used to omit the five autonomy_runtime loops that
+    # carry no other on/off surface (sandbox-reap, surface-gc, quiet-release,
+    # settlement, bridges) — all 8 loops `start_autonomy` can start are named
+    # here so the owner can see the same liveness set the status snapshot checks.
     flags = [
         ("self-wake", AutonomyConfig.self_wake_enabled()),
         ("goals", AutonomyConfig.goals_enabled()),
@@ -70,7 +69,6 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
         ("cron", cron_flag),
         ("cron-run-loop", AutonomyConfig.cron_run_loop()),
         ("background-review", AutonomyConfig.background_review_enabled()),
-        ("planner", _gate(AutonomyConfig.goal_planner_enabled)),
         ("sandbox-reap", _gate(_sandbox_reap_gate)),
         ("surface-gc", _gate(_surface_gc_gate)),
         ("quiet-release", _gate(_quiet_release_gate)),
@@ -168,7 +166,7 @@ def _h_autonomy(ctx: CommandContext):
 
     lines.append(candy.section(f"cron jobs ({snap['cron_count']})"))
     if snap["cron_count"]:
-        lines.append(f"{candy.GUTTER}/cron lists the schedule")
+        lines.append(f"{candy.GUTTER}/jobs lists the schedule")
 
     lines.append("")
     lines.append(candy.section(f"goals (open: {snap['goal_count']})"))

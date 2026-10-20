@@ -25,7 +25,7 @@ from core.status_render import (
 OWNER = "rob"
 
 
-def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True, exhausted_objective=True):
+def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True):
     from agents.task.goals.board import GoalBoard, STATUS_READY
     board = GoalBoard(os.path.join(data_dir, "goals.db"))
     for i in range(ready):
@@ -38,12 +38,6 @@ def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True, exhausted_objecti
     if asks:
         board.create_ask(user_id=OWNER, what="Unblock goal: deploy one x402 endpoint",
                          why="need a public HTTPS endpoint", blocks_goal_ids=[])
-    if exhausted_objective:
-        obj = board.create_objective(user_id=OWNER, title="Promote POLYROB in public",
-                                     payload={"goal_budget": 2})
-        for title in ("Write the launch post", "Ship the demo video"):
-            c = board.create(user_id=OWNER, title=title, parent_id=obj.id, force=True)
-            board.update_status(c.id, "done")  # a done child still counts against the budget
     # another tenant's ask must never leak into rob's snapshot
     board.create_ask(user_id="someone-else", what="Not rob's ask", why="", blocks_goal_ids=[])
     return board
@@ -97,7 +91,7 @@ def _seed_telemetry(path, *, capped=3, timeouts=1, rerouted=2):
 @pytest.fixture()
 def degraded(tmp_path, monkeypatch):
     """The 2026-08-28 prod state: sentinel tripped + suppressed notices + open
-    ask + blocked goal + 0 ready goals + exhausted objective + rerouted cron."""
+    ask + blocked goal + 0 ready goals + rerouted cron."""
     data_dir = str(tmp_path)
     monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
     monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "true")
@@ -135,7 +129,6 @@ def test_degraded_fixture_renders_every_condition(degraded):
     assert "credit_sentinel:openrouter" in keys
     assert any(k.startswith("ask:") for k in keys)
     assert any(k.startswith("blocked:") for k in keys)
-    assert any(k.startswith("objective_budget:") for k in keys)
     assert "delivery_capped" in keys
     assert "tool_timeouts" in keys
     assert "loop_silent:cron" in keys and "loop_silent:goals" in keys
@@ -149,7 +142,6 @@ def test_degraded_fixture_renders_every_condition(degraded):
     assert "402" in lines[3]
     assert "open ask" in text and "x402 endpoint" in text and "/fulfill" in text
     assert "goal BLOCKED" in text and "defi_trade" in text
-    assert "objective at lifetime goal budget (2/2)" in text
     assert "3 owner message(s) suppressed by the daily cap" in text and "/missed" in text
     assert "1 tool timeout(s)" in text
     assert "no liveness heartbeat" in text
@@ -310,7 +302,7 @@ def test_clean_fixture_is_ok_with_evidence(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", os.path.join(data_dir, "telemetry_events.db"))
     monkeypatch.setenv("GOALS_ENABLED", "false")
     monkeypatch.setenv("CRON_ENABLED", "false")
-    _seed_goals(data_dir, ready=1, blocked=False, asks=False, exhausted_objective=False)
+    _seed_goals(data_dir, ready=1, blocked=False, asks=False)
     _seed_cron(data_dir)
     from core.event_log import TelemetryEventLog
     TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
@@ -327,7 +319,7 @@ def test_partial_when_a_health_source_is_unreadable(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", os.path.join(data_dir, "telemetry_events.db"))
     monkeypatch.setenv("GOALS_ENABLED", "false")
     monkeypatch.setenv("CRON_ENABLED", "false")
-    _seed_goals(data_dir, blocked=False, asks=False, exhausted_objective=False)
+    _seed_goals(data_dir, blocked=False, asks=False)
     # no cron.db, no telemetry db
     snap = build_status_snapshot(OWNER, data_dir=data_dir, ledger=_fake_ledger())
     assert snap.overall == OVERALL_PARTIAL
@@ -401,10 +393,10 @@ def test_literals_match_owning_modules():
     from core import status_snapshot as ss
     from core.surfaces import user_delivery as ud
     from tools.controller.approval_queue import TOOL_APPROVAL_ASK_KIND
-    assert (ss._KIND_GOAL, ss._KIND_OBJECTIVE, ss._KIND_ASK) == (b.KIND_GOAL, b.KIND_OBJECTIVE, b.KIND_ASK)
+    assert (ss._KIND_GOAL, ss._KIND_ASK) == (b.KIND_GOAL, b.KIND_ASK)
     assert (ss._ST_READY, ss._ST_RUNNING, ss._ST_BLOCKED, ss._ST_WAITING) == (
         b.STATUS_READY, b.STATUS_RUNNING, b.STATUS_BLOCKED, b.STATUS_WAITING)
-    assert ss._ASK_OPEN == b.ASK_OPEN and ss._OBJ_ACTIVE == b.OBJ_ACTIVE
+    assert ss._ASK_OPEN == b.ASK_OPEN
     assert ss._TOOL_APPROVAL_ASK_KIND == TOOL_APPROVAL_ASK_KIND
     assert (ss._K_USER_DELIVERY, ss._K_OWNER_NOTICE, ss._K_CREDIT_SENTINEL, ss._K_CRON_RUN,
             ss._K_GOAL_RUN, ss._K_SELF_WAKE, ss._K_TOOL_TIMEOUT, ss._K_TOOL_DENIED,
@@ -418,14 +410,6 @@ def test_literals_match_owning_modules():
     # delivery section grep for
     import inspect
     assert ss._SUPPRESSED_PREFIX in inspect.getsource(ud)
-
-
-def test_objective_budget_mirrors_board_rule(monkeypatch):
-    from core.status_snapshot import _objective_budget
-    monkeypatch.setenv("OBJECTIVE_GOAL_BUDGET", "25")
-    assert _objective_budget({}) == 25
-    assert _objective_budget({"goal_budget": 12}) == 12
-    assert _objective_budget({"stream_id": "treasury-trading", "goal_budget": 12}) == 0
 
 
 # --- spend record carries the chain (043 A36) --------------------------------
@@ -705,7 +689,7 @@ def test_each_rail_reports_what_it_spent_in_24h(tmp_path, monkeypatch):
     assert abs(spend["usd"] - 0.15) < 1e-9
     assert spend["runs"] == 3
     assert spend["unpriced"] == 0
-    line = "\n".join(l for l in sec.lines if l.startswith("rail "))
+    line = "\n".join(l for l in sec.lines if l.startswith("job "))
     assert "$0.15" in line and "3 run" in line, line
 
 
@@ -728,7 +712,7 @@ def test_a_run_with_no_spend_recorded_is_UNPRICED_not_zero(tmp_path, monkeypatch
     assert abs(spend["usd"] - 0.04) < 1e-9
     assert spend["runs"] == 2
     assert spend["unpriced"] == 1
-    line = "\n".join(l for l in snap.section("loops").lines if l.startswith("rail "))
+    line = "\n".join(l for l in snap.section("loops").lines if l.startswith("job "))
     assert "unpriced" in line, line
 
 
@@ -766,6 +750,6 @@ def test_a_rail_with_nothing_priced_never_renders_a_confident_zero(tmp_path, mon
         log.record("cron_run", user_id=OWNER, source="cron",
                    attrs={"job_id": "job1", "outcome": "done"}, ts=time.time() - 60 - i)
     sec = build_status_snapshot(OWNER, data_dir=data_dir).section("loops")
-    line = "\n".join(l for l in sec.lines if l.startswith("rail "))
+    line = "\n".join(l for l in sec.lines if l.startswith("job "))
     assert "$0.00" not in line, line
     assert "cost not recorded for 2 runs today" in line, line

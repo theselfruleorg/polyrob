@@ -64,6 +64,7 @@ async def run_turn(
         # not a recognized slash → fall through and treat as a turn
 
     from cli.ui.input_policy import prepare_text
+    typed = line   # 085 W3 (A1): the owner's words, before @-references expand
     try:
         line = prepare_text(line)
     except Exception as exc:
@@ -85,7 +86,8 @@ async def run_turn(
             from core.interactive_gate import interactive_turn
 
             with interactive_turn():
-                answer = await convo.respond(line)
+                answer = await (convo.respond(line) if typed == line
+                                else convo.respond(line, typed_text=typed))
         except asyncio.CancelledError:
             outcome = TurnOutcome.CANCELLED
             _render_interrupt(renderer)  # Ctrl-C → back to idle, not a stuck spinner

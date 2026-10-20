@@ -27,7 +27,9 @@ def test_lazy_ensure_refuses_under_custody(lazy_on, monkeypatch):
     assert calls == []
 
 
-def test_pip_child_env_drops_secret_named_vars(lazy_on, monkeypatch):
+def test_pip_child_env_is_an_allowlist(lazy_on, monkeypatch):
+    """085 W1 (custody L-1): the core.lazy_installer.child_env allowlist; a
+    ``PIP_*`` knob (a private index URL can hold a token) no longer rides along."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
     monkeypatch.setenv("PIP_INDEX_URL", "https://pypi.org/simple")
     seen = {}
@@ -39,7 +41,7 @@ def test_pip_child_env_drops_secret_named_vars(lazy_on, monkeypatch):
     monkeypatch.setattr(ld.subprocess, "run", fake_run)
     ld._run_installer(["pip", "--version"])
     assert "OPENAI_API_KEY" not in seen
-    assert seen.get("PIP_INDEX_URL") == "https://pypi.org/simple"
+    assert "PIP_INDEX_URL" not in seen
     assert "PATH" in seen
 
 

@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Stop a durable goal: once by default; forever=true only when the owner said never again (the same as the owner's /goal stop).",
+    "name": "goal_cancel",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "forever": {
+          "default": false,
+          "description": "True ONLY when the owner said never again: the title is switched off, so no stream, planner or agent creates it again (until the owner's /goal allow). Default: stop just this goal.",
+          "type": "boolean"
+        },
+        "goal_id": {
+          "description": "The goal id to stop.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -36,9 +36,14 @@ def test_unverified_wake_says_so():
     assert "unverified" in text and text.startswith("goal abcdef12")
 
 
-def test_goal_create_exposes_report_back_and_max_steps():
+def test_goal_create_exposes_report_back_and_no_step_budget():
+    import pytest
+    from pydantic import ValidationError
     from tools.goal_tools import GoalCreateAction
-    a = GoalCreateAction(title="test goal", body="b", report_back=True, max_steps=30)
-    assert a.report_back is True and a.max_steps == 30
+    a = GoalCreateAction(title="test goal", body="b", report_back=True)
+    assert a.report_back is True
     b = GoalCreateAction(title="test goal", body="b")
-    assert b.report_back is False and b.max_steps is None
+    assert b.report_back is False
+    # 083 WS-4: the step cap is the operator's — an old argument is a schema error.
+    with pytest.raises(ValidationError):
+        GoalCreateAction(title="test goal", body="b", max_steps=30)

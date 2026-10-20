@@ -77,6 +77,29 @@ async def tick(container: Any = None, *, db_path: Optional[str] = None,
     from core.wallet import bridge_guard
 
     result = TickResult()
+    if provider is None:
+        # The seam, NOT the provider: `core` may not import `tools`. See
+        # core/wallet/bridge_status.py for why the degraded case is safe.
+        from core.wallet import bridge_status
+        provider = _SeamProvider(bridge_status.read_status)
+    # L-6: a `pending` row with no tx, older than an hour, was never sent (a
+    # crash between the record and the broadcast). Close it so it stops
+    # blocking its balance; a row Relay reports filled is left alone.
+    closed: List[Dict[str, Any]] = []
+    try:
+        bridge_guard.close_stale_unsent(status=provider.status, now=now(),
+                                        db_path=db_path, closed=closed)
+    except Exception:
+        logger.warning("bridge watcher: stale-row sweep failed", exc_info=True)
+    # One owner notice per closed row: a closed row leaves every open view, so
+    # without it a rare funded-but-unrecorded order would vanish silently.
+    for row in closed:
+        try:
+            await (notify or _default_notify)(container, row.get("user_id"),
+                                              never_sent_notice(row))
+        except Exception:
+            logger.warning("bridge watcher: never-sent notice failed for %s",
+                           row.get("id"), exc_info=True)
     try:
         rows: List[Dict[str, Any]] = bridge_guard.open_bridges_all(db_path=db_path)
     except Exception:
@@ -92,11 +115,6 @@ async def tick(container: Any = None, *, db_path: Optional[str] = None,
     # it cannot be one function for the whole pass. An injected reader (tests)
     # still overrides.
     reader = read_balance
-    if provider is None:
-        # The seam, NOT the provider: `core` may not import `tools`. See
-        # core/wallet/bridge_status.py for why the degraded case is safe.
-        from core.wallet import bridge_status
-        provider = _SeamProvider(bridge_status.read_status)
     notifier = notify or _default_notify
 
     for row in rows:
@@ -133,30 +151,17 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
     age = float(now()) - float(row.get("created_at") or 0.0)
 
     delta = None
-    prove = (bridge_guard.arrival_prover(str(row.get("request_id") or ""), recipient,
-                                         row.get("currency_out"), chain_name)
+    after = None
+    prove = (bridge_guard.arrival_prover(
+                str(row.get("request_id") or ""), recipient, row.get("currency_out"),
+                chain_name, bridge_id=bid, dest_chain_id=row.get("dest_chain_id"),
+                created_at=row.get("created_at"), min_out_raw=min_out,
+                db_path=db_path)
              if (chain_name and recipient) else None)
-    if prove is not None:
-        # SVM: the wallet also trades here, so only the delivering
-        # transaction's own balance change proves the arrival (bridge_guard).
-        state, status_detail = provider.status(str(row.get("request_id") or ""))
-        proven = prove() if state == "success" else None
-        if proven is not None and proven >= min_out > 0:
-            detail = (f"arrived on a later pass: proven +{proven} raw by the "
-                      f"delivering transaction on {chain_name} (floor {min_out})")
-            bridge_guard.settle(bid, state=bridge_guard.STATE_ARRIVED,
-                                detail=detail, db_path=db_path)
-            result.arrived += 1
-            await notify(container, user_id, tx_notify.TxNotice(
-                verb="bridge", route=route, chain=origin_name,
-                tx_ref=row.get("tx_ref"),
-                extra_refs=(bid,), state=tx_notify.STATE_ARRIVED,
-                usd=row.get("amount_usd"),
-                measured=f"+{proven} raw on {chain_name}",
-                detail=f"resolved by the watcher after {int(age)}s",
-                ledger_recorded=True))
-            return
-    elif chain_name and recipient and before is not None:
+    # The measured balance: the whole proof without a prover, the second check
+    # with an EVM one (085 B-2). Never read for Solana — the lab trades there.
+    if (chain_name and recipient and before is not None
+            and (prove is None or prove.requires_delta)):
         measure = reader or bridge_guard.arrival_reader(row.get("currency_out"),
                                                         chain_name)
         after = measure(recipient, chain_name)
@@ -166,25 +171,41 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
             result.unreadable += 1
         else:
             delta = int(after) - int(before)
-            if min_out > 0 and delta >= min_out:
-                detail = (f"arrived on a later pass: measured +{delta} raw on "
-                          f"{chain_name} (floor {min_out})")
-                bridge_guard.settle(bid, state=bridge_guard.STATE_ARRIVED,
-                                    detail=detail, balance_after=int(after),
-                                    db_path=db_path)
-                result.arrived += 1
-                await notify(container, user_id, tx_notify.TxNotice(
-                    verb="bridge", route=route, chain=origin_name,
-                    tx_ref=row.get("tx_ref"),
-                    extra_refs=(bid,), state=tx_notify.STATE_ARRIVED,
-                    usd=row.get("amount_usd"),
-                    measured=f"+{delta} raw on {chain_name}",
-                    detail=f"resolved by the watcher after {int(age)}s",
-                    ledger_recorded=True))
-                return
 
-    if prove is None:
-        state, status_detail = provider.status(str(row.get("request_id") or ""))
+    state, status_detail = provider.status(str(row.get("request_id") or ""))
+    arrived_by = None
+    if prove is not None:
+        # The delivering transaction's own transfer is the proof (B-1/B-2); on
+        # EVM the measured rise must also clear the floor.
+        delta_ok = (not prove.requires_delta) or (delta is not None and delta >= min_out)
+        proven = prove() if (state == "success" and delta_ok) else None
+        if proven is not None and proven >= min_out > 0:
+            arrived_by = (f"proven +{proven} raw by the delivering transaction on "
+                          f"{chain_name}", f"+{proven} raw on {chain_name}")
+        elif (proven is None and prove.basis == bridge_guard.BASIS_BALANCE_ONLY
+              and delta is not None and min_out > 0 and delta >= min_out):
+            arrived_by = (f"measured +{delta} raw on {chain_name}; proof basis: "
+                          f"balance-only (relay returned no destination tx)",
+                          f"+{delta} raw on {chain_name}")
+    elif delta is not None and min_out > 0 and delta >= min_out:
+        arrived_by = (f"measured +{delta} raw on {chain_name}",
+                      f"+{delta} raw on {chain_name}")
+    if arrived_by is not None:
+        detail = f"arrived on a later pass: {arrived_by[0]} (floor {min_out})"
+        bridge_guard.settle(bid, state=bridge_guard.STATE_ARRIVED, detail=detail,
+                            balance_after=None if after is None else int(after),
+                            db_path=db_path)
+        result.arrived += 1
+        await notify(container, user_id, tx_notify.TxNotice(
+            verb="bridge", route=route, chain=origin_name,
+            tx_ref=row.get("tx_ref"),
+            extra_refs=(bid,), state=tx_notify.STATE_ARRIVED,
+            usd=row.get("amount_usd"),
+            measured=arrived_by[1],
+            detail=f"resolved by the watcher after {int(age)}s",
+            ledger_recorded=True))
+        return
+
     if state == "failure" and (delta is None or delta < min_out):
         # The one case that can be called failed: the provider says refunded or
         # expired AND no inflow was measured at the destination.
@@ -228,6 +249,25 @@ class _SeamProvider:
 
     def status(self, request_id):
         return self._read(request_id)
+
+
+def never_sent_notice(row: Dict[str, Any]):
+    """The owner notice for a bridge row closed as never sent (bridge L-6).
+
+    It names the ORIGIN chain (where a deposit would have been sent from) and
+    the request id, the one thing the owner can check at the provider. There
+    is no tx hash: none was ever recorded."""
+    from core.wallet import bridge_guard, tx_notify
+    origin_name = bridge_guard.chain_name_for_id(row.get("origin_chain_id"))
+    origin_label = (origin_name
+                    or bridge_guard.arrival_chain_name(row.get("origin_chain_id"))
+                    or "?")
+    dest = bridge_guard.arrival_chain_name(row.get("dest_chain_id"))
+    return tx_notify.TxNotice(
+        verb="bridge", route=f"{origin_label}{_route(row, dest)}", chain=origin_name,
+        extra_refs=tuple(r for r in (row.get("request_id"), row.get("id")) if r),
+        state=tx_notify.STATE_NEVER_SENT, usd=row.get("amount_usd"),
+        detail=row.get("detail"))
 
 
 async def _default_notify(container, user_id, notice) -> None:

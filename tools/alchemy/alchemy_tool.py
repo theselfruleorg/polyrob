@@ -286,14 +286,14 @@ class AlchemyTool(BaseTool):
             masked_address = f"{address[:6]}...{address[-4:]}"
 
             if has_token:
-                message = f"Address `{masked_address}` holds {total_count} DEN token(s)."
+                message = f"Address `{masked_address}` holds {total_count} access token(s)."
                 if token_ids:
                     message += f" Token IDs: {', '.join(token_ids[:5])}"
                     if len(token_ids) > 5:
                         message += f"... (+{len(token_ids) - 5} more)"
                 self.logger.info(f"Token verification SUCCESS for {masked_address}: has_token=True, count={total_count}, ids={token_ids}")
             else:
-                message = f"Address `{masked_address}` does NOT own any DEN tokens."
+                message = f"Address `{masked_address}` does NOT own any access tokens."
                 self.logger.info(f"Token verification FAILED for {masked_address}: has_token=False")
 
             # Create standardized response format with ALL token IDs

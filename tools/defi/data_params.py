@@ -61,10 +61,6 @@ class WalletHoldingsParams(BaseModel):
 
 class ReconcileParams(BaseModel):
     chain: str = Field("base", description=_chain_field("reconcile against"))
-    ledger_path: str = Field(..., description=(
-        "Path to the LIVE position-ledger markdown file — never a copy or an "
-        "excerpt. Its '## Open positions' table is compared row by row "
-        "against actual on-chain balances."))
     account: Optional[str] = Field(None, description=(
         "Reconcile a token-bound ERC-6551 account (its 0x address) instead of the "
         "treasury wallet. Omit for the treasury."))
@@ -157,7 +153,7 @@ class PoolMetricsParams(BaseModel):
         "The pool id you expect (bytes32). A different PoolKey hash is reported as an ALERT."))
     depth_pct: List[float] = Field(default_factory=lambda: [1.0, 2.0, 5.0], description=(
         "Price moves (in %) to size the depth for, both directions."))
-    mint_native: float = Field(0.021, gt=0, description="Native size of one buy, for the impact figure.")
+    mint_native: float = Field(0.00825, gt=0, description="Native size of one buy, for the impact figure.")
     hook_fee_bps: int = Field(100, ge=0, le=10000, description=(
         "Fee the hook takes from the input, in bps (090: 1%). An assumption, not read."))
 

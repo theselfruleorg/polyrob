@@ -273,3 +273,218 @@ async def run_read_job(task_agent: Any, job: Any, *, tool_factory=None) -> Tuple
                        exc_info=True)
         sent = False
     return ok, "read_verb_delivered" if sent else "read_verb_undelivered"
+
+
+# -- $0 pre-check for watch jobs ---------------------------------------------
+# (lives in this module, not its own, so the cron import cycle gains no member
+# — tests/test_layering_ratchet.py)
+"""$0 pre-check for watch jobs (2026-10-14 review A-12).
+
+Monitor / scout / exit / watcher jobs mostly find nothing: ≈ $44 of ≈ $122 in
+30 days went to LLM runs that read a price and concluded "no change" (EXIT
+MONITOR: 24 runs, 0 useful). The 071 ``$0 watches`` pattern (``cron/read_job.py``)
+already reads a PUBLIC verb in-process with no model turn; a pre-check reuses it
+IN FRONT of an LLM job:
+
+    payload.precheck = {
+        "verb": "defi_data.price",                 # a read_verb (READ_VERBS rows)
+        "params": {"chain": "base", "address": "0x…"},
+        "alert": {"field": "price_usd", "below": 0.8, "above": 1.4},   # optional
+        "move_pct": 5,             # optional, needs "field": run on a ≥ 5 % move
+        "field": "price_usd",      # the metadata key move_pct watches
+        "max_quiet_hours": 24,     # optional: run anyway after this long
+    }
+
+The verb runs first ($0). The tick is a ``cron_run skipped/precheck_quiet``
+(no session, no model call) when the verb read cleanly AND nothing fired:
+no ``alert`` bound crossed, and the ``field`` moved less than ``move_pct`` since
+the last tick that DID run the model. When something fired, the model runs and
+the pre-check's own text rides into the task as ``<precheck>`` so the run does
+not read the same number again.
+
+Fail-OPEN by construction: an unknown verb, a read error, an unreadable value,
+a missing baseline or any exception RUNS the tick — a watch that cannot see its
+number must never read as "all quiet" (the read-job alert rule). The baseline
+(the last value that ran the model) lives in the wake-gate side table in
+``cron.db`` under ``precheck:<job id>`` — no new store.
+"""
+from dataclasses import dataclass as _dataclass, field as _field  # noqa: E402
+
+PAYLOAD_KEY = "precheck"
+#: The ``cron_run`` reason a quiet pre-check records.
+QUIET_REASON = "precheck_quiet"
+_BASELINE_PREFIX = "precheck:"
+
+
+class PrecheckError(ValueError):
+    """A pre-check payload that cannot run as written (refused at schedule/edit)."""
+
+
+@_dataclass
+class PrecheckVerdict:
+    #: True = a $0 tick (record ``cron_run skipped/precheck_quiet``, no model)
+    skip: bool
+    reason: str
+    attrs: Dict[str, Any] = _field(default_factory=dict)
+    #: the read's text, handed to the run as ``<precheck>`` when it runs
+    context: str = ""
+    #: the watched value this tick read (recorded as the baseline after a run)
+    value: Optional[float] = None
+
+
+def validate_precheck(spec: Any) -> Dict[str, Any]:
+    """The normalized spec, or :class:`PrecheckError`. The verb, its params and
+    the alert go through the read-job validator (one allowlist, one param check)."""
+    if not isinstance(spec, dict):
+        raise PrecheckError("precheck must be an object {verb, params, alert?, move_pct?, "
+                            "field?, max_quiet_hours?}")
+    try:
+        base = validate_read_verb({"verb": spec.get("verb"), "params": spec.get("params") or {},
+                                   "alert": spec.get("alert")})
+    except ReadJobError as exc:
+        raise PrecheckError(f"precheck: {exc}") from exc
+    out: Dict[str, Any] = {"verb": base["verb"], "params": base["params"]}
+    if base.get("alert"):
+        out["alert"] = base["alert"]
+    if spec.get("move_pct") is not None:
+        try:
+            move = float(spec["move_pct"])
+        except (TypeError, ValueError) as exc:
+            raise PrecheckError("precheck.move_pct must be a number (percent)") from exc
+        if not move > 0:
+            raise PrecheckError("precheck.move_pct must be above 0")
+        fld = str(spec.get("field") or "").strip()
+        if not fld:
+            raise PrecheckError("precheck.move_pct needs field (the metadata key it watches)")
+        out["move_pct"] = move
+        out["field"] = fld
+    if spec.get("max_quiet_hours") is not None:
+        try:
+            hours = float(spec["max_quiet_hours"])
+        except (TypeError, ValueError) as exc:
+            raise PrecheckError("precheck.max_quiet_hours must be a number") from exc
+        if not hours > 0:
+            raise PrecheckError("precheck.max_quiet_hours must be above 0")
+        out["max_quiet_hours"] = hours
+    if "alert" not in out and "move_pct" not in out:
+        raise PrecheckError("precheck needs alert {field, below?, above?} and/or "
+                            "move_pct + field — otherwise nothing can ever say 'quiet'")
+    return out
+
+
+def _store(data_dir: str):
+    from core.runtime_paths import cron_db_path
+    from cron.wake_gate import WakeGateStore
+    return WakeGateStore(cron_db_path(data_dir))
+
+
+def _baseline(job_id: str, data_dir: str):
+    """``(value, age_seconds)`` of the last tick that ran the model, or None."""
+    from core.sqlite_util import execute_retry
+    st = _store(data_dir)
+    row = execute_retry(st.db_path,
+                        "SELECT fingerprint, updated_at FROM wake_gate WHERE job_id=?",
+                        (_BASELINE_PREFIX + job_id,), fetch="one")
+    if not row:
+        return None
+    try:
+        return float(row[0]), max(0.0, time.time() - float(row[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def record_baseline(job: Any, value: Optional[float], *, data_dir: str) -> None:
+    """After a tick that RAN the model: its value is the next tick's baseline.
+    A tick with no readable value leaves the old baseline. Never raises."""
+    if value is None:
+        return
+    try:
+        from core.sqlite_util import execute_retry
+        st = _store(data_dir)
+        execute_retry(st.db_path,
+                      "INSERT INTO wake_gate (job_id, user_id, fingerprint, ok, updated_at) "
+                      "VALUES (?,?,?,1,?) ON CONFLICT(job_id) DO UPDATE SET "
+                      "fingerprint=excluded.fingerprint, ok=1, updated_at=excluded.updated_at",
+                      (_BASELINE_PREFIX + str(getattr(job, "id", "")),
+                       str(getattr(job, "user_id", "") or ""), repr(float(value)), time.time()))
+    except Exception:
+        logger.warning("precheck: baseline for job %s not recorded", getattr(job, "id", "?"),
+                       exc_info=True)
+
+
+def _value(metadata: Any, path: str) -> Optional[float]:
+    raw = _metadata_value(metadata, path)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+async def run_precheck(job: Any, *, data_dir: str, tool_factory=None) -> Optional[PrecheckVerdict]:
+    """None when the job declares no pre-check. Otherwise a verdict; ANY doubt
+    is ``skip=False`` (run the model). Never raises."""
+    payload = dict(getattr(job, "payload", None) or {})
+    spec = payload.get(PAYLOAD_KEY)
+    if not spec:
+        return None
+    try:
+        spec = validate_precheck(spec)
+    except PrecheckError as exc:
+        logger.warning("cron job %s: %s — running the tick", getattr(job, "id", "?"), exc)
+        return PrecheckVerdict(False, "precheck_invalid", {"error": str(exc)[:200]})
+    try:
+        cls, model = _load(spec["verb"])
+        tool = (tool_factory or cls)()
+        action = _read_verbs()[spec["verb"]][2]
+        result = await getattr(tool, action)(model(**spec["params"]))
+    except Exception as exc:
+        return PrecheckVerdict(False, "precheck_error", {"error": f"{type(exc).__name__}"})
+    err = getattr(result, "error", None)
+    text = str(getattr(result, "extracted_content", "") or "")
+    if err:
+        return PrecheckVerdict(False, "precheck_error", {"error": str(err)[:200]},
+                               context=f"The pre-check read FAILED: {str(err)[:300]}")
+    metadata = getattr(result, "metadata", None)
+    lines = alert_lines(spec.get("alert"), metadata)
+    watched = spec.get("field") or (spec.get("alert") or {}).get("field")
+    value = _value(metadata, watched) if watched else None
+    ctx = ("\n".join(lines) + "\n\n" if lines else "") + text[:1500]
+    if lines:
+        return PrecheckVerdict(False, "precheck_alert", {"alerts": len(lines)}, ctx, value)
+    attrs: Dict[str, Any] = {"precheck": spec["verb"]}
+    if value is not None:
+        attrs["value"] = value
+    if "move_pct" in spec and value is None:
+        return PrecheckVerdict(False, "precheck_unreadable", attrs,
+                               f"The pre-check could not read {watched} — it is UNKNOWN, "
+                               f"not unchanged.\n\n{text[:1500]}", None)
+    base = None
+    if "move_pct" in spec or spec.get("max_quiet_hours"):
+        try:
+            base = _baseline(str(getattr(job, "id", "")), data_dir)
+        except Exception:
+            base = None
+        if base is None:
+            # No tick has run the model yet (or the baseline is unreadable).
+            return PrecheckVerdict(False, "precheck_no_baseline", attrs, ctx, value)
+        if spec.get("max_quiet_hours") and base[1] >= spec["max_quiet_hours"] * 3600:
+            return PrecheckVerdict(False, "precheck_quiet_too_long", attrs, ctx, value)
+    if "move_pct" in spec:
+        prev = base[0]
+        moved = abs(value - prev) / abs(prev) * 100.0 if prev else float("inf")
+        attrs.update(baseline=prev, moved_pct=round(moved, 3) if moved != float("inf") else None)
+        if moved >= spec["move_pct"]:
+            return PrecheckVerdict(False, "precheck_moved", attrs, ctx, value)
+    return PrecheckVerdict(True, QUIET_REASON, attrs, ctx, value)
+
+
+def context_block(verdict: Optional[PrecheckVerdict]) -> str:
+    """The ``<precheck>`` block a run that the pre-check let through carries."""
+    if verdict is None or verdict.skip or not verdict.context:
+        return ""
+    return (f"<precheck reason=\"{verdict.reason}\">\nThe job's $0 pre-check already read "
+            f"this — use it; do not read the same figure again.\n{verdict.context}\n</precheck>")
+
+

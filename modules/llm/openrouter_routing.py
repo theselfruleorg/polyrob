@@ -63,3 +63,90 @@ def apply_provider_routing(request_params: Dict[str, Any],
         extra.update(body)
         request_params["extra_body"] = extra
     return request_params
+
+
+# ---------------------------------------------------------------------------
+# B-3 (review 2026-10-14, owner approved): `tool_choice` on an agent step.
+#
+# 13.4 % of agent calls came back as a text-only "empty action" while the
+# client always sent `tool_choice:"auto"`. On an agent step every reply IS a
+# tool call (`send_message` talks, `done` ends), so the step asks for
+# `required`. Aux, no-tools and other callers keep `auto`. An upstream that
+# rejects `required` gets ONE retry with `auto`, and the model is remembered
+# for the life of the process so the next step does not pay the 400 again.
+# ---------------------------------------------------------------------------
+
+_TOOL_CHOICES = frozenset({"auto", "required", "none"})
+#: the tool whose presence marks a call as an agent step
+AGENT_STEP_TOOL = "done"
+_REQUIRED_REJECTED: set = set()
+
+
+def _tool_names(tools: Any) -> set:
+    names = set()
+    for t in tools or []:
+        if isinstance(t, dict):
+            fn = t.get("function") if isinstance(t.get("function"), dict) else t
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
+
+def resolve_tool_choice(tools: Any, model: Optional[str],
+                        explicit: Optional[str] = None) -> str:
+    """The `tool_choice` for a request that carries *tools*.
+
+    *explicit* (``auto``/``required``/``none``) wins; else ``required`` when the
+    toolset holds :data:`AGENT_STEP_TOOL` (an agent step), else ``auto``. A
+    ``required`` for a model that already rejected it in this process is
+    ``auto``.
+    """
+    value = (explicit or "").strip().lower()
+    if value not in _TOOL_CHOICES:
+        value = "required" if AGENT_STEP_TOOL in _tool_names(tools) else "auto"
+    if value == "required" and (model or "") in _REQUIRED_REJECTED:
+        return "auto"
+    return value
+
+
+def is_tool_choice_rejection(exc: BaseException) -> bool:
+    """True when a provider error refuses the `tool_choice` value (a 400, or
+    OpenRouter's 404 "no endpoints ... tool_choice")."""
+    text = str(exc or "").lower()
+    return "tool_choice" in text or "tool choice" in text
+
+
+def remember_required_rejected(model: Optional[str]) -> None:
+    """Never ask *model* for ``required`` again in this process."""
+    if model:
+        _REQUIRED_REJECTED.add(model)
+
+
+def tool_choice_for(client: Any, tools: Any, explicit: Optional[str] = None) -> str:
+    """The client's `tool_choice`. ``required`` on an agent step is OpenRouter's
+    own default only: a subclass (NIM, an OpenAI-compatible local server) keeps
+    ``auto`` unless the caller asks explicitly."""
+    if explicit is None and getattr(client, "_PROVIDER_LABEL", "OpenRouter") != "OpenRouter":
+        return "auto"
+    return resolve_tool_choice(tools, getattr(client, "model_type", None), explicit)
+
+
+async def create_with_tool_choice_fallback(client: Any, sdk: Any,
+                                           request_params: Dict[str, Any]) -> Any:
+    """One `chat.completions.create`. An upstream that refuses
+    ``tool_choice:"required"`` is retried ONCE with ``auto``, and the model is
+    remembered for the process. Any other error propagates unchanged."""
+    try:
+        return await sdk.chat.completions.create(**request_params)
+    except Exception as e:
+        if request_params.get("tool_choice") != "required" or not is_tool_choice_rejection(e):
+            raise
+        model = getattr(client, "model_type", None)
+        remember_required_rejected(model)
+        logger = getattr(client, "logger", None)
+        if logger is not None:
+            logger.warning(f"event=tool_choice_required_rejected model={model} "
+                           f"action=retry_auto ({str(e)[:160]})")
+        request_params["tool_choice"] = "auto"
+        return await sdk.chat.completions.create(**request_params)

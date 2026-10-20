@@ -1,6 +1,6 @@
 """043 W10 — a console approval wakes the owning session across processes.
 
-On prod Rob #1 the console (``polyrob-webview.service``) and the agent
+On a split-service install the console (``polyrob-webview.service``) and the agent
 (``polyrob.service``) run as SEPARATE processes. When the owner approves a gated
 tool call from the console, the deciding process holds NO ``task_agent`` that owns
 the asking session — and ``deliver_self_wake`` refuses a remote session by design.

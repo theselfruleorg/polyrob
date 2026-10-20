@@ -84,11 +84,34 @@ def _sentinel_path() -> str:
     return os.path.join(base, SENTINEL_FILENAME)
 
 
+#: A 402 that says "wait", not "pay". OpenRouter refuses a request whose
+#: reservation, ADDED to the account's other in-flight requests, passes the
+#: balance (``metadata.reason = in_flight_budget_exceeded``). The account is
+#: funded and the request succeeds once a sibling settles — prod 2026-10-12 read
+#: it as credit death, paused autonomy for 6h and failed a goal over to a dead
+#: provider.
+_TRANSIENT_BUDGET_MARKERS = (
+    "in_flight_budget",
+    "in-flight requests",
+)
+
+
+def looks_like_transient_budget(text: Optional[str]) -> bool:
+    """Is this a 402 that clears by itself once concurrent requests settle?
+    Callers treat it as a rate limit (back off, retry), never as credit death."""
+    if not text:
+        return False
+    low = str(text).lower()
+    return any(m in low for m in _TRANSIENT_BUDGET_MARKERS)
+
+
 def looks_like_credit_death(text: Optional[str]) -> bool:
     """Does a run-refusal status / exception string look like provider credit
     death? Called on framework status strings ("Session failed: PERMANENT
     ERROR: … 402 …"), not on agent prose."""
     if not text:
+        return False
+    if looks_like_transient_budget(text):
         return False
     low = str(text).lower()
     if any(m in low for m in _CREDIT_DEATH_MARKERS):

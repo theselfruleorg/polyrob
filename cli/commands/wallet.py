@@ -27,6 +27,7 @@ from cli.commands.config import _upsert_env
 from cli._admin_home import as_root_option
 from core.paths import polyrob_home
 from core.wallet.onchain import VENUE_CHAIN as _VENUE_CHAIN, balances as _balances
+from core.wallet.token_template import TokenTemplateError, format_supply as _fmt_supply, to_exact_supply, validate_token_names  # noqa: E501
 # C60: the venue rule lived here AND in `surfaces/telegram/owner_ops.py`, each
 # with its own comment explaining the same footgun. One tuple, imported.
 from surfaces.telegram.owner_ops import _FUNDABLE_VENUES
@@ -145,7 +146,7 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
     # config); export/init also load it themselves (override=False → harmless double).
     from polyrob.app.bootstrap import load_env
     try:
-        load_env(local_mode=True)
+        load_env()
     except Exception:
         pass
     if ctx.invoked_subcommand is not None:
@@ -515,9 +516,7 @@ def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None)
     _upsert_env(env_path, "AGENT_WALLET_MASTER_SEED", seed, secure=True)
     # H1 (2026-07-15): pin the derivation scheme in the SAME global .env as the seed
     # so the scheme travels WITH the seed and resolve_scheme (env override wins) is
-    # CWD-independent. The write-once meta.json lives under the data-home (CWD-relative
-    # in local mode when POLYROB_DATA_DIR is unset), so running from a different dir
-    # could miss it and silently flip a funded bip44 wallet to legacy = wrong address.
+    # CWD-independent (meta.json under a CWD-relative data-home could flip bip44 to legacy).
     _upsert_env(env_path, "AGENT_WALLET_DERIVATION", scheme, secure=True)
     os.environ["AGENT_WALLET_MASTER_SEED"] = seed
     os.environ["AGENT_WALLET_ENABLED"] = "true"
@@ -598,7 +597,7 @@ def wallet_export_cmd(venue):
     import os, sys
     from polyrob.app.bootstrap import load_env
     try:
-        load_env(local_mode=True)
+        load_env()
     except Exception:
         pass
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -710,7 +709,7 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
     from pathlib import Path as _P
     from polyrob.app.bootstrap import load_env
     try:
-        load_env(local_mode=True)  # see file-based seeds before deciding "already set"
+        load_env()  # see file-based seeds before deciding "already set"
     except Exception:
         pass
     # M14 (2026-07-15): a flag supplied with an EMPTY value ("") is the request for
@@ -1211,7 +1210,7 @@ def _echo_result(result, *, what: str):
 
 @wallet_cmd.command("deploy-token")
 @click.argument("symbol")
-@click.argument("supply", type=float)
+@click.argument("supply", type=to_exact_supply)   # 085 W7: Decimal, never float
 @click.argument("name", nargs=-1, required=True)
 @click.option("--chain", default="base", show_default=True)
 @click.option("--decimals", type=int, default=None,
@@ -1253,19 +1252,17 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
     This does NOT make the token tradable — use `polyrob wallet launch` for that.
     """
     import asyncio
-
     from tools.defi.deploy_verb import perform_deploy_token
     from tools.defi.trade_tool import DefiTradeTool, DeployTokenParams
-
-    label = " ".join(name)
+    try:    # 085 W7: refuse a non-ASCII name BEFORE the confirm, never after
+        label, symbol = validate_token_names(" ".join(name), symbol)
+    except TokenTemplateError as exc:
+        raise click.ClickException(str(exc)) from None
     is_solana = str(chain).strip().lower() == "solana"
 
-    # C35: `--decimals` defaulted to 18 and the Solana branch silently did
-    # `min(decimals, 9)`, so `--decimals 18` on Solana produced a 9-decimal
-    # mint and said nothing; and `--uri` was accepted on an EVM deploy and
-    # dropped on the floor, so a token deployed with a logo had none. A flag
-    # that cannot be honoured is REFUSED, and a default that differs by chain
-    # is resolved from the chain, not from a literal.
+    # C35: `--decimals 18` on Solana was silently clamped to 9, and `--uri` on
+    # an EVM deploy was silently dropped. A flag that cannot be honoured is
+    # REFUSED; a default that differs by chain is resolved from the chain.
     if decimals is None:
         decimals = 9 if is_solana else 18
     elif is_solana and decimals > 9:
@@ -1291,7 +1288,7 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
                 "nothing to mine against here.")
         if execute and not yes:
             click.echo(click.style(
-                f"About to mint {supply:g} {symbol} on Solana and revoke the "
+                f"About to mint {_fmt_supply(supply)} {symbol!r} ({label!r}) on Solana and revoke the "
                 f"mint authority. This cannot be undone.", fg="yellow"))
             click.confirm("Proceed?", abort=True)
         sol_params = SolanaDeployTokenParams(
@@ -1304,8 +1301,8 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
         return
     if execute and not yes:
         click.echo(click.style(
-            f"About to deploy {symbol} ({label}) with a fixed supply of "
-            f"{supply:g} on {chain}. A deployment cannot be undone and the "
+            f"About to deploy {symbol!r} ({label!r}) with a fixed supply of "
+            f"{_fmt_supply(supply)} on {chain}. A deployment cannot be undone and the "
             f"supply can never change.", fg="yellow"))
         click.confirm("Proceed?", abort=True)
 
@@ -1746,7 +1743,7 @@ def wallet_asset_add(ctx, asset_id, chain, address, decimals, symbol,
     import time
 
     from core.payments.assets import (AssetStore, PaymentAsset, store_path,
-                                      verify_on_chain)
+                                      unpinned_stable_note, verify_on_chain)
 
     chain = _require_known_chain(chain)
     address = _require_address(chain, address)
@@ -1754,7 +1751,7 @@ def wallet_asset_add(ctx, asset_id, chain, address, decimals, symbol,
     if verify:
         decimals, symbol = verify_on_chain(chain, address,
                                            rpc_call=_asset_rpc(ctx, chain))
-        click.echo(f"verified on {chain}: decimals={decimals} symbol={symbol}")
+        click.echo(f"verified on {chain}: decimals={decimals} symbol={symbol}{unpinned_stable_note(chain, address, symbol)}")
     if decimals is None:
         raise click.ClickException(
             "--decimals is required without --verify (never guess decimals: "

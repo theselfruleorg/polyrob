@@ -12,12 +12,11 @@ from click.testing import CliRunner
 
 
 def test_owner_group_invokes_load_env(monkeypatch):
-    """The group callback must call load_env(local_mode=True) before subcommands run."""
+    """The group callback must call load_env() before subcommands run."""
     calls = {}
 
     def _spy_load_env(*args, **kwargs):
         calls["called"] = True
-        calls["local_mode"] = kwargs.get("local_mode")
 
     monkeypatch.setattr(bootstrap, "load_env", _spy_load_env)
     monkeypatch.setattr(bootstrap, "setup_project_path", lambda: "")
@@ -27,7 +26,6 @@ def test_owner_group_invokes_load_env(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls.get("called") is True, "owner group did not call load_env"
-    assert calls.get("local_mode") is True, "owner group must load env with local_mode=True"
 
 
 def test_owner_show_reflects_file_set_owner(monkeypatch):

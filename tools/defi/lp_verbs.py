@@ -9,7 +9,6 @@ import time
 import json
 import math
 
-from core.security.refusal_taint import PreconditionUnmet
 from core.wallet import abi, chains, dex_registry, simulation, tx_guard, univ3_math as M
 from tools.defi import lp_abi as A, lp_reads as R
 
@@ -190,12 +189,12 @@ def prepare_add(p, rpc, holder, npm, price_fn=None):
         if not nat:
             available = R.allowance(rpc, p.chain, t, holder, npm)
             if available < n:
-                raise PreconditionUnmet(f'allowance short: {available}, need {n}. Run defi_trade.approve_token(chain={p.chain}, token={t}, spender={npm}, amount={Decimal(n) / 10**dec}) first; one exact approval per transaction.')
+                raise ValueError(f'allowance short: {available}, need {n}. Run defi_trade.approve_token(chain={p.chain}, token={t}, spender={npm}, amount={Decimal(n) / 10**dec}) first; one exact approval per transaction.')
             balance = int(R.view(rpc, t, A.NPM_BALANCE_OF, [holder]))
         else:
             balance = int(rpc('eth_getBalance', [holder, 'latest']), 16)
         if balance < n:
-            raise PreconditionUnmet(f'insufficient balance of {t}')
+            raise ValueError(f'insufficient balance of {t}')
         out.append((None if nat else t, n))
         held.append((None if nat else t, balance))
     deadline = int(time.time()) + 600
@@ -320,7 +319,8 @@ async def _perform(tool, p, ctx, verb):
         return tool._ar(error=verdict.reason)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error='agent wallet not enabled (AGENT_WALLET_ENABLED)')
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     signer, gate = wallet.operational_signer(), wallet.policy
     try:
         rail = (tool._rail_factory or EvmRail)(chain=p.chain, signer=signer)
@@ -336,8 +336,7 @@ async def _perform(tool, p, ctx, verb):
                     prepare_exit(p, rpc, signer.address, npm, verb,
                                  price_fn=exit_price_fn(tool)))
     except Exception as exc:
-        from core.security.refusal_taint import kind_of
-        return tool._ar(error=f'refused: {exc}. RESULT: NOT SENT.', error_kind=kind_of(exc))
+        return tool._ar(error=f'refused: {exc}. RESULT: NOT SENT.')
     async with gate.reserve():
         from tools.controller.action_registration import (
             _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
@@ -385,12 +384,10 @@ async def _perform(tool, p, ctx, verb):
                 raise ValueError('owner paused spending before broadcast')
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text, outcome_unknown
+            from core.wallet.broadcast.evm import broadcast_failure_text, outcome_unknown
             if outcome_unknown(exc):
-                return tool._ar(error=broadcast_failure_text(exc),
-                    error_kind=broadcast_error_kind(exc))
-            return tool._ar(error=f'refused before broadcast: {exc}',
-                            error_kind=broadcast_error_kind(exc))
+                return tool._ar(error=broadcast_failure_text(exc))
+            return tool._ar(error=f'refused before broadcast: {exc}')
         tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=f'{p.chain}:{p.protocol}',
             chain=p.chain, amount_in=plan.description, usd=decision.amount_usd,
             tx_ref=tx_hash, lane=decision.lane), settled=False)

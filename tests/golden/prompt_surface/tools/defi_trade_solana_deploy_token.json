@@ -1,0 +1,53 @@
+{
+  "function": {
+    "description": "Deploy a NEW fixed-supply SPL token on SOLANA, with its name and symbol written ON-CHAIN (Token-2022 metadata — no Metaplex account needed). Everything that could later change is closed in the SAME transaction: the whole supply is minted to the agent, the mint authority is revoked, no freeze authority is ever created, and the metadata update authority is revoked so the name cannot be swapped. The mint is then READ BACK and all of that is proven, not assumed. Pass a `uri` to a JSON file for a logo. For an EVM chain use deploy_token. dry_run defaults to TRUE.",
+    "name": "defi_trade_solana_deploy_token",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "decimals": {
+          "default": 9,
+          "description": "Decimal places. 9 is Solana's convention (SOL itself). supply x 10**decimals must fit in a u64.",
+          "maximum": 9,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) builds, simulates and asserts the whole supply arrives, without broadcasting.",
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "description": "The most USD this may cost. A mint creation sends nothing — the cost is ~0.0035 SOL of rent for the mint and the token account, plus fees.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "name": {
+          "default": "",
+          "description": "Token name, e.g. 'Rob Coin'. Written ON-CHAIN via Token-2022 metadata, so every explorer and wallet shows it. Defaults to the symbol. Max 64 characters, printable ASCII only.",
+          "type": "string"
+        },
+        "supply": {
+          "description": "TOTAL supply in WHOLE units (a string is exact), minted in full to the agent's Solana token account. The mint authority is revoked in the same transaction, so this is the supply forever.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Ticker, e.g. 'ROB'. Written ON-CHAIN alongside the name. Max 16 characters, printable ASCII only.",
+          "type": "string"
+        },
+        "uri": {
+          "default": "",
+          "description": "Optional https:// or ipfs:// URI of a JSON metadata file ({name, symbol, description, image}). This is where a LOGO comes from — without it the token shows with no picture anywhere. Host it yourself; any public HTTPS URL works.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "supply",
+        "max_spend_usd"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

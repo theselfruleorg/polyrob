@@ -107,7 +107,8 @@ def test_every_bridge_notice_carries_the_ORIGIN_chain():
 
 def test_the_watcher_names_the_origin_and_never_the_destination():
     source = (_REPO / "core" / "wallet" / "bridge_watcher.py").read_text()
-    assert source.count("chain=origin_name") == 4  # + the SVM proven-arrival notice
+    # Every watcher notice names the origin (085 W6 merged the EVM and SVM arrival notices).
+    assert source.count("chain=origin_name") == source.count("TxNotice(") >= 3
     assert 'origin_name = bridge_guard.chain_name_for_id(row.get("origin_chain_id"))' in source
     assert "chain=chain_name" not in source
 

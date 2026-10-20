@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Requeue a BLOCKED goal with a rationale (§5.3 stewardship; resets its retry budget).",
+    "name": "goal_unblock",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "goal_id": {
+          "description": "The blocked goal id.",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "description": "Why it can proceed now (what changed).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

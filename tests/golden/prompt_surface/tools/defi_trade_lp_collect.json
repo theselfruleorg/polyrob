@@ -1,0 +1,41 @@
+{
+  "function": {
+    "description": "Collect fees from your v3 liquidity position without reducing liquidity. Both token receipts are asserted; caps charge gas. dry_run defaults true.",
+    "name": "defi_trade_lp_collect",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "robinhood",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) simulates and asserts without broadcasting.",
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "default": 5.0,
+          "description": "Maximum gas fee in USD.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "protocol": {
+          "default": "v3",
+          "description": "'v3' only.",
+          "type": "string"
+        },
+        "token_id": {
+          "description": "Your position NFT id.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "token_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

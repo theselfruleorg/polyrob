@@ -37,7 +37,7 @@ class _Agent(mp.MemoryPrefetchMixin):
 @pytest.fixture
 def _stub_build(monkeypatch):
     """Make build_prefetch_message return a sentinel so a fire => one push."""
-    async def _fake(query, *, session_id, user_id=None, seen=None):
+    async def _fake(query, *, session_id, user_id=None, seen=None, **_kw):
         return object()  # non-None -> mixin pushes it
 
     monkeypatch.setattr(mp, "build_prefetch_message", _fake)

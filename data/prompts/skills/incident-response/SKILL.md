@@ -3,9 +3,10 @@ name: incident-response
 description: 'Run a live incident: impact first, stabilise before root cause, roll back before you debug, one change at a time, an append-only timeline, recovery only on an observed signal. Includes the leaked-secret containment order (revoke or rotate, scope the exposure, purge, prove the old credential dead, record).'
 license: MIT
 metadata:
+  polyrob-when: 'Something is broken live, or a secret leaked'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["incident response","production incident","live incident","security incident","outage","postmortem","post-mortem","leaked key","leaked secret","leaked token","leaked credentials","exposed secret","credential leak","wallet drained","account compromised","key compromised"],"task_patterns":["\\b(prod|production|site|website|service|server|api|bot|agent|app|endpoint|database|db)\\b.{0,40}\\b(is|went|goes|has gone|keeps going)\\s+down\\b","\\bleak(ed|s|ing)?\\b.{0,40}\\b(api ?keys?|secrets?|tokens?|credentials?|passwords?|seed phrase|mnemonic|private keys?)\\b","\\b(api ?keys?|secrets?|tokens?|credentials?|passwords?|seed phrase|mnemonic|private keys?)\\b.{0,40}\\b(leaked|exposed|compromised|stolen)\\b","\\b(wallet|account|server|vps)\\b.{0,30}\\b(drained|compromised|hacked|breached)\\b"],"tool_ids":[]}'
+  polyrob-requires: '["secret-handling"]'
   polyrob-version: '1'
 ---
 # Incident Response

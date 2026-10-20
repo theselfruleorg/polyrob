@@ -43,11 +43,9 @@ def _rail(monkeypatch, exc):
 ])
 def test_a_definitive_rejection_is_not_sent_and_frees_the_interlock(monkeypatch, msg):
     r = _rail(monkeypatch, onchain.RpcError(f"eth_sendRawTransaction: {msg}"))
-    with pytest.raises(BroadcastError, match='rejected') as info:
+    with pytest.raises(BroadcastError, match='rejected'):
         r.sign_and_send({'chainId': 8453, 'nonce': 1})
     assert J.unresolved() == []
-    # A market condition, tagged where it was raised: the run is not refusal-tainted.
-    assert info.value.precondition is True
 
 
 @pytest.mark.parametrize('exc', [

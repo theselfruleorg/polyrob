@@ -9,7 +9,7 @@ import types
 import pytest
 
 from agents.task.agent.skill_manager import SkillManager
-from agents.task.agent.skill_writer import PROVENANCE_BACKGROUND
+from modules.skills.writer import PROVENANCE_BACKGROUND
 
 
 @pytest.fixture(autouse=True)

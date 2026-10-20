@@ -189,7 +189,7 @@ def _seed_identity_docs(instance_id: str) -> str:
 def _ensure_user_skills_home() -> Path | None:
     """Create ``~/.agents/skills`` — the place a user's own skills go.
 
-    The directory has always been READ (``agents/task/agent/skill_discovery``)
+    The directory has always been READ (``core/skills/scopes``)
     and never created, so "where do I put a skill" had no visible answer.
     """
     try:
@@ -635,7 +635,7 @@ def init_cmd(
     import os as _os
     try:
         from polyrob.app.bootstrap import load_env
-        load_env(local_mode=True)
+        load_env()
         merged_env = dict(_os.environ)
     except Exception:
         # Degrade to the just-written file + process env, never crash init.

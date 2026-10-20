@@ -50,7 +50,7 @@ def test_seam_is_silent_on_a_local_box(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("mod", ["cli.ui.commands.h_owner", "cli.ui.commands.h_cards",
-                                 "cli.ui.commands.h_cron"])
+                                 "cli.ui.commands.h_job"])
 def test_repl_owner_tenants_use_the_seam(deployed_owner, mod):
     import importlib
     assert importlib.import_module(mod)._tenant(_ctx()) == deployed_owner

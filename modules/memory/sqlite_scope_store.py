@@ -230,8 +230,7 @@ class ScopeStoreMixin:
     def _prunable_rowids(self, older_than_ts: int,
                          autonomous_older_than_ts: Optional[int] = None) -> List[int]:
         """Stamped rows past the general cutoff, plus (B2, 2026-10-11) rows from
-        an autonomous run past the shorter autonomous cutoff, unless the row
-        carries an owner ruling, a lesson or a decision. Raises on a DB
+        an autonomous run past the shorter autonomous cutoff. Raises on a DB
         error — the callers own the fail-open."""
         rows = execute_retry(
             self.db_path, "SELECT mem_rowid FROM mem_provenance WHERE ts < ?",
@@ -239,16 +238,13 @@ class ScopeStoreMixin:
         ids = {r["mem_rowid"] for r in (rows or [])}
         if autonomous_older_than_ts is not None and autonomous_older_than_ts > older_than_ts:
             try:
-                from modules.memory.write_filter import is_protected
                 auto = execute_retry(
                     self.db_path,
-                    "SELECT p.mem_rowid AS mem_rowid, m.content AS content "
+                    "SELECT p.mem_rowid AS mem_rowid "
                     "FROM mem_provenance p JOIN memories m ON m.rowid = p.mem_rowid "
                     f"WHERE p.ts < ? AND {self._AUTONOMOUS_SQL}",
                     (int(autonomous_older_than_ts),), fetch="all")
-                # An owner ruling / lesson / decision keeps the long window.
-                ids.update(r["mem_rowid"] for r in (auto or [])
-                           if not is_protected(r["content"] or ""))
+                ids.update(r["mem_rowid"] for r in (auto or []))
             except Exception as e:  # no episodes table yet: the general window only
                 logger.debug("autonomous memory window skipped: %s", e)
         return sorted(ids)

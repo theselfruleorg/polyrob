@@ -1,0 +1,19 @@
+{
+  "function": {
+    "description": "List ingested sources in the knowledge base.",
+    "name": "knowledge_kb_list",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "default": null,
+          "description": "Filter by collection (omit for all).",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

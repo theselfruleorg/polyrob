@@ -1110,7 +1110,7 @@ _NUMERIC_SHAPE_RE = re.compile(r"`(-?\d+(?:\.\d+)?)`")
 
 
 def _pattern_to_regex(name: str) -> "re.Pattern[str]":
-    """Turn a dynamic catalog name (e.g. ``POLYROB_<PROVIDER>_MODEL``) into a
+    """Turn a dynamic catalog name (e.g. ``AUX_MODEL_<SLOT>``) into a
     regex that matches any concrete flag name following that shape."""
     parts = _PLACEHOLDER_RE.split(name)
     body = "[A-Z0-9_]+".join(re.escape(p) for p in parts)

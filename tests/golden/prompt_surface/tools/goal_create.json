@@ -1,0 +1,98 @@
+{
+  "function": {
+    "description": "Record a DURABLE goal pursued across sessions (beyond this turn). Use for ongoing work; use `task` for this-turn TODOs and `cronjob` for time-scheduled runs.",
+    "name": "goal_create",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance": {
+          "default": null,
+          "description": "What 'done' must prove (ids/paths/urls).",
+          "nullable": true,
+          "type": "string"
+        },
+        "acceptance_checks": {
+          "default": null,
+          "description": "Optional TYPED checks the framework executes at run end (fail-closed when present). ONLY these types exist — do NOT invent others: [{'type':'artifact_glob','pattern':'*.md'}, {'type':'http_ok','url':'https://…'}, {'type':'artifact','name':'report.md','contains':['A']}, {'type':'file_contains','path':'report.md','contains':['A','B'],'mode':'all'}]. Prefer setting one when the outcome is mechanically checkable. At most 10 checks; malformed checks are rejected, never dropped. Paths are run-workspace-relative; HTTP probes require public endpoints. file_contains is a case-insensitive literal-substring match — use it only for known-exact strings (an id, a file path, a specific number). Do NOT use it to assert a report 'discusses'/'covers' a topic (e.g. contains=['PnL'] to check the report mentions profit/loss) — a semantically-complete report using different wording will fail this check and force a wasted retry. For that kind of completeness, describe it in plain-English `acceptance` instead and let the completion judge read it.",
+          "items": {},
+          "nullable": true,
+          "type": "array"
+        },
+        "body": {
+          "default": "",
+          "description": "Full instructions for pursuing the goal (what 'done' looks like).",
+          "type": "string"
+        },
+        "depends_on": {
+          "default": null,
+          "description": "Goal ids that must complete first — the goal waits until they are done.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "memory_regime": {
+          "default": null,
+          "description": "Optional memory isolation for this goal's runs: 'shared', 'scoped' (reads shared memory, its own findings stay quarantined until it completes verified) or 'sealed' (sees only its own findings). Omit for the deployment default. Never weaker than the creating run's.",
+          "nullable": true,
+          "type": "string"
+        },
+        "priority": {
+          "default": 5,
+          "description": "1-10, higher runs first.",
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "report_back": {
+          "default": false,
+          "description": "056 WS7: when true the FULL result re-enters the session that created this goal; default false = a one-line 'goal <id> done — <first line>' notice (the artefacts are on disk either way).",
+          "type": "boolean"
+        },
+        "rig": {
+          "default": null,
+          "description": "Optional NAMED tool rig instead of an explicit `tools` list: 'money_rail', 'social', 'research', 'ops', or 'full'. A narrow rig ships far fewer tool schemas on every step of the run, which is most of what a goal costs. `tools`, when set, always wins. A rig is a REQUEST, not a grant: a rig with an id outside the ceiling described under `tools` is REFUSED (e.g. 'money_rail' asks for defi_trade, which needs DEFI_AGENT_AUTONOMY armed; 'ops' asks for cronjob, which needs autonomous mode).",
+          "nullable": true,
+          "type": "string"
+        },
+        "skills": {
+          "default": null,
+          "description": "Optional skill ids this goal's runs must load (its doctrine, e.g. ['rh-reporting']). Pinned skills load every run instead of depending on keyword matching; they grant no tool. Up to 8; omit to match by keyword.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "target_token": {
+          "additionalProperties": false,
+          "default": null,
+          "description": "068: the ONE contract this goal's runs may acquire, as data: {'chain': 'robinhood', 'address': '0x…'}. Buys of anything else are refused. A goal created by a run that already has a target inherits it and may only restate the same one.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "title": {
+          "description": "Short title for the durable goal.",
+          "minLength": 3,
+          "type": "string"
+        },
+        "tools": {
+          "default": null,
+          "description": "ALWAYS list every tool this goal needs to actually finish (e.g. 'twitter' to post to X, 'email' to send mail, 'message' to post to telegram, 'x402_invoice' to invoice, 'web_fetch' to read the web) — a goal without the right tools dispatches tool-starved and blocks. Filtered to the self-goal ceiling: filesystem, task, web_fetch, knowledge, browser, perplexity, mcp, anysite, coding (runs tests, so it executes commands), twitter, email, message, x402_invoice, defi_data. Under autonomous mode the ceiling widens to the autonomous grant (adds goal, cronjob, x_browser; plus defi_trade, launchpad, dapp_browser and x402_pay when DEFI_AGENT_AUTONOMY is armed). Host shell/process/code_execution are never granted here. Dropped ids are named in the result. If unset, tools are inferred from the goal text and a safe baseline is applied.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

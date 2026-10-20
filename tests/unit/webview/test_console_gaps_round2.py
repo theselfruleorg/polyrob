@@ -150,7 +150,7 @@ def test_autonomy_halt_is_raise_only(monkeypatch):
 
 def test_provider_selectors_stay_writable():
     from core.config_service import is_console_unwritable
-    for key in ("DEFAULT_PROVIDER", "CHAT_PROVIDER", "CHAT_MODEL"):
+    for key in ("DEFAULT_PROVIDER", "DEFAULT_MODEL"):
         assert not is_console_unwritable(key), key
 
 

@@ -92,8 +92,10 @@ TOOL_LOOKAHEAD_WINDOW = 15  # Default, use get_tool_lookahead_window() for dynam
 # ========== AUX-MODEL ROUTER (A5/A1 + generalized) ==========
 # Provider -> cheap auxiliary model, used for compaction (`llm_compact_history`) and the
 # judge aux task (output validation) via resolve_aux_model() below.
-# NOTE: this map has no "openrouter" key (intentional) — an openrouter session's aux
-# tasks resolve to None and fall back to the main model.
+# NOTE: this map has no "openrouter" key. OpenRouter serves many model families, so its
+# cheap aux model is keyed by the MAIN model's family instead
+# (OPENROUTER_AUX_FAMILY_MAP below; 2026-10-14 review B-2 — before it, AUX_AUTO was inert
+# on an openrouter box). A family with no row resolves to None => the main model.
 # (Reference parity: auxiliary.compression.model — a small/fast model for compaction.)
 COMPACTION_AUX_MODEL_MAP = {
     "anthropic": "claude-haiku-4-5",
@@ -112,6 +114,28 @@ COMPACTION_AUX_MODEL_MAP = {
 # Alias: the generalized router reuses the same cheap-model map for all aux tasks.
 AUX_MODEL_MAP = COMPACTION_AUX_MODEL_MAP
 
+# OpenRouter: main-model family prefix -> the cheap aux model of that family. First
+# match wins. `deepseek/*` has no row: its flash IS the cheap tier, so aux = main.
+OPENROUTER_AUX_FAMILY_MAP = (
+    ("z-ai/glm-5", "z-ai/glm-5.3-flash"),
+)
+
+
+def _openrouter_aux_model(main_model):
+    """The cheap aux model for an openrouter MAIN model, or None (=> the main model).
+    ``main_model`` None => the operator's pinned openrouter model."""
+    if not main_model:
+        try:
+            from core.runtime_config import operator_model_for
+            main_model = operator_model_for("openrouter")
+        except Exception:
+            main_model = None
+    name = str(main_model or "").strip().lower()
+    for prefix, cheap in OPENROUTER_AUX_FAMILY_MAP:
+        if name.startswith(prefix):
+            return None if name == cheap else cheap
+    return None
+
 # Per-task explicit override env var names (the slot names, AUX_MODEL_<SLOT>).
 # UP-10 2.1: only `compaction` (live) and `judge` (wired into output validation,
 # default-off/fail-open) remain. `planner`/`vision` had zero call sites and were
@@ -122,7 +146,7 @@ _AUX_TASK_ENV = {
 }
 
 
-def _resolve_aux_model_with_origin(task, provider=None):
+def _resolve_aux_model_with_origin(task, provider=None, main_model=None):
     """``(model, from_cheap_map)`` for aux `task`. See ``resolve_aux_model``.
 
     The origin flag matters because the cheap-map branch is the only one whose
@@ -136,22 +160,23 @@ def _resolve_aux_model_with_origin(task, provider=None):
     if explicit:
         return explicit, False
     auto = _core_bool_env("AUX_AUTO", False)
-    if task == "compaction":
-        auto = auto or _core_bool_env("COMPACTION_AUTO_AUX", False)
     if auto and provider:
         mapped = AUX_MODEL_MAP.get(provider.lower())
+        if not mapped and provider.lower() == "openrouter":
+            mapped = _openrouter_aux_model(main_model)
         return mapped, bool(mapped)
     return None, False
 
 
-def resolve_aux_model(task, provider=None):
+def resolve_aux_model(task, provider=None, main_model=None):
     """Which model should aux `task` use? (None => use the main model.)
 
     Precedence: 1) per-task explicit env (AUX_MODEL_JUDGE / AUX_MODEL_COMPACTION);
-    2) provider cheap-map default when AUX_AUTO=true (or, for compaction only, the
-    legacy COMPACTION_AUTO_AUX=true); 3) None.
+    2) provider cheap-map default when AUX_AUTO=true (on openrouter, keyed by
+    *main_model*'s family);
+    3) None.
     """
-    return _resolve_aux_model_with_origin(task, provider)[0]
+    return _resolve_aux_model_with_origin(task, provider, main_model)[0]
 
 
 _AUX_SLOTS = ("compaction", "judge", "reflection")
@@ -170,13 +195,15 @@ def _parse_provider_model(token, default_provider=None):
     return {"model": token, "provider": default_provider}
 
 
-def resolve_aux_chain(task, provider=None):
+def resolve_aux_chain(task, provider=None, main_model=None):
     """Ordered aux-model candidates for `task` (primary first, then per-task fallbacks).
 
     B5: each of the 3 real aux
     call sites (compaction/judge/reflection) can be pointed at its own model+
     provider plus an ordered fallback list, instead of a single model string.
-    Empty list => caller uses the main model (unchanged runtime contract).
+    Empty list => caller uses the main model (unchanged runtime contract). For
+    `reflection`, whose caller has no main-model fallback, an empty chain with a known
+    *main_model* returns that model instead (B-2).
 
     Env per slot (<SLOT> = task.upper()):
       AUX_MODEL_<SLOT>    primary model
@@ -208,20 +235,28 @@ def resolve_aux_chain(task, provider=None):
         # AUX_PROVIDER_COMPACTION (pre-B5, reflection reused _provision_compaction_llm
         # wholesale, so AUX_AUTO + the compaction provider resolved as a pair). Go
         # straight from own-env to the compaction branch, which itself honors
-        # AUX_AUTO/COMPACTION_AUTO_AUX via resolve_aux_model("compaction", ...).
+        # AUX_AUTO via resolve_aux_model("compaction", ...).
         primary_model = os.getenv("AUX_MODEL_REFLECTION", "")
         if not primary_model:
             primary_model = os.getenv("AUX_MODEL_COMPACTION", "")
             if not primary_model:
                 primary_model, from_cheap_map = _resolve_aux_model_with_origin(
-                    "compaction", provider)
+                    "compaction", provider, main_model)
             if primary_model:
                 inherited_from_compaction = True
     else:
         primary_model = os.getenv(f"AUX_MODEL_{slot}", "")
         if not primary_model:
-            primary_model, from_cheap_map = _resolve_aux_model_with_origin(task, provider)
+            primary_model, from_cheap_map = _resolve_aux_model_with_origin(
+                task, provider, main_model)
     if not primary_model:
+        if task == "reflection" and main_model:
+            # B-2 (2026-10-14): reflection has no "main model" fallback of its own
+            # (ReflectionService with llm=None never runs), so on a box where no aux
+            # model resolves — every openrouter/deepseek box — H-MEM reflection was
+            # silently OFF. Run it on an isolated copy of the MAIN model instead, as
+            # compaction and the judge already do.
+            return [{"model": main_model, "provider": provider or None}]
         return []
 
     primary_provider = os.getenv(f"AUX_PROVIDER_{slot}") or None
@@ -663,15 +698,12 @@ ALLOWED_REASONING_TURNS = _core_int_env('ALLOWED_REASONING_TURNS', 1)
 
 
 def skill_catalog_include_all() -> bool:
-    """Whether the <skill-catalog> lists ALL skills (not just trigger-matched).
+    """Whether the <skill-catalog> short index lists every skill this session may
+    load (default ON) or only the pinned ones (``SKILL_CATALOG_INCLUDE_ALL=false``).
 
-    P2-1a: defaults **ON everywhere** (model-chosen disclosure). The substring/regex
-    trigger matcher is lossy — a paraphrased task can match zero skills, and on the
-    server an unmatched skill is then undiscoverable (neither in the catalog nor
-    load_skill-able). Listing the full compact catalog (id + one-line desc, bounded by
-    ``get_catalog_skills(max_skills)``, ~20-30 tok each, cache-stable) lets the agent
-    discover and ``load_skill`` what it judges relevant. ~600 tok at the current library
-    size. Set ``SKILL_CATALOG_INCLUDE_ALL=false`` to restore trigger-matched-only.
+    Only pinned skills load at session start (081 Q2); the index (one
+    ``polyrob-when`` line each, bounded by ``get_catalog_skills(max_skills)``) lets
+    the agent ``load_skill`` what the task needs.
     Access-time read (not the import-bound constant) so an env override always wins.
     """
     return _bool_env("SKILL_CATALOG_INCLUDE_ALL", True)
@@ -708,49 +740,12 @@ CHAT_SKIP_CREDIT_CHECK = os.getenv('CHAT_SKIP_CREDIT_CHECK', 'true').strip().low
 # `MAX_SESSIONS_PER_USER = 100` used to live here but had ZERO call sites and only
 # misled readers — removed. Do not reintroduce a second cap constant here.
 
-# Model-specific Tool Calling Instructions
-# Some models (Grok, certain OpenRouter models) struggle with nested argument placement
-# These instructions are injected into the system prompt for affected models
-GROK_TOOL_CALL_INSTRUCTIONS = """
-## 🚨 CRITICAL: MCP TOOL CALL FORMAT 🚨
-
-**Do NOT send empty parameters — a tool with no params does nothing and fails.**
-
-MCP tools are registered as DIRECT actions with FLAT parameters (there is no
-nested `arguments={...}` wrapper). Call the tool by its `{server}_{tool}` name
-and pass its parameters directly:
-
-### ✅ CORRECT (direct, flat params):
-```python
-anysite_api(endpoint="/api/linkedin/search", params={"keywords": "CEO founder", "count": 10})
-webparser_parse(url="https://example.com")
-```
-
-### ❌ WRONG (the deprecated nested form — DO NOT use):
-```python
-mcp_execute_tool(server_name="anysite", tool_name="search", arguments={})
-```
-
-### THE RULE:
-- Call the tool DIRECTLY by its `{server}_{tool}` name; pass params inline/flat.
-- NEVER pass empty params — if you don't know what a tool needs, discover it
-  first (e.g. `mcp_list_tools`) before calling.
-"""
-
-# Models that need explicit tool argument instructions
-MODELS_NEEDING_TOOL_INSTRUCTIONS = [
-    'grok',
-    'x-ai',
-    'xai',
-]
-
 # ---------------------------------------------------------------------------
 # P-1: per-model-family operational guidance.
 # Short, high-signal nudges appended to the system prompt for non-Anthropic
 # families whose tool-calling/agent behavior benefits from explicit framing.
 # Kept terse so the cached system prefix stays small. Anthropic/Claude needs
-# none (the prompt is authored for it); Grok keeps its dedicated argument-format
-# block (MODELS_NEEDING_TOOL_INSTRUCTIONS) above and is not duplicated here.
+# none (the prompt is authored for it).
 # ---------------------------------------------------------------------------
 GEMINI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (Gemini)
 - Call exactly one function per step unless several are truly independent; after an
@@ -797,10 +792,3 @@ def format_nag_exempt(model_name: str, provider: str = "") -> bool:
     if any(needle in name for needle in FORMAT_NAG_EXEMPT_FAMILIES):
         return True
     return (provider or "").lower() == "anthropic"
-
-# OpenRouter models that may need extra help
-OPENROUTER_MODELS_NEEDING_HELP = [
-    'grok',
-    'mistral',
-    'mixtral',
-]

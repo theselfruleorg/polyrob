@@ -44,6 +44,10 @@ RAIL_PRECONDITION_FAILED = "rail_precondition_failed"
 #: not load into its session — unknown id or no SKILL.md. The run continues on
 #: keyword matching; the `rules` status section names it. attrs: missing, rail.
 RAIL_SKILL_MISSING = "rail_skill_missing"
+#: 2026-10-14 review D-10: ONE row per session start — which inputs went into
+#: the prompt (foundation slots and their sizes, skills, recall rows,
+#: previous-runs, live-health). Emitted through ``core.prompt_manifest``.
+PROMPT_MANIFEST = "prompt_manifest"
 #: 056 WS9: an external-rail call outcome (anysite …): ok / empty / error / timeout.
 RAIL_PROBE = "rail_probe"
 #: 056 WS8: one stale-session-directory GC pass (dry-run or applied) — the
@@ -61,6 +65,11 @@ CRON_CANCELLED = "cron_cancelled"
 #: ``CronService.edit``. attrs name the changed fields; a task patch carries
 #: the bounded old/new snippet so a bad amendment can be reverted by hand.
 CRON_EDITED = "cron_edited"
+#: 080 WS-2: the owner paused / resumed one job (its own state) or pulled it to
+#: the next tick — ``CronService.pause|resume|run_now``; attrs carry ``via``.
+CRON_PAUSED = "cron_paused"
+CRON_RESUMED = "cron_resumed"
+CRON_RUN_NOW = "cron_run_now"
 GOAL_RUN = "goal_run"
 GOAL_COMPLETION = "goal_completion"          # consumed by cron/digest rollup
 SELF_WAKE = "self_wake"
@@ -206,19 +215,15 @@ CONSOLE_GOAL_VERB = "console_goal_verb"
 CONSOLE_GOAL_CREATE = "console_goal_create"
 CONSOLE_CRON_CANCEL = "console_cron_cancel"
 CONSOLE_CRON_CREATE = "console_cron_create"
+CONSOLE_CRON_VERB = "console_cron_verb"       # 080 WS-2: pause / resume / run one job
 CONSOLE_INVOICE_SETTLE = "console_invoice_settle"
 CONSOLE_INBOX_DECIDE = "console_inbox_decide"
 CONSOLE_TOKEN_DECIDE = "console_token_decide"   # W1: trust/untrust/write-off from Money
 CONSOLE_CARD_PRESS = "console_card_press"       # an action card tapped in the console
+#: 084: every card one session raised is decided (done/failed/cancelled/expired).
+CARD_GROUP_SETTLED = "card_group_settled"
 CONSOLE_SELF_CONTEXT_WRITE = "console_self_context_write"
 CONSOLE_MEMORY_WRITE = "console_memory_write"
-
-# --- rails (036) -------------------------------------------------------------------
-#: A rail is an objective with ``payload.recurrence``; its tool grants live in
-#: ``rail_grants`` (``core/tool_grants.py``). Every grant change is audited.
-RAIL_GRANT = "rail_grant"        # owner granted (or an import staged) a tool on a rail
-RAIL_REVOKE = "rail_revoke"      # owner revoked a rail grant (immediate)
-RAIL_SEEDED = "rail_seeded"      # the rails tick wrote one cycle of a rail's legs
 
 # 025: a ROOT goal completed verified and its quarantined memory scope moved
 # to shared recall (``agents/task/goals/memory_scope.py``; emitted only when N > 0).
@@ -229,11 +234,13 @@ MEMORY_WRITE = "memory_write"
 X_API_REJECTED = "x_api_rejected"
 #: Provider output was cut short; the agent recorded whether it retried.
 LLM_OUTPUT_TRUNCATED = "llm_output_truncated"
+#: 2026-10-14 review E-3: one row per bad agent-step LLM call — attrs provider,
+#: model, regime, issue (empty | text_only | unknown_tool | bad_args |
+#: parse_failure | repaired | no_action), session_id, step. Producer:
+#: ``agents/task/agent/core/call_quality.py``.
+MODEL_CALL_QUALITY = "model_call_quality"
 #: A money verb stopped a run because the broadcast infrastructure failed.
 MONEY_VERB_INFRA_FAILURE = "money_verb_infra_failure"
-#: A money verb failed or was refused, so the rest of that run reports to the
-#: owner only (``core/security/refusal_taint.py``); one row per run.
-RUN_REFUSAL_TAINTED = "run_refusal_tainted"
 
 # Infra/storage housekeeping
 DB_RELOCATED = "db_relocated"                 # R-2 T3 one-shot sidecar move ran

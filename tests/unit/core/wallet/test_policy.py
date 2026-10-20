@@ -62,7 +62,7 @@ def test_persistent_sink_round_trips_lifetime_spend(tmp_path):
 def test_rejects_over_ceiling():
     gate = PolicyGate(max_per_tx_usd=10.0)
     d = gate.check(venue="x402", amount_usd=50.0, idempotency_key="k2")
-    assert d.allowed is False and "ceiling" in d.reason.lower()
+    assert d.allowed is False and "per-transaction cap" in d.reason.lower()
 
 
 def test_rejects_duplicate_idempotency_key():

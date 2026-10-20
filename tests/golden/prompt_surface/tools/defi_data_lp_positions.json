@@ -1,0 +1,29 @@
+{
+  "function": {
+    "description": "List this address's Uniswap v3 liquidity positions: pool, range, whether it is in range right now, current holdings and uncollected fees. Defaults to your own wallet. Read-only. Uniswap v4 lands in a later phase.",
+    "name": "defi_data_lp_positions",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "default": null,
+          "description": "Owner address; defaults to the agent wallet.",
+          "nullable": true,
+          "type": "string"
+        },
+        "chain": {
+          "default": "robinhood",
+          "description": "Chain to read Uniswap v3 positions on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "protocol": {
+          "default": "v3",
+          "description": "Uniswap protocol: v3 (v4 in a later phase).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

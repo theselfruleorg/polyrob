@@ -142,6 +142,8 @@ class AgentEndTelemetryEvent(BaseTelemetryEvent):
 	success: bool
 	errors: list[str]
 	name: str = 'agent_end'
+	stop_reason: Optional[str] = None  # 083 WS-1: runtime.stop_reason.StopReason value
+	max_steps: Optional[int] = None  # the step budget the run had
 
 
 @dataclass

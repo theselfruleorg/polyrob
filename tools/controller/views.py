@@ -381,11 +381,6 @@ class SubtaskAction(BaseModel):
 		default="executor",
 		description="Sub-agent profile: 'executor' (default), or — when WORKERS_ENABLED is on — the id of an APPROVED worker (worker_manage action='list'); an unknown or pending worker is then refused. With WORKERS_ENABLED off, any value runs as executor."
 	)
-	max_steps: int = Field(
-		default=30,
-		description="Maximum steps for sub-agent (default 30, max 50)",
-		le=50
-	)
 	model: Optional[str] = Field(
 		default=None,
 		description="Optional model for this sub-agent (e.g. 'claude-haiku-4-5' or an "
@@ -398,26 +393,6 @@ class SubtaskAction(BaseModel):
 		            "the model name. Requires 'model' — a provider set on a task without "
 		            "its own 'model' is rejected (the top-level 'model' is used, so a "
 		            "task-level provider without a task-level model is discarded)."
-	)
-
-
-class ParallelSubtasksAction(BaseModel):
-	"""Run 2-5 independent subtasks in parallel using sub-agents.
-
-	⚠️ WARNING: Very expensive - spawns multiple full agent conversations.
-
-	ONLY use when you have genuinely independent work that can run simultaneously.
-	Each subtask should be complex enough to justify sub-agent overhead.
-
-	All subtasks run in parallel and results are collected with usage statistics.
-	"""
-	model_config = ConfigDict(extra='forbid')
-
-	subtasks: List[SubtaskAction] = Field(
-		...,
-		description="List of independent subtasks to run in parallel (2-5 tasks)",
-		min_length=2,
-		max_length=5
 	)
 
 
@@ -457,11 +432,6 @@ class DelegateTaskAction(BaseModel):
 	profile: str = Field(
 		default="executor",
 		description="Sub-agent profile when 'goal' is used: 'executor' (default), or — when WORKERS_ENABLED is on — the id of an APPROVED worker (worker_manage action='list'); an unknown or pending worker is then refused. With WORKERS_ENABLED off, any value runs as executor.",
-	)
-	max_steps: int = Field(
-		default=30,
-		description="Maximum steps for the sub-agent when 'goal' is used (default 30, max 50)",
-		le=50,
 	)
 	role: Literal["leaf", "orchestrator"] = Field(
 		default="leaf",

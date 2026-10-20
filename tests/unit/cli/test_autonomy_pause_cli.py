@@ -27,7 +27,9 @@ def test_pause_resume_status_roundtrip(tmp_path, monkeypatch):
     out = r.invoke(autonomy, ["resume"])
     assert out.exit_code == 0 and "RESUMED" in out.output
     assert json.loads(r.invoke(autonomy, ["status", "--json"]).output)["pause"]["paused"] is False
-    assert "pause: ▶ RUNNING" in r.invoke(autonomy, ["status"]).output
+    # 080 WS-4: not paused = RUNNING, or IDLE when autonomy is off (never RUNNING then)
+    after = r.invoke(autonomy, ["status"]).output
+    assert "pause: ▶ RUNNING" in after or "pause: ■ IDLE" in after
 
 
 def test_halt_is_an_alias_and_bad_scope_is_an_error(tmp_path, monkeypatch):

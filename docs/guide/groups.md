@@ -211,8 +211,7 @@ list can only grow by adding a guard, never by flipping a flag.
   `usage_summary`. A room reply can never surface the owner's DM or trading history.
 - **Outbound elsewhere** — no `message`, `send_email`, `email_send`.
   `send_message` is the only speech verb, and it lands in this room only.
-- **Delegation / control** — no `delegate_task`, `subtask`, `parallel_subtasks`,
-  `autonomy_control`.
+- **Delegation / control** — no `delegate_task`, `autonomy_control`.
 - **Every room-bound turn is stamped `turn_kind=group`**, which the same forged-turn
   predicate that protects self-wakes and delegation results treats as forged — a room
   turn can never auto-activate or promote a skill, and `tx_guard` refuses to sign for
@@ -258,7 +257,7 @@ Whose decision a moderation is:
 |---|---|
 | An owner turn that has read no third-party content | It runs: this is the owner's own instruction |
 | An owner turn that read room lines (or any other outside text) | Each moderation waits for the owner's tap |
-| An autonomous run | Only under a standing owner-authored cron job whose text names the room (by chat id or title); any other run is refused |
+| An autonomous run | Only under a standing cron job or goal whose text names the room (by chat id or title); any other run is refused |
 | A room turn, or a correspondent-tainted session | Refused |
 
 So a member line in a room can never talk the agent into banning another member: the
@@ -275,7 +274,7 @@ in his DM:
 `/trade` `/wallet` `/send` `/swap` `/cards` `/deploy` `/launch` `/lp` `/bridge` `/claim` `/pay`
 `/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause` `/halt`
 `/resume` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs` `/mcp` `/apps`
-`/invoices` `/settle` `/cron` `/goal` `/fulfill` `/rail` `/contacts` `/thread`
+`/invoices` `/settle` `/job` `/goal` `/fulfill` `/contacts` `/thread`
 `/why` `/restart` `/update` — do these in the private chat. A verb that a pack contributes is refused
 too, unless the pack declares it safe for a room.
 

@@ -321,7 +321,6 @@ class PlainRenderer(Renderer):
         suppressed_by_bubble = self._message_bubble_rendered and (
             not self._one_shot
             or norm == self._last_bubble_text
-            or dialog.is_redundant_recap(norm, self._last_bubble_text)
         )
         if not suppressed_by_bubble:
             if not dialog.is_plumbing_string(norm) and norm:

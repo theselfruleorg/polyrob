@@ -1,30 +1,23 @@
-"""A cron rail that reports the same owner-only remedy run after run asks ONCE.
+"""A cron rail that declares the same BLOCKED need run after run asks ONCE.
 
-A rail that is blocked on something only the owner can do (log in to an
-account, pin a token) says so in its result and then, by design, stays quiet
-— its task text forbids pinging the owner every run. Nothing turned that
-repeated line into a question. Live: X OUTREACH logged "Phase 1 BLOCKED (owner
-remedy: `polyrob x-account capture-session`)" on 11 consecutive daily runs
-(2026-09-18 → 09-28) and made 0 touches; the owner was never asked.
+A rail that is blocked on something only the owner can do declares it with the
+run-outcome protocol (``OUTCOME: BLOCKED — <need>``, parsed once into
+``RunOutcome.blocked`` / ``blocked_need``) and then stays quiet. Live: X
+OUTREACH reported the same block on 11 consecutive daily runs (2026-09-18 →
+09-28) and the owner was never asked.
 
-This module watches each finished cron run's result text. A result that says
-``BLOCKED`` (or "owner remedy") AND names an owner command (``polyrob …``) is a
-block on that remedy. When the SAME remedy repeats on ``STREAK_THRESHOLD``
-consecutive runs of one job, it raises ONE owner ask on that rail (A: I will
-run it · B: retire this job). The answer rides the rail's next run
-(``agents/task/goals/rail_answers.py``). A clean run or a different remedy
-resets the count, and a streak asks at most once.
-
-Deterministic on purpose: the prompt already said "ask the owner if blocked"
-and the model followed the task text's "no ping" instead.
+When the SAME declared need repeats on ``STREAK_THRESHOLD`` consecutive runs of
+one job, this raises ONE owner ask on that rail (A: I will do it · B: retire
+this job). The answer rides the rail's next run
+(``agents/task/goals/rail_answers.py``). A run that is not blocked, or a
+different need, resets the count, and a streak asks at most once. The model's
+free text is never parsed here: only the run outcome's ``blocked_need`` field.
 
 Fail-open: any error answers "no ask" and never touches the run's outcome.
 """
 from __future__ import annotations
 
 import logging
-import os
-import re
 import time
 from typing import Any, Optional
 
@@ -35,25 +28,11 @@ logger = logging.getLogger(__name__)
 #: consecutive identical blocks before the owner is asked
 STREAK_THRESHOLD = 3
 
-_BLOCK_RE = re.compile(r"\bBLOCKED\b|\bowner[- ]remedy\b", re.IGNORECASE)
-_UPPER_BLOCK_RE = re.compile(r"\bBLOCKED\b")
-_REMEDY_RE = re.compile(r"\bowner[- ]remedy\b", re.IGNORECASE)
 
-
-def remedy_in(text: Optional[str]) -> Optional[str]:
-    """The owner command a blocked run names, or ``None``.
-
-    Needs BOTH a block marker (an upper-case ``BLOCKED`` or the words "owner
-    remedy") and a named ``polyrob …`` call: a CLI call alone is a report, and
-    a block with no owner command has nothing to ask about.
-    """
-    if not text:
-        return None
-    if not (_UPPER_BLOCK_RE.search(text) or _REMEDY_RE.search(text)):
-        return None
-    from core.owner_remedy import cli_calls_named
-    calls = cli_calls_named(text)
-    return calls[0] if calls else None
+def _key(need: Optional[str]) -> Optional[str]:
+    """The streak key of a declared need, or None (not blocked / no need)."""
+    key = " ".join(str(need or "").split())[:300]
+    return key or None
 
 
 class _Store:
@@ -98,19 +77,19 @@ class _Store:
 
 def _question(job: Any, remedy: str, count: int) -> str:
     name = " ".join(str(getattr(job, "task", "") or "").split())[:60] or str(job.id)
-    return (f"The scheduled job \"{name}\" ({job.id}) has been blocked on its last "
-            f"{count} runs until you run `{remedy}`. A) I will run `{remedy}` "
-            f"or B) retire this job?")
+    return (f"The scheduled job \"{name}\" ({job.id}) declared the same block on its "
+            f"last {count} runs: {remedy}. A) I will do it or B) retire this job?")
 
 
-def observe(job: Any, final_text: Optional[str], *, data_dir: str,
+def observe(job: Any, blocked_need: Optional[str], *, data_dir: str,
             board: Any = None) -> Optional[Any]:
-    """Record this run's block (or its absence). Returns the NEW ask when this
-    run completes a streak, else ``None``. Never raises."""
+    """Record this run's declared block (``RunOutcome.blocked_need``; None when
+    the run was not blocked). Returns the NEW ask when this run completes a
+    streak, else ``None``. Never raises."""
     try:
         from core.runtime_paths import cron_db_path, goals_db_path
         store = _Store(cron_db_path(data_dir))
-        remedy = remedy_in(final_text)
+        remedy = _key(blocked_need)
         prev = store.get(job.id)
         if remedy is None:
             if prev:
@@ -129,14 +108,14 @@ def observe(job: Any, final_text: Optional[str], *, data_dir: str,
         question = _question(job, remedy, count)
         ask = board.create_ask(
             user_id=job.user_id, what=question,
-            why=(f"Each run's result names `{remedy}` as the owner-only fix and the job "
-                 f"stays blocked until it is done. Choosing B stops the runs."),
+            why=("Each run declared this block and the job stays blocked until it "
+                 "is resolved. Choosing B stops the runs."),
             extra_payload={"origin": "cron_remedy_streak", "rail_id": f"cron:{job.id}",
                            "rail_kind": "cron", "remedy": remedy,
                            "options": ask_options(question)},
             force=True)
         store.put(job.id, job.user_id, remedy, count, str(ask.id))
-        logger.info("cron job %s: same owner remedy on %d runs (%s) -> ask %s",
+        logger.info("cron job %s: same declared block on %d runs (%s) -> ask %s",
                     job.id, count, remedy, ask.id)
         return ask
     except Exception:
@@ -145,10 +124,10 @@ def observe(job: Any, final_text: Optional[str], *, data_dir: str,
         return None
 
 
-async def observe_and_notify(job: Any, final_text: Optional[str], *, data_dir: str,
+async def observe_and_notify(job: Any, blocked_need: Optional[str], *, data_dir: str,
                              container: Any = None) -> None:
     """``observe`` plus ONE owner notice for a newly raised ask. Fail-open."""
-    ask = observe(job, final_text, data_dir=data_dir)
+    ask = observe(job, blocked_need, data_dir=data_dir)
     if ask is None:
         return
     try:
@@ -168,4 +147,4 @@ async def observe_and_notify(job: Any, final_text: Optional[str], *, data_dir: s
                      exc_info=True)
 
 
-__all__ = ["STREAK_THRESHOLD", "remedy_in", "observe", "observe_and_notify"]
+__all__ = ["STREAK_THRESHOLD", "observe", "observe_and_notify"]

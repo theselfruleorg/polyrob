@@ -3,9 +3,11 @@ name: polymarket-trading
 description: 'GATED: place/cancel Polymarket orders. Owner-only, read-first, >$500 confirmation gate; references crypto-trading-safety'
 license: MIT
 metadata:
+  polyrob-when: 'Placing or cancelling Polymarket orders'
   polyrob-priority: '5'
   polyrob-auto-activate: 'false'
-  polyrob-triggers: '{"action_names":["polymarket_place_limit_order","polymarket_place_market_order","polymarket_cancel_order","polymarket_cancel_all_orders"],"keywords":["place polymarket order","buy polymarket","sell polymarket","polymarket limit order","polymarket market order","cancel polymarket order"],"task_patterns":["(place|buy|sell|cancel).*polymarket","polymarket.*(limit|market).*order"],"tool_ids":["polymarket"]}'
+  polyrob-triggers: '{"tool_ids":["polymarket"]}'
+  polyrob-requires: '["crypto-trading-safety"]'
   polyrob-version: '2'
 ---
 # Polymarket Trading

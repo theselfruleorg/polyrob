@@ -1,0 +1,28 @@
+{
+  "function": {
+    "description": "Register YOUR OWN identity on the ERC-8004 Identity Registry. This mints you an agent token (agentId) owned by your wallet, and publishes your registration file — name, description, avatar, the services you actually offer. Needs no hosting: the file rides inside the transaction as a data: URI. ⚠️ Permanent and public, and calling it twice splits your identity. dry_run defaults to TRUE.",
+    "name": "defi_trade_register_agent",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "base",
+          "description": "Chain whose ERC-8004 Identity Registry to register on. Pinned; unsupported chains refuse.",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "default": 25.0,
+          "description": "Ceiling for the transaction FEE. A registration sends nothing else.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

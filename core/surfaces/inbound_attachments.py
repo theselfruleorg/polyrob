@@ -178,6 +178,40 @@ def persist_inbound_file(
 
 # --- describe on the turn --------------------------------------------------
 
+#: 085 W3 (A1): ``metadata`` key of a queued turn — the words the owner TYPED,
+#: before any attachment content, caption or @-reference expansion was appended.
+#: The drain (``user_ingress._update_forged_turn_marker``) builds the owner's own
+#: words for a turn from this key ONLY; ``inject_file_content`` /
+#: ``absorb_inbound_media`` append document text that is never the owner's.
+TYPED_TEXT_KEY = "typed_text"
+
+#: 085 W3: ``metadata`` flag of a queued turn that holds ONLY file content the
+#: owner attached with no words of his own (the CLI ``--attach`` / REPL
+#: ``/attach``). A drained batch of only such turns leaves the owner's words of
+#: the turn as they were (the opening task, the REPL line) — it neither adds the
+#: file content nor erases what the owner typed.
+ATTACHMENT_ONLY_KEY = "attachment_only"
+
+
+def owner_typed_text(inbound: Any) -> str:
+    """The words the owner TYPED on one inbound chat message, or ``""``.
+
+    ``""`` for a FORWARDED message (a third party's words, H06) and for a room
+    line (its session task is a framed block, not one person's sentence)."""
+    if inbound is None or getattr(inbound, "forwarded", False):
+        return ""
+    source = getattr(getattr(inbound, "identity", None), "source", None)
+    if (getattr(source, "chat_type", None) or "dm") != "dm":
+        return ""
+    text = getattr(inbound, "text", "")
+    return text if isinstance(text, str) else ""
+
+
+def with_typed_text(metadata: Optional[Dict[str, Any]], typed: Optional[str]) -> Dict[str, Any]:
+    """``metadata`` plus the owner's typed words (:data:`TYPED_TEXT_KEY`)."""
+    return {**(metadata or {}), TYPED_TEXT_KEY: typed if isinstance(typed, str) else ""}
+
+
 def inject_file_content(
     workspace_dir: str,
     rel_path: str,

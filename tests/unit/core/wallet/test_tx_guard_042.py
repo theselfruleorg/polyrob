@@ -190,9 +190,17 @@ def test_a_constructor_that_pays_the_deployer_refuses():
     assert "pays the deployer" in d.reason
 
 
+def _landed(wei):
+    """085 W2: the endowment measured at the new contract's address."""
+    from core.wallet.deploy_guard import predict_create_address
+    return {predict_create_address(HOLDER, int(_deploy_tx()["nonce"])).lower(): wei}
+
+
 def test_a_constructor_that_overspends_its_endowment_refuses():
     d = _authorize(_deploy_intent(amount_raw=10 ** 15),
-                   _deploy_deltas(native_delta=-10 ** 17), tx=_deploy_tx())
+                   _deploy_deltas(native_delta=-10 ** 17,
+                                  watched_native_deltas=_landed(10 ** 15)),
+                   tx=_deploy_tx())
     assert d.allowed is False
     assert "spends more than it was endowed" in d.reason
 
@@ -209,7 +217,9 @@ def test_a_tampered_runtime_refuses_before_anything_is_signed():
 
 def test_an_endowed_deploy_is_priced_on_endowment_plus_fee():
     endowed = _authorize(_deploy_intent(amount_raw=10 ** 18, max_spend_usd=100.0),
-                         _deploy_deltas(native_delta=-10 ** 18), tx=_deploy_tx())
+                         _deploy_deltas(native_delta=-10 ** 18,
+                                        watched_native_deltas=_landed(10 ** 18)),
+                         tx=_deploy_tx())
     free = _authorize(_deploy_intent(), _deploy_deltas(), tx=_deploy_tx())
     assert endowed.allowed is True, endowed.reason
     assert endowed.amount_usd > free.amount_usd

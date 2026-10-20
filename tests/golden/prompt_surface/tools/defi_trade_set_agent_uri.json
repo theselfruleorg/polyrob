@@ -1,0 +1,34 @@
+{
+  "function": {
+    "description": "Update your published ERC-8004 registration file (setAgentURI). Use this when your endpoints, description or avatar change — it does NOT mint a new identity. dry_run defaults to TRUE.",
+    "name": "defi_trade_set_agent_uri",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "description": "Your existing agentId (tokenId).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "chain": {
+          "default": "base",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "default": 10.0,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "agent_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

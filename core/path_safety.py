@@ -11,7 +11,7 @@ Also the ONE deny seam for agent file tools (security analysis 2026-09-23):
   or the harness EXECUTES or AUTO-LOADS: anything under a ``.git`` segment
   (``.git/config`` fsmonitor / ``.git/hooks/*`` = host RCE on the next git
   command), the project skill dirs (``.agents/skills/**``, ``.claude/skills/**``
-  — auto-discovered by ``agents/task/agent/skill_discovery.py``) and the
+  — auto-discovered by ``core/skills/scopes.py``) and the
   project-context files (``polyrob.md``/``POLYROB.md``/``AGENTS.md``/``CLAUDE.md``/
   ``.cursorrules`` — auto-loaded by ``agents/task/agent/core/project_context.py``)
   in any directory that walk visits. ``.git`` is refused for reads too (remote

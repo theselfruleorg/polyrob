@@ -28,8 +28,7 @@ def test_the_pack_is_loaded_and_owns_its_rows():
         assert state.pack_of_tool(tid) == "markets", tid
         assert TOOL_CAPABILITIES[tid].cli == "incompatible", tid
     for venue in ("polymarket", "hyperliquid"):
-        assert {"money", "delegate_blocked", "readable_while_tainted",
-                "writes_money"} <= set(TOOL_CAPABILITIES[venue])
+        assert {"money", "delegate_blocked"} <= set(TOOL_CAPABILITIES[venue])
         assert row_field(venue, "gate").tier == "reserved"
         assert TOOL_PERMISSIONS[venue] == ("network.read", "trade.execute")
         assert TOOL_PERMISSIONS[f"{venue}_data"] == ("network.read",)
@@ -102,11 +101,10 @@ def test_pack_skills_carry_their_rules_and_left_the_builtin_library():
     sm._ensure_rules_loaded()
     assert ids <= sm._pack_rule_ids
     base = REPO / "data" / "prompts" / "skills"
-    rules = json.loads((base / "rules.json").read_text())
     for sid in ids:
-        assert sid not in rules and not (base / sid).exists(), sid
+        assert not (base / sid).exists(), sid
     # The safety doctrine also covers the on-chain treasury rail: it stays in core.
-    assert "crypto-trading-safety" in rules and (base / "crypto-trading-safety").is_dir()
+    assert (base / "crypto-trading-safety" / "SKILL.md").is_file()
 
 
 _DISABLED = """

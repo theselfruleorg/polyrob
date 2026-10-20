@@ -113,10 +113,16 @@ class ExecutionMixin:
 				ms = int((time.monotonic_ns() - started_ns) / 1_000_000)
 			from core.event_kinds import TOOL_INVOKED
 			from core.event_log import emit
+			# D-9 (2026-10-14): the model and the coarse error class, so tool
+			# errors per model can be compared across a model switch.
+			from tools.controller.tool_error_class import classify_tool_error, invoking_model
+			error = getattr(result, "error", None)
 			emit(TOOL_INVOKED, source="tool",
 				 user_id=getattr(execution_context, "user_id", None) or "",
 				 session_id=getattr(execution_context, "session_id", "") or "",
-				 attrs={"tool": tool, "action": str(action_type), "ok": not getattr(result, "error", None), "ms": ms})
+				 attrs={"tool": tool, "action": str(action_type), "ok": not error, "ms": ms,
+						"model": invoking_model(self, execution_context),
+						"error_class": classify_tool_error(error)})
 		except Exception:
 			self.logger.debug("tool_invoked emit skipped", exc_info=True)
 
@@ -264,9 +270,6 @@ class ExecutionMixin:
 						self.logger.warning(f"⛔ Action '{action_type}' blocked by pre_tool_call hook: {deny_reason}")
 						self._emit_governance_event("tool_denied", execution_context,
 													action=action_type, reason=str(deny_reason)[:200])
-						# A vetoed money verb never reaches the post hooks: taint its run here.
-						from tools.controller.refusal_taint_gate import note_denied_action
-						note_denied_action(self, action_type, execution_context, deny_reason)
 						results.append(ActionResult(
 							error=f"Action '{action_type}' blocked: {deny_reason}",
 							include_in_memory=True,
@@ -331,6 +334,9 @@ class ExecutionMixin:
 						self.logger.info(f"🤖 Sub-agent action '{action_type}' - timeout: {action_timeout}s")
 					else:
 						action_timeout = TimeoutConfig.get_tool_timeout(tool_name)
+						if action_type == 'present_choice':
+							from tools.controller.card_actions import choice_action_timeout
+							action_timeout = choice_action_timeout(action_params, action_timeout)
 
 					if tool_name == 'mcp':
 						self.logger.info(f"🌐 MCP action '{action_type}' - timeout: {action_timeout}s")
@@ -376,11 +382,6 @@ class ExecutionMixin:
 					await self._run_post_tool_call_hooks(action_type, action_params, result, execution_context)
 					result.tool_call_id = getattr(action, "_tool_call_id", None)
 					self._record_invocation(action_type, result, execution_context, started_ns=started_ns)
-					# AGT-1: third-party bytes entered this turn — what it writes next
-					# is no longer the owner's own word (core/security/read_taint.py).
-					from core.security.read_taint import note_result
-					note_result(getattr(self, 'orchestrator', None), execution_context,
-					            action_type, tool_name, result, params=action_params)
 					results.append(result)
 
 					# Log the result with detailed information

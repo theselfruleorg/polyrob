@@ -7,8 +7,7 @@ written, and nothing is narrated by the model — both are DERIVED:
   the stream seeder and the owner seats already stamp:
 
   ``OWNER``   the owner launched it from a seat (``/trade``, ``polyrob goals
-              create``, the console) — ``owner_granted`` or ``authored_by=owner``
-              without a chat session;
+              create``, the console) — ``owner_granted``;
   ``GRANTED`` a stream-manifest leg (``stream`` / legacy ``cycle``);
   ``ASKED``   created in a GENUINE owner chat turn (``origin_session_id`` is
               stamped only when the turn is not forged);
@@ -16,9 +15,9 @@ written, and nothing is narrated by the model — both are DERIVED:
               (``created_by_session_id`` alone);
   ``LEGACY``  no stamp at all (rows from before 2026-09-02).
 
-- :func:`owner_bucket` — seven machine statuses collapse to four owner facts:
+- :func:`owner_bucket` — eight machine statuses collapse to five owner facts:
   ``NOW`` (running) · ``NEXT`` (triage/waiting/ready) · ``STUCK`` (blocked) ·
-  ``OVER`` (done/cancelled). The DB keeps all seven; an unknown status renders
+  ``PAUSED`` (paused by the owner) · ``OVER`` (done/cancelled). The DB keeps all seven; an unknown status renders
   as ``OTHER``, never assumed into the enum.
 
 Pure core: stdlib + ``core.goal_vocab``.
@@ -28,8 +27,8 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Mapping
 
 from core.goal_vocab import (
-    STATUS_BLOCKED, STATUS_CANCELLED, STATUS_DONE, STATUS_READY, STATUS_RUNNING,
-    STATUS_TRIAGE, STATUS_WAITING,
+    STATUS_BLOCKED, STATUS_CANCELLED, STATUS_DONE, STATUS_PAUSED, STATUS_READY,
+    STATUS_RUNNING, STATUS_TRIAGE, STATUS_WAITING, has_own_surface,
 )
 
 ORIGIN_OWNER = "OWNER"
@@ -50,9 +49,11 @@ ORIGIN_TAG = {
 BUCKET_NOW = "NOW"
 BUCKET_NEXT = "NEXT"
 BUCKET_STUCK = "STUCK"
+BUCKET_PAUSED = "PAUSED"
 BUCKET_OVER = "OVER"
 BUCKET_OTHER = "OTHER"
-BUCKET_ORDER = (BUCKET_NOW, BUCKET_STUCK, BUCKET_NEXT, BUCKET_OVER, BUCKET_OTHER)
+BUCKET_ORDER = (BUCKET_NOW, BUCKET_STUCK, BUCKET_PAUSED, BUCKET_NEXT, BUCKET_OVER,
+                BUCKET_OTHER)
 
 _BUCKETS: Dict[str, str] = {
     STATUS_RUNNING: BUCKET_NOW,
@@ -60,6 +61,7 @@ _BUCKETS: Dict[str, str] = {
     STATUS_WAITING: BUCKET_NEXT,
     STATUS_READY: BUCKET_NEXT,
     STATUS_BLOCKED: BUCKET_STUCK,
+    STATUS_PAUSED: BUCKET_PAUSED,
     STATUS_DONE: BUCKET_OVER,
     STATUS_CANCELLED: BUCKET_OVER,
 }
@@ -79,9 +81,7 @@ def origin(goal: Any) -> str:
         return ORIGIN_GRANTED
     if p.get("origin_session_id"):
         return ORIGIN_ASKED
-    if str(p.get("authored_by") or "").strip().lower() == "owner":
-        return ORIGIN_OWNER
-    if p.get("created_by_session_id") or str(p.get("authored_by") or "").lower() == "agent":
+    if p.get("created_by_session_id"):
         return ORIGIN_SELF
     return ORIGIN_LEGACY
 
@@ -123,9 +123,65 @@ def origin_counts(goals: Iterable[Any]) -> Dict[str, int]:
     return out
 
 
+#: ``payload.block_kind`` in the owner's words (the dispatcher stamps it).
+_BLOCK_KIND_WORDS = {
+    "needs_input": "it needs something from you",
+    "provider_outage": "the model provider was down",
+    "dep_failed": "a goal it depends on failed or was stopped",
+}
+
+
+def _field(goal: Any, name: str, default: Any = None) -> Any:
+    if isinstance(goal, Mapping):
+        return goal.get(name, default)
+    return getattr(goal, name, default)
+
+
+def status_reason(goal: Any, holding_asks: Iterable[Any] = ()) -> str:
+    """080 WS-2: why ``goal`` is where it is, in ONE owner sentence.
+
+    Read from what the board already holds: the status, ``payload.block_kind``,
+    ``consecutive_failures`` + ``last_failure_error``, and *holding_asks* — the
+    open asks that name the goal (``GoalBoard.holding_asks``). A ready goal an
+    ask holds is "waiting on your answer to …", never "waiting its turn"."""
+    status = str(_field(goal, "status", "") or "")
+    p = _payload(goal)
+    asks = [a for a in (holding_asks or ()) if a is not None]
+    fails = int(_field(goal, "consecutive_failures", 0) or 0)
+    err = " ".join(str(_field(goal, "last_failure_error", "") or "").split())[:160]
+    if status == STATUS_PAUSED:
+        return "Paused by you."
+    if asks:
+        a = asks[0]
+        aid = str(_field(a, "id", "") or "")[:8]
+        title = str(_field(a, "title", "") or "").strip()
+        where = "/pending" if has_own_surface(_payload(a)) else f"/fulfill {aid}"
+        return f"Waiting on your answer to ask {aid} “{title}” ({where})."
+    if status == STATUS_BLOCKED:
+        kind = _BLOCK_KIND_WORDS.get(str(p.get("block_kind") or ""), "")
+        if fails and err:
+            times = "once" if fails == 1 else "twice" if fails == 2 else f"{fails} times"
+            head = f"Failed {times}: {err}"
+            return f"{head} ({kind})." if kind else f"{head}."
+        return f"Stopped: {kind}." if kind else "Stopped after repeated failures."
+    if status == STATUS_WAITING:
+        return "Waiting for a goal it depends on."
+    if status == STATUS_TRIAGE:
+        return "Being sorted before it is queued."
+    if status == STATUS_READY:
+        return "Waiting its turn."
+    if status == STATUS_RUNNING:
+        return "Running now."
+    if status == STATUS_DONE:
+        return "Done."
+    if status == STATUS_CANCELLED:
+        return "Stopped."
+    return f"Status {status or 'unknown'}."
+
+
 __all__ = [
     "BUCKET_NEXT", "BUCKET_NOW", "BUCKET_ORDER", "BUCKET_OTHER", "BUCKET_OVER",
-    "BUCKET_STUCK", "ORIGIN_ASKED", "ORIGIN_GRANTED", "ORIGIN_LEGACY", "ORIGIN_OWNER",
+    "BUCKET_PAUSED", "BUCKET_STUCK", "ORIGIN_ASKED", "ORIGIN_GRANTED", "ORIGIN_LEGACY", "ORIGIN_OWNER",
     "ORIGIN_SELF", "ORIGIN_TAG", "bucket_counts", "bucket_line", "origin",
-    "origin_counts", "origin_tag", "owner_bucket",
+    "origin_counts", "origin_tag", "owner_bucket", "status_reason",
 ]

@@ -52,13 +52,14 @@ def translate_llm_error(error: Exception, context: str = "") -> Exception:
     """
     error_str = str(error).lower()
 
-    # 1. Permanent / billing errors — halt, do NOT fall through to rate-limit
-    #    (adapters.py was the only previous carrier of this branch).
-    #    'limit exhausted' / 'insufficient balance': plan-quota death dressed as
-    #    a 429 — z.ai GLM Coding Plan code 1310 says "Weekly/Monthly Limit
-    #    Exhausted. Your limit will reset at <ts>" with type=rate_limit_error,
-    #    and the old rate-limit classification retried it for days
-    #    (2026-08-13..16 storm: ~3.4k 429s, 63 dead sessions/day).
+    # 0. OpenRouter's in-flight 402 is funded — back off like a rate limit.
+    from core.credit_sentinel import looks_like_transient_budget
+    if looks_like_transient_budget(error_str):
+        return LLMRateLimitError(f"{context}: {error}" if context else str(error))
+    # 1. Permanent / billing errors — halt, do NOT fall through to rate-limit.
+    #    'limit exhausted' / 'insufficient balance': plan-quota death dressed as a
+    #    429 (z.ai code 1310 "Weekly/Monthly Limit Exhausted", type=rate_limit_error)
+    #    that the old rate-limit classification retried for days (2026-08 storm).
     if any(x in error_str for x in [
         'insufficient_quota', 'billing', 'account_deactivated', 'suspended', '402',
         'limit exhausted', 'insufficient balance',

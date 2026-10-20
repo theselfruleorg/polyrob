@@ -22,14 +22,12 @@ def ours(monkeypatch):
     from core.wallet import factory
     monkeypatch.setattr(factory, "get_agent_wallet",
                         lambda: SimpleNamespace(address=AGENT, solana_address=SOL))
-    monkeypatch.setattr("tools.goal_tools.owner_seat_turn", lambda ctx: bool(ctx.genuine))
-    monkeypatch.setattr("core.security.read_taint.is_tainted",
-                        lambda ctx: bool(getattr(ctx, "tainted", False)))
+    monkeypatch.setattr("core.security.owner_turn.is_genuine_owner_turn",
+                        lambda ctx: bool(ctx.genuine))
 
 
 GENUINE = SimpleNamespace(genuine=True)
 FORGED = SimpleNamespace(genuine=False)
-TAINTED = SimpleNamespace(genuine=True, tainted=True)
 
 
 def _ex(action, to, ctx=GENUINE):
@@ -58,12 +56,3 @@ def test_the_hook_takes_context_and_the_list_is_console_unwritable():
     from core.config_service import is_console_unwritable
     assert st.spend_exemption_with_turn.takes_context is True
     assert is_console_unwritable("OWNER_WALLET_ADDRESSES")
-
-
-def test_an_owner_turn_that_read_outside_text_waits_on_the_tap(ours):
-    """Verifier round 3: a genuine owner turn that read a page/post/mail may be
-    steered by it — the transfer to "our" address goes to the owner queue (a
-    tap, not a refusal); the clean owner turn still needs none."""
-    assert _ex("defi_trade_transfer", OWNER, TAINTED) is None
-    assert _ex("defi_trade_transfer", AGENT, TAINTED) is None
-    assert _ex("defi_trade_transfer", OWNER, GENUINE)

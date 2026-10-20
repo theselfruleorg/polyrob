@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Run the test suite (default 'pytest -q') in the workspace via the code_exec backend (sandbox-gated on servers; local convenience under POLYROB_LOCAL)",
+    "name": "coding_run_tests",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "default": null,
+          "description": "Test command to run; defaults to 'pytest -q'",
+          "nullable": true,
+          "type": "string"
+        },
+        "timeout": {
+          "default": null,
+          "description": "Wall-clock seconds (clamped by the code_exec backend)",
+          "nullable": true,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

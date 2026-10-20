@@ -1,0 +1,24 @@
+{
+  "function": {
+    "description": "Write content to a file in the workspace",
+    "name": "filesystem_write_file",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for writing content to a file in the workspace",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filePath",
+        "content"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -273,7 +273,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
 
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
 
         allow = tuple(a.strip() for a in (params.allow_contracts or "").split(",")
                       if a.strip())

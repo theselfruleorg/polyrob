@@ -162,20 +162,17 @@ async def test_approve_keeps_a_real_overshoot():
 
 def test_reconcile_shows_the_look_alike_warning_before_any_row():
     from tools.defi import reconcile as rec
-    ledger, _err = rec.parse_open_positions(
-        "## Open positions\n\n| Token | Address | Qty |\n|---|---|---|\n"
-        f"| PNL | {REAL} | 126902897.45 |\n")
+    book = [rec.RailPosition(address=REAL, symbol="PNL", qty=126902897.45)]
     holdings = [
         rec.ChainHolding(address=FAKE, symbol="PNL", qty=615.17, raw_units=615,
                          value_usd=None, balance_known=True, name="Pissin N Lying"),
         rec.ChainHolding(address=REAL, symbol="PNL", qty=126902897.45, raw_units=1,
                          value_usd=None, balance_known=True, name="Rob Track Record"),
     ]
-    report = rec.diff(ledger, holdings)
-    out = rec.render(report, chain="robinhood", holder="0xabc", ledger_path="l.md",
-                     coverage="full")
+    report = rec.diff(book, holdings)
+    out = rec.render(report, chain="robinhood", holder="0xabc", coverage="full")
     warn = out.index("ONE SYMBOL, MORE THAN ONE CONTRACT")
-    # 071 W3: the unpriced look-alike in neither book is `unsolicited`, not an issue
+    # 071 W3: the unpriced look-alike not in the book is `unsolicited`, not an issue
     assert warn < out.index("matched:") < out.index("unsolicited (")
     assert "Pissin N Lying" in out and "Rob Track Record" in out
     assert report.to_dict()["collisions"]
@@ -188,19 +185,5 @@ def test_portfolio_keeps_its_import_of_the_helper():
 
 
 # ---- G3: a routine task does not pin the degen playbook ---------------------
-
-@pytest.mark.parametrize("task", ["rotate the API token and update the ledger",
-                                  "scan the repo and screen the diff",
-                                  "claim the domain and check its position"])
-def test_bare_common_words_do_not_load_the_trading_playbook(task):
-    from agents.task.agent.skill_manager import SkillManager
-    ids = {m.skill_id for m in SkillManager().get_skills_for_session(
-        task=task, tool_ids=["defi_trade", "defi_data", "task"])}
-    assert "treasury-trading" not in ids
-
-
-def test_trading_tasks_still_load_it():
-    from agents.task.agent.skill_manager import SkillManager
-    ids = {m.skill_id for m in SkillManager().get_skills_for_session(
-        task="buy token PNL for the buyback", tool_ids=["defi_trade", "defi_data"])}
-    assert "treasury-trading" in ids
+# 081 Q2: nothing loads by keyword; treasury-trading loads only when a job or
+# goal pins it (tests/unit/agents/task/test_068_procedure_skills.py).

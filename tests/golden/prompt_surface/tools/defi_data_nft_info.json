@@ -1,0 +1,31 @@
+{
+  "function": {
+    "description": "Read one NFT straight from the chain: who owns it, which standard it implements, and its metadata URI. Keyless and exact. A field that the node did not answer is reported as NOT CHECKED, never as a default.",
+    "name": "defi_data_nft_info",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "base",
+          "description": "Chain to read the token on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "contract": {
+          "description": "The NFT collection contract (0x…). EVM chains only.",
+          "type": "string"
+        },
+        "token_id": {
+          "description": "The token id to read.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "token_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

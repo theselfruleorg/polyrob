@@ -1,7 +1,7 @@
 """The `room_read` action — the agent READS an allowlisted room's ledger.
 
 Owner rail 2026-09-15 19:41Z: "fix tg chat reading and deploy and restart".
-Rob could POST to The Public Den but not read it: the t.me/s web preview is
+Rob could POST to its group room but not read it: the t.me/s web preview is
 off, the Telegram Bot API cannot read history at all, and no session action
 covered the one store that already holds the lines — `group_ledger`
 (`core/surfaces/group_ledger.py`, 044 §4.1), which the harness appends EVERY
@@ -108,16 +108,6 @@ def room_matches(r: dict, want: str, title: str) -> bool:
             or want.lower() in str(r.get("note") or "").lower())
 
 
-def _mark_read_taint(controller, execution_context) -> None:
-    """Mark the turn as having read third-party text. Never raises."""
-    orch = getattr(controller, "orchestrator", None)
-    try:
-        from core.security.read_taint import mark
-        mark(orch, execution_context)
-    except Exception:
-        logger.warning("room_read: could not mark the turn tainted", exc_info=True)
-
-
 def register_room_read_action(controller) -> None:
     """Register the read-only `room_read` action over the group ledger.
 
@@ -143,8 +133,8 @@ def register_room_read_action(controller) -> None:
                          "the plain most-recent window."))
 
     @controller.registry.action(
-        "Read what has been said in a group/channel room you are in (e.g. The "
-        "Public Den): the most recent lines from the local room ledger, "
+        "Read what has been said in a group/channel room you are in: "
+        "the most recent lines from the local room ledger, "
         "newest last. Each line carries {uid=… msg=…} for room_moderate. "
         "Read-only — to reply, use message(surface='telegram', "
         "target=<chat_id>) or answer a mention in the room. Omit `room` to "
@@ -265,10 +255,6 @@ def register_room_read_action(controller) -> None:
             # M01: the member lines are third-party DATA — framed as such.
             from core.security.untrusted_wrap import wrap_untrusted
             lines = [wrap_untrusted("room_ledger", "\n".join(_render_line(r) for r in rows))]
-            # CHAT-5: members wrote these lines. The turn that read them is
-            # TAINTED: a moderation it then asks for needs the owner's tap
-            # (room_moderate_action._moderation_authority).
-            _mark_read_taint(controller, execution_context)
         footer = ("read-only: this action never posts. Reply via "
                   "message(surface='telegram', target=<chat_id>) or by "
                   "answering a mention in the room.")

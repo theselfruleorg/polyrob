@@ -46,8 +46,8 @@ TOKEN_TO_EFFECT: Dict[str, str] = {
     "writes_social": "social",
     "writes_comms": "comms",
     "writes_public": "public",
-    "writes_money": "money",
-    "writes_code": "code",
+    "money": "money",
+    "exec": "code",
     "writes_self": "self",
     "writes_network": "network",
 }
@@ -257,6 +257,10 @@ def record_external_write(*, effect: str, tool: str = "", action: str = "",
             user_id = user_id or amb_u
             session_id = session_id or amb_s
         attrs: Dict[str, Any] = dict(extra or {})
+        # The cron job behind the write (None for any other session): the
+        # per-job post spacing reads it (packs/x/polyrob_x/post_spacing.py).
+        from core.autonomy_marker import cron_job_for_session
+        attrs["cron_job_id"] = cron_job_for_session(str(session_id or "")) or None
         attrs.update({
             "tool": str(tool or ""),
             "action": str(action or ""),

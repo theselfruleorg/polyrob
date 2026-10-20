@@ -44,8 +44,9 @@ def test_the_room_prompt_says_done_is_not_delivered():
     """Suppressing `done` is only safe because the prompt teaches the verb: a
     `done()`-only turn is the majority shape, and an untaught model would
     leave the room with nothing."""
-    from pathlib import Path
-    src = (Path(__file__).resolve().parents[4] / "agents" / "task" / "agent"
-           / "prompts.py").read_text()
+    from agents.task.agent.prompts import SystemPrompt
+    room = {"surface_id": "telegram", "chat_type": "supergroup", "max_message_bytes": 4096}
+    src = SystemPrompt("a", use_native_tools=True, tool_ids=[],
+                       surface=room).get_system_message().content
     assert "`send_message` is the ONLY way to speak" in src
     assert "The user NEVER sees it" in src

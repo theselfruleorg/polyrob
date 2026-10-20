@@ -8,11 +8,17 @@ rail (``cron/delivery.deliver_result``), so it costs nothing and cannot
 hallucinate. Runs as a cron job carrying ``payload.digest=true`` — the runner
 routes such a job here instead of paying for a model turn.
 
-Every read is a module-level seam so tests can monkeypatch it; every read fails
-open (a missing source contributes nothing, never an exception).
+Every read is a module-level seam so tests can monkeypatch it. A seam RAISES
+on a failed read and the composer names it on its own line (080 WS-4) — "could
+not read" never renders as "none" or "0". An ABSENT source (event log off) is
+empty, not a failure.
 """
+import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
+
+_logger = logging.getLogger(__name__)
 
 
 def digest_enabled_for(user_id: Optional[str], home_dir: Optional[str]) -> bool:
@@ -28,19 +34,18 @@ def digest_enabled_for(user_id: Optional[str], home_dir: Optional[str]) -> bool:
 
 def _ledger(user_id: str, days: int) -> Dict[str, Any]:
     """Seam kept for test monkeypatching; the read lives on the shared layer (T8).
-    include_balances=True: the digest is a display surface (spec §4.1)."""
-    from core.activity_evidence import ledger_rollup
-    return ledger_rollup(user_id, days, include_balances=True)
+    include_balances=True: the digest is a display surface (spec §4.1). Raises."""
+    from core.activity_evidence import ledger_rollup_strict
+    return ledger_rollup_strict(user_id, days, include_balances=True)
 
 
 def _event_aggregate(user_id: str, since_ts: Optional[float]) -> Dict[str, Any]:
-    try:
-        from core.event_log import get_event_log, event_log_enabled
-        if not event_log_enabled():
-            return {}
-        return get_event_log().aggregate(since_ts=since_ts, user_id=user_id) or {}
-    except Exception:
+    """Counts by kind from the durable event log. Raises on a failed read; a
+    disabled log is ``{}``."""
+    from core.event_log import get_event_log, event_log_enabled
+    if not event_log_enabled():
         return {}
+    return get_event_log().aggregate(since_ts=since_ts, user_id=user_id) or {}
 
 
 def _outward(user_id: str, since_ts: float, data_dir: Optional[str]) -> str:
@@ -55,28 +60,84 @@ def _outward(user_id: str, since_ts: float, data_dir: Optional[str]) -> str:
 
 
 def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
-    try:
-        import os
-
-        from agents.task.goals.board import GoalBoard
-        from core.runtime_paths import goals_db_path
-        board = GoalBoard(goals_db_path(data_dir))
-        rows = board.asks(user_id=user_id, status="open") or []
-        out = []
-        for a in rows:
-            get = (a.get if isinstance(a, dict) else lambda k, d=None: getattr(a, k, d))
-            out.append({"title": get("title") or get("what") or ""})
-        return out
-    except Exception:
-        return []
+    """The open asks on the goal board. Raises on a failed read."""
+    from agents.task.goals.board import GoalBoard
+    from core.runtime_paths import goals_db_path
+    board = GoalBoard(goals_db_path(data_dir))
+    rows = board.asks(user_id=user_id, status="open") or []
+    out = []
+    for a in rows:
+        get = (a.get if isinstance(a, dict) else lambda k, d=None: getattr(a, k, d))
+        out.append({"title": get("title") or get("what") or ""})
+    return out
 
 
 def _episodes(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
     """Seam kept for test monkeypatching; the read lives on the shared layer (T8).
     Rows carry the superset fields (kind/outcome/spend_usd/task/ts) — the digest
     consumes kind/outcome and ignores the rest."""
-    from core.activity_evidence import recent_episodes
-    return recent_episodes(user_id, since_ts)
+    from core.activity_evidence import recent_episodes_strict
+    return recent_episodes_strict(user_id, since_ts, EPISODE_READ_LIMIT)
+
+
+def _short(text: Any, n: int = 40) -> str:
+    first = " ".join(str(text or "").split())
+    return first if len(first) <= n else first[: n - 1] + "…"
+
+
+def rail_names(user_id: str, data_dir: str) -> Dict[str, str]:
+    """``job:<id>`` / ``goal:<id>`` -> a short title. Fail-open to ``{}`` (the
+    view then shows the id), because a name is a label, not a number."""
+    names: Dict[str, str] = {}
+    try:
+        from core.runtime_paths import cron_db_path
+        from cron.jobs import CronJobStore
+        path = cron_db_path(data_dir)
+        jobs = CronJobStore(path).list(user_id=user_id) if os.path.exists(path) else []
+        for job in jobs or []:
+            names[f"job:{job.id}"] = _short(job.task) or f"scheduled job {job.id[:8]}"
+    except Exception:
+        _logger.debug("names: job names unavailable", exc_info=True)
+    try:
+        from agents.task.goals.board import GoalBoard
+        from core.runtime_paths import goals_db_path
+        path = goals_db_path(data_dir)
+        goals = (GoalBoard(path).list_recent(user_id=user_id, limit=200)
+                 if os.path.exists(path) else [])
+        for g in goals or []:
+            names[f"goal:{g.id}"] = "goal " + (_short(getattr(g, "title", "")) or g.id[:8])
+    except Exception:
+        _logger.debug("names: goal names unavailable", exc_info=True)
+    return names
+
+
+def _short(text: Any, n: int = 40) -> str:
+    first = " ".join(str(text or "").split())
+    return first if len(first) <= n else first[: n - 1] + "…"
+
+
+def _top_cost(user_id: str, data_dir: Optional[str], days: int) -> str:
+    """2026-10-14 D6: ONE digest line — the biggest AI cost of the window
+    (``core.status_economics.top_cost_line``). Raises on an unreadable ledger
+    (the composer names it)."""
+    from core.runtime_paths import data_dir_or_home
+    from core.status_economics import spend_view, top_cost_line
+    home = data_dir_or_home(data_dir)
+    view = spend_view(user_id, home, now=time.time(), days=max(1, int(days)))
+    return top_cost_line(view, names=rail_names(user_id, home))
+
+
+#: The episode read is bounded; a full read renders as "N+" (080 WS-4).
+EPISODE_READ_LIMIT = 20
+
+
+def _read(failures: List[str], source: str, fn, *args):
+    """One seam; a failure is recorded by name and the value is ``None``."""
+    try:
+        return fn(*args)
+    except Exception as e:  # noqa: BLE001 — named on the digest, never a silent blank
+        failures.append(f"{source} ({type(e).__name__}: {str(e)[:100]})")
+        return None
 
 
 #: How many suppressed owner messages the digest quotes in full; the rest are counted.
@@ -125,7 +186,14 @@ def _health_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
         from core.status_snapshot import build_status_snapshot
         from core.status_render import render_health_lines
         snap = build_status_snapshot(user_id, data_dir=data_dir, include_money=False)
-        return render_health_lines(snap, prefix="• ", limit=6)
+        out = render_health_lines(snap, prefix="• ", limit=6)
+        # 080 WS-4: what runs next, by name — the snapshot's ONE Next list.
+        nxt = [ln for ln in (snap.sections["loops"].lines or []) if ln.startswith("next: ")]
+        if snap.sections["loops"].available and nxt:
+            out.append("• Next: " + nxt[0][len("next: "):])
+        else:
+            out.append(f"• Next: unknown ({snap.sections['loops'].reason or 'no next line'})")
+        return out
     except Exception as e:
         return [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
 
@@ -134,25 +202,37 @@ async def compose_digest(user_id: str, *, days: int = 1,
                          data_dir: Optional[str] = None, db=None) -> str:
     """Build the digest text from evidence. Pure-ish (all reads fail-open)."""
     since_ts = time.time() - max(1, int(days)) * 86400
-    ledger = _ledger(user_id, days)
-    agg = _event_aggregate(user_id, since_ts)
-    asks = _open_asks(user_id, data_dir)
-    episodes = _episodes(user_id, since_ts)
+    failures: List[str] = []
+    ledger = _read(failures, "ledger", _ledger, user_id, days)
+    agg = _read(failures, "event log", _event_aggregate, user_id, since_ts)
+    asks = _read(failures, "open asks", _open_asks, user_id, data_dir)
+    episodes = _read(failures, "episodes", _episodes, user_id, since_ts)
+    top_cost = _read(failures, "AI cost records", _top_cost, user_id, data_dir, days)
 
     from core.event_kinds import GOAL_COMPLETION, GOAL_RUN, SELF_MODIFICATION
-    counts = agg.get("counts_by_kind", {}) or {}
-    n_sessions = len(episodes)
+
+    def _n(value, unknown: bool) -> str:
+        return "?" if unknown else str(value)
+
+    counts = (agg or {}).get("counts_by_kind", {}) or {}
+    n_sessions = len(episodes or [])
+    sessions = ("?" if episodes is None else
+                f"{n_sessions}+" if n_sessions >= EPISODE_READ_LIMIT else str(n_sessions))
     n_goals = int(counts.get(GOAL_RUN, 0)) + int(counts.get(GOAL_COMPLETION, 0))
     n_self_mods = int(counts.get(SELF_MODIFICATION, 0))
 
-    period = "today" if days == 1 else f"last {days}d"
+    # 080 WS-4: the window is ROLLING, not the calendar day — say so.
+    period = "last 24 h" if days == 1 else f"last {days} days"
     lines = [f"Daily digest — {period}:"]
     # 2026-08-28 status SSOT: the digest leads with the same health block
     # /status renders. A degraded instance is the first thing the owner reads;
     # a builder failure is one honest line, never a silently clean digest.
     lines.extend(_health_lines(user_id, data_dir))
-    lines.append(f"• Activity: {n_sessions} session(s), {n_goals} goal event(s), "
-                 f"{n_self_mods} self-change(s)")
+    lines.append(f"• Activity: {sessions} session(s), {_n(n_goals, agg is None)} goal event(s), "
+                 f"{_n(n_self_mods, agg is None)} self-change(s)")
+    if failures:
+        lines.append("• Could not read: " + "; ".join(failures)
+                     + " — a '?' or a missing line here is NOT a zero")
     lines.append(f"• Outward: {_outward(user_id, since_ts, data_dir)}")
 
     # H14b (final whole-branch review, Finding 1): `_ledger` fails open to `{}`
@@ -163,7 +243,9 @@ async def compose_digest(user_id: str, *, days: int = 1,
     # "nothing happened today". This is the same lie shape as the 2026-07-16
     # incident this project exists to fix. Short-circuit to an honest empty
     # state instead of fabricating money lines from an empty dict.
-    if not ledger:
+    if ledger is None:
+        lines.append("• Money: could not read the ledger (see above)")
+    elif not ledger:
         lines.append("• Money: no data (ledger unreadable)")
     else:
         t = ledger.get("treasury") or {}
@@ -198,10 +280,16 @@ async def compose_digest(user_id: str, *, days: int = 1,
             note = ledger_availability_note(ledger)
             if note:
                 lines.append(f"  ⚠ {note}")
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"  ⚠ ledger availability unknown ({type(e).__name__})")
 
-    if asks:
+    # 2026-10-14 D6: the one "top cost" line (`/usage` has the full split).
+    lines.append(f"• {top_cost}" if top_cost is not None
+                 else "• Top AI cost: could not read the records (see above)")
+
+    if asks is None:
+        lines.append("• Pending approvals: could not read the open asks (see above)")
+    elif asks:
         lines.append(f"• Pending approvals ({len(asks)}):")
         for a in asks[:5]:
             title = (a.get("title") or "").strip().replace("\n", " ")[:80]

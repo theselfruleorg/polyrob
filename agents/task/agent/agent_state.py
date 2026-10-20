@@ -41,6 +41,14 @@ class AgentState:
 	paused: bool = False
 	stopped: bool = False
 	done: bool = False
+	# 083 WS-1: why the last run() stopped (a runtime.stop_reason.StopReason
+	# value; first writer wins via set_stop). Reset per run, never persisted.
+	stop_reason: Optional[str] = None
+	# 083 WS-2: the agent's last report at the step limit (its words, never done()).
+	exhausted_summary: Optional[str] = None
+	# 083 WS-3: session provider spend when this run started (autonomous main agent
+	# with AUTONOMOUS_RUN_BUDGET_USD > 0); None = per-run cap off. Never persisted.
+	run_spend_baseline: Optional[float] = None
 
 	# Error tracking
 	consecutive_failures: int = 0
@@ -48,9 +56,7 @@ class AgentState:
 	max_failures: int = 3
 
 	# History and results
-	last_result: Optional[List[Any]] = None
 	last_action: Optional[str] = None
-	last_model_output: Optional[Any] = None
 
 	# Timing
 	session_created_at: Optional[datetime] = None

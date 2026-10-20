@@ -22,14 +22,14 @@ _UNIT_MINUTES = {"m": 1, "h": 60, "d": 1440}
 _DUR_RE = re.compile(r"^(\d+)([mhd])$")
 
 #: A19 — the owner rejected the raw scope tokens as vocabulary ("trading
-#: streams planner cron social oversight pings apps"); every seat now also
+#: cron social oversight pings apps"); every seat now also
 #: takes five plain words. ``oversight`` is dormant (A8/A42) and deliberately
 #: gets no plain word. Order here is the order the refusal message lists them
 #: in, so keep it insertion-ordered.
 PLAIN_WORDS: Dict[str, Tuple[str, ...]] = {
     "everything": ("all",),
     "trading": ("trading",),
-    "background": ("streams", "planner", "cron"),
+    "background": ("cron",),
     "messages": ("pings",),
     "deploying": ("apps",),
 }

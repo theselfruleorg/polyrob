@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "List your durable goals, newest first — LIVE ones by default (pass status='done'/'cancelled' for history).",
+    "name": "goal_list",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 30,
+          "description": "Newest N rows to show (default 30).",
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "status": {
+          "default": null,
+          "description": "Filter: triage/waiting/ready/running/blocked/done/cancelled. Omitted = LIVE goals only (triage/waiting/ready/running/blocked); pass 'done' or 'cancelled' to see history.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

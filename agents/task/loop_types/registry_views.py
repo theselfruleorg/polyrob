@@ -134,7 +134,13 @@ class ActionRegistry(BaseModel):
             return f"- {action.name}: {first_line}"
 
         tools: Dict[str, list] = {}
+        seen = set()
         for action in self.actions.values():
+            # A legacy alias (todo_add -> task_todo_add) maps to the SAME action:
+            # list it once, under its own name.
+            if action.name in seen:
+                continue
+            seen.add(action.name)
             tools.setdefault(action.tool or "default", []).append(action)
 
         lines = []

@@ -139,6 +139,19 @@ def test_no_done_and_no_checks_declared_fails_exactly_as_before(monkeypatch):
     assert not board.successes
     assert board.failures
     assert "no done()" in board.failures[0][1]
+    # 083 WS-1: no guessed cause — the reason is unknown here, and it says so.
+    assert "likely ran out of steps" not in board.failures[0][1]
+    assert "stop reason unknown" in board.failures[0][1]
+
+
+def test_no_done_names_the_typed_stop_reason_with_steps(monkeypatch):
+    board, disp = _dispatcher()
+    _patch_run(monkeypatch, _outcome(done_called=False, stop_reason="failures",
+                                     steps=4, max_steps=30))
+    asyncio.run(disp._run_goal(_goal()))
+    assert board.failures
+    assert ("no done() — stopped after too many consecutive failed steps (4/30)"
+            in board.failures[0][1])
 
 
 def test_all_actions_errored_is_not_salvaged_by_passing_checks(monkeypatch):
@@ -178,3 +191,28 @@ def test_the_completion_judge_is_not_consulted_for_a_salvaged_run(monkeypatch):
     asyncio.run(disp._run_goal(_goal(acceptance_checks=CHECKS)))
     assert judged == []
     assert board.successes == ["g-acc"]
+
+
+def test_last_report_rides_the_failure_and_is_never_a_success(monkeypatch):
+    """083 WS-2: the agent's last report at the step limit is recorded as its
+    words on the failure — the goal is NOT a success (T2-01)."""
+    board, disp = _dispatcher()
+    _patch_run(monkeypatch, _outcome(done_called=False, stop_reason="max_steps", steps=30,
+                                     max_steps=30, exhausted_summary="Done: all of it!"))
+    asyncio.run(disp._run_goal(_goal()))
+    assert not board.successes
+    err = board.failures[0][1]
+    assert err.startswith("run ended without completing (no done() — stopped at the step "
+                          "limit (30/30))")
+    assert err.endswith("\nLast report (agent's words): Done: all of it!")
+    assert len(err) <= 2000
+
+
+def test_a_long_last_report_keeps_the_failure_within_2000(monkeypatch):
+    board, disp = _dispatcher()
+    _patch_run(monkeypatch, _outcome(done_called=False, stop_reason="max_steps",
+                                     exhausted_summary="x" * 5000))
+    asyncio.run(disp._run_goal(_goal()))
+    err = board.failures[0][1]
+    assert len(err) <= 2000 and err.startswith("run ended without completing")
+    assert "Last report (agent's words): " + "x" * 600 in err

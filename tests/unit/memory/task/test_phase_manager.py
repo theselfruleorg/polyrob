@@ -213,18 +213,18 @@ class TestPhaseManager:
         """
         brain_state = {"phase": "discovery"}
 
-        # Add steps and update progress with total_steps provided
+        # 083 WS-5: progress names the step, never a step cap.
         phase_manager.add_step(1, brain_state, "action_1", "finding_1")
-        phase_manager.update_progress(1, total_steps=10)
+        phase_manager.update_progress(1)
         phase_manager.add_step(2, brain_state, "action_2", "finding_2")
-        phase_manager.update_progress(2, total_steps=10)
+        phase_manager.update_progress(2)
 
-        assert phase_manager.memory.progress == "2/10"
+        assert phase_manager.memory.progress == "step 2"
 
         phase_manager.add_step(5, brain_state, "action_5", "finding_5")
-        phase_manager.update_progress(5, total_steps=10)
+        phase_manager.update_progress(5)
 
-        assert phase_manager.memory.progress == "5/10"
+        assert phase_manager.memory.progress == "step 5"
 
     def test_phase_summary_generation(self, phase_manager):
         """Test phase summary is generated."""

@@ -8,7 +8,7 @@ import pytest
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    for k in ("AUTONOMY_HALT", "TREASURY_ENTRY_PAUSE", "STREAM_SEEDING_PAUSE", "DATA_ROOT"):
+    for k in ("AUTONOMY_HALT", "TREASURY_ENTRY_PAUSE", "DATA_ROOT"):
         monkeypatch.delenv(k, raising=False)
     # One base only: the conftest autouse fixture points POLYROB_DATA_DIR at a
     # throwaway dir; pin it AND the resolved home to tmp_path so state_bases()
@@ -38,8 +38,8 @@ def test_pause_all_denies_every_kind_and_is_durable(home):
 
 def test_scoped_pause_denies_only_its_kinds(home):
     from core import autonomy_control as ac
-    ac.pause(str(home), scopes=("streams",))
-    assert ac.allows("seed_stream", str(home)).allowed is False
+    ac.pause(str(home), scopes=("social",))
+    assert ac.allows("social_post", str(home)).allowed is False
     assert ac.allows("dispatch", str(home)).allowed is True
     assert ac.allows("trade_entry", str(home)).allowed is True
 
@@ -72,8 +72,6 @@ def test_legacy_files_and_env_are_read_as_facets(home, monkeypatch):
     (home / "TREASURY_ENTRY_PAUSE").write_text("x")
     st = ac.read_state(str(home))
     assert st.paused and st.scopes == ("trading",) and st.source == "legacy"
-    (home / "STREAM_SEEDING_PAUSE").write_text("x")
-    assert set(ac.read_state(str(home)).scopes) == {"trading", "streams"}
     monkeypatch.setenv("AUTONOMY_HALT", "true")
     assert ac.read_state(str(home)).scopes == ("all",)
     assert ac.read_state(str(home)).source == "env"
@@ -92,17 +90,17 @@ def test_resume_clears_record_and_legacy_files(home):
 
 def test_resume_one_scope_keeps_the_others(home):
     from core import autonomy_control as ac
-    ac.pause(str(home), scopes=("cron", "streams"))
+    ac.pause(str(home), scopes=("cron", "apps"))
     res = ac.resume(str(home), scopes=("cron",))
-    assert res.state.scopes == ("streams",)
+    assert res.state.scopes == ("apps",)
     assert res.effective is True
 
 
 def test_scoped_pause_merges_into_an_existing_record(home):
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("cron",))
-    ac.pause(str(home), scopes=("streams",))
-    assert set(ac.read_state(str(home)).scopes) == {"cron", "streams"}
+    ac.pause(str(home), scopes=("apps",))
+    assert set(ac.read_state(str(home)).scopes) == {"cron", "apps"}
     ac.pause(str(home), scopes=("all",))
     assert ac.read_state(str(home)).scopes == ("all",)
 
@@ -152,11 +150,11 @@ def test_read_never_creates_a_record(home):
 
 def test_merge_never_shortens_an_existing_pause(home):
     from core import autonomy_control as ac
-    ac.pause(str(home), scopes=("streams",))
+    ac.pause(str(home), scopes=("apps",))
     st = ac.pause(str(home), scopes=("cron",), duration_minutes=90).state
-    assert set(st.scopes) == {"streams", "cron"} and st.until is None
+    assert set(st.scopes) == {"apps", "cron"} and st.until is None
     ac.resume(str(home))
-    ac.pause(str(home), scopes=("streams",), duration_minutes=30)
+    ac.pause(str(home), scopes=("apps",), duration_minutes=30)
     st = ac.pause(str(home), scopes=("cron",), duration_minutes=90).state
     assert st.until is not None and st.until - time.time() > 80 * 60
     # a narrower pause on top of "all" keeps "all"
@@ -207,10 +205,10 @@ def test_facets_are_tracked_and_a_scoped_resume_keeps_only_record_scopes(home, m
 def test_multi_base_write_and_resume(home, monkeypatch):
     other = home / "other"
     from core import autonomy_control as ac
-    res = ac.pause(str(other), scopes=("streams",))
+    res = ac.pause(str(other), scopes=("apps",))
     assert sorted(res.written) == sorted([str(other / ac.PAUSE_FILENAME), str(home / ac.PAUSE_FILENAME)])
-    assert ac.read_state(str(home)).scopes == ("streams",)
-    assert ac.read_state(None).scopes == ("streams",)   # a reader with no data_dir sees it too
+    assert ac.read_state(str(home)).scopes == ("apps",)
+    assert ac.read_state(None).scopes == ("apps",)   # a reader with no data_dir sees it too
     res = ac.resume(str(other))
     assert res.effective is True and not (home / ac.PAUSE_FILENAME).exists()
     assert not (other / ac.PAUSE_FILENAME).exists()
@@ -243,11 +241,11 @@ def test_concurrent_pauses_never_corrupt_the_record(home):
         except Exception as e:  # pragma: no cover
             errs.append(e)
 
-    ts = [threading.Thread(target=_p, args=(sc,)) for sc in ("cron", "streams", "social", "pings")]
+    ts = [threading.Thread(target=_p, args=(sc,)) for sc in ("cron", "apps", "social", "pings")]
     [t.start() for t in ts]
     [t.join() for t in ts]
     st = ac.read_state(str(home))
-    assert not errs and st.source == "record" and set(st.scopes) == {"cron", "streams", "social", "pings"}
+    assert not errs and st.source == "record" and set(st.scopes) == {"cron", "apps", "social", "pings"}
     assert not any(p.name.endswith(".tmp") for p in home.iterdir())
 
 

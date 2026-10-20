@@ -31,11 +31,11 @@
         {% if not read_only %}
         <details class="section">
           <summary>{{ t('work.create.goal_label') }}</summary>
-          {# A44: the goal writer has always accepted a body, a priority, a tool
-             grant and a step budget; this form submitted a title and nothing
-             else, so `max_steps` — the field the agent uses to size its own
-             work — was unreachable from the console entirely. Every field is
-             optional but the title; an empty one is simply not sent. #}
+          {# A44: the goal writer accepts a body, a priority and a tool grant;
+             this form used to submit a title and nothing else. Every field is
+             optional but the title; an empty one is simply not sent. There is
+             no step-budget field: the cap is the operator's
+             AUTONOMOUS_MAX_STEPS (083). #}
           <form class="setting-control" data-create="goals" data-unreachable="{{ t('work.create.unreachable') }}">
             <label>{{ t('work.create.title_label') }}<textarea name="title" required></textarea></label>
             <label>{{ t('work.create.body_label') }}<textarea name="body"></textarea></label>
@@ -43,8 +43,6 @@
             <p class="why">{{ t('work.create.priority_hint') }}</p>
             <label>{{ t('work.create.tools_label') }}<textarea name="tools"></textarea></label>
             <p class="why">{{ t('work.create.tools_hint') }}</p>
-            <label>{{ t('work.create.max_steps_label') }}<input name="max_steps" type="number" step="1" min="6" max="60"></label>
-            <p class="why">{{ t('work.create.max_steps_hint') }}</p>
             <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
             <p class="why" role="status"></p>
           </form>
@@ -67,8 +65,8 @@
         </div>
       </div>
 
-      {# On a clock — cron jobs, listed with Cancel. Drawn by work-now.js from
-         /api/webgate/cron; Cancel posts to /api/webgate/cron/{id}/cancel. #}
+      {# Scheduled jobs — listed with Pause / Resume / Run now / Stop. Drawn by
+         work-now.js from /api/webgate/cron; each posts /api/webgate/cron/{id}/{verb}. #}
       <div data-pane="schedule" hidden>
         {% if not read_only %}
         <details class="section">
@@ -201,6 +199,7 @@
          data-pause="{{ t('work.now.pause') }}"
          data-drop="{{ t('work.now.drop') }}"
          data-retry="{{ t('work.now.retry') }}"
+         data-resume="{{ t('work.now.resume') }}"
          data-helper_lead="{{ t('work.now.helper_lead') }}"
          data-helper_body="{{ t('work.now.helper_body') }}"
          data-helper_goal="{{ t('work.now.helper_goal') }}"
@@ -208,6 +207,7 @@
          data-status_waiting="{{ t('work.now.status_waiting') }}"
          data-status_triage="{{ t('work.now.status_triage') }}"
          data-status_blocked="{{ t('work.now.status_blocked') }}"
+         data-status_paused="{{ t('work.now.status_paused') }}"
          data-unreachable="{{ t('work.now.unreachable') }}"
          data-secs="{{ t('work.now.secs') }}"
          data-mins="{{ t('work.now.mins') }}"
@@ -219,8 +219,17 @@
          data-sched_unreadable="{{ t('work.schedule.unreadable') }}"
          data-sched_unreadable_why="{{ t('work.schedule.unreadable_why') }}"
          data-sched_cancel="{{ t('work.schedule.cancel') }}"
+         data-sched_pause="{{ t('work.schedule.pause') }}"
+         data-sched_resume="{{ t('work.schedule.resume') }}"
+         data-sched_run="{{ t('work.schedule.run') }}"
+         data-sched_done_pause="{{ t('work.schedule.done_pause') }}"
+         data-sched_done_resume="{{ t('work.schedule.done_resume') }}"
+         data-sched_done_run="{{ t('work.schedule.done_run') }}"
+         data-sched_refused="{{ t('work.schedule.refused') }}"
+         data-sched_outcome="{{ t('work.schedule.outcome') }}"
          data-sched_last_never="{{ t('work.schedule.last_never') }}"
          data-sched_ran_ago="{{ t('work.schedule.ran_ago') }}"
+         data-sched_next="{{ t('work.schedule.next') }}"
          data-sched_unreachable="{{ t('work.schedule.unreachable') }}"></div>
 
     {# The words work-apps.js renders (WS-P2). Its own copy node, since it is its

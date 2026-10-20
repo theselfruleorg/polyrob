@@ -1,9 +1,9 @@
-"""Goal-board / planner tuning flags (030 file-size extraction).
+"""Goal-board tuning flags (030 file-size extraction).
 
 A mixin of pure access-time env accessors split out of ``AutonomyConfig``
 (``core/config_policy/policy.py``) per the god-file ratchet. No behavior
 change: `AutonomyConfig` inherits this, every ``AutonomyConfig.goal_*``
-call site is untouched. `goals_enabled`/`goal_planner_enabled`/
+call site is untouched. `goals_enabled`/
 `goal_self_wake_enabled` STAY in policy.py — they consult the
 posture/autonomy-group defaults defined there.
 """
@@ -13,8 +13,12 @@ from core.env import int_env as _int_env
 #: Internal tuning (not env-driven). Tests patch these module constants.
 #: Trigram similarity at or above which a new goal is a duplicate (0 disables).
 GOAL_DEDUP_THRESHOLD = 0.6
-#: Recent goals the planner reads as history.
-GOAL_PLANNER_HISTORY_N = 10
+
+#: 083: the ONE default step budget of an interactive request — ``polyrob run``,
+#: the HTTP task API, A2A, ``SessionRequest`` and the billed ceiling. Not an env
+#: flag. Autonomous runs use ``AutonomyConfig.autonomous_max_steps()``; a chat
+#: turn uses ``CHAT_MAX_STEPS``; the REPL uses ``DEFAULT_TURN_BUDGET``.
+INTERACTIVE_MAX_STEPS = 50
 
 
 class GoalFlagsMixin:
@@ -81,11 +85,15 @@ class GoalFlagsMixin:
         return _int_env("GOAL_YIELD_AGEING", 0)
 
     @staticmethod
-    def goal_default_max_steps() -> int:
-        """056 WS5: the step budget a goal gets when its payload sets none. Was a
-        literal 20 in the dispatcher; agent-created goals (which could not even set
-        one until `goal_create.max_steps`) exhausted it. Default 30."""
-        return _int_env("GOAL_DEFAULT_MAX_STEPS", 30)
+    def autonomous_max_steps() -> int:
+        """083 WS-4: the ONE step cap for an autonomous run — goal, cron,
+        delegation and worker. The operator owns it; no tool argument, stored
+        goal/cron payload or worker profile sets a step budget any more. A
+        safety stop, not a task size: cost (``AUTONOMOUS_RUN_BUDGET_USD``) and
+        wall clock (``GOAL_MAX_RUN_SECONDS``) are the real bounds. Default 150;
+        a value below 1 falls back to the default."""
+        value = _int_env("AUTONOMOUS_MAX_STEPS", 150)
+        return value if value >= 1 else 150
 
     @staticmethod
     def goal_dispatch_cron_headroom_sec() -> int:
@@ -113,40 +121,8 @@ class GoalFlagsMixin:
         return _int_env("GOAL_MAX_CONCURRENT", 2)
 
     @staticmethod
-    def goal_per_objective_cap() -> int:
-        """Max concurrent goal runs for ONE objective. <=0 disables the extra cap."""
-        return _int_env("GOAL_PER_OBJECTIVE_CAP", 0)
-
-    @staticmethod
     def goal_dedup_threshold() -> float:
         return GOAL_DEDUP_THRESHOLD
-
-    @staticmethod
-    def goal_planner_min_ready() -> int:
-        return _int_env("GOAL_PLANNER_MIN_READY", 2)
-
-    @staticmethod
-    def goal_planner_cooldown_sec() -> int:
-        return _int_env("GOAL_PLANNER_COOLDOWN_SEC", 3600)
-
-    @staticmethod
-    def goal_planner_history_n() -> int:
-        return GOAL_PLANNER_HISTORY_N
-
-    @staticmethod
-    def goal_planner_goals_per_run() -> int:
-        """Upper bound on goals ONE planner run may create."""
-        return _int_env("GOAL_PLANNER_GOALS_PER_RUN", 3)
-
-    @staticmethod
-    def goal_planner_ready_ceiling() -> int:
-        """Ready-goal ceiling the planner is told to respect. <=0 derives it."""
-        return _int_env("GOAL_PLANNER_READY_CEILING", 0)
-
-    @staticmethod
-    def goal_planner_max_social() -> int:
-        """Max goals in one planner run that may carry the `twitter` tool."""
-        return _int_env("GOAL_PLANNER_MAX_SOCIAL", 1)
 
     @staticmethod
     def goal_daily_quota() -> int:

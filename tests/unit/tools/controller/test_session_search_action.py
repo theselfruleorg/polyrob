@@ -219,3 +219,47 @@ async def test_before_id_passed_through_to_provider():
     # page filtered strictly below 4: only ids 3, 2 in range, limit=2 -> both returned
     assert "(id 3)" in res.extracted_content and "(id 2)" in res.extracted_content
     assert "(id 4)" not in res.extracted_content and "(id 5)" not in res.extracted_content
+
+
+class _BoomSearchProvider(_StubExternalProvider):
+    async def search(self, query, *, user_id=None, session_id=None, limit=5, sort=None):
+        raise RuntimeError("database is locked")
+
+
+@pytest.mark.asyncio
+async def test_d3_read_failure_is_an_error_not_no_match():
+    """D3 / E-A9 (review 2026-10-13): a provider exception rendered as "No
+    past-session memory matched" and was kept in step memory as a finding."""
+    mem_registry.set_external_memory_provider(_BoomSearchProvider())
+    c = _bare_controller()
+    c._register_session_search_action()
+    action = c.registry.registry.actions["session_search"]
+    res = await action.function(action.param_model(query="did the owner approve the bridge"),
+                                execution_context=None)
+    assert res.error and "could not be read (RuntimeError)" in res.error
+    assert "never recorded" in res.error
+    assert not (res.extracted_content or "").startswith("No past-session memory matched")
+    assert res.include_in_memory is False
+
+
+@pytest.mark.asyncio
+async def test_d2_reader_regime_is_forwarded(monkeypatch):
+    """An autonomous cron reader asks for no demotion and its own job first."""
+    seen = {}
+
+    class _ReaderProvider(_StubExternalProvider):
+        async def search(self, query, *, user_id=None, session_id=None, limit=5, sort=None,
+                         demote_automation=True, prefer_job_id=None, prefer_goal_id=None):
+            seen.update(demote=demote_automation, job=prefer_job_id, goal=prefer_goal_id)
+            return "- hit"
+
+    mem_registry.set_external_memory_provider(_ReaderProvider())
+    import core.autonomy_marker as am
+    monkeypatch.setattr(am, "is_autonomous", lambda sid: sid == "sess-1")
+    monkeypatch.setattr(am, "cron_job_for_session", lambda sid: "job-a" if sid == "sess-1" else None)
+    monkeypatch.setattr(am, "goal_for_session", lambda sid: None)
+    c = _bare_controller()
+    c._register_session_search_action()
+    action = c.registry.registry.actions["session_search"]
+    await action.function(action.param_model(query="release"), execution_context=None)
+    assert seen == {"demote": False, "job": "job-a", "goal": None}

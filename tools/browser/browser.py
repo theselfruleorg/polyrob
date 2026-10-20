@@ -537,14 +537,12 @@ class Browser(BaseTool):
 		Returns an ``ActionResult`` to hand straight back to the agent, or None
 		when the URL may be navigated.
 		"""
-		# 1. file:// — the filesystem is not a web origin. `data:` URLs stay
-		#    allowed (the agent renders generated images with them).
-		if (url.startswith('file://') or 'file:///' in url) and not url.startswith('data:'):
-			self.logger.warning(f"Blocked file:// navigation to {url}")
-			return ActionResult(
-				error="Cannot open file:// URLs in browser. If you're trying to view an image, you already have vision capabilities - just analyze the image content that was passed to you in the message. Alternatively, you can use filesystem_read_file to get the image content and create an HTML page with a data URL.",
-				include_in_memory=True
-			)
+		# 1. The scheme allowlist, before anything else (085 W1, custody L-2).
+		from tools.browser.nav_schemes import navigation_scheme_refusal
+		scheme_refusal = navigation_scheme_refusal(url)
+		if scheme_refusal:
+			self.logger.warning(f"Blocked navigation by scheme: {url}")
+			return ActionResult(error=scheme_refusal, include_in_memory=True)
 
 		# 2. SSRF — reject loopback / RFC1918 / link-local / cloud-metadata
 		#    hosts (gated by BROWSER_ALLOW_PRIVATE_URLS). Offload the blocking

@@ -15,15 +15,15 @@ capabilities = ["tools", "money", "api_routes"]
 # as a tool id); the trade verbs are blocked by NAME while correspondent-tainted
 # (their rows below) and every order verb is on the owner approval lane
 # (approval_owner = "hook"). Server only: credentials live in the database.
-# Known wording debt, kept verbatim from core: the reserved remedy says "never
-# autonomous", which contradicts the x402 micro lane and DEFI_AGENT_AUTONOMY.
+# `remedy` is a KEY of core.tool_gates.REMEDIES (081 B-1): the venue shows the
+# same money text the <tool-catalog> and load_tool show.
 [tools.polymarket]
 # 067 (one install): without this module the tool is withheld and names the pack's extra.
 requires = ["py_clob_client_v2"]
-capabilities = ["money", "delegate_blocked", "readable_while_tainted", "writes_money"]
+capabilities = ["money", "delegate_blocked"]
 cli = "incompatible"
 permissions = ["network.read", "trade.execute"]
-gate = { tier = "reserved", label = "trading", remedy = "owner-only; trading is never autonomous" }
+gate = { tier = "reserved", label = "money", remedy = "money" }
 
 # L9 (2026-07-15): live-trade order verbs get the SAME owner-in-the-loop an
 # invoice does. 067 P1: the venue trade verbs, NAMESPACED.
@@ -133,10 +133,10 @@ correspondent_blocked = true
 [tools.hyperliquid]
 # 067 (one install): without this module the tool is withheld and names the pack's extra.
 requires = ["hyperliquid"]
-capabilities = ["money", "delegate_blocked", "readable_while_tainted", "writes_money"]
+capabilities = ["money", "delegate_blocked"]
 cli = "incompatible"
 permissions = ["network.read", "trade.execute"]
-gate = { tier = "reserved", label = "trading", remedy = "owner-only; trading is never autonomous" }
+gate = { tier = "reserved", label = "money", remedy = "money" }
 
 [tools.hyperliquid.verbs.hyperliquid_agent_status]
 effect = "none"

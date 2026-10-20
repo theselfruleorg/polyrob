@@ -17,7 +17,7 @@ from core.surfaces.session_chat_registry import SessionChatRegistry
 from surfaces.telegram.surface import TelegramSurface
 from tools.controller import message_send as ms
 
-DEN = "-1002125904710"
+DEN = "-1009876543210"
 
 
 class _Msg:

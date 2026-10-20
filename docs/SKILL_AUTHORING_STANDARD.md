@@ -7,7 +7,7 @@ Rules for writing durable, safe system skills in this codebase. All shipped `SKI
 ## 1. Shape
 
 - **Start with a single `# Title` heading.** The heading is the skill's human-readable name.
-- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt). With progressive disclosure ON (default), the skills that MATCHED the session (trigger matches, rail/persona seeds, `requires` prerequisites) are pinned in full while their bodies fit a 20,000-char budget (`SkillManager.EAGER_INJECT_BUDGET_CHARS`), prerequisites first. A matched skill that does not fit is listed `LOAD FIRST` in the `<skill-catalog>`, and every other skill is a catalog line the agent pulls with `load_skill`. A body over 20,000 chars is therefore never pinned; keep a skill that must be delivered under that size.
+- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt). Only a session's PINNED skills load at session start: a cron job's or goal's `payload.skills`, `TaskSessionConfig.skills`, the persona seeds, and their `requires` prerequisites. They are pinned in full while their bodies fit a 20,000-char budget (`SkillManager.EAGER_INJECT_BUDGET_CHARS`), prerequisites first; a pin that does not fit is listed `LOAD FIRST` in the `<skill-catalog>`. Every other skill is one index line the agent pulls with `load_skill` — there is no keyword matcher. A `load_skill` result over 24,000 chars is cut on the wire, so keep a body under 20,000 chars and move detail to `references/` (a test holds every shipped body to it; `treasury-trading` is the worked example).
 - **Write in the second person, active voice.** "Use `anysite` to query LinkedIn profiles" not "The agent should use anysite to query LinkedIn profiles."
 
 ## 2. Advisory + tool-graceful
@@ -19,7 +19,7 @@ If `perplexity` is available, use it for synthesis. If not, fall back to `anysit
 ```
 
 - **Never hard-fail on a missing tool.** Say "if X is unavailable, do Y instead."
-- **Never imply a tool can do something the session doesn't have access to.** The `tool_ids` field in a rule is METADATA for matching — it does NOT grant capabilities. If the tool isn't loaded for the session, the skill still activates but the tool won't be callable.
+- **Never imply a tool can do something the session doesn't have access to.** The `tool_ids` field in a rule is a GATE for the index — it does NOT grant capabilities. A pinned skill loads even when its tool isn't loaded for the session, and then the tool won't be callable.
 - **State uncertainty.** If a data source might be paywalled or unavailable, say so and tell the agent to note it in the output.
 
 ## 2a. Capability-denial claims must be re-checkable, never asserted as permanent fact
@@ -30,15 +30,12 @@ Section 2 covers a tool being *unloaded for this session* — that's transient a
 - **Prefer computing the fact at render time over hand-typing it**, wherever the rendering code already has the real answer — e.g. `agents/task/agent/prompts.py::_get_web_access_content` renders per-session tool availability from `self.tool_ids` rather than asserting a fixed list. A skill can't do this (it's static Markdown), which is exactly why it needs the registry instead.
 - **Word the claim so it's falsifiable by a specific check**, not vibes — "there is no marketplace integration (no Seaport, no Reservoir)" is checkable; "NFTs aren't really our thing" is not.
 
-## 3. `tool_ids` are matching metadata, not capability grants
+## 3. `tool_ids` are a gate, not capability grants
 
-The `tool_ids` array in `rules.json` under `triggers` tells the skill manager that this skill is relevant when those tools are loaded. It does **not** make those tools available.
+The `tool_ids` array in the `polyrob-triggers` frontmatter value names the tools the skill is about. It gates a money playbook and a gated skill (section 9a); it does **not** make those tools available.
 
 ```json
-"triggers": {
-    "tool_ids": ["anysite", "web_fetch"],
-    ...
-}
+"triggers": {"tool_ids": ["anysite", "web_fetch"]}
 ```
 
 Every entry in `tool_ids` must be a member of `VALID_TOOL_IDS` (defined in `agents/task/agent/skill_manager.py`). Unknown tool IDs cause validation warnings.
@@ -95,8 +92,8 @@ The threat scanner scans both the skill **body** and its **description** for inj
 New writes and promotions are refused if the scanner is unavailable or fails.
 Tenant IDs must pass the shared tenant validator. User-scope reads and mutations
 use descriptor-relative, no-symlink file operations; unsafe legacy paths require
-owner remediation, not automatic migration. File replacement is atomic, but the
-body and `rules.json` are not yet a single revision/CAS transaction.
+owner remediation, not automatic migration. File replacement is atomic, and an
+active user skill loads only when its body matches the revision recorded at write.
 
 The following are rejected at write time:
 
@@ -107,42 +104,52 @@ The following are rejected at write time:
 
 Write skills that describe a procedure, not one that tries to override the agent's operating context.
 
-## 9. rules.json entry format
+## 9. The rule lives in the frontmatter
 
-Each new skill needs a `rules.json` entry:
+A shipped skill's SKILL.md frontmatter is its ONLY metadata source; there is no
+index file. The rule is the flat `metadata.polyrob-*` strings (agentskills.io
+allows only string values under `metadata`):
 
-```json
-"skill-id": {
-    "triggers": {
-        "tool_ids": [],         // subset of VALID_TOOL_IDS; empty = matches regardless of tools
-        "keywords": ["..."],    // short phrases that trigger this skill
-        "action_names": [],     // see 9a — never an always-registered action
-        "task_patterns": ["..."]  // regex patterns matched against the task string
-    },
-    "priority": 6,             // lower = higher priority; see 9c for the ranges
-    "auto_activate": true,     // must have a SKILL.md body or the rule is pruned at load
-    "description": "...",      // one sentence, also scanned for injection
-    "requires": []             // optional prerequisite skill ids, see 9b
-}
+```yaml
+---
+name: skill-id
+description: One sentence, also scanned for injection.
+license: MIT
+metadata:
+  polyrob-when: 'Moving funds between chains (bridge)'   # the index line, <= 60 chars
+  polyrob-priority: '6'            # lower = higher priority; see 9c for the ranges
+  polyrob-auto-activate: 'true'    # 'false' = gated: listed and loadable only with every tool_id loaded
+  polyrob-triggers: '{"tool_ids":["defi_trade"]}'   # optional; the gate domain, see 9a
+  polyrob-requires: '["token-identity"]'   # optional prerequisite skill ids, see 9b
+  polyrob-version: '1'
+---
 ```
 
-### 9a. How a rule matches
+`polyrob-when` is the line the skill index shows after the id: say WHEN to load the
+skill, task first, in at most 60 characters (`MAX_WHEN_CHARS`). Every shipped skill
+has one (a test checks it); a write with a longer one is refused. A skill without one
+shows its description, cut at 160 characters.
 
-- **Relevance is required.** A skill loads when a `keyword` (word-boundary match) or a `task_pattern` (regex, case-insensitive) hits the task. Only the first 4,000 characters of the task are matched (`SkillManager.MAX_TRIGGER_TASK_CHARS`). A `tool_ids` match alone never loads a skill.
-- **`action_names` alone loads a skill only when `tool_ids` is empty.** Never list an action that is registered in every session (`preferences`, `owner_doc_manage`, `agent_status`, `done`, ...): the skill then matches every session and takes a capped slot. A shipped rule with empty `tool_ids` must keep `action_names` empty (`tests/unit/skills/test_trigger_matching_fixes.py`).
-- **Money gate.** A rule that declares a MONEY tool (`core.tool_capabilities.ids_with("money")`, e.g. `defi_trade`) in `tool_ids` matches only when the session holds a declared money tool or a declared read tool with no `high_impact` capability (e.g. `defi_data`). A declared action tool that moves no funds (`cronjob`) does not open it.
-- **`max_skills` is 2.** Trigger matches compete for two slots by `priority` (then match count).
+`polyrob-triggers` is one JSON object with one key, `tool_ids` (a subset of
+`VALID_TOOL_IDS`). There are no keyword or pattern triggers: a test refuses them on
+a shipped skill. A SKILL.md with no `polyrob-*` key is a plain agentskills.io
+skill: it is an index line with no rule.
+
+### 9a. How a skill reaches the model
+
+- **A pin loads it.** A job's or goal's `payload.skills`, `TaskSessionConfig.skills` and the persona seeds load at session start (`SkillManager.get_pinned_skills`). A pin is explicit intent: it loads even when its rule is gated. The cron lane stop keys on a job's first pinned id, so a pinned id is never renamed or retired.
+- **Otherwise the model chooses.** Every other session — owner chat, room, correspondent, a goal or cron run with no pin — gets the short `<skill-catalog>` index and calls `load_skill` for the line that fits the task.
+- **Money gate.** A rule that declares a MONEY tool (`core.tool_capabilities.ids_with("money")`, e.g. `defi_trade`) in `tool_ids` is an index line (and a pullable prerequisite) only when the session holds a declared money tool or a declared read tool with no `high_impact` capability (e.g. `defi_data`). A declared action tool that moves no funds (`cronjob`) does not open it.
 
 ### 9b. `requires` — prerequisite procedures
 
-```json
-"treasury-trading": { ..., "requires": ["token-identity", "pre-trade-check"] }
+```yaml
+  polyrob-requires: '["token-identity","pre-trade-check"]'   # treasury-trading
 ```
 
-- Every loaded skill (matched or seeded) pulls in its `requires` ids, beyond `max_skills`, at most 2 per session (`MAX_PREREQUISITES`).
+- Every pinned skill pulls in its `requires` ids, at most 2 per session (`MAX_PREREQUISITES`).
 - One pass, no recursion: a prerequisite's own `requires` are not expanded.
 - A prerequisite whose effective rule says `auto_activate: false` is not pulled in, and it must pass the money gate for the session.
-- A prerequisite that a SELECTED parent requires does not compete for a capped slot; it is appended instead.
 - Under progressive disclosure, prerequisites are pinned first (see section 1).
 
 ### 9c. Priority range
@@ -156,18 +163,16 @@ Each new skill needs a `rules.json` entry:
 ### 9d. Ids and precedence
 
 - **A user skill can never take a builtin or pack id.** `skill_manage create`, `promote`, `polyrob skill install` and `POST /api/skills` all refuse one (`SkillManager.reserved_skill_ids()`). A legacy user rule under a system id may only disable that skill (`"auto_activate": false`); it never replaces its triggers, `requires`, priority or gate.
-- **One body precedence:** builtin (`data/prompts/skills/`) > the tenant's user skill > pack skill > ecosystem skill. `load_skill`, `resolve_skill_dir` (the `references/` directory) and the catalog use the same order. Among ecosystem roots, project > user; an ecosystem skill never enters the index under a builtin id.
+- **One body precedence** (`core.skills.scopes.resolve`): builtin (`data/prompts/skills/`) > the tenant's user skill > pack skill > project > user ecosystem skill. `load_skill`, `resolve_skill_dir` (the `references/` directory) and the catalog use the same order. An ecosystem skill never enters the index under a builtin or pack id. Two non-builtin skills with one id and different bodies (a tenant skill and an ecosystem skill, or two ecosystem roots) are refused and logged once; an identical copy is not.
 
 ### 9e. `allowed-tools` is advisory
 
 An agentskills.io `allowed-tools` frontmatter field is recorded and one advisory line is appended to the delivered body (`agents/task/agent/skill_allowed_tools.py`). It is NOT enforced: the session's tool set does not change when the skill loads, and the names are often another harness's tool names.
 
-**After editing rules.json:** always re-read it first to avoid clobbering another session's concurrent additions. The file is shared across parallel sessions.
-
 ## 10. Invariant test
 
 `tests/unit/agents/task/test_library_invariants.py` enforces:
-- Every `auto_activate` rule has a `SKILL.md` body.
+- Every rule in the index has a `SKILL.md` body (true by construction: the index is built from the bodies).
 - No `SKILL.md` contains `mcp_execute_tool`.
 - No `SKILL.md` contains an obvious hardcoded secret (`sk-…`, `AKIA…`, PEM private key).
 

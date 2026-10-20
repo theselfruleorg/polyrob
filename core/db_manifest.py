@@ -59,8 +59,6 @@ DB_REGISTRY: Tuple[DbSpec, ...] = (
        "SqliteMemoryProvider._init_schema"),
     _S("feedback_replays.db", "data", "modules/eip8004/feedback_replays.py",
        "consume_feedback_auth", note="signed ERC-8004 feedback grants and purchase proofs"),
-    _S("refusal_taint.db", "data", "core/security/refusal_taint_store.py", "write",
-       note="durable money-refusal public-send restriction"),
     _S("login_attempts.db", "data", "webview/login_limits.py", "_trusted",
        note="owner-login budgets shared by workers"),
     _S("x_write_attempts.db", "data", "packs/x/polyrob_x/write_budget.py",

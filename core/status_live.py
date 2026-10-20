@@ -57,9 +57,13 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
     except Exception as exc:
         unreadable["cron"] = f"{type(exc).__name__}: {exc}"[:200]
     try:
-        rows = _rows(session_registry_db_path(data_dir),
-                     "SELECT session_id, worker_pid, created_at, last_seen_at "
-                     "FROM active_sessions")
+        reg = session_registry_db_path(data_dir)
+        # 080 WS-4: a fresh install has no registry yet — nothing has ever run,
+        # so the honest answer is EMPTY, not "unreadable". A file that exists
+        # and fails to read stays unreadable.
+        rows = (_rows(reg, "SELECT session_id, worker_pid, created_at, last_seen_at "
+                           "FROM active_sessions")
+                if os.path.exists(reg) else [])
         live = []
         for r in rows:
             sid = str(r.get("session_id") or "")

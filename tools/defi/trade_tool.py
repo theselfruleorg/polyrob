@@ -64,11 +64,11 @@ from tools.defi.trade_params import (  # noqa: F401 — re-exported (tests, pack
     NftRevokeParams, NftTransferParams, RegisterAgentParams, RevokeParams,
     SetAgentUriParams, SolanaDeployTokenParams, SolanaSwapParams, SwapParams,
     TransferParams, UnwrapParams, WrapParams, _chain_field_description)
-from core.security.refusal_taint import PRECONDITION  # noqa: F401 — swap verbs import it from here
 from tools.base_tool import BaseTool
 from tools.defi.solana_rail_adapters import SolanaRailMixin
 from tools.defi.solana_send_verb import SolanaTransferParams
 from tools.wallet_holder import WalletHolderMixin
+from tools.defi import call_verb as _call_verb  # noqa: F401 — registers the payout card context
 
 logger = logging.getLogger(__name__)
 
@@ -558,7 +558,12 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
                    f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
                    f"  guard: {decision.reason}\n  lane:  {decision.lane}\n")
         if not decision.allowed:
-            return self._ar(content=header + _not_sent_text(decision.lane))
+            # C-09: the same call refused twice says so, instead of reading as
+            # a "duplicate" result the agent then misreports.
+            from tools.defi.refusal_repeat import REPEAT_NOTE, note_refusal
+            repeat = note_refusal(execution_context, venue_action, intent, decision.reason)
+            return self._ar(content=header + _not_sent_text(decision.lane)
+                            + ("\n" + REPEAT_NOTE if repeat else ""))
         # Size the gas limit from the simulation's gasUsed (§3a): the fixed
         # default out-of-gas-reverts a swap on-chain and burns the fee. Done
         # before the dry-run return so a sizing refusal shows up in a dry run.
@@ -577,9 +582,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return self._ar(error=broadcast_failure_text(exc),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return self._ar(error=broadcast_failure_text(exc))
         from core.wallet import tx_notify
         _used, _limit = tx_notify.caps_from_gate(gate)
         _route_label = intent.chain
@@ -802,9 +806,14 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         chain_err = _unsupported_chain(params.chain)
         if chain_err:
             return self._ar(error=chain_err)
+        # 085 W2 (evmverbs L1): the address-poisoning rule every send runs.
+        from core.wallet import address_lookalike
+        if poisoned := address_lookalike.poisoning_refusal(params.to):
+            return self._ar(error=poisoned)
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         signer = wallet.operational_signer()
         try:
             data = nft_verbs.encode_nft_transfer(
@@ -853,7 +862,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             return self._ar(error=chain_err)
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         signer = wallet.operational_signer()
         try:
             data = nft_verbs.encode_revoke_operator(operator=params.operator)
@@ -896,7 +906,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             return self._ar(error=_ERC8004_OFF)
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         signer = wallet.operational_signer()
 
         try:
@@ -965,7 +976,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             return self._ar(error=_ERC8004_OFF)
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         signer = wallet.operational_signer()
         try:
             registry = erc8004.resolve_identity_registry(params.chain)

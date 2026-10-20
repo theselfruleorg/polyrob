@@ -22,7 +22,6 @@ import time
 from decimal import Decimal
 from typing import Optional
 
-from core.security.refusal_taint import PreconditionUnmet
 from core.wallet import chains, dex_registry, tx_guard
 from tools.defi import lp_abi as A, lp_reads as R, lp_v4 as V
 
@@ -108,19 +107,19 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
         else:
             to_permit2 = R.allowance(rpc, p.chain, cur, holder, row.permit2)
             if to_permit2 < n:
-                raise PreconditionUnmet(
+                raise ValueError(
                     f"Permit2 holds an ERC-20 allowance of {to_permit2} on {cur}, need {n}. The "
                     f"owner runs defi_trade.approve_token(chain={p.chain}, token={cur}, "
                     f"spender={row.permit2}, amount=<program size>) once (owner turn only).")
             granted, expiration = V.permit2_allowance(rpc, p.chain, holder, cur, npm)
             if granted < n or expiration <= now + DEADLINE_S:
-                raise PreconditionUnmet(
+                raise ValueError(
                     f"Permit2 grant to the v4 PositionManager is {granted} (expires {expiration}), "
                     f"need {n}. Run defi_trade.approve_token(chain={p.chain}, token={cur}, "
                     f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first.")
             balance = int(R.view(rpc, cur, A.NPM_BALANCE_OF, [holder]))
         if balance < n:
-            raise PreconditionUnmet(f"insufficient balance of {cur}: {balance} < {n}")
+            raise ValueError(f"insufficient balance of {cur}: {balance} < {n}")
         out.append((None if cur == V.ZERO else cur, n))
         held.append((None if cur == V.ZERO else cur, balance))
     unlock = V.encode_mint_unlock(key, lo, hi, liq, maxima[0], maxima[1], holder)
@@ -153,7 +152,8 @@ async def perform_permit2_approve(tool, params, execution_context=None):
         return tool._ar(error=f"no pinned Uniswap v4 deployment on {params.chain}")
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     try:
         token = normalize_address(params.token)
         spender = normalize_address(params.spender)

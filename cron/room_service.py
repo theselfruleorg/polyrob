@@ -82,7 +82,7 @@ def service(container: Any, owner_uid: str, surface: str, chat_id: str, *,
         if not existing:
             return f"No service job for {label}."
         for job in existing:
-            cron.cancel(job.id, user_id=owner_uid)
+            cron.cancel(job.id, user_id=owner_uid, via="groups")
         return (f"🛑 Stopped servicing {label} "
                 f"({', '.join(j.id[:8] for j in existing)}).")
     # Fix round 1 (Minor 10): refuse a room the agent is not IN. The run would
@@ -113,10 +113,11 @@ def service(container: Any, owner_uid: str, surface: str, chat_id: str, *,
              "chat_type": str(chat_type or "supergroup")}
     if thread_id:
         group["thread_id"] = str(thread_id)
-    # `/groups service` is an owner verb: the job is owner-authored (its run
-    # moderates the room it names — standing owner authority, positive stamp).
-    payload = {"group": group, "authored_by": "owner",
-               "max_replies": int(max_replies), "max_steps": 8}
+    # `/groups service` is an owner verb: its run moderates the room it names.
+    # A room reply is a short turn: its step budget is fixed in
+    # `group_service.room_run_max_steps` (every other cron job gets
+    # AUTONOMOUS_MAX_STEPS), so the payload carries none.
+    payload = {"group": group, "max_replies": int(max_replies)}
     try:
         # Inside the try (Minor 9): a hand-edited overlay that cannot be parsed
         # must cost the job its NAME, never the whole verb.

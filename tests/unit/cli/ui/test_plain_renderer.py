@@ -189,25 +189,6 @@ def test_brain_state_answer_demoted_not_dumped():
     assert "Reply to greeting and offer assistance" in out
 
 
-def test_one_shot_suppresses_done_recap_after_send_message():
-    """OR-1: in one-shot, a send_message reply + a done() recap must render only
-    ONE bubble (the reply). The bookkeeping recap is suppressed."""
-    rend, buf, state = _renderer()
-    rend._one_shot = True
-    rend.on_turn_start("Hey, how's it going?")
-    ev = Step(step=1, actions=[
-        {"action_type": "send_message", "name": "message", "service": "send",
-         "params": {"text": "Hey! Doing great, thanks for asking. How can I help?"}},
-    ])
-    state.update(ev)
-    rend.on_event(ev)
-    rend.on_turn_end("Responded to the user's greeting. No further action needed.")
-    out = buf.getvalue()
-    assert out.count("polyrob:") == 1
-    assert "Hey! Doing great" in out
-    assert "No further action needed" not in out
-
-
 def test_one_shot_keeps_new_final_answer_after_send_message():
     """OR-1 guard: a genuine NEW final answer after a progress note still renders."""
     rend, buf, state = _renderer()
@@ -900,6 +881,23 @@ def test_agent_end_produces_no_output():
     assert buf.getvalue() == "", (
         f"Expected empty output for AgentEnd, got: {buf.getvalue()!r}"
     )
+
+
+def test_agent_end_with_a_stop_reason_prints_one_dim_line():
+    """083: a turn that stopped for a reason other than a normal finish says so
+    in one line; a done / reply-only turn stays silent."""
+    rend, buf, state = _renderer()
+    ev = AgentEnd(agent_id="exec-1", steps=9, success=False,
+                  stop_reason="max_steps", max_steps=8)
+    state.update(ev)
+    rend.on_event(ev)
+    assert _lines(buf) == ["stopped at the step limit (8/8)"]
+    for reason in ("done", "awaiting_reply", "conversational_exit", None):
+        rend2, buf2, state2 = _renderer()
+        ev2 = AgentEnd(agent_id="exec-1", steps=3, stop_reason=reason, max_steps=8)
+        state2.update(ev2)
+        rend2.on_event(ev2)
+        assert buf2.getvalue() == "", reason
 
 
 def test_plain_run_sequence_no_lifecycle_noise():

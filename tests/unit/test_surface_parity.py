@@ -32,7 +32,7 @@ CAPABILITY_MATRIX = {
                        "/approve"),
     "finance":        ("finance",   "finance",  "/api/webgate/ledger",      None),
     "goals":          ("goals",     "goals",    "/api/webgate/goals",       "/goals"),
-    "cron":           ("cron",      "cron",     "/api/webgate/cron",        "/cron"),
+    "cron":           ("job",       "jobs",     "/api/webgate/cron",        "/jobs"),
     "recap":          ("journey",   "journey",  None,                       "/recap"),
     "recap-alias":    (None,        "recap",    None,                       "/journey"),
     # 061: the ONE owner transcript on both chat seats (the console reads the
@@ -85,7 +85,9 @@ CAPABILITY_MATRIX = {
     # exactly what it did for two months.
     "avatar":             ("avatar",   "avatar",    "/avatar.json",             "/avatar"),
     "goal-steer":         ("goals",    "goal",      "/api/webgate/goals/{goal_id}/{verb}", "/goal"),
-    "cron-cancel":        ("cron",     "cron",      "/api/webgate/cron/{job_id}/cancel",   "/cron"),
+    "cron-cancel":        ("job",      "job",       "/api/webgate/cron/{job_id}/cancel",   "/job"),
+    # 080 WS-2: the job's own state — pause / resume / run now — on every seat.
+    "job-state":          ("job",      "job",       "/api/webgate/cron/{job_id}/{verb}",   "/job"),
     "pending-reject":     ("owner",    "reject",    "/api/webgate/pending/{kind}/{item_id}/reject", "/reject"),
     "mcp-admin":          (None,       "mcp",       None,                       "/mcp"),
     "config":             ("config",   "config",    "/api/webgate/config",      "/config"),
@@ -136,7 +138,7 @@ CAPABILITY_MATRIX = {
     "capabilities":       ("tools",    "tools",     "/api/webgate/capabilities", None),
     "flags":              ("config",   "config",    "/api/webgate/flags",       "/config"),
     "chats":              ("session",  "sessions",  "/api/webgate/chats",       None),
-    "cron-add":           ("cron",     "cron",      "/api/webgate/cron",        "/cron"),
+    "cron-add":           ("job",      "job",       "/api/webgate/cron",        "/job"),
     "session-meter":      (None,       "meter",     None,                       None),
     "subscriptions":      ("owner",    None,        None,                       None),
     "api-keys":           ("keys",     None,        None,                       None),
@@ -161,7 +163,7 @@ CAPABILITY_HOME = {
     "pending-review": "Inbox", "pending-decide": "Inbox", "pending-reject": "Inbox",
     "finance": "Money › Cash", "invoices": "Money › Invoices", "invoices-settle": "Money › Invoices",
     "goals": "Work › Now & next", "goal-steer": "Work › Now & next", "cron": "Work › On a clock",
-    "cron-cancel": "Work › On a clock", "recap": "Work › Log", "recap-alias": "Work › Log",
+    "cron-cancel": "Work › On a clock", "job-state": "Work › On a clock", "recap": "Work › Log", "recap-alias": "Work › Log",
     "owner-thread": "Work › Log",   # 061: the conversation is a log the owner reads
     "avatar": "Agent › Overview",
     "status": "Agent › Overview", "doctor": "Agent › Advanced › Diagnostics",

@@ -1,0 +1,23 @@
+{
+  "function": {
+    "description": "Read a resource file (reference doc, asset, etc.) that belongs to a skill you have already loaded via load_skill (see metadata.skill_resources on that call's result for the available paths). Read-only — this NEVER executes scripts or other files, it only returns their text content.",
+    "name": "read_skill_resource",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "resource_path": {
+          "type": "string"
+        },
+        "skill_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill_id",
+        "resource_path"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

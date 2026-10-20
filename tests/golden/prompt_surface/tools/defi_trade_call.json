@@ -1,0 +1,83 @@
+{
+  "function": {
+    "description": "Call ANY contract with your own ABI-encoded calldata — the verb for a protocol nobody integrated ahead of time (an Aave supply, an NFT mint, a staking deposit). You declare BOTH directions: at most this much leaves, AT LEAST this much must come back, and the simulation decides whether that held. Declare receive_token + receive_min_raw whenever the call returns a fungible token: with no declared receipt the guard only bounds what leaves. Under a run's target_token a receipt of the target MUST be declared. dry_run defaults to TRUE.",
+    "name": "defi_trade_call",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_max_raw": {
+          "default": 0,
+          "description": "The most raw units allow_spender may be granted.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "allow_spender": {
+          "default": null,
+          "description": "Address this call is EXPECTED to grant an allowance to, if any. An undeclared allowance grant is always refused.",
+          "nullable": true,
+          "type": "string"
+        },
+        "calldata": {
+          "description": "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the encoded arguments. Build it yourself or take it from a protocol's own transaction-preparation endpoint.",
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to call on on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Full guidance:\nethereum (id 1, gas ETH, swaps): Deepest liquidity and the canonical home of most ERC-20s, but the most expensive gas by far — an approve+swap+revoke cycle can cost more than a small trade is worth. Prefer it for size, for tokens that only exist here, or when depth matters more than fees.\nbase (id 8453, gas ETH, swaps): Cheap, fast L2 and the agent's own treasury chain: the USDC the wallet holds and the x402 payment rail both live here. The default choice for small trades, because gas is a fraction of a cent.\nrobinhood (id 4663, gas ETH, transfers): Robinhood's L2 (Arbitrum Orbit, ETH gas, gas ~free) and the primary memecoin hunting ground — minutes-old pools on the pons-v2 launchpad, real depth on the leaders. It also hosts TOKENIZED US EQUITIES (NVDA, AAPL, GME, SPY, SPCX) as ERC-20s, and memecoins here pair against WETH *or against a stock token* — so such a position is two bets stacked, the meme against its stock and the stock itself. The stablecoin is USDG, NOT USDC. No Uniswap V3 router is pinned, so everything routes through the aggregator; that is normal here, not a degraded path. Native ETH routes straight into a memecoin with no allowance, so ETH on this chain is gas and buying power at once.\nrobinhood-testnet (id 46630, gas ETH, data only): Robinhood Chain's TESTNET: valueless ETH, used to rehearse an agent-NFT collection (mint, adopt, inspect) before mainnet. Reads only here — nothing moves value from the agent on this chain, and no route, price or screen covers it.\narbitrum (id 42161, gas ETH, transfers): Cheap L2 with deep majors liquidity, and where the Hyperliquid venue settles. Gas is ETH and costs a fraction of a cent. No Uniswap V3 deployment is pinned here, so swaps route through the aggregator — which reaches Camelot, Ramses and the rest.\npolygon (id 137, gas POL, transfers): Cheap chain with a large long-tail token market, and where the Polymarket venue settles. Gas is POL, NOT ether, and is far pricier per unit than an L2's — budget for it. No Uniswap V3 deployment is pinned here, so swaps route through the aggregator (QuickSwap, SushiSwap and the rest).\noptimism (id 10, gas ETH, data only): OP Stack L2 with native USDC and deep majors liquidity; READ ONLY here (token screens, prices, balances). No money moves on this chain until the owner arms it. Gas is ETH and costs a fraction of a cent plus a small L1 data fee.\nsolana (id 0, gas SOL, data only): Solana. Reads (prices, screens, pool discovery, portfolio) work here; the EVM money verbs do NOT — swaps go through the dedicated defi_trade.solana_swap verb (Jupiter route, simulate-and-assert guard, SOLANA_TRADE_ENABLED) and sends through defi_trade.solana_transfer (SOL or an SPL token, same guard). Its addresses are base58 with NO checksum, so a mistyped one is a valid different account — verify before trusting any address here.",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) simulates and asserts without broadcasting.",
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "description": "The most USD you authorize to leave the wallet on this call.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "receive_min_raw": {
+          "default": 0,
+          "description": "The MINIMUM raw units of receive_token the simulation must measure coming back. This is the assertion that makes arbitrary calldata safe to sign. Leave 0 only for a call that genuinely receives nothing: at 0 NO return is checked and the guard only bounds what leaves.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "receive_token": {
+          "default": null,
+          "description": "CONTRACT ADDRESS of the token this call must RETURN, when it returns one. Required if receive_min_raw is set.",
+          "nullable": true,
+          "type": "string"
+        },
+        "spend_max_raw": {
+          "default": 0,
+          "description": "The most RAW units of spend_token the call may move out. 0 with a spend_token declared means 'this call must not move that token'.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spend_token": {
+          "default": null,
+          "description": "CONTRACT ADDRESS of the token this call SPENDS, or null when it spends native (or nothing). The simulated outflow is asserted against spend_max_raw.",
+          "nullable": true,
+          "type": "string"
+        },
+        "to": {
+          "description": "CONTRACT ADDRESS being called (0x…)",
+          "type": "string"
+        },
+        "value": {
+          "default": 0.0,
+          "description": "NATIVE value to send with the call, in whole coin units (0.01 = 0.01 ETH, converted at 18 decimals) — NOT wei. Declare it — an undeclared native movement is refused.",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "to",
+        "calldata",
+        "max_spend_usd"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

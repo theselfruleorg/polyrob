@@ -207,15 +207,13 @@ class CodeExecutionTool(BaseTool):
         if controller is None or getattr(controller, "registry", None) is None:
             return "tools=True could not reach this session's tool controller."
         try:
-            from core.security import taints
-            held = taints.of(orchestrator=orch,
-                             session_id=getattr(execution_context, "session_id", None))
-            tainted = held.correspondent or held.refusal
+            from core.security.taints import correspondent_tainted
+            tainted = correspondent_tainted(orch)
         except Exception:
             tainted = True  # can't prove clean -> deny
         if tainted:
             return ("tools=True is refused on this turn: the latest input is untrusted "
-                    "correspondent data, or this run is refusal-tainted.")
+                    "correspondent data.")
         return None
 
     async def _run_with_tools(self, backend, req, execution_context):

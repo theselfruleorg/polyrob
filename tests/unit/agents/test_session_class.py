@@ -33,10 +33,19 @@ def test_probe_error_fails_closed_to_autonomous(monkeypatch):
     assert is_autonomous_session("sc-goal-1") is True
 
 
-def test_disclosure_is_off_by_default():
+def test_disclosure_is_on_by_default_for_autonomous_only():
+    """E-4 (2026-10-14): AUTONOMOUS_TOOL_DISCLOSURE defaults ON; an owner chat
+    off POLYROB_LOCAL keeps disclosure off."""
     mark_autonomous("sc-goal-2", "g2")
-    assert tool_disclosure_enabled("sc-goal-2") is False
+    assert tool_disclosure_enabled("sc-goal-2") is True
+    assert tool_disclosure_enabled("an-owner-chat-2") is False
     assert tool_disclosure_enabled(None) is False
+
+
+def test_the_autonomous_key_can_still_be_turned_off(monkeypatch):
+    monkeypatch.setenv("AUTONOMOUS_TOOL_DISCLOSURE", "false")
+    mark_autonomous("sc-goal-4", "g4")
+    assert tool_disclosure_enabled("sc-goal-4") is False
 
 
 def test_the_existing_flag_still_turns_it_on_everywhere(monkeypatch):

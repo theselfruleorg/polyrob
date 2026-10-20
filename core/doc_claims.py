@@ -1,5 +1,4 @@
-"""Provenance stamping + the claim-format guard for the durable identity docs
-(057 WS-D / R3).
+"""Provenance stamping for the durable identity docs (057 WS-D / R3).
 
 The S3 class: the agent writes a sentence like "X lacks permission to post"
 into ``owner.md``, it is injected as a frozen foundation block every session
@@ -7,24 +6,13 @@ from then on, and NOTHING on the read side says where it came from or when it
 was true. Two months later the agent is still steering on a July observation it
 cannot date.
 
-This module is the pure half of the fix. It does two things and neither of them
-is a truth check:
+This module is the pure half of the fix: :func:`stamp_changed_lines` renders
+every NEW or CHANGED line of a document with a trailing
+``[from: <source> <YYYY-MM-DD>]`` when the writer passes a ``source``. Unchanged
+lines keep the provenance they already carry — a rewrite of one paragraph must
+not re-date the rest of the document. Nothing here refuses a write.
 
-1. :func:`stamp_changed_lines` renders every NEW or CHANGED line of a document
-   with a trailing ``[from: <source> <YYYY-MM-DD>]``. Unchanged lines keep the
-   provenance they already carry — a rewrite of one paragraph must not re-date
-   the rest of the document.
-2. :func:`find_unsourced_claims` returns the new/changed lines that READ like a
-   durable claim about the world (the claim lexicon) when the caller supplied no
-   ``source``. The writer turns that into a refusal naming the line and the
-   remedy.
-
-⚠️ **A FORMAT check, not a truth check.** Nothing here knows whether a claim is
-true. It makes "the owner told me in July" distinguishable from "I measured this
-today", which is the whole of the S3 class; a false sentence with a source is
-still a false sentence, and it will still land.
-
-Pure ``core`` (stdlib + ``core.env`` only) so both document writers, the tool
+Pure ``core`` (stdlib only) so both document writers, the tool
 layer and the tests share ONE implementation.
 """
 from __future__ import annotations
@@ -33,7 +21,6 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from core.env import bool_env
 
 #: The trailing provenance stamp this module writes and recognises. Kept
 #: deliberately loose on the source (free text, e.g. ``room_read``,
@@ -56,44 +43,8 @@ def _stamp_parts(line: str):
     return start, parts[-1]
 
 
-#: 057 §1 R3's lexicon. A line matching any of these is making a durable claim
-#: about what is true or permitted — exactly the shape that must not be datable
-#: only by guesswork. Word-ish boundaries so "sincere" is not "since".
-_CLAIM_TERMS = (
-    r"lacks",
-    r"needs",
-    r"is not allowed",
-    r"permission",
-    r"unconfirmed",
-    r"cannot post",
-    r"can'?t post",
-    r"disabled",
-    r"broken",
-    r"since",
-    r"no longer",
-    r"does not work",
-    r"doesn'?t work",
-    r"blocked",
-)
-_CLAIM_RE = re.compile(r"\b(?:" + "|".join(_CLAIM_TERMS) + r")\b", re.IGNORECASE)
-
 #: 060 WS-6: the heading that starts a rules doc's superseded section.
 _SUPERSEDED_RE = re.compile(r"^\s*##\s+superseded\s*$", re.IGNORECASE)
-
-def claim_provenance_required() -> bool:
-    """Is the claim guard armed? ``DOC_CLAIM_PROVENANCE_REQUIRED``, default OFF.
-
-    Default OFF keeps every existing write byte-identical; prod arms it once the
-    docs have been re-sourced. Read at call time (never frozen at import) so an
-    operator flip needs no redeploy of the writer.
-
-    ⚠️ The name is written as a LITERAL here on purpose. ``test_flags_reverse``
-    scans the tree for ``bool_env(<literal name>)`` to prove every env read is
-    catalogued; a name hidden behind a module constant is invisible to it, which
-    is the exact class that contract exists to catch.
-    """
-    return bool_env("DOC_CLAIM_PROVENANCE_REQUIRED", False)
-
 
 def today_iso() -> str:
     """Today's date in UTC, ``YYYY-MM-DD``. The default for ``observed_at``."""
@@ -205,44 +156,6 @@ def stamp_changed_lines(old: str, new: str, source: str,
     if (new or "").endswith("\n") and not text.endswith("\n"):
         text += "\n"
     return text
-
-
-def find_unsourced_claims(old: str, new: str, source: Optional[str]) -> List[str]:
-    """New/changed lines that make a durable CLAIM with no ``source`` given.
-
-    ⚠️ This is a **format** check, not a truth check: it asks "can a reader tell
-    where this came from", never "is this true". A sourced falsehood passes.
-
-    Returns ``[]`` when a non-blank ``source`` was supplied (the format question
-    is answered) or when no new/changed line matches the claim lexicon.
-    """
-    if (source or "").strip():
-        return []
-    # A changed line that already carries its own stamp HAS answered the format
-    # question — the author sourced it when they wrote it. Prod 2026-09-20: the
-    # owner's promotion of a fully-stamped draft was refused here because the
-    # diff against the active doc made every line "changed" and this never
-    # looked at the stamp. ``changed_lines`` strips stamps for the comparison,
-    # so re-derive against the original lines.
-    stamped = {strip_stamp(l).strip() for l in (new or "").splitlines() if has_stamp(l)}
-    return [line for line in changed_lines(old, new)
-            if _CLAIM_RE.search(line) and line not in stamped]
-
-
-def unsourced_claim_error(lines: List[str]) -> str:
-    """The ONE refusal sentence for a claim guard trip — names the line AND the
-    remedy, so the agent can retry without guessing what the writer wanted."""
-    shown = lines[0] if lines else ""
-    if len(shown) > 160:
-        shown = shown[:159] + "…"
-    more = f" (and {len(lines) - 1} more line(s))" if len(lines) > 1 else ""
-    return (
-        f"this line makes a durable claim with no provenance: {shown!r}{more} — "
-        f"add source= (e.g. source='room_read', 'owner said', 'measured') and "
-        f"observed_at=YYYY-MM-DD (defaults to today) and retry. "
-        f"This is a FORMAT check: it asks where the claim came from, not whether "
-        f"it is true."
-    )
 
 
 # --- 060 WS-6: supersede, never evict ---------------------------------------
@@ -368,17 +281,61 @@ def carry_superseded(old: str, new: str, *, observed_at: Optional[str] = None) -
     return new_active.rstrip() + "\n\n" + SUPERSEDED_HEADING + "\n\n" + "\n".join(entries) + "\n"
 
 
+def _rule_keys(text: str) -> set:
+    return {strip_stamp(l).strip() for l in active_rule_lines(text)}
+
+
+def rebase_draft(base: str, draft: str, current: str):
+    """Apply a pending draft's CHANGE to the CURRENT active doc (a three-way merge
+    over active rule lines; ``base`` = the active doc the draft was drafted against).
+
+    Promote used to activate the draft's whole body, so every live line the draft
+    never saw (added after it was drafted) moved under ``## Superseded``, and a line
+    retired since came back to life (prod 10-10 duplicate stale line, 10-15 ~60-line
+    near miss). Per active line:
+
+    - in the draft, not in ``base``: the draft added it -> kept;
+    - in ``base`` and the draft, gone from ``current``: retired since -> dropped;
+    - in ``base``, not in the draft: the draft retired it -> retired (named);
+    - in ``current``, not in ``base`` nor the draft: added since -> kept (named).
+
+    Returns ``(merged, retired, kept)``; ``retired``/``kept`` are the ``current``
+    lines the promote retires / keeps although the draft lacks them.
+    """
+    base_k, draft_k, cur_k = _rule_keys(base), _rule_keys(draft), _rule_keys(current)
+    head, tail = split_superseded_raw(draft)
+    out, dropped = [], False
+    for line in head.splitlines():
+        k = strip_stamp(line).strip()
+        is_rule = bool(line.strip()) and not line.lstrip().startswith("#")
+        if is_rule and k in base_k and k not in cur_k:
+            dropped = True
+            continue  # the draft did not touch it, and it was retired since
+        out.append(line)
+    cur_lines = active_rule_lines(current)
+    kept = [l for l in cur_lines
+            if strip_stamp(l).strip() not in base_k | draft_k]
+    retired = [l for l in cur_lines
+               if strip_stamp(l).strip() in base_k - draft_k]
+    if not dropped and not kept:
+        return draft, retired, kept
+    merged_head = "\n".join(out).rstrip()
+    if kept:
+        merged_head += "\n\n" + "\n\n".join(l.rstrip() for l in kept)
+    merged = merged_head + "\n" + (("\n" + tail) if tail else "")
+    return merged, retired, kept
+
+
 __all__ = [
     "SUPERSEDED_HEADING",
+    "rebase_draft",
     "SUPERSEDED_MAX_CHARS",
     "active_rule_lines",
     "carry_superseded",
     "split_superseded",
     "split_superseded_raw",
     "superseded_entries",
-    "claim_provenance_required",
     "changed_lines",
-    "find_unsourced_claims",
     "has_stamp",
     "normalize_observed_at",
     "render_stamp",
@@ -386,5 +343,4 @@ __all__ = [
     "stamp_of",
     "strip_stamp",
     "today_iso",
-    "unsourced_claim_error",
 ]

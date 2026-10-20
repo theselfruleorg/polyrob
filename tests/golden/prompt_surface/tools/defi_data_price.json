@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Spot price for ONE token contract address (not a ticker).",
+    "name": "defi_data_price",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The TOKEN's address: on EVM chains its contract (0x…, 40 hex); on solana its MINT (base58). A ticker is not accepted — use token_resolve first. A WALLET is not a token: to see what a wallet holds use wallet_holdings.",
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to look the token up on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

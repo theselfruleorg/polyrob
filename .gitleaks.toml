@@ -23,6 +23,8 @@ paths = [
     '''tests/unit/core/test_credential_scrub\.py''',
     '''tests/unit/core/test_env_key_backfill\.py''',
     '''tests/unit/core/test_public_address_not_a_credential\.py''',
+    # reconcile chain-scope fixtures: public on-chain token/pair contract addresses
+    '''tests/unit/tools/defi/test_reconcile_chain_scope\.py''',
     # Managed-RPC redaction battery: every value is an intentionally synthetic
     # Alchemy/Infura/QuickNode/Helius-shaped credential and the assertions prove
     # that the shared scrubber removes it.
@@ -75,6 +77,8 @@ regexes = [
     '''2apBGMsS6ti9RyF5TwQTDswXBWskiJP2LD4cUEDqYJjk''',
     '''8Jornc27vtAYPkwDzsZVgLQchAYyC8nD7aCNPCDV8Qk2''',
     '''0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed''',
+    # Solana mainnet USDC mint (public on-chain address; the Token-2022 buy tests)
+    '''EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v''',
     # documented example API key placeholder in docstrings
     '''rob_abc123\.\.\.''',
     # a Python identifier, not a credential: the shared ERC-20 ABI fragment

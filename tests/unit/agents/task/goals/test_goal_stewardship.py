@@ -99,7 +99,7 @@ def test_retry_prompt_carries_previous_attempt_block(board):
     board.record_failure(g.id, error="completion judge: no successful post action",
                          session_id="s1", claim_token=board.get(g.id).claim_token)
     got = board.get(g.id)
-    prompt = build_goal_run_task(got, None)
+    prompt = build_goal_run_task(got)
     assert "PREVIOUS ATTEMPT" in prompt
     assert "no successful post action" in prompt
 
@@ -107,7 +107,7 @@ def test_retry_prompt_carries_previous_attempt_block(board):
 def test_first_attempt_prompt_has_no_previous_attempt_block(board):
     from agents.task.goals.context import build_goal_run_task
     g = board.create(user_id="u1", title="fresh goal", body="do it")
-    assert "PREVIOUS ATTEMPT" not in build_goal_run_task(g, None)
+    assert "PREVIOUS ATTEMPT" not in build_goal_run_task(g)
 
 
 def test_goal_show_exposes_attempts_and_acceptance(board):
@@ -241,32 +241,6 @@ def test_recent_blocked_goals_do_not_age_out(board):
 # ---------------------------------------------------------------------------
 # §5.4 quota exhaustion pauses runs, not curation
 # ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_quota_exhaustion_still_plans(board, monkeypatch):
-    monkeypatch.setenv("GOALS_ENABLED", "true")
-    monkeypatch.setenv("GOAL_DAILY_QUOTA", "1")
-
-    g = board.create(user_id="u1", title="already ran")
-    assert board.claim(g.id, "w", ttl_seconds=900)
-    board.record_success(g.id, result="done",
-        claim_token=board.get(g.id).claim_token)  # 1 started in 24h -> quota exhausted
-
-    from agents.task.goals.dispatcher import GoalDispatcher
-
-    class _Agent:
-        pass
-
-    d = GoalDispatcher(board, _Agent())
-    planned = []
-
-    async def _plan(*, headroom_after):
-        planned.append(headroom_after)
-
-    monkeypatch.setattr(d, "_maybe_plan", _plan)
-    n = await d.dispatch_once()
-    assert n == 0, "quota pauses RUNS"
-    assert planned, "…but NOT curation/planning (§5.4)"
 
 
 def test_goal_unblock_tool_verb_owner_only(board, monkeypatch):

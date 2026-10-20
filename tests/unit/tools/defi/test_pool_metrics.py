@@ -35,7 +35,7 @@ def test_reserves_price_and_impact_match_090(reads):
     assert out["pool_id"] == POOL_ID and not out["alerts"]
     assert 3.69 < out["reserve0"] < 3.71                       # ETH side, measured ≈3.698
     assert 6.26e7 < out["token_per_native"] < 6.28e7
-    approx = 2 * 0.021 * 0.99 / out["reserve0"] * 100          # 090 §3 formula
+    approx = 2 * 0.00825 * 0.99 / out["reserve0"] * 100          # 090 §3 formula
     assert abs(out["mint_impact_pct"] - approx) < 0.01
     assert reads and reads[0][0] == PM.EVENT_KIND              # each reading is journaled
     assert reads[0][1]["attrs"]["pool_id"] == POOL_ID

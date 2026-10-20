@@ -64,8 +64,9 @@ def test_every_source_is_reported_even_when_all_are_clean(monkeypatch):
     import webview.inbox as inbox
     _all_empty(monkeypatch, inbox)
     body = inbox.build_inbox("u1")
-    assert set(body["sources"]) == {"self_evolution", "tool_approvals",
-                                    "correspondents", "asks", "apps"}
+    # 080 WS-3: every list the one Inbox reads, the console included.
+    from core.surfaces.inbox import SOURCE_LABELS
+    assert set(body["sources"]) == set(SOURCE_LABELS)
     assert set(body["sources"].values()) == {"ok"}
     assert body["uncertain"] is False
 
@@ -423,3 +424,39 @@ def test_a_locked_goal_board_is_a_named_refusal_not_a_500(client, inbox, monkeyp
     body = resp.json()
     assert body["ok"] is False and "locked" in body["error"]
     assert body["message"]
+
+
+def test_signer_approval_decide_routes_to_the_signer_decider(monkeypatch):
+    """The Inbox lists signer approvals with Approve/Reject; the console decider
+    sent them to the self-evolution promoter ("unknown pending kind")."""
+    import core.signer.approvals as approvals
+    from webview import pages
+    seen = {}
+
+    def fake_decide(approval_id, *, approve, client=None):
+        seen.update(id=approval_id, approve=approve)
+        return False, "must be decided on the box as root"
+
+    monkeypatch.setattr(approvals, "decide", fake_decide)
+    ok, msg = pages._decide_pending("signer_approval", "ap1", {"user_id": "u1"},
+                                    approved=True)
+    assert seen == {"id": "ap1", "approve": True}
+    assert not ok and "root" in msg
+
+
+def test_multitenant_signer_approvals_list_for_the_owner_only(monkeypatch):
+    """The signer is instance-wide (the owner's wallet): a non-owner tenant on a
+    multitenant console must not see its held spends; the owner still does."""
+    import webview.inbox as inbox
+    from webview import webgate
+    import surfaces.inbox_sources as src
+    _all_empty(monkeypatch, inbox)
+    monkeypatch.setattr(src, "collect_signer_approvals",
+                        lambda uid, *, data_dir: [Item(kind="signer_approval", id="s1",
+                                                       title="signer review: $900")])
+    monkeypatch.setattr(src, "collect_cards", lambda uid, *, data_dir: [])
+    monkeypatch.setattr(webgate, "posture", lambda: "multitenant")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner1")
+    ids = lambda body: [i["id"] for i in body["items"] + body.get("not_blocking", [])]
+    assert "s1" not in ids(inbox.build_inbox("tenant2"))
+    assert "s1" in ids(inbox.build_inbox("owner1"))

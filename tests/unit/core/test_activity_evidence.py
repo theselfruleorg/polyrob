@@ -50,3 +50,25 @@ def test_digest_and_recap_delegate():
 
     for fn in (digest._ledger, digest._episodes, recap._ledger, recap._episodes):
         assert "activity_evidence" in inspect.getsource(fn), fn.__module__
+
+
+def test_recent_episodes_strict_raises_on_an_unreadable_store(monkeypatch):
+    """An unreadable episode store is not "nothing done": the strict read RAISES
+    (the registry swallowed the error to [] unless asked to raise)."""
+    import pytest
+    from modules.memory import registry
+
+    class _Provider:
+        async def recall_episodes(self, *, raise_errors=False, **kw):
+            raise RuntimeError("episodes.db locked")
+
+    class _Reg:
+        def active(self):
+            return _Provider()
+
+    monkeypatch.setattr(registry, "get_memory_registry", lambda: _Reg())
+    with pytest.raises(registry.MemoryReadError):
+        ae.recent_episodes_strict("u1", None)
+    errors = []
+    assert ae.recent_episodes("u1", None, errors=errors) == []
+    assert errors

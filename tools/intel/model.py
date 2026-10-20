@@ -70,6 +70,9 @@ class PriceQuote:
     #: A gap worth knowing that did NOT change the grade (eased 2026-10-02):
     #: sources a few percent apart, or one outvoted outlier.
     note: Optional[str] = None
+    #: The ONE secondary source the others outvoted (excluded from the median),
+    #: or None. The pinned-stable peg check reads the counted sources only.
+    outlier: Optional[str] = None
 
     # -- PriceInfo compatibility ------------------------------------------
     @property

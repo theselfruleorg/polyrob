@@ -57,8 +57,8 @@ def test_create_goal_no_tools_writes_no_tools_key():
     board = _FakeBoard()
     create_goal(board, user_id="u1", title="t")
     # No tools key (dispatch's wide default applies); the only stamp is the
-    # 034 provenance mark — the owner seat is the author.
-    assert board.calls[0]["payload"] == {"authored_by": "owner"}
+    # 034 provenance mark — the owner seat's grant.
+    assert board.calls[0]["payload"] == {"owner_granted": True}
 
 
 def test_create_goal_carries_acceptance_and_tenant_and_priority():

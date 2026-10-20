@@ -1,0 +1,58 @@
+{
+  "function": {
+    "description": "Swap one SPL token for another on SOLANA via the Jupiter aggregator. Simulated and asserted before anything is broadcast. There is NO allowance to grant or revoke on Solana — Jupiter needs none — so this is a single verb, not the EVM approve/swap/revoke cycle. dry_run defaults to TRUE.",
+    "name": "defi_trade_solana_swap",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_in": {
+          "description": "Human amount of token_in to sell",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) simulates and asserts without broadcasting.",
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "description": "Your declared ceiling for this swap in USD. The guard holds you to it.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "minimum_output_raw": {
+          "default": null,
+          "description": "Minimum raw output confirmed by the owner; every new route must preserve this floor.",
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
+        "slippage_bps": {
+          "default": null,
+          "description": "Slippage bound in basis points. Jupiter bakes its own minimum into the transaction it builds, so this is a bar that minimum must CLEAR — a looser route is refused, not rewritten.",
+          "maximum": 1000,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
+        "token_in": {
+          "description": "MINT ADDRESS of the token to sell (base58)",
+          "type": "string"
+        },
+        "token_out": {
+          "description": "MINT ADDRESS of the token to buy (base58)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token_in",
+        "token_out",
+        "amount_in",
+        "max_spend_usd"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

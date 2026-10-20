@@ -49,8 +49,7 @@ def test_empty_state_names_a_verb_not_a_flag(_home):
     # usage line — the same "remedy names a command the seat cannot run" defect
     # C5 removed from `/approve`.
     assert "/goal create" not in out
-    assert "/trade" in out
-    assert "polyrob goals create" in out
+    assert "/goal new" in out
     assert "GOALS_ENABLED" not in out
 
 

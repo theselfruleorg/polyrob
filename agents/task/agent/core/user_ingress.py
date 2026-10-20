@@ -11,11 +11,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from agents.task.telemetry.views import (
-    HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
     TodoStatusEvent,
 )
 from agents.task.agent.core.self_wake import FORGED_TURN_KINDS as _FORGED_MESSAGE_KINDS
+from core.surfaces.inbound_attachments import ATTACHMENT_ONLY_KEY, TYPED_TEXT_KEY  # 085 W3
 
 # Message kinds that count as the owner genuinely driving, and so clear correspondent
 # taint. Mirrors hitl_ingress._TRUSTED_CONTEXT_REF_KINDS (the same allowlist that
@@ -31,6 +31,16 @@ ROOM_ROLE_KEY = "room_role"
 def _owner_spoke(message: Dict[str, Any]) -> bool:
     """False for a room admin's steer line; every other genuine kind is the owner's."""
     return str((message.get("metadata") or {}).get(ROOM_ROLE_KEY) or "") != "admin"
+
+
+def typed_text_of(message: Dict[str, Any]) -> str:
+    """The owner's typed words of one queued message, or ``""``: a forwarded body
+    is a third party's words, and a message with no ``typed_text`` has none."""
+    meta = message.get("metadata") or {}
+    if meta.get("forwarded"):
+        return ""
+    typed = meta.get(TYPED_TEXT_KEY)
+    return typed if isinstance(typed, str) else ""
 
 
 def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> None:
@@ -59,12 +69,30 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
 
     # AGT-4: the owner's OWN words for this turn — the only text a tool may take
     # as the owner's decision (owner_ask answer=). Recomputed per drained batch,
-    # like the forged marker: a forged batch carries none; a forwarded body is a
-    # third party's words; a room admin's line is not the owner's.
-    orchestrator._owner_turn_text = None if forged_kind else "\n".join(
-        str(m.get("text") or "") for m in messages
-        if m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m)
-        and not (m.get("metadata") or {}).get("forwarded"))
+    # like the forged marker: a forwarded body is a third party's words; a room
+    # admin's line is not the owner's; a forged message (self-wake, delegation
+    # result) is never in it. 2026-10-13 review C10: a MIXED batch (the owner's
+    # answer drained with a delegation result) keeps the owner's genuine lines —
+    # it used to be discarded whole, so the owner's real answer was refused as a
+    # decision. The turn stays marked forged above (fail toward untrusted).
+    # 085 W3 (A1): only what the owner TYPED — ``metadata["typed_text"]``, stamped
+    # at the queue (``hitl_ingress.submit_user_message``) before @-references expand
+    # and by every surface that appends attachment or caption content to the text.
+    # A message with no ``typed_text`` contributes nothing: the full ``text`` may hold
+    # a document's content, which is never the owner's own words.
+    # A batch of only attachment turns (CLI ``--attach``) keeps the words the owner
+    # typed for this turn (the opening task, the REPL line): it has none of its own.
+    owner_lines = [m for m in messages
+                   if m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m)]
+    if not (owner_lines and all((m.get("metadata") or {}).get(ATTACHMENT_ONLY_KEY)
+                                for m in owner_lines)):
+        orchestrator._owner_turn_text = "\n".join(
+            typed for typed in (typed_text_of(m) for m in owner_lines) if typed)
+        # WS5 D4: the latest genuine owner ask, DATED — a delegated child is briefed
+        # with it. Unlike ``_owner_turn_text`` it survives a later forged batch.
+        if orchestrator._owner_turn_text and orchestrator._owner_turn_text.strip():
+            import time as _time
+            orchestrator._last_owner_ask = (orchestrator._owner_turn_text.strip(), _time.time())
 
     # WS-A: a genuine owner/continuation turn clears any correspondent taint — the
     # owner is driving again, so the capability gate re-opens high-impact tools.
@@ -80,28 +108,9 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
     # AGT-17: a room ADMIN's addressed line rides kind="comment" too, but an admin
     # is not the owner driving — it never clears the taint.
     if any(m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m) for m in messages):
-        # AGT-1 + the refusal taint: the owner is speaking again — the read taint
-        # of the last turn and a money refusal earlier in this run no longer
-        # speak for this one. W5: the ONE clear point for all three taints.
+        # The owner is speaking again: the ONE clear point.
         from core.security.taints import clear_on_owner_turn
         clear_on_owner_turn(orchestrator)
-
-    # CR-L22: a FORWARDED body (Telegram stamps ``metadata.forwarded``) is a
-    # third party's words inside an owner message. It re-taints AFTER the clear
-    # above, so a mixed batch fails toward untrusted and the capability gate
-    # holds the money / high-impact verbs for this turn. The next genuine,
-    # un-forwarded owner message clears it again.
-    if any((m.get("metadata") or {}).get("forwarded") for m in messages):
-        try:
-            orchestrator._set_correspondent_taint("telegram", "forwarded")
-        except Exception:
-            # Fail closed: the flag alone is what the gate reads.
-            orchestrator._correspondent_tainted = True
-        try:
-            from core.security.read_taint import mark as _mark_read_taint
-            _mark_read_taint(orchestrator)
-        except Exception:
-            pass
 
     # P1 finalization: a genuine (non-forged) batch means the owner is driving
     # again — clear the self-wake re-entry budget for this session. Previously the
@@ -116,6 +125,25 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
                 get_reentry_budget().reset(sid)
         except Exception:
             pass
+
+
+#: 085 W3: explicit ``creator`` labels whose session task IS the line a person
+#: typed at a seat (chat_once, the REPL / ``polyrob run``, the HTTP endpoint).
+_TYPED_TASK_CREATORS = frozenset({"owner", "cli", "api"})
+
+
+def opening_owner_text(kwargs: Dict[str, Any], task: Any, *, public: bool = False) -> str:
+    """The owner's typed words for a new session's opening turn (085 W3, A1).
+
+    ``typed_text`` passed by the surface wins (``""`` for a forwarded message).
+    Otherwise only an EXPLICIT human-seat creator seeds the task; a goal or
+    cron dispatch (no creator), a correspondent and a room seed ``""``."""
+    if "typed_text" in kwargs:
+        typed = kwargs.get("typed_text")
+        return typed if isinstance(typed, str) else ""
+    if public or kwargs.get("creator") not in _TYPED_TASK_CREATORS:
+        return ""
+    return task if isinstance(task, str) else ""
 
 
 def latest_turn_text(messages: List[Dict[str, Any]]) -> Optional[str]:
@@ -323,34 +351,6 @@ class UserIngressMixin:
             )
 
         return messages
-
-    async def request_approval(self, reason: str, checkpoint_type: str,
-                               action_preview: Optional[List[str]] = None,
-                               payload: Optional[Dict[str, Any]] = None) -> bool:
-        """Request human approval for an action.
-
-        DEPRECATED: Use send_message action instead for agent-initiated confirmations.
-        This method auto-approves to maintain backward compatibility.
-        """
-        # Emit telemetry
-        event = HumanApprovalRequestedEvent(
-            agent_id=self.agent_id,
-            step=self.state.n_steps,
-            reason=reason,
-            required=False,  # Not blocking anymore
-            checkpoint_type=checkpoint_type,
-            action_preview=action_preview,
-            payload=payload,
-            timeout_seconds=0
-        )
-        self.telemetry_manager.capture_event(event)
-
-        # Auto-approve (approval workflow removed)
-        self.logger.warning(
-            f"request_approval() is deprecated - use send_message action instead. "
-            f"Auto-approving: {reason}"
-        )
-        return True
 
     async def record_approval_decision(self, approved: bool, note: Optional[str] = None,
                                        override_type: Optional[str] = None,

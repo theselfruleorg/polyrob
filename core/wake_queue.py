@@ -4,7 +4,7 @@ When an owner approves a gated tool call from the WEB CONSOLE, the session that
 asked for it must be re-entered so the one-shot grant is redeemed while the owner
 is still there. In-process this rides the self-wake rail
 (``tools/controller/approval_queue.py::decide_tool_approval`` with a live
-``task_agent``). But on prod Rob #1 the console (``polyrob-webview.service``) and
+``task_agent``). But on a split-service install the console (``polyrob-webview.service``) and
 the agent (``polyrob.service``) run as SEPARATE processes, so the deciding
 process holds NO ``task_agent`` for that session — and
 ``TaskAgent.deliver_self_wake`` refuses a remote session BY DESIGN (it only ever
@@ -211,6 +211,14 @@ class WakeQueue:
             self._exec(
                 "UPDATE session_wakes SET status='pending', claimed_by=NULL, "
                 "claimed_at=NULL WHERE id=?", (int(wake_id),))
+
+    def release(self, wake_id: int) -> None:
+        """Put a claimed wake back WITHOUT spending an attempt: the session is
+        busy with a live owner turn, not unreachable (084). The row's age cap
+        still bounds how long it can wait."""
+        self._exec(
+            "UPDATE session_wakes SET status='pending', claimed_by=NULL, claimed_at=NULL, "
+            "attempts=MAX(attempts-1, 0) WHERE id=? AND status='claimed'", (int(wake_id),))
 
     # -- test / observability -------------------------------------------------
 

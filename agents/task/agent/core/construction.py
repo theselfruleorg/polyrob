@@ -222,7 +222,7 @@ def rail_skill_ids(agent) -> list:
 def report_missing_rail_skills(agent, pinned: list, matched) -> list:
 	"""A skill the rail NAMED that did not load says so (060 WS-7 fail-loud):
 	a WARNING in the journal and a ``rail_skill_missing`` event the ``rules``
-	status section renders. The run continues on keyword matching."""
+	status section renders. The run continues with the skill index."""
 	loaded = {getattr(s, "skill_id", None) for s in (matched or [])}
 	missing = [sid for sid in pinned if sid not in loaded]
 	if not missing:
@@ -230,7 +230,7 @@ def report_missing_rail_skills(agent, pinned: list, matched) -> list:
 	orch = getattr(agent, "orchestrator", None)
 	agent.logger.warning(
 		"rail pinned skill(s) %s but they did not load (unknown id or no SKILL.md) — "
-		"running on keyword-matched skills only", missing)
+		"running with the skill index only", missing)
 	from core.event_kinds import RAIL_SKILL_MISSING
 	from core.event_log import emit
 	emit(RAIL_SKILL_MISSING, source="construction",
@@ -410,8 +410,6 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			# Apply other profile settings
 			if '_enabled_actions' in updated_config:
 				self._enabled_actions = updated_config['_enabled_actions']
-			if '_profile_max_steps' in updated_config:
-				self._profile_max_steps = updated_config['_profile_max_steps']
 
 			# Apply profile settings explicitly. The old `locals()[key] = ...` loop was
 			# a no-op (assigning to locals() does not rebind), silently dropping these
@@ -809,7 +807,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			self.logger.debug(f"action-index recompute skipped: {_aidx_err}")
 
 	def _init_skills(self, p) -> None:
-		"""Match this session's skills; leaves ``p.system_message`` and ``p.skill_content``."""
+		"""This session's pinned skills + index; leaves ``p.system_message`` and ``p.skill_content``."""
 		# Load skills for this session and embed into system message
 		# Skills are per-session prompt extensions that provide context-aware guidance
 		system_message = getattr(self, '_profile_system_message', None)
@@ -822,45 +820,36 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			# Get tool_ids from controller (what tools are loaded for this session)
 			tool_ids = self.controller.list_tools() if self.controller else []
 			
-			# Get available actions for more precise matching
-			available_actions = []
-			if self.controller and hasattr(self.controller, 'registry'):
-				available_actions = self.controller.registry.list_action_names()
-			
-			# Match skills based on session context (include user's custom skills)
 			user_id = self.orchestrator.user_id if hasattr(self.orchestrator, 'user_id') else None
 			from agents.task.templates import seeded_skills_for
 			_seeded = seeded_skills_for(os.environ.get("POLYROB_PERSONA"))
-			# 060 WS-5: a rail pins its doctrine (`payload.skills` on a cron job or
-			# goal, or TaskSessionConfig.skills) through the SAME seed seam a
-			# persona uses — seeds bypass keyword matching and max_skills.
+			# 081 Q2: only PINNED skills load at session start — the persona seeds and
+			# the rail's pins (060 WS-5: `payload.skills` on a cron job or goal, or
+			# TaskSessionConfig.skills), then their `requires`. Every other session
+			# (owner chat, room, correspondent, an unpinned goal or cron run) gets the
+			# short index below and loads what fits with load_skill.
 			_rail_skills = rail_skill_ids(self)
 			_seeded = list(dict.fromkeys(list(_seeded or []) + _rail_skills))
-			matched_skills = skill_manager.get_skills_for_session(
-				tool_ids=tool_ids,
-				task=self.task,
-				available_actions=available_actions,
-				user_id=user_id,
-				seeded_skill_ids=_seeded or None,
-			)
+			matched_skills = skill_manager.get_pinned_skills(
+				seeded_skill_ids=_seeded or None, tool_ids=tool_ids, user_id=user_id)
 			if _rail_skills:
 				report_missing_rail_skills(self, _rail_skills, matched_skills)
-			# D5: the skills THIS session matched (triggers, seeds, `requires`
-			# prerequisites) — before the catalog extras are appended below.
+			# D5: the skills THIS session pinned — before the index entries are appended.
 			_session_matched = list(matched_skills)
+			# 081 WS-4.6: the run record splits skills_loaded into auto (pinned
+			# here) and explicit (load_skill), per regime (modules.memory.episodic).
+			if self.controller is not None:
+				from agents.task.session_class import session_regime
+				self.controller._auto_skills = {s.skill_id for s in _session_matched}
+				self.controller._skill_regime = session_regime(self)
 
-			# S9 fix (default OFF -> byte-identical): with progressive disclosure, optionally
-			# expose ALL available skills in the catalog so the agent can discover + load_skill
-			# any of them (not just trigger-matched ones). Matched skills stay first (priority).
+			# The short index: every skill this session may load (SKILL_CATALOG_INCLUDE_ALL,
+			# default ON; OFF lists the pins only). Pinned skills stay first.
 			from agents.task.constants import skill_catalog_include_all as _catalog_include_all
-			# Access-time read (not the import-bound constant) so the local-mode
-			# default (ON under POLYROB_LOCAL) is honored for the terminal agent.
 			if _catalog_include_all():
 				try:
 					_seen = {s.skill_id for s in matched_skills}
-					# SK-F1: the builtin library is 23 rules and every authored skill
-					# defaults to priority 6 (the old cap-20 cut band) — 50 is comfortably
-					# above both so the catalog actually reflects the full library.
+					# SK-F1: 50 is above the builtin + pack library (48 skills).
 					_extra = [s for s in skill_manager.get_catalog_skills(user_id=user_id, max_skills=50, tool_ids=tool_ids)
 							  if s.skill_id not in _seen]
 					matched_skills = list(matched_skills) + _extra
@@ -868,15 +857,11 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 					self.logger.debug(f"catalog-include-all skipped (non-fatal): {_cat_err}")
 
 			if matched_skills:
-				# S-1: progressive disclosure. Inject only a compact <skill-catalog>
-				# (plus the pinned bodies that fit) and let the agent pull full bodies
-				# via load_skill. The matched skills (with pre-loaded bodies) are
-				# handed to the controller so load_skill can serve them without
-				# re-reading disk.
-				# D5: a matched skill must reach the model, not only rank first
-				# in a catalog it may never act on. Pin the matched bodies that
-				# fit a bounded budget (safety prerequisites first); mark the
-				# rest LOAD FIRST in the catalog.
+				# S-1: progressive disclosure. The skill message holds the pinned
+				# bodies that fit a bounded budget (D5, safety prerequisites first)
+				# and the short index; a pin that does not fit is LOAD FIRST. The
+				# entries (with pre-loaded bodies) go to the controller so load_skill
+				# serves them without re-reading disk.
 				_eager, _load_first = skill_manager.split_progressive(_session_matched)
 				skill_content = skill_manager.format_progressive(
 					_eager, matched_skills, _load_first)
@@ -897,10 +882,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 				try:
 					from agents.task.path import pm
 					import json
-					# P2-25: precompute user-authored skill ids via the REAL method
-					# (_load_user_rules returns (rules, dir); the old hasattr referenced
-					# a nonexistent _load_user_skill_rules, so is_user_skill was always
-					# the startswith/endswith heuristic).
+					# P2-25: user-authored skill ids come from the tenant's rules.
 					_user_skill_ids = set()
 					try:
 						if user_id and hasattr(skill_manager, '_load_user_rules'):
@@ -914,7 +896,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 							"name": s.skill_id.replace("-", " ").title(),
 							"priority": s.priority,
 							"trigger_type": s.trigger_type,
-							"is_user_skill": s.skill_id.startswith("forked-") or s.skill_id.endswith("-custom") or s.skill_id in _user_skill_ids
+							"is_user_skill": s.skill_id in _user_skill_ids
 						}
 						for s in matched_skills
 					]
@@ -1005,6 +987,13 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		# PR13: pin skills as a foundation user message (origin=SKILL), not the system
 		# prompt. get_messages_for_llm() injects this; the system prompt stays stable.
 		self.message_manager.set_skill_message(skill_content)
+
+		# E-A3 (coherency review 2026-10-13): in an owner chat the first message is
+		# not THE task. A regime that does not pin it (agents.task.session_class)
+		# gets it dated and labelled "first message of this chat"; cron, goal,
+		# planner and child runs keep the authoritative task. Fail-open.
+		from agents.task.agent.core.chat_regime import label_first_chat_message
+		label_first_chat_message(self)
 
 		# 041 phase 2: the approved named workers the orchestrator may dispatch.
 		# Only a delegating (non-leaf) owner-side agent reads it; a room session
@@ -1173,6 +1162,9 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 				)
 			if _env_block:
 				self.message_manager.set_environment_message(_env_block)
+				from agents.task.agent.core.env_context import build_workspace_note
+				self.message_manager.set_workspace_message(build_workspace_note(
+					self.orchestrator.session_id, getattr(self.orchestrator, "user_id", None)))
 		except Exception as e:
 			self.logger.debug(f"Could not pin environment context (non-fatal): {e}")
 
@@ -1187,10 +1179,12 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			self.logger.debug(f"compaction aux model provisioning skipped: {e}")
 			self.message_manager.aux_llm = None
 
-		# Reflection LLM: its own aux slot (B5), which inherits compaction's
-		# model+provider by default when unset (back-compat: reflection historically
-		# reused _provision_compaction_llm wholesale) — see
-		# constants.resolve_aux_chain(). Operators can now set AUX_MODEL_REFLECTION /
+		# Reflection LLM: its own aux slot (B5). When AUX_MODEL_REFLECTION is unset it
+		# inherits compaction's model+provider pair if one is configured; when no aux
+		# model resolves at all (e.g. openrouter + deepseek, which has no
+		# OPENROUTER_AUX_FAMILY_MAP row) it runs on an isolated copy of the session's
+		# MAIN model (2026-10-14 review B-2; before that, reflection was silently off)
+		# — see constants.resolve_aux_chain(). Operators can set AUX_MODEL_REFLECTION /
 		# AUX_FALLBACK_REFLECTION independently. UP-09: default ON via
 		# constants.reflection_llm_enabled_default() — the SAME helper the
 		# TaskContextManager runtime guard reads, so the two can never diverge
@@ -1239,7 +1233,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		from agents.task.agent.agent_state import AgentState
 		self.state = AgentState(
 			n_steps=1,
-			max_steps=None,  # Set later if profile provides it
+			max_steps=None,  # run() sets it from its max_steps argument
 			max_failures=max_failures,
 			consecutive_failures=0,
 			total_actions_count=0,
@@ -1314,6 +1308,9 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		self.message_manager.usage_tracker = self.usage_tracker
 		self.message_manager.metering_user_id = getattr(self, "user_id", None)
 		self.message_manager.metering_agent_id = getattr(self, "agent_id", None)
+		# E-A7: the REAL workspace (a child's MM session_id is its virtual id, whose
+		# directory the filesystem tool never reads).
+		self.message_manager.workspace_root = getattr(self.orchestrator, "workspace_dir", None)
 		# Capture the MAIN event loop here (construction runs on it). Reflection
 		# consolidation runs on a worker thread (add_step_memory is offloaded via
 		# asyncio.to_thread), where run_coroutine_sync would spin a THROWAWAY loop;

@@ -43,8 +43,8 @@ def first_run_no_config(env=None, home=None) -> bool:
         return False
     if home is None:
         from core.paths import env_file_candidates
-        home_env = next(c.path for c in env_file_candidates(local_mode=True)
-                        if c.tier == "home")
+        # 080 WS-1: the top tier — the instance file on a deployed box.
+        home_env = env_file_candidates()[0].path
     else:
         home_env = Path(home) / ".env"
     return not home_env.exists()
@@ -83,7 +83,7 @@ def preflight_or_onboard(*, interactive: bool) -> bool:
     """
     try:
         from polyrob.app.bootstrap import load_env
-        load_env(local_mode=True)
+        load_env()
     except Exception:
         pass
     if not should_warn_no_key():
@@ -93,7 +93,7 @@ def preflight_or_onboard(*, interactive: bool) -> bool:
             from cli.commands.init import run_quick_key_setup
             run_quick_key_setup()
             from polyrob.app.bootstrap import load_env
-            load_env(local_mode=True)  # re-layer files; os.environ already set by setup
+            load_env()  # re-layer files; os.environ already set by setup
         except Exception:
             pass  # fail-open into the message path below
         if not should_warn_no_key():

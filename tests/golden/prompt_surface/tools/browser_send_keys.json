@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Send keyboard keys/shortcuts (e.g., \"Enter\", \"Escape\", \"Control+A\").",
+    "name": "browser_send_keys",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for sending keyboard keys.",
+      "properties": {
+        "keys": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

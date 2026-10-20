@@ -22,10 +22,6 @@ from typing import Any, List
 from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
 
-# Upper bound on how many skills we pull from the catalog. The library is small
-# (a couple dozen), so this is effectively "all of them" while still bounding a
-# pathological/misconfigured skills dir.
-_MAX_SKILLS = 200
 # Description truncation width for the one-line-per-skill listing.
 _DESC_WIDTH = 80
 
@@ -34,14 +30,6 @@ _DESC_WIDTH = 80
 # `/skills <query>` predates this dispatch layer).
 _SUBCOMMANDS = frozenset({"list", "install", "approve", "remove", "info",
                           "tap", "search", "update"})
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Flatten whitespace and truncate *text* to *limit* chars (ellipsis)."""
-    flat = " ".join(str(text or "").split())
-    if len(flat) <= limit:
-        return flat
-    return flat[: limit - 1] + "…"
 
 
 async def h_skills(ctx: CommandContext) -> None:
@@ -260,42 +248,24 @@ def _cmd_catalog(ctx: CommandContext) -> None:
     Read-only. Fail-open: any backend error degrades to a friendly one-liner
     (never raises into the REPL).
     """
-    try:
-        from agents.task.agent.skill_manager import get_skill_manager
+    # 080 D8: the ONE catalog reader the chat seats' `/skills` renders too.
+    from surfaces.telegram.skills_ops import catalog
 
-        manager = get_skill_manager()
-        skills = manager.get_catalog_skills(
-            user_id=ctx.user_id or "local", max_skills=_MAX_SKILLS
-        )
+    query = " ".join(str(a) for a in (ctx.args or [])).strip()  # every word, like Telegram
+    try:
+        rows = catalog(ctx.user_id or "local", query, desc_chars=_DESC_WIDTH)
+        if not rows and (not query or not catalog(ctx.user_id or "local")):
+            ctx.emit(candy.empty("skills available", yet=False), title="skills")
+            return
     except Exception as exc:
         ctx.emit(f"Could not load skills: {exc}", title="skills")
         return
-
-    if not skills:
-        ctx.emit(candy.empty("skills available", yet=False), title="skills")
+    if not rows:
+        ctx.emit(candy.empty(f"skills match {query!r}", yet=False), title="skills")
         return
 
-    # Optional case-insensitive filter over id + description.
-    query = (ctx.args[0].strip().lower() if ctx.args else "")
-    if query:
-        skills = [
-            s
-            for s in skills
-            if query in str(getattr(s, "skill_id", "")).lower()
-            or query in str(getattr(s, "description", "")).lower()
-        ]
-        if not skills:
-            ctx.emit(candy.empty(f"skills match {ctx.args[0]!r}", yet=False), title="skills")
-            return
-
-    # Sort readably by id (the catalog is already priority-sorted; id-sort makes
-    # the flat list scannable).
-    skills = sorted(skills, key=lambda s: str(getattr(s, "skill_id", "")))
-
-    lines: List[str] = [f"{len(skills)} skill(s) available:"]
-    for s in skills:
-        skill_id = str(getattr(s, "skill_id", "") or "?")
-        desc = _truncate(getattr(s, "description", "") or "", _DESC_WIDTH)
+    lines: List[str] = [f"{len(rows)} skill(s) available:"]
+    for skill_id, desc in rows:
         lines.append(candy.bullet(skill_id + (f" — {desc}" if desc else "")))
     lines.append("Use `load_skill(skill_id=\"<id>\")` (agent) to load a skill's full body.")
 

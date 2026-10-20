@@ -25,7 +25,7 @@ Creates a new AutoV2 session and starts it running in the background.
   "provider": "…",                      // Optional, see note below
   "temperature": 0.0,                   // Optional, defaults to 0.0
   "use_vision": true,                   // Optional, defaults to true
-  "max_steps": 50,                      // Optional, defaults to 50
+  "max_steps": 50,                      // Optional, defaults to 50 (this session only; autonomous runs use AUTONOMOUS_MAX_STEPS)
   "tools": ["browser", "filesystem"],   // Optional, defaults to ["browser", "filesystem"]
   "tools_config": {}                    // Optional, tool-specific configuration
 }

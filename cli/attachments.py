@@ -32,7 +32,11 @@ async def attach_to_session(orchestrator, session_id, user_id, paths):
     from agents.task.path import pm
     workspace = pm().get_workspace_dir(session_id, user_id)
     text, images, receipts = await stage_attachments(paths, workspace)
+    # 085 W3 (A1): the turn holds only file content — none of it is typed, and
+    # it leaves the turn's typed words (the task, the REPL line) as they are.
+    from core.surfaces.inbound_attachments import ATTACHMENT_ONLY_KEY, TYPED_TEXT_KEY
     await orchestrator.submit_user_message(
-        None, text, kind="comment", metadata={"image_attachments": images}
+        None, text, kind="comment",
+        metadata={"image_attachments": images, TYPED_TEXT_KEY: "", ATTACHMENT_ONLY_KEY: True}
     )
     return receipts

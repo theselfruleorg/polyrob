@@ -128,17 +128,17 @@ def test_a_dm_has_no_room_style_line(tmp_path):
 def test_the_room_name_and_instructions_reach_the_surface_profile(tmp_path):
     from core.surfaces.binding import surface_profile
 
-    _set(tmp_path, "chat.name", "The Public Den")
+    _set(tmp_path, "chat.name", "The Lobby")
     _set(tmp_path, "chat.instructions", "Answer in Portuguese.")
     profile = surface_profile(_orchestrator(tmp_path, public=True))
-    assert profile["chat_name"] == "The Public Den"
+    assert profile["chat_name"] == "The Lobby"
     assert profile["chat_instructions"] == "Answer in Portuguese."
 
 
 def test_a_dm_profile_never_carries_room_settings(tmp_path):
     from core.surfaces.binding import surface_profile
 
-    _set(tmp_path, "chat.name", "The Public Den")
+    _set(tmp_path, "chat.name", "The Lobby")
     _set(tmp_path, "chat.instructions", "Answer in Portuguese.")
     profile = surface_profile(_orchestrator(tmp_path, public=False))
     assert profile["chat_name"] == "-100" and profile["chat_instructions"] == ""

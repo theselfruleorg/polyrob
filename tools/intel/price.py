@@ -22,6 +22,15 @@ pool source's own rule (>= 2 pools AND >= $50k in the priced pool,
 take it away (dispute) and can never grant it. A price that only a secondary
 source supplied is ``low``.
 
+Two ANCHORS are the only exceptions, both pinned in ``core.wallet.chains``
+(:func:`_anchored`): a pinned USD stablecoin is ``high`` at its peg while
+every source that answered is within :data:`PEG_BAND_PCT` of $1 (and at $1.00
+when none answered — the Solana USDC rule); and an ETH-native chain's pinned
+WETH that grades below ``high`` takes Ethereum mainnet's WETH quote — the same
+asset, priced where a thin L2 pool cannot move it. Gas fees and native sends
+price through that WETH, so without it one indexer gap refused every send on
+the chain (Optimism, 2026-10-17).
+
 The sources live in the tools tier and register here (``core`` must not import
 ``tools``). With none registered, every quote is ``unknown`` and says why.
 """
@@ -199,10 +208,12 @@ def aggregate(answers: Iterable[SourceAnswer], *, now: Optional[float] = None) -
     threshold = dispute_threshold_pct(priced_liq)
     note_at = note_threshold_pct(priced_liq)
     note = None
+    outlier = None
     judged = spread
     odd = _outlier(priced, primary.name if p_usd is not None else None, note_at)
     if odd is not None and spread is not None and spread > note_at:
         name, value, off = odd
+        outlier = name
         judged = _spread([v for n, v in priced if n != name])
         median = statistics.median([v for n, v in priced if n != name])
         note = (f"{name} is an outlier ({off:+.1f}% vs the other sources) and was "
@@ -235,7 +246,7 @@ def aggregate(answers: Iterable[SourceAnswer], *, now: Optional[float] = None) -
         pool=pool, pool_count=pool_count, confidence=confidence, reason=reason,
         priced_liquidity_usd=priced_liq, primary_usd=p_usd, primary_confidence=p_conf,
         primary_liquidity_usd=(primary.liquidity_usd if primary is not None else None),
-        failed=tuple(failed), fetched_at=stamp)
+        failed=tuple(failed), fetched_at=stamp, outlier=outlier)
 
 
 def _ask(src: Source, chain: str, address: str) -> SourceAnswer:
@@ -290,10 +301,52 @@ def quote(chain: str, address: str, *,
                     asked[name] = SourceAnswer(name=name, error=exc.__class__.__name__)
     got: List[SourceAnswer] = [given[s.name] if s.name in given else asked[s.name]
                                for s in todo]
-    q = aggregate(got, now=clock())
+    q = _anchored(key[0], address, aggregate(got, now=clock()), use_cache=use_cache)
     if use_cache and not q.failed and got:
         cache.put(key, q)
     return q
+
+
+#: A pinned stablecoin keeps its $1 peg while every answering source is
+#: within this band of $1; outside it the ordinary pool rule grades it.
+PEG_BAND_PCT = 2.0
+
+
+def _anchored(chain: str, address: str, q: PriceQuote, *, use_cache: bool) -> PriceQuote:
+    """The two pinned anchors (module docstring). Any fault returns ``q``."""
+    try:
+        from core.wallet import chains
+        addr = str(address or "").lower()
+        # 085 M-2: the ONE pinned (chain, address) peg table (base58 compares exactly).
+        if chains.is_usd_pegged(chain, str(address or "")):
+            # The sources the median counted: one secondary the others outvoted
+            # must not knock a pinned stable off its peg (2026-10-19: a USDG
+            # payout refused VALUE NOT VERIFIED after three identical sends passed).
+            values = [v for n, v in q.sources if n != q.outlier]
+            if any(abs(v - 1.0) * 100.0 > PEG_BAND_PCT for v in values):
+                return replace(q, note=(q.note or "") + " pinned stablecoin OFF its "
+                               f"$1 peg (> {PEG_BAND_PCT:g}%): graded as an ordinary token")
+            usd = statistics.median(values) if values else 1.0
+            why = (f"pinned stablecoin on its peg ({len(values)} source(s) within "
+                   f"{PEG_BAND_PCT:g}% of $1)" if values else
+                   "pinned stablecoin, no source answered: valued at its $1.00 peg")
+            return replace(q, usd=usd, primary_usd=usd, confidence=HIGH,
+                           primary_confidence=HIGH, reason=why)
+        if q.confidence == HIGH or chain == "ethereum":
+            return q
+        row, eth = chains.get(chain), chains.get("ethereum")
+        if (row is None or row.valueless or row.native_symbol != "ETH" or eth is None
+                or not row.wrapped_native or addr != row.wrapped_native.lower()):
+            return q
+        m = quote("ethereum", eth.wrapped_native, use_cache=use_cache)
+        if m.confidence != HIGH or m.primary_usd is None:
+            return q
+        return replace(q, usd=m.primary_usd, primary_usd=m.primary_usd, confidence=HIGH,
+                       primary_confidence=HIGH, primary_liquidity_usd=m.primary_liquidity_usd,
+                       reason=(f"priced as ETH on ethereum (same asset; the {chain} "
+                               f"WETH quote was {q.confidence}: {q.reason})"))
+    except Exception:
+        return q
 
 
 # -- the three readings every caller needs --------------------------------

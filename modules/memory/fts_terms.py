@@ -6,9 +6,17 @@ the first 12 raw tokens of a long task spent the budget on boilerplate ("the",
 stopwords and case-insensitive duplicates are dropped first, order kept; a
 query of ONLY stopwords falls back to its raw terms so a MATCH is never empty.
 """
+import re
 from typing import List
 
 MAX_TERMS = 12
+
+#: The ONE recall tokenizer (every FTS5 recall path and the query builder).
+#: Unicode-aware since 2026-10-13 (review D7): ``[A-Za-z0-9…]`` dropped every
+#: Cyrillic / CJK word and split accented words at the accent, so a non-Latin
+#: owner turn produced no query at all. FTS5's default ``unicode61`` tokenizer
+#: indexes those words, so they match.
+TOKEN_RE = re.compile(r"[\w.:/-]{3,}", re.UNICODE)
 
 #: Words that never pick a topic.
 STOPWORDS = frozenset((
@@ -17,8 +25,27 @@ STOPWORDS = frozenset((
     "those they them their then than there here from into onto over under about after "
     "before again also just only very more most some such each both other same own "
     "will would could should shall may might must does did done doing been being "
-    "let lets one two via per get got use used using now new it's i'm don't"
+    "let lets one two via per get got use used using now new it's i'm don't "
+    # chat acknowledgements (review A3: BM25 matched an old "Ok cool" row)
+    "yes yeah yep yup okay cool thanks thank please sure fine good great nice"
 ).split())
+
+
+def tokens(text: str) -> List[str]:
+    """Significant (>= 3-char) tokens of *text* — see ``TOKEN_RE``."""
+    return TOKEN_RE.findall(text or "")
+
+
+def informative_terms(text: str) -> List[str]:
+    """The tokens that can pick a topic (no stopwords, no duplicates, no fallback)."""
+    seen, out = set(), []
+    for t in tokens(text):
+        k = t.lower()
+        if k in seen or k in STOPWORDS:
+            continue
+        seen.add(k)
+        out.append(t)
+    return out
 
 
 def select_terms(terms: List[str], limit: int = MAX_TERMS) -> List[str]:

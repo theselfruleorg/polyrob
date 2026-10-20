@@ -28,6 +28,8 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.surfaces.cards import GO_WORDS as _GO
+
 from core import lifecycle as lc
 
 RESTART_USAGE = ("Usage: /restart — restart me once my current work is done\n"
@@ -35,7 +37,6 @@ RESTART_USAGE = ("Usage: /restart — restart me once my current work is done\n"
 UPDATE_USAGE = ("Usage: /update — update me to the latest release\n"
                 "/update pre — include pre-releases")
 
-_GO = ("go", "execute", "confirm")
 _UPDATE_CHANNELS = ("stable", "pre")
 #: The install methods whose code ``polyrob update --apply`` can move itself.
 _SELF_UPDATING = ("git", "editable_git")

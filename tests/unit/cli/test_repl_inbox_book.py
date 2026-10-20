@@ -44,9 +44,8 @@ NOW = 1_700_000_000.0
 
 def _body(**kw):
     items = kw.pop("items", [])
-    sources = kw.pop("sources", {"self_evolution": "ok", "tool_approvals": "ok",
-                                 "correspondents": "ok", "asks": "ok",
-                                 "apps": "ok"})
+    from core.surfaces.inbox import SOURCE_LABELS
+    sources = kw.pop("sources", {name: "ok" for name in SOURCE_LABELS})
     return compose(items, sources)
 
 
@@ -91,7 +90,7 @@ def test_the_empty_state_says_why_it_can_say_nothing():
 
 def test_the_empty_state_names_every_source():
     from core.surfaces.inbox import SOURCE_LABELS
-    out = render_inbox(_body(), now=NOW)
+    out = " ".join(render_inbox(_body(), now=NOW).split())  # a label may wrap
     for label in SOURCE_LABELS.values():
         assert label in out, label
 

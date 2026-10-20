@@ -129,8 +129,9 @@ def settlement_for(tx: Any, *, treasury: str, mint: str,
 
 
 def scan_reference(reference: str, *, rpc, limit: int = 1000,
-                   max_pages: int = 5) -> Iterable[str]:
-    """Signatures that touched *reference*, newest first.
+                   max_pages: int = 5, since: Optional[float] = None,
+                   oldest_first: bool = False, strict: bool = False) -> Iterable[str]:
+    """Signatures that touched *reference*, newest first (or oldest first).
 
     This is the whole reason the reference exists: instead of scanning every
     transfer to the treasury and guessing which invoice it belongs to, ask the
@@ -141,6 +142,13 @@ def scan_reference(reference: str, *, rpc, limit: int = 1000,
     pages of *limit*) instead of stopping at the 20 newest; the caller skips
     signatures it has already judged, so a real payment behind the spam is
     reached.
+
+    085 F1: *since* (epoch seconds, the invoice's creation) drops a signature
+    whose ``blockTime`` is older — nothing before the invoice can pay it — and
+    stops paging once a page reaches that far back. *oldest_first* returns the
+    walk from the invoice's creation forward, so spam sent AFTER a real payment
+    sits behind it, not in front of it. *strict* raises on an RPC failure
+    instead of returning a partial list (the pre-expiry pass must know).
     """
     out = []
     before = None
@@ -151,14 +159,28 @@ def scan_reference(reference: str, *, rpc, limit: int = 1000,
         try:
             res = rpc("getSignaturesForAddress", [reference, opts])
         except Exception as exc:
+            if strict:
+                raise
             logger.info("solana settlement: reference scan failed for %s (%s)",
                         reference, exc)
             break
         page = [e for e in (res or []) if isinstance(e, dict) and e.get("signature")]
+        reached_since = False
         for entry in page:
+            block_time = entry.get("blockTime")
+            if since is not None and isinstance(block_time, (int, float)) \
+                    and float(block_time) < float(since):
+                reached_since = True
+                continue
             if entry.get("err") is None:
                 out.append(str(entry["signature"]))
-        if len(page) < int(limit):
+        if reached_since or len(page) < int(limit):
             break
         before = str(page[-1]["signature"])
+    else:
+        if strict and before:
+            raise RuntimeError(f"reference {reference}: more than "
+                               f"{int(max_pages) * int(limit)} signatures")
+    if oldest_first:
+        out.reverse()
     return out

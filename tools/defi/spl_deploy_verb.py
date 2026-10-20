@@ -108,12 +108,14 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
 
     try:
         supply_raw = _supply_to_raw(params.supply, params.decimals)
+        name, symbol = _validate_metadata_text(params)
     except ValueError as exc:
         return tool._ar(error=f"refused: {exc}")
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     try:
         signer = wallet.solana_signer()
     except Exception as exc:
@@ -134,17 +136,19 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     # Fund for the mint AND the metadata it is about to grow: TokenMetadata
     # reallocs, and a short account fails THERE rather than at the instruction
     # that under-funded it.
-    name = (params.name or params.symbol).strip()
+    # The validated (stripped, printable-ASCII) name and symbol are the ones
+    # minted — never the raw params, or " ROB" would pass the check and mint
+    # with its leading space.
     uri = (params.uri or "").strip()
     space = spl_token.MINT_WITH_POINTER_LEN + spl_token.metadata_space(
-        name=name, symbol=params.symbol, uri=uri)
+        name=name, symbol=symbol, uri=uri)
     mint_rent = await asyncio.to_thread(spl_token.rent_exempt_from_rpc,
         space, lambda m, p: solana_onchain._rpc(m, p))
     try:
         tx, mint_kp, mint, ata = spl_token.build_fixed_supply_mint(
             payer=payer, decimals=params.decimals, supply_raw=supply_raw,
             recent_blockhash=blockhash, mint_rent=mint_rent,
-            name=name, symbol=params.symbol, uri=uri)
+            name=name, symbol=symbol, uri=uri)
     except spl_token.SplBuildError as exc:
         return tool._ar(error=f"refused: {exc}")
 
@@ -164,10 +168,8 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     except Exception as exc:
         return tool._ar(error=f"refused: simulation raised ({exc})")
     if not deltas.ok:
-        from core.security.refusal_taint import simulation_kind
         return tool._ar(error=(
-            f"refused: simulation not trustworthy — {deltas.reason}"),
-            error_kind=simulation_kind(deltas))
+            f"refused: simulation not trustworthy — {deltas.reason}"))
 
     refusal = _assert_deltas(deltas, mint=mint, supply_raw=supply_raw)
     if refusal:
@@ -180,12 +182,12 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     header = (
         f"deploy SPL token on solana\n"
         f"  mint:     {mint}\n"
-        f"  supply:   {params.supply:g} whole units ({supply_raw} raw at "
+        f"  supply:   {format_supply(params.supply)} whole units ({supply_raw} raw at "
         f"{params.decimals} decimals), all to {ata}\n"
         f"  fixed:    the mint authority is REVOKED in the same transaction, "
         f"and no freeze authority is ever created\n"
         f"  metadata: ON-CHAIN via Token-2022 — name {name!r}, symbol "
-        f"{params.symbol!r}"
+        f"{symbol!r}"
         + (f", uri {uri}" if uri else ", no uri")
         + ". The update authority is revoked in the same transaction, so the "
           "name cannot be swapped later either.\n"
@@ -248,9 +250,8 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
         try:
             signature = await asyncio.to_thread(SolanaRail(signer=signer).send_raw, bytes(signed))
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"))
 
         gate.record(venue="defi", action="solana_deploy_token",
                     amount_usd=amount_usd, counterparty=mint,
@@ -359,31 +360,43 @@ def _prove_fixed_supply(mint: str, supply_raw: int, decimals: int) -> str:
             f" — read back from the mint, not assumed\n")
 
 
-def _supply_to_raw(supply: float, decimals: int) -> int:
+def _validate_metadata_text(params):
+    """085 W7 (D6): the Token-2022 name and symbol pass the SAME printable-ASCII
+    filter as the EVM template. The metadata update authority is revoked in the
+    same transaction, so a homoglyph name would be permanent.
+
+    Returns ``(name, symbol)`` stripped — the exact text to mint. A blank name
+    falls back to the symbol."""
+    from core.wallet.token_template import (
+        MAX_NAME_CHARS, MAX_SYMBOL_CHARS, validate_token_text)
+    symbol = validate_token_text(params.symbol, field="symbol",
+                                 limit=MAX_SYMBOL_CHARS)
+    raw_name = params.name if isinstance(params.name, str) else ""
+    name = validate_token_text(raw_name.strip() or symbol, field="name",
+                               limit=MAX_NAME_CHARS)
+    return name, symbol
+
+
+def format_supply(supply) -> str:
+    from core.wallet.token_template import format_supply as _fmt
+    return _fmt(supply)
+
+
+def _supply_to_raw(supply, decimals: int) -> int:
     """Whole units -> raw, EXACTLY, and inside a u64.
 
-    Decimal for the same reason the EVM template uses it: `1e9 * 10**9` in
-    binary floating point is not `1e18`, and above 2^53 the error lands in the
-    integer part.
+    The one exact conversion the EVM template uses (``whole_to_raw``: Decimal
+    in, integer arithmetic, the ``MAX_WHOLE_SUPPLY`` typo ceiling, and a refusal
+    of more fractional digits than decimals), plus the u64 bound.
     """
-    from decimal import Decimal, InvalidOperation
+    from core.wallet.token_template import whole_to_raw
 
-    if supply <= 0:
-        raise ValueError("supply must be greater than zero")
-    try:
-        scaled = Decimal(str(supply)) * (Decimal(10) ** int(decimals))
-    except (InvalidOperation, ValueError, ArithmeticError) as exc:
-        raise ValueError(f"supply {supply!r} is not a usable number ({exc})")
-    if scaled != scaled.to_integral_value():
-        raise ValueError(
-            f"a supply of {supply:g} is not a whole number of units at "
-            f"{decimals} decimals")
-    raw = int(scaled)
+    raw = whole_to_raw(supply, decimals)    # TokenTemplateError is a ValueError
     if raw >= 2 ** 64:
         raise ValueError(
-            f"{supply:g} at {decimals} decimals is {raw} raw units, which does "
-            f"not fit in a u64 — Solana supplies are u64. Use fewer decimals or "
-            f"a smaller supply.")
+            f"{format_supply(supply)} at {decimals} decimals is {raw} raw units, "
+            f"which does not fit in a u64 — Solana supplies are u64. Use fewer "
+            f"decimals or a smaller supply.")
     return raw
 
 

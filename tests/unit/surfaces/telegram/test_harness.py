@@ -679,11 +679,11 @@ class _GetMeBot(_PollBot):
 
 @pytest.mark.asyncio
 async def test_start_resolves_bot_username_onto_harness_and_surface():
-    bot = _GetMeBot(username="tmachinroBot")
+    bot = _GetMeBot(username="ExampleBot")
     h = _harness(bot, _FakeTaskAgent())
     await h.start()
-    assert h.bot_username == "tmachinroBot"
-    assert h.surface.bot_username == "tmachinroBot"
+    assert h.bot_username == "ExampleBot"
+    assert h.surface.bot_username == "ExampleBot"
 
 
 @pytest.mark.asyncio

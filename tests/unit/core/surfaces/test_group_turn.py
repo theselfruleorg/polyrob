@@ -28,9 +28,9 @@ def test_neutralize_name_collapses_newlines_and_caps():
 def test_context_block_attributes_with_id_and_role_and_excludes_addressed():
     rows = [_r(1, "anyone tried the bridge?"),
             _r(2, "@rob which chains?", name="@bob", sender="9911", role="admin")]
-    out = render_context(rows, chat_name="The Public Den", surface="telegram",
+    out = render_context(rows, chat_name="The Lobby", surface="telegram",
                          thread=None, exclude_message_id="2")
-    assert out.startswith('<group-context chat="The Public Den" surface="telegram"')
+    assert out.startswith('<group-context chat="The Lobby" surface="telegram"')
     assert "@alice|8123 (member): anyone tried the bridge?" in out
     assert "@bob|9911" not in out
     assert "</group-context>" in out

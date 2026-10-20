@@ -108,10 +108,10 @@ def test_x_browser_leaf_or_forged_is_the_shared_rule():
 
 def test_no_second_owner_turn_definition_in_the_x_pack():
     """The X pack reads the turn and its taint through polyrob.sdk, never the
-    raw ``metadata['untrusted_read']`` key or the forged-kind literal."""
+    raw ``metadata['correspondent_tainted']`` key or the forged-kind literal."""
     import pathlib
     root = pathlib.Path(__file__).resolve().parents[4] / "packs" / "x" / "polyrob_x"
     for path in (root / "twitter_tool.py", root / "x_browser" / "tool.py"):
         text = path.read_text()
-        assert '"untrusted_read"' not in text, path
+        assert '"correspondent_tainted"' not in text, path
         assert "FORGED_TURN_KINDS" not in text, path

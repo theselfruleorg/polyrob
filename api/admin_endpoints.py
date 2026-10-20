@@ -116,8 +116,6 @@ class TokenVerificationResult(BaseModel):
     tier_changed: bool
     token_ids: List[str]
     verified_at: str
-    bonuses_granted: int = 0
-    bonuses_already_claimed: int = 0
 
 
 class AuditEvent(BaseModel):
@@ -836,44 +834,6 @@ async def verify_user_token(
         WHERE user_id = ?
     """, (new_count, new_tier, user_id))
 
-    # Check and grant bonuses for new token IDs
-    bonuses_granted = 0
-    bonuses_already_claimed = 0
-
-    if token_ids:
-        # Get contract address from config
-        from core.config import BotConfig
-        config = BotConfig()  # BaseSettings auto-loads from env
-        contract_address = getattr(config, 'den_token_contract_address', '')
-
-        if contract_address:
-            for token_id in token_ids:
-                # Check if bonus already granted for this token
-                existing = await db.fetch_one("""
-                    SELECT 1 FROM den_token_bonuses
-                    WHERE token_id = ? AND contract_address = ?
-                """, (token_id, contract_address))
-
-                if existing:
-                    bonuses_already_claimed += 1
-                else:
-                    # Grant bonus
-                    from modules.credits.pricing import DEN_SIGNUP_ALLOWANCE
-                    balance_mgr = container.get_service('balance_manager')
-                    if balance_mgr:
-                        await balance_mgr.add_credits(
-                            user_id=user_id,
-                            amount=DEN_SIGNUP_ALLOWANCE,
-                            reason=f"DEN Sign Up Allowance for token #{token_id}",
-                            transaction_type="den_bonus"
-                        )
-                        # Record bonus granted
-                        await db.execute("""
-                            INSERT INTO den_token_bonuses (token_id, contract_address)
-                            VALUES (?, ?)
-                        """, (token_id, contract_address))
-                        bonuses_granted += 1
-
     # Audit log
     admin_id = getattr(request.state, 'user_id', 'unknown')
     client_ip = get_client_ip(request)
@@ -895,9 +855,7 @@ async def verify_user_token(
         new_tier=new_tier,
         tier_changed=tier_changed,
         token_ids=token_ids,
-        verified_at=verified_at,
-        bonuses_granted=bonuses_granted,
-        bonuses_already_claimed=bonuses_already_claimed
+        verified_at=verified_at
     )
 
 

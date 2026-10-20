@@ -20,8 +20,28 @@ from modules.llm.messages import AIMessage, ToolMessage
 logger = logging.getLogger(__name__)
 
 
+_PAGING_PARAMS = frozenset({"offset", "limit", "char_offset", "char_limit", "page",
+                            "cursor", "start_line", "end_line"})
+
+
+def _action_takes_paging(controller, action_name):
+	"""True/False when the action's param model is known to have / lack a paging
+	param; None when it cannot be told (unknown action, no controller)."""
+	if controller is None or not action_name:
+		return None
+	try:
+		ra = controller.get_action_details(action_name)
+		model = getattr(ra, 'param_model', None) if ra else None
+		fields = getattr(model, 'model_fields', None)
+		if not isinstance(fields, dict):
+			return None
+		return bool(_PAGING_PARAMS & set(fields))
+	except Exception:
+		return None
+
+
 def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
-                           validation_errors=None):
+                           validation_errors=None, pages_for=None):
 	"""Map each tool_call id -> (content, had_error) by identity.
 
 	Prefers ActionResult.tool_call_id (set by multi_act). Falls back to
@@ -46,7 +66,23 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 	time — raw — in the next step's state message (`prompts.AgentMessagePrompt`),
 	and that render site has no controller to resolve a source with. Stamping here
 	keeps ONE resolution for both renders.
+
+	``pages_for`` (``tool_call_id -> bool | None``, 2026-10-13 review A4): False
+	names a tool with NO paging params, so a cut result says so instead of
+	"use offset/limit". (An over-cap result is normally already spilled to a
+	workspace file by ``_spill_over_wire_cap``; this is the fallback wording.)
 	"""
+	def _way_out(tc_id):
+		if pages_for is None or tc_id is None:
+			return None
+		try:
+			if pages_for(tc_id) is False:
+				from agents.task.agent.core.result_budget import NO_PAGING_WAY_OUT
+				return NO_PAGING_WAY_OUT
+		except Exception:
+			logger.debug("paging probe failed", exc_info=True)
+		return None
+
 	def _entry(ar, tc_id=None):
 		if ar.error:
 			# UP-06: an untrusted tool can control its own error string, so the error
@@ -54,7 +90,7 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			# injected instructions in a tool's error reach the model unframed.
 			# An untrusted tool controls its own error string too (UP-06), so it
 			# gets the same cap — and before the wrap, for the same reason.
-			content = truncate_tool_result(f"Error: {ar.error}")
+			content = truncate_tool_result(f"Error: {ar.error}", way_out=_way_out(tc_id))
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
 				stamp_result_source(ar, action_name, tool)
@@ -66,7 +102,7 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			# wrap (so the closing delimiter is never what gets cut) and on the
 			# returned string only — ar.extracted_content is never mutated, so
 			# memory previews / telemetry keep the full content (UP-06 pattern).
-			content = truncate_tool_result(content)
+			content = truncate_tool_result(content, way_out=_way_out(tc_id))
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
 				stamp_result_source(ar, action_name, tool)
@@ -220,9 +256,15 @@ class ResultProcessingMixin:
 			# validation_errors is resolved above; pass it so the positional fallback
 			# can skip the calls that were dropped before execution (they consumed no
 			# slot in `result`).
+			name_of_call = {tc.get('id'): tc.get('name') for tc in tool_calls_to_pass if tc.get('id')}
+
+			def _pages_for(tc_id, _names=name_of_call):
+				return _action_takes_paging(self.controller, _names.get(tc_id))
+
 			paired = _pair_results_to_calls(result, tool_calls_to_pass,
 			                                source_for=source_for,
-			                                validation_errors=validation_errors)
+			                                validation_errors=validation_errors,
+			                                pages_for=_pages_for)
 
 			for i, tc in enumerate(tool_calls_to_pass):
 				tc_id = tc.get('id')
@@ -394,7 +436,7 @@ class ResultProcessingMixin:
 			# CRITICAL: Handle large action results BEFORE adding to context
 			# This offloads content >10K to files, preventing context overflow
 			# Must happen BEFORE tool responses are added to message history
-			self._handle_large_action_results(result)
+			self._handle_large_action_results(result, tool_calls_to_pass)
 
 			# C5: stamp every untrusted result's source HERE, for both paths. The
 			# native path also stamps inside _pair_results_to_calls; the non-native

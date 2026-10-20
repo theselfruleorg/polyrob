@@ -162,22 +162,22 @@ def test_render_block_defangs_and_caps():
 
 def test_adopt_legacy_owner_rows_folds_both_spellings(container, tmp_path):
     conv = ConversationStore(str(tmp_path / "conversations.db"))
-    conv.record_outbound("u1", "telegram", "28436760", "digest via message tool", session_id="s1", now=1000.0)
-    conv.record_outbound("u1", "telegram", "telegram:28436760", "typed with prefix", session_id="s2", now=2000.0)
+    conv.record_outbound("u1", "telegram", "100000001", "digest via message tool", session_id="s1", now=1000.0)
+    conv.record_outbound("u1", "telegram", "telegram:100000001", "typed with prefix", session_id="s2", now=2000.0)
     conv.record_outbound("u1", "email", "someone@x.com", "a correspondent", session_id="s3", now=3000.0)
     container.register_service("conversation_store", conv)
     ot._ADOPTED.discard("u1")   # the per-process once-guard; another test may have tripped it
-    moved = ot.adopt_legacy_owner_rows(container, "u1", {"telegram": "28436760"})
+    moved = ot.adopt_legacy_owner_rows(container, "u1", {"telegram": "100000001"})
     assert moved == 2
-    assert conv.get("u1", "telegram", "28436760") is None
-    assert conv.get("u1", "telegram", "telegram:28436760") is None
+    assert conv.get("u1", "telegram", "100000001") is None
+    assert conv.get("u1", "telegram", "telegram:100000001") is None
     assert conv.get("u1", "email", "someone@x.com") is not None
     rows = ot.thread_recent(container, "u1", limit=10)
     assert [r["body"] for r in rows] == ["digest via message tool", "typed with prefix"]
     assert all(r["source"] == "message_tool" for r in rows)
     # idempotent per process AND per store
     ot._ADOPTED.discard("u1")
-    assert ot.adopt_legacy_owner_rows(container, "u1", {"telegram": "28436760"}) == 0
+    assert ot.adopt_legacy_owner_rows(container, "u1", {"telegram": "100000001"}) == 0
 
 
 def test_counts_and_recent_outbound_bodies(container):
@@ -200,8 +200,8 @@ def test_bare_container_without_data_dir_gets_no_store(tmp_path):
 # --- §2.3 the split address --------------------------------------------------
 
 def test_canonical_owner_addr_strips_same_surface_prefix():
-    assert canonical_owner_addr("telegram", "telegram:28436760") == "28436760"
-    assert canonical_owner_addr("telegram", "28436760") == "28436760"
+    assert canonical_owner_addr("telegram", "telegram:100000001") == "100000001"
+    assert canonical_owner_addr("telegram", "100000001") == "100000001"
     assert canonical_owner_addr("telegram", "@Rob") == "rob"
     assert canonical_owner_addr("email", "email:Rob@X.com") == "rob@x.com"
     # a prefix naming ANOTHER surface is not stripped
@@ -209,8 +209,8 @@ def test_canonical_owner_addr_strips_same_surface_prefix():
 
 
 def test_resolve_target_tier_owner_under_every_spelling():
-    owner = {"telegram": "28436760"}
-    for spelled in ("28436760", "telegram:28436760", "TELEGRAM:28436760"):
+    owner = {"telegram": "100000001"}
+    for spelled in ("100000001", "telegram:100000001", "TELEGRAM:100000001"):
         assert resolve_target_tier(surface="telegram", target=spelled, user_id="u",
                                    allowlist=None, owner_targets=owner, policy="open") == "owner"
         assert is_owner_target("telegram", spelled, owner)

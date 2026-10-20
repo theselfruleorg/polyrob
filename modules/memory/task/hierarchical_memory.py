@@ -356,7 +356,7 @@ class HierarchicalMemory(BaseModel):
         session_id: Unique session identifier
         task: Task description
         current_phase: Current active phase name
-        progress: Progress string (e.g., "25/50")
+        progress: Progress string (e.g., "step 25"; no step cap — 083 WS-5)
         phases_completed: List of completed phase names
         phase_memories: List of phase memories (position-indexed for H-MEM)
         phase_index: Mapping from phase name to position (backward compatibility)
@@ -369,7 +369,7 @@ class HierarchicalMemory(BaseModel):
     session_id: str = Field(..., description="Unique session ID")
     task: str = Field(..., description="Task description")
     current_phase: str = Field(default="discovery", description="Current active phase")
-    progress: str = Field(default="0/?", description="Progress string like '25/50'")
+    progress: str = Field(default="step 0", description="Progress string like 'step 25'")
     phases_completed: List[str] = Field(default_factory=list, description="Completed phases")
 
     # Layer 2: Phase list (H-MEM position indices!)
@@ -774,7 +774,7 @@ class HierarchicalMemory(BaseModel):
             session_id=data["session_id"],
             task=data["task"],
             current_phase=data.get("current_phase", "discovery"),
-            progress=data.get("progress", "0/?"),
+            progress=data.get("progress", "step 0"),
             phases_completed=data.get("phases_completed", []),
             phase_memories=phase_memories,
             phase_index=phase_index,

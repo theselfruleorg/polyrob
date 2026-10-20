@@ -110,17 +110,7 @@ class GasCeilingExceeded(RuntimeError):
 
 
 class BroadcastError(RuntimeError):
-    """The transaction could not be submitted.
-
-    ``precondition`` is True only where THIS module raised it for a market or
-    transport condition — the node refused the bytes (nonce, funds, underpriced,
-    revert) or the RPC could not be reached — never for a refusal (a signer
-    refusal, a wrong chain, an unaccounted submission). It is set at the raise
-    site, never read from the message (``broadcast_error_kind``)."""
-
-    def __init__(self, *args, precondition: bool = False):
-        super().__init__(*args)
-        self.precondition = bool(precondition)
+    """The transaction could not be submitted."""
 
 
 class BroadcastOutcomeUnknown(RuntimeError):
@@ -138,18 +128,6 @@ def outcome_unknown(exc: BaseException) -> bool:
         return True
     text = str(exc).lower()
     return any(m in text for m in _UNKNOWN_MARKERS)
-
-
-def broadcast_error_kind(exc: BaseException) -> Optional[str]:
-    """``refusal_taint.PRECONDITION`` when this send failed on a market or
-    transport condition this module classified at its raise site (the node
-    refused the bytes, the RPC was unreachable) and the outcome is KNOWN; else
-    None (a refusal, or an outcome that may have landed). Pass it to
-    ``BaseTool._ar(error_kind=…)`` next to :func:`broadcast_failure_text`."""
-    if outcome_unknown(exc) or not getattr(exc, "precondition", False):
-        return None
-    from core.security.refusal_taint import PRECONDITION
-    return PRECONDITION
 
 
 def broadcast_failure_text(exc: BaseException, *,
@@ -219,23 +197,16 @@ class EvmRail:
     # -- preflight --------------------------------------------------------
     def preflight(self):
         """(ok, reason). Verifies the node serves the chain we are pinned to."""
-        ok, why, transport = self._preflight()
-        self._preflight_transport = transport
-        return ok, why
-
-    def _preflight(self):
-        """``(ok, reason, transport)`` — ``transport`` when the node could not be
-        reached at all (a market/transport condition, not a refusal)."""
         try:
             served = _hex_to_int(self._rpc("eth_chainId", []))
         except Exception as exc:
-            return False, f"rpc unreachable: {exc}", True
+            return False, f"rpc unreachable: {exc}"
         if served is None:
-            return False, "rpc returned no chain id", False
+            return False, "rpc returned no chain id"
         if served != self.chain_id:
             return False, (f"rpc serves chain {served}, expected {self.chain_id} "
-                           f"({self.chain}) — refusing to broadcast"), False
-        return True, "", False
+                           f"({self.chain}) — refusing to broadcast")
+        return True, ""
 
     # -- build ------------------------------------------------------------
     def build_erc20_transfer(self, *, token: str, to: str, amount_raw: int) -> dict:
@@ -346,8 +317,7 @@ class EvmRail:
     def sign_and_send(self, tx: dict) -> str:
         ok, why = self.preflight()
         if not ok:
-            raise BroadcastError(why, precondition=bool(
-                getattr(self, "_preflight_transport", False)))
+            raise BroadcastError(why)
         if tx.get("chainId") != self.chain_id:
             raise BroadcastError(
                 f"transaction chainId {tx.get('chainId')} != rail chain "
@@ -384,8 +354,7 @@ class EvmRail:
                 logger.warning('could not release the interlock for rejected %s', tx_hash,
                                exc_info=True)
             raise BroadcastError(
-                f"the node rejected the transaction ({rejected}): {exc}",
-                precondition=True) from exc
+                f"the node rejected the transaction ({rejected}): {exc}") from exc
         return tx_hash
 
     def _remote_sign_and_send(self, tx: dict) -> str:

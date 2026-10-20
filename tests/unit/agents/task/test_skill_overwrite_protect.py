@@ -8,7 +8,7 @@ Task 2 — SKILL_OVERWRITE_PROTECT guard:
 - BUG 5 fix: two rapid overwrites of the same skill produce two distinct archive files.
 """
 from agents.task.agent.skill_manager import SkillManager
-from agents.task.agent.skill_writer import PROVENANCE_AGENT, PROVENANCE_USER
+from modules.skills.writer import PROVENANCE_AGENT, PROVENANCE_USER
 
 GOOD = "# My Skill\nDo X then Y. " + ("body " * 20)
 STALE = "# My Skill\nDo X then WRONG. " + ("body " * 20)

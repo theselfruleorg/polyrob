@@ -30,7 +30,7 @@ _STATE_DEFAULTS = dict(
     _deferred_mcp_actions=[], _max_mcp_deferrals=5, _llm_call_in_progress=False,
     _llm_call_start_time=None, agent_type="task", agent_id="agent_sess123",
     sensitive_data=None, available_file_paths=None, include_attributes=None,
-    initial_actions=None, _skill_content=None, _profile_max_steps=None,
+    initial_actions=None, _skill_content=None,
     _profile_system_message=None, _enabled_actions=None, _native_tools_debug=False,
     validate_output=False, generate_gif=False, save_conversation_path=None,
     tool_output_log_path=None, register_new_step_callback=None,
@@ -136,7 +136,6 @@ class _FakeMemoryWriter:
 
     _save_step_to_memory = MemoryWriterMixin._save_step_to_memory
     _build_action_summary = MemoryWriterMixin._build_action_summary
-    _extract_finding_from_results = MemoryWriterMixin._extract_finding_from_results
 
 
 @pytest.mark.asyncio
@@ -163,7 +162,6 @@ async def test_placeholder_brain_never_lands_in_hmem():
         brain_state=brain_state,
         actions=[],
         results=[],
-        step_info=None,
     )
 
     assert w.task_context_manager.add_step_memory.call_count == 1
@@ -200,7 +198,7 @@ async def test_placeholder_brain_does_not_trip_thinking_loop_or_set_last_finding
     for step in (1, 2):
         await w._save_step_to_memory(
             step_number=step, brain_state=brain_state,
-            actions=[], results=[], step_info=None,
+            actions=[], results=[],
         )
 
     # Never stored the placeholder as _last_memory_finding.

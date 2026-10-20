@@ -26,7 +26,7 @@ def wrong_surface_target_reason(surface: str, target):
     """Why this target can NEVER be delivered on this surface, or None.
 
     2026-09-15 prod review, C8: the dead-target registry held
-    ``telegram / rob@theselfrule.org / chat_not_found`` — an email address
+    ``telegram / rob@example.org / chat_not_found`` — an email address
     handed to the Bot API. Nothing checked the SHAPE, so the send was spent, it
     failed, and the address was durably marked dead on a surface it was never
     addressable on. This is the same courtesy :func:`is_bot_username` already
@@ -56,10 +56,10 @@ def normalize_surface_target(surface: str, target):
     """Best-effort normalization of an agent-typed outbound target (pure).
 
     Telegram (live 2026-08-15..16 journal failures):
-    - ``t.me/thepublicden`` / ``https://t.me/thepublicden`` → ``@thepublicden``
+    - ``t.me/examplegroup`` / ``https://t.me/examplegroup`` → ``@examplegroup``
       (the Bot API takes ``@username`` or a numeric id, never a link — the raw
       link fails "Bad Request: chat not found").
-    - bare ``thepublicden`` → ``@thepublicden`` (same failure shape).
+    - bare ``examplegroup`` → ``@examplegroup`` (same failure shape).
     - numeric ids, ``-100…`` channel ids, ``@handles`` and invite links
       (``t.me/+hash``, ``t.me/joinchat/…`` — not addressable chat ids at all)
       pass through unchanged.
@@ -100,7 +100,7 @@ def canonical_owner_addr(surface: str, target) -> str:
     """The ONE spelling an owner address is compared under (061 §2.3).
 
     Strips a leading ``<surface>:`` that names THIS surface (the model types
-    ``telegram:28436760`` for the owner's Telegram id; prod held that as a
+    ``telegram:100000001`` for the owner's Telegram id; prod held that as a
     SECOND, open-tier conversation row invisible to the owner-resend cooldown),
     then applies :func:`core.surfaces.address_key.canonical_addr`. Used by
     :func:`resolve_target_tier` and the cooldown — one helper, both callers.

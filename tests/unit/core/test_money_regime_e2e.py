@@ -64,12 +64,10 @@ def goal_turn():
         autonomy_marker._SESSIONS.pop(sid, None)
 
 
-def _owner_chat_turn(*, tainted=False):
-    """A genuine owner chat turn. ``tainted`` = the turn has read third-party
-    content since the owner last spoke (core/security/read_taint.py)."""
-    meta = {"untrusted_read": True} if tainted else {}
+def _owner_chat_turn():
+    """A genuine owner chat turn."""
     return types.SimpleNamespace(user_id=OWNER, role="orchestrator", is_sub_agent=False,
-                                 session_id="sess-owner-chat", metadata=meta)
+                                 session_id="sess-owner-chat", metadata={})
 
 
 def _leaf_turn():
@@ -147,7 +145,6 @@ class TestSelfAuthoredGoal:
         res = _create(tool, goal_turn, rig="money_rail")
         assert res.error is None, res.error
         goal, tools = _dispatch_tools(tool)
-        assert goal.payload["authored_by"] == "agent"
         assert "defi_trade" in tools
 
     def test_unarmed_money_rail_goal_is_refused(self, monkeypatch, tmp_path, goal_turn):
@@ -161,46 +158,36 @@ class TestSelfAuthoredGoal:
         res = _create(tool, goal_turn, rig="money_rail")
         assert res.error and "NOT granted" in res.error
 
-    def test_a_stored_agent_row_is_narrowed_when_disarmed(self, monkeypatch, tmp_path,
-                                                          goal_turn):
-        """Armed at creation, disarmed at dispatch: the row loses defi_trade."""
+    def test_a_stored_row_keeps_its_rig_but_supervised_cannot_trade(
+            self, monkeypatch, tmp_path, goal_turn):
+        """Armed at creation, supervised at dispatch: 085 W8 A4 re-judges the rig
+        against the row's stored actor (agent), so the money id is dropped — and
+        the guard still refuses the unattended trade (the money regime)."""
         _armed(monkeypatch)
         tool = _goal_tool(tmp_path)
         assert _create(tool, goal_turn, rig="money_rail").error is None
-        monkeypatch.delenv("DEFI_AGENT_AUTONOMY")
-        _goal, tools = _dispatch_tools(tool)
+        monkeypatch.delenv("AUTONOMY_MODE")
+        goal, tools = _dispatch_tools(tool)
+        assert goal.payload["rig"] == "money_rail" and goal.payload["actor"] == "agent"
         assert "defi_trade" not in tools
+        d = _authorize(goal_turn, monkeypatch)
+        assert not d.allowed and "forged/autonomous turn" in d.reason
 
 
 # --- owner-seat provenance ----------------------------------------------------
 
 class TestOwnerChatTurn:
     def test_clean_owner_chat_authors_an_owner_money_goal(self, tmp_path):
-        """ONE authorship rule (tools/goal_tools.py::owner_authored_turn): a genuine
-        owner turn that has read no third-party content writes OWNER work — the
-        owner asking for a money goal in chat gets it."""
+        """A genuine owner turn may request any rig — 085 W3 (D3): a money rig
+        becomes the owner's card (no row yet); its Confirm writes it on the seat
+        (tests/unit/tools/test_085_w3_money_job_cards.py)."""
         tool = _goal_tool(tmp_path)
         res = _create(tool, _owner_chat_turn(), rig="money_rail")
         assert res.error is None, res.error
-        goal, tools = _dispatch_tools(tool)
-        assert goal.payload["authored_by"] == "owner"
-        assert "defi_trade" in tools
+        assert "NOT written" in res.extracted_content and "rig=money_rail" in \
+            res.extracted_content
+        assert tool._resolve_board().list_recent(user_id=OWNER, limit=5) == []
 
-    def test_tainted_owner_chat_cannot_grant_an_owner_money_goal(self, tmp_path):
-        """After third-party text entered the turn, model-written arguments do not
-        acquire owner provenance: the money rig is refused, nothing is written."""
-        tool = _goal_tool(tmp_path)
-        res = _create(tool, _owner_chat_turn(tainted=True), rig="money_rail")
-        assert res.error and "NOT granted" in res.error
-        assert tool._resolve_board().list_recent(user_id=OWNER, limit=1) == []
-
-    def test_tainted_owner_chat_cannot_self_grant_tools(self, tmp_path):
-        tool = _goal_tool(tmp_path)
-        _create(tool, _owner_chat_turn(tainted=True),
-                tools=["defi_trade", "shell", "x402_pay"])
-        goal, tools = _dispatch_tools(tool)
-        assert goal.payload["authored_by"] == "agent"
-        assert not {"defi_trade", "shell", "x402_pay"} & set(tools)
 
     @pytest.mark.parametrize("ctx", [
         _leaf_turn(),
@@ -211,7 +198,7 @@ class TestOwnerChatTurn:
         types.SimpleNamespace(user_id="u_stranger", role="orchestrator",
                               is_sub_agent=False, session_id="s", metadata={}),
     ])
-    def test_non_owner_turns_stay_agent_authored(self, tmp_path, ctx):
+    def test_non_owner_turns_cannot_request_a_money_rig(self, tmp_path, ctx):
         tool = _goal_tool(tmp_path)
         res = _create(tool, ctx, rig="money_rail")
         # A leaf is refused outright (it cannot create a durable goal at all).
@@ -245,7 +232,6 @@ class TestCron:
         assert res.error is None, res.error
         from cron.runner import resolve_cron_tools
         job = tool._resolve_service().list_jobs(user_id=OWNER)[0]
-        assert job.payload["authored_by"] == "agent"
         assert "defi_trade" in resolve_cron_tools(job.payload)
 
     def test_autonomous_goal_run_may_schedule_but_not_money(self, monkeypatch,
@@ -273,15 +259,10 @@ class TestCron:
         tool = _cron_tool(tmp_path)
         res = _schedule(tool, _owner_chat_turn(), rig="money_rail")
         assert res.error is None, res.error
-        job = tool._resolve_service().list_jobs(user_id=OWNER)[0]
-        assert job.payload["authored_by"] == "owner"
-        assert "defi_trade" in resolve_cron_tools(job.payload)
-
-    def test_tainted_owner_chat_cannot_schedule_an_owner_money_job(self, tmp_path):
-        tool = _cron_tool(tmp_path)
-        res = _schedule(tool, _owner_chat_turn(tainted=True), rig="money_rail")
-        assert res.error and "NOT granted" in res.error
+        # 085 W3 (D3): the owner's card, no row; the owner seat writes it on Confirm.
+        assert "NOT written" in res.extracted_content
         assert tool._resolve_service().list_jobs(user_id=OWNER) == []
+        assert "defi_trade" in resolve_cron_tools({"rig": "money_rail", "actor": "owner_seat"})
 
 
 # --- the trade reaches the guard and passes within caps -----------------------
@@ -333,6 +314,22 @@ class TestTradeReachesTheGuard:
         d = _authorize(goal_turn, monkeypatch)
         assert not d.allowed and "forged/autonomous turn" in d.reason
 
+    def test_supervised_goal_turn_trade_is_refused_even_with_the_turn_flag(
+            self, monkeypatch, goal_turn):
+        """Every goal or cron row holds the toolset it was written with, so the
+        verb itself refuses unattended money under the supervised regime."""
+        for k, v in _ARM.items():
+            monkeypatch.setenv(k, v)          # every DEFI_* key, but no AUTONOMY_MODE
+        assert money_regime().name == REGIME_SUPERVISED
+        d = _authorize(goal_turn, monkeypatch)
+        assert not d.allowed and "forged/autonomous turn" in d.reason
+
+    def test_supervised_x402_goal_turn_is_not_admitted(self, monkeypatch, goal_turn):
+        from tools.x402.spend_gate import _autonomous_ok_fn
+        assert _autonomous_ok_fn(goal_turn, None) is False
+        _autonomous(monkeypatch)
+        assert _autonomous_ok_fn(goal_turn, None) is True
+
     def test_unarmed_spend_lane_keeps_the_tap(self, monkeypatch):
         _autonomous(monkeypatch)
         from core.config_policy.spend_lane import spend_exemption
@@ -351,25 +348,13 @@ class TestTradeReachesTheGuard:
         assert not d.allowed
 
 
-# --- the deploy-wide default rig is a DEFAULT, not a grant ---------------------
+# --- the deploy-wide default rig is used as written ----------------------------
 
 class TestDefaultRig:
-    def test_env_money_rail_does_not_arm_agent_work(self, monkeypatch):
-        """AUTONOMOUS_RIG_DEFAULT=money_rail used to hand defi_trade to every
-        agent-authored row, bypassing DEFI_AGENT_AUTONOMY and the mode."""
+    def test_env_money_rail_is_the_default_for_every_row(self, monkeypatch):
         monkeypatch.setenv("AUTONOMOUS_RIG_DEFAULT", "money_rail")
         from cron.runner import resolve_cron_tools
-        assert "defi_trade" not in resolve_cron_tools({"authored_by": "agent"})
-        assert "defi_trade" in resolve_cron_tools({"authored_by": "owner"})
-        # An unstamped row is agent work: every owner path stamps `owner`
-        # (positive owner stamp, 2026-10-08; legacy rows via cron.stamp_authorship).
-        assert "defi_trade" not in resolve_cron_tools({})
-
-    def test_armed_env_money_rail_reaches_agent_work(self, monkeypatch):
-        _armed(monkeypatch)
-        monkeypatch.setenv("AUTONOMOUS_RIG_DEFAULT", "money_rail")
-        from cron.runner import resolve_cron_tools
-        assert "defi_trade" in resolve_cron_tools({"authored_by": "agent"})
+        assert "defi_trade" in resolve_cron_tools({})
 
 
 # --- every guard call can recognise a goal turn --------------------------------

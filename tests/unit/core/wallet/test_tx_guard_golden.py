@@ -708,6 +708,15 @@ def _snapshot(decision) -> dict:
 
 
 @pytest.fixture(autouse=True)
+def _regime_allows_unattended_money(monkeypatch):
+    """These tests isolate the guard's lanes; the money regime itself is
+    tested in tests/unit/core/test_money_regime_e2e.py."""
+    import importlib
+    money_regime = importlib.import_module("core.config_policy.money_regime")
+    monkeypatch.setattr(money_regime, "unattended_money_allowed", lambda: True)
+
+
+@pytest.fixture(autouse=True)
 def _deterministic_env(monkeypatch, tmp_path):
     for k in ("DEFI_AUTONOMOUS_TURN_TRADING", "DEFI_MONITOR_EXITS", "WALLET_SIGNER"):
         monkeypatch.delenv(k, raising=False)

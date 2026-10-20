@@ -44,7 +44,7 @@ class _FakeContainer:
         return self._store
 
 
-_OWNER_TARGETS = {"telegram": "28436760"}
+_OWNER_TARGETS = {"telegram": "100000001"}
 
 
 def test_genuine_owner_turn_never_gated(monkeypatch):
@@ -76,7 +76,7 @@ def test_autonomous_turn_recent_send_refused_with_actionable_message(monkeypatch
     assert "contact_history" in res.extracted_content
     assert "telegram" in res.extracted_content
     # queried against the RESOLVED owner address, not the literal alias
-    assert store.calls == [("rob", "telegram", "28436760", 7200)]
+    assert store.calls == [("rob", "telegram", "100000001", 7200)]
 
 
 def test_autonomous_turn_recent_send_to_real_owner_address_also_gated(monkeypatch):
@@ -85,7 +85,7 @@ def test_autonomous_turn_recent_send_to_real_owner_address_also_gated(monkeypatc
     store = _FakeStore(count=1)
     res = _autonomous_owner_resend_cooldown_refusal(
         _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
-        surface="telegram", target="28436760", owner_targets=_OWNER_TARGETS)
+        surface="telegram", target="100000001", owner_targets=_OWNER_TARGETS)
     assert res is not None
 
 
@@ -158,7 +158,7 @@ def test_materially_new_body_is_not_refused(monkeypatch):
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS,
         text="X posting is BLOCKED: both rails dead, need credits or a session")
     assert res is None
-    assert store.body_calls == [("rob", "telegram", "28436760", 7200)]
+    assert store.body_calls == [("rob", "telegram", "100000001", 7200)]
 
 
 def test_same_body_is_still_refused(monkeypatch):

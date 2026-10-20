@@ -315,9 +315,9 @@ def test_the_owner_telegram_dm_lands_on_the_same_tenant_as_the_repl(unbound):
     user_id (`surfaces/telegram/inbound.py`). Unbound it ran the owner's DM under
     `polyrob` while every other seat said `local`."""
     from core.instance import owner_surface_alias, resolve_owner_user_id
-    env = {"POLYROB_OWNER_TELEGRAM_ID": "28436760"}
-    assert owner_surface_alias("28436760", "telegram", env=env) == "local"
-    assert owner_surface_alias("28436760", "telegram", env=env) == resolve_owner_user_id(env)
+    env = {"POLYROB_OWNER_TELEGRAM_ID": "100000001"}
+    assert owner_surface_alias("100000001", "telegram", env=env) == "local"
+    assert owner_surface_alias("100000001", "telegram", env=env) == resolve_owner_user_id(env)
     # A different authenticated sender is never aliased.
     assert owner_surface_alias("99999999", "telegram", env=env) is None
 
@@ -345,8 +345,8 @@ def test_a_bound_install_is_unchanged_on_both_axes(unbound, monkeypatch):
     assert set(_migrated_seats().values()) == {"rob"}
     assert is_owner("rob", owner_principal=resolve_owner_principal()) is True
     assert owner_surface_alias(
-        "28436760", "telegram",
-        env={"POLYROB_OWNER_TELEGRAM_ID": "28436760",
+        "100000001", "telegram",
+        env={"POLYROB_OWNER_TELEGRAM_ID": "100000001",
              "POLYROB_OWNER_USER_ID": "rob"}) == "rob"
 
 

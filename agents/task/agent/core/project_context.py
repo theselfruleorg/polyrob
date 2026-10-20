@@ -128,6 +128,33 @@ def should_load_project_context(
     return server_mode
 
 
+def code_root() -> Path:
+    """The directory that holds the POLYROB code packages (``agents/``, ``polyrob/``…).
+
+    A source checkout or ``/opt/polyrob`` on a server; ``site-packages`` for a
+    wheel install. Derived from this file, never imported, so it costs nothing.
+    """
+    return Path(__file__).resolve().parents[4]
+
+
+def is_code_root_dir(path: str) -> bool:
+    """True when *path* is the code root or a directory inside it.
+
+    C-2 / A-3 (2026-10-14 review): prod runs with ``POLYROB_LOCAL=1`` and its
+    working directory is ``/opt/polyrob``, so the local tier read the REPO'S OWN
+    developer ``AGENTS.md`` (29,100 chars ≈ 8k tokens of branching / deploy /
+    CHANGELOG rules for coding agents) as TRUSTED steering into every session —
+    434/434 sessions, cited 0 times. The install's own files are never the
+    owner's project.
+    """
+    try:
+        target = Path(path).resolve()
+        root = code_root()
+        return target == root or root in target.parents
+    except Exception:
+        return False
+
+
 def resolve_project_context_root(
     *, local: bool, cwd: str, workspace_dir: Optional[str]
 ) -> Optional[str]:
@@ -139,8 +166,10 @@ def resolve_project_context_root(
       ``/opt/polyrob``). Reading CWD there would leak the deployment's own files
       (or another tenant's) into every session. Returns ``None`` when no server
       workspace is resolvable, so the loader simply loads nothing.
+    - Local, but the CWD is the code root (the service runs from ``/opt/polyrob``
+      with ``POLYROB_LOCAL=1``): the session ``workspace_dir``, as on the server.
     """
-    if local:
+    if local and not is_code_root_dir(cwd):
         return cwd
     return workspace_dir
 
@@ -175,14 +204,19 @@ def build_project_context_message(
     root = resolve_project_context_root(local=local, cwd=cwd, workspace_dir=workspace_dir)
     if root is None:
         return None
+    # C-2: a local process whose CWD is the code root reads the session workspace
+    # like the server tier: confined, and framed as DATA (the agent writes that
+    # directory; the owner did not author it as steering).
+    owner_project = local and not is_code_root_dir(cwd)
     effective_cap = resolve_cap_tokens(context_window, default_cap=cap_tokens)
     # P1-8: on the server the walk is CONFINED to the tenant workspace — it must
     # never ascend to a surrounding git root, which on a deployment whose data
     # root lives inside a source checkout is the install's own AGENTS.md/CLAUDE.md.
-    ctx = load_project_context(root, cap_tokens=effective_cap, confine_to_root=not local)
+    ctx = load_project_context(root, cap_tokens=effective_cap,
+                               confine_to_root=not owner_project)
     if ctx is None:
         return None
-    return frame_project_context(ctx, trusted=local)
+    return frame_project_context(ctx, trusted=owner_project)
 
 
 def frame_project_context(content: str, *, trusted: bool) -> str:

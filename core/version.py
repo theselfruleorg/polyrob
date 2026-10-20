@@ -100,18 +100,36 @@ def running_version_line() -> str:
 RELEASE_NOTES_MAX_CHARS = 6000
 
 
+def changelog_path() -> Optional[Path]:
+    """The ``CHANGELOG.md`` shipped with the running code, or None.
+
+    A checkout / the prod deploy carry it at the code root; a wheel carries it
+    as ``core/CHANGELOG.md`` (080 WS-5 D9: a symlink to the root file in the
+    tree, package data in the wheel — site-packages has no code root file).
+    """
+    for path in (_code_root() / "CHANGELOG.md", _code_root() / "core" / "CHANGELOG.md"):
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
 def release_notes(version: str = "", max_chars: int = RELEASE_NOTES_MAX_CHARS) -> str:
     """One release's section of the ``CHANGELOG.md`` shipped with the running code.
 
     ``version`` empty / ``latest`` → the running version's section (or the newest
-    released one when the running version has none). ``unreleased`` → the
-    ``[Unreleased]`` section. Never raises; an absent file says so honestly.
+    released one when the running version has none); on a deploy
+    (``deployed_sha()`` set) the ``[Unreleased]`` section comes first, because a
+    deploy of ``main`` runs what is past the last tag (080 D9). ``unreleased`` →
+    the ``[Unreleased]`` section. Never raises; an absent file says so honestly.
     """
-    path = _code_root() / "CHANGELOG.md"
+    path = changelog_path()
+    if path is None:
+        return "Release notes are not shipped with this install (no CHANGELOG.md next to the code)."
     try:
         text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return "Release notes are not shipped with this install (no CHANGELOG.md next to the code)."
     except Exception as exc:
         return f"Release notes unreadable ({type(exc).__name__}: {path})."
     import re
@@ -123,11 +141,16 @@ def release_notes(version: str = "", max_chars: int = RELEASE_NOTES_MAX_CHARS) -
         sections[key] = re.sub(r"(?m)^\[[^\]]+\]:\s.*\n?", "", m.group(0)).strip()
         order.append(key)
     want = (version or "").strip().lower().lstrip("v")
+    deployed_unreleased = ""
     if want in ("", "latest"):
         want = get_version().lower()
         if want not in sections:
             want = next((k for k in order if k != "unreleased"), "")
+        if deployed_sha() and sections.get("unreleased"):
+            deployed_unreleased = sections["unreleased"]
     body = sections.get(want)
+    if deployed_unreleased:
+        body = deployed_unreleased + ("\n\n" + body if body else "")
     if not body:
         known = ", ".join(k for k in order[:8])
         return f"No release notes for {version!r} in CHANGELOG.md. Known: {known}."

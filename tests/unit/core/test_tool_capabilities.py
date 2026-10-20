@@ -75,7 +75,7 @@ def test_polarities_preserved():
     # trading venues: readable while tainted (NOT high_impact as a tool_id), money.
     for t in ("hyperliquid", "polymarket"):
         caps = TOOL_CAPABILITIES[t]
-        assert {"money", "readable_while_tainted"} <= caps
+        assert "money" in caps
         assert "high_impact" not in caps
     # x402_pay: fully blocked while tainted (its only verb is auto-pay).
     assert "high_impact" in TOOL_CAPABILITIES["x402_pay"]
@@ -154,34 +154,13 @@ def test_effect_tokens_are_known_capabilities():
     assert EFFECT_CAPABILITIES <= KNOWN_CAPABILITIES
     assert EFFECT_CAPABILITIES == frozenset({
         "writes_social", "writes_comms", "writes_public",
-        "writes_money", "writes_code", "writes_self", "writes_network"})
+        "money", "exec", "writes_self", "writes_network"})
 
 
 def test_money_and_exec_tools_all_declare_an_effect():
     from core.tool_capabilities import TOOL_CAPABILITIES, lacks_effect_ceiling
     missing = sorted(t for t in TOOL_CAPABILITIES if lacks_effect_ceiling(t))
-    assert missing == [], f"write-capable tools with no writes_* token: {missing}"
-    assert ids_with("money") <= ids_with("writes_money")
-
-
-def test_registration_guard_refuses_a_writer_with_no_effect(monkeypatch):
-    """033: a classified row that can move money but names no effect ceiling is
-    refused at registration, exactly like an unclassified one."""
-    import pytest
-    import core.tool_capabilities as tc
-    from tools.base_tool import BaseTool
-    from tools.descriptors import ToolCategory, ToolDescriptor, register_optional_tool
-
-    class _Phantom(BaseTool):  # pragma: no cover - never initialized
-        pass
-
-    monkeypatch.setitem(tc.TOOL_CAPABILITIES, "phantom_money_tool",
-                        frozenset({"money", "high_impact"}))
-    desc = ToolDescriptor(name="phantom_money_tool", description="test-only",
-                          category=ToolCategory.INTEGRATION)
-    with pytest.raises(ValueError, match="writes_"):
-        register_optional_tool("phantom_money_tool", _Phantom, desc,
-                               lambda: False, force=True)
+    assert missing == [], f"write-capable tools with no effect token: {missing}"
 
 
 # --- 067 P1: per-tool policy fields on the rows -----------------------------------

@@ -29,8 +29,6 @@ from typing import Optional
 #: and the two failure modes are indistinguishable from here.
 _UNUSABLE_VERDICTS = ("WASH", "UNSCREENABLE")
 
-#: Symbols treated as dollar-pegged, needing no quote at all.
-_STABLE_SYMBOLS = ("USDC", "USDT", "DAI", "PYUSD", "USDG", "USDS")
 
 
 class QuoteRefused(ValueError):
@@ -58,8 +56,15 @@ def quote_max_age_sec() -> int:
 
 
 def is_stable(asset) -> bool:
-    """Is this asset dollar-pegged, so a USD price needs no quote at all?"""
-    return (getattr(asset, "symbol", "") or "").upper() in _STABLE_SYMBOLS
+    """Is this asset dollar-pegged, so a USD price needs no quote at all?
+
+    085 M-2: decided by the PINNED ``(chain, address)``, never by ``symbol``
+    (the token's own claim). The table is `core/wallet/chains.py` (``usdc`` /
+    ``stables`` plus the test-network USDC), which also covers every builtin
+    payment row."""
+    from core.wallet.chains import is_usd_pegged
+    return is_usd_pegged(str(getattr(asset, "chain", "") or ""),
+                         str(getattr(asset, "address", "") or ""))
 
 
 def size_amount_raw(usd: float, asset, quote: Optional[PriceQuote], *,

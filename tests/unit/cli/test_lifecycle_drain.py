@@ -22,6 +22,7 @@ class _Clock:
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "test-unit")
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)  # a pytest shell is a .scope
     yield tmp_path / "data"
     lc.end_drain()
 
@@ -248,6 +249,7 @@ def test_gateway_round_trip_exit_75_then_back_online(monkeypatch, tmp_path):
     data = tmp_path / "data"
     _os.environ["POLYROB_DATA_DIR"] = str(data)
     _os.environ["INVOCATION_ID"] = "test-unit"
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)  # a pytest shell is a .scope
     _os.environ["TELEGRAM_SURFACE_ENABLED"] = "true"
     _os.environ["TELEGRAM_BOT_TOKEN"] = "tok"
     monkeypatch.setattr("cli.commands._lifecycle.POLL_SEC", 0.05)

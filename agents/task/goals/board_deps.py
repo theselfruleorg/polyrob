@@ -32,10 +32,9 @@ class BoardDepsMixin:
         Raises ValueError on the first bad id — an all-or-nothing validation
         pass (a partially-validated dep set is worse than none). ``get()`` is
         NOT tenant-scoped, so every dep is re-checked against ``user_id`` here.
-        The kind check matters beyond "edges are goal->goal by design":
-        ``OBJ_DONE == STATUS_DONE == "done"`` (same literal), so an objective
-        (or an ask, which never reaches a real 'done' status either) could
-        otherwise silently satisfy a dependency it was never meant to.
+        The kind check matters beyond "edges are goal->goal by design": an ask
+        never reaches a real 'done' status, and a non-goal row could otherwise
+        silently satisfy a dependency it was never meant to.
         """
         deps: List[Goal] = []
         for dep_id in dep_ids:

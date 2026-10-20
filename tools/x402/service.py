@@ -73,6 +73,62 @@ def x402_idempotency_key(params: "FetchParams") -> str:
             + (f":rid={rid}" if rid else ""))
 
 
+def x402_cap_charge(res, max_amount_usd: float) -> float:
+    """The USD a paid x402 fetch books against the spend caps (085 W4).
+
+    The signed authorization amount when it is known — EIP-3009 moves exactly
+    that ``value``. Else the settle/estimate amount, clamped to
+    ``[0, max_amount_usd]`` so a seller-written figure can never freeze the caps.
+    """
+    import math
+    authorized = getattr(res, "authorized_amount_usd", None)
+    if isinstance(authorized, (int, float)) and math.isfinite(authorized) and authorized >= 0:
+        return float(authorized)
+    amount = getattr(res, "amount_usd", None)
+    if not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
+        return float(max_amount_usd)
+    return float(min(amount, max_amount_usd))
+
+
+def _signer_x402_envelope_refusal(wallet, max_amount_usd: float, envelope) -> Optional[str]:
+    """The refusal text when *max_amount_usd* passes the signer's x402 caps
+    (per payment, or the x402 venue rolling-24h cap), else None (085 W4)."""
+    signer_cap = envelope("x402_per_payment_usd")
+    if signer_cap is not None and max_amount_usd > signer_cap:
+        return (f"max_amount_usd ${max_amount_usd:.2f} is above the wallet signer's "
+                f"x402 per-payment cap ${signer_cap:.2f} (/etc/polyrob/signer.toml); "
+                f"use a max_amount_usd at or below it")
+    signer_x402_daily = envelope("x402_daily_usd")
+    if signer_x402_daily is None:
+        return None
+    try:
+        x402_spent = float(wallet.policy.rolling_24h_spend_usd(venue="x402"))
+    except Exception:
+        x402_spent = None
+    if x402_spent is None or x402_spent + max_amount_usd > signer_x402_daily + 1e-9:
+        return (f"max_amount_usd ${max_amount_usd:.2f} would pass the wallet signer's "
+                f"x402 daily cap ${signer_x402_daily:.2f} (/etc/polyrob/signer.toml"
+                + (f"; trailing-24h ${x402_spent:.2f}" if x402_spent is not None else "")
+                + "). Nothing was paid.")
+    return None
+
+
+def _signer_hold_text(exc: BaseException) -> Optional[str]:
+    """The owner-facing text when the remote signer held this payment for a
+    root-only approval (085 W4, S-1), else None. The SDK wraps the signer's
+    refusal; walk the cause chain to find it."""
+    from core.signer import protocol
+    from core.signer.client import SignerRefused
+    seen = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, SignerRefused) and cur.code == protocol.APPROVAL_REQUIRED:
+            return f"x402 payment held by the wallet signer: {cur.reason} Nothing was paid."
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
 def _render_probe(row: dict) -> str:
     """One compact, honest line-block per endpoint. Never invents a price."""
     head = f"{row['url']} [{row['method']}]"
@@ -242,7 +298,8 @@ class X402PayTool(BaseTool):
     async def x402_fetch(self, params: FetchParams, execution_context=None):
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         # H1a (audit 2026-08-22): turn-origin refusal — parity with tx_guard step 2
         # and crypto_trade_gate.trade_turn_refusal. `x402_fetch` took an
         # execution_context and never read it, so a forged self-wake /
@@ -302,12 +359,17 @@ class X402PayTool(BaseTool):
         if spend_held_by_signer():
             # Its $0 clamp is not a cap to pay under: say the signer is down.
             return self._ar(error=f"x402 payment refused: {UNANSWERED_TEXT}. Nothing was paid.")
-        signer_cap = envelope("x402_per_payment_usd")
-        if signer_cap is not None and params.max_amount_usd > signer_cap:
-            return self._ar(error=(
-                f"max_amount_usd ${params.max_amount_usd:.2f} is above the wallet signer's "
-                f"x402 per-payment cap ${signer_cap:.2f} (/etc/polyrob/signer.toml); "
-                f"use a max_amount_usd at or below it"))
+        # 085 W4 (S-1): the signer's own x402 caps. Under `remote` the signer holds
+        # the key and decides: above its per-payment or x402 venue daily cap it
+        # opens a root-only approval (`sudo polyrob owner promote signer_approval
+        # <id>`), and the retry of THAT payment signs once. Under `shadow` the
+        # agent signs locally, so no signer approval can unlock anything: the
+        # envelope is a refusal here, before any payment.
+        from core.signer import MODE_REMOTE, signer_mode
+        if signer_mode() != MODE_REMOTE:
+            refusal = _signer_x402_envelope_refusal(wallet, params.max_amount_usd, envelope)
+            if refusal:
+                return self._ar(error=refusal)
         try:
             # 068 B8: price the entry the payer will actually pay.
             price = await self._get_client().quote(params.url, pinned_ip=pinned_ip,
@@ -373,6 +435,9 @@ class X402PayTool(BaseTool):
                 except asyncio.TimeoutError:
                     return self._ar(error="payment outcome unconfirmed after the request deadline; inspect the payment ledger before retrying")
                 except Exception as e:
+                    held = _signer_hold_text(e)
+                    if held:
+                        return self._ar(error=held)
                     logging.getLogger(__name__).error(f"x402_fetch failed: {e}")
                     return self._ar(error=f"x402_fetch failed: {e}")
                 if res.paid:
@@ -382,9 +447,11 @@ class X402PayTool(BaseTool):
                     # "mainnet"/"testnet" MODE, not a chain id, and mapping it to the
                     # actual settled chain (base/base-sepolia) belongs to a future
                     # X402Result field, not a guess here. chain=None until then.
-                    # A merchant-controlled settlement header cannot discount the
-                    # amount of the authorization we actually signed.
-                    cap_charge = max(res.amount_usd, getattr(res, "authorized_amount_usd", None) or 0.0)
+                    # 085 W4 (X402OUT-1): book what we signed. EIP-3009 moves
+                    # exactly the authorized `value`, so a seller's settle header
+                    # can neither discount nor inflate the charge. Without a known
+                    # authorization, the settle amount is clamped to the ceiling.
+                    cap_charge = x402_cap_charge(res, params.max_amount_usd)
                     if owner_direct and hasattr(wallet.policy, "note_lane"):
                         wallet.policy.note_lane(idem, "owner_direct")
                     wallet.policy.record(venue="x402", action="pay", amount_usd=cap_charge,
@@ -427,7 +494,8 @@ class X402PayTool(BaseTool):
     async def x402_wallet_status(self, params: EmptyWalletParams, execution_context=None):
         wallet = self._get_wallet()
         if wallet is None:
-            return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true)")
+            from core.wallet.config import WALLET_OFF_TEXT
+            return self._ar(error=WALLET_OFF_TEXT)
         venue = wallet.operational_venue
         addr = wallet.operational_signer().address
         cfg = wallet.config

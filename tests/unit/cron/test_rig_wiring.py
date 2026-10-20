@@ -32,10 +32,9 @@ def test_resolve_cron_tools_is_unchanged_by_default(monkeypatch):
 
 def test_resolve_cron_tools_honours_the_job_rig(monkeypatch):
     monkeypatch.delenv("AUTONOMOUS_RIG_DEFAULT", raising=False)
-    own = {"authored_by": "owner"}
-    assert resolve_cron_tools({"rig": "ops", **own}) == list(RIGS["ops"])
-    # payload.tools still wins — the owner-grant contract is untouched.
-    assert resolve_cron_tools({"rig": "ops", "tools": ["defi_trade"], **own}) == ["defi_trade"]
+    assert resolve_cron_tools({"rig": "ops"}) == list(RIGS["ops"])
+    # payload.tools still wins, verbatim.
+    assert resolve_cron_tools({"rig": "ops", "tools": ["defi_trade"]}) == ["defi_trade"]
 
 
 @pytest.mark.asyncio
@@ -48,7 +47,6 @@ async def test_cronjob_schedule_stores_a_valid_rig(tmp_path):
     assert res.error is None
     job = t._cron_service.list_jobs(user_id="u1")[0]
     assert job.payload["rig"] == "research"
-    assert job.payload["authored_by"] == "agent"  # H05 provenance
 
 
 @pytest.mark.asyncio
@@ -69,15 +67,9 @@ async def test_cronjob_schedule_refuses_a_rig_past_the_self_goal_ceiling(
     assert t._cron_service.list_jobs(user_id="u1") == []
 
 
-def test_resolve_cron_tools_intersects_an_agent_rig_only(monkeypatch):
-    import tools.goal_tools as gt
-    monkeypatch.setattr(gt, "allowed_self_goal_tools", lambda: gt._SELF_GOAL_ALLOWED_TOOLS)
-    agent = resolve_cron_tools({"rig": "money_rail", "authored_by": "agent"})
-    assert "defi_trade" not in agent and "defi_data" in agent
-    assert resolve_cron_tools({"rig": "money_rail", "authored_by": "owner"}) \
-        == list(RIGS["money_rail"])
-    # Round 3: an UNSTAMPED row is not the owner's — it gets the ceiling too.
-    assert "defi_trade" not in resolve_cron_tools({"rig": "money_rail"})
+def test_resolve_cron_tools_uses_the_rig_as_written(monkeypatch):
+    monkeypatch.delenv("AUTONOMOUS_RIG_DEFAULT", raising=False)
+    assert resolve_cron_tools({"rig": "money_rail"}) == list(RIGS["money_rail"])
 
 
 @pytest.mark.asyncio
@@ -108,20 +100,27 @@ def test_set_job_rig_merges_and_is_tenant_scoped(tmp_path):
     assert "rig" not in store.get(job.id).payload
 
 
-def test_set_job_preflight_slot_cap_merges_and_clears(tmp_path):
-    """2026-09-22: `payload.preflight = {"kind": "slot_cap", "max_open_rows": N}`
-    is the SCOUT rail's $0 skip (cron/preflight.py); the setter merges like
-    rig/deliver, refuses a non-positive cap, and `None` drops the key."""
-    from cron.rig_edit import set_job_preflight_slot_cap
+def test_payload_key_edit_keeps_a_concurrent_pause(tmp_path):
+    """A pause (or outcome) written between the edit's read and its write
+    must survive: the edit sets ONE key, it never rewrites the payload."""
+    from datetime import datetime
+    from cron.rig_edit import set_job_payload_key
     store = CronJobStore(str(tmp_path / "cron.db"))
-    svc = CronService(store)
-    job = svc.schedule(task="scout", schedule_spec="0 * * * *", user_id="u1",
-                       payload={"rig": "money_rail"})
-    assert set_job_preflight_slot_cap(store, job.id, 6, user_id="u1") is True
-    got = store.get(job.id)
-    assert got.payload["preflight"] == {"kind": "slot_cap", "max_open_rows": 6}
-    assert got.payload["rig"] == "money_rail"
-    assert set_job_preflight_slot_cap(store, job.id, 0, user_id="u1") is False
-    assert set_job_preflight_slot_cap(store, job.id, 6, user_id="u2") is False
-    assert set_job_preflight_slot_cap(store, job.id, None, user_id="u1") is True
-    assert "preflight" not in store.get(job.id).payload
+    job = CronService(store).schedule(task="hourly", schedule_spec="0 * * * *",
+                                      user_id="u1", payload={"deliver": "telegram"})
+    real_get = store.get
+
+    def racing_get(jid):
+        snap = real_get(jid)
+        store.pause(jid, user_id="u1", note={"by": "owner"})
+        store.record_outcome(jid, "ok", datetime(2026, 10, 18))
+        return snap
+
+    store.get = racing_get
+    assert set_job_payload_key(store, job.id, "rig", "ops", user_id="u1")
+    store.get = real_get
+    p = real_get(job.id).payload
+    assert p["rig"] == "ops" and p["deliver"] == "telegram"
+    assert p["paused"] == {"by": "owner"} and p["last_outcome"]["outcome"] == "ok"
+    assert set_job_payload_key(store, job.id, "rig", None, user_id="u1")
+    assert "rig" not in real_get(job.id).payload and "paused" in real_get(job.id).payload

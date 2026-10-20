@@ -111,15 +111,25 @@ def test_goals_read_error_is_reported_honestly(monkeypatch, tmp_path):
     assert "goals.db locked" in body["error"]
 
 
-def test_goals_disabled_flag_unaffected(monkeypatch, tmp_path):
+def test_goals_disabled_still_lists_the_stored_goals(monkeypatch, tmp_path):
+    """080 F-5: "I added it to my work." then an empty Work page read as a lost
+    goal. With the dispatcher off the board is still listed, flagged off."""
     client, pages = _client(monkeypatch, tmp_path, user_id="u1")
     monkeypatch.setattr(pages.AutonomyConfig, "goals_enabled", staticmethod(lambda: False))
-    monkeypatch.setattr(pages, "GoalBoard", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("GoalBoard touched while GOALS disabled")))
+    from agents.task.goals.board import GoalBoard
+    from core.runtime_paths import goals_db_path
+    board = GoalBoard(goals_db_path(str(tmp_path)))
+    g = board.create(user_id="u1", title="stored while off")
+    board.update_status(g.id, "paused")
+    monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
 
     r = client.get("/api/webgate/goals")
     assert r.status_code == 200
-    assert r.json() == {"enabled": False, "goals": []}
+    body = r.json()
+    assert body["enabled"] is False
+    [row] = body["goals"]
+    assert row["title"] == "stored while off" and row["status"] == "paused"
+    assert row["status_reason"] == "Paused by you."
 
 
 # NOTE: test_autonomy_js_renders_goals_error was deleted with the legacy

@@ -140,3 +140,64 @@ def test_set_priority_merges_payload(tmp_path):
     assert j.payload == {"deliver": "telegram", "priority": "money"} and is_money_job(j)
     assert not s.set_priority("j1", "urgent")  # unknown class refused
     assert not s.set_priority("j1", "money", user_id="someone-else")
+
+
+def test_done_write_disables_the_job(tmp_path):
+    """081 WS-6.1: a job that reaches 'done' is disabled in the same write."""
+    s = _store(tmp_path)
+    s.add(_job(id="a", one_shot=True))
+    claimed = s.claim_for_run("a")
+    s.update_after_run("a", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
+                       next_run_at=None, status="done", expected=claimed)
+    got = s.get("a")
+    assert (got.status, got.enabled) == ("done", False)
+    assert "a" not in {j.id for j in s.list(enabled_only=True)}
+    # a recurring reschedule stays enabled
+    s.add(_job(id="b"))
+    claimed = s.claim_for_run("b")
+    s.update_after_run("b", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
+                       next_run_at=datetime(2026, 6, 6, 12, 15, 0),
+                       status="scheduled", expected=claimed)
+    assert s.get("b").enabled is True
+    # the un-CAS path too
+    s.add(_job(id="c"))
+    s.update_after_run("c", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
+                       next_run_at=None, status="done")
+    assert s.get("c").enabled is False
+
+
+def test_failed_write_disables_the_job_like_done(tmp_path):
+    """A one-shot that ends 'failed' is terminal too: disabled in the same write,
+    on the CAS path and the plain path, and an old failed+enabled row is
+    disabled when the store opens."""
+    import cron.jobs as jobs_mod
+    s = _store(tmp_path)
+    s.add(_job(id="f", one_shot=True))
+    claimed = s.claim_for_run("f")
+    s.update_after_run("f", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
+                       next_run_at=None, status="failed", expected=claimed)
+    assert (s.get("f").status, s.get("f").enabled) == ("failed", False)
+    s.add(_job(id="g"))
+    s.update_after_run("g", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
+                       next_run_at=None, status="failed")
+    assert s.get("g").enabled is False
+    s.add(_job(id="old", status="failed", enabled=True))
+    jobs_mod._CLEARED_STORES.discard(s.db_path)
+    assert _store(tmp_path).get("old").enabled is False
+
+
+def test_store_open_clears_done_enabled_rows_and_dead_payload_keys(tmp_path):
+    """081 WS-6.1/6.3: an old row with status done + enabled=1 is disabled, and
+    the deleted authorship keys are dropped, when the store opens."""
+    import cron.jobs as jobs_mod
+    s = _store(tmp_path)
+    s.add(_job(id="old", status="done", enabled=True,
+               payload={"provider": "gemini", "authored_by": "agent",
+                        "adopted_skills_digest": "abc"}))
+    s.add(_job(id="live"))
+    jobs_mod._CLEARED_STORES.discard(s.db_path)
+    s2 = _store(tmp_path)
+    old = s2.get("old")
+    assert old.enabled is False
+    assert old.payload == {"provider": "gemini"}
+    assert s2.get("live").enabled is True

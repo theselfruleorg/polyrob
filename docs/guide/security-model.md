@@ -83,45 +83,23 @@ pre-hook receives the bare *action name*, not the *tool_id* — a denylist keyed
 the wrong one is silently dead. It's implemented correctly today, but that's a
 property of the code, not of the mechanism.
 
-### Read taint and authorship (`core/security/read_taint.py`)
+### Standing work and the money regime
 
-The correspondent gate covers a message FROM a third party. Read taint covers the
-owner's own turn after it has READ third-party text: a web page, a mail, an X
-post, MCP or x402 output, a file, a sub-agent report, a recall, room lines from
-`room_read`. The Controller marks the turn when a tool result is untrusted; the
-next genuine owner message clears it.
+Every goal and cron job carries the same standing authority: when it runs, its rig
+and tool list are used as written, it may post on X without a per-run approval,
+and it may moderate a room only when its task text names that room. What a turn may
+WRITE is decided when the work is created: a genuine owner turn may ask for any rig;
+an autonomous goal or cron run may ask only for tools inside the self-goal ceiling,
+and only a genuine owner turn may put a write verb on a job
+(`tools/goal_tools.py::owner_seat_turn`).
 
-A tainted owner turn keeps the owner's access, but it loses the owner's
-authorship:
+Money from unattended work follows the money regime
+(`core/config_policy/money_regime.py`). Under `supervised` no goal or cron run moves
+funds unattended: the guard's autonomous lane and the x402 autonomous lane refuse.
+Under `armed` a run trades within the caps and the per-verb simulation.
 
-- **Standing work it writes is agent-authored.** A goal or cron job created on that
-  turn is stamped `authored_by=agent`, and the reply says so, what the row loses and
-  how to make it the owner's. Only an untainted owner turn writes owner-authored work
-  (`tools/goal_tools.py::owner_authored_turn` is the one rule).
-- **Owner-authored work carries standing authority; agent-authored work does not.**
-  An owner-authored cron job runs its rig as written, may name a write verb, may post
-  on X and moderate the room it names without a per-run approval. An agent-authored
-  job runs inside the self-goal ceiling and waits on the owner for each of those.
-  Authority reads a positive `authored_by=owner` stamp; an unstamped row is the
-  agent's.
-- **`/adopt`** is how the owner makes an agent-authored job or goal his own. It shows
-  the whole task, every payload key and each pinned skill with a content digest, and
-  binds that view: a skill edited after adoption makes the row run as the agent's
-  again until it is re-adopted. On an install that has cron rows from before the
-  stamp existed, `python -m cron.stamp_authorship --dry-run` prints the plan and the
-  same command without `--dry-run` stamps each unstamped row once.
-- **A tainted turn's money shortcuts close.** The owner self-transfer exemption, an
-  X post without approval, and room moderation all need an untainted owner turn; a
-  tainted one queues the action for the owner's tap instead.
-
-**Refusal taint** (`core/security/refusal_taint.py`) is the run-level twin for
-money: once a money verb in a run is refused, every public or non-owner send of
-that run is refused (a message to the owner still goes), and cron delivery to a
-public sink is re-routed to the owner. The run's own text cannot exempt itself:
-only an error our code tags as an unmet precondition where it builds the error
-(insufficient allowance, no route, a stale quote, a broadcast the node rejected or
-could not reach) leaves the run untainted, and the tag is never inferred from the
-error text.
+Tool output reaches the model inside an `<untrusted_tool_result>` frame: it is data,
+never an instruction.
 
 **A late approval sends exactly what was approved.** When the owner approves a
 queued outbound write (an X post, reply or DM, a mail) after its run has ended, the
@@ -133,8 +111,8 @@ context came from, not a judgement of whether the content was hostile.
 
 ### Tool-capability table (`core/tool_capabilities.py`)
 
-The single SSOT for `money` / `high_impact` / `delegate_blocked` / `exec` /
-`readable_while_tainted` per tool_id — derives `MONEY_TOOLS`,
+The single SSOT for `money` / `high_impact` / `delegate_blocked` / `exec` per
+tool_id — derives `MONEY_TOOLS`,
 `HIGH_IMPACT_TOOL_IDS`, `DELEGATE_BLOCKED_TOOLS`. `register_optional_tool` refuses
 to register a tool that isn't classified here, which closes the "new tool
 silently skips every gate" failure mode.
@@ -219,7 +197,7 @@ on a probe error):
   the last 30 days (same first and last characters, a different body) is refused;
   unreadable payment history refuses the send. This assists, and does not replace,
   checking the full address.
-- **Transfers to yourself.** A genuine, untainted owner turn that transfers to one
+- **Transfers to yourself.** A genuine owner turn that transfers to one
   of `OWNER_WALLET_ADDRESSES` or to the agent's own wallet waits on no second tap.
   The caps, `tx_guard` and the pause still hold.
 
@@ -353,13 +331,12 @@ sandbox. Full behaviour, roles and caps: [groups.md](groups.md#what-the-agent-ca
 ### The agent's mailbox (the `email` tool)
 
 The agent can own a full mailbox: its own AgentMail address (`AGENTMAIL_API_KEY`)
-or an IMAP/SMTP account (`EMAIL_PROVIDER=smtp`). It has eleven verbs:
+or an IMAP/SMTP account (`EMAIL_PROVIDER=smtp`). It has ten verbs:
 
 - **Read:** `email_list` (newest first, with filters and a Gmail `query`),
-  `email_read` (headers, text body, links, the attachment list),
-  `email_save_attachment` (into the session workspace) and
-  `email_read_machine_mail` (activation links and codes from no-reply senders,
-  the mail the inbound surface never answers).
+  `email_read` (headers, text body, links, the attachment list; this includes
+  activation links and codes, the mail the inbound surface never answers) and
+  `email_save_attachment` (into the session workspace).
 - **Send:** `email_send` (to, cc, bcc, HTML, workspace attachments), `email_reply`
   (threaded, the original quoted) and `email_forward` (with the original attachments).
 - **Organise, IMAP only:** `email_folders`, `email_mark`, `email_move` and
@@ -369,8 +346,7 @@ Every send verb goes through one gate: forged and autonomous turns, the tier of
 EVERY recipient (one denied address refuses the whole send and names the owner's
 `/allow email` command), the owner pause, the secret scrub and the resend cooldown.
 The read verbs open their own read-only IMAP connection and never mark a mail as
-seen. Mail is third-party text: every result is framed as untrusted, and a turn
-that read it is tainted.
+seen. Mail is third-party text: every result is framed as untrusted.
 
 ### The pattern across all of them
 
@@ -389,20 +365,44 @@ These are not bugs to be quietly worked around; they are documented, deliberate
 trade-offs (or, in one case, an unwired-but-designed lever). Naming them precisely
 is the point of this page.
 
-### a) Host work runs beside the wallet; the key is isolated
+### a) Host work runs beside the wallet; the key is isolated in memory, not on disk
 
-Wallet custody does not refuse host work. Local `run_code`, git, LSP diagnostics,
-coding snapshots, MCP stdio, lazy installs and `self_env` run with the wallet
-present, in every signer mode. The key is protected by isolation, not by refusing
-the tool: the seed leaves `os.environ` when the wallet config loads, the process is
-non-dumpable (a same-UID child cannot read `/proc/<pid>/environ`), and every host
-child gets an allowlisted env with no custody secret. Two things still refuse
+Wallet custody does not refuse host work. Git, LSP diagnostics, coding snapshots,
+MCP stdio, `rg`, lazy installs and `self_env` run with the wallet present, in every
+signer setting. The process memory is protected by isolation: the seed leaves
+`os.environ` when the wallet settings load, the process is non-dumpable (a same-UID
+child cannot read `/proc/<pid>/environ`), and every host child gets an allowlisted
+env with no custody secret. Two things refuse every host child
 (`core/security/host_execution.py::host_execution_refusal`): the floor row
 `key_isolation_gap` (a key is held and the non-dumpable hardening did not hold), and
-the owner's `SECURITY_SETTINGS` row `host_exec_under_custody=refuse`. Servers always
-require a sandbox backend for `run_code`. The trade-off: a host child runs with the
-agent's own OS user, so it can read files that user can read and, under a remote
-signer, call the signer socket (the signer's caps and on-box approvals bound it).
+the owner's `SECURITY_SETTINGS` row `host_exec_under_custody=refuse`.
+
+That isolation does not cover a file. A host child runs as Rob's own OS user,
+so it can read every file that user can read. A local `polyrob wallet init` writes
+the seed to `~/.polyrob/.env` (0600, the same user), so a local wallet's key is
+**not** isolated from host children unless the signer holds it. For that case
+(`core/security/host_execution.py::model_code_host_refusal`): when an env file
+Rob's user can read holds a wallet key, the children that run code the model wrote
+refuse on the host — `run_tests`, `run_code` and the posture-3 host shell. The
+files checked are every env file this process loaded at start and every env file
+it wrote a wallet key into (`polyrob wallet init`, `polyrob config set`). Each check
+reads the file again, so the file decides, not what the process holds: a seed left
+in the file under the remote signer, or an older seed than the one the service
+manager set, refuses too, and the refusal ends when the seed leaves the file. The
+refusal names the fixes: move the seed to the signer (`polyrob signer install`)
+and remove it from that file, or run code in a sandbox backend
+(`CODE_EXEC_BACKEND=docker`). The other host children above stay allowed: they do
+not run code the model wrote. A seed only in the service manager's env file (the
+production shape: `wallet.env`, root-owned 0600) and an install with no wallet see
+no change. The env copies in an old `polyrob update` snapshot
+(`<data home>/snapshots/*/config/`) are checked too: a seed moved to the signer can
+still sit there. That refusal names its own fix — delete the old snapshot once you
+no longer need to roll back to it, or use a sandbox backend; Rob never edits a
+snapshot, so a restore keeps the seed. A backup you made elsewhere is not checked.
+
+Servers always require a sandbox backend for `run_code`. Under a remote signer a
+host child can call the signer socket; the signer's limits and on-box approvals bound
+it.
 
 ### b) Host Git, diagnostics and snapshots
 
@@ -450,7 +450,8 @@ admits a turn only when ALL hold:
 
 1. `compute_posture_allows(ctx, 3)` — the owner's own, non-delegated, non-forged turn;
 2. `POLYROB_LOCAL` is on;
-3. `host_execution_refusal` passes (key isolation holds and the owner's
+3. `model_code_host_refusal` passes (key isolation holds, no env file Rob's
+   user can read holds a wallet key — see §3a — and the owner's
    `host_exec_under_custody` row allows it);
 4. the turn was typed at a foreground terminal of this process (`polyrob` or
    `polyrob run`). Telegram, the API, `/v1`, A2A, rooms and the web console never
@@ -541,7 +542,7 @@ without custody, host subprocesses run as you and require trusted inputs. With
 custody enabled, code execution requires a sandbox and host Git/LSP/snapshot
 helpers refuse. Local mode does not provide an OS isolation boundary.
 
-**Single-owner VPS** (the Rob #1 shape — headless agent, one owner,
+**Single-owner VPS** (the reference VPS shape — headless agent, one owner,
 `POLYROB_LOCAL=1` on a private box you control) — the code-level trust decisions
 are the same as local CLI, but the box itself is network-facing. Prioritize:
 harden the systemd units to a non-root user (§4); if `CODE_EXEC_ENABLED` is ever

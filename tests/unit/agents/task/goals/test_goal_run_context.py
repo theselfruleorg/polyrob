@@ -4,35 +4,33 @@ from agents.task.goals.context import build_goal_run_task, extract_outcome_line
 
 def _mk(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    o = b.create_objective(user_id="rob", title="Get 100k followers on X",
-                           body="X is distribution for substack posts.")
-    g = b.create(user_id="rob", title="Draft memory-arch thread", parent_id=o.id,
+    g = b.create(user_id="rob", title="Draft memory-arch thread",
                  body="Draft a 5-tweet thread.",
                  payload={"acceptance": "a draft file under project/drafts/"})
-    return b, o, g
+    return b, g
 
 
-def test_task_contains_objective_body_acceptance_outcome(tmp_path):
-    b, o, g = _mk(tmp_path)
-    t = build_goal_run_task(g, o)
-    assert "STANDING OBJECTIVE" in t and "Get 100k followers on X" in t
+def test_task_contains_body_acceptance_outcome(tmp_path):
+    b, g = _mk(tmp_path)
+    t = build_goal_run_task(g)
+    assert "STANDING OBJECTIVE" not in t
     assert "Draft a 5-tweet thread." in t
     assert "Definition of done" in t and "project/drafts/" in t
     assert "OUTCOME:" in t
 
 
-def test_task_without_objective(tmp_path):
+def test_task_carries_the_body(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
     g = b.create(user_id="rob", title="One-off", body="Do a thing.")
-    t = build_goal_run_task(g, None)
-    assert "one-off goal" in t.lower() and "Do a thing." in t
+    t = build_goal_run_task(g)
+    assert "Do a thing." in t
 
 
 def test_task_attempts_ledger_rides_into_retry_prompt(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
     g = b.create(user_id="rob", title="Post intro", body="Post it.",
                  payload={"attempts": [{"ts": 100.0, "error": "BLOCKED: no telegram capability"}]})
-    t = build_goal_run_task(g, None)
+    t = build_goal_run_task(g)
     assert "PREVIOUS ATTEMPT" in t
     assert "no telegram capability" in t
 
@@ -45,7 +43,7 @@ def test_task_owner_unblocked_overrides_failure_memory(tmp_path):
     g = b.create(user_id="rob", title="Post intro", body="Post it.",
                  payload={"attempts": [{"ts": 100.0, "error": "BLOCKED: no telegram capability"}],
                           "owner_unblocked": {"ts": 200.0, "ask_id": "a1"}})
-    t = build_goal_run_task(g, None)
+    t = build_goal_run_task(g)
     assert "OWNER UNBLOCKED" in t
     assert "retry" in t.lower()
     assert "PREVIOUS ATTEMPT (this goal was retried" not in t
@@ -58,7 +56,7 @@ def test_task_stale_owner_unblocked_keeps_failure_ledger(tmp_path):
     g = b.create(user_id="rob", title="Post intro", body="Post it.",
                  payload={"attempts": [{"ts": 300.0, "error": "BLOCKED: still failing"}],
                           "owner_unblocked": {"ts": 200.0, "ask_id": "a1"}})
-    t = build_goal_run_task(g, None)
+    t = build_goal_run_task(g)
     assert "PREVIOUS ATTEMPT" in t and "OWNER UNBLOCKED" not in t
 
 
@@ -86,5 +84,5 @@ def test_goal_run_task_teaches_deliverable_attachment():
     today's x402-recon flow sent `media_paths=None` while naming the file."""
     from agents.task.goals.board import Goal
     from agents.task.goals.context import build_goal_run_task
-    text = build_goal_run_task(Goal(id="g", user_id="u", title="t"), None)
+    text = build_goal_run_task(Goal(id="g", user_id="u", title="t"))
     assert "media_paths" in text

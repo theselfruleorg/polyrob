@@ -107,8 +107,9 @@ async def test_spam_on_the_reference_does_not_hide_the_payment(x402_db, monkeypa
         if await _status(x402_db, rid) == "completed":
             break
     assert await _status(x402_db, rid) == "completed"
-    # Capped per tick, and a judged signature is never fetched twice.
-    assert calls["getTransaction"] == 61
+    # 085 F1: the reference is walked OLDEST first, so spam sent after the
+    # real payment sits behind it — the payment is the first fetch.
+    assert calls["getTransaction"] == 1
 
 
 def test_scan_reference_pages_back_past_the_newest_page():

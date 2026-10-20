@@ -135,18 +135,6 @@ def test_default_provider_env_pins_resolution(monkeypatch):
     assert model == "claude-sonnet-4-5"
 
 
-def test_chat_env_overrides_default_env(monkeypatch):
-    # CHAT_PROVIDER/CHAT_MODEL take precedence over DEFAULT_* (mirrors task_agent_lite).
-    monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
-    monkeypatch.setenv("DEFAULT_PROVIDER", "anthropic")
-    monkeypatch.setenv("DEFAULT_MODEL", "claude-sonnet-4-5")
-    monkeypatch.setenv("CHAT_PROVIDER", "openai")
-    monkeypatch.setenv("CHAT_MODEL", "gpt-5")
-    provider, model = cs.resolve_provider_model(None, None, available_keys=set())
-    assert provider == "openai"
-    assert model == "gpt-5"
-
-
 def test_explicit_flag_beats_default_env(monkeypatch):
     # An explicit --provider must still win over the DEFAULT_PROVIDER env pin.
     monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))

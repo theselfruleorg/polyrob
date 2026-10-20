@@ -44,3 +44,27 @@ def test_doctor_report_names_a_retired_flag():
 def test_retired_names_are_not_catalog_rows():
     from core.flags import REGISTRY
     assert not set(RETIRED_FLAGS) & set(REGISTRY)
+
+
+def test_duplicate_model_pickers_are_reported():
+    """One way to pick the model: CHAT_* refuse alone, the rest are named."""
+    lines = retired_flag_lines({"CHAT_MODEL": "m", "COMPACTION_AUTO_AUX": "true",
+                                "POLYROB_OPENROUTER_MODEL": "x-ai/grok-4.3"})
+    assert any(l.startswith("FAIL") and "CHAT_MODEL" in l and "DEFAULT_MODEL" in l
+               for l in lines)
+    assert any(l.startswith("WARN") and "COMPACTION_AUTO_AUX" in l and "AUX_AUTO" in l
+               for l in lines)
+    assert any(l.startswith("WARN") and "POLYROB_OPENROUTER_MODEL" in l
+               and "payload.model" in l for l in lines)
+    assert retired_flag_lines({"POLYROB_OPENROUTER_MODEL": " "}) == []
+
+
+def test_start_refuses_a_chat_pin_alone(tmp_path, monkeypatch):
+    """The process refuses to start on CHAT_MODEL alone: it never runs another model."""
+    import core.paths
+    monkeypatch.setattr(core.paths, "env_file_candidates", lambda: [])
+    monkeypatch.delenv("DEFAULT_MODEL", raising=False)
+    monkeypatch.setenv("CHAT_MODEL", "x-ai/grok-4.3")
+    from polyrob.app.bootstrap import load_env
+    with pytest.raises(RetiredFlagError, match="DEFAULT_MODEL"):
+        load_env("development")

@@ -56,6 +56,18 @@ def _rail(session_id: str) -> tuple:
     return "", ""
 
 
+def _answer_route(rail_kind: str) -> str:
+    """Where the owner's decision goes — only what is TRUE (2026-10-13 review B1):
+    a cron job reads it on its next completed run, a goal reads it from its own
+    row on every later run, and a chat session has no next run."""
+    if rail_kind == "cron":
+        return "the answer reaches this job's next run (it stays until a run completes)."
+    if rail_kind == "goal":
+        return "the answer is written onto this goal and every later run of it reads it."
+    return ("this session has no next run; the answer is kept on the ask and reaches "
+            "you only if the owner replies in this chat.")
+
+
 #: An option marker inside the question: ``A)`` / ``(B)`` at a word start.
 _OPTION_MARK = re.compile(r"(?:^|(?<=[\s(,;:]))\(?([A-F])\)\s*")
 _OPTION_TAIL = re.compile(r"[\s,;:]*(?:\bor\b)?[\s,;:]*$", re.IGNORECASE)
@@ -167,21 +179,6 @@ def autonomous_wait_refusal(controller, session_id: str):
         metadata={"conversational_reply": True, "gated": "autonomous_wait"})
 
 
-#: A choice that only an owner-side change makes real. A tap on it records the
-#: choice and changes nothing (prod 2026-10-07: "A) raise the per-trade cap" was
-#: tapped, the cap stayed $120, and the next run would refuse again).
-_CAP_WORDS = re.compile(r"\b(?:cap|caps|ceiling|limit|budget)\b", re.IGNORECASE)
-CAP_HINT = ("A tap only records your choice; it does not change a cap. To raise the "
-            "per-trade cap: /config set budget.wallet_per_tx_usd <usd>, then approve it "
-            "in /pending. The daily cap "
-            "and the signer cap are set on the server.")
-
-
-def owner_only_hint(question: str) -> str:
-    """The owner-side step a cap/limit choice needs, or ``""``."""
-    return CAP_HINT if _CAP_WORDS.search(question or "") else ""
-
-
 def register_owner_ask_action(controller) -> None:
     class OwnerAskAction(BaseModel):
         question: Optional[str] = Field(
@@ -278,8 +275,8 @@ def register_owner_ask_action(controller) -> None:
             if ask.id in before:
                 return ActionResult(
                     extracted_content=(f"Ask `{ask.id}` is ALREADY OPEN (refreshed, not duplicated). "
-                                       f"The owner sees it on every seat; the answer reaches this rail's "
-                                       f"next run. Apply the conservative reading now and log the skip "
+                                       f"The owner sees it on every seat; {_answer_route(rail_kind)} "
+                                       f"Apply the conservative reading now and log the skip "
                                        f"against ask {short}."),
                     include_in_memory=True)
             # Tell the owner ONCE through the one rail; the thread line carries the ask id.
@@ -293,7 +290,6 @@ def register_owner_ask_action(controller) -> None:
                 text = (f"❓ I need your decision (ask {short}): {question}"
                         + (f"\nWhy: {(params.why or '').strip()[:400]}" if (params.why or '').strip() else "")
                         + taps
-                        + (f"\n⚠️ {owner_only_hint(question)}" if owner_only_hint(question) else "")
                         + "\nAnswer here in chat (e.g. \"A\"), or /fulfill "
                         + f"{ask.id} <answer>.")
                 await deliver_user_message(getattr(controller, "container", None), user_id, text,
@@ -303,13 +299,9 @@ def register_owner_ask_action(controller) -> None:
                 logger.debug("owner_ask: owner notice skipped: %s", e)
             return ActionResult(
                 extracted_content=(f"Raised owner ask `{ask.id}` ({rail_kind or 'session'} rail). It stays "
-                                   f"visible on every owner seat until answered; the answer is handed to "
-                                   f"this rail's next run. Do NOT also message the owner about it; "
-                                   f"continue with the conservative reading and log skips against ask {short}."
-                                   + (" The owner was told that a tap does not change a cap; a cap "
-                                      "changes only when the owner sets it (/config set "
-                                      "budget.wallet_per_tx_usd), so re-check the live cap before "
-                                      "you act on an approval." if owner_only_hint(question) else "")),
+                                   f"visible on every owner seat until answered; {_answer_route(rail_kind)} "
+                                   f"Do NOT also message the owner about it; "
+                                   f"continue with the conservative reading and log skips against ask {short}."),
                 include_in_memory=True)
 
         # --- answer: a GENUINE owner turn only ---

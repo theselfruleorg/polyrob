@@ -8,18 +8,10 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from core.goal_vocab import (
-    STATUS_READY, KIND_GOAL, OBJ_ACTIVE, OBJ_PAUSED, OBJ_DROPPED, OBJ_DONE,
-)
+from core.goal_vocab import STATUS_READY, KIND_GOAL  # noqa: F401
 
-#: How many ready rows one fair-dispatch pass considers. The dispatcher asks for
-#: 2-4 slots against a board of a few hundred rows, so scan a bounded window
-#: rather than the table. A stream whose goals all sit below this window is one
-#: whose neighbours are already saturated — the next tick sees it.
-READY_SCAN_LIMIT = 200
-
-# kind: rows are goals (dispatchable), objectives (standing, never dispatched),
-# or asks (owner-facing needs, never dispatched)
+# kind: rows are goals (dispatchable) or asks (owner-facing needs, never
+# dispatched)
 # ask lifecycle (§7.2b) — disjoint from goal statuses so nothing dispatches them
 # Task 9 (G-2): a tool_approval ask's owner-declined outcome. Disjoint from the
 # goal-status STATUS_CANCELLED string on purpose — an ask is never a goal.
@@ -29,10 +21,6 @@ READY_SCAN_LIMIT = 200
 # the work resolved itself must never be recorded as an owner decision. Prod held
 # 44 open asks (oldest a month) with several naming goals that had since
 # succeeded — that queue is what the owner has to read.
-
-# objective lifecycle (disjoint from goal statuses so nothing dispatches them)
-_OBJECTIVE_STATUSES = {OBJ_ACTIVE, OBJ_PAUSED, OBJ_DROPPED, OBJ_DONE}
-
 
 class DuplicateGoalError(ValueError):
     """A new goal's title is a near-duplicate of a recent goal."""
@@ -49,20 +37,29 @@ from core.goal_vocab import normalize_title  # noqa: E402,F401 — the ONE title
 
 
 class SuppressedGoalError(ValueError):
-    """The owner switched this goal OFF (034 §3.5 — ``/goal cancel``).
+    """The owner switched this goal OFF (034 §3.5 — ``/goal stop --forever``).
 
     Raised by ``create`` BEFORE the dedup check, and ``force=True`` does not
-    bypass it: the stream seeder forces every create, and the owner's "never
-    again" must beat the seeder."""
+    bypass it: the owner's "never again" beats every writer."""
 
     def __init__(self, suppression):
         self.suppression = suppression
-        what = {"stream": "stream ", "objective": "objective "}.get(
-            getattr(suppression, "scope", ""), "")
         label = getattr(suppression, "label", "") or getattr(suppression, "key", "")
         super().__init__(
-            f"the owner switched {what}'{label}' OFF — do not create it again or a "
+            f"the owner switched '{label}' OFF — do not create it again or a "
             f"variant of it. Only the owner turns it back on (/goal allow).")
+
+
+def clip_keep_end(text, limit: int = 600) -> str:
+    """Head + tail of a long error (2026-10-13 review B9): the cause usually
+    leads, and the detail a retry needs (a tool gap, a failed acceptance check)
+    trails — a head-only cut dropped exactly that."""
+    t = str(text or "").strip()
+    if len(t) <= limit:
+        return t
+    head = max(40, limit // 4)
+    tail = limit - head - 3
+    return f"{t[:head]} … {t[-tail:]}"
 
 
 def _trigrams(s: str) -> set:

@@ -35,6 +35,17 @@ def money_tool(tool_id) -> bool:
     return name in money_tool_ids()
 
 
+#: 085 A5: flat action names (``{server}_{tool}``) of an MCP server the owner
+#: marked ``"money": true`` in mcp.json. The MCP registrar adds them when it
+#: registers the server's actions; no capability-table row can name them.
+_MONEY_MCP_ACTIONS: set = set()
+
+
+def register_money_actions(names) -> None:
+    """Classify each action in *names* as money (an owner-marked MCP server)."""
+    _MONEY_MCP_ACTIONS.update(str(n) for n in (names or ()) if n)
+
+
 def owning_tool(name: str) -> Optional[str]:
     """The tool id that owns action *name*, or None.
 
@@ -51,6 +62,39 @@ def owning_tool(name: str) -> Optional[str]:
 
 
 def money_action(name) -> bool:
-    """True when action *name* belongs to a money tool."""
+    """True when action *name* belongs to a money tool (or to an MCP server
+    the owner marked money)."""
+    if str(name) in _MONEY_MCP_ACTIONS:
+        return True
     owner = owning_tool(name)
     return bool(owner) and money_tool(owner)
+
+
+def is_money_class(payload) -> bool:
+    """True when an autonomous run (a cron job or goal *payload*) is MONEY-CLASS.
+
+    The ONE answer for routing (``HEAVY_MODEL``), tick ordering, pre-emption and the
+    wake-gate carve-out (2026-10-14 review B-1). Two signals, either suffices:
+
+    * ``payload.priority == "money"`` — the explicit label;
+    * the run's TOOLSET holds a money tool — ``payload.tools``, else the rig
+      (``payload.rig`` > ``AUTONOMOUS_RIG_DEFAULT``) resolved through
+      ``core.config_policy.rigs.resolve_rig_tools``. The live money jobs carry
+      ``rig=money_rail`` and no priority; keying on priority alone routed none of them.
+
+    *payload* may be a dict or its stored JSON text. Fail-closed to False (a bad
+    payload is not money-class; every spend gate still runs on its own).
+    """
+    try:
+        if isinstance(payload, (str, bytes)):
+            import json
+            payload = json.loads(payload or "{}")
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("priority") or "").strip().lower() == "money":
+            return True
+        from core.config_policy.rigs import resolve_rig_tools
+        ids = resolve_rig_tools(payload) or []
+        return any(money_tool(t) for t in ids)
+    except Exception:
+        return False

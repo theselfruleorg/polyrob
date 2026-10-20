@@ -54,8 +54,8 @@ def test_list_and_cancel(tmp_path):
     j = svc.schedule(task="t", schedule_spec="1h", user_id="u1")
     svc.schedule(task="t2", schedule_spec="1h", user_id="u2")
     assert {x.id for x in svc.list_jobs(user_id="u1")} == {j.id}
-    assert svc.cancel(j.id) is True
-    assert svc.cancel("missing") is False
+    assert svc.cancel(j.id, via="cli") is True
+    assert svc.cancel("missing", via="cli") is False
 
 
 def test_payload_round_trips(tmp_path):

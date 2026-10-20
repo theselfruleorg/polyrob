@@ -1,0 +1,108 @@
+{
+  "function": {
+    "description": "Schedule a durable task to run later or on a recurring cycle (not bound to this turn).",
+    "name": "cronjob_schedule",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Schedule a durable task. NOT bound to this turn — it runs later/on a cycle.",
+      "properties": {
+        "deliver": {
+          "default": null,
+          "description": "Optional out-of-band delivery sink for the result: 'telegram' or 'email' (to the owner), or 'twitter' — a PUBLIC post on the agent's X account, when the X pack is enabled. Omit to keep silent.",
+          "nullable": true,
+          "type": "string"
+        },
+        "deliver_target": {
+          "default": null,
+          "description": "Optional explicit recipient. IGNORED unless the operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET; by default delivery always goes to the owner's own channel.",
+          "nullable": true,
+          "type": "string"
+        },
+        "max_duration_seconds": {
+          "default": 600,
+          "description": "Hard cap per run (60-1800s; default 600). A money rail that reconciles, quotes, gates, swaps and reports needs ~15-25 min at 1-5 min/step — the 600 s ceiling cut the hourly buyback at step 6 before its swap (2026-09-18).",
+          "maximum": 1800,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "pause_windows": {
+          "default": null,
+          "description": "Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 UTC. A tick inside a window is a $0 skip (e.g. hold the buyback from T-1h to 24h after the mint window).",
+          "items": {
+            "items": {},
+            "type": "array"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "precheck": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "For a WATCH job (monitor/scout/exit/watcher): a $0 check that runs BEFORE the model each tick — {'verb': <a read_verb verb>, 'params': {...}, 'alert': {'field', 'below'?, 'above'?}, 'move_pct': 5, 'field': 'price_usd', 'max_quiet_hours': 24}. When the read is clean, no alert fires and the field moved less than move_pct since the last model run, the tick is skipped at $0. Otherwise the run starts with the read attached. Use it on every price/pool watch.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "read_verb": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "W9: make this a DETERMINISTIC read job — one allowlisted read verb, no LLM turn per tick: {'verb': 'defi_data.pool_metrics', 'params': {...the verb's params...}, 'deliver_on': 'alert'|'always'|'never'}. 'alert' (default) delivers only a result with an ALERT line or an error. Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, defi_data.wallet_holdings (public reads only). A price/value watch adds 'alert': {'field': '<key of the verb result metadata>', 'below': n, 'above': n} — the verb compares, you never do; an unreadable value alerts.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "rig": {
+          "default": null,
+          "description": "Optional named tool rig for this job's runs: 'money_rail', 'social', 'research', 'ops', or 'full' (everything this deploy grants an autonomous run). A narrow rig ships far fewer tool schemas per step, which is most of the cost of a recurring job. A rig is a REQUEST, not a grant: a rig with a tool an agent-created job cannot carry is REFUSED with the rigs you can use. Omit to use this deploy's default.",
+          "nullable": true,
+          "type": "string"
+        },
+        "schedule": {
+          "description": "When to run: '30m'/'2h'/'1d', 'every monday 09:00', 5-field cron '*/15 * * * *', or an ISO timestamp (one-shot).",
+          "type": "string"
+        },
+        "skills": {
+          "default": null,
+          "description": "Optional skill ids this job's runs must load (its doctrine, e.g. ['x-engagement']). Pinned skills load every run instead of depending on keyword matching; they grant no tool. Up to 8; omit to match by keyword.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "target_token": {
+          "additionalProperties": false,
+          "default": null,
+          "description": "For a job that BUYS one specific token: {'chain': ..., 'address': ...}. Every run's buys are then refused unless they name exactly this contract — the address lives in the job as data, never only in the task text. It only restricts; it grants nothing.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "task": {
+          "description": "The task the scheduled agent should perform.",
+          "minLength": 10,
+          "type": "string"
+        },
+        "wake_agent": {
+          "default": true,
+          "description": "If false, this tick runs without invoking the LLM (a $0 no-op tick). Default true = normal agent run.",
+          "type": "boolean"
+        },
+        "write_verb": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "OWNER TURN ONLY: make this a deterministic WRITE job — the one allowlisted write verb, no LLM turn per tick: {'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': 'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. It SPENDS gas from the treasury (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run; no value, no asset) and runs only while CRON_WRITE_JOBS_ENABLED=true. Omitting dry_run=false only simulates. May recur every minute.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "task",
+        "schedule"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

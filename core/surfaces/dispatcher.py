@@ -51,9 +51,8 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/paid",             # 046: paid room actions (owner or room admin)
              "/ban", "/unban", "/unmute",   # 046 phase 2: the rest of the catalog
              "/halt", "/resume", "/pause",  # owner pause record (031; /halt = alias of /pause)
-             "/cron", "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
-             "/rail",   # 036: standing work (rails + their grants), owner-only
-             "/adopt",  # 2026-10-08: make an agent-authored job/goal the owner's (card confirm)
+             "/jobs", "/job",  # 080 WS-2: scheduled jobs (list; new/show/edit/pause/resume/run/stop)
+             "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
              "/trade",  # owner-launched money-granted run (2026-09-09)
              "/bridge",  # 037 cross-chain move; owner-only, approval-gated
              "/launch", "/deploy", "/lp",  # token/liquidity writes; owner-only, capped
@@ -76,6 +75,8 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/apps",  # 032 durable app service (approve an address, health, kill, logs)
              "/mcp",   # per-tenant MCP servers; owner-only (core/mcp_admin.py)
              "/kb", "/files",
+             "/model", "/skills",  # 080 D8: the model + its source; the skill list
+             "/usage",  # 2026-10-14 D6: AI cost by kind of work, job, model, day
              "/dev",  # owner ↔ on-host dev-loop rail (proposal 027 WS-1)
              "/restart", "/update",  # 077: drained restart / update, card-confirmed
              "/start")  # Telegram first-contact convention -> welcome (030 L9);
@@ -803,10 +804,11 @@ async def _route_inbound_impl(
         # STEER). Fail-open: any policy error keeps STEER, never spuriously wiping a chat.
         try:
             import time as _time
-            from core.surfaces.session_policy import should_start_fresh
+            from core.surfaces.session_policy import should_start_fresh, with_agent_activity
             from core.surfaces.config import SurfaceConfig
+            # C3: the agent's own question to the owner counts as activity.
             fresh, _reason = should_start_fresh(
-                row, now=_time.time(),
+                with_agent_activity(row, container), now=_time.time(),
                 idle_minutes=SurfaceConfig.session_idle_minutes(),
                 daily_hour=SurfaceConfig.session_reset_hour(),
                 mode=SurfaceConfig.session_reset_mode(),

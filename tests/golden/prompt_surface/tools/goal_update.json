@@ -1,0 +1,51 @@
+{
+  "function": {
+    "description": "Edit a goal's title/body/priority/acceptance/tools (owner-only).",
+    "name": "goal_update",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance": {
+          "default": null,
+          "description": "What 'done' must prove (ids/paths/urls).",
+          "nullable": true,
+          "type": "string"
+        },
+        "body": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "goal_id": {
+          "type": "string"
+        },
+        "priority": {
+          "default": null,
+          "maximum": 10,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
+        "title": {
+          "default": null,
+          "minLength": 3,
+          "nullable": true,
+          "type": "string"
+        },
+        "tools": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "goal_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

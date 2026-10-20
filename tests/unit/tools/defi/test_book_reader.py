@@ -40,19 +40,14 @@ async def test_book_worst_chain_wins(monkeypatch, tmp_path):
     monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
     monkeypatch.setattr(DefiDataTool, "portfolio", fake_portfolio)
 
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text("## Open positions\n")
-
     from tools.defi.book import read_book
-    body = await read_book("u1", str(tmp_path), chains=["base", "solana"],
-                            ledger_path=str(ledger))
+    body = await read_book("u1", str(tmp_path), chains=["base", "solana"])
 
     assert body["verdict"] == "disagreement"
     assert body["chains"]["base"]["verdict"] == "disagreement"
     assert body["chains"]["base"]["report"]["unbacked"] == ["BOTS"]
     assert body["chains"]["solana"]["verdict"] == "unverified"
     assert "node down" in body["chains"]["solana"]["error"]
-    assert body["ledger_path"] == str(ledger)
     assert isinstance(body["checked_at"], float)
 
 
@@ -70,12 +65,8 @@ async def test_book_clean_when_every_chain_agrees(monkeypatch, tmp_path):
     monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
     monkeypatch.setattr(DefiDataTool, "portfolio", fake_portfolio)
 
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text("## Open positions\n")
-
     from tools.defi.book import read_book
-    body = await read_book("u1", str(tmp_path), chains=["base", "solana"],
-                            ledger_path=str(ledger))
+    body = await read_book("u1", str(tmp_path), chains=["base", "solana"])
 
     assert body["verdict"] == "clean"
     assert body["chains"]["base"]["verdict"] == "clean"
@@ -83,8 +74,9 @@ async def test_book_clean_when_every_chain_agrees(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_book_no_ledger_every_chain_and_skips_reconcile(monkeypatch, tmp_path):
+async def test_an_unreadable_book_is_unverified_and_skips_reconcile(monkeypatch, tmp_path):
     _enable_defi(monkeypatch)
+    (tmp_path / "open_positions.db").write_text("not a database")
 
     async def fake_portfolio(self, params, execution_context=None):
         return _AR(content="holdings text")
@@ -100,15 +92,35 @@ async def test_book_no_ledger_every_chain_and_skips_reconcile(monkeypatch, tmp_p
     monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
 
     from tools.defi.book import read_book
-    body = await read_book("u1", str(tmp_path), chains=["base", "solana"],
-                            ledger_path=None)
+    body = await read_book("u1", str(tmp_path), chains=["base", "solana"])
 
-    assert body["verdict"] == "no_ledger"
-    assert body["chains"]["base"]["verdict"] == "no_ledger"
-    assert body["chains"]["solana"]["verdict"] == "no_ledger"
+    assert body["verdict"] == "unverified"
+    assert "NOT an empty book" in body["error"]
     assert body["chains"]["base"]["portfolio_text"] == "holdings text"
     assert called["reconcile"] is False
-    assert body["ledger_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_runs_as_the_books_tenant(monkeypatch, tmp_path):
+    _enable_defi(monkeypatch)
+    seen = []
+
+    async def fake_reconcile(self, params, execution_context=None):
+        from core.exec_identity import current_exec_identity
+        seen.append(current_exec_identity()[0])
+        return _AR(metadata={"report": {"verdict": "CLEAN"}})
+
+    async def fake_portfolio(self, params, execution_context=None):
+        return _AR(content="")
+
+    from tools.defi.data_tool import DefiDataTool
+    monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
+    monkeypatch.setattr(DefiDataTool, "portfolio", fake_portfolio)
+
+    from tools.defi.book import read_book
+    await read_book("u1", str(tmp_path), chains=["base"])
+    from core.exec_identity import current_exec_identity
+    assert seen == ["u1"] and current_exec_identity()[0] == ""
 
 
 @pytest.mark.asyncio

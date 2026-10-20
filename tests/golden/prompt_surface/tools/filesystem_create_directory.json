@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Create a directory",
+    "name": "filesystem_create_directory",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for creating a directory",
+      "properties": {
+        "directoryPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "directoryPath"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

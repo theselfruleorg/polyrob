@@ -143,6 +143,24 @@ def test_create_cron_bad_schedule_returns_400(monkeypatch, tmp_path):
     assert r.json()["ok"] is False
 
 
+def test_create_cron_unreadable_store_names_the_failure(monkeypatch, tmp_path):
+    """An unreadable cron.db on the duplicate check is a named 503, not a bare 500."""
+    import sqlite3
+
+    from cron.service import CronService
+
+    def _boom(self, **kw):
+        raise sqlite3.OperationalError("database disk image is malformed")
+    monkeypatch.setattr(CronService, "find_duplicate", _boom)
+    client = _client(monkeypatch, tmp_path, user_id="u1")
+    r = client.post("/api/webgate/cron",
+                    json={"task": "do a real thing", "schedule": "30m"})
+    assert r.status_code == 503, r.text
+    body = r.json()
+    assert body["ok"] is False and "could not read" in body["message"]
+    assert "malformed" in body["detail"]
+
+
 def test_create_cron_missing_task_returns_400(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path, user_id="u1")
     r = client.post("/api/webgate/cron", json={"schedule": "30m"})

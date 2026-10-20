@@ -80,7 +80,7 @@ class _FakeTaskAgent:
         return bool(context_block)
 
     async def create_session(self, user_id, *, request=None, session_source=None,
-                             chat_session_key=None, tool_ids=None):
+                             chat_session_key=None, tool_ids=None, typed_text=None):
         self.created.append(dict(user_id=user_id, request=request,
                                  tool_ids=tuple(tool_ids or ())))
         return {"id": "sess-cold-1"}
@@ -108,7 +108,7 @@ def _member_update(uid=1, text="@bot which chains?"):
     return {"update_id": uid, "message": {
         "message_id": 77,
         "chat": {"id": int(_ROOM_CHAT_ID), "type": "supergroup",
-                 "title": "The Public Den"},
+                 "title": "The Lobby"},
         "from": {"id": 9911, "username": "bob"}, "text": text,
         "date": time.time()}}
 
@@ -170,7 +170,7 @@ async def test_member_mention_runs_a_room_turn_with_the_earlier_line(monkeypatch
     assert turn["session_id"] == "sess-room-1"
     assert turn["role"] == "member", "a member's line must never be a steer"
     # (a) the context block carries the EARLIER member's line, attributed.
-    assert '<group-context chat="The Public Den" surface="telegram">' in turn["context_block"]
+    assert '<group-context chat="The Lobby" surface="telegram">' in turn["context_block"]
     assert "@alice|8123 (member): anyone tried the bridge?" in turn["context_block"]
     # ... and never the addressed message itself (it is rendered once, below).
     assert "which chains?" not in turn["context_block"]

@@ -1,0 +1,32 @@
+{
+  "function": {
+    "description": "Show the durable conversation history with an external correspondent (what we sent and what they replied, across sessions). Omit surface+address to LIST all conversations (who replied, who has not). Read-only.",
+    "name": "contact_history",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Read the durable conversation history with an external correspondent —\nwhat we sent and what they replied, across sessions (survives compaction).\nOmit surface+address to LIST all conversations (who was contacted, who\nreplied, who hasn't answered yet).",
+      "properties": {
+        "address": {
+          "default": null,
+          "description": "Correspondent address (email address / chat id); omit to list all conversations",
+          "nullable": true,
+          "type": "string"
+        },
+        "limit": {
+          "default": 10,
+          "description": "Max messages/rows to show (<=50)",
+          "nullable": true,
+          "type": "integer"
+        },
+        "surface": {
+          "default": null,
+          "description": "Surface id, e.g. 'email', 'telegram', 'x' (omit together with address to list all conversations)",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

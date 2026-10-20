@@ -173,6 +173,29 @@ def bind_x402_authorization(reference, *, authorizer, nonce, valid_before, asset
                 raise ValueError('x402 authorization does not match a prepared attempt')
 
 
+def release_unsent_x402(reference):
+    """Close an x402 attempt whose payment payload was never created.
+
+    The x402 client calls this ONLY from the SDK's payment-creation failure hook,
+    before its after-creation hook ran: the signer refused (a signer approval, a
+    cap, a pause) or the payload build raised, so no signed authorization left
+    the process and nothing can settle. Without this, the prepared row refused
+    every money rail until an operator released it (085 reval W4). A row that
+    carries authorization terms was signed and is never touched here.
+    """
+    from core.wallet.submission_store import connection
+    if not str(reference or '').startswith('attempt:'):
+        raise ValueError('only an x402 attempt row can be released unsent')
+    with connection(journal_path(), write=True) as db:
+        with db:
+            changed = db.execute(
+                "UPDATE submissions SET state='rejected' WHERE tx_hash=? AND venue='x402' "
+                "AND state='prepared' AND x402_auth IS NULL",
+                (reference,)).rowcount
+            if changed != 1:
+                raise ValueError('unsent x402 release does not match a prepared, unsigned attempt')
+
+
 def x402_authorizations(data_dir=None):
     """The unresolved x402 rows that carry authorization terms (for the expiry
     resolver). Raises on unreadable storage — never a false empty list."""

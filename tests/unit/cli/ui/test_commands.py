@@ -903,6 +903,26 @@ async def test_usage_empty_breakdown_falls_back():
     assert "estimate" in buf.getvalue().lower()
 
 
+@pytest.mark.asyncio
+async def test_usage_keeps_this_chats_breakdown_when_the_admin_home_cannot_be_read(monkeypatch):
+    """An ambiguous/unreadable deployed home must not hide this chat's usage
+    (it did in 1.4.0's place); the spend view says it could not read."""
+    import cli.ui.commands.h_owner as h_owner
+
+    def _boom(*a, **k):
+        raise RuntimeError("ambiguous data home")
+
+    monkeypatch.setattr(h_owner, "_admin_data_dir", _boom)
+    state = SessionState()
+    state.cost_estimate_total = 0.05
+    reg = default_registry()
+    ctx, buf = _plain_ctx(state=state, session_id="s1")
+    await reg.dispatch("/usage", ctx)
+    out = buf.getvalue()
+    assert "0.0500" in out
+    assert "could not read the records" in out and "not a zero" in out
+
+
 # ---------------------------------------------------------------------------
 # /resume — replay against the real captured feed dir
 # ---------------------------------------------------------------------------
@@ -1050,8 +1070,7 @@ def test_goals_not_initialized_uses_candy_grammar(monkeypatch, tmp_path):
     # not a subcommand `/goal` has (it STEERS: show|ready|pause|resume|retry|
     # cancel), so the owner was sent to a usage line instead of a board.
     assert "/goal create" not in out
-    assert "/trade" in out
-    assert "polyrob goals create" in out
+    assert "/goal new" in out
     assert "GOALS_ENABLED" not in out
     assert "--- goals ---" in out  # title on every emit (Wave B1)
 
@@ -1066,7 +1085,7 @@ def test_goals_empty_board_uses_candy_grammar(monkeypatch, tmp_path):
     _h_goals(ctx)
     out = buf.getvalue()
     assert "no goals yet" in out
-    assert "/goal create" not in out and "/trade" in out
+    assert "/goal create" not in out and "/goal new" in out
     assert "--- goals ---" in out
 
 

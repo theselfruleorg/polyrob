@@ -20,8 +20,8 @@ class _Agent:
 
 def test_configured_owner_single_allowed_id(monkeypatch):
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "28436760")
-    assert _configured_owner_telegram_id() == "28436760"
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "100000001")
+    assert _configured_owner_telegram_id() == "100000001"
 
 
 def test_configured_owner_explicit_wins(monkeypatch):
@@ -40,8 +40,8 @@ def test_owner_telegram_falls_back_for_nonnumeric_tenant(monkeypatch):
     """The headline bug: a goal/cron run as user_id='rob' must still resolve the owner."""
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "28436760")
-    assert _owner_telegram(_Agent(), _Job("rob")) == "28436760"
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "100000001")
+    assert _owner_telegram(_Agent(), _Job("rob")) == "100000001"
 
 
 def test_owner_telegram_numeric_uid_is_chat(monkeypatch):
@@ -63,11 +63,11 @@ def test_owner_alias_roundtrip_prod_config(monkeypatch):
     """
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     # No user_directory row maps 'rob' -> a tg chat (the alias skips resolve_internal,
     # and the UNIQUE(tg_user_id) constraint forbids upserting one), so delivery MUST
     # fall through to the configured owner id.
-    assert _owner_telegram(_Agent(), _Job("rob")) == "28436760"
+    assert _owner_telegram(_Agent(), _Job("rob")) == "100000001"
 
 
 def test_owner_telegram_delegates_to_rail_resolver(monkeypatch):

@@ -370,14 +370,14 @@ def register_optional_tool(
             "add a row to core/tool_capabilities.py::TOOL_CAPABILITIES (empty frozenset() "
             "if it genuinely has no money/high-impact/exec/delegation-blocking traits)"
         )
-    # 033: a write-capable row must also name its effect ceiling (writes_*), or
+    # 033: a write-capable row must also name its effect ceiling, or
     # every write it makes is invisible to the effect recorder and the pause gate.
     from core.tool_capabilities import lacks_effect_ceiling
     if lacks_effect_ceiling(display):
         raise ValueError(
-            f"tool {name!r} (display {display!r}) can move money, run code or write "
-            "externally but carries no writes_* effect capability — add its "
-            "ceiling to core/tool_capabilities.py (033)")
+            f"tool {name!r} (display {display!r}) writes externally but carries no "
+            "effect capability (writes_*, money, exec) — add its ceiling to "
+            "core/tool_capabilities.py (033)")
     if name not in TOOL_DESCRIPTORS:
         TOOL_DESCRIPTORS[name] = descriptor
     register_tool_class(name, tool_cls)

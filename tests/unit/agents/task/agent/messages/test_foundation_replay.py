@@ -37,13 +37,18 @@ def _mm(session_id=SESSION, model="gpt-4o"):
     )
 
 
-def _dress(mm, suffix=""):
-    """Fill every foundation slot with recognisable rendered bytes."""
+def _dress(mm, suffix="", rules_suffix=""):
+    """Fill every foundation slot with recognisable rendered bytes.
+
+    2026-10-13 A2: ``suffix`` varies the layers that REPLAY (identity, project
+    context, tool catalog); ``rules_suffix`` varies the ``refresh_on_reload``
+    layers (environment, self-context, skills), whose differing fresh render
+    stands on reload."""
     mm.set_runtime_identity(f"model{suffix}", f"provider{suffix}")
-    mm.set_environment_message(f"the environment as rendered{suffix}")
-    mm.set_self_context_message(f"who I am{suffix}")
+    mm.set_environment_message(f"the environment as rendered{rules_suffix}")
+    mm.set_self_context_message(f"who I am{rules_suffix}")
     mm.set_project_context_message(f"the project rules{suffix}")
-    mm.set_skill_message(f"skill catalog{suffix}")
+    mm.set_skill_message(f"skill catalog{rules_suffix}")
     mm.set_tool_catalog_message(f"- done: finish [ready]{suffix}")
     return mm
 

@@ -11,7 +11,7 @@ The tracked files here are templates/examples only.
 tier — the OSS self-hosting posture where `polyrob serve` / `python main.py`
 runs on a box with no unit-file env management. Nothing else needs it:
 
-- **Systemd deploys (Rob #1 prod)** read `/etc/polyrob/polyrob.env` via the
+- **Systemd deploys (the VPS prod shape)** read `/etc/polyrob/polyrob.env` via the
   unit file. They never read this directory.
 - **The local CLI** keeps these files only as the LOWEST-precedence
   back-compat layers. CLI keys belong in `~/.polyrob/.env` — copy them once

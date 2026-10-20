@@ -1,8 +1,9 @@
 """ONE config control plane (proposal 018 P1): describe / explain / search / set.
 
 POLYROB's configuration lives in several composed stores — the env-flag catalog
-(~400 documented flags, ``core/flags.py``), the typed per-tenant preferences
-overlay (``core/prefs.py``), a 7-file env ladder (``core/paths.py``), and the
+(``core/flags.py``), the typed per-tenant preferences overlay
+(``core/prefs.py``), the ONE env ladder (``core/paths.py``: process env > the
+instance file > ``~/.polyrob/.env``), and the
 model-resolution ladder (``core/runtime_config.py``). Each is internally
 consistent; what never existed was ONE seam that composes them, so every
 surface (REPL ``/config``, ``polyrob config``, webview, Telegram, the agent's
@@ -13,10 +14,11 @@ existing writer with its existing validation/quarantine semantics:
 
 - pref  → ``write_preference`` (safe / guarded+confirm) or
           ``propose_pref_change`` (guarded, queued for owner review)
-- flag  → shape-checked ``KEY=value`` upsert into the project
-          (``./.polyrob/.env``) or global (``~/.polyrob/.env``) env file
-          (the ``polyrob config set`` contract; server/operator files
-          ``config/.env.*`` are NEVER written from here)
+- flag  → shape-checked ``KEY=value`` upsert into :func:`home_env_path` —
+          the instance file ``<deployed data home>/.env`` on a deployed box,
+          else ``~/.polyrob/.env`` — refused when a higher layer pins the key
+          (:func:`shadowed_write_refusal`); ``/etc/polyrob/polyrob.env`` is
+          NEVER written from here
 
 Security invariants (pinned by tests/unit/core/test_config_service.py):
 secrets are never readable back through any accessor (masking via
@@ -58,7 +60,7 @@ _SCOPES = ("user", "project", "global")
 class Source:
     """One rung of a setting's provenance chain (display-safe value)."""
     value: object
-    origin: str  # pref:<uid> | env:process | env:<FLAG> | env-file:<path> | built-in* | default(...)
+    origin: str  # pref:<uid> | env:systemd (<path>) | env:shell | env:file (<path>) | env:<FLAG> | built-in* | default(...)
 
 
 @dataclass(frozen=True)
@@ -172,15 +174,23 @@ def _describe_flag(key: str, include_chain: bool) -> SettingInfo:
     chain = ()
     if include_chain:
         rungs = []
+        # 080 WS-1: the same three labels on every seat — env:systemd (the
+        # deployed EnvironmentFile), env:shell (a process export), env:file.
+        readable, sysval = _systemd_value(key)
+        if readable and sysval is not None:
+            rungs.append(Source(_mask(key, sysval), f"env:systemd ({_systemd_env_file()})"))
         raw = os.environ.get(key)
-        if raw is not None and raw.strip() != "":
-            rungs.append(Source(_mask(key, raw), "env:process"))
+        origin = process_env_origin(key)
+        if origin == "shell" or (origin == "systemd" and not (readable and sysval is not None)):
+            label = ("env:shell" if origin == "shell"
+                     else f"env:systemd ({_systemd_env_file()})")
+            rungs.append(Source(_mask(key, raw), label))
         for cand in _existing_env_files():
             try:
                 from core.env_file import read_env_file
                 vals = read_env_file(cand)
                 if key in vals:
-                    rungs.append(Source(_mask(key, vals[key]), f"env-file:{cand}"))
+                    rungs.append(Source(_mask(key, vals[key]), f"env:file ({cand})"))
             except Exception:
                 continue
         dyn = dynamic_flag_default(key)
@@ -245,23 +255,107 @@ def _flag_applies(key: str) -> str:
 
 
 def _existing_env_files() -> list:
-    """Existing .env candidate paths, local ladder first then server ladder
-    (deduped). Attribution is read-only display — showing every file that
-    holds the key is honest regardless of which ladder loaded this process."""
+    """Existing .env candidate paths of the ONE ladder, highest first."""
     try:
         from core.paths import env_file_candidates
-        seen, out = set(), []
-        for local in (True, False):
-            for cand in env_file_candidates(local_mode=local):
-                p = cand.path
-                if p in seen:
-                    continue
-                seen.add(p)
-                if p.exists():
-                    out.append(p)
-        return out
+        return [c.path for c in env_file_candidates() if c.path.exists()]
     except Exception:
         return []
+
+
+# ---------------------------------------------------------------------------
+# provenance of a process-env value (080 WS-1)
+# ---------------------------------------------------------------------------
+
+#: key -> (value, path) for every env var a ladder FILE put into this process
+#: (``polyrob.app.bootstrap.load_env`` records it). A process value that is not
+#: here — or no longer equals the loaded value — was exported by the shell or
+#: the service manager.
+_FILE_LOADED: dict = {}
+
+
+def note_file_loaded(path, values: dict) -> None:
+    """Record the keys a ladder file is about to set (absent from the env)."""
+    for key, val in (values or {}).items():
+        if val is not None and key not in os.environ:
+            _FILE_LOADED[key] = (str(val), str(path))
+
+
+def reset_file_loaded_env() -> None:
+    """Forget the file-loaded record (tests)."""
+    _FILE_LOADED.clear()
+
+
+def _systemd_value(key: str):
+    """``(readable, value)`` for *key* in the deployed systemd env file.
+
+    ``readable`` False = a deployed box whose file this euid cannot read (the
+    service identities: root 0600). ``(True, None)`` = not deployed, or the file
+    does not hold the key."""
+    try:
+        import core.admin_data_home as adh
+        if not adh._deployment_evidence():
+            return True, None
+        return True, adh.deployed_env_value(key)
+    except Exception:
+        return False, None
+
+
+def process_env_origin(key: str) -> Optional[str]:
+    """Where this process's value of *key* came from: ``file`` | ``systemd`` |
+    ``shell`` — or None when the key is not in the process env."""
+    raw = os.environ.get(key)
+    if raw is None or str(raw).strip() == "":
+        return None
+    loaded = _FILE_LOADED.get(key)
+    if loaded is not None and loaded[0] == str(raw):
+        return "file"
+    readable, sysval = _systemd_value(key)
+    if not readable or (sysval is not None and str(sysval) == str(raw)):
+        return "systemd"
+    return "shell"
+
+
+def _systemd_env_file() -> str:
+    from core.admin_data_home import DEPLOYED_ENV_FILE
+    return DEPLOYED_ENV_FILE
+
+
+def pinning_layer(key: str):
+    """The layer ABOVE the instance/home env file that pins *key*, or None.
+
+    Returns ``(label, where, value)``: ``env:systemd`` (the deployed
+    ``EnvironmentFile``, which every service of the instance starts with) or
+    ``env:shell`` (a process-env value that did not come from a ladder file).
+    The process env beats every file at the next start, so a different value
+    written below it would apply nothing."""
+    readable, sysval = _systemd_value(key)
+    if readable and sysval is not None:
+        return ("env:systemd", _systemd_env_file(), sysval)
+    origin = process_env_origin(key)
+    if origin == "systemd":
+        return ("env:systemd", _systemd_env_file(), os.environ.get(key))
+    if origin == "shell":
+        return ("env:shell", "this process's environment (a shell or service export)",
+                os.environ.get(key))
+    return None
+
+
+def shadowed_write_refusal(key: str, value) -> Optional[str]:
+    """The refusal for a write a higher layer pins to a DIFFERENT value, or None."""
+    try:
+        layer = pinning_layer(key)
+    except Exception:
+        logger.debug("config_service: pin check failed for %s", key, exc_info=True)
+        return None
+    if layer is None or str(layer[2]) == str(value):
+        return None
+    label, where, _val = layer
+    if label == "env:systemd":
+        return (f"nothing written: `{key}` is set in {where}, which wins — "
+                f"change it there")
+    return (f"nothing written: `{key}` is set in {where}, which wins over "
+            f"{home_env_path()} — unset or change it there")
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +420,8 @@ def search(query: str, *, user_id: Optional[str] = None, home_dir=None,
 #   file    — operator env file / local CLI only: it binds the owner, a money
 #             bound, approval, posture or trust, a guard, a tool set, or where
 #             data, code, inference or money goes. A remote write lands in
-#             ./.polyrob/.env, which OUTRANKS /etc/polyrob/polyrob.env on the
-#             next restart, so these would hand the instance over;
+#             the instance env file every process of the instance reads, so a
+#             remote surface must never set one of these;
 #   secret  — file, and the value is masked.
 #
 # An UNKNOWN flag-shaped name is refused (fail closed); a typed preference key
@@ -419,7 +513,9 @@ def set_value(key: str, value: str, *, scope: Optional[str] = None,
     try:
         from core import lifecycle
         lifecycle.record_pending(key, scope or "global")
-        hint = lifecycle.restart_hint(surface)
+        store = str(res.store or "")
+        hint = lifecycle.restart_hint(
+            surface, written=Path(store) if store.endswith(".env") else None)
     except Exception:  # noqa: BLE001 — a hint never fails a completed write
         logger.debug("config_service: pending-restart record skipped", exc_info=True)
         hint = ""
@@ -514,6 +610,11 @@ def _write_env(path: Path, key: str, value: str, scope: str) -> Optional[str]:
     try:
         from core.env_file import upsert_env_var
         upsert_env_var(path, key, str(value), secure=True)
+        # 080 WS-1: the instance file is read by every service identity of the
+        # instance (group polyrob-data), so it is 0640, not 0600.
+        from core.runtime_paths import instance_env_path
+        if instance_env_path() == Path(path):
+            os.chmod(path, 0o640)
     except Exception as e:
         return f"write failed: {e}"
     return None
@@ -528,6 +629,9 @@ def _set_raw(key: str, value: str, scope: str, *, forced: bool) -> SetResult:
     write_err = env_write_error(key, str(value))
     if write_err:
         return SetResult(False, "invalid", write_err)
+    pinned = shadowed_write_refusal(key, value)
+    if pinned:
+        return SetResult(False, "refused", pinned)
     path = _env_path(scope)
     err = _write_env(path, key, value, scope)
     if err:
@@ -592,6 +696,9 @@ def _set_flag(key: str, value: str, scope: str, *, surface: str = "local",
     write_err = env_write_error(key, str(value))
     if write_err:
         return SetResult(False, "invalid", write_err)
+    pinned = shadowed_write_refusal(key, value)
+    if pinned:
+        return SetResult(False, "refused", pinned)
     path = _env_path(scope)
     err = _write_env(path, key, value, scope)
     if err:
@@ -606,6 +713,7 @@ def _set_flag(key: str, value: str, scope: str, *, surface: str = "local",
         from core.config_policy.live_apply import live_apply_allowed
         if live_apply_allowed(key):
             os.environ[key] = str(value)
+            _FILE_LOADED[key] = (str(value), str(path))  # it came from this file write
             applied_live = True
             applies = "live"
     display = ("(set, masked)" if (is_secret_flag(key) or _is_secret_shaped(key))
@@ -654,6 +762,7 @@ def _set_member(key: str, value: str, scope: str, *, surface: str = "local",
     applies = res.applies
     if live and surface == "local" and live_apply_allowed(key):
         os.environ[OVERRIDES_ENV] = with_override(os.environ.get(OVERRIDES_ENV), key, value)
+        _FILE_LOADED[OVERRIDES_ENV] = (os.environ[OVERRIDES_ENV], str(path))
         applied_live, applies = True, "live"
     effect = ("applies: live in this session + persisted for the next start"
               if applied_live else "takes effect: restart")
@@ -664,13 +773,16 @@ def _set_member(key: str, value: str, scope: str, *, surface: str = "local",
 
 
 def home_env_path() -> Path:
-    """The env file the local CLI READS — and so the only one it writes.
+    """The env file this process READS first — and so the only one it writes.
 
-    The ``home`` tier of ``core.paths.env_file_candidates`` (``$POLYROB_HOME/
-    .env``; the active profile's ``.env`` when a profile is selected). A write
-    resolved any other way can land in a file ``load_env`` never opens."""
+    The top tier of ``core.paths.env_file_candidates``: on a box with a deployed
+    instance the ONE instance file ``<deployed data home>/.env`` (080 WS-1 —
+    agent, console, email, gateway and a root CLI all resolve it), else
+    ``$POLYROB_HOME/.env`` (the active profile's ``.env`` when a profile is
+    selected). A write resolved any other way can land in a file ``load_env``
+    never opens."""
     from core.paths import env_file_candidates
-    return env_file_candidates(local_mode=True)[0].path
+    return env_file_candidates()[0].path
 
 
 def legacy_project_env_path() -> Path:
@@ -709,9 +821,6 @@ def post_write_notes(key: str, value: str, scope: str, *,
         process-env value that differs from the effective file value.
       - P1.6 clamp echo: AUTONOMY_MODE=autonomous evaluates the would-be
         single-owner clamp NOW and names the missing prerequisite.
-      - P1.5 server honesty: a remote surface (webview/telegram) whose serving
-        process reads the server env ladder is told the .polyrob write applies
-        to CLI runs only.
     Never raises; returns [] on any resolution error.
     """
     notes: list = []
@@ -730,9 +839,12 @@ def post_write_notes(key: str, value: str, scope: str, *,
                 f"`polyrob config set {key} … --global`")
         effective_file = glob_vals.get(key)
         env_raw = os.environ.get(key)
+        # 080 WS-1: a value this process loaded from the file itself is not a
+        # shell/systemd export — the old note blamed one falsely (sim B).
         if (env_raw is not None and str(env_raw).strip() != ""
                 and effective_file is not None
-                and str(env_raw) != str(effective_file)):
+                and str(env_raw) != str(effective_file)
+                and process_env_origin(key) in ("shell", "systemd")):
             notes.append(
                 f"note: this process started with {key}={_mask(key, env_raw)}; "
                 "a shell/systemd-exported value wins over every file at the "
@@ -752,14 +864,4 @@ def post_write_notes(key: str, value: str, scope: str, *,
                 notes.append("autonomy mode after restart: autonomous (effective)")
         except Exception:
             logger.debug("post_write_notes clamp echo failed", exc_info=True)
-    if surface != "local":
-        try:
-            from core.config_policy.policy import local_mode_enabled
-            if not local_mode_enabled():
-                notes.append(
-                    "note: this serving process reads the server env ladder "
-                    "(config/.env.* / systemd EnvironmentFile), not "
-                    ".polyrob/.env — the write applies to CLI runs only")
-        except Exception:
-            logger.debug("post_write_notes server-ladder check failed", exc_info=True)
     return notes

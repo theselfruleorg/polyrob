@@ -74,6 +74,10 @@ def _canonical_pins() -> Dict[Tuple[str, str], Dict[str, object]]:
         if row.usdc:
             pins[(row.name, row.usdc)] = {
                 "symbol": "USDC", "name": "USD Coin", "decimals": 6}
+        for addr, symbol, name, decimals in row.stables:
+            # Each stable carries its OWN verified identity (USDG is not USDC).
+            pins[(row.name, addr)] = {
+                "symbol": symbol, "name": name, "decimals": decimals}
         if row.wrapped_native:
             # The NAME is derived, never hardcoded: Polygon's wrapped native is
             # WPOL, and labelling it "Wrapped Ether" would put a false identity

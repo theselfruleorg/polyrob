@@ -31,18 +31,12 @@ def _status_db_path() -> Path:
     explicit = (os.environ.get("DB_PATH") or "").strip()
     if explicit:
         return Path(explicit).expanduser().resolve()
-    from core.runtime_paths import resolve_data_home
-    home_db = resolve_data_home() / "database" / "bot.db"
-    # ``upgrade`` opens bot.db through BotConfig, which anchors its relative
-    # ``data_dir="data"`` on POLYROB_DATA_DIR — so a server home keeps the db at
-    # ``$POLYROB_DATA_DIR/data/database/bot.db``. Read that one when it exists,
-    # or status reports "needs baseline" right after a successful upgrade.
-    data_dir = (os.environ.get("POLYROB_DATA_DIR") or "").strip()
-    if data_dir:
-        upgraded = Path(data_dir).expanduser() / "data" / "database" / "bot.db"
-        if upgraded.is_file() or not home_db.is_file():
-            return upgraded.resolve()
-    return home_db
+    from core.runtime_paths import bot_db_default_path, effective_data_home
+    # 080 WS-1: BotConfig.data_dir IS the data home (no ``<home>/data`` tree), so
+    # ``upgrade`` and ``status`` open the same <data home>/database/bot.db —
+    # through the SAME anchor BotConfig uses (``effective_data_home``; the local
+    # ``resolve_data_home`` differs from it when POLYROB_DATA_DIR is unset).
+    return Path(bot_db_default_path(str(effective_data_home()))).resolve()
 
 
 def display_status_readonly() -> bool:

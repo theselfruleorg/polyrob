@@ -164,7 +164,7 @@ def dashboard(multitenant, posture, host, port, no_browser, set_password):
     # instead of letting chat fail deep in the request handler.
     from polyrob.app.bootstrap import load_env
     from modules.llm.profiles import usable_providers_with_credentials
-    load_env(local_mode=True)
+    load_env()
     if not usable_providers_with_credentials(os.environ):
         click.echo(click.style("[polyrob] WARN: ", fg="yellow")
                    + "no usable provider key — chat will fail until you set one "

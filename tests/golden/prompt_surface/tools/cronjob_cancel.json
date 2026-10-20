@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Cancel a scheduled cron job by id.",
+    "name": "cronjob_cancel",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "forever": {
+          "default": false,
+          "description": "Only when the OWNER asked in this turn: also stop the job's lane (its pinned skill, else its rig), so no new job in it is created until the owner re-arms it (/job allow <lane>).",
+          "type": "boolean"
+        },
+        "job_id": {
+          "description": "The id of the cron job to cancel.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

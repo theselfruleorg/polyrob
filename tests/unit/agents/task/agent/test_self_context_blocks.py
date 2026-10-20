@@ -78,8 +78,9 @@ def test_replay_round_trips_the_blocks(monkeypatch):
 	a.set_self_context_blocks(BLOCKS)
 	blob = json.loads(json.dumps(capture_foundation(a)))
 	assert isinstance(blob["self_context_blocks"], list)
+	# 2026-10-13 A2: a DIFFERENT fresh render now stands (stale owner rules must not
+	# come back); with no fresh render yet, the persisted blocks replay.
 	b = _mm()
-	b.set_self_context_blocks((("soul", "a different render"),))
 	assert replay_foundation(b, blob)
 	assert [m.content for m in b._self_context_blocks] == [m.content for m in a._self_context_blocks]
 	assert b._self_context_message is None
@@ -87,13 +88,14 @@ def test_replay_round_trips_the_blocks(monkeypatch):
 
 def test_a_pre_060_blob_replays_the_weld_and_clears_live_blocks(monkeypatch):
 	"""An F13 blob written before 060 has no blocks key: it is still whole, and
-	its combined message must not stack on the freshly rendered blocks."""
+	its combined message must not stack on a live blocks slot. (2026-10-13 A2: a
+	fresh self-context render that DIFFERS stands instead — see
+	test_ws5_foundation_refresh.py; here the live slot is empty.)"""
 	old = _mm()
 	old.set_self_context_message("the old weld")
 	blob = json.loads(json.dumps(capture_foundation(old)))
 	blob.pop("self_context_blocks", None)
 	live = _mm()
-	live.set_self_context_blocks(BLOCKS)
 	assert replay_foundation(live, blob)
 	got = _self_ctx(live.get_messages_for_llm(consume_ephemeral=False))
 	assert [m.content for m in got] == [old._self_context_message.content]

@@ -18,7 +18,7 @@ def test_prior_artifacts_appear_in_the_retry_prompt():
                 payload={"attempts": [{"error": "ran out of steps", "ts": 1}]})
 
     task = build_goal_run_task(
-        goal, None,
+        goal,
         prior_artifacts=[("x402-round4-decode.md", 2845),
                          ("sweep-ledger.json", 10240)])
 
@@ -31,7 +31,7 @@ def test_the_prompt_tells_the_run_to_continue_not_restart():
     goal = Goal(id="g1", user_id="rob", title="x402 Round 4",
                 payload={"attempts": [{"error": "ran out of steps", "ts": 1}]})
 
-    task = build_goal_run_task(goal, None,
+    task = build_goal_run_task(goal,
                               prior_artifacts=[("evidence.md", 100)])
 
     lowered = task.lower()
@@ -44,11 +44,11 @@ def test_no_prior_artifacts_leaves_the_prompt_unchanged():
     goal = Goal(id="g1", user_id="rob", title="x402 Round 4",
                 payload={"attempts": [{"error": "ran out of steps", "ts": 1}]})
 
-    assert build_goal_run_task(goal, None, prior_artifacts=[]) == \
-        build_goal_run_task(goal, None)
+    assert build_goal_run_task(goal, prior_artifacts=[]) == \
+        build_goal_run_task(goal)
 
 
 def test_a_first_attempt_is_unchanged():
     goal = Goal(id="g1", user_id="rob", title="x402 Round 4")
 
-    assert "ALREADY PRODUCED" not in build_goal_run_task(goal, None)
+    assert "ALREADY PRODUCED" not in build_goal_run_task(goal)

@@ -1,4 +1,4 @@
-from agents.task.agent.skill_validation import validate_authored, validate_consumed
+from core.skills.frontmatter import validate_authored, validate_consumed
 
 def _errs(issues): return [i.code for i in issues if i.level == "error"]
 

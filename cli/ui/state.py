@@ -63,7 +63,6 @@ class SessionState:
         cost_estimate_total: Running sum of ``LLMCall.cost_estimate`` values.
 
         step:             Current step number.
-        max_steps:        Maximum steps (not in feed; settable externally).
         tool_calls:       Count of tool-execution events seen.
         errors:           Count of error events seen.
 
@@ -99,7 +98,6 @@ class SessionState:
 
         # Step / progress
         self.step: int = 0
-        self.max_steps: Optional[int] = None
         self.tool_calls: int = 0
         self.errors: int = 0
 

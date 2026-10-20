@@ -1,12 +1,13 @@
 ---
 name: post-trade-verify
-description: 'Verify a trade after it confirms: receipt, measured amount received, the bought token at the intended address, the measured amount beside the quote, leftover allowances, the ledger row, and reconcile. A tx hash is not proof.'
+description: 'Verify a trade after it confirms: receipt, measured amount received, the bought token at the intended address, the measured amount beside the quote, leftover allowances, the position book, and reconcile. A tx hash is not proof.'
 license: MIT
 metadata:
+  polyrob-when: 'Checking a trade after it confirms'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["verify the trade","verify the fill","verify the swap","did the swap land","trade receipt","tx receipt","fill price","confirm the fill","realized slippage"],"task_patterns":["(verify|confirm|check).*(fill price|tx receipt|trade receipt|swap landed|trade landed)"],"tool_ids":["defi_trade","defi_data"]}'
-  polyrob-version: '3'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-version: '4'
 ---
 # Post-Trade Verify — a tx hash is not proof
 
@@ -56,14 +57,14 @@ unknown.
    is in `defi_data.positions`, and that is the cost you report.
 4. **Leftovers.** An allowance you granted for a one-off trade: revoke it.
    Dust left in `token_in`: record it; do not chase it.
-5. **Write the ledger row** (see `position-journal`) with the tx hash, the
-   address, the MEASURED quantity (the chain delta — never the quote and never
-   a "fill" a tool result reported), the basis from `defi_data.positions` (or
-   `unknown`), and the reason for the trade.
-   `positions` also says where its size came from: `measured from the swap
-   receipt`, or `QUOTED size, not measured` — a quoted size is not proof.
-6. **Reconcile when anything looked off:** `defi_data.reconcile(chain=…,
-   ledger_path=…)`. Its verdict is authoritative over your memory.
+5. **Check the book** (see `position-journal`): `defi_data.positions(chain=…)`
+   shows the position at the address with its size and basis (or `unknown`).
+   It also says where its size came from: `measured from the swap receipt`,
+   or `QUOTED size, not measured` — a quoted size is not proof. Report the tx
+   hash, the MEASURED quantity (the chain delta — never the quote and never a
+   "fill" a tool result reported), and the reason for the trade.
+6. **Reconcile when anything looked off:** `defi_data.reconcile(chain=…)`. Its
+   verdict is authoritative over your memory.
 
 ## Honest reporting
 

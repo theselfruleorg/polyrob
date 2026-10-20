@@ -8,6 +8,7 @@ callers compute ``next_run_at`` with :mod:`cron.schedule` and hand it in.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -15,6 +16,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from core.sqlite_util import execute_retry
+
+logger = logging.getLogger(__name__)
+
+#: Store paths whose dead state ``CronJobStore._clear_dead_state`` already cleared.
+_CLEARED_STORES: set = set()
 
 
 @dataclass
@@ -34,7 +40,7 @@ class CronJob:
     max_duration_seconds: int = field(default_factory=lambda: default_max_duration_sec())
     payload: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
-    status: str = "scheduled"  # scheduled|running|done|failed|cancelled
+    status: str = "scheduled"  # scheduled|running|paused|done|failed|cancelled
     last_run_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
@@ -68,8 +74,11 @@ def default_max_duration_sec() -> int:
 
 
 def is_money_job(job) -> bool:
+    """Whether *job* is money-class: ``core.money.classify.is_money_class`` over its
+    payload (``priority=money`` OR a toolset/rig holding a money tool — review B-1)."""
     try:
-        return str((getattr(job, "payload", None) or {}).get("priority") or "").lower() == CRON_PRIORITY_MONEY
+        from core.money.classify import is_money_class
+        return is_money_class(getattr(job, "payload", None) or {})
     except Exception:
         return False
 
@@ -135,6 +144,29 @@ class CronJobStore:
             )
             """
         )
+        self._clear_dead_state()
+
+    def _clear_dead_state(self) -> None:
+        """Once per process per store: a 'done' or 'failed' row written before the
+        terminal write disabled it is disabled now, and the payload keys of the deleted
+        authorship model (``authored_by``, ``adopted_skills_digest``) are
+        dropped. Idempotent; fail-open (a busy store retries next process)."""
+        if self.db_path in _CLEARED_STORES:
+            return
+        try:
+            execute_retry(self.db_path,
+                          "UPDATE cron_jobs SET enabled=0 "
+                          "WHERE status IN ('done','failed') AND enabled=1")
+            execute_retry(
+                self.db_path,
+                "UPDATE cron_jobs SET payload=json_remove(payload, '$.authored_by', "
+                "'$.adopted_skills_digest') WHERE json_valid(payload) AND ("
+                "json_type(payload, '$.authored_by') IS NOT NULL OR "
+                "json_type(payload, '$.adopted_skills_digest') IS NOT NULL)")
+            _CLEARED_STORES.add(self.db_path)
+        except Exception:
+            logger.debug("cron store dead-state clear failed for %s", self.db_path,
+                         exc_info=True)
 
     # --- row mapping ---------------------------------------------------------
 
@@ -216,19 +248,26 @@ class CronJobStore:
             # schedule edit or cancellation that landed during the run.
             unchanged = "schedule_spec=? AND one_shot=? AND next_run_at IS ?"
             match = (expected.schedule_spec, int(expected.one_shot), _iso(expected.next_run_at))
+            # A job that reaches a terminal state ('done' or 'failed') is
+            # disabled in the same write: nothing will run it again, and
+            # enabled=1 kept its prose in the live rail readers (rules sweep,
+            # status rail prose).
             execute_retry(
                 self.db_path,
                 f"""UPDATE cron_jobs SET last_run_at=?,
                     next_run_at=CASE WHEN {unchanged} THEN ? ELSE next_run_at END,
+                    enabled=CASE WHEN {unchanged} AND ? IN ('done','failed') THEN 0 ELSE 1 END,
                     status=CASE WHEN {unchanged} THEN ? ELSE 'scheduled' END
                     WHERE id=? AND enabled=1 AND status='running'""",
-                (_iso(last_run_at), *match, _iso(next_run_at), *match, status, job_id),
+                (_iso(last_run_at), *match, _iso(next_run_at), *match, status,
+                 *match, status, job_id),
             )
             return
         execute_retry(
             self.db_path,
-            "UPDATE cron_jobs SET last_run_at=?, next_run_at=?, status=? WHERE id=?",
-            (_iso(last_run_at), _iso(next_run_at), status, job_id),
+            "UPDATE cron_jobs SET last_run_at=?, next_run_at=?, status=?, "
+            "enabled=CASE WHEN ? IN ('done','failed') THEN 0 ELSE enabled END WHERE id=?",
+            (_iso(last_run_at), _iso(next_run_at), status, status, job_id),
         )
 
     def run_now(self, job_id: str, now: datetime) -> bool:
@@ -241,7 +280,52 @@ class CronJobStore:
         return rearm_job(self.db_path, job_id, now)
 
     def set_status(self, job_id: str, status: str) -> None:
-        execute_retry(self.db_path, "UPDATE cron_jobs SET status=? WHERE id=?", (status, job_id))
+        """Scheduler-internal status write. Never lifts an owner pause (080
+        WS-2): a run the autonomy pause cut short goes back to 'scheduled',
+        but a job the owner paused mid-run stays paused."""
+        execute_retry(self.db_path,
+                      "UPDATE cron_jobs SET status=? WHERE id=? AND status!='paused'",
+                      (status, job_id))
+
+    # --- owner job state (080 WS-2) -------------------------------------------
+    #
+    # A paused job is the job's OWN state, not a rule elsewhere: status
+    # 'paused', no next run (nothing will run it, so nothing is shown), and
+    # ``payload.paused`` names who paused it and when. ``due``/``claim_for_run``
+    # only take 'scheduled' rows, so the ticker never sees a paused job.
+
+    def pause(self, job_id: str, *, user_id: Optional[str], note: Dict[str, Any]) -> bool:
+        """'scheduled'/'running' -> 'paused', next run cleared, ``payload.paused``
+        = *note*. A CAS on status; True iff the row moved."""
+        sql = ("UPDATE cron_jobs SET status='paused', next_run_at=NULL, "
+               "payload=json_set(payload, '$.paused', json(?)) "
+               "WHERE id=? AND enabled=1 AND status IN ('scheduled','running')")
+        params: tuple = (json.dumps(note), job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
+
+    def resume(self, job_id: str, *, user_id: Optional[str],
+               next_run_at: datetime) -> bool:
+        """'paused' -> 'scheduled' at *next_run_at*; drops ``payload.paused``."""
+        sql = ("UPDATE cron_jobs SET status='scheduled', next_run_at=?, "
+               "payload=json_remove(payload, '$.paused') "
+               "WHERE id=? AND enabled=1 AND status='paused'")
+        params: tuple = (_iso(next_run_at), job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
+
+    def record_outcome(self, job_id: str, outcome: str, at: datetime) -> None:
+        """Store the last run's outcome on the row (``payload.last_outcome``):
+        recurring jobs go back to 'scheduled' after every run, so the status
+        alone never says how the last run ended. Merges; never replaces."""
+        execute_retry(
+            self.db_path,
+            "UPDATE cron_jobs SET payload=json_set(payload, '$.last_outcome', json(?)) WHERE id=?",
+            (json.dumps({"outcome": str(outcome), "at": _iso(at)}), job_id))
 
     def claim_for_run(self, job_id: str, *, now: Optional[datetime] = None,
                       preempting_only: bool = False) -> Optional[CronJob]:
@@ -328,7 +412,11 @@ class CronJobStore:
             return False
         if nxt is None:
             return False
-        sql = "UPDATE cron_jobs SET schedule_spec=?, one_shot=?, next_run_at=? WHERE id=? AND status IN ('scheduled','running')"
+        # A paused job keeps no next run (080 WS-2): the new spec is stored and
+        # ``resume`` computes the run from it.
+        sql = ("UPDATE cron_jobs SET schedule_spec=?, one_shot=?, next_run_at="
+               "CASE WHEN status='paused' THEN NULL ELSE ? END "
+               "WHERE id=? AND status IN ('scheduled','running','paused')")
         params: tuple = (schedule_spec, int(schedule.one_shot), nxt.isoformat(), job_id)
         if user_id is not None:
             sql += " AND user_id=?"
@@ -415,11 +503,19 @@ class CronJobStore:
         return int(execute_retry(self.db_path,
                                  f"DELETE FROM cron_jobs {where}", params) or 0)
 
-    def cancel(self, job_id: str, *, user_id: Optional[str] = None) -> bool:
-        sql = "UPDATE cron_jobs SET enabled=0, status='cancelled' WHERE id=?"
-        params: tuple = (job_id,)
+    def cancel(self, job_id: str, *, user_id: Optional[str] = None,
+               note: Optional[Dict[str, Any]] = None) -> bool:
+        """Stop the job for good. *note* (who stopped it, via which seat, when)
+        lands on ``payload.stopped`` so the row itself answers "who stopped it"."""
+        if note:
+            sql = ("UPDATE cron_jobs SET enabled=0, status='cancelled', "
+                   "payload=json_set(payload, '$.stopped', json(?)) WHERE id=?")
+            params: tuple = (json.dumps(note), job_id)
+        else:
+            sql = "UPDATE cron_jobs SET enabled=0, status='cancelled' WHERE id=?"
+            params = (job_id,)
         if user_id is not None:
             sql += " AND user_id=?"
-            params = (job_id, user_id)
+            params = params + (user_id,)
         rowcount = execute_retry(self.db_path, sql, params)
         return bool(rowcount)

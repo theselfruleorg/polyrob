@@ -39,6 +39,8 @@ from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
 # F28: the parent context a child inherits is third-party DATA, not task text.
 # `core.security` is a lower tier than `agents`, so this is a downward import.
 from core.security.untrusted_wrap import wrap_untrusted
+from agents.task.agent.core.run_budget import attach_parent_run_budget
+from agents.task.runtime.stop_reason import StopReason, describe_stop_reason, label_last_report
 
 if TYPE_CHECKING:
     from agents.task.agent.orchestrator import SessionOrchestrator
@@ -58,6 +60,17 @@ class SubAgentUsage:
     llm_calls: int = 0
 
 
+def _report_cap_chars() -> int:
+    """The child report's cap: the tool-result wire cap (``TOOL_RESULT_MAX_TOKENS``),
+    24k chars when that cap is off."""
+    try:
+        from agents.task.agent.core.result_budget import _CHARS_PER_TOKEN, tool_result_max_tokens
+        tokens = tool_result_max_tokens()
+        return tokens * _CHARS_PER_TOKEN if tokens > 0 else 24_000
+    except Exception:
+        return 24_000
+
+
 @dataclass
 class SubAgentOutput:
     """Structured output from a sub-agent execution.
@@ -69,9 +82,32 @@ class SubAgentOutput:
     files_created: List[str] = field(default_factory=list)
     tool_results: List[Dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
+    #: 2026-10-13 review D2 — the child's own ``done()`` report. It used to arrive
+    #: as "Content 1" cut to 500 chars under an always-set summary.
+    final_text: str = ""
+    #: the parent-workspace file holding the full report when it is over the cap.
+    report_file: str = ""
+
+    def _report_part(self) -> str:
+        if not self.final_text:
+            return ""
+        cap = _report_cap_chars()
+        text = self.final_text
+        if len(text) <= cap:
+            return f"**Report:**\n{text}"
+        where = (f'the full report ({len(text):,} chars) is in the workspace file '
+                 f'"{self.report_file}" — read it with filesystem_read_file('
+                 f'file_path="{self.report_file}", char_offset=0)'
+                 if self.report_file else "the rest was not saved")
+        return f"**Report:**\n{text[:cap]}\n[…report truncated: {cap:,} of {len(text):,} chars; {where}]"
 
     def to_string(self, max_length: int = 4000) -> str:
-        """Convert to string for backward compatibility."""
+        """Convert to string for backward compatibility.
+
+        The child's ``done()`` report leads and is capped by the tool-result cap
+        (D2), not by *max_length*; *max_length* bounds the rest (summary, files,
+        data items)."""
+        report = self._report_part()
         parts = []
 
         if self.summary:
@@ -81,18 +117,20 @@ class SubAgentOutput:
             parts.append(f"**Files Created:** {', '.join(self.files_created[:10])}")
 
         if self.extracted_content:
-            # Include first few items of extracted content
-            for i, item in enumerate(self.extracted_content[:3]):
+            # Include first few items of extracted content (the report is shown above)
+            items = [x for x in self.extracted_content if not (report and x == self.final_text)]
+            for i, item in enumerate(items[:3]):
                 if isinstance(item, dict):
                     parts.append(f"**Data {i+1}:** {json.dumps(item)[:500]}")
                 else:
                     parts.append(f"**Content {i+1}:** {str(item)[:500]}")
 
-        if self.raw_text and not parts:
+        if self.raw_text and not parts and not report:
             parts.append(self.raw_text[:max_length])
 
         result = "\n\n".join(parts)
-        return result[:max_length] if len(result) > max_length else result
+        result = result[:max_length] if len(result) > max_length else result
+        return f"{report}\n\n{result}" if report and result else (report or result)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -103,6 +141,12 @@ class SubAgentOutput:
             'tool_results': self.tool_results,
             'raw_text': self.raw_text[:1000] if self.raw_text else ''
         }
+
+
+def _state_stop_reason(agent: Any) -> Optional[str]:
+    """The child's ``state.stop_reason`` (083 WS-1) when it is a real string."""
+    reason = getattr(getattr(agent, 'state', None), 'stop_reason', None)
+    return reason if isinstance(reason, str) and reason else None
 
 
 @dataclass
@@ -127,13 +171,21 @@ class SubAgentResult:
     # says the child itself called done. False = it stopped first (step limit),
     # so its output is partial. None = not known.
     finished: Optional[bool] = None
+    # 083 WS-1: why the child stopped (runtime.stop_reason) and its step budget.
+    stop_reason: Optional[str] = None
+    max_steps: Optional[int] = None
+
+    @property
+    def stop_description(self) -> str:
+        return describe_stop_reason(self.stop_reason, self.steps_taken, self.max_steps)
 
     @property
     def status_label(self) -> str:
         if not self.success:
-            return "Failed"
+            # 083: a typed stop (e.g. the wall-clock cap) names itself.
+            return f"Failed ({self.stop_description})" if self.stop_reason else "Failed"
         if self.finished is False:
-            return "Stopped before finishing (no done — step limit)"
+            return f"Stopped before finishing (no done — {self.stop_description})"
         return "Completed"
 
     @property
@@ -257,6 +309,50 @@ class SubAgentManager:
 
         return False
 
+    #: WS5 D4: the owner-ask brief stays SMALL — the goal is the child's task.
+    OWNER_BRIEF_MAX_CHARS = 600
+
+    def _owner_ask_brief(self, parent_agent) -> str:
+        """A short, DATED brief of the parent session's latest owner ask.
+
+        2026-10-13 review D4: the child used to get 3 x 300 chars of the parent's
+        previous step (often unrelated) and no idea what the owner asked. Only a
+        regime whose ``child_owner_brief`` is set gets one — a room / correspondent
+        session's latest ask is a third party's, and a child of a child gets its
+        goal only. Framed as DATA: it is context, the goal stays the instruction.
+        """
+        if parent_agent is None:
+            return ""
+        try:
+            from agents.task.session_class import regime_policy
+            if not regime_policy(parent_agent, orchestrator=self.orchestrator).child_owner_brief:
+                return ""
+        except Exception:
+            return ""
+        ask = getattr(self.orchestrator, "_last_owner_ask", None)
+        text, at = (ask if isinstance(ask, tuple) and len(ask) == 2 else (None, None))
+        from_owner = isinstance(text, str) and bool(text.strip())
+        if not from_owner:
+            # No recorded owner ask: the parent's task may be a job text or a goal
+            # the agent wrote itself — never label it as the owner's words.
+            text, at = getattr(parent_agent, "task", None), None
+        if not (isinstance(text, str) and text.strip()):
+            return ""
+        text = text.strip()
+        if len(text) > self.OWNER_BRIEF_MAX_CHARS:
+            text = text[:self.OWNER_BRIEF_MAX_CHARS] + " […]"
+        when = ""
+        if isinstance(at, (int, float)):
+            from datetime import timezone
+            when = " (" + datetime.fromtimestamp(at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC") + ")"
+        if not from_owner:
+            return ("**The parent session's task** (undated; not necessarily the owner's "
+                    "words) — background only; your goal above is your task:\n"
+                    + wrap_untrusted("parent_task", text))
+        return (f"**The owner's latest ask in the parent session{when}** — background "
+                f"only; your goal above is your task:\n"
+                + wrap_untrusted("parent_owner_ask", text))
+
     def _gather_parent_context(self, parent_agent_id: str) -> str:
         """Gather relevant context from the parent agent.
 
@@ -278,34 +374,9 @@ class SubAgentManager:
             # Try without session suffix
             parent_agent = self.orchestrator.agents.get(parent_agent_id)
 
-        if parent_agent:
-            try:
-                # Get parent's recent results
-                if hasattr(parent_agent, 'state') and parent_agent.state.last_result:
-                    recent_results = []
-                    for result in parent_agent.state.last_result[:3]:
-                        if hasattr(result, 'extracted_content') and result.extracted_content:
-                            content = result.extracted_content
-                            if isinstance(content, dict):
-                                recent_results.append(json.dumps(content)[:300])
-                            else:
-                                recent_results.append(str(content)[:300])
-                    if recent_results:
-                        # F28: the parent's tool results are the SAME bytes UP-06
-                        # frames everywhere else — a fetched page, an email body,
-                        # an MCP response. Concatenated raw onto the child's task
-                        # they read as operator instructions to a fresh agent that
-                        # has no idea where the text came from. Frame them as DATA.
-                        # ⚠️ Wrap AFTER the [:300] truncation above: wrapping first
-                        # would let the cut land inside the frame and leave an
-                        # opener whose closer never arrives.
-                        context_parts.append(
-                            "**Recent Results:**\n"
-                            + wrap_untrusted("parent_agent_results",
-                                             "\n".join(recent_results))
-                        )
-            except Exception as e:
-                self.logger.debug(f"Failed to get parent results: {e}")
+        brief = self._owner_ask_brief(parent_agent)
+        if brief:
+            context_parts.append(brief)
 
         # Get workspace files
         try:
@@ -445,7 +516,18 @@ class SubAgentManager:
         Returns:
             Virtual session ID like "bfb58574_sub_1"
         """
-        return f"{self.session_id}__{sub_agent_id}"
+        # The path manager refuses ids over 50 chars (it used to truncate). A
+        # 36-char UUID parent + "__sub-N-xxxxxxxx" is 52+. Drop the suffix's
+        # "-<parent prefix>" tail first (it repeats the parent) so the parent
+        # stays WHOLE — refusal_repeat.run_key ties a child to its parent by
+        # the part before "__". Trim the parent only as the last resort.
+        parent = self.session_id or ""
+        suffix = f"__{sub_agent_id}"
+        if len(parent) + len(suffix) > 50:
+            tail = f"-{parent[:8]}"
+            if parent and sub_agent_id.endswith(tail):
+                suffix = f"__{sub_agent_id[:-len(tail)]}"
+        return f"{parent[:max(1, 50 - len(suffix))]}{suffix}"
 
     async def _build_child_controller(self, requested_tools: Optional[List[str]] = None,
                                       force: bool = False):
@@ -550,10 +632,11 @@ class SubAgentManager:
         task: str,
         parent_agent_id: str,
         profile_id: str = "executor",
-        max_steps: int = 30,
+        max_steps: Optional[int] = None,
         parent_llm: Any = None,
         is_parent_sub_agent: bool = False,
-        skip_complexity_check: bool = False
+        skip_complexity_check: bool = False,
+        background: bool = False,
     ) -> SubAgentResult:
         """
         Spawn and run a sub-agent for a subtask with ISOLATED context.
@@ -579,16 +662,22 @@ class SubAgentManager:
             task: The subtask description
             parent_agent_id: ID of the parent agent delegating this task
             profile_id: Profile to use for sub-agent (default: executor)
-            max_steps: Maximum steps for sub-agent
+            max_steps: An internal, operator-set budget (e.g. BG_REVIEW_MAX_STEPS).
+                None = AUTONOMOUS_MAX_STEPS. No tool argument reaches this (083 WS-4).
             parent_llm: Optional LLM from parent agent (inherits if not provided)
             is_parent_sub_agent: True if the parent is already a sub-agent
             skip_complexity_check: Skip task complexity validation (for testing)
+            background: A background (async) child — its own cap is the parent run's
+                remaining AUTONOMOUS_RUN_BUDGET_USD at spawn (083 WS-3).
 
         Returns:
             SubAgentResult with output, usage, and structured data
         """
         from agents.task.constants import TimeoutConfig
+        from core.config_policy import AutonomyConfig
 
+        if max_steps is None:
+            max_steps = AutonomyConfig.autonomous_max_steps()
         start_time = time.time()
         sub_agent_id = self._generate_sub_agent_id(parent_agent_id)
         virtual_session_id = self._generate_virtual_session_id(sub_agent_id)
@@ -647,15 +736,13 @@ class SubAgentManager:
             )
 
         # 041 phase 2: an APPROVED worker's own config applies — its
-        # instructions, its pinned step budget, its pinned model and its tool
-        # list (⊆ the parent's minus DELEGATE_BLOCKED, via narrow_child_tools).
+        # instructions, its pinned model and its tool list (its step budget is
+        # the operator's AUTONOMOUS_MAX_STEPS, 083 WS-4) (⊆ the parent's minus DELEGATE_BLOCKED, via narrow_child_tools).
         # None (flag OFF, `executor`, unknown) = the plain delegation, unchanged.
         from agents.task.agent.profile_store import resolve_worker
         worker = resolve_worker(profile_id, getattr(self.orchestrator, 'user_id', None))
         live_goal = task
         if worker is not None:
-            if worker.max_steps:
-                max_steps = worker.max_steps
             if worker.instructions:
                 task = (f"<worker-instructions worker=\"{worker.id}\">\n"
                         f"{worker.instructions}\n</worker-instructions>\n\n{task}")
@@ -737,6 +824,9 @@ class SubAgentManager:
                     sub_agent.message_manager.session_id = virtual_session_id
                     self.logger.debug(f"Isolated message_manager session_id: {virtual_session_id[:20]}...")
 
+                # 083 WS-3: the child carries the parent run's budget (fail-open)
+                await attach_parent_run_budget(sub_agent, self.orchestrator, parent_agent_id,
+                                               background=background)
                 # Track relationships
                 self._sub_agents[sub_agent_id] = sub_agent
                 self._parent_map[sub_agent_id] = parent_agent_id
@@ -772,7 +862,8 @@ class SubAgentManager:
                         error=f"Timeout after {timeout}s",
                         cancelled=True,
                         usage=usage,
-                        virtual_session_id=virtual_session_id
+                        virtual_session_id=virtual_session_id,
+                        stop_reason=StopReason.WALL_CLOCK.value, max_steps=max_steps,
                     )
 
                 # UPGRADE: Extract structured output (not just string)
@@ -797,6 +888,8 @@ class SubAgentManager:
                     usage=usage,
                     virtual_session_id=virtual_session_id,
                     finished=finished,
+                    stop_reason=_state_stop_reason(sub_agent),
+                    max_steps=max_steps,
                 )
 
                 self._results[sub_agent_id] = result
@@ -945,7 +1038,8 @@ class SubAgentManager:
         hitl = getattr(agent, 'hitl_manager', None) if agent is not None else None
         if hitl is None or not (text or "").strip():
             return None
-        await hitl.queue_user_message(text.strip(), "comment", {})
+        # 085 W3 (A1): the owner typed this line — the drain reads only typed_text.
+        await hitl.queue_user_message(text.strip(), "comment", {"typed_text": text.strip()})
         return cid
 
     async def run_parallel_subtasks(
@@ -986,7 +1080,6 @@ class SubAgentManager:
                         task=subtask['task'],
                         parent_agent_id=parent_agent_id,
                         profile_id=subtask.get('profile', 'executor'),
-                        max_steps=subtask.get('max_steps', 30),
                         # B4: optional per-task LLM (built by the caller); absent/None
                         # is byte-identical to the pre-B4 call (inherits parent LLM).
                         parent_llm=subtask.get('llm')
@@ -1103,10 +1196,14 @@ class SubAgentManager:
         output = SubAgentOutput()
 
         # PRIORITY 1: Get extracted content from last action results
-        if hasattr(agent, 'state') and agent.state.last_result:
+        # 083 B7: the ledger is ``agent._last_result`` — ``state.last_result``
+        # is never assigned, so this priority never ran.
+        if getattr(agent, '_last_result', None):
             try:
-                last_results = agent.state.last_result
+                last_results = agent._last_result
                 for result in last_results:
+                    if (getattr(result, 'metadata', None) or {}).get('exhausted_summary'):
+                        continue  # 083 WS-2: carried, labelled, as final_text
                     if hasattr(result, 'extracted_content') and result.extracted_content:
                         # Preserve structure - don't convert to string
                         content = result.extracted_content
@@ -1176,6 +1273,24 @@ class SubAgentManager:
             except Exception as e:
                 self.logger.debug(f"Failed to extract from history: {e}")
 
+        # D2: the child's own done() report, in full (capped/offloaded on render).
+        if history is not None:
+            try:
+                if callable(getattr(history, 'is_done', None)) and history.is_done():
+                    final = history.final_result() if callable(getattr(history, 'final_result', None)) else None
+                    if isinstance(final, str) and final.strip():
+                        output.final_text = final.strip()
+            except Exception as e:
+                self.logger.debug(f"Failed to read the child's final report: {e}")
+        # 083 WS-2: a child stopped at its step limit reports in its own words.
+        if not output.final_text:
+            _report = getattr(getattr(agent, 'state', None), 'exhausted_summary', None)
+            output.final_text = label_last_report(_report, 1_000_000)
+            if output.final_text:
+                output.extracted_content = [x for x in output.extracted_content if x != _report]
+        if output.final_text and len(output.final_text) > _report_cap_chars():
+            output.report_file = self._save_report_file(agent, output.final_text) or ""
+
         # Build summary
         if output.extracted_content:
             output.summary = f"Extracted {len(output.extracted_content)} data items"
@@ -1184,9 +1299,31 @@ class SubAgentManager:
         elif output.tool_results:
             output.summary = f"Executed {len(output.tool_results)} tool calls"
         else:
-            output.summary = f"Completed task: {agent.task[:150] if hasattr(agent, 'task') else 'unknown'}"
+            # A child that did not call done() did not complete its task.
+            _lead = "Completed task" if _state_stop_reason(agent) == "done" else "Task"
+            output.summary = f"{_lead}: {agent.task[:150] if hasattr(agent, 'task') else 'unknown'}"
 
         return output
+
+    def _save_report_file(self, agent: 'Agent', text: str) -> Optional[str]:
+        """Write an over-cap child report to the PARENT workspace; return its name.
+
+        The report can quote third-party content (P1-3), so the file is framed
+        as DATA — a later ``read_file`` (a trusted tool) must not launder it."""
+        try:
+            import secrets
+            from agents.task.path import pm
+            from agents.task.agent.core.result_offload import _write_new_file
+            agent_id = str(getattr(agent, 'agent_id', '') or getattr(agent, 'id', '') or 'child')
+            safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in agent_id)[:40]
+            name = f"delegation_report_{safe_id}_{secrets.token_hex(6)}.md"
+            path = pm().create_file_path(self.session_id, "workspace", name,
+                                         user_id=getattr(self.orchestrator, 'user_id', None))
+            _write_new_file(path, wrap_untrusted("delegation", text))
+            return path.name
+        except Exception as e:
+            self.logger.warning(f"child report offload failed (report is cut): {e}")
+            return None
 
     def _extract_output(self, agent: 'Agent', history: Any) -> str:
         """

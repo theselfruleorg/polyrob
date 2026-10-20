@@ -18,7 +18,7 @@ Rules it enforces (the standing rule of the 2026-08-28 investigation):
   computed is ``unavailable(<reason>)``, never absent, never a zero.
 - **Health is mandatory and ranked first.** Credit sentinel per provider,
   whether any provider can serve, the delivery cap (suppressed notices), open
-  asks, blocked goals, pending approvals, budget-exhausted objectives, dead
+  asks, blocked goals, pending approvals, dead
   loops, open surface circuits, tool timeouts, degraded run outcomes, the kill
   switch. Any item ⇒ the whole snapshot is ``degraded``; an unreadable health
   source ⇒ ``partial`` (we could not verify), never ``ok``.
@@ -60,10 +60,10 @@ from core.status_types import (  # noqa: E402,F401
     ASK_KIND_TOKEN_IDENTITY, HealthItem, MISSED_IN_SNAPSHOT, MISSED_TEXT_CHARS,
     OVERALL_DEGRADED, OVERALL_OK, OVERALL_PARTIAL, SECTION_ORDER, SEVERITY_CRIT,
     SEVERITY_WARN, STATE_DEGRADED, STATE_OK, STATE_UNAVAILABLE, Section, StatusSnapshot,
-    _ASK_OPEN, _KIND_ASK, _KIND_GOAL, _KIND_OBJECTIVE, _K_AUTONOMY_STARTED,
+    _ASK_OPEN, _KIND_ASK, _KIND_GOAL, _K_AUTONOMY_STARTED,
     _K_AUTONOMY_TICK, _K_CREDIT_SENTINEL, _K_CRON_RUN, _K_GOAL_RUN, _K_OWNER_NOTICE,
     _K_RAIL_PRECONDITION_FAILED, _K_RUN_DEGRADED, _K_SELF_WAKE, _K_SURFACE_POLL_ERROR,
-    _K_TOOL_DENIED, _K_TOOL_TIMEOUT, _K_USER_DELIVERY, _K_WALLET_SPEND, _OBJ_ACTIVE,
+    _K_TOOL_DENIED, _K_TOOL_TIMEOUT, _K_USER_DELIVERY, _K_WALLET_SPEND,
     _PAUSE_HONOURED_OUTCOMES, _ST_BLOCKED, _ST_READY, _ST_RUNNING, _ST_WAITING,
     _SUPPRESSED_PREFIX, _TOOL_APPROVAL_ASK_KIND, _age, _flag_command, _guarded, _hhmm,
     _payload, _tele_rows, _telemetry_db_path, _unavailable, has_own_surface,
@@ -121,7 +121,7 @@ from core.status_session import (  # noqa: E402,F401
     _providers_section, _release_window, _session_section,
 )
 from core.status_work import (  # noqa: E402,F401
-    _approvals_section, _objective_budget, _work_section,
+    _approvals_section, _work_section,
 )
 from core.status_loops import (  # noqa: E402,F401
     _live_started_loops, _loops_section, _pid_alive,
@@ -237,6 +237,26 @@ def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
         sections[name] = (build_slot(name, ctx) if name in CONTRIBUTED_SLOTS
                           else core_sections[name])
     return _assemble(uid, now, window_sec, sections)
+
+
+def build_operations_sections(user_id: str, *, data_dir: Optional[str] = None
+                              ) -> Dict[str, Section]:
+    """The ``work`` and ``loops`` sections ONLY — what runs, what is open, what is
+    paused and what the owner stopped — for the agent's per-turn
+    ``<operations>`` block (``core.status_render.render_operations_block``).
+    The same builders as :func:`build_status_snapshot`, without the 24h
+    telemetry read (the block needs live state, not counts)."""
+    from core.runtime_paths import cron_db_path, data_dir_or_home, goals_db_path
+    data_dir = data_dir_or_home(data_dir)
+    uid, now = str(user_id or ""), time.time()
+    if not uid:
+        return {n: Section(name=n, state=STATE_UNAVAILABLE, reason="no tenant (empty user_id)")
+                for n in ("work", "loops")}
+    tele = Section(name="telemetry", state=STATE_UNAVAILABLE, reason="not read here")
+    goals_db, cron_db = goals_db_path(data_dir), cron_db_path(data_dir)
+    return {"work": _guarded("work", _work_section, uid, goals_db, tele, now),
+            "loops": _guarded("loops", _loops_section, uid, cron_db, tele, now, goals_db,
+                              data_dir)}
 
 
 #: 067 P5a: the builders that moved to the slot provider modules, still

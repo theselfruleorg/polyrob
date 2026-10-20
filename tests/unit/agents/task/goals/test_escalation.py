@@ -54,7 +54,7 @@ class _FakeAgent:
 @pytest.mark.asyncio
 async def test_escalate_only_when_blocked(monkeypatch):
     monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     sink = _FakeSink()
     agent = _FakeAgent(_FakeContainer(sink))
     # a non-blocked (ready) goal must NOT escalate
@@ -69,7 +69,7 @@ async def test_escalate_only_when_blocked(monkeypatch):
 @pytest.mark.asyncio
 async def test_escalate_noop_when_flag_off(monkeypatch):
     monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "false")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     sink = _FakeSink()
     agent = _FakeAgent(_FakeContainer(sink))
     assert await escalation.maybe_escalate_blocked(agent, _blocked_goal()) is False
@@ -87,85 +87,6 @@ async def test_escalate_failopen_no_container(monkeypatch):
 
 
 # --- empty-pipeline escalation (§7.2 tail — the dead-code wiring) -------------
-
-@pytest.mark.asyncio
-async def test_empty_pipeline_escalates_when_enabled(monkeypatch):
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
-    sink = _FakeSink()
-    agent = _FakeAgent(_FakeContainer(sink))
-    sent = await escalation.maybe_escalate_empty_pipeline(
-        agent, objective_title="Grow the POLYROB following on X",
-        planner_summary="blocked: I need Twitter write access from you",
-        planner_word_visible=True)
-    assert sent is True
-    assert sink.sent
-    msg = sink.sent[0][1]
-    assert "Grow the POLYROB following on X" in msg
-    assert "Twitter write access" in msg  # verbose owner: the planner's record rides along
-
-
-@pytest.mark.asyncio
-async def test_empty_pipeline_hides_planner_record_unless_verbose(monkeypatch):
-    # The planner's summary is its done() text — a bookkeeping record the owner
-    # sees only at style.verbosity == detailed. Default: not shown.
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
-    sink = _FakeSink()
-    agent = _FakeAgent(_FakeContainer(sink))
-    sent = await escalation.maybe_escalate_empty_pipeline(
-        agent, objective_title="Grow the POLYROB following on X",
-        planner_summary="blocked: I need Twitter write access from you")
-    assert sent is True
-    msg = sink.sent[0][1]
-    assert "Grow the POLYROB following on X" in msg
-    assert "Twitter write access" not in msg
-    assert "planner" not in msg.lower()
-
-
-def test_empty_pipeline_text_names_which_stall():
-    # Two stalls must not produce identical bytes (the rail dedups identical text).
-    a = escalation.build_empty_pipeline_escalation(
-        "X", stall_number=1, stalled_since=1_790_000_000.0)
-    b = escalation.build_empty_pipeline_escalation(
-        "X", stall_number=2, stalled_since=1_790_000_000.0)
-    assert a != b
-    assert "stall #1" in a and "UTC" in a
-
-
-@pytest.mark.asyncio
-async def test_empty_pipeline_noop_when_flag_off(monkeypatch):
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "false")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
-    sink = _FakeSink()
-    agent = _FakeAgent(_FakeContainer(sink))
-    assert await escalation.maybe_escalate_empty_pipeline(
-        agent, objective_title="x") is False
-    assert sink.sent == []
-
-
-@pytest.mark.asyncio
-async def test_empty_pipeline_skips_queue_healthy(monkeypatch):
-    # "queue healthy, nothing to add" is the planner's legitimate NON-blocker
-    # outcome — it must never turn into an owner ping.
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
-    sink = _FakeSink()
-    agent = _FakeAgent(_FakeContainer(sink))
-    assert await escalation.maybe_escalate_empty_pipeline(
-        agent, objective_title="x",
-        planner_summary="Queue healthy, nothing to add.") is False
-    assert sink.sent == []
-
-
-@pytest.mark.asyncio
-async def test_empty_pipeline_failopen_no_container(monkeypatch):
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-
-    class _Bare:
-        container = None
-
-    assert await escalation.maybe_escalate_empty_pipeline(_Bare(), objective_title="x") is False
 
 
 # --- flag default ------------------------------------------------------------

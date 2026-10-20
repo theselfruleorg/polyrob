@@ -14,7 +14,7 @@ Store: ONE env row, ``SECURITY_SETTINGS`` (Access ``file`` in
 docs/CONFIGURATION.md) — only the operator env file or the local CLI
 (``polyrob config set``) writes it. No agent tool, no console write and no chat
 pref can change it. Format: comma-separated ``name=value`` pairs, e.g.
-``SECURITY_SETTINGS=host_exec_under_custody=refuse,read_taint=off``. An unknown
+``SECURITY_SETTINGS=host_exec_under_custody=refuse,packs_under_custody=refuse``. An unknown
 name or an invalid value keeps the row's default and is reported in the
 ``custody`` status section (``polyrob doctor``, ``/status``).
 
@@ -70,25 +70,6 @@ SETTINGS: Tuple[Setting, ...] = (
         "`refuse`: it is refused.",
         ("tools/controller/command_guard_hook.py::make_command_guard_hook",
          "tools/controller/command_guard_hook.py::make_shell_command_exemption")),
-    Setting(
-        "refusal_taint", "hold", ("hold", "off"),
-        "After a money verb is refused in a run, that run's public sends (posts, group and "
-        "room messages, public cron delivery) go to the owner instead. `off`: no hold.",
-        ("core/security/refusal_taint.py::is_tainted",)),
-    Setting(
-        "read_taint", "on", ("on", "off"),
-        "After a turn reads third-party content, its writes are agent-authored "
-        "(restrict-only) and owner-only verbs queue an owner tap. `off`: the owner turn "
-        "keeps its authorship after a read.",
-        ("core/security/read_taint.py::is_tainted",
-         "core/security/read_taint.py::orchestrator_tainted")),
-    Setting(
-        "financial_claim_gate", "on", ("on", "off"),
-        "An outbound message on any rail (chat, email, X API and X browser posts/DMs) "
-        "whose text claims money moved is refused unless a settled record backs it. "
-        "`off`: no claim check. (The older FINANCIAL_CLAIM_GATE_ENABLED=false also turns "
-        "it off.)",
-        ("tools/controller/financial_claim_gate.py::gate_enabled",)),
 )
 
 FLOOR: Tuple[FloorRow, ...] = (

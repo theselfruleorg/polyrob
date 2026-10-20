@@ -123,23 +123,19 @@ def test_workspace_doctrine_counts_marked_docs(tmp_path):
 	assert any("1 instruction doc(s)" in l for l in sec.lines)
 
 
-def test_goal_and_objective_prose_is_reported_without_a_cron_store(tmp_path):
-    import json
+def test_goal_prose_is_reported_without_a_cron_store(tmp_path):
     con = sqlite3.connect(tmp_path / "goals.db")
     con.execute("CREATE TABLE goals (id TEXT,user_id TEXT,title TEXT,body TEXT,status TEXT,payload TEXT)")
-    recurrence = {"recurrence": {"legs": [{"title": "publish", "body": "Named rail instruction"}]}}
     rows = [("g", UID, "goal", "Live task text", "ready", "{}"),
-            ("r", UID, "rail", "", "active", json.dumps(recurrence)),
             ("old", UID, "history", "Ignored completed text", "done", "{}"),
-            ("off", UID, "paused", "Ignored paused rail", "paused", "{}"),
-            ("other", "different-user", "private", "Other tenant", "active", "{}")]
+            ("other", "different-user", "private", "Other tenant", "ready", "{}")]
     con.executemany("INSERT INTO goals VALUES (?,?,?,?,?,?)", rows)
     con.commit(); con.close()
     sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
     info = sec.data["rail_prose"]
-    assert info["goal_rows"] == 2
-    assert info["goal_chars"] == len("goal\nLive task text") + len("rail\npublish\nNamed rail instruction")
-    assert any("2 live goal/objective" in line for line in sec.lines)
+    assert info["goal_rows"] == 1
+    assert info["goal_chars"] == len("goal\nLive task text")
+    assert any("1 live goal row(s)" in line for line in sec.lines)
 
 
 def test_unreadable_goal_prose_never_renders_as_empty(tmp_path):

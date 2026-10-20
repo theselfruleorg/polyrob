@@ -164,7 +164,7 @@ def test_collection_mint_qty_1_and_3_through_the_real_guard(fork, tmp_path, monk
         value = collection_mint.mint_value(qty)
         tx = rail.build_call(to=collection, data=collection_mint.encode_mint(signer.address, qty, 0), value=value)
         intent = tx_guard.TxIntent(chain="robinhood", token=None, to=collection, amount_raw=value,
-                                   max_spend_usd=qty * 0.042 * ETH_USD + 5.0,
+                                   max_spend_usd=qty * 0.033 * ETH_USD + 5.0,
                                    idempotency_key=f"fork-mint-{before}-{qty}",
                                    is_collection_mint=True, mint_ids=ids)
         # warm the fork's state cache (pool, registry, accounts): a cold fork can exceed the
@@ -175,7 +175,7 @@ def test_collection_mint_qty_1_and_3_through_the_real_guard(fork, tmp_path, monk
         # the unattended lane refuses and the owner queue is the answer
         queued = authorize(intent, tx)
         assert queued.allowed is False and queued.lane == "owner_queue", queued.reason
-        assert queued.amount_usd >= qty * 0.042 * ETH_USD, queued.amount_usd
+        assert queued.amount_usd >= qty * 0.033 * ETH_USD, queued.amount_usd
         # the owner raised the ceiling for this test (an owner-granted call behaves the same)
         monkeypatch.setenv("AGENT_WALLET_MAX_PER_TX_USD", "1000")
         monkeypatch.setenv("DEFI_AUTONOMOUS_MAX_USD", "1000")

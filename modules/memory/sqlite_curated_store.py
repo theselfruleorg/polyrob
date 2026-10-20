@@ -65,7 +65,8 @@ class CuratedNotesStoreMixin:
         return (await self.note_create(user_id, content)) is not None
     async def curated_read(self, user_id) -> str:
         """Return this tenant's ACTIVE curated notes as newline-joined "- {content}"
-        (or ""). Pre-C1 rows have status NULL and read as active."""
+        (or "" = none). Pre-C1 rows have status NULL and read as active. A read
+        failure raises (D14)."""
         if self._anon_blocked(user_id):
             return ""
         try:
@@ -76,8 +77,10 @@ class CuratedNotesStoreMixin:
                 (self._norm_user(user_id),), fetch="all",
             )
         except Exception as e:
+            # D14 (review 2026-10-13): RAISE — "" reads as "your curated memory
+            # is empty", and an unreadable store is not an empty one.
             logger.warning("curated_read failed: %s", e)
-            return ""
+            raise
         return "\n".join(f"- {r['content']}" for r in (rows or []))
     @staticmethod
     def _note_row_to_dict(r) -> dict:

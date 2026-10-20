@@ -27,8 +27,7 @@ from .hierarchical_memory import HierarchicalMemory, PhaseMemory, Step
 
 logger = logging.getLogger(__name__)
 
-# An in-session phase hint (boilerplate counts), never a cross-session fact:
-# drain_promoted_findings skips findings that start with it.
+# An in-session phase hint (boilerplate counts), never a cross-session fact.
 STRATEGIC_CLUE_PREFIX = "[STRATEGIC CLUE FROM "
 
 
@@ -527,17 +526,13 @@ class PhaseManager:
         # For many findings, list count
         return f"Completed {phase_memory.phase_name}: {len(findings)} findings"
 
-    def update_progress(self, current_step: int, total_steps: Optional[int] = None) -> None:
-        """Update session progress string.
+    def update_progress(self, current_step: int) -> None:
+        """Update session progress string: ``step N``.
 
-        Args:
-            current_step: Current step number
-            total_steps: Total expected steps (if known)
+        083 WS-5: the step cap is the operator's, so the agent's context shows
+        no denominator (the state message says ``Current step: N`` too).
         """
-        if total_steps:
-            self.memory.progress = f"{current_step}/{total_steps}"
-        else:
-            self.memory.progress = f"{current_step}/?"
+        self.memory.progress = f"step {current_step}"
 
         logger.debug(f"Updated progress to {self.memory.progress}")
 

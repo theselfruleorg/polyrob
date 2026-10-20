@@ -208,13 +208,6 @@ class TestDerivedSeams:
         from cli.keys import should_warn_no_key
         assert should_warn_no_key({}) is False
 
-    def test_default_model_env_override_hyphenated_provider(self, user_providers, monkeypatch):
-        """Q11: hyphenated provider names map to underscores — POSIX env names
-        can't contain '-', so `zai-coding` reads POLYROB_ZAI_CODING_MODEL."""
-        monkeypatch.setenv("POLYROB_ZAI_CODING_MODEL", "glm-4.6")
-        from modules.llm.llm_client_registry import get_default_model
-        assert get_default_model("zai-coding") == "glm-4.6"
-
     def test_no_key_message_names_declared_providers(self, user_providers):
         """The canonical no-key message derives from the spec registry: a
         declared row's env key is listed, so the message never denies the
@@ -254,13 +247,6 @@ class TestDerivedSeams:
     def test_get_default_model_from_spec(self, user_providers):
         from modules.llm.llm_client_registry import get_default_model
         assert get_default_model("ollama") == "qwen3-coder:30b"
-        # env override still wins
-        import os
-        os.environ["POLYROB_OLLAMA_MODEL"] = "llama3.3:70b"
-        try:
-            assert get_default_model("ollama") == "llama3.3:70b"
-        finally:
-            del os.environ["POLYROB_OLLAMA_MODEL"]
 
     def test_model_map_routes_user_provider(self, user_providers):
         from api.openai_compat.model_map import map_model

@@ -119,3 +119,49 @@ async def test_wiring_never_raises(provider, monkeypatch):
     agent = _Agent(n_steps=1, session_id=sid)
     await agent._maybe_inject_autonomous_continuity()  # must not raise
     assert agent.message_manager.pushed == []
+
+
+# --- current job/goal status next to each past run (2026-10-15 review rec. 3) --
+
+def _stores(tmp_path):
+    import sqlite3
+    c = sqlite3.connect(tmp_path / "cron.db")
+    c.execute("CREATE TABLE cron_jobs (id TEXT PRIMARY KEY, status TEXT, enabled INTEGER)")
+    c.executemany("INSERT INTO cron_jobs VALUES (?,?,?)",
+                  [("jobOFF", "cancelled", 0), ("jobON", "scheduled", 1)])
+    c.commit(); c.close()
+    g = sqlite3.connect(tmp_path / "goals.db")
+    g.execute("CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT)")
+    g.execute("INSERT INTO goals VALUES ('g1', 'done')")
+    g.commit(); g.close()
+
+
+@pytest.mark.asyncio
+async def test_continuity_names_the_current_status_of_each_run(provider, tmp_path):
+    from modules.memory.episodic import finalize_episode
+    _stores(tmp_path)
+    await finalize_episode(session_id="c1", user_id="u1", kind="cron", outcome="done",
+                           task="buyback run", thread_key="cron:jobOFF")
+    await finalize_episode(session_id="c2", user_id="u1", kind="cron", outcome="done",
+                           task="digest run", thread_key="cron:jobON")
+    await finalize_episode(session_id="c3", user_id="u1", kind="cron", outcome="done",
+                           task="pruned job run", meta={"job_id": "gone1"})
+    await finalize_episode(session_id="g", user_id="u1", kind="goal", outcome="done",
+                           task="goal run", goal_id="g1")
+    msg = await build_mission_continuity(user_id="u1", data_dir=str(tmp_path))
+    text = msg.content
+    line = lambda needle: next(l for l in text.splitlines() if needle in l)
+    assert "(job now: cancelled — STOPPED)" in line("buyback run")
+    assert "(job now: scheduled)" in line("digest run")
+    assert "(job now: deleted — STOPPED)" in line("pruned job run")
+    assert "(goal now: done — STOPPED)" in line("goal run")
+    assert "do not build on it and do not re-create it" in text
+
+
+@pytest.mark.asyncio
+async def test_continuity_without_stores_renders_no_status(provider, tmp_path):
+    from modules.memory.episodic import finalize_episode
+    await finalize_episode(session_id="c1", user_id="u1", kind="cron", outcome="done",
+                           task="buyback run", thread_key="cron:jobOFF")
+    msg = await build_mission_continuity(user_id="u1", data_dir=str(tmp_path))
+    assert "job now:" not in msg.content

@@ -17,6 +17,7 @@ import os
 from typing import Optional, Dict, Any, List, Tuple
 
 from core.env import bool_env as _bool_env
+from core.config_policy import INTERACTIVE_MAX_STEPS
 from core.exceptions import SessionOwnershipError
 from datetime import datetime
 import uuid
@@ -399,6 +400,7 @@ class A2ATaskHandler:
 
         # Prepare session config
         from agents.task_agent_lite import SessionRequest
+        from api.tenant_tools import tenant_toolset
         # model/provider omitted -> SessionRequest resolves them from the
         # operator's runtime config (DEFAULT_PROVIDER pin > first keyed
         # provider), never a hardcoded openai/gpt-5 literal.
@@ -406,8 +408,10 @@ class A2ATaskHandler:
             task=task_text,
             model=metadata.get("model", config.get("model")),
             provider=metadata.get("provider", config.get("provider")),
-            tools=metadata.get("tools", config.get("tools", ["browser", "filesystem"])),
-            max_steps=metadata.get("max_steps", config.get("max_steps", 50)),
+            # 085 A6: a non-owner tenant never carries a money tool.
+            tools=tenant_toolset(
+                metadata.get("tools", config.get("tools", ["browser", "filesystem"])), user_id),
+            max_steps=metadata.get("max_steps", config.get("max_steps", INTERACTIVE_MAX_STEPS)),
             use_vision=metadata.get("use_vision", config.get("use_vision", True))
         )
 

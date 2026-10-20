@@ -14,8 +14,9 @@ import pytest
 
 from agents.task.goals.board import GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
-from agents.task.goals.preflight import (crossing_rail, expected_run_seconds,
-                                         next_preempting_rail, p95)
+from agents.task.goals.preflight import (UNMEASURED_RUN_STEPS, crossing_rail,
+                                         expected_run_seconds, next_preempting_rail,
+                                         p95)
 
 NOW = datetime(2026, 9, 20, 13, 0, 0)
 
@@ -47,32 +48,39 @@ def test_next_preempting_rail_names_the_money_rail(tmp_path):
 
 
 def test_an_unmeasured_goal_uses_the_fallback_and_says_so(tmp_path):
-    est, measured = expected_run_seconds("g-new", 14, fallback_step_sec=45,
-                                         max_run_sec=1800, data_dir=str(tmp_path))
-    assert est == 14 * 45 and measured is False
+    est, measured = expected_run_seconds("g-new", fallback_step_sec=45,
+                                         max_run_sec=3600, data_dir=str(tmp_path))
+    assert est == UNMEASURED_RUN_STEPS * 45 and measured is False
 
 
 def test_the_estimate_is_clamped_by_the_wall_clock_cap(tmp_path):
-    est, _ = expected_run_seconds("g-new", 60, fallback_step_sec=45,
+    est, _ = expected_run_seconds("g-new", fallback_step_sec=45,
                                   max_run_sec=600, data_dir=str(tmp_path))
     assert est == 600, "a goal cannot be expected to run past its own hard cap"
 
 
 def test_a_goal_that_would_run_into_the_rail_is_named(tmp_path):
     _cron(tmp_path, when=NOW + timedelta(minutes=3), payload={"priority": "money"})
-    assert crossing_rail("g-14", 14, data_dir=str(tmp_path), now=NOW,
+    assert crossing_rail("g-14", data_dir=str(tmp_path), now=NOW,
                          fallback_step_sec=45, max_run_sec=1800) == "exit0001"
 
 
-def test_a_short_goal_clears_the_rail(tmp_path):
+def test_a_short_goal_clears_the_rail(tmp_path, monkeypatch):
+    import core.event_log as el
+    monkeypatch.setattr(el, "_INSTANCES", {})
+    log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
+    log.record("goal_run", user_id="rob", source="goal",
+               attrs={"goal_id": "g-2", "outcome": "done", "steps": 2,
+                      "duration_sec": 90.0})
     _cron(tmp_path, when=NOW + timedelta(minutes=30), payload={"priority": "money"})
-    assert crossing_rail("g-2", 2, data_dir=str(tmp_path), now=NOW,
+    assert crossing_rail("g-2", data_dir=str(tmp_path), now=NOW,
                          fallback_step_sec=45, max_run_sec=1800) is None
 
 
 def test_an_absent_cron_store_never_refuses(tmp_path):
     """A pre-flight that refuses on ignorance stops the board."""
-    assert crossing_rail("g-14", 14, data_dir=str(tmp_path / "nope"), now=NOW,
+    assert crossing_rail("g-14", data_dir=str(tmp_path / "nope"), now=NOW,
                          fallback_step_sec=45, max_run_sec=1800) is None
 
 
@@ -81,14 +89,30 @@ def test_measured_history_beats_the_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(el, "_INSTANCES", {})
     log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
-    # Two prior runs at ~5 s/step — far under the 45 s fallback.
+    # Two prior runs of 50 s — far under the 30 x 45 s fallback.
     for _ in range(2):
         log.record("goal_run", user_id="rob", source="goal",
                    attrs={"goal_id": "g-fast", "outcome": "done",
                           "steps": 10, "duration_sec": 50.0})
-    est, measured = expected_run_seconds("g-fast", 14, fallback_step_sec=45,
+    est, measured = expected_run_seconds("g-fast", fallback_step_sec=45,
                                          max_run_sec=1800, data_dir=str(tmp_path))
-    assert measured is True and est == pytest.approx(14 * 5.0)
+    assert measured is True and est == pytest.approx(50.0)
+
+
+def test_the_estimate_is_the_run_time_not_the_step_cap(tmp_path, monkeypatch):
+    """083 WS-4: the step cap (150) is a safety stop, not a task size — the
+    estimate is this goal's measured p95 RUN time, never cap x step time."""
+    import core.event_log as el
+    monkeypatch.setattr(el, "_INSTANCES", {})
+    log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
+    for dur in (60.0, 80.0, 120.0):
+        log.record("goal_run", user_id="rob", source="goal",
+                   attrs={"goal_id": "g-run", "outcome": "failed",
+                          "steps": 150, "duration_sec": dur})
+    est, measured = expected_run_seconds("g-run", fallback_step_sec=45,
+                                         max_run_sec=3600, data_dir=str(tmp_path))
+    assert measured is True and est == pytest.approx(120.0)
 
 
 def test_a_run_with_no_duration_is_not_counted_as_fast(tmp_path, monkeypatch):
@@ -98,9 +122,9 @@ def test_a_run_with_no_duration_is_not_counted_as_fast(tmp_path, monkeypatch):
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
     log.record("goal_run", user_id="rob", source="goal",
                attrs={"goal_id": "g-old", "outcome": "done", "steps": 10})
-    est, measured = expected_run_seconds("g-old", 14, fallback_step_sec=45,
-                                         max_run_sec=1800, data_dir=str(tmp_path))
-    assert measured is False and est == 14 * 45
+    est, measured = expected_run_seconds("g-old", fallback_step_sec=45,
+                                         max_run_sec=3600, data_dir=str(tmp_path))
+    assert measured is False and est == UNMEASURED_RUN_STEPS * 45
 
 
 @pytest.mark.asyncio
@@ -120,8 +144,7 @@ async def test_preflight_defers_the_claim_and_emits_the_reason(
                       next_run_at=datetime.now() + timedelta(minutes=3),
                       payload={"priority": "money"}))
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Long build", priority=5,
-                     payload={"max_steps": 20})
+    g = board.create(user_id="rob", title="Long build", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     from core import interactive_gate as ig
     ig._busy_depth = 0

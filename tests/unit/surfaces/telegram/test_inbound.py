@@ -132,7 +132,7 @@ async def test_voice_transcript_is_marked_as_voice(tmp_path):
 # "rob") so the owner's chat shares autonomy's tenant (goals/memory/SELF). A
 # non-owner tg id keeps its surface-hashed u_ id (tenant isolation intact).
 
-_OWNER_TG = "28436760"
+_OWNER_TG = "100000001"
 
 
 def _owner_env(monkeypatch):
@@ -186,10 +186,10 @@ def _group_update(update_id, text, *, entities=None, reply_to_from=None, from_id
 
 def test_group_entity_mention_of_bot_sets_mentions_bot(tmp_path):
     _, ud, _ = _deps(tmp_path)
-    text = "hey @tmachinroBot what can you do?"
-    ents = [{"type": "mention", "offset": 4, "length": 13}]
+    text = "hey @ExampleBot what can you do?"
+    ents = [{"type": "mention", "offset": 4, "length": 11}]
     inbound = build_inbound_message(_group_update(10, text, entities=ents), ud,
-                                    bot_username="tmachinroBot")
+                                    bot_username="ExampleBot")
     assert inbound.mentions_bot is True
 
 
@@ -198,7 +198,7 @@ def test_group_mention_of_other_user_is_not_a_bot_mention(tmp_path):
     text = "hey @someoneelse what's up"
     ents = [{"type": "mention", "offset": 4, "length": 12}]
     inbound = build_inbound_message(_group_update(11, text, entities=ents), ud,
-                                    bot_username="tmachinroBot")
+                                    bot_username="ExampleBot")
     assert inbound.mentions_bot is False
 
 
@@ -206,8 +206,8 @@ def test_group_reply_to_bot_message_counts_as_mention(tmp_path):
     _, ud, _ = _deps(tmp_path)
     inbound = build_inbound_message(
         _group_update(12, "yes please", reply_to_from={"id": 999, "is_bot": True,
-                                                       "username": "tmachinroBot"}),
-        ud, bot_username="tmachinroBot")
+                                                       "username": "ExampleBot"}),
+        ud, bot_username="ExampleBot")
     assert inbound.mentions_bot is True
     assert inbound.reply_to == "42"
 
@@ -217,7 +217,7 @@ def test_group_reply_to_other_bot_is_not_ours(tmp_path):
     inbound = build_inbound_message(
         _group_update(13, "ok", reply_to_from={"id": 998, "is_bot": True,
                                                "username": "otherbot"}),
-        ud, bot_username="tmachinroBot")
+        ud, bot_username="ExampleBot")
     assert inbound.mentions_bot is False
 
 
@@ -230,14 +230,14 @@ def test_group_plain_message_without_username_stays_unknown(tmp_path):
 
 def test_group_text_mention_case_insensitive(tmp_path):
     _, ud, _ = _deps(tmp_path)
-    text = "@TMACHINROBOT hello"
-    ents = [{"type": "mention", "offset": 0, "length": 13}]
+    text = "@EXAMPLEBOT hello"
+    ents = [{"type": "mention", "offset": 0, "length": 11}]
     inbound = build_inbound_message(_group_update(15, text, entities=ents), ud,
-                                    bot_username="tmachinroBot")
+                                    bot_username="ExampleBot")
     assert inbound.mentions_bot is True
 
 
 def test_private_chat_mentions_stays_none(tmp_path):
     _, ud, _ = _deps(tmp_path)
-    inbound = build_inbound_message(_update(16, "hi there"), ud, bot_username="tmachinroBot")
+    inbound = build_inbound_message(_update(16, "hi there"), ud, bot_username="ExampleBot")
     assert inbound.mentions_bot is None

@@ -54,7 +54,7 @@ polyrob cron show <id>
 polyrob cron cancel <id>
 ```
 
-Schedule formats and the per-run cap: [guide/streams.md](guide/streams.md#on-a-clock--cron).
+Schedule formats and the per-run cap: [guide/streams.md](guide/streams.md#3-jobs--the-same-work-at-set-times).
 
 The same thing in chat, in plain words — the agent calls its own cron tool and tells
 you the job id and the next run:
@@ -64,16 +64,10 @@ you the job id and the next run:
 > summary if anything is critical.
 ```
 
-A job you schedule — from the CLI, with `/cron add`, or in the console — is
-stamped as **yours** and runs with your standing authority. One the agent schedules
-on its own, or on a turn that had already read outside text, is stamped as the
-agent's: it runs with less, and the agent tells you so. To make one yours, look at
-it first:
-
-```
-/adopt              # the agent-authored jobs and goals you could adopt
-/adopt <id>         # the whole task, tools, target and pinned skills — then Confirm
-```
+Every job — one you schedule from the CLI, with `/cron add` or in the console, or
+one the agent schedules for itself — runs with the same standing authority: its
+tools as written. A job the agent schedules on its own may ask only for tools
+inside its self-goal ceiling.
 
 That is the whole cron story; the rest of this page assumes it.
 
@@ -101,16 +95,8 @@ goal tool, so ask for them:
 > table, and write the comparison report — each depending on the one before it.
 ```
 
-An **objective** is a standing mission the planner keeps feeding:
-
-```bash
-polyrob goals objective add "Grow the newsletter" \
-  --success-criteria "list size and open rate trending up, judged monthly" \
-  --goal-budget 20
-```
-
-Full treatment, including fair dispatch and the knobs that matter as the board
-grows: [guide/streams.md](guide/streams.md).
+Work that repeats on a clock is a scheduled job, not a goal. Full treatment of
+the goal board: [guide/streams.md](guide/streams.md).
 
 ---
 

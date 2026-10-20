@@ -29,6 +29,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from agents.task.runtime.stop_reason import StopReason
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,7 +126,6 @@ class AsyncDelegationRegistry:
         *,
         goal: str,
         profile: str = "executor",
-        max_steps: int = 30,
         parent_agent_id: str,
         caller_is_sub: bool = False,
     ) -> Dict[str, Any]:
@@ -173,7 +174,7 @@ class AsyncDelegationRegistry:
                     logger.warning("delegation durable write failed", exc_info=True)
             rec.task = asyncio.create_task(
                 self._run_and_deliver(
-                    rec, goal=goal, profile=profile, max_steps=max_steps,
+                    rec, goal=goal, profile=profile,
                     parent_agent_id=parent_agent_id, caller_is_sub=caller_is_sub,
                 )
             )
@@ -221,30 +222,37 @@ class AsyncDelegationRegistry:
         *,
         goal: str,
         profile: str,
-        max_steps: int,
         parent_agent_id: str,
         caller_is_sub: bool,
     ) -> None:
         """Run the child to completion and deliver exactly one completion block."""
         status = "completed"
         result_text = ""
+        stop_note = ""
         try:
             result = await self._manager.run_subtask(
                 task=goal,
                 parent_agent_id=parent_agent_id,
                 profile_id=profile,
-                max_steps=max_steps,
                 is_parent_sub_agent=caller_is_sub,
+                background=True,  # 083 WS-3: its own cap = the parent's remaining
             )
             if getattr(result, "success", False):
-                status = "completed"
+                # 2026-10-13 review D1: ``success`` only says the child returned
+                # without an exception. A child stopped at its step limit
+                # (``finished is False``) did NOT finish — re-entering it as
+                # "✅ completed" made the parent trust a partial result.
+                status = "incomplete" if getattr(result, "finished", None) is False else "completed"
                 result_text = self._extract_output(result)
             else:
-                status = "error"
+                # run_subtask catches its own wall-clock timeout and returns it
+                # typed (stop_reason ``wall_clock``) — it never raises one.
+                status = ("timeout" if getattr(result, "stop_reason", None)
+                          == StopReason.WALL_CLOCK.value else "error")
                 result_text = getattr(result, "error", None) or "Background task failed."
-        except asyncio.TimeoutError:
-            status = "timeout"
-            result_text = "Background task timed out."
+            if getattr(result, "stop_reason", None):
+                stop_note = getattr(result, "stop_description", "")
+                stop_note = stop_note if isinstance(stop_note, str) else ""
         except asyncio.CancelledError:
             # Don't deliver on cancellation (shutdown); re-raise so the loop sees it.
             # Set the LOCAL `status` (not rec.status) — the finally below writes
@@ -273,7 +281,7 @@ class AsyncDelegationRegistry:
                 duration=max(0.0, rec.completed_at - rec.dispatched_at),
             )
 
-        block = self._format_completion_block(rec, status, result_text)
+        block = self._format_completion_block(rec, status, result_text, stop_note)
         try:
             await self._deliver(rec, block)
         except Exception as e:  # noqa: BLE001 — delivery is best-effort (e.g. queue full)
@@ -305,7 +313,8 @@ class AsyncDelegationRegistry:
         return "(no output)"
 
     @staticmethod
-    def _format_completion_block(rec: DelegationRecord, status: str, result_text: str) -> str:
+    def _format_completion_block(rec: DelegationRecord, status: str, result_text: str,
+                                 stop_note: str = "") -> str:
         """Self-contained block so a parent deep in unrelated context knows why this
         arrived (mirrors Reference' task-source block).
 
@@ -317,11 +326,22 @@ class AsyncDelegationRegistry:
         ``</delegation-result>`` in the payload is defanged so it can't break the
         envelope.
         """
-        emoji = {"completed": "✅", "error": "❌", "timeout": "⏱️"}.get(status, "ℹ️")
+        emoji = {"completed": "✅", "error": "❌", "timeout": "⏱️",
+                 "incomplete": "⚠️"}.get(status, "ℹ️")
         safe_result = _frame_delegation_payload(result_text)
+        why = stop_note or "stop reason unknown"
+        if status == "completed":
+            lead = f"{emoji} A background task you dispatched has finished."
+        elif status == "incomplete":
+            lead = (f"{emoji} A background task you dispatched STOPPED before it finished "
+                    f"(no done — the child {why}; the result is "
+                    "partial; check it before you rely on it).")
+        else:
+            lead = (f"{emoji} A background task you dispatched STOPPED without a result "
+                    f"({status}" + (f" — the child {stop_note}" if stop_note else "") + ").")
         return (
             f"<delegation-result delegation_id=\"{rec.delegation_id}\" status=\"{status}\">\n"
-            f"{emoji} A background task you dispatched has finished.\n\n"
+            f"{lead}\n\n"
             f"**delegation_id:** {rec.delegation_id}\n"
             f"**goal:** {rec.goal}\n"
             f"**status:** {status}\n\n"

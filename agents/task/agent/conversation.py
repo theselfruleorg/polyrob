@@ -7,7 +7,7 @@ sessions are unaffected; this is opt-in via Conversation.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Iterable, List
+from typing import Any, Iterable, List, Optional
 
 
 def extract_answer(history: Any) -> str:
@@ -59,14 +59,22 @@ class Conversation:
     agent: Any
     turns: List[Turn] = field(default_factory=list)
 
-    async def respond(self, text: str, max_steps: int = DEFAULT_TURN_BUDGET) -> str:
+    async def respond(self, text: str, max_steps: int = DEFAULT_TURN_BUDGET, *,
+                      typed_text: Optional[str] = None) -> str:
         """Run exactly one conversational turn and return the agent's reply.
 
         After the first turn we pass _continue_session=True so run() skips the
         once-per-session preamble (session-start telemetry + H-MEM create/load),
         which would otherwise re-fire on every REPL line.
+
+        085 W3 (A1): ``typed_text`` is the line the owner TYPED, before any
+        @-reference expansion put file content into ``text`` (default: ``text``).
+        A REPL line never rides the HITL queue, so this is where the turn's owner
+        words are set — otherwise the last drained batch (a /steer) stays the
+        owner's words for every later line.
         """
         _reset_turn_state(self.agent)                # recover from a prior failed turn
+        _set_owner_turn_text(self.agent, text if typed_text is None else typed_text)
         _record_repl_line(self.agent, text)          # 061: the terminal is an owner seat
         self.agent.set_turn_input(text)              # append-as-turn (Task 7)
         history = await self.agent.run(
@@ -74,6 +82,16 @@ class Conversation:
         answer = extract_answer(history)
         self.turns.append(Turn(user=text, assistant=answer))
         return answer
+
+
+def _set_owner_turn_text(agent: Any, typed: Any) -> None:
+    """The REPL line's typed words as the turn's owner text (085 W3). Fail-open."""
+    orch = getattr(agent, "orchestrator", None)
+    if orch is not None:
+        try:
+            orch._owner_turn_text = typed if isinstance(typed, str) else ""
+        except Exception:
+            pass
 
 
 def _record_repl_line(agent: Any, text: str) -> None:

@@ -14,7 +14,7 @@ def test_parse_native_send():
     order, err = send_ops.parse(["0.997", "native", "to", ADDR, "on", "ethereum", "go"])
     assert err is None
     assert order == {"amount": 0.997, "token": "native", "to": ADDR,
-                     "chain": "ethereum", "go": True, "max_usd": None}
+                     "chain": "ethereum", "go": True, "max_usd": None, "anyway": False}
 
 
 def test_parse_token_send_any_word_order():

@@ -22,9 +22,9 @@ def test_first_keyed_provider_when_openai_absent():
     assert model and "gpt-5" not in model  # provider-appropriate model, not the openai default
 
 
-def test_chat_provider_env_pin_wins():
+def test_default_provider_env_pin_wins():
     prov, model = _resolve_chat_runtime(
-        env={"CHAT_PROVIDER": "openrouter", "CHAT_MODEL": "z-ai/glm-5.2", "OPENAI_API_KEY": "x"}
+        env={"DEFAULT_PROVIDER": "openrouter", "DEFAULT_MODEL": "z-ai/glm-5.2", "OPENAI_API_KEY": "x"}
     )
     assert prov == "openrouter"
     assert model == "z-ai/glm-5.2"

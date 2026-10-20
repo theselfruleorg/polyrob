@@ -299,10 +299,10 @@ HELP_TEXT: Dict[str, Tuple[str, str]] = {
         "  ready, running, blocked on an ask, or done.",
         "Telegram /goals, and the app's Autonomy page.",
     ),
-    "cron": (
-        "  Durable scheduled runs — the work that happens on a clock instead\n"
-        "  of a trigger, and survives a restart.",
-        "Telegram /cron, and the app's Autonomy page.",
+    "jobs": (
+        "  Scheduled jobs — work that runs at set times instead of on a\n"
+        "  trigger, and survives a restart.",
+        "Telegram /jobs, and the app's Work page.",
     ),
     "meter": (
         "  This turn only: model, tokens in/out, an estimated cost, how full\n"

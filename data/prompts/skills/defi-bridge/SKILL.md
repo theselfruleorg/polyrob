@@ -3,10 +3,11 @@ name: defi-bridge
 description: 'Moving value between chains with defi_trade.bridge: what it can move, the two-phase guard, in_flight is not failure, and proving arrival by a measured destination balance.'
 license: MIT
 metadata:
+  polyrob-when: 'Moving funds between chains (bridge)'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["defi_trade_bridge"],"keywords":["cross-chain","cross chain","bridge funds","bridge eth","bridge sol","bridge usdc","defi_trade.bridge","in_flight"],"task_patterns":["\\bbridge\\b.*\\b(eth|sol|usdc|usdg|funds)\\b","\\b(bridge|move|send)\\b.*\\b(to|from|between)\\b.*\\b(solana|robinhood|ethereum|arbitrum|polygon|base chain)\\b"],"tool_ids":["defi_trade"]}'
-  polyrob-version: '2'
+  polyrob-triggers: '{"tool_ids":["defi_trade"]}'
+  polyrob-version: '3'
 ---
 # Bridge — moving value between chains
 
@@ -16,17 +17,13 @@ declaration, and the caps apply to it.
 
 ## Moving value between chains — the bridge
 
-You hunt on three chains and your money is rarely on the one holding the
-opportunity. Until 2026-09-11 there was no answer to that and you correctly said
-so. **There is now: `defi_trade.bridge`.** If you are working from a memory that
-"there is no bridge verb", that memory is stale — it was true, it is not now.
+Your money is rarely on the chain that holds the opportunity.
+`defi_trade.bridge` moves it there.
 
 **What it does.** Sends the origin chain's **NATIVE asset** (SOL / ETH), or its
 **PINNED USDC** (`token_in="usdc"`), through Relay. **Every direction works**: solana → EVM,
 EVM → EVM (Base → Robinhood included), and EVM → solana (native SOL or `usdc`;
-the arrival is measured in lamports / the SPL balance). Measured: SOL → Robinhood
-~1s at −0.88%; Base → Robinhood ~1s at −0.05%; Robinhood ETH → Solana USDC quoted
-at −0.3%. solana → solana is not a bridge: use `solana_swap` / `solana_transfer`.
+the arrival is measured in lamports / the SPL balance). solana → solana is not a bridge: use `solana_swap` / `solana_transfer`.
 
 The **destination** asset may be native OR a token **pinned in the chain
 registry** — `weth` / `usdc` where that chain has one:
@@ -51,13 +48,10 @@ origin token is refused. Robinhood pins no USDC, so its origin is ETH.
 
 ⚠️ **On Robinhood, prefer `native`.** ETH there is gas AND the asset that routes
 straight into a position with no allowance, so `token_out="weth"` costs you more
-slippage (−0.13% vs −0.05% measured) and buys you nothing unless WETH is wanted
-for its own sake.
+slippage and buys you nothing unless WETH is wanted for its own sake.
 
-**CAPS, NOT TAPS** — the owner decided this on 2026-09-12, on purpose. If you
-are working from a memory that a bridge is "always owner-approved, never on an
-autonomous turn", that memory is stale. The bridge is bounded by the caps, not
-by a tap on every move:
+**Caps, not taps.** The bridge is bounded by the caps, not by a tap on every
+move:
 
 - under `DEFI_AUTONOMOUS_MAX_USD` you run it and report — no tap;
 - above it, the durable owner queue decides — one tap, and it is the verb's own
@@ -98,7 +92,7 @@ success nor failure.
 - **NEVER report it as arrived** either. That is a lie about money.
 - It is recorded durably and escalated to the owner. Your job is to say plainly:
   sent, not yet confirmed arrived, here is the id. Then stop.
-- **A watcher re-checks it every 2 minutes** and settles it when the destination
+- **A watcher re-checks it** and settles it when the destination
   balance actually moves, so an `in_flight` row is no longer the end of the
   story. The owner gets that resolution automatically — you do not need to poll
   it, and you must not re-send while waiting.
@@ -112,9 +106,8 @@ for this wallet counts — a swap fill during the wait never passes as the bridg
 
 **When to bridge at all.** Rarely. Gas and slippage make it a real cost, so it is
 not a move you make to chase one ticket — bridge when the imbalance is
-structural, i.e. your buying power sits on a chain you are not hunting on. You no
-longer need the owner in the loop for a small one, but "I am allowed to" is not
-"I should".
+structural, i.e. your buying power sits on a chain you are not hunting on.
+"I am allowed to" is not "I should".
 
 ## If a tool is missing
 

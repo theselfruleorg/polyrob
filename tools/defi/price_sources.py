@@ -84,6 +84,18 @@ def _jup_source(chain: str, address: str) -> SourceAnswer:
     return SourceAnswer(name=JUPITER, usd=got.get(address))
 
 
+def egress_hosts() -> list:
+    """Every host the EVM price sources call — what the signer's egress rule
+    must allow (``deployment/hardening/polyrob-signer-egress.sh``). Before this
+    the script hardcoded DexScreener; 071 added GeckoTerminal, the signer's
+    price reads hung on the dropped connection, and 74 of 92 shadow verdicts
+    timed out (prod, 2026-10-17)."""
+    from urllib.parse import urlparse
+    from tools.defi.providers import dexscreener, geckoterminal
+    urls = (dexscreener.TOKEN_URL, dexscreener.BATCH_URL, geckoterminal.BASE_URL)
+    return sorted({urlparse(u).hostname for u in urls if urlparse(u).hostname})
+
+
 def register() -> None:
     """Idempotent. Runs at import; callable again after a test resets the registry."""
     _intel.register_source(DEXSCREENER, _ds_source, covers=_covers_ds, primary=True)

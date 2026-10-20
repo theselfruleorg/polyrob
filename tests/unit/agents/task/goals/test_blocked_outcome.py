@@ -17,7 +17,7 @@ from agents.task.goals.context import (
 def test_goal_run_prompt_teaches_blocked_exit(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
     g = b.create(user_id="rob", title="Post the announcement")
-    t = build_goal_run_task(g, None)
+    t = build_goal_run_task(g)
     assert "OUTCOME: BLOCKED" in t
     assert "do NOT report success" in t
 

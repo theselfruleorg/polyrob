@@ -40,6 +40,11 @@ SURFACE_VERB_NONE = {
              "owner verb can reach — correspondent-only by design",
     },
 }
+# 080: every terminal-only row of the ONE table (Verb.seats = repl) is a gap by design.
+for _v in VERB_TABLE:
+    if _v.seats == ("repl",):
+        SURFACE_VERB_NONE["telegram"].setdefault(
+            _v.name, "seat-local: a terminal verb (Verb.seats = repl)")
 #: Chat surfaces where the only gaps are the seat-local REPL verbs.
 for _sid in ("slack", "discord", "signal", "whatsapp", "x", "feishu", "dingtalk"):
     SURFACE_VERB_NONE[_sid] = dict(SURFACE_VERB_NONE["telegram"])

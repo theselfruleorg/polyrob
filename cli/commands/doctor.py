@@ -416,7 +416,7 @@ def _display_env_path(path) -> str:
     return s
 
 
-def env_file_layers(env: dict, local_mode: bool = True) -> list:
+def env_file_layers(env: dict) -> list:
     """``(display_path, parsed_values)`` per EXISTING env file, precedence order.
 
     Parsed with dotenv for parity with ``polyrob.app.bootstrap.load_env`` (quote
@@ -427,9 +427,8 @@ def env_file_layers(env: dict, local_mode: bool = True) -> list:
 
     from core.paths import env_file_candidates
 
-    resolved = env.get("CONFIG_ENV") or env.get("ENV") or "development"
     out = []
-    for cand in env_file_candidates(resolved, local_mode=local_mode):
+    for cand in env_file_candidates():
         try:
             if cand.path.exists():
                 out.append((_display_env_path(cand.path), dotenv_values(str(cand.path))))
@@ -532,7 +531,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # provenance walk, the config-file line, and the footgun note all read it.
     rob_local = local_flag_on(env, absent_means_on=local_absent_means_on)
     try:
-        _env_layers = env_file_layers(env, local_mode=rob_local)
+        _env_layers = env_file_layers(env)
     except Exception:
         _env_layers = []
     # 024 L1.5: one pass over the credential oracle instead of two key-only set
@@ -742,7 +741,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(f"data dir: {_data_home}")
     try:
         from core.paths import env_file_candidates
-        _cfg = next((str(c.path) for c in env_file_candidates(local_mode=rob_local)
+        _cfg = next((str(c.path) for c in env_file_candidates()
                      if c.path.exists()), None)
         lines.append(f"config file: {_cfg or '(none found — using process env / defaults)'}")
     except Exception as e:
@@ -925,6 +924,15 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(browser_rail_line())
     lines.append(x_oauth2_doctor_line(env))
     lines.append(schema_status_line(env))
+    from core.legacy_data_tree import legacy_tree_doctor_line
+    _legacy = legacy_tree_doctor_line(Path(doctor_data_home(env)), data_dir=env.get(
+        "DATA_DIR") or "", db_path=env.get("DB_PATH") or "")
+    if _legacy:  # a 1.4.0 <home>/data tree: moved, collided or waiting
+        lines.append(_legacy)
+    # A-1: billed vs catalog LLM cost (a 2x drift once ran 12 days unseen).
+    from core.runtime_paths import bot_db_default_path
+    from modules.credits.usage_tracker import billed_vs_catalog_line
+    lines.append(billed_vs_catalog_line(bot_db_default_path(str(doctor_data_home(env)))))
     lines.append(live_activity_line())
     # 1.4: a retired env name still set — FAIL for an identity/money alias the
     # runtime now refuses, WARN for a line that is merely ignored.
@@ -1412,7 +1420,7 @@ def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
-    load_env(local_mode=True)
+    load_env()
     show_flags = (show_flags or flag_all or bool(flag_group) or bool(flag_search)
                   or flag_changed)
 

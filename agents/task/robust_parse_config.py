@@ -10,6 +10,8 @@ from typing import Optional
 
 from core.env import bool_env as _bool_env
 
+from agents.task.constants import COMPACTION_EMERGENCY_PCT as _COMPACTION_EMERGENCY_PCT
+
 
 def resolve_base64_strip_mode(raw: Optional[str]) -> dict:
     """Resolve a STRIP_BASE64_IMAGES value into its effective behaviour (A2).
@@ -93,7 +95,13 @@ class RobustParseConfig:
     
     # NEW: Context safety configuration - CRITICAL ADDITION
     ENABLE_CONTEXT_OVERFLOW_GUARD: bool = _bool_env("ENABLE_CONTEXT_OVERFLOW_GUARD", True)
-    CONTEXT_OVERFLOW_THRESHOLD: float = 0.90  # 90% of context window - maximize usage
+    # The PRE-CALL guard (token_counter.check_token_safety -> token_budget) prunes
+    # at this share of the window. It is NOT a second compaction policy: it reads
+    # the ladder's emergency band (agents/task/constants.py COMPACTION_EMERGENCY_PCT),
+    # so the 85/95 ladder in step.py is the one place the threshold lives. It was
+    # a free-standing 0.90 until 2026-10-13 (coherency review E-A1), which pruned
+    # inside the ladder's 85-95 % summarise band.
+    CONTEXT_OVERFLOW_THRESHOLD: float = _COMPACTION_EMERGENCY_PCT / 100.0
     # F19: the denominator of last resort. Only reached when there is no live
     # MessageManager AND the model registry does not know the id — a registry gap.
     # Deliberately small so the guard fires early rather than late.

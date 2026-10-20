@@ -39,7 +39,6 @@ _AUTONOMY_FLAG_READERS = (
     ("SKILLS_WRITABLE", constants.AutonomyConfig.skills_writable),
     ("BACKGROUND_REVIEW_ENABLED", constants.AutonomyConfig.background_review_enabled),
     ("INSIGHTS_TOOL", constants.AutonomyConfig.insights_tool),
-    ("GOAL_PLANNER_ENABLED", constants.AutonomyConfig.goal_planner_enabled),
     ("KNOWLEDGE_CURATOR_ENABLED", constants.AutonomyConfig.knowledge_curator_enabled),
     ("SELF_CONTEXT_WRITABLE", constants.AutonomyConfig.self_context_writable),
     ("OWNER_DOC_WRITABLE", constants.AutonomyConfig.owner_doc_writable),

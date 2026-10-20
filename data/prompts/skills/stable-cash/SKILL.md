@@ -3,10 +3,11 @@ name: stable-cash
 description: 'What counts as cash: pinned stablecoins only, native over bridged, the depeg thresholds, yield stables are positions, gas is not cash.'
 license: MIT
 metadata:
+  polyrob-when: 'Deciding what counts as cash or a safe stablecoin'
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["stablecoin","stable coin","depeg","de-peg","park in stables","usdc.e","usdg","usdt"],"task_patterns":["(move|rotate|park|hold).*\\b(stablecoins?|usdc|usdg|usdt)\\b"],"tool_ids":["defi_trade","defi_data"]}'
-  polyrob-version: '2'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-version: '3'
 ---
 # Stable Cash — what counts as cash, and when it stops counting
 
@@ -19,8 +20,8 @@ itself a dollar is a position.
   says `on the pinned canonical list` for those. Base USDC is
   `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
 - Other stables (USDG on Robinhood Chain, USDT, DAI) are NOT on the canonical
-  list. Treat them as verified only when a trusted source covers them (an
-  owner-authored `target_token`, the owner's approval — `token_info` says
+  list. Treat them as verified only when a trusted source covers them (a
+  `target_token` the owner typed, the owner's approval — `token_info` says
   `verified`); otherwise resolve them with `token-identity`. A refused buy has
   already asked the owner in `/pending`; never name a shell command.
 - The guard values the chain's pinned USDC at exactly $1.00 — it is the unit the
@@ -37,8 +38,9 @@ itself a dollar is a position.
    The peg rule runs BEFORE any "buy the dip" idea.
 3. **Yield stables are positions.** A stable that pays yield carries protocol
    and redemption risk; it is not cash.
-4. **Keep native gas outside "cash".** The gas tank pays for every exit; never
-   count it as spendable.
+4. **Keep the fee reserve outside "cash".** The chain's fee reserve (named on
+   the portfolio's native row) pays for every exit; the native coin above it is
+   money and counts as buying power.
 5. **Parking idle cash in lending** (Aave, Morpho) has no dedicated verb yet;
    `defi_trade.call` can reach a protocol, but only on an owner instruction.
 

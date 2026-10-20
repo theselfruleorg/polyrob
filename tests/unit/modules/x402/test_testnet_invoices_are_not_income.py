@@ -24,7 +24,7 @@ def _env(monkeypatch):
                 "PAYMENT_DEFAULT_ASSET"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(invoicing, "_svm_treasury",
-                        lambda: "BrsPwATRZcb2PWsEZba9Bh1mwcxU6M7R64nPgRneCpmL")
+                        lambda: "2cyLycfUPcu8Zhmdpzf13vQHEZcoWrRkiQGFHvJ5xveW")
 
 
 async def _db(tmp_path):

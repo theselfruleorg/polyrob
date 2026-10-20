@@ -64,7 +64,7 @@ _QR_SIZE = 220
 
 
 def _amount_block_lines(*, raw: int, decimals: int, symbol: str,
-                        amount_usd: str) -> dict:
+                        amount_usd: str, at_par: Optional[bool] = None) -> dict:
     """The card's amount block, as text. Pure — the renderer only draws it.
 
     ⚠️ Live 2026-09-15: an 18-decimal PNL amount
@@ -81,7 +81,9 @@ def _amount_block_lines(*, raw: int, decimals: int, symbol: str,
     there is no precision to disambiguate.
     """
     from decimal import Decimal
-    if not symbol or symbol.upper() == "USDC" or not raw:
+    # ``at_par`` (085 M-2): USDC at its PINNED address; None = the symbol alone.
+    par = (not symbol or symbol.upper() == "USDC") if at_par is None else at_par
+    if par or not raw:
         return {"headline": f"${amount_usd} USDC", "exact": "",
                 "exact_label": "", "usd": ""}
     value = Decimal(int(raw)) / (Decimal(10) ** int(decimals))
@@ -287,13 +289,15 @@ def render_invoice_card(invoice: Dict[str, Any], artifact: Dict[str, Any],
     # get back. The token amount leads (it is what they must actually send) and
     # the USD figure follows as the annotation it is.
     amount_font = _load_font(68, bold=True)
+    _par = None
     try:
-        from modules.x402.artifact import _invoice_asset
+        from modules.x402.artifact import _invoice_asset, usdc_at_par
         _addr, _dec, _sym, _raw = _invoice_asset(invoice)
+        _par = usdc_at_par(str(invoice.get("chain") or "base"), _addr, _sym)
     except Exception:
         _sym, _raw, _dec = "USDC", 0, 6
     block = _amount_block_lines(raw=_raw, decimals=_dec, symbol=_sym,
-                                amount_usd=amount_text)
+                                amount_usd=amount_text, at_par=_par)
     draw.text((_MARGIN, y), block["headline"], font=amount_font, fill=_GREEN)
     y += 78 if block["exact"] else 92
     if block["exact"]:

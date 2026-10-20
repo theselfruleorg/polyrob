@@ -40,16 +40,13 @@ import pytest
 
 from tools.controller._helpers import build_load_skill_result
 from agents.task.agent.skill_manager import SkillManager
+from tests.support.skill_library import write_library
 
 
-# --- shared fixture builder (mirrors test_skill_rules_integrity.py's pattern) ---
+# --- shared fixture builder ---
 
 def _make_manager(tmp_path: Path, rules: dict, bodies: dict) -> SkillManager:
-    (tmp_path / "rules.json").write_text(json.dumps(rules))
-    for sid, body in bodies.items():
-        d = tmp_path / sid
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "SKILL.md").write_text(body)
+    write_library(tmp_path, rules, bodies)
     return SkillManager(skills_dir=tmp_path)
 
 
@@ -171,13 +168,13 @@ def test_gated_skill_absent_from_get_catalog_skills(tmp_path):
         rules={
             "gated-skill": {
                 "auto_activate": False,
-                "triggers": {"keywords": ["trade"]},
+                "triggers": {"tool_ids": ["polymarket"]},
                 "priority": 5,
                 "description": "GATED: dangerous trading skill",
             },
             "normal-skill": {
                 "auto_activate": True,
-                "triggers": {"keywords": ["normal"]},
+                "triggers": {},
                 "priority": 5,
                 "description": "an ordinary skill",
             },
@@ -199,7 +196,7 @@ def test_gated_skill_absent_from_catalog_text(tmp_path):
         rules={
             "gated-skill": {
                 "auto_activate": False,
-                "triggers": {"keywords": ["trade"]},
+                "triggers": {"tool_ids": ["polymarket"]},
                 "priority": 5,
                 "description": "GATED: dangerous trading skill",
             },
@@ -212,25 +209,6 @@ def test_gated_skill_absent_from_catalog_text(tmp_path):
     assert "Dangerous trading instructions" not in text
 
 
-def test_gated_skill_not_trigger_matched_even_on_keyword_hit(tmp_path):
-    """A gated skill must not auto-activate even when its own keyword is present
-    in the task text -- the ONLY path in is explicit seeding."""
-    sm = _make_manager(
-        tmp_path,
-        rules={
-            "gated-skill": {
-                "auto_activate": False,
-                "triggers": {"keywords": ["trade now"]},
-                "priority": 5,
-                "description": "GATED",
-            },
-        },
-        bodies={"gated-skill": "# Gated Skill\n\nBody."},
-    )
-    matched = sm.get_skills_for_session(task="please trade now immediately")
-    assert all(m.skill_id != "gated-skill" for m in matched)
-
-
 def test_gated_skill_still_reachable_via_seeded_force_include_and_load_skill(tmp_path):
     """Money-critical guard: hiding a gated skill from the catalog must NOT make
     it unreachable via the seeded/persona force-include path, nor via load_skill
@@ -240,7 +218,7 @@ def test_gated_skill_still_reachable_via_seeded_force_include_and_load_skill(tmp
         rules={
             "gated-skill": {
                 "auto_activate": False,
-                "triggers": {"keywords": ["trade"]},
+                "triggers": {"tool_ids": ["polymarket"]},
                 "priority": 5,
                 "description": "GATED: dangerous trading skill",
             },
@@ -248,7 +226,7 @@ def test_gated_skill_still_reachable_via_seeded_force_include_and_load_skill(tmp
         bodies={"gated-skill": "# Gated Skill\n\nDangerous trading instructions."},
     )
     # Seeded (persona force-include) bypasses the auto_activate gate by design.
-    seeded = sm.get_skills_for_session(task="", seeded_skill_ids=["gated-skill"])
+    seeded = sm.get_pinned_skills(seeded_skill_ids=["gated-skill"])
     seeded_ids = {m.skill_id for m in seeded}
     assert "gated-skill" in seeded_ids
 
@@ -281,7 +259,7 @@ def test_seeded_skill_not_preactivated_but_dedupes_normally(tmp_path):
         },
         bodies={"seeded-skill": "# Seeded Skill\n\nReal instructions."},
     )
-    matched = sm.get_skills_for_session(task="", seeded_skill_ids=["seeded-skill"])
+    matched = sm.get_pinned_skills(seeded_skill_ids=["seeded-skill"])
     session_skills = {m.skill_id: m for m in matched}
     activated: set = set()  # fresh -- construction.py does not pre-seed this
 

@@ -145,8 +145,8 @@ def install_local(src: Path, *, user_id: str, trust: str = "prompt", source: str
                   resolved_sha: Optional[str] = None,
                   origin: Optional[InstallOrigin] = None) -> InstallResult:
     _require_local_operator()
-    from agents.task.agent.skill_frontmatter import parse_frontmatter
-    from agents.task.agent.skill_validation import validate_consumed
+    from core.skills.frontmatter import parse_frontmatter
+    from core.skills.frontmatter import validate_consumed
 
     src = Path(src).resolve()
     md = src / "SKILL.md"
@@ -452,7 +452,7 @@ def install_url(url: str, *, user_id: str, trust: str = "prompt",
     guarantees quarantine (``install_local``'s auto-approve gate only fires
     for ``source == "local"``, so a URL install can never auto-approve even
     with ``trust="local"``)."""
-    from agents.task.agent.skill_frontmatter import parse_frontmatter
+    from core.skills.frontmatter import parse_frontmatter
 
     text = _fetch_text(url)
     meta, _ = parse_frontmatter(text)
@@ -671,9 +671,9 @@ def list_all_skills(user_id: str) -> List[Dict[str, Any]]:
     seen_ids = set()
 
     try:
-        from agents.task.agent import skill_store
+        from core.skills import scopes
 
-        for sid in sorted(skill_store.builtin_skill_ids()):
+        for sid in sorted(scopes.builtin_skill_ids()):
             rows.append({"id": sid, "scope": "builtin", "status": "active"})
             seen_ids.add(sid)
     except Exception:
@@ -764,7 +764,7 @@ def get_skill_info(skill_id: str, user_id: str) -> Dict[str, Any]:
     unsafe id is treated as not-found, never used to construct a path).
     Provenance/usage lookups are fail-open (absent store/rows degrade to
     omitted fields, never raise)."""
-    from agents.task.agent.skill_frontmatter import parse_frontmatter
+    from core.skills.frontmatter import parse_frontmatter
 
     mgr = _skill_manager()
     skill_dir = mgr.resolve_skill_dir(skill_id, user_id=user_id)
@@ -773,14 +773,19 @@ def get_skill_info(skill_id: str, user_id: str) -> Dict[str, Any]:
         pending = mgr._user_root(user_id) / ".pending" / skill_id
         if (pending / "SKILL.md").is_file():
             skill_dir, status = pending, "pending"
+    md = None
     if skill_dir is None and _traversal_safe(skill_id):
         archived = mgr._user_root(user_id) / ".archived" / skill_id
-        if (archived / "SKILL.md").is_file():
-            skill_dir, status = archived, "archived"
+        # 081 WS-5.2: archived bodies are content-addressed (`<sha256>-SKILL.md`);
+        # the newest one describes the retired skill.
+        bodies = sorted(archived.glob("*SKILL.md"), key=lambda p: p.stat().st_mtime) \
+            if archived.is_dir() else []
+        if bodies:
+            skill_dir, status, md = archived, "archived", bodies[-1]
     if skill_dir is None:
         raise InstallError(f"skill {skill_id!r} not found (checked active/pending/archived)")
 
-    md = skill_dir / "SKILL.md"
+    md = md or skill_dir / "SKILL.md"
     meta: Dict[str, Any] = {}
     if md.is_file():
         meta, _ = parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))

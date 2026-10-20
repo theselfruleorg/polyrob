@@ -1,0 +1,37 @@
+{
+  "function": {
+    "description": "Search file CONTENTS for a regex (gitignore-aware); output_mode 'content' or 'files'. It does not match file names: to find a file by name, set glob (e.g. glob='report.md', pattern='^', output_mode='files'). '(no matches)' means no line matched, not that a file is absent",
+    "name": "coding_grep",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "glob": {
+          "default": null,
+          "description": "Filename glob filter on the base name, e.g. '*.py'; to find a file BY NAME use pattern '^', glob 'name.md', output_mode 'files'",
+          "nullable": true,
+          "type": "string"
+        },
+        "output_mode": {
+          "default": "content",
+          "description": "'content' (path:line:text) or 'files' (matching paths only)",
+          "type": "string"
+        },
+        "path": {
+          "default": null,
+          "description": "Subdir (relative to workspace) to search; defaults to the whole workspace",
+          "nullable": true,
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Regex matched against file CONTENTS (lines), never against file names",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

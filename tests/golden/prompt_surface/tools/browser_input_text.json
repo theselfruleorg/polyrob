@@ -1,0 +1,29 @@
+{
+  "function": {
+    "description": "Input text into an element by its index.",
+    "name": "browser_input_text",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for inputting text into an element.",
+      "properties": {
+        "elementIndex": {
+          "type": "integer"
+        },
+        "inputText": {
+          "type": "string"
+        },
+        "xPath": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "elementIndex",
+        "inputText"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

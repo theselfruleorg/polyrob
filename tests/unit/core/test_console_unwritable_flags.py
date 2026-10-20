@@ -145,7 +145,7 @@ def test_unknown_flag_shaped_key_fails_closed():
 def test_pattern_rows_carry_their_class():
     assert is_console_unwritable("OWNER_TELEGRAM_ID")          # OWNER_<SURFACE>_ID
     assert is_secret_flag("DEFI_EVM_RPC_ARBITRUM")             # DEFI_EVM_RPC_<CHAIN>
-    assert not is_console_unwritable("POLYROB_OPENROUTER_MODEL")
+    assert not is_console_unwritable("AUX_MODEL_JUDGE")
 
 
 def test_local_surface_still_writes_them(monkeypatch):

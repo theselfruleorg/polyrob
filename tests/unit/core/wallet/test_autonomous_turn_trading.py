@@ -40,6 +40,15 @@ def _authorize(*, forged, autonomous_ok, halted=False):
     )
 
 
+@pytest.fixture(autouse=True)
+def _regime_allows_unattended_money(monkeypatch):
+    """These tests isolate the guard's lanes; the money regime itself is
+    tested in tests/unit/core/test_money_regime_e2e.py."""
+    import importlib
+    money_regime = importlib.import_module("core.config_policy.money_regime")
+    monkeypatch.setattr(money_regime, "unattended_money_allowed", lambda: True)
+
+
 class TestFlagOff:
     @pytest.fixture(autouse=True)
     def _off(self, monkeypatch):

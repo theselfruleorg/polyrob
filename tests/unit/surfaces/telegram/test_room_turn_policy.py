@@ -40,9 +40,9 @@ def _inbound(text="hi", *, title="Telegram's Own Title", message_id=9):
 
 
 def test_the_owners_name_beats_the_telegram_title(tmp_path):
-    ok, msg = set_pol(tmp_path, _OWNER, "telegram", _CHAT, "chat.name", "The Public Den")
+    ok, msg = set_pol(tmp_path, _OWNER, "telegram", _CHAT, "chat.name", "The Lobby")
     assert ok, msg
-    assert chat_title(_container(tmp_path), _inbound()) == "The Public Den"
+    assert chat_title(_container(tmp_path), _inbound()) == "The Lobby"
 
 
 def test_without_a_name_the_telegram_title_is_used(tmp_path):

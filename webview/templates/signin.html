@@ -14,15 +14,17 @@
 <script src="/static/js/theme.js?v=20260916theme"></script>
 </head>
 <body>
-    <!-- Ticker -->
+    <!-- Ticker (only when the operator set a support link) -->
+    {% if branding().support_url %}
     <div class="ticker">
         <div class="ticker-track">
-            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
-            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
-            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
-            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle or branding().support_display }}</a> ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle or branding().support_display }}</a> ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle or branding().support_display }}</a> ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle or branding().support_display }}</a> ///</span>
         </div>
     </div>
+    {% endif %}
 
     <!-- Main -->
     <main class="signin">

@@ -143,7 +143,7 @@ class ResolvedFlag:
 
 
 REGISTRY: dict[str, Flag] = {}
-# Dynamic name patterns (e.g. POLYROB_<PROVIDER>_MODEL) — documented but not
+# Dynamic name patterns (e.g. AUX_MODEL_<SLOT>) — documented but not
 # enumerable; kept for reference/reporting, not resolved.
 PATTERNS: list[Flag] = []
 
@@ -160,7 +160,7 @@ for _name, _group, _default, *_rest in CATALOG:
 
 def pattern_flag_for(name: str) -> Optional[Flag]:
     """Match *name* against the dynamic ``<...>`` catalog patterns (e.g.
-    ``POLYROB_<PROVIDER>_MODEL`` ← ``POLYROB_OPENROUTER_MODEL``). Placeholders
+    ``AUX_MODEL_<SLOT>`` ← ``AUX_MODEL_JUDGE``). Placeholders
     match ``[A-Z0-9_]+`` (mirrors ``core.prefs.catalog_lookup``); returns the
     pattern Flag or None."""
     import re

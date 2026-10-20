@@ -33,8 +33,7 @@ def test_api_book_passes_effective_user_and_returns_result(monkeypatch, tmp_path
         calls["data_dir"] = data_dir
         return {"chains": {"base": {"verdict": "clean", "report": {},
                                      "portfolio_text": "x", "error": None}},
-                "verdict": "clean", "checked_at": 1234.5,
-                "ledger_path": str(tmp_path / "ledger.md")}
+                "verdict": "clean", "checked_at": 1234.5}
 
     monkeypatch.setattr(pages, "read_book", fake_read_book)
 
@@ -52,7 +51,6 @@ def test_api_book_disabled_flag_shape(monkeypatch, tmp_path):
 
     async def fake_read_book(user_id, data_dir, **kwargs):
         return {"chains": {}, "verdict": None, "checked_at": 1.0,
-                "ledger_path": None,
                 "error": ("DEFI_DATA_ENABLED is off — the book cannot be "
                           "read until an operator enables on-chain sight")}
 

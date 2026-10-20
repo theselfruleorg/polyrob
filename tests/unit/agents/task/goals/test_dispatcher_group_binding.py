@@ -90,7 +90,7 @@ def _row(mid, text, ts):
 def _goal():
     return Goal(id="g-room", user_id="rob", title="Service room The Den",
                 payload={"group": {"surface": "telegram", "chat_id": "-1001"},
-                         "tools": ["defi_trade"], "max_steps": 8})
+                         "tools": ["defi_trade"], "max_steps": 99})
 
 
 def _dispatch(tmp_path, monkeypatch, *, rows=(("7", "is the bridge live?", NOW - 30),)):
@@ -123,6 +123,14 @@ def test_the_room_toolset_wins_over_payload_tools(tmp_path, monkeypatch, caplog)
     assert request["tools"] == room_tool_ids()
     assert "defi_trade" not in request["tools"]
     assert any("payload.tools ignored" in r.getMessage() for r in caplog.records)
+
+
+def test_a_room_run_keeps_its_short_step_budget(tmp_path, monkeypatch):
+    """083 WS-4: every other goal stops at AUTONOMOUS_MAX_STEPS (150); a room
+    reply is a short turn and keeps a fixed 8 (a stored payload.max_steps,
+    here 99, is inert)."""
+    agent, _board, _lg = _dispatch(tmp_path, monkeypatch)
+    assert agent.calls[0]["request"]["max_steps"] == 8
 
 
 def test_the_turn_text_is_the_room_tail(tmp_path, monkeypatch):

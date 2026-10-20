@@ -12,8 +12,7 @@ as a function:
 - ⚠️ A RECORD is never swept (060 WS-3): a dated log is history, and proposing
   an edit to it is proposing to falsify it.
 - A line CONFLICTS when exactly one of (rule, line) prohibits and they share at
-  least two content words — the same deterministic, LLM-free test
-  ``self_evolution.detect_conflicts`` applies to a pending draft.
+  least two content words — a deterministic, LLM-free test.
 - ADVISORY only: it reports; it never edits anything. Precedence decides the
   outcome at run time (a later owner rule outranks rail prose — owner decision
   Q1, 2026-09-23); the sweep is how the owner SEES what the rule overrides.
@@ -24,17 +23,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
-#: A conflict needs this many shared content words (same bar as detect_conflicts).
+#: A conflict needs this many shared content words.
 MIN_OVERLAP = 2
 #: The most hits one sweep returns (the rest are counted).
 MAX_HITS = 12
-#: Live goals and active objectives can both supply future run instructions.
-from core.goal_vocab import LIVE_STATUS_ORDER, OBJ_ACTIVE
-_LIVE_GOAL_STATUSES = (*LIVE_STATUS_ORDER, OBJ_ACTIVE)
+#: Live goals can supply future run instructions.
+from core.goal_vocab import LIVE_STATUS_ORDER
+_LIVE_GOAL_STATUSES = LIVE_STATUS_ORDER
 
 
 @dataclass(frozen=True)
@@ -49,14 +49,27 @@ class SweepHit:
                 f"(shares: {', '.join(self.shared[:4])})")
 
 
+_PROHIBITION_RE = re.compile(
+    r"\b(no|not|never|stop|cease|halt|don'?t|do not|avoid|forbid(?:den)?|"
+    r"disallow(?:ed)?|prohibit(?:ed)?)\b", re.IGNORECASE)
+
+_STOPWORDS = frozenset({
+    "the", "and", "for", "all", "any", "with", "from", "this", "that", "into",
+    "only", "your", "will", "must", "should", "until", "when", "what", "content",
+    "rule", "owner", "directive", "priority", "highest", "effective",
+    "immediately", "overrides", "policy", "posting", "posts", "post", "report",
+    "reporting", "never", "stop", "always",
+})
+
+
 def _prohibits(text: str) -> bool:
-    from core.self_evolution import _PROHIBITION_RE
     return bool(_PROHIBITION_RE.search(text or ""))
 
 
 def _terms(text: str) -> set:
-    from core.self_evolution import _significant_terms
-    return _significant_terms(text or "")
+    """Content words, >=3 chars, minus stopwords; hyphens split."""
+    words = re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", (text or "").lower())
+    return {w for w in words if w not in _STOPWORDS}
 
 
 def _scan(rule: str, surface: str, where: str, text: str) -> List[SweepHit]:
@@ -106,13 +119,6 @@ def _rail_texts(uid: str, cron_db: str, goals_db: str) -> Tuple[List[Tuple[str, 
                 payload = {}
             task = payload.get("task") if isinstance(payload, dict) else ""
             parts = [r.get("title"), r.get("body"), task]
-            # 036 rails keep their future task prose in recurrence legs, before
-            # any dispatchable child goal exists. The owner may govern it now.
-            recurrence = payload.get("recurrence") if isinstance(payload, dict) else None
-            if isinstance(recurrence, dict):
-                for leg in recurrence.get("legs") or []:
-                    if isinstance(leg, dict):
-                        parts.extend((leg.get("title"), leg.get("body")))
             body = "\n".join(p for p in parts if isinstance(p, str) and p)
             texts.append((f"goal {str(r.get('id'))[:8]}", body))
     except Exception as e:

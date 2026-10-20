@@ -336,8 +336,8 @@ _MUTATING = [
     ("owner", ["fulfill"]), ("owner", ["pair", "approve"]),
     ("owner", ["groups", "allow"]), ("owner", ["paid", "enable"]),
     ("apps", ["approve"]), ("apps", ["reject"]), ("apps", ["kill"]),
-    ("cron", ["schedule"]), ("cron", ["cancel"]), ("cron", ["edit"]),
-    ("cron", ["prune"]), ("approvals", ["add"]), ("approvals", ["remove"]),
+    ("cron", ["new"]), ("cron", ["stop"]), ("cron", ["edit"]),
+    ("cron", ["prune"]), ("cron", ["pause"]), ("cron", ["resume"]), ("cron", ["run"]), ("approvals", ["add"]), ("approvals", ["remove"]),
     ("keys", ["create"]), ("keys", ["revoke"]),
     ("wallet", ["init"]), ("wallet", ["set-cap"]), ("wallet", ["asset", "add"]),
 ]
@@ -347,7 +347,7 @@ _MUTATING = [
 def test_mutating_verbs_offer_as_root(group_name, path):
     import importlib
     mod = importlib.import_module(f"cli.commands.{group_name}")
-    group = getattr(mod, {"owner": "owner", "apps": "apps", "cron": "cron",
+    group = getattr(mod, {"owner": "owner", "apps": "apps", "cron": "job",
                           "approvals": "approvals", "keys": "keys",
                           "wallet": "wallet_cmd"}[group_name])
     res = _run(group, path + ["--help"])

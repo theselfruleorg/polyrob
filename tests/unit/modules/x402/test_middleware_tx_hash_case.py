@@ -99,6 +99,9 @@ def _client(monkeypatch, mixed_case_tx, captured):
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
     _install_fake_fastapi_x402(monkeypatch)
     install_auth_state_writer(set_auth_state)
+    # 085 x402in L1: the settlement is proven on-chain before service.
+    monkeypatch.setattr("modules.x402.facilitator.receipt_pays",
+                        lambda *a, **k: True)
 
     async def _fake_record(**kwargs):
         captured.update(kwargs)

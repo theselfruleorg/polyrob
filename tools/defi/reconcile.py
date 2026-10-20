@@ -1,61 +1,46 @@
-"""Ledger ⟷ chain reconciliation (the §0 fix, 2026-08-26).
+"""Book ⟷ chain reconciliation (the §0 fix, 2026-08-26).
 
-On 2026-08-25 the agent's position ledger and the chain disagreed — three
-positions held on-chain, "Open positions: NONE" in the ledger's own state table
-— and the agent published the wrong side of that disagreement to X. The write
-path was correct; the RECALL was broken: runs answered from a stale or partial
-read and nothing ever compared the two sources. This module is that comparison.
+On 2026-08-25 the agent's recorded positions and the chain disagreed, and the
+agent published the wrong side of that disagreement to X. This module is the
+comparison: the rail store (``core/open_positions.py``, written from landed
+receipts) against the chain.
 
-Pure logic, no I/O: `parse_open_positions` reads the `## Open positions`
-markdown table out of the agent-authored ledger, `diff` compares it against a
-list of on-chain holdings, `render` produces a verdict the agent is told to
-treat as authoritative over its own memory. The network side (balances,
-identity, prices) is the `defi_data.reconcile` action's job, through the same
-seams `portfolio` uses.
+Pure logic, no I/O: `diff` compares the rail book against a list of on-chain
+holdings, `render` produces a verdict the agent is told to treat as
+authoritative over its own memory. The network side (balances, identity,
+prices) is the `defi_data.reconcile` action's job, through the same seams
+`portfolio` uses.
 
 Design constraints that matter:
 - UNKNOWN is never zero. A balance the RPC could not read is reported as
-  unverifiable, not as "the position is gone" — collapsing the two is exactly
-  the failure this module exists to catch (and the one the Solana simulation
-  fix a95944b6 caught the same day: code that PASSES while observing nothing).
-- Chain holdings that the ledger does not explain are NOT auto-promoted to
-  positions — the anti-dust rule stands. They are reported as a disagreement
-  the agent must resolve in the ledger, one way or the other.
+  unverifiable, not as "the position is gone".
+- Chain holdings that the book does not explain are NOT auto-promoted to
+  positions — the anti-dust rule stands.
 - The quote asset (USDC) and the wrapped native are working capital, not
   positions; they are never "unexplained".
-
-071 W3 (TM P0-7, P1-13):
-- TWO books are diffed against the chain: the RAIL store (``open_positions``,
-  written from landed receipts) and the agent's markdown ledger. Every row says
-  which source it came from.
-- An UNPRICED token neither book mentions is ``unsolicited`` (someone sent it;
+- An UNPRICED token the book does not hold is ``unsolicited`` (someone sent it;
   never interact) — NOT a disagreement, so a dusted wallet can read CLEAN. A
-  priced holding above dust that no book explains stays ``unexplained``.
-- A ledger row closed to 0 whose chain balance is 0 is a matched CLOSED row,
-  never "unbacked".
+  priced holding above dust that the book does not explain stays
+  ``unexplained``.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 #: Confidently-priced holdings below this are classified as dust, not as a
 #: disagreement — same spirit as the portfolio verb's dust framing.
 DUST_VALUE_USD = 0.25
 
-#: |chain − ledger| / ledger beyond this is a size mismatch. The ledger rounds
-#: (442,232.099224 recorded as 442,232.10), so exact equality is the wrong bar.
+#: |chain − book| / book beyond this is a size mismatch (a quoted or simulated
+#: size is not the final fill), so exact equality is the wrong bar.
 QTY_REL_TOLERANCE = 0.02
 
-# The LEDGER-READING half is core-tier (2026-08-28): `core/status_snapshot.py`
-# reports the open-position COUNT, and core may not import tools. Re-exported
-# here so every existing `from tools.defi.reconcile import …` keeps working —
-# there is still exactly ONE parser, it just lives one tier down.
-from core.position_ledger import (  # noqa: F401  (re-export)
-    _BASE58_ADDR, _EVM_ADDR, _norm, _parse_qty, LedgerPosition,
-    parse_open_positions,
-)
+_EVM_ADDR = re.compile(r"0x[0-9a-fA-F]{40}")
+_BASE58_ADDR = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
+
+from core.open_positions import _norm  # noqa: E402
 
 
 @dataclass
@@ -94,26 +79,23 @@ class RailPosition:
 class ReconcileReport:
     matched: List[str] = field(default_factory=list)
     mismatched: List[str] = field(default_factory=list)
-    unbacked: List[str] = field(default_factory=list)       # ledger row, chain says zero
-    unexplained: List[str] = field(default_factory=list)    # chain holds it, ledger silent
-    #: 071 W3: unpriced, in neither book — someone sent it. Not an issue.
+    unbacked: List[str] = field(default_factory=list)       # book row, chain says zero
+    unexplained: List[str] = field(default_factory=list)    # chain holds it, book silent
+    #: unpriced, not in the book — someone sent it. Not an issue.
     unsolicited: List[str] = field(default_factory=list)
-    unreadable_rows: List[str] = field(default_factory=list)
     unknown: List[str] = field(default_factory=list)        # could not verify (read failed)
     dust: List[str] = field(default_factory=list)
-    skipped_other_family: List[str] = field(default_factory=list)
     #: 068: warning lines when >1 contract here claims one symbol. Rendered
     #: FIRST — on 2026-09-25 a buyback took the first "PNL" line it saw.
     collisions: List[str] = field(default_factory=list)
-    ledger_rows: int = 0
     holdings_considered: int = 0
-    #: 071 W3: rail-store rows compared; None = the rail store was not consulted.
-    rail_rows: Optional[int] = None
+    #: rail-store rows compared on this chain.
+    rail_rows: int = 0
     #: CR-L11: the ADDRESS each row is about, per list, parallel to the text.
     #: A row's text starts with a symbol, and a symbol is attacker-authored (a
-    #: contract's ``symbol()`` or a ledger cell), so "the first address in the
-    #: line" could be an address the symbol smuggled in. Consumers
-    #: (``tools/defi/book.py``) match on THIS field, never on the prose.
+    #: contract's ``symbol()``), so "the first address in the line" could be an
+    #: address the symbol smuggled in. Consumers (``tools/defi/book.py``) match
+    #: on THIS field, never on the prose.
     addresses: Dict[str, List[str]] = field(default_factory=dict)
 
     def add(self, kind: str, address: str, text: str) -> None:
@@ -122,8 +104,7 @@ class ReconcileReport:
 
     @property
     def issues(self) -> int:
-        return (len(self.mismatched) + len(self.unbacked)
-                + len(self.unexplained) + len(self.unreadable_rows))
+        return len(self.mismatched) + len(self.unbacked) + len(self.unexplained)
 
     @property
     def verdict(self) -> str:
@@ -138,96 +119,82 @@ class ReconcileReport:
         (``core.book.verdict_from_report``) can consume it without importing
         this module (core may not import ``tools.*``)."""
         fields = ("matched", "mismatched", "unbacked", "unexplained",
-                  "unsolicited", "unreadable_rows", "unknown", "dust",
-                  "skipped_other_family", "collisions")
+                  "unsolicited", "unknown", "dust", "collisions")
         return {
             **{f: list(getattr(self, f)) for f in fields},
             "addresses": {k: list(v) for k, v in self.addresses.items()},
-            "ledger_rows": self.ledger_rows,
             "rail_rows": self.rail_rows,
             "holdings_considered": self.holdings_considered,
             "verdict": self.verdict,
         }
 
 
-def diff(ledger: List[LedgerPosition],
+def diff(rail: List[RailPosition],
          holdings: List[ChainHolding],
          *,
          quote_addresses: Optional[List[str]] = None,
          evm_chain: bool = True,
          dust_value_usd: float = DUST_VALUE_USD,
          qty_rel_tolerance: float = QTY_REL_TOLERANCE,
-         rail: Optional[List[RailPosition]] = None) -> ReconcileReport:
-    """Diff the chain against the rail store (``rail``; None = not consulted)
-    and the markdown ledger. See the module docstring for the classes."""
+         chain: Optional[str] = None) -> ReconcileReport:
+    """Diff the chain against the rail book (``rail``: this chain's rows).
+    See the module docstring for the classes."""
     from core.wallet.tokens import clean_symbol
     report = ReconcileReport()
     quotes = {_norm(a) for a in (quote_addresses or []) if a}
     by_addr: Dict[str, ChainHolding] = {_norm(h.address): h for h in holdings}
-    ledger_addrs = set()
-    report.ledger_rows = len(ledger)
     report.holdings_considered = len(holdings)
+    book_addrs = set()
 
-    for row in ledger:
-        is_evm_row = bool(_EVM_ADDR.fullmatch(row.address))
-        if is_evm_row != evm_chain:
-            report.add("skipped_other_family", row.address,
-                f"{row.symbol} {row.address} — a different chain family; not "
-                f"checked here")
+    for rp in rail or []:
+        if bool(_EVM_ADDR.fullmatch(rp.address or "")) != evm_chain:
             continue
-        key = _norm(row.address)
-        ledger_addrs.add(key)
+        report.rail_rows += 1
+        key = _norm(rp.address)
+        book_addrs.add(key)
+        label = clean_symbol(rp.symbol) or "?"
         held = by_addr.get(key)
+        if rp.status != "open":
+            report.add("matched", rp.address,
+                f"{label} {rp.address} — the book marks it "
+                f"{rp.status.replace('_', ' ')}; not compared")
+            continue
+        if held is not None and not held.balance_known:
+            report.add("unknown", rp.address,
+                f"{label} {rp.address} — book says {rp.qty:,.6f}, chain balance "
+                f"UNKNOWN (read failed — this is NOT zero; retry before "
+                f"concluding anything)")
+            continue
+        if held is not None and held.qty is None:
+            report.add("unknown", rp.address,
+                f"{label} {rp.address} — held on chain ({held.raw_units} raw "
+                f"units) but decimals unknown, size not comparable")
+            continue
         # Absent from a COMPLETE enumeration means zero. The action guarantees
-        # this: under partial scan coverage it adds every ledger address to the
-        # scan set, so a ledger row is only ever absent when the indexer
+        # this: under partial scan coverage it adds every book address to the
+        # scan set, so a book row is only ever absent when the indexer
         # enumerated everything and did not see it.
         chain_qty = held.qty if held is not None else 0.0
-        if held is not None and not held.balance_known:
-            report.add("unknown", row.address,
-                f"{row.symbol} {row.address} — ledger says {row.qty}, chain "
-                f"balance UNKNOWN (read failed — this is NOT zero; retry "
-                f"before concluding anything)")
-            continue
-        if held is not None and held.balance_known and held.qty is None:
-            report.add("unknown", row.address,
-                f"{row.symbol} {row.address} — held on chain "
-                f"({held.raw_units} raw units) but decimals unknown, size "
-                f"not comparable")
-            continue
-        if row.qty is None:
-            report.add("unreadable_rows", row.address,
-                f"{row.symbol} {row.address} — the table row's size is "
-                f"unparseable; chain says {chain_qty}. Rewrite the row.")
-            continue
-        if not chain_qty and not row.qty:
-            # TM P1-13: the ledger closed it (size 0) and the chain agrees.
-            report.add("matched", row.address,
-                f"{row.symbol} {row.address} — closed (ledger 0, chain 0) ✓ "
-                f"[ledger]")
-            continue
         if not chain_qty:
-            report.add("unbacked", row.address,
-                f"{row.symbol} {row.address} — ledger says {row.qty:,.6f} "
-                f"OPEN, chain balance is ZERO. Either the exit was never "
-                f"recorded in the table, or the tokens left the wallet: find "
-                f"which, record it, close the row. [ledger]")
+            report.add("unbacked", rp.address,
+                f"{label} {rp.address} — book says {rp.qty:,.6f} OPEN, chain "
+                f"balance is ZERO. The tokens left the wallet outside a recorded "
+                f"swap (a transfer?), or an exit was not booked. "
+                + (f"If it is gone for good, the owner closes the row with "
+                   f"/writeoff {chain} {rp.address} (the loss is its recorded "
+                   f"cost; nothing is sold)." if chain else ""))
             continue
-        rel = abs(chain_qty - row.qty) / row.qty if row.qty else 1.0
+        rel = abs(chain_qty - rp.qty) / rp.qty if rp.qty else 1.0
         if rel > qty_rel_tolerance:
-            report.add("mismatched", row.address,
-                f"{row.symbol} {row.address} — ledger {row.qty:,.6f} vs chain "
-                f"{chain_qty:,.6f} ({rel * 100.0:.1f}% apart). A partial exit "
-                f"or entry was not recorded. [ledger]")
+            report.add("mismatched", rp.address,
+                f"{label} {rp.address} — book {rp.qty:,.6f} vs chain "
+                f"{chain_qty:,.6f} ({rel * 100.0:.1f}% apart). Tokens moved "
+                f"outside a recorded swap.")
         else:
-            report.add("matched", row.address,
-                f"{row.symbol} {row.address} — {chain_qty:,.6f} (ledger "
-                f"{row.qty:,.6f}) ✓ [ledger]")
+            report.add("matched", rp.address,
+                f"{label} {rp.address} — {chain_qty:,.6f} (book {rp.qty:,.6f}) ✓")
 
-    rail_addrs = _diff_rail(report, rail, by_addr, ledger_addrs,
-                            evm_chain=evm_chain, qty_rel_tolerance=qty_rel_tolerance)
-
-    # 068: one symbol, several contracts — across the ledger rows AND the chain
+    # 068: one symbol, several contracts — across the book rows AND the chain
     # holdings, named, before anything else is read.
     names = {_norm(h.address): getattr(h, "name", None) for h in holdings}
     # 068 B11: the quote assets take part — a fake "USDC" beside the real one
@@ -235,8 +202,9 @@ def diff(ledger: List[LedgerPosition],
     collision_rows = [(clean_symbol(h.symbol), h.address, names.get(_norm(h.address)))
                       for h in holdings]
     held_keys = {_norm(h.address) for h in holdings}
-    collision_rows += [(clean_symbol(r.symbol), r.address, "ledger row")
-                       for r in ledger if _norm(r.address) not in held_keys]
+    collision_rows += [(clean_symbol(r.symbol), r.address, "book row")
+                       for r in rail or [] if _norm(r.address) not in held_keys
+                       and bool(_EVM_ADDR.fullmatch(r.address or "")) == evm_chain]
     # A pinned quote asset the wallet does not hold right now still OWNS its
     # symbol: a look-alike claiming it must warn even with no real one held.
     try:
@@ -251,7 +219,7 @@ def diff(ledger: List[LedgerPosition],
     report.collisions = [ln for ln in _ticker_collision_lines(collision_rows) if ln]
 
     for key, held in sorted(by_addr.items()):
-        if key in ledger_addrs or key in quotes or key in rail_addrs:
+        if key in book_addrs or key in quotes:
             continue
         label = clean_symbol(held.symbol) or "?"
         if not held.balance_known:
@@ -275,8 +243,8 @@ def diff(ledger: List[LedgerPosition],
                 # 071 review: an outage must not turn every unrecorded holding
                 # into "clean" — we cannot tell an airdrop from a position.
                 report.add("unknown", held.address,
-                    f"{label} {held.address} — {size} (price read failed; in "
-                    f"neither book — cannot tell an airdrop from a position)")
+                    f"{label} {held.address} — {size} (price read failed; not in "
+                    f"the book — cannot tell an airdrop from a position)")
                 continue
             if est is not None and est < dust_value_usd:
                 report.add("dust", held.address,
@@ -284,128 +252,61 @@ def diff(ledger: List[LedgerPosition],
                     f"price: dust/airdrop noise, never a position, never interact")
                 continue
             if state == "no_pool":
-                # TM P0-7: a token nothing trades, that no book mentions, is
-                # something someone SENT — an airdrop or a scam lure. Not a
+                # TM P0-7: a token nothing trades, that the book does not hold,
+                # is something someone SENT — an airdrop or a scam lure. Not a
                 # disagreement, or a dusted wallet never reads CLEAN.
                 report.add("unsolicited", held.address,
-                    f"{label} {held.address} — {size} (no market; in neither book)")
+                    f"{label} {held.address} — {size} (no market; not in the book)")
                 continue
             # A market exists (low/disputed price) and it is worth more than
             # dust: an unrecorded buy looks exactly like this. A disagreement.
             report.add("unexplained", held.address,
                 f"{label} {held.address} — {size} ("
                 + (f"≈${est:,.2f} at a low-confidence price" if est is not None
-                   else "priced at low confidence") + "; in neither book)")
+                   else "priced at low confidence") + "; not in the book)")
             continue
         report.add("unexplained", held.address,
-            f"{label} {held.address} — {size} (≈${held.value_usd:,.2f}; in "
-            f"neither book)")
+            f"{label} {held.address} — {size} (≈${held.value_usd:,.2f}; not in "
+            f"the book)")
     return report
 
 
-def _diff_rail(report: ReconcileReport, rail: Optional[List[RailPosition]],
-               by_addr: Dict[str, ChainHolding], ledger_addrs: set, *,
-               evm_chain: bool, qty_rel_tolerance: float) -> set:
-    """071 W3: the RAIL store against the chain. Returns the addresses the rail
-    store explains. A row the ledger also lists only adds a line when the rail
-    store DISAGREES with the chain (the ledger line already says the rest)."""
-    from core.wallet.tokens import clean_symbol
-    explained: set = set()
-    if rail is None:
-        return explained
-    report.rail_rows = 0
-    for rp in rail:
-        if bool(_EVM_ADDR.fullmatch(rp.address or "")) != evm_chain:
-            continue
-        report.rail_rows += 1
-        key = _norm(rp.address)
-        explained.add(key)
-        label = clean_symbol(rp.symbol) or "?"
-        in_ledger = key in ledger_addrs
-        held = by_addr.get(key)
-        if rp.status != "open":
-            if not in_ledger:
-                report.add("matched", rp.address,
-                    f"{label} {rp.address} — the rail store marks it "
-                    f"{rp.status.replace('_', ' ')}; not compared [rail store]")
-            continue
-        if held is not None and (not held.balance_known or held.qty is None):
-            if not in_ledger:
-                report.add("unknown", rp.address,
-                    f"{label} {rp.address} — rail store says {rp.qty:,.6f}, chain "
-                    f"balance UNKNOWN (unknown is NOT zero) [rail store]")
-            continue
-        chain_qty = held.qty if held is not None else 0.0
-        if not chain_qty:
-            report.add("unbacked", rp.address,
-                f"{label} {rp.address} — rail store says {rp.qty:,.6f} OPEN, "
-                f"chain balance is ZERO. The tokens left the wallet outside a "
-                f"recorded swap (a transfer?), or an exit was not booked. "
-                f"[rail store]")
-            continue
-        rel = abs(chain_qty - rp.qty) / rp.qty if rp.qty else 1.0
-        if rel > qty_rel_tolerance:
-            report.add("mismatched", rp.address,
-                f"{label} {rp.address} — rail store {rp.qty:,.6f} vs chain "
-                f"{chain_qty:,.6f} ({rel * 100.0:.1f}% apart). Tokens moved "
-                f"outside a recorded swap. [rail store]")
-            continue
-        if not in_ledger:
-            report.add("unexplained", rp.address,
-                f"{label} {rp.address} — {chain_qty:,.6f} held; the rail store "
-                f"agrees ({rp.qty:,.6f}) but the ledger has NO row. Add the row. "
-                f"[rail store, not in ledger]")
-    return explained
-
-
 def render(report: ReconcileReport, *, chain: str, holder: str,
-           ledger_path: str, coverage: str,
-           rail_state: Optional[str] = None) -> str:
+           coverage: str, rail_state: Optional[str] = None) -> str:
     lines = [
-        f"LEDGER ⟷ CHAIN RECONCILIATION — chain {chain}, holder {holder}",
-        f"ledger: {ledger_path}",
-        "rail store (open_positions): "
-        + (rail_state or ("not consulted" if report.rail_rows is None
-                          else f"{report.rail_rows} row(s) compared")),
+        f"BOOK ⟷ CHAIN RECONCILIATION — chain {chain}, holder {holder}",
+        "book (open_positions, written by the money rail from landed receipts): "
+        + (rail_state or f"{report.rail_rows} row(s) compared"),
         f"chain coverage: {coverage}",
-        f"ledger open rows: {report.ledger_rows} · chain holdings considered: "
-        f"{report.holdings_considered}",
-        "Each row ends with its source: [ledger] = your markdown table, "
-        "[rail store] = what the money rail recorded from landed receipts.",
+        f"chain holdings considered: {report.holdings_considered}",
         "",
         f"VERDICT: {report.verdict}"
-        + (f" — {report.issues} issue(s) between the chain and the books "
-           f"(the ledger's Open-positions table and the rail store)"
+        + (f" — {report.issues} issue(s) between the chain and the book"
            if report.issues else ""),
     ]
     if report.collisions:
         lines += [""] + list(report.collisions)
     sections = [
         ("matched", report.matched),
-        ("LEDGER ROWS THE CHAIN DOES NOT BACK", report.unbacked),
+        ("BOOK ROWS THE CHAIN DOES NOT BACK", report.unbacked),
         ("SIZE MISMATCHES", report.mismatched),
-        ("HELD ON CHAIN, NOT IN THE LEDGER — each is either a position you "
-         "forgot to record (add the row) or something someone sent you "
-         "(record it as dust, never interact); decide and write it down NOW",
-         report.unexplained),
-        ("unsolicited (unpriced, in neither book — someone sent it; never "
-         "interact; not an issue. If you DID buy one, add its ledger row)",
-         report.unsolicited),
-        ("UNPARSEABLE TABLE ROWS", report.unreadable_rows),
+        ("HELD ON CHAIN, NOT IN THE BOOK — each is either a position bought "
+         "outside the money rail or something someone sent you (dust, never "
+         "interact)", report.unexplained),
+        ("unsolicited (unpriced, not in the book — someone sent it; never "
+         "interact; not an issue)", report.unsolicited),
         ("COULD NOT VERIFY (unknown is NOT zero)", report.unknown),
         ("dust (noise, per the anti-dust rule)", report.dust),
-        ("other chain family (not checked here)", report.skipped_other_family),
     ]
     for title, items in sections:
         if items:
             lines += ["", f"{title}:"] + [f"  {item}" for item in items]
     lines += [
         "",
-        "This output is authoritative over your memory, over the ledger's run",
-        "log, and over any earlier summary of the book. If it disagrees with",
-        "what you believed, the belief is wrong. Fix the Open-positions table",
-        "to match the chain BEFORE any trade, any ledger write, and any public",
-        "claim about your positions or track record.",
+        "This output is authoritative over your memory and over any earlier",
+        "summary of the book. If it disagrees with what you believed, the",
+        "belief is wrong. Resolve every disagreement BEFORE any trade and any",
+        "public claim about your positions or track record.",
     ]
     return "\n".join(lines)
 
@@ -468,7 +369,7 @@ def _ticker_collision_lines(rows) -> list:
                     "not something this list can tell you and not something any "
                     "price or liquidity ranking can settle — a look-alike can be "
                     "seeded to outrank a real token. Take the address from your "
-                    "own ledger row or the owner's instruction, and say which "
+                    "own book row or the owner's instruction, and say which "
                     "address you used.", ""]
         entries = [seen[k] for k in sorted(seen)]
         out.append(f"  symbol {key.upper()!r} is claimed by {len(entries)} contracts here:")

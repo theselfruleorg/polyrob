@@ -122,12 +122,13 @@ class AgentConfig(BaseSettings):
     base_dir: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     environment: str = Field(default="development", alias='ENVIRONMENT')
 
-    # Data paths
-    data_dir: str = Field(default="data", alias='DATA_DIR')
-    # R-2 B1 (2026-07-17): default aligned with the file the app ACTUALLY opens
-    # (modules/database/database_manager.py derives <data_dir>/database/bot.db).
-    # The old "data/bot.db" default was a decoy nothing ever opened.
-    db_path: str = Field(default="data/database/bot.db", alias='DB_PATH')
+    # Data paths. 080 WS-1 (one data dir): unset = the data home
+    # (``core.runtime_paths.effective_data_home``), resolved in
+    # ``_ensure_directories``; never ``<POLYROB_DATA_DIR>/data`` or the code tree.
+    data_dir: str = Field(default="", alias='DATA_DIR')
+    # R-2 B1: unset = the file the app ACTUALLY opens, ``<data_dir>/database/bot.db``
+    # (modules/database/database_manager.py derives it the same way).
+    db_path: str = Field(default="", alias='DB_PATH')
 
     # Logging
     log_level: str = Field('INFO', alias='LOG_LEVEL')
@@ -282,7 +283,7 @@ class ServerConfig(AgentConfig):
 
     # OCR scratch dir — no reader left, but _ensure_directories still creates it.
     # Internal: no alias, so the env cannot move it.
-    services_ocr_temp_dir: str = Field(default="data/temp")
+    services_ocr_temp_dir: str = Field(default="temp")
     
     # LLM API keys live on AgentConfig (parent) — see top of file.
 
@@ -515,26 +516,33 @@ class ServerConfig(AgentConfig):
     def _ensure_directories(self) -> None:
         """Ensure required directories exist.
 
-        Anchor every path to base_dir BEFORE creating anything. Construction runs
-        during BotConfig() — in the CLI that is BEFORE bootstrap reassigns
-        data_dir=.rob — so a relative default ("data", "data/bot.db", "data/temp")
-        must not materialize as a stray ./data tree in the caller's CWD.
+        Anchor every path to the data home BEFORE creating anything, so a
+        relative value never materializes as a stray ./data tree in the CWD or
+        the code tree.
         """
-        # Runtime isolation (doc 01 T2): when POLYROB_DATA_DIR is set (the server
-        # data-home), anchor the relative runtime data paths there — OUTSIDE the
-        # code tree — instead of base_dir (the code root). Read via os.getenv only
-        # (BotConfig.get is a getattr that ignores the env). The CLI/local path is
-        # unaffected: bootstrap reassigns data_dir to an absolute .rob AFTER
-        # construction, and these paths are already absolute by then. Fall back to
-        # base_dir anchoring (legacy) when unset.
-        data_anchor = os.getenv("POLYROB_DATA_DIR") or self.base_dir
+        # 080 WS-1 (one data dir): the anchor is THE data home every container,
+        # console page and admin verb reads — never the code tree.
+        from core.runtime_paths import bot_db_default_path, effective_data_home
+        data_anchor = str(effective_data_home())
+
+        # A 1.4.0 server kept config.data_dir at <POLYROB_DATA_DIR>/data; move
+        # that tree up BEFORE any mkdir below, or bot.db opens empty.
+        _home_env = (os.getenv("POLYROB_DATA_DIR") or "").strip()
+        if _home_env:
+            from core.legacy_data_tree import converge_legacy_data_tree
+            converge_legacy_data_tree(Path(_home_env).expanduser().resolve(),
+                                      data_dir=self.data_dir, db_path=self.db_path)
 
         # Convert relative paths to absolute FIRST (so the mkdirs below never
-        # resolve against CWD).
-        if not Path(self.db_path).is_absolute():
-            self.db_path = str(Path(data_anchor) / self.db_path)
-        if not Path(self.data_dir).is_absolute():
+        # resolve against CWD). An unset data_dir IS the data home.
+        if not self.data_dir:
+            self.data_dir = data_anchor
+        elif not Path(self.data_dir).is_absolute():
             self.data_dir = str(Path(data_anchor) / self.data_dir)
+        if not self.db_path:
+            self.db_path = bot_db_default_path(str(self.data_dir))
+        elif not Path(self.db_path).is_absolute():
+            self.db_path = str(Path(data_anchor) / self.db_path)
         if not Path(self.services_ocr_temp_dir).is_absolute():
             self.services_ocr_temp_dir = str(Path(data_anchor) / self.services_ocr_temp_dir)
 

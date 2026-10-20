@@ -9,7 +9,9 @@ Rule: a status section that cannot be computed renders ``unavailable
 Mechanism (AST, mirrors tests/test_file_size_ratchet.py): in each designated
 status-render module, count ``except`` handlers whose body is SILENT — only
 ``pass``, ``continue``, a bare ``return``/``return None``, and/or logging
-calls (``logger.*`` / ``self.logger.*`` / ``logging.*``). The per-file
+calls (``logger.*`` / ``self.logger.*`` / ``logging.*``). 080 WS-4: an
+empty-container return (``return []`` / ``return {}`` / ``return ()``) is
+silent too — an empty list reads as "none", which is the same lie. The per-file
 ceilings may only SHRINK; a new silent handler in one of these files fails.
 The two new SSOT modules are pinned at ZERO.
 """
@@ -22,7 +24,9 @@ REPO = Path(__file__).resolve().parent.parent
 CEILINGS = {
     "core/status_snapshot.py": 0,
     # W9 (2026-10-10): the types and section builders split out of the snapshot.
-    "core/status_types.py": 0,
+    # 080 WS-4: 0 -> 1 only because `return {}` now counts (`_payload`: an
+    # unparseable goal payload reads as no payload). Shrink-only from here.
+    "core/status_types.py": 1,
     "core/status_session.py": 0,
     "core/status_work.py": 0,
     "core/status_rails.py": 0,
@@ -43,8 +47,10 @@ CEILINGS = {
     # agent loop; the note it would carry is the thing that failed)
     "agents/task/agent/core/live_health.py": 1,
     "core/config_policy/posture_card.py": 1,
-    "cron/digest.py": 2,
-    "surfaces/telegram/harness.py": 32,
+    # 080 WS-4: every read seam now raises and the composer names it; the one
+    # survivor is the optional console link.
+    "cron/digest.py": 1,
+    "surfaces/telegram/harness.py": 33,  # 080 WS-4: +1 = a `return []` now counted
     # W9 (2026-10-10): the owner reply helpers that left harness.py.
     "surfaces/telegram/status_ops.py": 0,
     "surfaces/telegram/prefs_ops.py": 0,
@@ -59,7 +65,7 @@ CEILINGS = {
     "cli/commands/autonomy.py": 0,
     # WS-J3: _console_task_agent is a fail-open SERVICE accessor (returns None
     # when the in-process TaskAgent is absent), not a vanishing status section.
-    "webview/pages.py": 4,
+    "webview/pages.py": 6,  # 080 WS-4: +2 = `return []` handlers now counted
     # D67 (2026-09-21 interface audit): four render paths the ratchet did not
     # scan at all. Pinned at today's count, shrink-only — a NEW log-and-forget
     # handler in any of them now fails.
@@ -71,8 +77,13 @@ CEILINGS = {
     # must never raise into the loop).
     "surfaces/email/surface.py": 7,
     "core/goal_board_render.py": 0,
-    "surfaces/telegram/owner_ops.py": 0,
+    "surfaces/telegram/owner_ops.py": 1,  # 080 WS-4: a `return []` now counted
     "core/surfaces/inbox_render.py": 0,
+    # 080 WS-4: the recap / journey readers name a read failure ("could not read
+    # X") instead of "none" / "0" / "Nothing to report".
+    "core/recap.py": 0,
+    "core/activity_evidence.py": 0,
+    "cli/ui/commands/h_journey.py": 0,
 }
 
 _LOG_NAMES = {"logger", "logging", "log"}
@@ -92,12 +103,22 @@ def _is_log_call(node: ast.AST) -> bool:
     return False
 
 
+def _is_empty_container(node: ast.AST) -> bool:
+    """``[]`` / ``{}`` / ``()`` — "nothing", said with confidence (080 WS-4)."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return not node.elts
+    if isinstance(node, ast.Dict):
+        return not node.keys
+    return False
+
+
 def _is_silent(handler: ast.ExceptHandler) -> bool:
     for stmt in handler.body:
         if isinstance(stmt, (ast.Pass, ast.Continue)):
             continue
         if isinstance(stmt, ast.Return) and (
-                stmt.value is None or (isinstance(stmt.value, ast.Constant) and stmt.value.value is None)):
+                stmt.value is None or (isinstance(stmt.value, ast.Constant) and stmt.value.value is None)
+                or _is_empty_container(stmt.value)):
             continue
         if _is_log_call(stmt):
             continue

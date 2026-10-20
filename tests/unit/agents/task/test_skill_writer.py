@@ -100,7 +100,8 @@ def test_delete_archives(sm, monkeypatch):
     sm.create_skill("d", GOOD, user_id="u1")
     assert sm.delete_skill("d", user_id="u1") is True
     assert not (sm.skills_dir / "user_u1" / "d" / "SKILL.md").exists()
-    assert (sm.skills_dir / "user_u1" / ".archived" / "d" / "SKILL.md").exists()  # recoverable
+    archived = list((sm.skills_dir / "user_u1" / ".archived" / "d").glob("*-SKILL.md"))
+    assert [p.read_text() for p in archived] == [GOOD]  # recoverable, content-addressed
 
 
 def test_promote_pending(sm, monkeypatch):
@@ -126,19 +127,16 @@ def test_promote_pending_removes_now_empty_pending_dir(sm, monkeypatch):
 # --- revalidation-round regression tests ------------------------------------
 
 def test_authored_active_skill_is_loadable_not_dead_write(sm, monkeypatch):
-    """REGRESSION: authored ACTIVE skills must be match-eligible (auto_activate + triggers),
-    else get_skills_for_session skips them forever (the dead-write bug)."""
+    """REGRESSION: an authored ACTIVE skill must be an index line (auto_activate),
+    else no session can see it (the dead-write bug). 081 Q2: no keyword matcher."""
     monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     content = "# Widget Calibration\n\nWhen calibrating a widget, first zero the gauge then log it.\n"
     sm.create_skill("widget-calibration", content, user_id="u1", description="calibrate widgets")
     import json
     rules = json.loads((sm.skills_dir / "user_u1" / "rules.json").read_text())
-    entry = rules["widget-calibration"]
-    assert entry["auto_activate"] is True
-    assert entry["triggers"]["keywords"], "must have keyword triggers or it's a dead write"
-    # and it actually surfaces for a relevant task
-    matched = sm.get_skills_for_session(task="please calibrate the widget now", user_id="u1")
-    assert any(m.skill_id == "widget-calibration" for m in matched)
+    assert rules["widget-calibration"]["auto_activate"] is True
+    index = sm.get_catalog_skills(user_id="u1", tool_ids=[], max_skills=500)
+    assert any(m.skill_id == "widget-calibration" for m in index)
 
 
 def test_patch_validates_skill_id(sm, monkeypatch):
@@ -200,8 +198,8 @@ def test_reject_pending_skill_archives_and_removes(sm, monkeypatch):
     # pending is gone
     assert not (sm.skills_dir / "user_u1" / ".pending" / "bad-draft" / "SKILL.md").exists()
     assert sm.list_pending_skills(user_id="u1") == []
-    # archived (recoverable)
-    assert (sm.skills_dir / "user_u1" / ".archived" / "bad-draft" / "SKILL.md").exists()
+    # archived (recoverable, content-addressed)
+    assert list((sm.skills_dir / "user_u1" / ".archived" / "bad-draft").glob("*-SKILL.md"))
 
 
 def test_reject_pending_skill_removes_now_empty_pending_dir(sm, monkeypatch):

@@ -30,7 +30,7 @@ Pure policy — no imports beyond the env helpers and the tier-0 verb-policy
 table, so every tier can read it.
 """
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from core.env import bool_env, float_env
 from core.lazy_views import lazy_module_getattr, view
@@ -192,7 +192,7 @@ def spend_exemption(action_name: str,
             # A venue cancel (lane none, risk_reducing): it retires a resting
             # order, moves no funds and grants nothing. Making the owner tap to
             # REDUCE exposure is how a book stays exposed. Every other gate
-            # (owner-only tool, correspondent, room, refusal taint) still holds.
+            # (owner-only tool, correspondent, room) still holds.
             if "revoke" in action_name:
                 return "revoke — it only reduces delegated authority; it moves no funds"
             return "cancel — retires a resting order; it moves no funds"
@@ -210,6 +210,12 @@ def spend_exemption(action_name: str,
     if declared <= 0:
         return None
 
+    if payout_shaped(action_name, params):
+        # 085 W2 (D2): a call that moves value and declares no inflow can pay any
+        # address — the same loss `defi_trade_transfer` (owner_always) is held
+        # to. No ceiling exempts it, on any turn: the owner taps it once.
+        return None
+
     ceiling = autonomous_ceiling_usd()
     if declared > ceiling:
         return None
@@ -225,6 +231,141 @@ def spend_exemption(action_name: str,
                 f"${session:.4f} are within the ${ceiling:.2f} autonomous limit")
     return (f"declared ceiling ${declared:.4f} is within the ${ceiling:.2f} "
             f"autonomous limit")
+
+
+def _positive(value) -> bool:
+    """``value > 0``; an unreadable value counts as positive (fail closed)."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return bool(value)
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return True
+
+
+#: 085 W2 (money M-1): a declared inflow makes a generic call a swap, not a payout,
+#: only when what comes back is worth at least this share of what leaves.
+INFLOW_FAIR_SHARE = 0.5
+
+#: The spend-grade price (``tools.defi.price_sources.spend_price``), registered by
+#: the tools tier (``tools/defi/call_verb.py``) so this core predicate can price
+#: without an upward import. Unregistered = unpriced = payout-shaped (the tap).
+_SPEND_PRICE: Optional[Callable[[str, str], Optional[float]]] = None
+
+
+def register_spend_price(fn: Callable[[str, str], Optional[float]]) -> None:
+    global _SPEND_PRICE
+    _SPEND_PRICE = fn
+
+
+def _trusted_receive_token(chain: str, token: str) -> bool:
+    """A canonical (pinned) asset of *chain*, or the agent's own token."""
+    from core.wallet.tokens import canonical_token, normalize_address
+    try:
+        addr = normalize_address(str(token))
+    except Exception:
+        return False
+    if canonical_token(chain, addr) is not None:
+        return True
+    from core.wallet.token_provenance import own_token
+    return own_token(chain, addr) is not None
+
+
+def _usd(chain: str, token: str, raw, price_fn) -> Optional[float]:
+    """``raw`` units of *token* in USD at the spend-grade price, or None."""
+    from core.wallet.tokens import canonical_token, normalize_address
+    from core.wallet.tx_guard_steps.value import _spend_price
+    try:
+        addr = normalize_address(str(token))
+        amount = int(raw)
+    except Exception:
+        return None
+    row = canonical_token(chain, addr)
+    decimals = row.get("decimals") if row else None
+    if decimals is None:
+        from core.wallet.tx_guard import _decimals_for
+        decimals = _decimals_for(chain, addr)
+    if decimals is None:
+        return None
+    unit = _spend_price(price_fn(chain, addr), chain)
+    if unit is None:
+        return None
+    return amount / (10 ** int(decimals)) * unit
+
+
+def _outflow_usd(params: Dict[str, Any], price_fn) -> Optional[float]:
+    chain = str(params.get("chain") or "")
+    if params.get("spend_token"):
+        return _usd(chain, params["spend_token"], params.get("spend_max_raw"), price_fn)
+    from core.wallet import chains
+    from core.wallet.tx_guard_steps.value import _spend_price
+    row = chains.get(chain)
+    if row is None or not row.wrapped_native:
+        return None
+    unit = _spend_price(price_fn(chain, row.wrapped_native), chain)
+    try:
+        return None if unit is None else float(params.get("value") or 0) * unit
+    except (TypeError, ValueError):
+        return None
+
+
+def inflow_declared(params: Optional[Dict[str, Any]], *,
+                    price_fn: Optional[Callable[[str, str], Optional[float]]] = None) -> bool:
+    """A generic call that declares a FAIR return (085 W2, money M-1): a
+    ``receive_token`` that is a canonical asset or the agent's own token, and a
+    ``receive_min_raw`` worth at least :data:`INFLOW_FAIR_SHARE` of the declared
+    outflow, both at the spend-grade price the guard uses. 1 wei of a junk token
+    back is not a swap. Any doubt (unpriced, unknown decimals, a raise) answers
+    False: the call is payout-shaped and the owner taps it — never a refusal.
+
+    *params* are the model's verb params (``value`` in native units,
+    ``spend_max_raw``/``receive_min_raw`` raw). *price_fn* defaults to the
+    registered spend-grade price."""
+    params = params or {}
+    if not (params.get("receive_token") and _positive(params.get("receive_min_raw"))):
+        return False
+    price_fn = price_fn or _SPEND_PRICE
+    if price_fn is None:
+        return False
+    chain = str(params.get("chain") or "")
+    try:
+        if not _trusted_receive_token(chain, params["receive_token"]):
+            return False
+        inflow = _usd(chain, params["receive_token"], params.get("receive_min_raw"), price_fn)
+        outflow = _outflow_usd(params, price_fn)
+    except Exception:
+        return False
+    if inflow is None or outflow is None:
+        return False
+    return inflow >= INFLOW_FAIR_SHARE * outflow
+
+
+def payout_shaped(action_name: str, params: Optional[Dict[str, Any]], *,
+                  price_fn: Optional[Callable[[str, str], Optional[float]]] = None) -> bool:
+    """True when this call can pay value to an address nobody pinned (085 W2).
+
+    Only these two verbs can express such a payout: every other defi-lane verb
+    binds its counterparty itself (a pinned router, the wrapped native, a
+    declared spender) or is owner_always.
+
+    ``defi_trade_call``: it moves value (native ``value > 0`` or a declared
+    ``spend_token`` outflow) and does not declare a fair inflow
+    (:func:`inflow_declared`).
+    ``defi_trade_deploy_contract``: it endows the constructor (``value > 0``),
+    which can forward the endowment anywhere.
+
+    The verbs set ``TxIntent.payout_shape`` from the same predicate, so the
+    guard queues the call for the owner in every lane (step 9).
+    """
+    params = params or {}
+    if action_name == "defi_trade_deploy_contract":
+        return _positive(params.get("value"))
+    if action_name == "defi_trade_call":
+        moves = _positive(params.get("value")) or bool(params.get("spend_token"))
+        return moves and not inflow_declared(params, price_fn=price_fn)
+    return False
 
 
 #: Back-compat alias — `tools/controller/service.py` and existing tests import

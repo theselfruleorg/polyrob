@@ -12,7 +12,7 @@ moving 0.9 SOL.
 """
 from core.wallet.solana_simulation import parse_deltas
 
-OWNER = "BrsPwATRZcb2PWsEZba9Bh1mwcxU6M7R64nPgRneCpmL"
+OWNER = "2cyLycfUPcu8Zhmdpzf13vQHEZcoWrRkiQGFHvJ5xveW"
 VAULT = "7uTT8Xi5RWXzy7h9XL244GRgEycDYDhLjr3ZyNdXi8pZ"
 
 

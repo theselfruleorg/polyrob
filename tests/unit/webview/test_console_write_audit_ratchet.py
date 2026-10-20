@@ -202,6 +202,8 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
+    from webview import job_routes  # 080: the job stop route moved here
+    app.include_router(job_routes.router)
     return TestClient(app)
 
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Dict, List, Literal, Optional, Tuple
 
 
@@ -57,6 +58,12 @@ class ChainRow:
     max_fee_wei_per_tx: int = 0         # per-chain: L1 gas dwarfs an L2's
     purpose: str = ""                   # guidance the agent reads to pick a chain
     usdc: Optional[str] = None
+    #: Other USD stablecoins verified on-chain for this row (address, symbol,
+    #: name, decimals) — the chain's own dollar where it is not USDC (USDG on
+    #: Robinhood). With ``usdc`` they are the canonical pins and the USD-pegged
+    #: set :func:`usd_pegged` returns: a pinned stable is valued at its peg
+    #: while every price source agrees it is on it (``tools.intel.price``).
+    stables: Tuple[Tuple[str, str, str, int], ...] = ()
     univ3_router: Optional[str] = None
     univ3_quoter: Optional[str] = None
     wrapped_native: Optional[str] = None
@@ -110,6 +117,11 @@ class ChainRow:
     #: ``tx_guard`` prices its native and wrapped native at exactly $0 (so the USD caps never
     #: bind) and the run is bounded by ``max_fee_wei_per_tx`` in wei, at the rail.
     valueless: bool = False
+    #: 079 D1 — the native coin kept back for fees, in COIN units (never USD: the
+    #: guard must not depend on a price). Everything above it is money — buying
+    #: power the holdings read values and counts. ``None`` = not set for this row;
+    #: read it through :func:`fee_reserve`, never a second constant.
+    fee_reserve: Optional[Decimal] = None
 
     @property
     def rpc_env(self) -> str:
@@ -145,6 +157,7 @@ _ROWS: Dict[str, ChainRow] = {
         # anomaly brake (a bad RPC or a fee spike), not an economic budget — the
         # USD caps in tx_guard/PolicyGate are what bound what a trade is worth.
         max_fee_wei_per_tx=10 ** 16,          # 0.01 ETH
+        fee_reserve=Decimal("0.01"),
         purpose=("Deepest liquidity and the canonical home of most ERC-20s, but "
                  "the most expensive gas by far — an approve+swap+revoke cycle "
                  "can cost more than a small trade is worth. Prefer it for size, "
@@ -169,6 +182,7 @@ _ROWS: Dict[str, ChainRow] = {
         native_symbol="ETH",
         public_rpc="https://mainnet.base.org",
         max_fee_wei_per_tx=2 * 10 ** 15,      # 0.002 ETH — a cheap L2
+        fee_reserve=Decimal("0.002"),
         purpose=("Cheap, fast L2 and the agent's own treasury chain: the USDC "
                  "the wallet holds and the x402 payment rail both live here. "
                  "The default choice for small trades, because gas is a "
@@ -220,6 +234,7 @@ _ROWS: Dict[str, ChainRow] = {
         # Measured 0.024 gwei: a 1.2M-gas aggregator route costs ~0.0000287 ETH,
         # so this is ~70 such routes of headroom as an anomaly brake.
         max_fee_wei_per_tx=2 * 10 ** 15,
+        fee_reserve=Decimal("0.002"),
         purpose=("Robinhood's L2 (Arbitrum Orbit, ETH gas, gas ~free) and the "
                  "primary memecoin hunting ground — minutes-old pools on the "
                  "pons-v2 launchpad, real depth on the leaders. It also hosts "
@@ -263,6 +278,11 @@ _ROWS: Dict[str, ChainRow] = {
         # here. Read from a live quote and verified with eth_getCode.
         aggregator_spender="0xB477751B76CF82d00a686A1232f5fCD772414Af3",
         route_hints=("lifi",),
+        # Verified on-chain 2026-10-17: code present (a proxy), symbol USDG,
+        # name "Global Dollar", decimals 6. One pool on the chain ($1.26M), so
+        # the pool grade alone read it "low" and every /send of it refused.
+        stables=(("0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", "USDG",
+                  "Global Dollar", 6),),
         money_enabled=True,
     ),
     # Robinhood Chain TESTNET (W13; the agent-NFT collection's testnet-first rule).
@@ -280,6 +300,7 @@ _ROWS: Dict[str, ChainRow] = {
         native_symbol="ETH",
         public_rpc="https://rpc.testnet.chain.robinhood.com",
         max_fee_wei_per_tx=2 * 10 ** 15,
+        fee_reserve=Decimal("0.002"),
         purpose=("Robinhood Chain's TESTNET: valueless ETH, used to rehearse an agent-NFT collection (mint, "
                  "adopt, inspect) before mainnet. Reads only here — nothing moves value from "
                  "the agent on this chain, and no route, price or screen covers it."),
@@ -310,6 +331,7 @@ _ROWS: Dict[str, ChainRow] = {
         # Measured 0.02 gwei; a 250k-gas tx costs ~0.000005 ETH, so this is
         # ~400 transactions of headroom as an anomaly brake.
         max_fee_wei_per_tx=2 * 10 ** 15,      # 0.002 ETH
+        fee_reserve=Decimal("0.002"),
         purpose=("Cheap L2 with deep majors liquidity, and where the Hyperliquid "
                  "venue settles. Gas is ETH and costs a fraction of a cent. No "
                  "Uniswap V3 deployment is pinned here, so swaps route through "
@@ -339,6 +361,7 @@ _ROWS: Dict[str, ChainRow] = {
         # transactions: still an anomaly brake, not a budget. The USD caps in
         # tx_guard/PolicyGate are what bound what a trade is worth.
         max_fee_wei_per_tx=5 * 10 ** 17,      # 0.5 POL
+        fee_reserve=Decimal("2"),
         purpose=("Cheap chain with a large long-tail token market, and where the "
                  "Polymarket venue settles. Gas is POL, NOT ether, and is far "
                  "pricier per unit than an L2's — budget for it. No Uniswap V3 "
@@ -379,6 +402,7 @@ _ROWS: Dict[str, ChainRow] = {
         # OP Stack fee also carries the L1 data fee the gas price does not show;
         # 0.002 ETH is the base row's brake for the same stack.
         max_fee_wei_per_tx=2 * 10 ** 15,      # 0.002 ETH
+        fee_reserve=Decimal("0.002"),
         purpose=("OP Stack L2 with native USDC and deep majors liquidity; READ "
                  "ONLY here (token screens, prices, balances). No money moves on "
                  "this chain until the owner arms it. Gas is ETH and costs a "
@@ -420,6 +444,7 @@ _ROWS: Dict[str, ChainRow] = {
         native_decimals=9,
         public_rpc="https://api.mainnet-beta.solana.com",
         max_fee_wei_per_tx=0,           # not a wei-denominated chain
+        fee_reserve=Decimal("0.02"),
         purpose=("Solana. Reads (prices, screens, pool discovery, portfolio) "
                  "work here; the EVM money verbs do NOT — swaps go through the "
                  "dedicated defi_trade.solana_swap verb (Jupiter route, "
@@ -456,6 +481,14 @@ def get(chain: str) -> Optional[ChainRow]:
         import dataclasses
         row = dataclasses.replace(row, money_enabled=True)
     return row
+
+
+def fee_reserve(chain: str) -> Optional[Decimal]:
+    """079 D1: the native coin *chain* keeps back for fees, in coin units, or
+    ``None`` for an unknown chain or a row with no reserve set. THE one reader of
+    ``ChainRow.fee_reserve`` — holdings and every "spend all" path read it here."""
+    row = get(chain)
+    return None if row is None else row.fee_reserve
 
 
 def valueless_money_enabled() -> bool:
@@ -496,6 +529,49 @@ def explorer_url(chain: str, kind: Literal["address", "tx", "token"], ref: str) 
 
 def all_rows() -> List[ChainRow]:
     return list(_ROWS.values())
+
+
+def usd_pegged(chain: str) -> frozenset:
+    """Lower-cased addresses of the USD stablecoins pinned on ``chain`` (its
+    ``usdc`` plus ``stables``) — only on a row whose assets were verified."""
+    row = get(chain)
+    if row is None or not (row.money_enabled or row.assets_verified):
+        return frozenset()
+    addrs = [row.usdc] if row.usdc else []
+    addrs += [s[0] for s in row.stables]
+    return frozenset(a.lower() for a in addrs if a)
+
+
+#: 085 M-2: the test-network USDC the registry carries no row for (a testnet in
+#: ``all_rows()`` would sit in front of every DeFi surface). Mirrors the builtin
+#: payment rows in ``core/payments/assets.py``; a test asserts every builtin row
+#: reads as pegged.
+_TESTNET_USD_STABLES = frozenset({
+    ("base-sepolia", "0x036cbd53842c5426634e7929541ec2318f3dcf7e"),
+    ("solana", "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"),
+})
+
+
+def is_usd_pegged(chain: str, address: Optional[str]) -> bool:
+    """True when ``address`` is a USD stablecoin pinned on ``chain``: the row's
+    ``usdc``/``stables`` (:func:`usd_pegged`) or a test-network USDC above.
+    085 M-2: the dollar peg is decided by this pinned ``(chain, address)``
+    table, never by a token's self-reported ``symbol()``. A Solana mint is
+    base58, where case IS the value, so it compares exactly."""
+    addr = (address or "").strip()
+    key = (chain or "").strip().lower()
+    if not addr:
+        return False
+    evm = key != "solana"
+    if (key, addr.lower() if evm else addr) in _TESTNET_USD_STABLES:
+        return True
+    row = get(key)
+    if row is None or not (row.money_enabled or row.assets_verified):
+        return False
+    pinned = [a for a in ([row.usdc] if row.usdc else []) + [s[0] for s in row.stables] if a]
+    if row.family == "evm":
+        return addr.lower() in {a.lower() for a in pinned}
+    return addr in set(pinned)
 
 
 def rows_of_family(family: str) -> List[ChainRow]:

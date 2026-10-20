@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 396
+  "universe_size": 391
  },
  "actions": {
   "": {
@@ -6698,57 +6698,6 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
-  "email_read_machine_mail": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [
-     "email"
-    ],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS",
-    "room_policy.ROOM_DENIED_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "email"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
-   }
-  },
   "email_reply": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -8814,186 +8763,6 @@
    }
   },
   "goal_list": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "goal"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "goal_objective_add": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "goal"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "goal_objective_list": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "goal"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "goal_objective_set_status": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "goal"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "goal_rail_propose": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -13019,9 +12788,9 @@
     "autonomous_gating_lanes(env)": "reported"
    },
    "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": false,
     "reply_action": false
    },
    "effect": {
@@ -13032,15 +12801,12 @@
     "write_row": {}
    },
    "emitted": {
-    "direct_controller_action": true,
+    "direct_controller_action": false,
     "live_default_env": false,
     "live_twitter_enabled": false,
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS",
     "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
    "money": {
@@ -13053,8 +12819,8 @@
    },
    "owner_tools": [],
    "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
+    "is_room_denied_call(name, None)": false,
+    "is_room_denied_call(name, owner)": false
    },
    "spend_exemption": {},
    "untrusted": {
@@ -17146,9 +16912,9 @@
     "autonomous_gating_lanes(env)": "reported"
    },
    "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": false,
     "reply_action": false
    },
    "effect": {
@@ -17159,15 +16925,12 @@
     "write_row": {}
    },
    "emitted": {
-    "direct_controller_action": true,
+    "direct_controller_action": false,
     "live_default_env": false,
     "live_twitter_enabled": false,
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS",
     "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
    "money": {
@@ -17180,8 +16943,8 @@
    },
    "owner_tools": [],
    "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
+    "is_room_denied_call(name, None)": false,
+    "is_room_denied_call(name, owner)": false
    },
    "spend_exemption": {},
    "untrusted": {
@@ -20201,6 +19964,14 @@
    "cronjob",
    "message"
   ],
+  "rigs.RIGS['owner']": [
+   "filesystem",
+   "task",
+   "web_fetch",
+   "goal",
+   "cronjob",
+   "message"
+  ],
   "rigs.RIGS['research']": [
    "web_fetch",
    "anysite",
@@ -20286,14 +20057,6 @@
   "tool_defaults.TOOLSETS['minimal']": [
    "filesystem",
    "task"
-  ],
-  "tool_defaults.TOOLSETS['owner_interactive']": [
-   "goal",
-   "twitter",
-   "web_fetch",
-   "filesystem",
-   "task",
-   "defi_data"
   ],
   "tool_defaults.TOOLSETS['research']": [
    "filesystem",
@@ -20464,6 +20227,14 @@
     "cronjob",
     "message"
    ],
+   "rigs.rig_tools('owner')": [
+    "filesystem",
+    "task",
+    "web_fetch",
+    "goal",
+    "cronjob",
+    "message"
+   ],
    "rigs.rig_tools('research')": [
     "web_fetch",
     "anysite",
@@ -20617,14 +20388,6 @@
    "tool_defaults.resolve_toolset('minimal')": [
     "filesystem",
     "task"
-   ],
-   "tool_defaults.resolve_toolset('owner_interactive')": [
-    "goal",
-    "twitter",
-    "web_fetch",
-    "filesystem",
-    "task",
-    "defi_data"
    ],
    "tool_defaults.resolve_toolset('research')": [
     "filesystem",
@@ -20834,6 +20597,14 @@
     "cronjob",
     "message"
    ],
+   "rigs.rig_tools('owner')": [
+    "filesystem",
+    "task",
+    "web_fetch",
+    "goal",
+    "cronjob",
+    "message"
+   ],
    "rigs.rig_tools('research')": [
     "web_fetch",
     "anysite",
@@ -20990,14 +20761,6 @@
    "tool_defaults.resolve_toolset('minimal')": [
     "filesystem",
     "task"
-   ],
-   "tool_defaults.resolve_toolset('owner_interactive')": [
-    "goal",
-    "twitter",
-    "web_fetch",
-    "filesystem",
-    "task",
-    "defi_data"
    ],
    "tool_defaults.resolve_toolset('research')": [
     "filesystem",
@@ -21207,6 +20970,14 @@
     "cronjob",
     "message"
    ],
+   "rigs.rig_tools('owner')": [
+    "filesystem",
+    "task",
+    "web_fetch",
+    "goal",
+    "cronjob",
+    "message"
+   ],
    "rigs.rig_tools('research')": [
     "web_fetch",
     "anysite",
@@ -21345,14 +21116,6 @@
    "tool_defaults.resolve_toolset('minimal')": [
     "filesystem",
     "task"
-   ],
-   "tool_defaults.resolve_toolset('owner_interactive')": [
-    "goal",
-    "twitter",
-    "web_fetch",
-    "filesystem",
-    "task",
-    "defi_data"
    ],
    "tool_defaults.resolve_toolset('research')": [
     "filesystem",
@@ -21540,6 +21303,14 @@
     "cronjob",
     "message"
    ],
+   "rigs.rig_tools('owner')": [
+    "filesystem",
+    "task",
+    "web_fetch",
+    "goal",
+    "cronjob",
+    "message"
+   ],
    "rigs.rig_tools('research')": [
     "web_fetch",
     "anysite",
@@ -21679,14 +21450,6 @@
     "filesystem",
     "task"
    ],
-   "tool_defaults.resolve_toolset('owner_interactive')": [
-    "goal",
-    "twitter",
-    "web_fetch",
-    "filesystem",
-    "task",
-    "defi_data"
-   ],
    "tool_defaults.resolve_toolset('research')": [
     "filesystem",
     "task",
@@ -21752,8 +21515,7 @@
    "capabilities": [
     "delegate_blocked",
     "high_impact",
-    "money",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -21964,7 +21726,7 @@
    "GATED_TOOL_REGISTRY": [
     "session tool_ids",
     "loadable",
-    "request tool_ids=['browser']"
+    "call load_tool(\"browser\") to use it"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,
@@ -22077,8 +21839,7 @@
    "capabilities": [
     "delegate_blocked",
     "exec",
-    "high_impact",
-    "writes_code"
+    "high_impact"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "code",
@@ -22124,8 +21885,7 @@
    "capabilities": [
     "delegate_blocked",
     "exec",
-    "high_impact",
-    "writes_code"
+    "high_impact"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "code",
@@ -22259,6 +22019,7 @@
     "autonomous:goal_tools.allowed_self_goal_tools()": 3,
     "autonomous:goal_tools.owner_turn_goal_tools()": 3,
     "autonomous:rigs.rig_tools('ops')": 3,
+    "autonomous:rigs.rig_tools('owner')": 4,
     "autonomous:room_policy._forbidden_tool_ids()": 6,
     "autonomous:tool_availability.grantable_autonomous_tools()": 3,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 13,
@@ -22267,6 +22028,7 @@
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 3,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 3,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 3,
+    "autonomous_defi_armed:rigs.rig_tools('owner')": 4,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 6,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 3,
     "bootstrap._CLI_OPTIONAL_TOOLS": 3,
@@ -22277,13 +22039,16 @@
     "posture2:delegation.get_blocked_child_tools()": 4,
     "posture2:goal_tools.owner_turn_goal_tools()": 3,
     "posture2:rigs.rig_tools('ops')": 3,
+    "posture2:rigs.rig_tools('owner')": 4,
     "posture2:room_policy._forbidden_tool_ids()": 6,
     "rigs.RIGS['ops']": 3,
+    "rigs.RIGS['owner']": 4,
     "supervised:constants.autonomous_mode_tools()": 13,
     "supervised:constants.effective_autonomous_tools()": 13,
     "supervised:delegation.get_blocked_child_tools()": 4,
     "supervised:goal_tools.owner_turn_goal_tools()": 3,
     "supervised:rigs.rig_tools('ops')": 3,
+    "supervised:rigs.rig_tools('owner')": 4,
     "supervised:room_policy._forbidden_tool_ids()": 6
    },
    "is_classified": true,
@@ -22308,8 +22073,7 @@
    "capabilities": [
     "delegate_blocked",
     "high_impact",
-    "money",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -22368,7 +22132,6 @@
     "autonomous:tool_availability.grantable_autonomous_tools()": 4,
     "autonomous:tool_defaults.cli_default_tools()": 5,
     "autonomous:tool_defaults.resolve_toolset('default')": 5,
-    "autonomous:tool_defaults.resolve_toolset('owner_interactive')": 5,
     "autonomous:tool_defaults.resolve_toolset('research')": 7,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 7,
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 5,
@@ -22383,7 +22146,6 @@
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 5,
     "autonomous_defi_armed:tool_defaults.cli_default_tools()": 5,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('default')": 5,
-    "autonomous_defi_armed:tool_defaults.resolve_toolset('owner_interactive')": 5,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 7,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 7,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 5,
@@ -22400,7 +22162,6 @@
     "posture2:tool_availability.grantable_autonomous_tools()": 3,
     "posture2:tool_defaults.cli_default_tools()": 4,
     "posture2:tool_defaults.resolve_toolset('default')": 4,
-    "posture2:tool_defaults.resolve_toolset('owner_interactive')": 5,
     "posture2:tool_defaults.resolve_toolset('research')": 7,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 7,
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 4,
@@ -22418,11 +22179,9 @@
     "supervised:tool_availability.grantable_autonomous_tools()": 3,
     "supervised:tool_defaults.cli_default_tools()": 4,
     "supervised:tool_defaults.resolve_toolset('default')": 4,
-    "supervised:tool_defaults.resolve_toolset('owner_interactive')": 5,
     "supervised:tool_defaults.resolve_toolset('research')": 7,
     "supervised:tool_defaults.resolve_toolset('trading_research')": 7,
     "supervised:tool_defaults.resolve_toolset('unknown-name')": 4,
-    "tool_defaults.TOOLSETS['owner_interactive']": 5,
     "tool_defaults.TOOLSETS['research']": 7,
     "tool_defaults.TOOLSETS['trading_research']": 7
    },
@@ -22447,8 +22206,7 @@
    "capabilities": [
     "delegate_blocked",
     "high_impact",
-    "money",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -22584,6 +22342,7 @@
     "autonomous:goal_tools.owner_turn_goal_tools()": 7,
     "autonomous:rigs.rig_tools('money_rail')": 2,
     "autonomous:rigs.rig_tools('ops')": 0,
+    "autonomous:rigs.rig_tools('owner')": 0,
     "autonomous:rigs.rig_tools('research')": 3,
     "autonomous:rigs.rig_tools('social')": 2,
     "autonomous:room_policy._forbidden_tool_ids()": 10,
@@ -22597,7 +22356,6 @@
     "autonomous:tool_defaults.resolve_toolset('earn')": 0,
     "autonomous:tool_defaults.resolve_toolset('full')": 0,
     "autonomous:tool_defaults.resolve_toolset('minimal')": 0,
-    "autonomous:tool_defaults.resolve_toolset('owner_interactive')": 3,
     "autonomous:tool_defaults.resolve_toolset('research')": 0,
     "autonomous:tool_defaults.resolve_toolset('safe')": 0,
     "autonomous:tool_defaults.resolve_toolset('social')": 0,
@@ -22611,6 +22369,7 @@
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 8,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 2,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 0,
+    "autonomous_defi_armed:rigs.rig_tools('owner')": 0,
     "autonomous_defi_armed:rigs.rig_tools('research')": 3,
     "autonomous_defi_armed:rigs.rig_tools('social')": 2,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 10,
@@ -22624,7 +22383,6 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 0,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('full')": 0,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('minimal')": 0,
-    "autonomous_defi_armed:tool_defaults.resolve_toolset('owner_interactive')": 3,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 0,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('safe')": 0,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 0,
@@ -22644,6 +22402,7 @@
     "posture2:goal_tools.owner_turn_goal_tools()": 7,
     "posture2:rigs.rig_tools('money_rail')": 2,
     "posture2:rigs.rig_tools('ops')": 0,
+    "posture2:rigs.rig_tools('owner')": 0,
     "posture2:rigs.rig_tools('research')": 3,
     "posture2:rigs.rig_tools('social')": 2,
     "posture2:room_policy._forbidden_tool_ids()": 10,
@@ -22657,7 +22416,6 @@
     "posture2:tool_defaults.resolve_toolset('earn')": 0,
     "posture2:tool_defaults.resolve_toolset('full')": 0,
     "posture2:tool_defaults.resolve_toolset('minimal')": 0,
-    "posture2:tool_defaults.resolve_toolset('owner_interactive')": 3,
     "posture2:tool_defaults.resolve_toolset('research')": 0,
     "posture2:tool_defaults.resolve_toolset('safe')": 0,
     "posture2:tool_defaults.resolve_toolset('social')": 0,
@@ -22667,6 +22425,7 @@
     "posture2:tool_defaults.with_compute_tools(['filesystem','task'])": 0,
     "rigs.RIGS['money_rail']": 2,
     "rigs.RIGS['ops']": 0,
+    "rigs.RIGS['owner']": 0,
     "rigs.RIGS['research']": 3,
     "rigs.RIGS['social']": 2,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 6,
@@ -22676,6 +22435,7 @@
     "supervised:goal_tools.owner_turn_goal_tools()": 7,
     "supervised:rigs.rig_tools('money_rail')": 2,
     "supervised:rigs.rig_tools('ops')": 0,
+    "supervised:rigs.rig_tools('owner')": 0,
     "supervised:rigs.rig_tools('research')": 3,
     "supervised:rigs.rig_tools('social')": 2,
     "supervised:room_policy._forbidden_tool_ids()": 10,
@@ -22689,7 +22449,6 @@
     "supervised:tool_defaults.resolve_toolset('earn')": 0,
     "supervised:tool_defaults.resolve_toolset('full')": 0,
     "supervised:tool_defaults.resolve_toolset('minimal')": 0,
-    "supervised:tool_defaults.resolve_toolset('owner_interactive')": 3,
     "supervised:tool_defaults.resolve_toolset('research')": 0,
     "supervised:tool_defaults.resolve_toolset('safe')": 0,
     "supervised:tool_defaults.resolve_toolset('social')": 0,
@@ -22704,7 +22463,6 @@
     "tool_defaults.TOOLSETS['earn']": 0,
     "tool_defaults.TOOLSETS['full']": 0,
     "tool_defaults.TOOLSETS['minimal']": 0,
-    "tool_defaults.TOOLSETS['owner_interactive']": 3,
     "tool_defaults.TOOLSETS['research']": 0,
     "tool_defaults.TOOLSETS['safe']": 0,
     "tool_defaults.TOOLSETS['social']": 0,
@@ -22825,17 +22583,17 @@
     "autonomous:goal_tools.allowed_self_goal_tools()": 7,
     "autonomous:goal_tools.owner_turn_goal_tools()": 8,
     "autonomous:rigs.rig_tools('ops')": 2,
+    "autonomous:rigs.rig_tools('owner')": 3,
     "autonomous:room_policy._forbidden_tool_ids()": 13,
     "autonomous:tool_availability.grantable_autonomous_tools()": 7,
-    "autonomous:tool_defaults.resolve_toolset('owner_interactive')": 0,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 12,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 12,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 9,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 9,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 2,
+    "autonomous_defi_armed:rigs.rig_tools('owner')": 3,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 13,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 9,
-    "autonomous_defi_armed:tool_defaults.resolve_toolset('owner_interactive')": 0,
     "bootstrap._CLI_OPTIONAL_TOOLS": 7,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 12,
     "constants.AUTONOMOUS_MODE_TOOLS": 12,
@@ -22843,16 +22601,16 @@
     "posture2:constants.effective_autonomous_tools()": 12,
     "posture2:goal_tools.owner_turn_goal_tools()": 8,
     "posture2:rigs.rig_tools('ops')": 2,
+    "posture2:rigs.rig_tools('owner')": 3,
     "posture2:room_policy._forbidden_tool_ids()": 13,
-    "posture2:tool_defaults.resolve_toolset('owner_interactive')": 0,
     "rigs.RIGS['ops']": 2,
+    "rigs.RIGS['owner']": 3,
     "supervised:constants.autonomous_mode_tools()": 12,
     "supervised:constants.effective_autonomous_tools()": 12,
     "supervised:goal_tools.owner_turn_goal_tools()": 8,
     "supervised:rigs.rig_tools('ops')": 2,
-    "supervised:room_policy._forbidden_tool_ids()": 13,
-    "supervised:tool_defaults.resolve_toolset('owner_interactive')": 0,
-    "tool_defaults.TOOLSETS['owner_interactive']": 0
+    "supervised:rigs.rig_tools('owner')": 3,
+    "supervised:room_policy._forbidden_tool_ids()": 13
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -22910,18 +22668,16 @@
   "hyperliquid": {
    "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
-    "trading",
+    "money",
     "reserved",
-    "owner-only; trading is never autonomous"
+    "money tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips money tools by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": null,
    "VALID_TOOL_IDS": true,
    "capabilities": [
     "delegate_blocked",
-    "money",
-    "readable_while_tainted",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -23066,8 +22822,7 @@
    "capabilities": [
     "delegate_blocked",
     "high_impact",
-    "money",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -23204,6 +22959,7 @@
     "autonomous:goal_tools.owner_turn_goal_tools()": 11,
     "autonomous:rigs.rig_tools('money_rail')": 4,
     "autonomous:rigs.rig_tools('ops')": 4,
+    "autonomous:rigs.rig_tools('owner')": 5,
     "autonomous:rigs.rig_tools('research')": 5,
     "autonomous:rigs.rig_tools('social')": 4,
     "autonomous:tool_availability.grantable_autonomous_tools()": 10,
@@ -23212,6 +22968,7 @@
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 13,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 4,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 4,
+    "autonomous_defi_armed:rigs.rig_tools('owner')": 5,
     "autonomous_defi_armed:rigs.rig_tools('research')": 5,
     "autonomous_defi_armed:rigs.rig_tools('social')": 4,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 13,
@@ -23221,11 +22978,13 @@
     "posture2:goal_tools.owner_turn_goal_tools()": 11,
     "posture2:rigs.rig_tools('money_rail')": 4,
     "posture2:rigs.rig_tools('ops')": 4,
+    "posture2:rigs.rig_tools('owner')": 5,
     "posture2:rigs.rig_tools('research')": 5,
     "posture2:rigs.rig_tools('social')": 4,
     "posture2:tool_availability.grantable_autonomous_tools()": 8,
     "rigs.RIGS['money_rail']": 4,
     "rigs.RIGS['ops']": 4,
+    "rigs.RIGS['owner']": 5,
     "rigs.RIGS['research']": 5,
     "rigs.RIGS['social']": 4,
     "supervised:bootstrap.cli_unavailable_tools(all)": 8,
@@ -23233,6 +22992,7 @@
     "supervised:goal_tools.owner_turn_goal_tools()": 11,
     "supervised:rigs.rig_tools('money_rail')": 4,
     "supervised:rigs.rig_tools('ops')": 4,
+    "supervised:rigs.rig_tools('owner')": 5,
     "supervised:rigs.rig_tools('research')": 5,
     "supervised:rigs.rig_tools('social')": 4,
     "supervised:tool_availability.grantable_autonomous_tools()": 8
@@ -23338,18 +23098,16 @@
   "polymarket": {
    "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
-    "trading",
+    "money",
     "reserved",
-    "owner-only; trading is never autonomous"
+    "money tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips money tools by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": null,
    "VALID_TOOL_IDS": true,
    "capabilities": [
     "delegate_blocked",
-    "money",
-    "readable_while_tainted",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -23430,8 +23188,7 @@
    "capabilities": [
     "delegate_blocked",
     "exec",
-    "high_impact",
-    "writes_code"
+    "high_impact"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "code",
@@ -23512,7 +23269,6 @@
     "delegate_blocked",
     "exec",
     "high_impact",
-    "writes_code",
     "writes_self"
    ],
    "core.tool_gates.registered": false,
@@ -23551,7 +23307,7 @@
    "GATED_TOOL_REGISTRY": [
     "AGENT_COMPUTE_POSTURE>=1",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE"
+    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "SHELL_TOOLS_ENABLED",
@@ -23559,8 +23315,7 @@
    "capabilities": [
     "delegate_blocked",
     "exec",
-    "high_impact",
-    "writes_code"
+    "high_impact"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "code",
@@ -23611,6 +23366,7 @@
     "autonomous:goal_tools.owner_turn_goal_tools()": 13,
     "autonomous:rigs.rig_tools('money_rail')": 3,
     "autonomous:rigs.rig_tools('ops')": 1,
+    "autonomous:rigs.rig_tools('owner')": 1,
     "autonomous:rigs.rig_tools('research')": 4,
     "autonomous:rigs.rig_tools('social')": 3,
     "autonomous:room_policy.room_tool_ids()": 0,
@@ -23624,7 +23380,6 @@
     "autonomous:tool_defaults.resolve_toolset('earn')": 1,
     "autonomous:tool_defaults.resolve_toolset('full')": 1,
     "autonomous:tool_defaults.resolve_toolset('minimal')": 1,
-    "autonomous:tool_defaults.resolve_toolset('owner_interactive')": 4,
     "autonomous:tool_defaults.resolve_toolset('research')": 1,
     "autonomous:tool_defaults.resolve_toolset('safe')": 1,
     "autonomous:tool_defaults.resolve_toolset('social')": 1,
@@ -23638,6 +23393,7 @@
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 15,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 3,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 1,
+    "autonomous_defi_armed:rigs.rig_tools('owner')": 1,
     "autonomous_defi_armed:rigs.rig_tools('research')": 4,
     "autonomous_defi_armed:rigs.rig_tools('social')": 3,
     "autonomous_defi_armed:room_policy.room_tool_ids()": 0,
@@ -23651,7 +23407,6 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 1,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('full')": 1,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('minimal')": 1,
-    "autonomous_defi_armed:tool_defaults.resolve_toolset('owner_interactive')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 1,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('safe')": 1,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 1,
@@ -23671,6 +23426,7 @@
     "posture2:goal_tools.owner_turn_goal_tools()": 13,
     "posture2:rigs.rig_tools('money_rail')": 3,
     "posture2:rigs.rig_tools('ops')": 1,
+    "posture2:rigs.rig_tools('owner')": 1,
     "posture2:rigs.rig_tools('research')": 4,
     "posture2:rigs.rig_tools('social')": 3,
     "posture2:room_policy.room_tool_ids()": 0,
@@ -23684,7 +23440,6 @@
     "posture2:tool_defaults.resolve_toolset('earn')": 1,
     "posture2:tool_defaults.resolve_toolset('full')": 1,
     "posture2:tool_defaults.resolve_toolset('minimal')": 1,
-    "posture2:tool_defaults.resolve_toolset('owner_interactive')": 4,
     "posture2:tool_defaults.resolve_toolset('research')": 1,
     "posture2:tool_defaults.resolve_toolset('safe')": 1,
     "posture2:tool_defaults.resolve_toolset('social')": 1,
@@ -23694,6 +23449,7 @@
     "posture2:tool_defaults.with_compute_tools(['filesystem','task'])": 1,
     "rigs.RIGS['money_rail']": 3,
     "rigs.RIGS['ops']": 1,
+    "rigs.RIGS['owner']": 1,
     "rigs.RIGS['research']": 4,
     "rigs.RIGS['social']": 3,
     "room_policy.DEFAULT_ROOM_TOOLS": 0,
@@ -23704,6 +23460,7 @@
     "supervised:goal_tools.owner_turn_goal_tools()": 13,
     "supervised:rigs.rig_tools('money_rail')": 3,
     "supervised:rigs.rig_tools('ops')": 1,
+    "supervised:rigs.rig_tools('owner')": 1,
     "supervised:rigs.rig_tools('research')": 4,
     "supervised:rigs.rig_tools('social')": 3,
     "supervised:room_policy.room_tool_ids()": 0,
@@ -23717,7 +23474,6 @@
     "supervised:tool_defaults.resolve_toolset('earn')": 1,
     "supervised:tool_defaults.resolve_toolset('full')": 1,
     "supervised:tool_defaults.resolve_toolset('minimal')": 1,
-    "supervised:tool_defaults.resolve_toolset('owner_interactive')": 4,
     "supervised:tool_defaults.resolve_toolset('research')": 1,
     "supervised:tool_defaults.resolve_toolset('safe')": 1,
     "supervised:tool_defaults.resolve_toolset('social')": 1,
@@ -23732,7 +23488,6 @@
     "tool_defaults.TOOLSETS['earn']": 1,
     "tool_defaults.TOOLSETS['full']": 1,
     "tool_defaults.TOOLSETS['minimal']": 1,
-    "tool_defaults.TOOLSETS['owner_interactive']": 4,
     "tool_defaults.TOOLSETS['research']": 1,
     "tool_defaults.TOOLSETS['safe']": 1,
     "tool_defaults.TOOLSETS['social']": 1,
@@ -23821,7 +23576,6 @@
     "autonomous:room_policy._forbidden_tool_ids()": 25,
     "autonomous:tool_availability.grantable_autonomous_tools()": 13,
     "autonomous:tool_defaults.default_session_tools()": 4,
-    "autonomous:tool_defaults.resolve_toolset('owner_interactive')": 1,
     "autonomous:tool_defaults.resolve_toolset('social')": 5,
     "autonomous:tool_defaults.server_default_tools()": 4,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 4,
@@ -23833,7 +23587,6 @@
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 25,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 16,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 4,
-    "autonomous_defi_armed:tool_defaults.resolve_toolset('owner_interactive')": 1,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 5,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 4,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 21,
@@ -23848,7 +23601,6 @@
     "posture2:rigs.rig_tools('social')": 0,
     "posture2:room_policy._forbidden_tool_ids()": 25,
     "posture2:tool_availability.grantable_autonomous_tools()": 11,
-    "posture2:tool_defaults.resolve_toolset('owner_interactive')": 1,
     "posture2:tool_defaults.resolve_toolset('social')": 5,
     "rigs.RIGS['social']": 0,
     "supervised:constants.autonomous_mode_tools()": 4,
@@ -23859,9 +23611,7 @@
     "supervised:rigs.rig_tools('social')": 0,
     "supervised:room_policy._forbidden_tool_ids()": 25,
     "supervised:tool_availability.grantable_autonomous_tools()": 11,
-    "supervised:tool_defaults.resolve_toolset('owner_interactive')": 1,
     "supervised:tool_defaults.resolve_toolset('social')": 5,
-    "tool_defaults.TOOLSETS['owner_interactive']": 1,
     "tool_defaults.TOOLSETS['social']": 5
    },
    "is_classified": true,
@@ -23895,6 +23645,7 @@
     "autonomous:constants.effective_autonomous_tools()": 2,
     "autonomous:goal_tools.allowed_self_goal_tools()": 14,
     "autonomous:goal_tools.owner_turn_goal_tools()": 15,
+    "autonomous:rigs.rig_tools('owner')": 2,
     "autonomous:rigs.rig_tools('research')": 0,
     "autonomous:rigs.rig_tools('social')": 5,
     "autonomous:room_policy.room_tool_ids()": 1,
@@ -23903,7 +23654,6 @@
     "autonomous:tool_defaults.default_session_tools()": 2,
     "autonomous:tool_defaults.resolve_toolset('default')": 2,
     "autonomous:tool_defaults.resolve_toolset('full')": 2,
-    "autonomous:tool_defaults.resolve_toolset('owner_interactive')": 2,
     "autonomous:tool_defaults.resolve_toolset('research')": 4,
     "autonomous:tool_defaults.resolve_toolset('social')": 4,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 4,
@@ -23913,6 +23663,7 @@
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 2,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 17,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 17,
+    "autonomous_defi_armed:rigs.rig_tools('owner')": 2,
     "autonomous_defi_armed:rigs.rig_tools('research')": 0,
     "autonomous_defi_armed:rigs.rig_tools('social')": 5,
     "autonomous_defi_armed:room_policy.room_tool_ids()": 1,
@@ -23921,7 +23672,6 @@
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 2,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('default')": 2,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('full')": 2,
-    "autonomous_defi_armed:tool_defaults.resolve_toolset('owner_interactive')": 2,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 4,
@@ -23936,6 +23686,7 @@
     "posture2:constants.effective_autonomous_tools()": 2,
     "posture2:goal_tools.allowed_self_goal_tools()": 12,
     "posture2:goal_tools.owner_turn_goal_tools()": 15,
+    "posture2:rigs.rig_tools('owner')": 2,
     "posture2:rigs.rig_tools('research')": 0,
     "posture2:rigs.rig_tools('social')": 5,
     "posture2:room_policy.room_tool_ids()": 1,
@@ -23943,12 +23694,12 @@
     "posture2:tool_defaults.cli_default_tools()": 2,
     "posture2:tool_defaults.resolve_toolset('default')": 2,
     "posture2:tool_defaults.resolve_toolset('full')": 2,
-    "posture2:tool_defaults.resolve_toolset('owner_interactive')": 2,
     "posture2:tool_defaults.resolve_toolset('research')": 4,
     "posture2:tool_defaults.resolve_toolset('social')": 4,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 4,
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 2,
     "posture2:tool_defaults.server_default_tools()": 2,
+    "rigs.RIGS['owner']": 2,
     "rigs.RIGS['research']": 0,
     "rigs.RIGS['social']": 5,
     "room_policy.DEFAULT_ROOM_TOOLS": 1,
@@ -23957,6 +23708,7 @@
     "supervised:constants.effective_autonomous_tools()": 2,
     "supervised:goal_tools.allowed_self_goal_tools()": 12,
     "supervised:goal_tools.owner_turn_goal_tools()": 15,
+    "supervised:rigs.rig_tools('owner')": 2,
     "supervised:rigs.rig_tools('research')": 0,
     "supervised:rigs.rig_tools('social')": 5,
     "supervised:room_policy.room_tool_ids()": 1,
@@ -23964,7 +23716,6 @@
     "supervised:tool_defaults.cli_default_tools()": 2,
     "supervised:tool_defaults.resolve_toolset('default')": 2,
     "supervised:tool_defaults.resolve_toolset('full')": 2,
-    "supervised:tool_defaults.resolve_toolset('owner_interactive')": 2,
     "supervised:tool_defaults.resolve_toolset('research')": 4,
     "supervised:tool_defaults.resolve_toolset('social')": 4,
     "supervised:tool_defaults.resolve_toolset('trading_research')": 4,
@@ -23972,7 +23723,6 @@
     "supervised:tool_defaults.server_default_tools()": 2,
     "tool_defaults.TOOLSETS['default']": 2,
     "tool_defaults.TOOLSETS['full']": 2,
-    "tool_defaults.TOOLSETS['owner_interactive']": 2,
     "tool_defaults.TOOLSETS['research']": 4,
     "tool_defaults.TOOLSETS['social']": 4,
     "tool_defaults.TOOLSETS['trading_research']": 4
@@ -24042,8 +23792,7 @@
    "capabilities": [
     "delegate_blocked",
     "high_impact",
-    "money",
-    "writes_money"
+    "money"
    ],
    "core.tool_gates.registered": false,
    "effects.ceiling": "money",
@@ -24103,9 +23852,9 @@
   "x402_pay": {
    "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
-    "money-SPEND",
+    "money",
     "reserved",
-    "owner-only, explicitly enabled, never autonomous; raise an ask if truly needed"
+    "money tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips money tools by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,
@@ -24114,7 +23863,6 @@
     "delegate_blocked",
     "high_impact",
     "money",
-    "writes_money",
     "writes_network"
    ],
    "core.tool_gates.registered": false,

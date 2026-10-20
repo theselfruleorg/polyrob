@@ -8,20 +8,17 @@ the planner, and cron all resolved their provider via
 fell to the "first keyed provider in canonical order" path — which picks the
 canonical-first (dead, keyed) ``openrouter`` over the operator-pinned (funded)
 ``zai-coding``. The fix: a ``resolve_default_provider()`` helper that threads the
-``CHAT_PROVIDER``/``DEFAULT_PROVIDER`` pin, used by every autonomous dispatch path.
+``DEFAULT_PROVIDER`` pin, used by every autonomous dispatch path.
 """
 
 import os
 
 
-def test_operator_provider_pin_reads_chat_then_default(monkeypatch):
+def test_operator_provider_pin_reads_default_provider(monkeypatch):
     from core.runtime_config import operator_provider_pin
 
-    monkeypatch.setenv("CHAT_PROVIDER", "chat-pinned")
+    monkeypatch.delenv("CHAT_PROVIDER", raising=False)
     monkeypatch.setenv("DEFAULT_PROVIDER", "default-pinned")
-    assert operator_provider_pin() == "chat-pinned"  # CHAT_PROVIDER wins
-
-    monkeypatch.delenv("CHAT_PROVIDER")
     assert operator_provider_pin() == "default-pinned"
 
     monkeypatch.delenv("DEFAULT_PROVIDER")
@@ -41,10 +38,10 @@ def test_resolve_default_provider_honors_pin(monkeypatch):
 
 
 def test_dispatch_sources_use_resolve_default_provider():
-    """The goal dispatcher, the planner, and cron runner must resolve the provider
+    """The goal run and the cron runner must resolve the provider
     via the pin-honoring helper (resolve_default_provider), NOT a bare
     resolve_runtime_config(None, None) that ignores the operator pin."""
-    import agents.task.goals.dispatcher as dispatcher_mod
+    import agents.task.goals.goal_run as dispatcher_mod
     import cron.runner as cron_runner_mod
     from core.runtime_config import resolve_default_provider
 

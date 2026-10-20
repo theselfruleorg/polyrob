@@ -390,18 +390,19 @@ def _live_count(request: Request) -> tuple:
 
 def _headline(request: Request) -> str:
     """The pause half of the head truth, with the in-progress count folded in
-    when Rob is running. "Rob is running." over three mid-flight cron runs read
-    as idle (2026-09-16 owner report); the count is what makes it true."""
+    when Rob is running ("Rob is running." over three mid-flight cron runs read
+    as idle, 2026-09-16). With nothing running and both loops off it says so
+    (080: ``core.status_loops.autonomy_idle_reason``)."""
     headline = _pause_headline()
     if headline != t("shell.state.running"):
         return headline
     busy, partial = _live_count(request)
     if busy > 0:
-        # ``N+`` when a store refused: the count is a floor, and a bare number
-        # over an unread store is the confident figure this frame refuses.
-        return t("shell.state.running_busy",
-                 count=(f"{busy}+" if partial else busy))
-    return headline
+        # ``N+`` when a store refused: the count is a floor, never a confident figure.
+        return t("shell.state.running_busy", count=(f"{busy}+" if partial else busy))
+    from core.status_loops import autonomy_idle_reason
+    idle = autonomy_idle_reason()
+    return t("shell.state.idle", why=idle) if idle else headline
 
 
 def _shell_context(request: Request, current: str) -> dict:
@@ -581,11 +582,11 @@ def _inbox_context(request: Request) -> dict:
     count = int(body.get("count") or 0)
     uncertain = bool(body.get("uncertain"))
     pill_class, pill_words = _pill(count, uncertain, len(refused))
-    from core.surfaces.inbox import SOURCE_LABELS
+    from webview.inbox import SOURCE_LABELS, cards_waiting, page_ledger
     ctx.update({
         "partial_reason": _shared_refusal(body, refused),
-        "items": [_card(i, owner_console=ctx["owner_console"])
-                  for i in body.get("items") or ()],
+        "items": [_card(i, owner_console=ctx["owner_console"]) for i in page_ledger(body)],
+        "cards_waiting": cards_waiting(body),  # 080: shown in the Cards section
         "not_blocking": [_card(i, owner_console=ctx["owner_console"])
                          for i in body.get("not_blocking") or ()],
         "inbox_count": count,
@@ -1438,31 +1439,6 @@ def _as_priority(raw, default: int = 5) -> int:
     return max(1, min(10, value))
 
 
-#: The step budget a goal run may be given, matching the agent-callable
-#: ``goal_create`` tool's own bounds (``tools/goal_tools.py``, 056 WS5). Omitted
-#: means the dispatcher default.
-MAX_STEPS_MIN, MAX_STEPS_MAX = 6, 60
-
-
-def _as_max_steps(raw):
-    """``(value, error)`` for an optional step budget.
-
-    ⚠️ REFUSED rather than clamped. A priority is a preference, so silently
-    pulling 99 down to 10 loses nothing; a step budget is what the owner
-    believes the run will cost, and quietly halving it produces a run that
-    stops short for a reason the owner was never told.
-    """
-    if raw in (None, ""):
-        return (None, None)
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return (None, t("work.create.max_steps_shape"))
-    if not (MAX_STEPS_MIN <= value <= MAX_STEPS_MAX):
-        return (None, t("work.create.max_steps_range"))
-    return (value, None)
-
-
 @router.post("/api/webgate/goals", dependencies=webgate.MUTATION_DEPS,
              response_class=JSONResponse, name="api_goal_create")
 async def api_goal_create(request: Request):
@@ -1484,10 +1460,6 @@ async def api_goal_create(request: Request):
                                   and all(isinstance(x, str) for x in tools)):
         return JSONResponse({"ok": False, "message": t("work.create.tools_shape")},
                             status_code=400)
-    max_steps, steps_error = _as_max_steps(body.get("max_steps"))
-    if steps_error:
-        return JSONResponse({"ok": False, "message": steps_error},
-                            status_code=400)
     try:
         goal = create_goal(
             _webgate_goal_board(), user_id=user_id, title=title,
@@ -1495,10 +1467,8 @@ async def api_goal_create(request: Request):
             priority=_as_priority(body.get("priority")),
             tools=tools,
             acceptance=(str(body["acceptance"]) if body.get("acceptance") else None),
-            # The dispatcher reads ``payload.max_steps``; ``extra_payload`` is
-            # the owner-create helper's own seam for exactly this, so no new
-            # parameter and no second writer.
-            extra_payload=({"max_steps": max_steps} if max_steps else None),
+            # 083 WS-4: no step budget — the run's cap is the operator's
+            # AUTONOMOUS_MAX_STEPS; a posted ``max_steps`` is ignored.
         )
     except DuplicateGoalError as exc:
         return JSONResponse({"ok": False, "message": t("work.create.goal_duplicate"),
@@ -1514,18 +1484,13 @@ async def api_goal_create(request: Request):
 @router.post("/api/webgate/cron", dependencies=webgate.MUTATION_DEPS,
              response_class=JSONResponse, name="api_cron_create")
 async def api_cron_create(request: Request):
-    """Schedule a cron job from the console, with the owner's grant (043 A5).
-
-    ``via="webview"`` is passed to ``CronService.schedule`` so Q2's A29 service
-    audit names the surface, alongside the ``console_write`` console-action row.
-    """
+    """Schedule a job from the console, with the owner's grant (043 A5); ``via="webview"``
+    names the surface in the A29 service audit beside the ``console_write`` row."""
     from webview.pages import _owner_console_required
     _owner_console_required()
-    import os
 
     from cron.jobs import CronJobStore
-    from cron.service import CronService, ScheduleError
-
+    from cron.service import CronService, ScheduleError, duplicate_job_text, scheduler_off_note
     from core.owner_create import create_cron
     from webview.pages import _data_dir, _effective_user_id
     user_id = _effective_user_id(request)
@@ -1543,7 +1508,13 @@ async def api_cron_create(request: Request):
                                   and all(isinstance(x, str) for x in tools)):
         return JSONResponse({"ok": False, "message": t("work.create.tools_shape")},
                             status_code=400)
-    service = CronService(CronJobStore(cron_db_path(_data_dir())))
+    try:  # an unreadable cron.db is NAMED, never a bare 500 (the unreadable-store rule)
+        service = CronService(CronJobStore(cron_db_path(_data_dir())))
+        dup = service.find_duplicate(user_id=user_id, task=task, schedule_spec=schedule_spec)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "message": t("work.create.cron_unreadable"), "detail": str(exc)}, status_code=503)
+    if dup:
+        return JSONResponse({"ok": False, "match_id": dup.id, "message": duplicate_job_text(dup)}, status_code=409)
     try:
         job = create_cron(
             service, task=task, schedule_spec=schedule_spec, user_id=user_id,
@@ -1554,15 +1525,13 @@ async def api_cron_create(request: Request):
             wake_agent=bool(body.get("wake_agent", True)),
             via="webview",
         )
-    except ScheduleError as exc:
-        return JSONResponse({"ok": False, "message": t("work.create.cron_bad_schedule"),
-                             "detail": str(exc)}, status_code=400)
-    except ValueError as exc:
+    except (ScheduleError, ValueError) as exc:
         return JSONResponse({"ok": False, "message": t("work.create.cron_bad_schedule"),
                              "detail": str(exc)}, status_code=400)
     console_write(CONSOLE_CRON_CREATE, user_id=user_id, attrs={"job_id": job.id})
-    return JSONResponse({"ok": True, "id": job.id,
-                         "message": t("work.create.cron_ok")}, status_code=201)
+    note = scheduler_off_note()  # 080 F-5: say when nothing will run it (the ONE text)
+    return JSONResponse({"ok": True, "id": job.id, "scheduler_note": note,
+                         "message": " ".join(x for x in (t("work.create.cron_ok"), note) if x)}, status_code=201)
 
 
 # --- Agent writers (043 WS-AB2): SELF-context edit + memory add/forget ------ #

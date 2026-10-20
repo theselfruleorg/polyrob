@@ -12,7 +12,7 @@ import pytest
 
 from tools.dapp_browser.js import BINDING, provider_script
 
-ADDRESS = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
 
 def _script(**kw):

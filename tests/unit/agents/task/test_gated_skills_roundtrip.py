@@ -5,14 +5,13 @@ frontmatter migration. A `bool("false") == True` mistake anywhere in the
 frontmatter round-trip would silently arm live trading, so pin both the on-disk
 `polyrob-auto-activate: 'false'` value AND that `parse_bool` reads it as False.
 """
-import json
 from pathlib import Path
 
 import pytest
 
-from agents.task.agent.skill_frontmatter import parse_frontmatter, parse_bool
+from core.skills.frontmatter import parse_frontmatter, parse_bool
 
-# 067 P4: both trading skills ship in the markets pack (its skills/ + rules.json).
+# 067 P4: both trading skills ship in the markets pack (its skills/).
 _SKILLS = Path(pytest.importorskip("polyrob_markets").__file__).parent / "skills"
 GATED = ("polymarket-trading", "hyperliquid-trading")
 
@@ -28,17 +27,14 @@ def test_gated_trading_skills_stay_disabled_after_frontmatter_roundtrip():
         assert parse_bool(val) is False, f"{sid}: parse_bool re-enabled a gated trading skill!"
 
 
-def test_gated_trading_skills_are_disabled_in_rules_json():
-    """The frontmatter value is currently NOT the runtime gate — gating is read from
-    rules.json (frontmatter metadata is for interop/portability). So pin the fence on
-    the ACTUAL live gate: rules.json must keep both trading skills auto_activate=false.
-    (Final-review finding: the roundtrip guard above protects a value nothing consumes;
-    THIS is the assertion that actually catches an accidental arming of live trading.)
-    """
-    rules = json.loads((_SKILLS / "rules.json").read_text(encoding="utf-8"))
+def test_gated_trading_skills_are_disabled_in_the_live_index():
+    """The frontmatter IS the runtime gate since 081 WS-4.2: the index the matcher
+    reads must keep both trading skills auto_activate=False."""
+    from core.skills.catalog import load_builtin_rules
+    rules = load_builtin_rules(_SKILLS)
     for sid in GATED:
-        assert sid in rules, f"{sid}: missing from rules.json"
+        assert sid in rules, f"{sid}: missing from the index"
         assert rules[sid].get("auto_activate") is False, (
-            f"{sid}: rules.json auto_activate must be False (the live gate) — "
+            f"{sid}: auto_activate must be False (the live gate) — "
             f"got {rules[sid].get('auto_activate')!r}"
         )

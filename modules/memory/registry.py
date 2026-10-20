@@ -73,26 +73,64 @@ def _scope_kwargs(method, session_id) -> dict:
     return {}
 
 
-async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str] = None) -> str:
+class MemoryReadError(RuntimeError):
+    """The memory store could not be READ — distinct from "nothing matched".
+
+    Raised by the recall routers only when the caller passes
+    ``raise_errors=True`` (the agent-facing recall paths, which must tell the
+    model "memory could not be read", never "no match"). ``error_class`` names
+    the underlying exception type for that message."""
+
+    def __init__(self, cause: BaseException):
+        self.error_class = type(cause).__name__
+        super().__init__(f"memory could not be read ({self.error_class})")
+
+
+#: The reader description a recall router forwards when the provider declares it
+#: (2026-10-13 review D2): the agents tier resolves the session regime and passes
+#: plain values — ``modules`` never imports ``agents``.
+_READER_KWARGS = ("demote_automation", "prefer_job_id", "prefer_goal_id")
+
+
+def _reader_kwargs(method, reader: dict) -> dict:
+    if not reader:
+        return {}
+    try:
+        params = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {k: v for k, v in reader.items()
+            if k in _READER_KWARGS and k in params and v is not None}
+
+
+async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str] = None,
+                          raise_errors: bool = False, **reader) -> str:
     """Route a prefetch through the active provider; '' for Null / on any error.
 
     ``user_id`` scopes recall to the tenant (P0-0) so one user's memory never leaks
-    into another's recall in a multi-tenant deployment.
+    into another's recall in a multi-tenant deployment. ``reader`` (any of
+    ``demote_automation`` / ``prefer_job_id`` / ``prefer_goal_id``) is forwarded
+    when the provider declares it. ``raise_errors=True`` turns a provider failure
+    into ``MemoryReadError`` instead of '' (D3).
     """
     provider = get_memory_registry().active()
     if provider is None:
         return ""
     try:
         return await provider.prefetch(query, session_id=session_id, user_id=user_id,
-                                       **_scope_kwargs(provider.prefetch, session_id))
+                                       **_scope_kwargs(provider.prefetch, session_id),
+                                       **_reader_kwargs(provider.prefetch, reader))
     except Exception as e:  # never break the agent loop on a memory backend hiccup
         logger.warning("memory_prefetch failed: %s", e)
+        if raise_errors:
+            raise MemoryReadError(e) from e
         return ""
 
 
 async def memory_search(query: str, *, session_id: str = "", user_id: Optional[str] = None,
                         limit: int = 5, sort: Optional[str] = None,
-                        before_id: Optional[int] = None, with_ids: bool = False) -> str:
+                        before_id: Optional[int] = None, with_ids: bool = False,
+                        raise_errors: bool = False, **reader) -> str:
     """Route an agent-initiated recall (discover/browse) through the active provider.
 
     Unlike ``memory_prefetch`` (automatic, fixed top_k, rank-only), this exposes the
@@ -118,26 +156,97 @@ async def memory_search(query: str, *, session_id: str = "", user_id: Optional[s
     if with_ids and "with_ids" in params:
         kwargs["with_ids"] = with_ids
     kwargs.update(_scope_kwargs(provider.search, session_id))
+    kwargs.update(_reader_kwargs(provider.search, reader))
     try:
         return await provider.search(query, user_id=user_id, session_id=session_id,
                                      limit=limit, sort=sort, **kwargs)
     except Exception as e:
         logger.warning("memory_search failed: %s", e)
+        if raise_errors:
+            raise MemoryReadError(e) from e
         return ""
 
 
+#: ``memory_sync_turn`` outcomes (D4, review 2026-10-13). Only ``INSERTED`` is a
+#: new row; the ``memory_write`` event is recorded for that one alone.
+SYNC_INSERTED = "inserted"
+SYNC_DUPLICATE = "duplicate"     # exact duplicate: collapsed into a ts refresh
+SYNC_SKIPPED = "skipped"         # nothing to store (filtered / anon / Null provider)
+SYNC_REFUSED_CAP = "refused_cap" # the tenant storage ceiling refused the row
+SYNC_FAILED = "failed"
+
+#: The owner-visible standing verdict for a full store (``core.credential_verdicts``
+#: renders it as a /status health line). Recorded at most once a day per process.
+STORE_FULL_KIND = "memory_store"
+STORE_FULL_KEY = "cross_session"
+_STORE_FULL_EVERY_SEC = 86400.0
+_store_full = {"recorded_at": 0.0, "open": None}
+
+
+def _note_store_full() -> None:
+    import time as _t
+    now = _t.time()
+    # Rate-limit only while the verdict is known OPEN: after a real insert
+    # cleared it, the store filling up again must be told at once — not up
+    # to a day later.
+    if (_store_full["open"] is not False
+            and now - _store_full["recorded_at"] < _STORE_FULL_EVERY_SEC):
+        return
+    _store_full["recorded_at"] = now
+    _store_full["open"] = True
+    try:
+        from core.credential_verdicts import record_rejection
+        from modules.memory.storage_limits import MAX_BYTES, MAX_MEMORY_ROWS
+        record_rejection(
+            STORE_FULL_KIND, STORE_FULL_KEY, code="storage limit reached",
+            remedy=(f"cross-session memory is full ({MAX_MEMORY_ROWS:,} rows / "
+                    f"{MAX_BYTES // (1024 * 1024)} MiB per tenant) — new findings are NOT "
+                    "being stored; remove old memory rows to make room"),
+            ttl_sec=_STORE_FULL_EVERY_SEC)
+    except Exception as e:  # the alarm must never break the write path
+        logger.debug("memory store-full verdict skipped: %s", e)
+
+
+def _note_store_ok() -> None:
+    """A real insert proves the store has room: close a standing full verdict.
+    Reads the verdict store at most once per process while none is known open."""
+    if _store_full["open"] is False:
+        return
+    try:
+        from core.credential_verdicts import clear_rejection, verdict
+        if _store_full["open"] or verdict(STORE_FULL_KIND, STORE_FULL_KEY) is not None:
+            clear_rejection(STORE_FULL_KIND, STORE_FULL_KEY)
+        _store_full["open"] = False
+    except Exception as e:
+        logger.debug("memory store-full verdict clear skipped: %s", e)
+
+
 async def memory_sync_turn(user_content: str, assistant_content: str, *,
-                           session_id: str, user_id: Optional[str] = None) -> None:
-    """Route a completed turn through the active provider (no-op for Null)."""
+                           session_id: str, user_id: Optional[str] = None) -> str:
+    """Route a completed turn through the active provider (no-op for Null).
+
+    Returns one of the ``SYNC_*`` outcomes (D4): a refused or failed write used
+    to be indistinguishable from a stored one, so the ``memory_write`` event
+    claimed writes the store had refused. Never raises."""
     provider = get_memory_registry().active()
     if provider is None or not provider.is_external:
-        return  # Null/built-in: nothing to persist externally
+        return SYNC_SKIPPED  # Null/built-in: nothing to persist externally
+    from modules.memory.storage_limits import StorageLimitError
     try:
-        await provider.sync_turn(user_content, assistant_content,
-                                 session_id=session_id, user_id=user_id,
-                                 **_scope_kwargs(provider.sync_turn, session_id))
+        got = await provider.sync_turn(user_content, assistant_content,
+                                       session_id=session_id, user_id=user_id,
+                                       **_scope_kwargs(provider.sync_turn, session_id))
+    except StorageLimitError as e:
+        logger.warning("memory_sync_turn refused: %s", e)
+        _note_store_full()
+        return SYNC_REFUSED_CAP
     except Exception as e:
         logger.warning("memory_sync_turn failed: %s", e)
+        return SYNC_FAILED
+    if got is True:
+        _note_store_ok()
+        return SYNC_INSERTED
+    return SYNC_DUPLICATE if got is False else SYNC_SKIPPED
 
 
 # ---- Episodic activity-ledger registry routers (Task 2) -------------------
@@ -162,18 +271,30 @@ async def memory_recall_episodes(*, user_id: Optional[str] = None,
                                  kind: Optional[str] = None,
                                  thread_key: Optional[str] = None,
                                  limit: int = 20, order: str = "newest",
-                                 exclude_surfaced: bool = False) -> list:
-    """Route a time-ordered episodic recall through the active provider. [] on error."""
+                                 exclude_surfaced: bool = False,
+                                 raise_errors: bool = False) -> list:
+    """Route a time-ordered episodic recall through the active provider. [] on error,
+    or ``MemoryReadError`` when ``raise_errors=True`` (a run's own previous-runs
+    read must not mistake an unreadable store for a first run)."""
     provider = get_memory_registry().active()
     if provider is None:
         return []
+    extra = {}
+    if raise_errors:
+        try:
+            if "raise_errors" in inspect.signature(provider.recall_episodes).parameters:
+                extra["raise_errors"] = True
+        except (TypeError, ValueError):
+            pass
     try:
         return await provider.recall_episodes(
             user_id=user_id, since_ts=since_ts, until_ts=until_ts, kind=kind,
             thread_key=thread_key, limit=limit, order=order,
-            exclude_surfaced=exclude_surfaced)
+            exclude_surfaced=exclude_surfaced, **extra)
     except Exception as e:
         logger.warning("memory_recall_episodes failed: %s", e)
+        if raise_errors:
+            raise MemoryReadError(e) from e
         return []
 
 

@@ -1,11 +1,12 @@
 """CR-L04 (unbounded decimals / zero price rated high) and CR-L11 (unbounded,
 multi-line symbols; the book matching the first address in a line)."""
-from core.position_ledger import LedgerPosition
+from types import SimpleNamespace
+
 from core.wallet import tokens as T
 from tools.defi.book import _worth_from_portfolio, book_rows
 from tools.defi.providers import dexscreener, geckoterminal
 from tools.defi.providers.base import confidence_for
-from tools.defi.reconcile import ChainHolding, diff
+from tools.defi.reconcile import ChainHolding, RailPosition, diff
 
 FAKE = "0x1111111111111111111111111111111111111111"
 VICTIM = "0x2222222222222222222222222222222222222222"
@@ -94,20 +95,26 @@ def test_cr_l11_indexer_symbols_are_cleaned():
     assert rows[0].price_usd is None
 
 
+def _Pos(symbol, address):
+    return SimpleNamespace(symbol=symbol, address=address, chain="base", qty=1.0,
+                           entry_usd=None, status="open", status_reason="")
+
+
 def test_cr_l11_book_does_not_take_an_address_a_symbol_smuggled_in():
-    """The ledger claims VICTIM; the only chain row is ATTACK's, whose SYMBOL
+    """The book holds VICTIM; the only chain row is ATTACK's, whose SYMBOL
     carries VICTIM's address. The victim must not read as matched."""
-    ledger = [LedgerPosition(symbol="VIC", address=VICTIM, qty=1.0, line=""),
-              LedgerPosition(symbol=VICTIM, address=ATTACK, qty=1.0, line="")]
+    book = [RailPosition(symbol="VIC", address=VICTIM, qty=1.0),
+            RailPosition(symbol=VICTIM, address=ATTACK, qty=1.0)]
     holdings = [ChainHolding(address=ATTACK, symbol="x", qty=1.0, raw_units=1,
                              value_usd=5.0, balance_known=True)]
-    report = diff(ledger, holdings).to_dict()
-    # VICTIM appears first in ATTACK's matched row's text:
-    assert report["matched"][0].startswith(VICTIM)
+    report = diff(book, holdings).to_dict()
+    # VICTIM's (clipped) address appears first in ATTACK's matched row's text:
+    assert report["matched"][0].startswith(VICTIM[:20])
     chains_out = {"base": {"verdict": "disagreement", "report": report,
                            "portfolio_text": (f"  {ATTACK}  1.0 {VICTIM}  = $5.00"),
                            "error": None}}
-    rows = {r.address: r for r in book_rows(chains_out, ledger)}
+    positions = [_Pos("VIC", VICTIM), _Pos(VICTIM, ATTACK)]
+    rows = {r.address: r for r in book_rows(chains_out, positions)}
     assert rows[VICTIM].state != "matched"
     assert rows[VICTIM].usd is None
     assert rows[ATTACK].state == "matched"
@@ -115,11 +122,10 @@ def test_cr_l11_book_does_not_take_an_address_a_symbol_smuggled_in():
 
 
 def test_cr_l11_legacy_text_rows_match_the_address_field():
-    ledger = [LedgerPosition(symbol="VIC", address=VICTIM, qty=1.0, line="")]
     chains_out = {"base": {"verdict": "clean",
                            "report": {"matched": [f"{VICTIM} {ATTACK} — 1 ✓"]},
                            "portfolio_text": "", "error": None}}
-    [row] = book_rows(chains_out, ledger)
+    [row] = book_rows(chains_out, [_Pos("VIC", VICTIM)])
     assert row.state != "matched"
 
 

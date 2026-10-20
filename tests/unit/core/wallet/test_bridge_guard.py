@@ -18,7 +18,7 @@ class _Q:
     origin_chain_id: int = 792703809
     dest_chain_id: int = 4663
     sender: str = "SOL111"
-    recipient: str = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+    recipient: str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
     currency_in: str = "native"
     currency_out: str = "0x0000000000000000000000000000000000000000"
     amount_in_raw: int = 500_000_000

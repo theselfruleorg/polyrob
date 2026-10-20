@@ -138,7 +138,7 @@ def test_gate_local_bypass_scoped_to_local_operator_tenant(monkeypatch):
     _freeze(monkeypatch, "1")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     assert c.compute_posture_allows(_ctx(user_id="local"), 1) is True
-    assert c.compute_posture_allows(_ctx(user_id="28436760"), 1) is False
+    assert c.compute_posture_allows(_ctx(user_id="100000001"), 1) is False
 
 
 def test_gate_local_tenant_is_the_owner_only_while_unbound(monkeypatch):
@@ -159,7 +159,7 @@ def test_gate_local_tenant_is_the_owner_only_while_unbound(monkeypatch):
     """
     _freeze(monkeypatch, "1")
     assert c.compute_posture_allows(_ctx(user_id="local"), 1) is True
-    assert c.compute_posture_allows(_ctx(user_id="28436760"), 1) is False
+    assert c.compute_posture_allows(_ctx(user_id="100000001"), 1) is False
     assert c.compute_posture_allows(_ctx(user_id="u_stranger"), 1) is False
 
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")

@@ -36,15 +36,15 @@ def test_latest_migration_version_helper_agrees():
 
 
 def test_status_reads_the_db_upgrade_writes_under_a_data_home(monkeypatch, tmp_path):
-    """`upgrade` anchors bot.db at $POLYROB_DATA_DIR/data/database (BotConfig's
-    relative data_dir); `status` must read that file, not report "needs baseline"
+    """`upgrade` anchors bot.db at $POLYROB_DATA_DIR/database (BotConfig's
+    data_dir IS the data home, 080 WS-1); `status` must read that file, not report "needs baseline"
     right after a successful upgrade — and it reads the newest row by id."""
     import sqlite3
     from migrations import migrate
 
     monkeypatch.delenv("DB_PATH", raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    db = tmp_path / "data" / "database" / "bot.db"
+    db = tmp_path / "database" / "bot.db"
     assert migrate._status_db_path() == db.resolve()  # nothing exists yet
     db.parent.mkdir(parents=True)
     with sqlite3.connect(db) as con:
@@ -58,3 +58,18 @@ def test_status_reads_the_db_upgrade_writes_under_a_data_home(monkeypatch, tmp_p
     with sqlite3.connect(db) as con:
         rows = con.execute("SELECT version FROM schema_versions ORDER BY id ASC").fetchall()
     assert rows[-1][0] == "9.9.9"
+
+
+def test_status_and_upgrade_open_the_same_bot_db_with_no_data_dir_set(monkeypatch, tmp_path):
+    """With POLYROB_DATA_DIR and DB_PATH unset, `status` read the local rule's
+    <home>/data/database/bot.db while `upgrade` (BotConfig) wrote
+    <effective data home>/database/bot.db."""
+    from core import runtime_paths
+    from migrations import migrate
+
+    monkeypatch.delenv("DB_PATH", raising=False)
+    monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    monkeypatch.setattr(runtime_paths, "effective_data_home", lambda: tmp_path / "server")
+    monkeypatch.setattr(runtime_paths, "resolve_data_home", lambda: tmp_path / "local")
+    assert migrate._status_db_path() == (tmp_path / "server" / "database" / "bot.db").resolve()
+

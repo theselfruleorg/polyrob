@@ -73,8 +73,11 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
     try:
         if not AutonomyConfig.owner_digest_enabled():
             return []
-    except Exception:
-        return []
+    except Exception as e:
+        return [HealthItem(
+            key="digest_unknown", severity=SEVERITY_WARN,
+            text=f"cannot tell whether the owner digest is on ({type(e).__name__})",
+            remedy="`polyrob doctor --flags` for OWNER_DIGEST_ENABLED")]
     try:
         jobs = _rows(cron_db_path(data_dir),
                      "SELECT status, enabled, payload FROM cron_jobs WHERE user_id=?",
@@ -84,7 +87,7 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
             key="digest_unknown", severity=SEVERITY_WARN,
             text=f"owner digest is enabled but the cron store is unreadable "
                  f"({type(e).__name__}) — cannot tell whether it is scheduled",
-            remedy="`polyrob doctor` for the store path, then `polyrob cron list`")]
+            remedy="`polyrob doctor` for the store path, then `polyrob job list`")]
     for row in jobs:
         if not _payload(row).get("digest"):
             continue
@@ -95,7 +98,7 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
         key="digest_unscheduled", severity=SEVERITY_WARN,
         text="owner digest is enabled but no digest job is scheduled — suppressed "
              "messages have no roll-up channel",
-        remedy="`polyrob cron digest 'every day 08:00'`")]
+        remedy="`polyrob job digest 'every day 08:00'`")]
 
 
 #: `recent_notices` window: sends by OTHER sessions this recent are "you were
@@ -261,6 +264,15 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             text=f"{capped} owner message(s) suppressed by the daily cap in 24h "
                  f"({consumed}/{cap} used; by source: {top})",
             remedy="/missed to read them; raise the cap with `/config set delivery.daily_cap N`"))
+    no_sink = outcomes.get("no_sink", 0)
+    if no_sink:
+        # 080 WS-4: `no_sink` = nobody received it (no surface could carry it).
+        # That is a message the owner never got, not a delivery statistic.
+        sec.health.append(HealthItem(
+            key="delivery_no_sink", severity=SEVERITY_WARN,
+            text=f"{no_sink} owner message(s) in 24h reached nobody — no chat surface "
+                 f"could carry them",
+            remedy="connect a chat surface (`polyrob surface list`), then /missed"))
     sec.health.extend(_digest_health(user_id, data_dir))
     sec.health.extend(_surface_poll_health(tele))
     timeouts = len(_tele_rows(tele, _K_TOOL_TIMEOUT))

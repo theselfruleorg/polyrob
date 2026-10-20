@@ -28,11 +28,17 @@ def test_server_data_home_outside_code_root(tmp_path, monkeypatch):
     assert is_within_root(str(paths.workspace_root), str(paths.data_home))
 
 
+from core.runtime_paths import _server_default_data_home as _REAL_SERVER_DEFAULT  # noqa: E402
+
+
 def test_server_data_home_default_outside_code_root(monkeypatch):
     """No POLYROB_DATA_DIR → the server default data_home is still outside code_root."""
+    import core.runtime_paths as rp
     from core.runtime_paths import resolve_runtime_paths
 
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    # the suite redirects the server default to cwd/.polyrob (conftest); test the real one
+    monkeypatch.setattr(rp, "_server_default_data_home", _REAL_SERVER_DEFAULT)
     paths = resolve_runtime_paths(local=False)
 
     assert not is_within_root(str(paths.data_home), str(paths.code_root)), (

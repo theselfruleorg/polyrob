@@ -36,10 +36,10 @@ LEAF: Role = "leaf"
 # Two distinct levers, because POLYROB registers tools two different ways:
 #   1. DELEGATE_BLOCKED_TOOLS — *container tool_ids* stripped from the child's
 #      load list (these are loaded via load_tools_from_container).
-#   2. DELEGATION_ACTION_NAMES — the delegation *actions* (subtask/
-#      parallel_subtasks/delegate_task) are NOT tool_ids; they are registered
+#   2. DELEGATION_ACTION_NAMES — the delegation *action* (delegate_task)
+#      is NOT a tool_id; it is registered
 #      unconditionally in Controller._register_default_actions when sub-agents
-#      are enabled. They are suppressed on a leaf child via the Registry's
+#      are enabled. It is suppressed on a leaf child via the Registry's
 #      exclude_actions seam (see delegation_exclusions_for_child).
 # NOTE: "task" is the TODO tool (task_todo_*), NOT delegation — do not block it.
 # WS-2 (2026-07-16): derived from the ONE per-tool capability table
@@ -58,7 +58,7 @@ DELEGATE_BLOCKED_TOOLS: frozenset = _ids_with("delegate_blocked")
 # tool out of the child's registry/ActionModel entirely (defence-in-depth on
 # top of the `_is_forged_or_autonomous_turn` runtime refusal inside the action).
 DELEGATION_ACTION_NAMES: frozenset = frozenset({
-    "subtask", "parallel_subtasks", "delegate_task",
+    "delegate_task",
     "preferences",
     "autonomy_control",  # 031: a leaf never touches the owner pause record
     # 2026-09-29 review F13: owner-facing moves. A leaf reports to its parent,

@@ -3,9 +3,10 @@ name: web-scraping
 description: Extract structured data from a URL using anysite (anysite_describe, then anysite_api), web_fetch, or browser with fallback
 license: MIT
 metadata:
+  polyrob-when: 'Extracting structured data from a URL'
   polyrob-priority: '6'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["scrape website","extract data from a website","extract data from url","web scraping","crawl website","structured data from url","scrape page","extract structured data from a site"],"task_patterns":["web.scrap","extract.*from.*(url|site|website|web ?page)","scrape.*(site|page|data|url)","crawl.*(site|page|url)"],"tool_ids":["anysite","browser","web_fetch"]}'
+  polyrob-triggers: '{"tool_ids":["anysite","browser","web_fetch"]}'
   polyrob-version: '2'
 ---
 # Web Scraping

@@ -245,7 +245,7 @@ def test_get_retries_once_on_429(monkeypatch):
             raise _RateLimited()
         return {"ok": True}
     monkeypatch.setattr("tools.defi.providers._http.get_json", _get_json)
-    monkeypatch.setattr(gt, "_RETRY_SLEEP_SEC", 0.0)
+    monkeypatch.setattr(gt, "_sleep", lambda s: None)
     assert src_get("https://x/y") == {"ok": True}
     assert len(calls) == 2
 

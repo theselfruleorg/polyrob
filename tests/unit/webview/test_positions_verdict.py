@@ -70,9 +70,6 @@ def test_api_positions_verdict_is_unverified_not_regex_guessed(monkeypatch, tmp_
     monkeypatch.setattr(dt, "DefiDataTool", _FakeTool)
 
     client, _ = _client(monkeypatch, tmp_path)
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text("## Open positions\n")
-    monkeypatch.setenv("POSITION_LEDGER_PATH", str(ledger))
 
     res = client.get("/api/webgate/positions?chain=base")
     assert res.status_code == 200
@@ -83,7 +80,7 @@ def test_api_positions_verdict_is_unverified_not_regex_guessed(monkeypatch, tmp_
     assert data["rows"] == {"unknown": ["X"], "verdict": "UNVERIFIED"}
 
 
-def test_api_positions_verdict_no_ledger(monkeypatch, tmp_path):
+def test_api_positions_reconcile_reads_the_tenants_book(monkeypatch, tmp_path):
     monkeypatch.setenv("DEFI_DATA_ENABLED", "true")
 
     import tools.defi as defi_pkg
@@ -92,17 +89,21 @@ def test_api_positions_verdict_no_ledger(monkeypatch, tmp_path):
     import core.wallet.factory as wallet_factory
     monkeypatch.setattr(wallet_factory, "get_agent_wallet", lambda: None)
 
-    import tools.defi.data_tool as dt
-    monkeypatch.setattr(dt, "DefiDataTool", _FakeTool)
+    seen = []
 
-    import core.position_ledger as pl
-    monkeypatch.setattr(pl, "resolve_position_ledger_path", lambda data_dir=None: None)
+    class _SeeTool(_FakeTool):
+        async def reconcile(self, params, execution_context=None):
+            from core.exec_identity import current_exec_identity
+            seen.append(current_exec_identity()[0])
+            return await super().reconcile(params, execution_context)
+
+    import tools.defi.data_tool as dt
+    monkeypatch.setattr(dt, "DefiDataTool", _SeeTool)
 
     client, _ = _client(monkeypatch, tmp_path)
     res = client.get("/api/webgate/positions?chain=base")
     assert res.status_code == 200
-    data = res.json()
-    assert data["verdict"] == "no_ledger"
+    assert seen == ["u1"]
 
 
 def test_api_positions_verdict_on_reconcile_error_is_unverified_not_clean(
@@ -123,9 +124,6 @@ def test_api_positions_verdict_on_reconcile_error_is_unverified_not_clean(
     monkeypatch.setattr(dt, "DefiDataTool", _ErrTool)
 
     client, _ = _client(monkeypatch, tmp_path)
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text("## Open positions\n")
-    monkeypatch.setenv("POSITION_LEDGER_PATH", str(ledger))
 
     res = client.get("/api/webgate/positions?chain=base")
     assert res.status_code == 200

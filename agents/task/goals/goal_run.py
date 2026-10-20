@@ -25,14 +25,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from agents.task.goals.board import Goal
 
+#: The regime seam's row for a goal run (`agents.task.session_class`).
+_GOAL_REGIME = "goal"
+
 # The dispatcher's logger name, so a log filter on it still sees the run's lines.
 logger = logging.getLogger("agents.task.goals.dispatcher")
+
+
+from agents.task.runtime.stop_reason import (
+    LAST_REPORT_LABEL, StopReason, describe_stop_reason, label_last_report)
 
 
 def _d():
@@ -88,10 +96,16 @@ class GoalRunMixin:
             if not await self._goal_run_verdict(ctx):
                 return
             await self._goal_run_success(ctx)
+        except asyncio.CancelledError:
+            # 2026-10-13 review B5: a pause or a rail yield cancels the run; it
+            # still leaves a run record (what it sent, did, signed) for the next run.
+            await self._goal_run_cut(ctx)
+            raise
         except Exception as e:
             await self._goal_run_failed(ctx, e)
         finally:
             self._goal_run_release(ctx)
+            self._goal_run_record_cost(ctx)
 
     async def _goal_run_start(self, ctx: _GoalRunCtx) -> None:
         """Mark the run started (busy gate on a shared workspace, event, start notice)."""
@@ -148,16 +162,6 @@ class GoalRunMixin:
         """Build the run request; False when the goal was settled without a run."""
         from core.config_policy import AutonomyConfig
         goal, hb_task = ctx.goal, ctx.hb_task
-        # An ADOPTED goal whose pinned skills changed after the owner saw
-        # them runs as the agent's again (in memory; ``/adopt`` lists it).
-        try:
-            from agents.task.agent.skill_pins import adoption_lapsed, lapse_payload
-            if adoption_lapsed(goal.payload, goal.user_id):
-                logger.warning("goal %s: a pinned skill changed after /adopt — this "
-                               "run is agent-authored", goal.id)
-                goal.payload = lapse_payload(goal.payload or {})
-        except Exception:
-            logger.warning("goal %s: adopted-skill check failed", goal.id, exc_info=True)
         payload = goal.payload or {}
         from core.runtime_config import (resolve_default_provider,
                                           resolve_live_provider)
@@ -191,7 +195,10 @@ class GoalRunMixin:
         # Autonomous runs have no interactive config to pick a model, so fill the
         # provider's default model from the registry when the goal doesn't pin one.
         # (A None model crashes session setup downstream — '.lower()' on None.)
-        model = payload.get("model")
+        # payload.model > HEAVY_MODEL for a money-class goal > the provider default
+        # (the GOAL row's model_tier, agents/task/session_class.py).
+        from agents.task.session_class import GOAL as _GOAL_REGIME, regime_model_for
+        model = regime_model_for(_GOAL_REGIME, payload, provider)
         if not model:
             try:
                 from modules.llm.llm_client_registry import get_default_model
@@ -199,26 +206,27 @@ class GoalRunMixin:
             except Exception:
                 model = None
         from agents.task.goals.context import build_goal_run_task
-        objective = None
-        if goal.parent_id:
-            try:
-                parent = self.board.get(goal.parent_id)
-                if parent is not None and parent.kind == "objective":
-                    objective = parent
-            except Exception:
-                objective = None
         # 057 WS-C (B9): the restart note leads the task body unconditionally
         # (it was written and read nowhere), and with GOAL_RESUME_SAME_SESSION
         # on it ALSO rides in as a SYSTEM_NOTE on the resumed session.
         _resume_note = (payload or {}).get("resume_note")
+        # 2026-10-13 review B6/B9: the goal's OWN earlier runs (outcome, why,
+        # what each sent, did and signed) — its run record; B10: what the goals
+        # it depends on recorded as their result.
+        from agents.task.agent.core.episodic_digest import render_previous_runs
+        _previous_runs = await render_previous_runs(
+            user_id=goal.user_id, rail_id=f"goal:{goal.id}", regime=_GOAL_REGIME)
         request = {
-            "task": build_goal_run_task(goal, objective,
+            "task": build_goal_run_task(goal,
                                         workspace_root=_d()._deliverables_root(),
-                                        prior_artifacts=self._prior_artifacts(goal)),
+                                        prior_artifacts=self._prior_artifacts(goal),
+                                        previous_runs=_previous_runs,
+                                        upstream=self._upstream_results(goal)),
             "provider": provider,
             "model": model,
             "tools": self._resolve_tools(goal),
-            "max_steps": payload.get("max_steps", AutonomyConfig.goal_default_max_steps()),
+            # 083 WS-4: the operator's cap; a stored payload.max_steps is inert.
+            "max_steps": AutonomyConfig.autonomous_max_steps(),
             "temperature": 0.0,
             "goal_id": goal.id,
             # B1: recall searches the goal itself, not the restart note and
@@ -234,6 +242,11 @@ class GoalRunMixin:
         _pinned_skills = pinned_skills(payload)
         if _pinned_skills:
             request["skills"] = _pinned_skills
+            # 081 WS-5.4: a pinned skill that is gone is named at the TOP of the run.
+            from core.cron_lanes import missing_skills_notice
+            _missing = missing_skills_notice(payload, user_id=goal.user_id)
+            if _missing:
+                request["task"] = f"{_missing}\n\n{request['task']}"
         # 068 G2: a declared buy target rides the run as DATA; a malformed
         # one fails the run rather than silently lifting the restriction.
         from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
@@ -244,17 +257,12 @@ class GoalRunMixin:
             self.board.record_failure(goal.id, error=f"invalid {PAYLOAD_KEY}: {exc}", claim_token=goal.claim_token)
             return False
         if _target:
-            # W0: an owner-authored goal's target is trust for this run.
+            # W0: a target the owner typed is trust for this run.
             from core.wallet.buy_target import with_authorship
             request["money_target"] = with_authorship(_target, payload)
         if _resume_note:
-            # Consume it: a note left on the payload would tell a LATER,
-            # un-pre-empted run that it had been cut short.
-            try:
-                self.board.merge_payload(goal.id, {"resume_note": None})
-            except Exception:
-                logger.debug("resume-note clear failed for %s", goal.id,
-                             exc_info=True)
+            # The note is CONSUMED at the end of this phase (B13), after every
+            # gate that can still stop the run without running it.
             if AutonomyConfig.goal_resume_same_session() and goal.session_id:
                 request["resume_session_id"] = goal.session_id
                 request["resume_note"] = _resume_note
@@ -264,7 +272,7 @@ class GoalRunMixin:
         # tail since THIS reader's checkpoint. An empty tail is a $0 skip:
         # nothing was asked, so no model is paid to discover that.
         from agents.task.goals.group_service import (
-            build_service_task, room_binding,
+            build_service_task, room_binding, room_run_max_steps,
             service_read_mark,
         )
         _room = room_binding(payload)
@@ -297,6 +305,7 @@ class GoalRunMixin:
             import uuid as _uuid
             _room_sid = str(_uuid.uuid4())
             request["task"] = _room_task
+            request["max_steps"] = room_run_max_steps()
             request["session_source"] = _src
             request["chat_session_key"] = _key
             request["bind_write_row"] = False
@@ -337,22 +346,21 @@ class GoalRunMixin:
                 _pre_sid = None
         if _pre_sid:
             self._goal_sessions[goal.id] = _pre_sid
-        # An OWNER-authored goal carries the owner's standing authority, the
-        # same as an owner-authored cron job (CHAT-5): the run is recorded so
-        # X posts and self-service tool loading treat it as the owner's.
-        # Positive stamp only — an agent-authored or unstamped goal is not.
-        try:
-            from core.autonomy_marker import (
-                forget_owner_goal, note_owner_goal,
-            )
-            if _d()._owner_authored_goal(payload):
-                note_owner_goal(goal.id, "\n".join(
-                    t for t in (goal.title, goal.body) if t))
-            else:
-                forget_owner_goal(goal.id)
-        except Exception:
-            logger.warning("goal %s: could not record provenance", goal.id,
-                           exc_info=True)
+        # A goal carries standing authority, the same as a cron job (CHAT-5):
+        # the run records its text (e.g. the room it names).
+        from core.autonomy_marker import note_goal
+        note_goal(goal.id, "\n".join(t for t in (goal.title, goal.body) if t))
+        if _resume_note:
+            # Consume it: a note left on the payload would tell a LATER,
+            # un-pre-empted run that it had been cut short. Cleared HERE, not
+            # where it is read (2026-10-13 review B13): a gate above (provider,
+            # buy target, room skip, unmetered money) that stops the run before
+            # it starts must leave the note for the run that really happens.
+            try:
+                self.board.merge_payload(goal.id, {"resume_note": None})
+            except Exception:
+                logger.debug("resume-note clear failed for %s", goal.id,
+                             exc_info=True)
         ctx.payload, ctx.request, ctx.max_run = payload, request, _max_run
         ctx.room, ctx.room_read_at, ctx.room_sid, ctx.pre_sid = _room, _room_read_at, _room_sid, _pre_sid
         return True
@@ -442,12 +450,27 @@ class GoalRunMixin:
             # a large-enough budget (e.g. "$402.00") would satisfy the
             # credit-death classifier inside _is_llm_provider_exhausted —
             # a budget halt must never be labeled a provider outage.
-            if _d().RUN_BUDGET_MARKER in str(run.status or ""):
+            if (getattr(run, "stop_reason", None) == "run_budget"
+                    or _d().RUN_BUDGET_MARKER in str(run.status or "")):
                 error = f"{_d().RUN_BUDGET_MARKER}: {str(run.status)[:400]}"
             elif _d()._is_llm_provider_exhausted(run.status):
                 error = f"{_d().LLM_EXHAUSTED_MARKER}: {str(run.status)[:400]}"
                 block_kind_hint = "provider_outage"
             hb_task.cancel()
+            # Prod 2026-10-14: a run a rate guard cut short (the X post cooldown
+            # names retry_after_sec) is a timer, not a failure — come back then.
+            # A budget halt is NOT a timer: deferring it re-runs (and re-spends).
+            if (run.retry_after_sec and block_kind_hint is None
+                    and _d().RUN_BUDGET_MARKER not in error):
+                _d_g = self.board.defer_run(
+                    goal.id, retry_after_sec=run.retry_after_sec,
+                    claim_token=goal.claim_token, reason=str(run.status or "")[:200])
+                if _d_g is not None:
+                    logger.info("goal %s deferred %ss by a rate guard (no failure)",
+                                goal.id, run.retry_after_sec)
+                    await self._goal_record(goal, session_id, "deferred", run=run,
+                                            reason="a rate guard asked to retry later")
+                    return False
             _g = self.board.record_failure(
                 goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
             if getattr(_g, "claim_token", None) != goal.claim_token:
@@ -459,20 +482,11 @@ class GoalRunMixin:
             # here lands the generic needs_input kind, which kind-aware
             # aging never auto-heals (worse than before block kinds existed).
             await self._maybe_escalate_blocked(_g, block_kind_hint=block_kind_hint)
-            try:
-                from modules.memory.episodic import finalize_episode
-                # 012 #1: thread the envelope's real provenance (zeros for a
-                # pre-loop refusal, honest values when work preceded it).
-                await finalize_episode(
-                    session_id=session_id, user_id=goal.user_id, kind="goal",
-                    task=getattr(goal, "title", None), outcome="failed",
-                    goal_id=goal.id, summary=error[:2000],
-                    spend_usd=run.spend_usd, steps=run.steps,
-                    artifacts=run.artifacts,
-                    meta={"source": "goal"},
-                )
-            except Exception:
-                logger.warning("goal episodic write failed", exc_info=True)
+            # 012 #1: the envelope's real provenance (zeros for a pre-loop
+            # refusal, honest values when work preceded it).
+            await self._goal_record(goal, session_id, "failed", run=run,
+                                    reason="the run was refused or produced nothing",
+                                    error=error)
             return False
         # §2: every downstream read comes from the envelope — the done() ledger
         # text, the BLOCKED declaration, provenance — never from re-extracted
@@ -488,7 +502,7 @@ class GoalRunMixin:
                 goal, session_id, outcome, run.blocked_need,
                 agent_reported=bool(run.user_messages),
                 steps=run.steps, spend_usd=run.spend_usd,
-                artifacts=run.artifacts)
+                artifacts=run.artifacts, run=run)
             return False
         # §4.4: typed acceptance checks — optional sharpener. When a producer
         # set them they run fail-CLOSED and their results join the evidence
@@ -525,13 +539,18 @@ class GoalRunMixin:
                     detail = "; acceptance checks failed: " + "; ".join(
                         f"{c.get('type')}: {c.get('detail')}" for c in _failed)
                 hb_task.cancel()
+                # 083 WS-2: the agent's last report at the step limit rides the
+                # failure text (labelled as its words) — never a done().
+                _report = getattr(run, "exhausted_summary", None)
+                _last = label_last_report(_report)
+                _error = (f"run ended without completing (no done() — {run.stop_description})"
+                          + detail + gap_note)
+                if _last:
+                    _error = _error[:2000 - len(_last) - 1] + "\n" + _last
                 await self._fail_run(
-                    goal, session_id,
-                    error=("run ended without completing (no done() — likely ran "
-                           "out of steps)" + detail + gap_note)[:2000],
-                    outcome=outcome,
+                    goal, session_id, error=_error[:2000], outcome=outcome,
                     steps=run.steps, spend_usd=run.spend_usd,
-                    artifacts=run.artifacts)
+                    artifacts=run.artifacts, run=run, last_report=_report)
                 return False
         # §4.2 NEW invariant: a done() where EVERY substantive action errored
         # is not a judgment call — nothing executed successfully, so the claim
@@ -560,7 +579,7 @@ class GoalRunMixin:
                         + gap_note)[:2000],
                     outcome=outcome,
                     steps=run.steps, spend_usd=run.spend_usd,
-                    artifacts=run.artifacts)
+                    artifacts=run.artifacts, run=run)
                 return False
         # §4.3 evidence-grounded completion review (autonomous runs): the
         # CLAIM read against the evidence pack — no acceptance required.
@@ -586,7 +605,7 @@ class GoalRunMixin:
                            f"(claim contradicted by evidence)" + gap_note)[:2000],
                     outcome=outcome,
                     steps=run.steps, spend_usd=run.spend_usd,
-                    artifacts=run.artifacts)
+                    artifacts=run.artifacts, run=run)
                 return False
             run.verified = "verified" if verdict == _cj.VERDICT_MET else "unverified"
         elif salvaged_without_done:
@@ -642,17 +661,11 @@ class GoalRunMixin:
             promote_after_success, self.board, goal,
             verified=run.verified if judge_on else "verified")
         try:
-            from modules.memory.episodic import finalize_episode
             # Provenance was collected into the envelope while the
             # orchestrator was resident (run_task_to_outcome).
-            await finalize_episode(
-                session_id=session_id, user_id=goal.user_id, kind="goal",
-                task=getattr(goal, "title", None), outcome="done", goal_id=goal.id,
-                summary=result_record[:2000],
-                spend_usd=run.spend_usd, steps=run.steps,
-                artifacts=run.artifacts,
-                meta={"source": "goal", "verified": run.verified},
-            )
+            await self._goal_record(goal, session_id, "done", run=run,
+                                    summary=result_record[:2000],
+                                    meta={"verified": run.verified})
             ctx.recorded_success = True
             _d()._goal_ev(goal, "done", session_id=session_id,
                      spend_usd=run.spend_usd, steps=run.steps,
@@ -662,7 +675,8 @@ class GoalRunMixin:
                      duration_sec=self._elapsed(goal.id),
                      artifacts=len(run.artifacts),
                      user_messages=len(run.user_messages),
-                     verified=run.verified, promoted=_promoted)
+                     verified=run.verified, promoted=_promoted,
+                     stop_reason=run.stop_reason)
         except Exception:
             logger.warning("goal episodic write failed", exc_info=True)
         if outcome:
@@ -705,13 +719,20 @@ class GoalRunMixin:
         # LLMPermanentError → "ALL LLM PROVIDERS EXHAUSTED") gets the
         # distinct greppable marker in goals.last_failure_error.
         error_text = str(e)
+        timed_out = isinstance(e, asyncio.TimeoutError)
+        if timed_out and not error_text:
+            # A bare TimeoutError has no text: the record said "failed" and nothing else.
+            error_text = (f"{describe_stop_reason(StopReason.WALL_CLOCK)} "
+                          f"({ctx.max_run}s) before done()")
         block_kind_hint = None
         if _d()._is_llm_provider_exhausted(e):
             error_text = f"{_d().LLM_EXHAUSTED_MARKER}: {error_text}"[:2000]
             block_kind_hint = "provider_outage"
         _d()._goal_ev(goal, "failed", reason=error_text[:200], session_id=session_id,
                  steps=int(getattr(run, "steps", 0) or 0),
-                 duration_sec=self._elapsed(goal.id))
+                 duration_sec=self._elapsed(goal.id),
+                 stop_reason=(StopReason.WALL_CLOCK.value if timed_out
+                              else getattr(run, "stop_reason", None)))
         try:
             hb_task.cancel()
             _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id, claim_token=goal.claim_token)
@@ -723,23 +744,113 @@ class GoalRunMixin:
             await self._maybe_escalate_blocked(_g, block_kind_hint=block_kind_hint)
         except Exception:
             pass
-        if session_id and not recorded_success:
-            try:
-                from modules.memory.episodic import finalize_episode
-                # 012 #1: thread whatever provenance the run envelope already
-                # computed (run stays None when the raise preceded run_session,
-                # in which case the safe zeros are the honest values).
-                await finalize_episode(
-                    session_id=session_id, user_id=goal.user_id, kind="goal",
-                    task=getattr(goal, "title", None), outcome="failed",
-                    goal_id=goal.id, summary=error_text[:2000],
-                    spend_usd=float(getattr(run, "spend_usd", 0.0) or 0.0),
-                    steps=int(getattr(run, "steps", 0) or 0),
-                    artifacts=list(getattr(run, "artifacts", None) or []),
-                    meta={"source": "goal"},
-                )
-            except Exception:
-                logger.warning("goal episodic write failed", exc_info=True)
+        if not recorded_success:
+            # 012 #1: whatever provenance the run envelope already computed (run
+            # stays None when the raise preceded run_session — or when the
+            # wall-clock cap cancelled it: then the resident session is read,
+            # B5, so a run that did work before the cap is PARTIAL).
+            sid = session_id or self._own_pre_sid(ctx)
+            if sid:
+                if run is None:
+                    run = await self._read_cut_run(sid)
+                if timed_out and run is not None:
+                    try:
+                        run.stop_reason = StopReason.WALL_CLOCK.value  # 083 WS-1: the cap, not the loop
+                    except Exception:
+                        pass
+                from agents.task.agent.core.episodic_digest import (
+                    did_something, run_record_facts)
+                partial = (getattr(run, "done_called", None) is not True
+                           and did_something(run_record_facts(run)))
+                await self._goal_record(goal, sid, "partial" if partial else "failed",
+                                        run=run, reason="the run raised",
+                                        error=error_text)
+
+    async def _goal_record(self, goal: Goal, session_id: Optional[str], outcome: str, *,
+                           run: Any = None, reason: str = "", error: str = "",
+                           summary: Optional[str] = None,
+                           meta: Optional[Dict[str, Any]] = None) -> None:
+        """The goal's run record for one exit path (2026-10-13 review R3)."""
+        from agents.task.agent.core.episodic_digest import record_run
+        await record_run(regime=_GOAL_REGIME, kind="goal", session_id=session_id,
+                         user_id=goal.user_id, rail_id=f"goal:{goal.id}",
+                         task=getattr(goal, "title", None), outcome=outcome,
+                         reason=reason, error=error, run=run, summary=summary,
+                         goal_id=goal.id, meta={"source": "goal", **(meta or {})})
+
+    def _own_pre_sid(self, ctx: _GoalRunCtx) -> Optional[str]:
+        """The pre-generated session id when the run really took it (the marker
+        names this goal), else None."""
+        sid = ctx.pre_sid
+        if not sid:
+            return None
+        try:
+            from core.autonomy_marker import goal_for_session
+            return sid if goal_for_session(sid) == ctx.goal.id else None
+        except Exception:
+            return None
+
+    async def _read_cut_run(self, session_id: str) -> Any:
+        """The RunOutcome of a run that never returned one (cap, pause, yield),
+        read from the resident session. Bounded; None on any error."""
+        try:
+            from agents.task.runtime.run_outcome import build_run_outcome
+            return await asyncio.wait_for(
+                build_run_outcome(self.task_agent, session_id, None), timeout=10)
+        except Exception:
+            logger.debug("goal: cut run unreadable (%s)", session_id, exc_info=True)
+            return None
+
+    async def _goal_run_cut(self, ctx: _GoalRunCtx) -> None:
+        """B5: the run was CANCELLED (owner pause, rail yield). Record what it
+        did — PARTIAL when it sent, produced or signed anything. Never raises."""
+        try:
+            if ctx.recorded_success:
+                return
+            sid = ctx.session_id or self._own_pre_sid(ctx)
+            if not sid:
+                return
+            run = ctx.run or await self._read_cut_run(sid)
+            from agents.task.agent.core.episodic_digest import (
+                did_something, run_record_facts)
+            outcome = "partial" if did_something(run_record_facts(run)) else "cancelled"
+            await asyncio.wait_for(self._goal_record(
+                ctx.goal, sid, outcome, run=run,
+                reason="paused by the owner or pre-empted before done()"), timeout=5)
+        except Exception:
+            logger.warning("goal %s: cut-run record failed", ctx.goal.id, exc_info=True)
+
+    def _upstream_results(self, goal: Goal) -> list:
+        """B10: ``[(id, title, status, result)]`` of the goals this one depends
+        on, or ``[]``. Fail-open (a board without edges has no upstream)."""
+        try:
+            out = []
+            for dep_id in self.board.dependencies(goal.id) or []:
+                dep = self.board.get(dep_id)
+                if dep is None:
+                    continue
+                result = ((dep.payload or {}).get("outcome") or dep.result
+                          or dep.last_failure_error or "")
+                out.append((dep.id, dep.title, dep.status, str(result)))
+            return out
+        except Exception:
+            logger.debug("upstream results unreadable for %s", goal.id, exc_info=True)
+            return []
+
+    def _goal_run_record_cost(self, ctx: _GoalRunCtx) -> None:
+        """080: write ``payload.cost_usd`` (the run's model spend from the usage
+        ledger) so ``/goal show`` can say what the goal cost. Fail-open: a
+        ledger that does not read leaves the field unset and logs why."""
+        sid = ctx.session_id or getattr(ctx.goal, "session_id", None)
+        if not sid:
+            return
+        try:
+            from core.status_economics import run_cost_usd
+            cost = run_cost_usd(sid, os.path.dirname(self.board.db_path))
+            if cost is not None:
+                self.board.merge_payload(ctx.goal.id, {"cost_usd": cost})
+        except Exception as e:
+            logger.warning("goal %s: could not record cost_usd: %s", ctx.goal.id, e)
 
     def _goal_run_release(self, ctx: _GoalRunCtx) -> None:
         """The outer ``finally``: stop the heartbeat, release the busy gate and slot."""
@@ -804,7 +915,8 @@ class GoalRunMixin:
                                      outcome: Optional[str], need: str,
                                      agent_reported: bool = False,
                                      steps: int = 0, spend_usd: float = 0.0,
-                                     artifacts: Optional[list] = None) -> None:
+                                     artifacts: Optional[list] = None,
+                                     run: Any = None) -> None:
         """§3.1: route an agent-declared BLOCKED outcome to the failure/escalation rail.
 
         The agent already concluded retrying won't help, so after the standard
@@ -817,13 +929,15 @@ class GoalRunMixin:
         error = f"agent declared BLOCKED: {need or 'unspecified need'}"
         await self._fail_run(goal, session_id, error=error, block=True, outcome=outcome,
                              agent_reported=agent_reported,
-                             steps=steps, spend_usd=spend_usd, artifacts=artifacts)
+                             steps=steps, spend_usd=spend_usd, artifacts=artifacts,
+                             run=run)
 
     async def _fail_run(self, goal: Goal, session_id: Optional[str], *, error: str,
                         block: bool = False, outcome: Optional[str] = None,
                         agent_reported: bool = False,
                         steps: int = 0, spend_usd: float = 0.0,
-                        artifacts: Optional[list] = None) -> None:
+                        artifacts: Optional[list] = None,
+                        run: Any = None, last_report: Optional[str] = None) -> None:
         """Shared verified-failure path for a run that finished but didn't deliver.
 
         record_failure's CAS respects owner cancel/pause; with ``block=True`` a row
@@ -855,11 +969,14 @@ class GoalRunMixin:
         # `needs_input` instead — worse than pre-block-kinds behavior, since
         # kind-aware `age_out_blocked` never auto-heals `needs_input`. One
         # mechanism, used everywhere `_maybe_escalate_blocked` is called.
-        block_kind_hint = "provider_outage" if _d()._is_llm_provider_exhausted(error) else None
+        # 083 WS-2: classify on the framework's text, never the agent's report.
+        _head = error.split("\n" + LAST_REPORT_LABEL, 1)[0]
+        block_kind_hint = "provider_outage" if _d()._is_llm_provider_exhausted(_head) else None
         # T4-03: surface the verified-failure outcome (blocked vs failed) in the durable
         # event log so `polyrob telemetry` reflects it, not just the episodes table.
         _d()._goal_ev(goal, "blocked" if getattr(_g, "status", None) == _d().STATUS_BLOCKED else "failed",
-                 reason=str(error)[:200], session_id=session_id)
+                 reason=str(error)[:200], session_id=session_id,
+                 stop_reason=getattr(run, "stop_reason", None))
         if outcome:
             try:
                 self.board.set_outcome(goal.id, outcome)
@@ -868,15 +985,23 @@ class GoalRunMixin:
         await self._maybe_escalate_blocked(_g, agent_reported=agent_reported,
                                            block_kind_hint=block_kind_hint)
         if session_id:
-            try:
-                from modules.memory.episodic import finalize_episode
-                await finalize_episode(
-                    session_id=session_id, user_id=goal.user_id, kind="goal",
-                    task=getattr(goal, "title", None), outcome="failed",
-                    goal_id=goal.id, summary=error[:2000],
-                    spend_usd=spend_usd, steps=steps,
-                    artifacts=list(artifacts or []),
-                    meta={"source": "goal"},
-                )
-            except Exception:
-                logger.warning("goal episodic write failed", exc_info=True)
+            # The run record (2026-10-13 review R3). ``run`` carries the sends,
+            # outputs and tx; without one the explicit provenance stands in.
+            if run is None:
+                from types import SimpleNamespace
+                run = SimpleNamespace(steps=steps, spend_usd=spend_usd,
+                                      artifacts=list(artifacts or []))
+            from agents.task.agent.core.episodic_digest import (
+                did_something, run_record_facts)
+            if block:
+                rec = "blocked"
+            elif (getattr(run, "done_called", None) is False
+                  and did_something(run_record_facts(run))):
+                rec = "partial"   # C-03: it did work, then stopped before done()
+            else:
+                rec = "failed"
+            _reason = error.split("\n", 1)[0][:300]
+            _summary = (f"{rec.upper()}: {_reason} | {label_last_report(last_report, 1500)}"
+                        if label_last_report(last_report) else None)
+            await self._goal_record(goal, session_id, rec, run=run,
+                                    reason=_reason, error=_head, summary=_summary)

@@ -94,11 +94,82 @@ def test_revision_metadata_cannot_be_malformed_into_a_load(manager):
     assert SkillManager(skills_dir=manager.skills_dir)._load_skill_content("calibration", "u1") == ""
 
 
-def test_corrupt_rules_cannot_disable_version_verification(manager):
+def test_an_unreadable_revision_store_cannot_disable_verification(manager, monkeypatch):
     pending = manager.create_skill("calibration", BODY, user_id="u1")
     assert manager.promote_pending_skill("calibration", user_id="u1",
                                          expected_revision=pending.revision).ok
-    (manager.skills_dir / "user_u1" / "rules.json").write_text("not json")
+    from modules.skills import skill_usage
+
+    def _boom(*a, **k):
+        raise OSError("database disk image is malformed")
+
+    monkeypatch.setattr(skill_usage.SkillUsageStore, "get_revision", _boom)
+    assert SkillManager(skills_dir=manager.skills_dir)._load_skill_content("calibration", "u1") == ""
+
+
+# ── 081 WS-4.2: the revision lives in skill_usage.db (read-old / write-new) ──
+
+def _sha(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_an_active_write_records_the_revision_in_the_db_not_rules_json(manager, monkeypatch):
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
+    res = manager.create_skill("calibration", BODY, user_id="u1", created_by="user")
+    assert res.ok and not res.pending
+    from modules.skills.skill_usage import get_skill_usage_store
+    assert get_skill_usage_store().get_revision("calibration", "u1") == res.revision
+    entry = json.loads((manager.skills_dir / "user_u1" / "rules.json").read_text())["calibration"]
+    assert not {"content_sha256", "revision", "created_by"} & set(entry)
+    assert entry["auto_activate"] is True and "triggers" not in entry  # 081 Q2: no keywords
+
+
+def _legacy(manager, sha):
+    root = manager.skills_dir / "user_u1"
+    (root / "calibration").mkdir(parents=True)
+    (root / "calibration" / "SKILL.md").write_text(BODY)
+    (root / "rules.json").write_text(json.dumps({"calibration": {
+        "auto_activate": True, "priority": 6, "triggers": {"keywords": ["gauge"]},
+        "description": "legacy", "created_by": "agent",
+        "revision": sha, "content_sha256": sha}}))
+    return root
+
+
+def test_read_old_a_legacy_rules_json_revision_still_verifies(manager):
+    _legacy(manager, _sha(BODY))
+    assert "gauge" in SkillManager(skills_dir=manager.skills_dir)._load_skill_content("calibration", "u1")
+
+
+def test_read_old_a_tampered_legacy_skill_is_still_refused(manager):
+    _legacy(manager, _sha(UPDATED))
+    assert SkillManager(skills_dir=manager.skills_dir)._load_skill_content("calibration", "u1") == ""
+
+
+def test_write_new_the_next_write_moves_a_legacy_revision_to_the_db(manager, monkeypatch):
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
+    root = _legacy(manager, _sha(BODY))
+    res = manager.patch_skill("calibration", user_id="u1", old_string="value",
+                              new_string="reading", created_by="user")
+    assert res.ok, res.errors
+    from modules.skills.skill_usage import get_skill_usage_store
+    assert get_skill_usage_store().get_revision("calibration", "u1") == res.revision
+    entry = json.loads((root / "rules.json").read_text())["calibration"]
+    assert not {"content_sha256", "revision", "created_by"} & set(entry)
+    assert "triggers" not in entry  # 081 Q2: the dead keyword triggers leave on the next write
+    assert "reading" in SkillManager(skills_dir=manager.skills_dir)._load_skill_content("calibration", "u1")
+
+
+def test_a_failed_revision_commit_cannot_load_the_new_body(manager, monkeypatch):
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
+    assert manager.create_skill("calibration", BODY, user_id="u1", created_by="user").ok
+    from modules.skills import skill_usage
+
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(skill_usage.SkillUsageStore, "record_revision", _boom)
+    assert not manager.create_skill("calibration", UPDATED, user_id="u1", created_by="user").ok
     assert SkillManager(skills_dir=manager.skills_dir)._load_skill_content("calibration", "u1") == ""
 
 

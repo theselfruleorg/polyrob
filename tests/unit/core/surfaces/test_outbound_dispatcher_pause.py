@@ -84,7 +84,7 @@ def test_interactive_reply_row_is_never_held(home):
     """R5: the owner's own chat keeps working while paused. A session-bound
     reply row (not the proactive ``direct:`` rail) is delivered."""
     from core import autonomy_control as ac
-    q, surface, disp = _rig(home, session_key="telegram:28436760")
+    q, surface, disp = _rig(home, session_key="telegram:100000001")
     ac.pause(str(home), via="test")
     assert asyncio.run(disp.drain_once(now=time.time() + 1)) == 1
     assert surface.sent == ["hi"]

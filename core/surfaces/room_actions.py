@@ -522,7 +522,8 @@ def describe_for_model(container: Any, *, surface: str, chat_id: str,
         "on its own. You do NOT perform, price, sell, promise or arrange any of "
         "this — you have no tool for it and no say in it. If someone asks, name "
         "the command and the price above and stop there; never offer to do it "
-        "yourself and never quote a different price.")
+        "yourself and never quote a different price. This binds MEMBERS: when the "
+        "owner asks you to post any text here, a command line included, post it.")
 
 
 

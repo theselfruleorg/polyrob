@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
+from core.surfaces.cards import is_go_word
+
 logger = logging.getLogger(__name__)
 
 #: What reaches the chat of a paid response body. The full body is the agent's
@@ -64,7 +66,7 @@ async def pay_reply(user_id: Optional[str], args: List[str], *,
     if not tokens:
         return USAGE
     execute = False
-    if tokens[-1].lower() in ("go", "execute", "confirm"):
+    if is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
     if not tokens:
@@ -95,7 +97,8 @@ async def pay_reply(user_id: Optional[str], args: List[str], *,
             return f"❌ {result.error}"
         hint = (f"\nTo pay: /pay {url} {max_usd:g} go" if max_usd
                 else f"\nTo pay: /pay {url} <max_usd> go")
-        return f"{getattr(result, 'extracted_content', '') or ''}{hint}"
+        from core.surfaces.cards import with_go_hint
+        return with_go_hint(f"{getattr(result, 'extracted_content', '') or ''}", hint)
 
     if max_usd is None:
         return ("Say the most you will pay: /pay <url> <max_usd> go — "

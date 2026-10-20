@@ -3,9 +3,10 @@ name: social-discovery
 description: Discover public X/social accounts and conversations with AnySite first (anysite_describe, then anysite_api), using native X account reads where they are authoritative and preserving write gates
 license: MIT
 metadata:
+  polyrob-when: 'Finding X accounts or conversations to engage'
   polyrob-priority: '6'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["twitter_search","twitter_get_user","twitter_get_tweets","twitter_get_mentions","twitter_get_timeline"],"keywords":["engagement targets","who to engage","find accounts on x","accounts to engage","discover on x","discover on twitter","social discovery","find people to engage","find prospects on x","who to reply to","trending in ai"],"task_patterns":["\\b(find|discover|identify)\\b.*\\b(accounts?|people|targets?|prospects?|conversations?)\\b.*\\b(on x|x\\.com|twitter|social)\\b","\\bwho (to|should (i|we|you)) (engage|reply to|follow)\\b","\\b(engagement|social)\\b.*\\b(discovery|targets?)\\b","\\bfind\\b.*\\b(mentions|conversations)\\b.*\\b(on x|twitter)\\b"],"tool_ids":["anysite","twitter"]}'
+  polyrob-triggers: '{"tool_ids":["anysite","twitter"]}'
   polyrob-version: '3'
 ---
 # Social Discovery

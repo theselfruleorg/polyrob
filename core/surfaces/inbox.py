@@ -47,6 +47,22 @@ SOURCE_LABELS: Dict[str, str] = {
     "correspondents": "correspondents",
     "asks": "blocked goals",
     "apps": "apps",
+    # 080 WS-3: the four lists that used to sit OUTSIDE the one list (D T8 —
+    # 11 waiting items over 7 verbs, /inbox showed 4 and said all answered).
+    "signer_approvals": "signer approvals",
+    "cards": "action cards",
+}
+
+#: The views that are FILTERS of the one Inbox (080 WS-3): ``/pending`` is the
+#: approve/reject queue (the ``all_pending`` union), ``/asks`` the open asks,
+#: ``/cards`` the open action cards. A seat renders a view through
+#: :func:`view`, never through a second reader, so a view can only ever be a
+#: subset of what ``/inbox`` counts.
+VIEWS: Dict[str, Tuple[str, ...]] = {
+    "pending": ("self_evolution", "tool_approvals", "correspondents",
+                "signer_approvals"),
+    "asks": ("asks",),
+    "cards": ("cards",),
 }
 
 #: The marker kind a refused source contributes. A seat renders it with its own
@@ -163,6 +179,32 @@ def compose(items: Sequence[Item],
         "uncertain": uncertain,
         "sources": dict(sources or {}),
         "unreadable_sources": unreadable_sources,
+    }
+
+
+def view(body: Mapping[str, Any], name: str) -> Dict[str, Any]:
+    """The Inbox *body* narrowed to one of :data:`VIEWS` — recounted, with the
+    same honest-state fields (a refused source inside the view stays named; a
+    refused source outside it is not this view's business)."""
+    keep = set(VIEWS[name])
+
+    def _mine(row: Mapping[str, Any]) -> bool:
+        return str(row.get("source") or "") in keep
+
+    items = [dict(i) for i in body.get("items") or () if _mine(i)]
+    listed = [dict(i) for i in body.get("not_blocking") or () if _mine(i)]
+    sources = {k: v for k, v in (body.get("sources") or {}).items() if k in keep}
+    refused = sorted(k for k, v in sources.items()
+                     if str(v).startswith("unreadable("))
+    return {
+        "items": items,
+        "not_blocking": listed,
+        "count": sum(1 for i in items if not i.get("unreadable")),
+        "uncertain": bool(refused) or any(i.get("unreadable") for i in items),
+        "sources": sources,
+        "unreadable_sources": refused,
+        "view": name,
+        "total": int(body.get("count") or 0),
     }
 
 

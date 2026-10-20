@@ -191,11 +191,11 @@ def test_console_display_name_env_override(webgate, monkeypatch):
 def test_branding_config_defaults(webgate):
     # 043 A12: an operator who never sets brand/org URLs gets no placeholder
     # host / framework-author domain — those default to "" so the footer
-    # renders no dead link. support_url keeps its real Telegram default.
+    # renders no dead link. The support link has no default either.
     b = webgate.branding_config()
-    assert b["support_url"] == "https://t.me/tmachinrobot"
-    assert b["support_display"] == "t.me/tmachinrobot"
-    assert b["support_handle"] == "@TMACHINROBOT"
+    assert b["support_url"] == ""
+    assert b["support_display"] == ""
+    assert b["support_handle"] == ""
     assert b["brand_url"] == ""
     assert b["brand_display"] == ""
     assert b["org_url"] == ""

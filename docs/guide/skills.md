@@ -2,9 +2,10 @@
 
 A **skill** is a reusable procedure the agent can load on demand — a folder with a
 `SKILL.md` file (agentskills.io-compliant Markdown + YAML frontmatter) plus optional
-`references/`, `assets/`, and `scripts/` resources. When a task matches a skill's
-triggers (or the agent chooses it from the catalog), the agent pulls the skill's full
-instructions with the `load_skill` tool and follows them.
+`references/`, `assets/`, and `scripts/` resources. A scheduled job or a goal can pin
+skills: a pinned skill loads when the run starts. Every other session sees a short
+index (one line per skill) and the agent loads the skill whose line fits the task with
+the `load_skill` tool, then follows it.
 
 POLYROB is an agentskills.io **client**: it discovers and loads skills authored for the
 open ecosystem (the same `SKILL.md` format used by Claude Code and other agents), and it
@@ -18,19 +19,33 @@ scanned, quarantined pipeline.
 
 ## Scopes and precedence
 
-Skills come from the scopes below. Resolution order is **project > user > builtin
-> pack**, with protected builtin names: a **builtin is never shadowed** by an
-external skill of the same name. A colliding pack skill uses `<pack-id>:<skill-id>`.
+Skills come from the scopes below. Resolution order is **builtin > user > pack >
+project > user-external**. Builtin and pack names are protected: a user skill cannot
+take one, and an external skill of the same name is skipped. A pack skill whose name
+is a builtin's uses `<pack-id>:<skill-id>`.
 
 | Scope | Location | Writable? | How it gets there |
 |-------|----------|-----------|-------------------|
-| **builtin** | the installed package (`data/prompts/skills/`) | read-only, trusted | ships with POLYROB |
+| **builtin** | `<data_home>/skills/bundled/`, a copy of the installed package's `data/prompts/skills/` | no — Rob suggests a fix, you accept it | ships with POLYROB; copied at each start |
 | **pack:<id>** | a loaded pack's contributed skills directory | read-only, trusted with the loaded pack | installed with the pack; absent when the pack is disabled/refused |
 | **user** | `<data_home>/skills/user_<uid>/` (local CLI: `~/.polyrob/data/skills/user_<uid>/`, or under `$POLYROB_DATA_DIR`) | yes | `polyrob skill install`, or the agent authoring a skill |
 | **external (discovered)** | `~/.agents/skills/`, `~/.claude/skills/` (user), and per-repo `./.agents/skills/`, `./.claude/skills/` (project) | no (loaded in place) | drop a skill folder in and it's auto-discovered |
 
-Builtin skills ship inside the installed package (`data/prompts/skills/`) and are
-replaced wholesale by an update. User and installed skills live under your **data
+Builtin skills ship inside the installed package (`data/prompts/skills/`). Each start
+copies them to `<data_home>/skills/bundled/` and records the sha256 of every copied
+`SKILL.md` in `.bundled_manifest`; Rob reads the copy. So a fix to a builtin skill
+needs no deploy: Rob suggests it with `skill_manage patch` or `edit` (it waits for
+your decision, like any suggested change), and when you accept it (`/pending`, or
+`polyrob owner promote skill <id>`) the copy changes at once.
+
+An update replaces a copy only when you did not change it. A copy you changed is kept,
+and the update's own report names it (the "back online" message, or the output of
+`polyrob update --apply`). A copy changed outside an accepted fix is archived and
+restored. A skill that left the package leaves the copy too. A user skill with the
+id of a builtin skill is never touched: the builtin skill is used for that id, and the
+report names your skill so that you can rename it.
+
+User and installed skills live under your **data
 home**, not the package tree, so they **survive `polyrob update`** — the updater
 snapshots `<data_home>/skills` first, and `polyrob update --rollback` restores it
 (data only; the code is not reverted — see
@@ -240,6 +255,48 @@ available as slash commands:
 
 ---
 
+## Pinned skills
+
+A scheduled job or a goal can pin skills by id (`skills=[...]`). The write is refused
+when an id names no skill, so a typing error does not wait until the run. When a pinned
+skill is gone at run time, the run continues without it, and the first line of the
+run's instructions names the missing id, so the report tells you to fix the pin. The
+first pinned id is the job's lane (the key of `/job stop --forever`), so a pinned skill
+id is never renamed or retired.
+
+---
+
+## History and rollback
+
+Rob changes its skills with `skill_manage` (`create`, `patch`, `edit`, `delete`,
+`rollback`). `load_skill` returns the skill's `sha256`, and a `patch`, `edit` or
+`delete` must carry that value as `expected_sha256`. When the skill changed after the
+read, the write is refused and the refusal gives the current sha256, so Rob reads
+the skill again before it writes. `create` never replaces a skill that exists, and it
+needs `when`, one line of 60 characters or fewer that says when to load the skill (its
+line in the index).
+The threat scan and the lint check only the lines that a `patch` or an `edit` adds, so
+a standing line does not block an unrelated fix.
+
+Every change to a user skill is one row in the skill change log (`skill_provenance_log` in
+`<data_home>/skill_usage.db`): the action (`create`, `edit`, `patch`, `delete`,
+`archive`, `promote`, `reject`, `rollback`), who made it (`user`, `agent`,
+`background_review`, `curator`), the sha256 of the body before and after, and the
+archive file that holds the prior body. An overwrite or a delete never removes a body:
+it is kept as `<data_home>/skills/user_<uid>/.archived/<id>/<sha256>-SKILL.md`.
+
+`skill_manage rollback <id>` restores the body the newest change replaced, and
+`rollback <id>` with `to_sha=<sha>` (a full sha or a unique prefix of 8 or more characters)
+restores a named revision. A rollback is an ordinary write: it is scanned again, and a
+rollback by Rob of an active skill waits for your decision.
+
+A delete by the background reviewer or the curator is a consolidation, so it must name
+`absorbed_into`, the skill that now holds those steps, and that skill must exist. The
+curator's archive of a skill that nobody loaded is an age transition and needs no
+absorber. Your own delete, or a delete by Rob in a chat you started, needs none.
+
+---
+
 ## Safety model
 
 Installing third-party skills is treated as importing untrusted content. The pipeline
@@ -277,8 +334,7 @@ enforces, all fail-closed:
 name: pdf-processing                 # required; must match the folder name
 description: Extract and analyze PDF text. Use when handling PDF files.   # required
 metadata:                            # optional; POLYROB settings live here
-  polyrob-auto-activate: "true"
-  polyrob-triggers: '{"keywords": ["pdf", "extract"]}'
+  polyrob-when: "Pulling text or tables out of a PDF"   # the index line, at most 60 chars
 ---
 
 # PDF processing
@@ -289,9 +345,11 @@ Step-by-step instructions the agent follows once this skill is loaded…
 Only the agentskills.io top-level fields are allowed (`name`, `description`,
 `license`, `compatibility`, `metadata`, `allowed-tools`), so the file stays
 portable to other agents; POLYROB settings go under `metadata` as flat
-`polyrob-*` string keys. `allowed-tools` is advisory in POLYROB: when the skill loads,
+`polyrob-*` string keys. `polyrob-when` is the skill's line in the skill index: write
+when to use the skill, in at most 60 characters.
+`allowed-tools` is advisory in POLYROB: when the skill loads,
 the agent sees one line that names the declared tools, but POLYROB does not remove any
-other tool from the session. Field limits, trigger syntax and the safety
+other tool from the session. Field limits, the gate syntax and the safety
 conventions are in
 [`docs/SKILL_AUTHORING_STANDARD.md`](../SKILL_AUTHORING_STANDARD.md) — write to
 that, and check your work with `polyrob skills validate`.

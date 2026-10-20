@@ -45,7 +45,7 @@ Never moves: the self-directed loops (axis 2), money, host access. The CLI sets
 it for you; never set it on a shared server.
 
 **2. `AUTONOMY_ENABLED` — let it work on its own.** Moves, as one group and only
-under axis 1: self-wake, the goal board and planner, the curator, background
+under axis 1: self-wake, the goal board, the curator, background
 review, episodic continuity, writable skills and self-context, attached
 deliverables. Defaults on when you choose axis 3 `autonomous` or an
 `owner-visible` / `full` posture, so a deliberate choice is never left inert.
@@ -259,8 +259,10 @@ polyrob run -p openai -m gpt-5 "…"                      # per run
 ```
 
 The pinned model serves every run on the pinned provider — chat, scheduled jobs,
-goals and the planner. `CHAT_PROVIDER`/`CHAT_MODEL` win over the `DEFAULT_` pair;
-`DEFAULT_MODEL` never applies to a different `CHAT_PROVIDER`.
+goals. `DEFAULT_MODEL` never applies to a different provider: a job picks
+another model with its own `payload.model`. The old `CHAT_PROVIDER`/`CHAT_MODEL`
+names are retired; set alone, POLYROB refuses to start and names the
+`DEFAULT_` name to use.
 
 `DEEPSEEK_API_KEY` is never auto-selected (its direct client has no tool
 calling); pass `-p deepseek` or reach DeepSeek through OpenRouter.
@@ -329,6 +331,10 @@ support it (off by default because it changes cost and latency).
 `RUN_BUDGET_USD=<dollars>` sets a per-session ceiling on real provider cost;
 the run halts honestly when it is reached, and the remaining budget is shown to
 the model so it can pace itself.
+`AUTONOMOUS_MAX_STEPS` (default `150`) is the one step limit for every goal,
+scheduled job and helper. Rob cannot set a step limit of its own; AI cost
+(`AUTONOMOUS_RUN_BUDGET_USD`) and wall-clock time are the real bounds. A run that
+answers in a group keeps a fixed 8 steps.
 
 Prompt caching is on by default and needs no configuration. If you want to
 change it: `ANTHROPIC_CACHE_TTL` (`auto` | `5m` | `1h`) sets the cache window
@@ -416,7 +422,7 @@ the six axes in §1. Set them in this order and stop when you have what you want
 | Axis | Default | What it moves |
 |---|---|---|
 | `POLYROB_LOCAL` | off | The single-user profile. Turns on the interactive tools (coding, git, knowledge base, memory, project context) as a group. Set automatically by the CLI. |
-| `AUTONOMY_ENABLED` | off | The master switch for the self-directed loops: self-wake, the goal board and planner, the curator, background review, episodic continuity, writable skills. |
+| `AUTONOMY_ENABLED` | off | The master switch for the self-directed loops: self-wake, the goal board, the curator, background review, episodic continuity, writable skills. |
 | `AUTONOMY_POSTURE` | `silent` | How visible the autonomous work is. `owner-visible` adds completion judging, blocker escalation and continuity; `full` adds time-based initiative (cron) and the no-change wake gate. Recommended for a single-user box: `owner-visible`. |
 | `AUTONOMY_MODE` | `supervised` | `autonomous` = act-and-report on a single-owner box: capability flags (Twitter, MCP, groups, email surface, invoicing) default on, approvals become allow-audit-notify, outbound policy opens. Effective only with `POLYROB_LOCAL` and a bound owner; otherwise it clamps back to `supervised`. |
 
@@ -477,7 +483,7 @@ building software with the agent. See [security-model.md](security-model.md).
 A session runs with a named toolset. Pick one with `--toolset` or
 `POLYROB_AGENT_TOOLSET`: `minimal`, `safe`, `default`, `research`,
 `trading_research`, `coding`, `development`, `browser`, `social`, `full`,
-`earn`, `owner_interactive`.
+`earn`.
 
 With `POLYROB_AGENT_TOOLSET` unset the CLI runs the **default** toolset —
 `filesystem`, `task`, `web_fetch` — plus `coding`, `anysite` and `defi_data`
@@ -494,6 +500,12 @@ Under the dynamic tool rig (`TOOL_PROGRESSIVE_DISCLOSURE`, on under
 `POLYROB_LOCAL`) the agent sees every loadable tool and pulls one in mid-session
 with `load_tool`; money tools are never loadable that way.
 
+Your own chat with Rob (Telegram, the console) starts with a small set of
+abilities: files, the TODO list, a web read, goals and scheduled jobs, plus every
+money ability you granted. Rob sees the full catalog and calls `load_tool` for
+anything else your request needs, like a scheduled job does.
+`INTERACTIVE_TOOL_IDS` replaces the starting set.
+
 #### Tools loaded mid-session
 
 A tool loaded mid-session has to reach the model somehow, and every way of
@@ -505,7 +517,9 @@ note, so the cached prefix is kept; if the API declines, POLYROB falls back to
 the plain list once and says so in the log. `TOOL_SCHEMAS_FROZEN=true` is the
 opt-in third shape for any provider: the schema list is pinned for the whole
 session and the model calls a late tool by name through
-`tool_call(name, arguments)`. Every permission, gate and approval fires against
+`tool_call(name, arguments)`. Scheduled jobs, goals and your own chat use that
+third shape by default (or the deferred one on a capable Claude model), so a
+load never changes their cached prefix. Every permission, gate and approval fires against
 the real tool exactly as if it had been called directly; the one thing a late
 tool loses there is the provider's own argument validation, so a bad argument
 comes back as an ordinary tool-result error.
@@ -530,6 +544,24 @@ you name with `CODE_EXEC_SSH_HOST` and must be attested disposable with
 `config/mcp_config.json` (secrets as `${VAR}` placeholders). Adding a server
 from chat — and what an added server can and cannot reach — is in
 [owner-controls.md](owner-controls.md#mcp-servers-giving-the-agent-new-tools).
+
+A server that holds its own money credential (an exchange key, an external
+wallet) can move money without Rob's wallet. Mark it in
+`~/.polyrob/mcp.json` or `config/mcp_config.json` with `"money": true`:
+
+```json
+{"servers": {"exchange": {"type": "http", "url": "https://mcp.example.com/rpc",
+                          "headers": {"Authorization": "Bearer ${EXCHANGE_KEY}"},
+                          "money": true}}}
+```
+
+Every action of a marked server then moves money: only you can start one, a
+helper Rob hands work to never can, and each call waits for your approval in
+`/inbox`. Call each action by its direct name (`exchange_<name>`); the generic
+`mcp_execute_tool` refuses a marked server. A server without the key behaves
+as before. Only the operator's files set it; a server added with `/mcp add` is
+never marked.
+
 `MCP_SERVE_ENABLED=true` mounts POLYROB as an inbound MCP server at `POST /mcp`
 for Claude Desktop or Cursor. See [api.md](api.md#mcp-server-inbound).
 

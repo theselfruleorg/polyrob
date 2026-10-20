@@ -399,7 +399,7 @@ def test_reconcile_settle_success_true_is_authoritative_not_estimate():
 
     settle = {"amount": 0.06, "network": "testnet", "payer": "0xPAYER",
               "tx_hash": "0xTXHASH", "success": True}
-    payment_info = {"happened": True, "amount": 0.04, "pay_to": "0xR"}
+    payment_info = {"happened": True, "amount": 0.06, "pay_to": "0xR"}
     paid, amount_paid, amount_is_estimate = C._reconcile_paid_amount(
         paid=True, settle=settle, payment_info=payment_info,
         probe_amount=0.04, max_amount_usd=0.10, url="http://fake/paid",

@@ -133,3 +133,17 @@ async def test_registry_rebind_session():
                            new_session_id="s2")
     assert n == 1
     assert reg.resolve(surface="email", address="j@x.com")["session_id"] == "s2"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_correspondent_session_gets_the_narrow_toolset(monkeypatch):
+    """081: a correspondent session holds files, its TODO and the reply action —
+    not the ambient grant (browser, coding, email, web reads ...) that the
+    capability gate refuses there anyway."""
+    from agents.task.tool_defaults import correspondent_session_tools
+    tools = correspondent_session_tools()
+    assert tools == ["filesystem", "task", "message"]
+    from core.tool_capabilities import TOOL_CAPABILITIES
+    for t in tools:
+        caps = TOOL_CAPABILITIES.get(t, ())
+        assert "high_impact" not in caps and "money" not in caps, t

@@ -1,0 +1,36 @@
+{
+  "function": {
+    "description": "Price a SWAP before committing to one: the route the swap verb would take (Uniswap V3, then a DEX aggregator if the operator enabled one), the output, the spender approve_token must authorise and an independent-price cross-check. Read-only — moves no funds. Each side is a CONTRACT ADDRESS or 'native' (priced via the wrapped native). EVM chains only: quote Solana with defi_trade.solana_swap(dry_run=true).",
+    "name": "defi_data_swap_quote",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_in": {
+          "description": "Human amount of token_in to sell",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to quote on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "token_in": {
+          "description": "CONTRACT ADDRESS of the token to sell (0x…), or the literal 'native' (quoted via the chain's wrapped-native, as the swap verb prefers)",
+          "type": "string"
+        },
+        "token_out": {
+          "description": "CONTRACT ADDRESS of the token to buy (0x…), or the literal 'native'",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token_in",
+        "token_out",
+        "amount_in"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

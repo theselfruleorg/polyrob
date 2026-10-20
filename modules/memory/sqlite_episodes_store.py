@@ -142,6 +142,7 @@ class EpisodeStoreMixin:
                 "meta, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(user_id, session_id) DO UPDATE SET "
                 "ts=excluded.ts, outcome=excluded.outcome, summary=excluded.summary, "
+                "thread_key=COALESCE(excluded.thread_key, episodes.thread_key), "
                 "artifacts=excluded.artifacts, "
                 "spend_usd=MAX(episodes.spend_usd, excluded.spend_usd), "
                 "steps=MAX(episodes.steps, excluded.steps), meta=excluded.meta",
@@ -154,7 +155,8 @@ class EpisodeStoreMixin:
             logger.warning("record_episode failed: %s", e)
     async def recall_episodes(self, *, user_id=None, since_ts=None, until_ts=None,
                               kind=None, thread_key=None, limit=20, order="newest",
-                              exclude_surfaced: bool = False) -> list:
+                              exclude_surfaced: bool = False,
+                              raise_errors: bool = False) -> list:
         if self._anon_blocked(user_id):
             return []
         limit = self._clamp_limit(limit, 20)
@@ -183,6 +185,8 @@ class EpisodeStoreMixin:
             )
         except Exception as e:
             logger.warning("recall_episodes failed: %s", e)
+            if raise_errors:  # the caller must tell "could not read" from "none yet"
+                raise
             return []
         return [self._episode_to_record(r) for r in (rows or [])]
     def prune_episodes(self, *, older_than_ts: int) -> int:

@@ -107,13 +107,13 @@ class Verb:
 #: step with the Telegram ``_HELP_BODY`` SSOT so the seats do not describe one
 #: verb differently.
 #: ``room_refused`` (044 I10) — the reasons that sat in the Telegram literal:
-#: /pause /halt /resume and /run (070) control autonomy; /cron /goal /fulfill
-#: (D43) mutate durable work; /rail (036) grants a tool to standing work;
+#: /pause /halt /resume and /run (070) control autonomy; /job /goal /fulfill
+#: (D43) mutate durable work;
 #: /thread (061) is the one owner transcript; /contacts is private
 #: correspondence; /why (O10) names tools, amounts and addresses; /cards
 #: confirms a money line; /approve /reject /allow /deny /config /prefs /mcp
 #: /apps /dev /identity are owner writes. A contributed verb (the money verbs,
-#: /writeoff, /adopt, /check …) is refused unless its contributor names it
+#: /writeoff, /check …) is refused unless its contributor names it
 #: room-safe.
 _CORE_TABLE: tuple[Verb, ...] = (
     # talk
@@ -137,14 +137,14 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/cards", "needs you",
          "Open action cards: confirm a quote, answer a choice, or cancel", room_refused=True),
     # work
-    Verb("/goal", "work", "Steer one goal or a whole stream", room_refused=True),
+    Verb("/goal", "work", "Add, show, retry, pause, or stop one goal", room_refused=True),
     Verb("/goals", "work", "The goal board summary"),
-    Verb("/rail", "work", "Standing work: list, create, switch, drop and grant rails",
+    Verb("/jobs", "work", "Scheduled jobs: next run, last outcome, and who wrote each"),
+    Verb("/job", "work", "Add, change, pause, resume, run now, or stop one scheduled job",
          room_refused=True),
-    Verb("/cron", "work", "Durable scheduled runs: list, add, edit, or cancel", room_refused=True),
     Verb("/apps", "work",
          "Deployed apps: approve an address, check health, or kill one", room_refused=True),
-    # money: no core row. The 13 money verbs are CONTRIBUTED
+    # money: no core row. Every money verb is CONTRIBUTED
     # (``register_verbs``) — today by ``core/money_verbs.py``, after 067 P5b by
     # the wallet pack. With none registered the group renders its install hint.
     # control
@@ -206,6 +206,56 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/identity", "display",
          "My on-chain identity: register it, or update where it is published (spends gas)",
               room_refused=True, background="Identity registration"),
+    # 080 D8: the model and the skills, on every seat (Telegram had neither).
+    Verb("/model", "set up",
+         "The model I run on, where that choice comes from, and how to change it",
+         room_refused=True),
+    Verb("/skills", "work", "The skills I can load, and what each one does",
+         room_refused=True),
+    # 080 WS-2: the REPL-only verbs, so this ONE table is complete. The terminal
+    # holds the live session, its trace and the local machine; no other seat can
+    # run these, so every other seat's help and palette leave them out.
+    Verb("/clear", "talk", "Clear this chat and keep my instructions",
+         seats=("repl",)),
+    Verb("/compact", "talk", "Shorten this chat's history in the background",
+         aliases=("/compress",), seats=("repl",)),
+    Verb("/history", "talk", "The turns of this chat", seats=("repl",)),
+    Verb("/attach", "talk", "Attach local files or images to my next step",
+         seats=("repl",)),
+    Verb("/steer", "talk", "Give the running turn one more instruction", seats=("repl",)),
+    Verb("/session", "talk", "Who and where this chat is: owner, model, memory, files",
+         aliases=("/info",), seats=("repl",)),
+    Verb("/sessions", "talk", "Every chat I know about", seats=("repl",)),
+    Verb("/replay", "talk", "Replay a chat's feed", seats=("repl",)),
+    Verb("/export", "talk", "Export this chat's data", seats=("repl",)),
+    Verb("/learn", "work", "Describe how to do something and I draft a skill for you to check",
+         seats=("repl",)),
+    Verb("/todos", "work", "The todo list in my working files", seats=("repl",)),
+    Verb("/subagents", "work", "What I can hand to a helper", seats=("repl",)),
+    Verb("/autonomy", "control", "My background loops and what they hold; switch them on or off",
+         seats=("repl",)),
+    Verb("/self", "remember", "My identity documents, read-only", aliases=("/soul",),
+         seats=("repl",)),
+    Verb("/doctor", "look", "The health report", seats=("repl",)),
+    Verb("/logs", "look", "Recent log lines of this chat", seats=("repl",)),
+    Verb("/context", "look", "What fills my context, slot by slot", seats=("repl",)),
+    Verb("/steps", "look", "The steps of the last turn", seats=("repl",)),
+    Verb("/tools", "look", "My abilities, built in and optional", seats=("repl",)),
+    Verb("/telemetry", "look", "Event counts and wallet spend across chats",
+         seats=("repl",)),
+    Verb("/usage", "look", "What my AI use cost: by kind of work, job, model and day",
+         aliases=("/cost",)),
+    Verb("/finance", "look", "Income, spend, money still due and net, with my AI cost",
+         seats=("repl",)),
+    Verb("/auth", "set up", "The provider keys I have, and how to connect one",
+         seats=("repl",)),
+    Verb("/persona", "set up", "The personas, and the one new chats use", seats=("repl",)),
+    Verb("/profile", "set up", "Which Rob this terminal runs, and where its files live", seats=("repl",)),
+    Verb("/toolset", "set up", "The ability sets, and the one new chats use", seats=("repl",)),
+    Verb("/quiet", "display", "Hide or show the step transcript", seats=("repl",)),
+    Verb("/verbose", "display", "Show or hide the live trace", seats=("repl",)),
+    Verb("/exit", "leave", "Leave the terminal", aliases=("/quit", "/q"),
+         seats=("repl",)),
     # leave
     Verb("/help", "leave", "This help, or the detail for one verb",
          aliases=("/h", "/?")),
@@ -478,7 +528,7 @@ def _rebuild() -> None:
 
 #: 067 P5a: modules still IN core that contribute verbs on import. P5b deletes
 #: the row when the wallet pack registers the money verbs instead.
-_IN_CORE_PROVIDERS: tuple[str, ...] = ("core.money_verbs", "core.standing_verbs")
+_IN_CORE_PROVIDERS: tuple[str, ...] = ("core.money_verbs",)
 
 
 def _load_in_core_providers() -> None:

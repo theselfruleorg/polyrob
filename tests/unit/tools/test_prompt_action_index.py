@@ -81,3 +81,28 @@ def test_construction_uses_index_in_native_mode():
 
     src = inspect.getsource(construction)
     assert "get_prompt_action_index()" in src
+
+
+def test_index_lists_an_aliased_action_once():
+    """081 WS-3.2: a legacy alias key maps to the SAME action — one line."""
+    reg = _registry()
+    todo = _action("task_todo_add", "Add a todo", tool="task")
+    reg.actions["task_todo_add"] = todo
+    reg.actions["todo_add"] = todo
+    idx = reg.get_prompt_action_index()
+    assert idx.count("- task_todo_add:") == 1
+    assert "- todo_add:" not in idx
+
+
+def test_native_prompt_has_no_action_list():
+    """081 WS-3.2: in native mode the schemas ship in tools[]; the system prompt
+    does not repeat them. The JSON-fallback path keeps its list."""
+    from agents.task.agent.prompts import SystemPrompt
+
+    native = SystemPrompt("- done: Complete task", use_native_tools=True,
+                          tool_ids=[]).get_system_message().content
+    assert "<available-actions>" not in native
+    assert "- done: Complete task" not in native
+    fallback = SystemPrompt("- done: Complete task", use_native_tools=False,
+                            tool_ids=[]).get_system_message().content
+    assert "<available-actions>" in fallback and "- done: Complete task" in fallback

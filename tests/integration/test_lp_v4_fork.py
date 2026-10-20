@@ -30,11 +30,15 @@ from core.wallet import dex_registry, tx_guard
 from core.wallet.policy import PolicyGate
 from tools.defi import lp_reads, lp_v4 as V
 
-pytestmark = pytest.mark.skipif(os.environ.get("LP_V4_FORK_E2E") != "1",
-                                reason="fork e2e: set LP_V4_FORK_E2E=1 and run anvil (see module doc)")
+#: The holder impersonated on the fork: an address that holds PNL on chain
+#: 4663. Read from the env, never pinned here (no real wallet in shipped tests).
+TREASURY = os.environ.get("LP_V4_FORK_HOLDER", "")
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("LP_V4_FORK_E2E") != "1" or not TREASURY,
+    reason="fork e2e: set LP_V4_FORK_E2E=1, LP_V4_FORK_HOLDER=<a PNL holder> and run anvil (see module doc)")
 
 RPC = os.environ.get("LP_V4_FORK_RPC", "http://127.0.0.1:8551")
-TREASURY = "0xcAda546F6A6DdDe31b71Ab21ef63D3EbF09fA553"
 PNL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
 POOL_ID = "0x43b7b259007600ad19df15a23b620fd77c8c121c8ecc8788d5116a833d031e94"
 ROW = dex_registry.row_for("robinhood", "v4")

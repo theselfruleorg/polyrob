@@ -109,7 +109,7 @@ async def test_an_amount_that_rounds_to_zero_raw_units_is_refused(x402_db, rob_a
 async def test_an_amount_below_the_assets_floor_is_refused(x402_db, tmp_path):
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(str(tmp_path / "home"))).upsert(PaymentAsset(
-        asset_id="usdc-base", chain="base", address="0x" + "aa" * 20,
+        asset_id="usdc-base", chain="base", address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         decimals=6, symbol="USDC", rail="facilitator",
         min_amount_raw=5_000_000, source="operator"))
     with pytest.raises(ValueError, match="floor"):

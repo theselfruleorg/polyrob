@@ -1,0 +1,21 @@
+{
+  "function": {
+    "description": "Extract URLs from text content with their context",
+    "name": "filesystem_extract_urls",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Parameters for extracting URLs from text",
+      "properties": {
+        "text": {
+          "description": "Text content to extract URLs from",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -29,6 +29,8 @@ import re
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional
 
+from core.money import PER_TX_CAP_REMEDY
+
 
 @dataclass(frozen=True)
 class Remedy:
@@ -69,11 +71,11 @@ def chat_verbs() -> FrozenSet[str]:
 from core.surfaces.catalog import cli_commands as _surface_cli_commands  # noqa: E402
 
 CLI_COMMAND_NAMES: FrozenSet[str] = frozenset({
-    "approvals", "apps", "auth", "autonomy", "avatar", "browser", "config", "cron",
+    "approvals", "apps", "auth", "autonomy", "avatar", "browser", "config", "cron", "job",
     "dashboard", "datagen", "doctor", "finance",
     "gateway", "goals", "identity", "init", "journey", "kb", "keys", "knowledge",
     "model", "models", "owner", "pack", "persona", "profile", "profiles",
-    "rails", "run", "serve", "session", "sessions", "skill", "skills",
+    "run", "serve", "session", "sessions", "skill", "skills",
     "soul", "subagents", "surface", "surfaces", "todos", "tools",
     "update", "wallet", "webgate", "workers",
     # 062: the installer/first-run verbs.
@@ -192,10 +194,12 @@ BLOCKER_REMEDIES = {
         owner_side="",
     ),
     "over_cap": Remedy(
-        # Deliberately NOT a chat verb. A compromised chat surface must not be
-        # able to raise a spend ceiling; this stays a hands-on-the-box action.
-        owner_side=("raise AGENT_WALLET_MAX_PER_TX_USD / WALLET_DAILY_CAP_USD "
-                    "in the env file and restart the service"),
+        # 079 D3: the per-tx cap is raised by the OWNER from chat — a `/config
+        # set` only PROPOSES the value; it binds after the owner approves it in
+        # /pending (the agent can propose, never approve). The text is the one
+        # `core.money.PER_TX_CAP_REMEDY`, shared with the refusal.
+        telegram=PER_TX_CAP_REMEDY,
+        owner_side="the daily cap and the signer cap are set on the server",
     ),
     "paused": Remedy(
         telegram="/resume",
@@ -205,8 +209,8 @@ BLOCKER_REMEDIES = {
         owner_side="enable the tool's feature flag in the env file and restart",
     ),
     "not_in_toolset": Remedy(
-        owner_side=("grant the tool to a stream leg in data/streams/streams.yaml "
-                    "(git-tracked, deployed with the code — never editable from chat)"),
+        owner_side=("grant the tool on the goal from an owner seat "
+                    "(polyrob goals edit <id> --tools …) — never from the agent itself"),
     ),
     "wrong_turn_kind": Remedy(
         none_because=("a forged, delegated or correspondent-tainted turn can never "
@@ -270,7 +274,8 @@ CLI_TO_CHAT_VERB = {
     "goals": "/goals",
     "wallet": "/wallet",
     "apps": "/apps",
-    "cron": "/cron",
+    "job": "/jobs",
+    "cron": "/jobs",  # `polyrob cron` = the one-release alias of `polyrob job`
     "kb": "/kb",
 }
 

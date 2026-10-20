@@ -103,35 +103,11 @@ class TestModelFamilyInstructions:
 
 
 # --------------------------------------------------------------------------- E8
-class TestGrokMcpBlockGating:
-    def _instr(self, model_name: str, mcp_servers=None) -> str:
-        return SystemPrompt(
-            action_description="", model_name=model_name, mcp_servers=mcp_servers
-        )._get_model_specific_instructions()
-
-    def test_grok_block_absent_without_mcp(self):
-        # A Grok model with NO MCP tools loaded must not get the MCP argument block.
-        out = self._instr("grok-4")
-        assert "MCP TOOL CALL FORMAT" not in out
-
-    def test_grok_block_present_with_mcp(self):
-        out = self._instr("grok-4", mcp_servers={"anysite": ["search"]})
-        assert "MCP TOOL CALL FORMAT" in out
-
-    def test_grok_block_teaches_direct_not_nested_form(self):
-        out = self._instr("grok-4", mcp_servers={"anysite": ["search"]})
-        # Teaches the direct {server}_{tool} flat-param form...
-        assert "anysite_api(" in out
-        # ...and marks the deprecated nested form as WRONG (not as the recommended form).
-        wrong_idx = out.find("WRONG")
-        nested_idx = out.find("mcp_execute_tool")
-        assert wrong_idx != -1 and nested_idx != -1 and wrong_idx < nested_idx, (
-            "the nested mcp_execute_tool form must appear only under the WRONG example"
-        )
-
-    def test_non_grok_model_with_mcp_gets_no_block(self):
-        out = self._instr("claude-opus-4-8", mcp_servers={"anysite": ["search"]})
-        assert "MCP TOOL CALL FORMAT" not in out
+def test_no_grok_mcp_block():
+    """The Grok MCP-format block duplicated <mcp-tools>; it is deleted."""
+    out = SystemPrompt(action_description="", model_name="grok-4",
+                       mcp_servers={"anysite": ["search"]})._get_model_specific_instructions()
+    assert "MCP TOOL CALL FORMAT" not in out
 
 
 # --------------------------------------------------------- tool-schema memoization

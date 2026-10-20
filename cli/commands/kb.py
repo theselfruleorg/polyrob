@@ -6,7 +6,7 @@ Task-6 engine (``kb_ingest``) and the Task-5 registry routers
 re-implementing any walking, chunking, or provider logic.
 
 Bootstrap preamble mirrors ``cli/commands/model.py``:
-  setup_project_path() → setup_sqlite_compat() → load_env(local_mode=True)
+  setup_project_path() → setup_sqlite_compat() → load_env()
 
 Then calls ``maybe_register_memory_backend`` to wire the active provider for
 the current process (the registry routers delegate to it).  No full CLI
@@ -53,7 +53,7 @@ def _bootstrap() -> None:
     from polyrob.app.bootstrap import load_env
     setup_project_path()
     setup_sqlite_compat()
-    load_env(local_mode=True)
+    load_env()
     # Set local mode so POLYROB_LOCAL defaults kick in (KB_ENABLED defaulting ON).
     os.environ.setdefault("POLYROB_LOCAL", "1")
 

@@ -74,12 +74,6 @@ PREFER_ACTION_TEXT = os.getenv("CLI_PREFER_ACTION_TEXT", "true").strip().lower()
     "no",
 )
 
-#: C6: the recap heuristic moved to ``core/surfaces/recap.py`` so every seat
-#: inherits it — this lived here, in ONE renderer, while Telegram, the webview
-#: console and email had nothing (finding F3). Re-exported so existing import
-#: sites and tests keep working unchanged.
-from core.surfaces.recap import _RECAP_LEAD_RE, is_redundant_recap  # noqa: F401,E402
-
 # ---------------------------------------------------------------------------
 # Plumbing strings — the receipts the send_message tool returns to the agent.
 # These are NOT the message; they must never be shown to the user as "rob".

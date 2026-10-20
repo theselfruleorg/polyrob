@@ -42,18 +42,18 @@ def _add_findings(mgr, session_id, n):
 		mgr.add_step_memory(
 			session_id=session_id, step=i + 1,
 			brain_state={"phase": "discovery", "memory": "x", "next_goal": "y"},
-			action_summary=f"act {i}", finding=f"finding {i}", total_steps=50)
+			action_summary=f"act {i}", finding=f"finding {i}")
 
 
-def test_drain_returns_promoted_findings_on_close():
-	"""close_session_and_drain returns the session's promoted findings before del."""
+def test_close_releases_the_session_and_drains_no_raw_findings():
+	"""close_session_and_drain returns only queued reflection summaries; raw
+	per-step findings stay in H-MEM."""
 	mgr = _make_manager()
 	mgr.create_session(session_id="s1", task="t")
 	_add_findings(mgr, "s1", 4)
 	ok, drained = mgr.close_session_and_drain("s1", "u1")
 	assert ok is True
-	# the 4 findings were never synced during this (test) session → all drain now
-	assert any("finding" in d for d in drained)
+	assert not any(d.startswith("finding") for d in drained)
 	assert "s1" not in mgr._sessions  # session released
 
 

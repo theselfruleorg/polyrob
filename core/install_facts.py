@@ -97,16 +97,23 @@ def install_lines(data_home: Optional[str] = None) -> List[str]:
     lines: List[str] = []
     try:
         # The version of the code that RUNS, not the one `polyrob setup` saw.
-        from core.version import running_version_line
-        lines.append(
-            f"Running version: {running_version_line()}. What shipped in a release "
-            "comes from the CHANGELOG.md deployed with your code — read it with "
-            "agent_status(release_notes='latest' or '<version>'); never guess.")
+        from core.version import changelog_path, running_version_line
+        line = f"Running version: {running_version_line()}."
+        if changelog_path() is not None:
+            line += (" What shipped in a release comes from the CHANGELOG.md shipped "
+                     "with your code — read it with agent_status(release_notes="
+                     "'latest', 'unreleased' or '<version>'); never guess.")
+        else:
+            line += (" No CHANGELOG.md ships with this install — say you cannot read "
+                     "the release notes; never guess what changed.")
+        lines.append(line)
     except Exception:
         pass
     try:
         from core.bootstrap_marker import describe
-        lines.append("Install: " + describe(data_home).replace("bootstrap: ", "", 1))
+        # B-2: no `polyrob …` command in the prompt (the user guide holds them).
+        lines.append("Install: " + describe(data_home).replace("bootstrap: ", "", 1)
+                     .replace(" (run `polyrob setup`)", "."))
     except Exception:
         lines.append("Install: not recorded.")
 

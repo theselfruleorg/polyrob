@@ -1,0 +1,47 @@
+{
+  "function": {
+    "description": "Propose a money action to the OWNER as a card. Nothing moves: the owner taps 'Get a quote', sees the real simulated price and caps, and only then can Confirm. Use it instead of describing a command for the owner to type, and when the owner only ASKS about a money move (execute one only on an imperative line). Verbs: /send /swap /bridge /pay /claim /launch /deploy /nft /identity /writeoff /unquarantine /wallet (trust|untrust), and /restart or /update (your own background service: it finishes its work, restarts and reports back).",
+    "name": "propose_action",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "also_owed": {
+          "default": false,
+          "description": "true only when an open /send card already pays this address AND both payments are owed (e.g. two different bounty rounds).",
+          "type": "boolean"
+        },
+        "command": {
+          "description": "The owner money verb and its arguments, WITHOUT `go`, exactly as the owner would type it, e.g. `/send 0.5 native to 0xAbc… on base`, `/swap 0.1 native to 0xToken… on base`, `/bridge solana base 0.9`, `/pay https://api.x/y 0.10`, `/claim 0xToken…`.",
+          "maxLength": 600,
+          "minLength": 3,
+          "type": "string"
+        },
+        "replaces": {
+          "description": "Ids of OPEN cards this one supersedes (they are closed as replaced) — e.g. a re-split payout to the same address.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "then": {
+          "default": "",
+          "description": "What you will do once the owner has decided every card you raised in this conversation. You are woken with each card's outcome; this text is shown back to you then.",
+          "maxLength": 400,
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "description": "One line: why you propose it.",
+          "maxLength": 600,
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

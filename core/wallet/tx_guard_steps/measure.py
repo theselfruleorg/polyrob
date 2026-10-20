@@ -37,13 +37,26 @@ def step_5_simulate(c: GuardContext) -> Optional[Decision]:
     tokens = [t for t in (intent.token, intent.inflow_token) if t]
     if intent.is_liquidity_op:
         tokens = sorted({t.lower() for t, _ in (*intent.lp_outflows, *intent.lp_inflows) if t})
+    # 085 W2: an endowed CREATE measures the native balance of the address it lands
+    # at, so deploy_guard can prove the endowment stayed there (a constructor that
+    # forwards it refuses). Passed only then: every other shape keeps its call.
+    watch_kw = {}
+    if intent.is_deploy and int(intent.amount_raw or 0) > 0 and not sender:
+        try:
+            from core.wallet.deploy_guard import predict_create_address
+            watch_kw["watch_native"] = (predict_create_address(
+                holder, int(outer_tx.get("nonce"))),)
+        except Exception as exc:
+            return Decision(False, (
+                f"refused: the address an endowed deployment lands at cannot be "
+                f"predicted ({exc}), so the endowment cannot be measured there"))
     try:
         if sender:
             deltas = simulate_fn(tx=outer_tx, holder=holder, chain=intent.chain,
                                  tokens=tokens, spenders=spenders, sender=sender)
         else:
             deltas = simulate_fn(tx=tx, holder=holder, chain=intent.chain,
-                                 tokens=tokens, spenders=spenders)
+                                 tokens=tokens, spenders=spenders, **watch_kw)
     except Exception as exc:
         return Decision(False, f"refused: simulation raised ({exc})")
     if not deltas.ok:

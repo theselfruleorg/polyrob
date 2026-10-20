@@ -331,7 +331,7 @@ class LLMManager(InventoryMixin, BaseComponent):
             self.logger.info(f"Using configured primary client: {self.primary_client_name}")
             return
 
-        # Operator provider pin (CHAT_PROVIDER > DEFAULT_PROVIDER). The same pin is
+        # Operator provider pin (DEFAULT_PROVIDER). The same pin is
         # already honored by ``core.runtime_config.resolve_runtime_config`` for goal
         # dispatch + chat — but WITHOUT this, a *dead-but-keyed* provider earlier in
         # the hardcoded ``priority_order`` below (e.g. an exhausted OpenRouter) is

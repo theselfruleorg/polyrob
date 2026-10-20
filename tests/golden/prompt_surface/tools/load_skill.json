@@ -1,0 +1,19 @@
+{
+  "function": {
+    "description": "Load a skill's full instructions on demand (see <skill-catalog>). Call before doing work the skill covers.",
+    "name": "load_skill",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "skill_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

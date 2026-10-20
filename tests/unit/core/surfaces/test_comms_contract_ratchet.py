@@ -51,11 +51,3 @@ def test_action_registration_never_gains_future_annotations():
     # The IMPORT, not the many comments warning against it.
     assert not any(ln.strip() == "from __future__ import annotations"
                    for ln in _source().splitlines())
-
-
-def test_the_recap_belt_lives_in_core_not_in_a_renderer():
-    """F3: the suppressor sat in cli/ui, so every non-CLI seat had nothing."""
-    assert (ROOT / "core" / "surfaces" / "recap.py").is_file()
-    dialog = (ROOT / "cli" / "ui" / "dialog.py").read_text()
-    assert "from core.surfaces.recap import" in dialog, (
-        "cli/ui/dialog.py must re-export the shared belt, never re-implement it")

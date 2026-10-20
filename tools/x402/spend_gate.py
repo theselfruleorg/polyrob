@@ -27,8 +27,12 @@ def _forged_fn(execution_context, tool_self) -> bool:
 
 def _autonomous_ok_fn(execution_context, tool_self) -> bool:
     """068 X4: the ONE forged-shaped origin that may pay — a goal/cron-dispatched
-    turn on the MAIN agent (the strict detector ``tx_guard`` uses). A leaf, a
-    sub-agent, a self-wake and a delegation-result re-entry stay refused."""
+    turn on the MAIN agent (the strict detector ``tx_guard`` uses), when the
+    money regime is not ``supervised``. A leaf, a sub-agent, a self-wake and a
+    delegation-result re-entry stay refused."""
+    from core.config_policy.money_regime import unattended_money_allowed
+    if not unattended_money_allowed():
+        return False
     from tools.controller.turn_origin import _is_autonomous_goal_turn
     return bool(_is_autonomous_goal_turn(execution_context, tool_self))
 

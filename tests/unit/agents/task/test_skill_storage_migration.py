@@ -1,12 +1,12 @@
 """Task 9 — one-time migration of legacy code-tree user_<uid>/ skills into data-home.
 
 Task 8 moved SkillManager's per-tenant WRITE (and READ) target for user_<uid>/
-skills to <data_home>/skills/ (skill_store.skills_data_home()), so a
+skills to <data_home>/skills/ (core.skills.scopes.skills_data_home()), so a
 `polyrob update` code-swap doesn't destroy them. That alone left a gap: any
 user_<uid>/ directory that already existed under the shipped package tree
 (data/prompts/skills/user_<uid>/, pre-Task-8's location) is now invisible AND
 would be destroyed outright by the next update. These tests pin the one-time
-catch-up migration (skill_store.migrate_legacy_user_skills) that closes it:
+catch-up migration (migration.migrate_legacy_user_skills) that closes it:
 idempotent, single-flight-locked, resumable, traversal/symlink-safe, and
 tolerant of a read-only/root-owned legacy tree (site-packages install).
 """
@@ -20,13 +20,13 @@ import pytest
 
 def test_migration_moves_user_skills_and_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_42" / "mine"
     legacy.mkdir(parents=True)
     (legacy / "SKILL.md").write_text("---\nname: mine\ndescription: d\n---\n# b")
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     dest = tmp_path / "home" / "skills" / "user_42" / "mine" / "SKILL.md"
@@ -35,7 +35,7 @@ def test_migration_moves_user_skills_and_is_idempotent(tmp_path, monkeypatch):
     assert not legacy.exists()
 
     # Idempotent: a second call is a no-op (marker short-circuits).
-    assert skill_store.migrate_legacy_user_skills(
+    assert migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     ) == 0
 
@@ -44,14 +44,14 @@ def test_migration_content_is_byte_identical_after_move(tmp_path, monkeypatch):
     """The sha256-verify step must preserve content exactly (not just move the
     directory) - this is the entire point of verifying before removing."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     body = "---\nname: mine\ndescription: d\n---\n# heading\n\nSome body text.\n"
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_42" / "mine"
     legacy.mkdir(parents=True)
     (legacy / "SKILL.md").write_text(body)
 
-    skill_store.migrate_legacy_user_skills(
+    migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     dest = tmp_path / "home" / "skills" / "user_42" / "mine" / "SKILL.md"
@@ -65,7 +65,7 @@ def test_migration_tolerates_permission_error_removing_source(tmp_path, monkeypa
     block migration: the destination copy still lands, the source is left in
     place, and the function must not raise or loop."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_7" / "readonly-skill"
     legacy.mkdir(parents=True)
@@ -76,9 +76,9 @@ def test_migration_tolerates_permission_error_removing_source(tmp_path, monkeypa
             return  # let temp-dir cleanup succeed silently (unaffected by the fault)
         raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
 
-    monkeypatch.setattr(skill_store.shutil, "rmtree", _fake_rmtree)
+    monkeypatch.setattr(migration.shutil, "rmtree", _fake_rmtree)
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
 
@@ -99,7 +99,7 @@ def test_migration_skips_existing_destination_without_clobbering(tmp_path, monke
     """A skill that already has a (possibly newer) copy at the data-home
     destination must be left alone - migration must never overwrite it."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_9" / "dup-skill"
     legacy.mkdir(parents=True)
@@ -109,7 +109,7 @@ def test_migration_skips_existing_destination_without_clobbering(tmp_path, monke
     dest_dir.mkdir(parents=True)
     (dest_dir / "SKILL.md").write_text("# newer data-home body (must survive)\n")
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
 
@@ -123,11 +123,11 @@ def test_migration_skips_existing_destination_without_clobbering(tmp_path, monke
 
 def test_migration_merges_legacy_rules_without_clobbering_dest(tmp_path, monkeypatch):
     """A migrated skill needs its rules.json entry too, or it stays permanently
-    invisible to SkillManager.get_skills_for_session (no rule => never
-    trigger-matched, even though the SKILL.md body did move). The merge must
+    invisible to SkillManager (no rule => never in the index or pinnable,
+    even though the SKILL.md body did move). The merge must
     fill in missing keys only - an existing dest entry always wins."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     user_dir = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_5"
     skill_dir = user_dir / "mine"
@@ -144,7 +144,7 @@ def test_migration_merges_legacy_rules_without_clobbering_dest(tmp_path, monkeyp
         "already-there": {"description": "NEWER dest value must survive"},
     }))
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 1
@@ -161,13 +161,13 @@ def test_migration_rules_merge_is_skipped_when_no_legacy_rules_file(tmp_path, mo
     """No legacy rules.json at all (Step 1's exact scenario) must not error -
     the merge step is a no-op, not a failure."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_1" / "mine"
     legacy.mkdir(parents=True)
     (legacy / "SKILL.md").write_text("# mine\nbody\n")
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 1
@@ -181,7 +181,7 @@ def test_migration_refuses_to_follow_symlinked_user_dir(tmp_path, monkeypatch):
     """A symlinked user_<uid> dir must never be followed - protects against a
     symlink planted to escape the legacy tree."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     outside = tmp_path / "outside_secret"
     outside.mkdir()
@@ -192,7 +192,7 @@ def test_migration_refuses_to_follow_symlinked_user_dir(tmp_path, monkeypatch):
     link = legacy_root / "user_evil"
     link.symlink_to(outside, target_is_directory=True)
 
-    moved = skill_store.migrate_legacy_user_skills(legacy_root=legacy_root)
+    moved = migration.migrate_legacy_user_skills(legacy_root=legacy_root)
     assert moved == 0
     dest = tmp_path / "home" / "skills" / "user_evil"
     assert not dest.exists(), "a symlinked user dir must never be followed/migrated"
@@ -202,7 +202,7 @@ def test_migration_refuses_symlinked_skill_dir(tmp_path, monkeypatch):
     """A symlinked skill dir (within an otherwise-legit user dir) must never
     be followed either."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     outside = tmp_path / "outside_skill"
     outside.mkdir()
@@ -213,7 +213,7 @@ def test_migration_refuses_symlinked_skill_dir(tmp_path, monkeypatch):
     link = user_dir / "sneaky"
     link.symlink_to(outside, target_is_directory=True)
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 0
@@ -229,7 +229,7 @@ def test_migration_ignores_non_skill_and_unrelated_dotted_dirs(tmp_path, monkeyp
     SkillManager._iter_authored_skill_dirs); the .pending/.archived quarantine
     dirs ARE migrated, but by their own dedicated test below."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     user_dir = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_4"
     # Unrelated dotted dir that LOOKS like it holds a skill but must be ignored
@@ -244,7 +244,7 @@ def test_migration_ignores_non_skill_and_unrelated_dotted_dirs(tmp_path, monkeyp
     real.mkdir()
     (real / "SKILL.md").write_text("# real\n")
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 1
@@ -261,7 +261,7 @@ def test_migration_moves_pending_and_archived_skill_content(tmp_path, monkeypatc
     Uses the SAME copy→verify→replace→remove pipeline + guards as active
     skills."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     root = tmp_path / "pkg" / "data" / "prompts" / "skills"
     pending = root / "user_7" / ".pending" / "draft"
@@ -271,7 +271,7 @@ def test_migration_moves_pending_and_archived_skill_content(tmp_path, monkeypatc
     archived.mkdir(parents=True)
     (archived / "SKILL.md").write_text("# old\narchived history\n")
 
-    moved = skill_store.migrate_legacy_user_skills(legacy_root=root)
+    moved = migration.migrate_legacy_user_skills(legacy_root=root)
     assert moved == 2
 
     home_user = tmp_path / "home" / "skills" / "user_7"
@@ -286,7 +286,7 @@ def test_migration_pending_archived_refuse_symlinks(tmp_path, monkeypatch):
     """The .pending/.archived walk applies the SAME symlink guard — a symlinked
     entry inside a quarantine dir must never be followed."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     outside = tmp_path / "outside_q"
     outside.mkdir()
@@ -297,7 +297,7 @@ def test_migration_pending_archived_refuse_symlinks(tmp_path, monkeypatch):
     pending.mkdir(parents=True)
     (pending / "sneaky").symlink_to(outside, target_is_directory=True)
 
-    moved = skill_store.migrate_legacy_user_skills(legacy_root=root)
+    moved = migration.migrate_legacy_user_skills(legacy_root=root)
     assert moved == 0
     assert not (tmp_path / "home" / "skills" / "user_2" / ".pending" / "sneaky").exists()
 
@@ -312,13 +312,13 @@ def test_migration_cross_volume_fallback_keeps_source_and_verifies(tmp_path, mon
     still present, no crash."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
     import errno as _errno
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_8" / "xvol-skill"
     legacy.mkdir(parents=True)
     (legacy / "SKILL.md").write_text("# xvol\nbody\n")
 
-    real_replace = skill_store.os.replace
+    real_replace = migration.os.replace
 
     def _fake_replace(src, dst, *a, **k):
         # Force EXDEV only for the skill-dir placement (temp→dest), so any
@@ -327,9 +327,9 @@ def test_migration_cross_volume_fallback_keeps_source_and_verifies(tmp_path, mon
             raise OSError(_errno.EXDEV, "cross-device link")
         return real_replace(src, dst, *a, **k)
 
-    monkeypatch.setattr(skill_store.os, "replace", _fake_replace)
+    monkeypatch.setattr(migration.os, "replace", _fake_replace)
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 1
@@ -349,14 +349,14 @@ def test_migration_cross_volume_verification_failure_rolls_back(tmp_path, monkey
     source (it's left intact by definition on the EXDEV path)."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
     import errno as _errno
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_8" / "corrupt-skill"
     legacy.mkdir(parents=True)
     (legacy / "SKILL.md").write_text("# real\nbody\n")
 
-    real_replace = skill_store.os.replace
-    real_copytree = skill_store.shutil.copytree
+    real_replace = migration.os.replace
+    real_copytree = migration.shutil.copytree
 
     def _fake_replace(src, dst, *a, **k):
         if str(dst).endswith("corrupt-skill"):
@@ -371,10 +371,10 @@ def test_migration_cross_volume_verification_failure_rolls_back(tmp_path, monkey
             (Path(dst) / "SKILL.md").write_text("# CORRUPTED\n")
         return result
 
-    monkeypatch.setattr(skill_store.os, "replace", _fake_replace)
-    monkeypatch.setattr(skill_store.shutil, "copytree", _corrupting_copytree)
+    monkeypatch.setattr(migration.os, "replace", _fake_replace)
+    monkeypatch.setattr(migration.shutil, "copytree", _corrupting_copytree)
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 0, "a cross-volume copy that fails verification must not be counted"
@@ -392,7 +392,7 @@ def test_migration_no_user_dirs_does_not_touch_data_home(tmp_path, monkeypatch):
     so constructing a bare SkillManager() on a machine that never had legacy
     user skills never writes into the real ~/.polyrob."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     root = tmp_path / "pkg" / "data" / "prompts" / "skills"
     root.mkdir(parents=True)
@@ -401,7 +401,7 @@ def test_migration_no_user_dirs_does_not_touch_data_home(tmp_path, monkeypatch):
     (root / "some-system-skill" / "SKILL.md").write_text("# sys\n")
     (root / "rules.json").write_text("{}")
 
-    moved = skill_store.migrate_legacy_user_skills(legacy_root=root)
+    moved = migration.migrate_legacy_user_skills(legacy_root=root)
     assert moved == 0
     skills_home = tmp_path / "home" / "skills"
     assert not skills_home.exists(), (
@@ -417,7 +417,7 @@ def test_migration_returns_zero_when_lock_acquisition_times_out(tmp_path, monkey
     worker/process holds it), this call must give up quickly (fail-open)
     rather than block indefinitely, crash, or race the other holder."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_1" / "mine"
     legacy.mkdir(parents=True)
@@ -435,7 +435,7 @@ def test_migration_returns_zero_when_lock_acquisition_times_out(tmp_path, monkey
 
     monkeypatch.setattr("core.file_lock.SafeFileLock", _AlwaysTimesOut)
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 0
@@ -453,9 +453,9 @@ def test_migration_returns_zero_when_legacy_root_missing(tmp_path, monkeypatch):
     migration as permanently done (so a later-appearing tree can still be
     picked up)."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"  # never created
     )
     assert moved == 0
@@ -466,7 +466,7 @@ def test_migration_never_raises_on_unexpected_error(tmp_path, monkeypatch):
     """Fail-open: an unexpected exception anywhere inside the pass must never
     propagate out of migrate_legacy_user_skills."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.agent import skill_store
+    from modules.skills import migration
 
     legacy = tmp_path / "pkg" / "data" / "prompts" / "skills" / "user_1" / "mine"
     legacy.mkdir(parents=True)
@@ -475,10 +475,10 @@ def test_migration_never_raises_on_unexpected_error(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(skill_store, "_migrate_pass", _boom)
+    monkeypatch.setattr(migration, "_migrate_pass", _boom)
 
     # Must not raise.
-    moved = skill_store.migrate_legacy_user_skills(
+    moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"
     )
     assert moved == 0
@@ -490,16 +490,18 @@ def test_migrate_legacy_user_skills_called_once_at_skill_manager_init(tmp_path, 
     legacy_root, and must never let a migration failure block construction."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
     from agents.task.agent import skill_manager as sm_mod
+    from core.skills import scopes
+    from modules.skills import migration
 
     calls = []
     monkeypatch.setattr(
-        sm_mod.skill_store, "migrate_legacy_user_skills",
+        migration, "migrate_legacy_user_skills",
         lambda legacy_root, **k: calls.append(legacy_root) or 0,
     )
 
     sm = sm_mod.SkillManager(skills_dir=tmp_path / "override")
     assert len(calls) == 1
-    assert calls[0] == sm_mod.skill_store.builtin_scope().root
+    assert calls[0] == scopes.builtin_scope().root
     assert calls[0] != (tmp_path / "override")
 
 
@@ -507,11 +509,12 @@ def test_migrate_legacy_user_skills_failure_does_not_block_construction(tmp_path
     """A raising migration function must not prevent SkillManager() from
     being constructed."""
     from agents.task.agent import skill_manager as sm_mod
+    from modules.skills import migration
 
     def _boom(legacy_root, **k):
         raise RuntimeError("disk on fire")
 
-    monkeypatch.setattr(sm_mod.skill_store, "migrate_legacy_user_skills", _boom)
+    monkeypatch.setattr(migration, "migrate_legacy_user_skills", _boom)
 
     sm = sm_mod.SkillManager(skills_dir=tmp_path)
     assert sm is not None

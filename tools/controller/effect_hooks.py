@@ -55,8 +55,14 @@ def _mcp_read_only(controller, action_name):
 
 
 def _classify(controller, action_name):
-    from core.effects import classify_effect
+    from core.effects import EffectVerdict, classify_effect
     tool_id = resolve_action_tool(controller, action_name)
+    if tool_id == "mcp":
+        # 085 A5: an action of an owner-marked money server is a money write,
+        # so the owner's `/pause` stops it (core.money.classify is the ONE answer).
+        from core.money.classify import money_action
+        if money_action(action_name):
+            return tool_id, EffectVerdict("money", "action")
     ro = _mcp_read_only(controller, action_name) if tool_id == "mcp" else False
     return tool_id, classify_effect(tool_id, action_name, mcp_read_only=ro)
 

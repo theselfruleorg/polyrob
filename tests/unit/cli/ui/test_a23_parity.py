@@ -7,7 +7,7 @@ its size ratchet). These tests pin: every verb is registered with a real group +
 guidance message into the bound session; and the light read-only verbs render an
 honest string rather than raising.
 
-Mirrors ``tests/unit/cli/ui/test_h_cron.py`` for CommandContext + output capture.
+Mirrors ``tests/unit/cli/ui/test_h_job.py`` for CommandContext + output capture.
 """
 from __future__ import annotations
 

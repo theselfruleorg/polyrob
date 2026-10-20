@@ -27,6 +27,17 @@ def run_budget_usd() -> float:
     return _float_env("RUN_BUDGET_USD", 0.0)
 
 
+def autonomous_run_budget_usd() -> float:
+    """AUTONOMOUS_RUN_BUDGET_USD — per-RUN provider-spend cap for an autonomous run (083 WS-3).
+
+    Default 2.0; 0 = off. Measured as spend since THIS run started (a baseline snapshot
+    at run start), so a resumed session never inherits its old spend. Sub-agent spend
+    books to the parent session and counts. RUN_BUDGET_USD (session, any run) still
+    applies; whichever trips first halts (agents/task/agent/core/run_budget.py).
+    """
+    return _float_env("AUTONOMOUS_RUN_BUDGET_USD", 2.0)
+
+
 def code_exec_enabled() -> bool:
     """`CODE_EXEC_ENABLED` (default OFF). Core-tier home (056 WS4) so the agents
     tier can read it without an upward import; `tools.code_exec` delegates here."""
@@ -133,11 +144,14 @@ def autonomous_tool_disclosure() -> bool:
     A narrow rig without a way back out is a tool-starved run; with disclosure
     the job loads the one tool it turns out to need and says so.
 
-    Default OFF => byte-identical. This module only READS the flag: which
-    sessions count as autonomous is answered by
-    ``agents.task.session_class`` (core may not import agents).
+    Default ON since 2026-10-14 (review E-4; prod had it on since 057). With it
+    an autonomous run keeps its rig as the EAGER set and reaches a later
+    ``load_tool`` through the ``tool_call`` bridge, so its ``tools[]`` stays
+    byte-stable (``tools/tool_disclosure.py::session_late_tool_mode``). This
+    module only READS the flag: which sessions count as autonomous is answered
+    by ``agents.task.session_class`` (core may not import agents).
     """
-    return _bool_env("AUTONOMOUS_TOOL_DISCLOSURE", False)
+    return _bool_env("AUTONOMOUS_TOOL_DISCLOSURE", True)
 
 
 def prefs_tool_enabled() -> bool:

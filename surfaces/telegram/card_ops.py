@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from core.surfaces import card_groups  # noqa: F401 — installs the 084 settle hook
 from core.surfaces import cards
 from core.surfaces.command_reply import CommandReply, reply_text
 
@@ -50,6 +51,9 @@ async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
             return USAGE
         cid, act = args[0].lower(), args[1].lower()
     p = cards.press(cid, act, user_id)
+    logger.info("card %s: press act=%s verb=%s state=%s", cid, act,
+                getattr(p.card, "verb", "") or getattr(p.card, "kind", "?"),
+                getattr(p.card, "state", "none"))
     if p.pick is not None and p.card is not None:
         from surfaces.card_builder import advance
         step = advance(p.card, p.pick, user_id)
@@ -63,33 +67,134 @@ async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
             return step.text
         p.run, act = step.run, "re"      # the last pick: run the verb's QUOTE
     if not p.run:
-        return p.reply
+        # A cancel, a pick, an expired or decided card: the seat's own answer.
+        return record_out(task_agent, result, "/cards", p.reply)
     card = p.card
     verb = p.run.split()[0]
     result.inbound.text = p.run
     result.decision.command = verb
     if act != "ok":
         # A refresh, or a proposal's quote: the verb quotes and the owner-verb
-        # branch turns the quote into a fresh card.
-        return await h._handle_command(task_agent, result, spawn, deliver, fetch_media)
+        # branch turns the quote into a fresh card — of the same session and
+        # group as this one (084 lineage).
+        reply = None
+        try:
+            with cards.lineage(card):
+                reply = await h._handle_command(task_agent, result, spawn, deliver,
+                                                fetch_media)
+        except Exception as e:
+            reply = f"Command failed: {str(e)[:200]}"
+            raise
+        finally:
+            if card is not None and getattr(reply, "card_id", None) is None:
+                # No new card (a refused quote, an error): the line's reply is
+                # this card's outcome, so its group can still settle.
+                cards.note_result(card.card_id, reply_text(reply) or "no quote")
+        return reply
 
     background = deliver is not None and h._runs_in_background(verb, result)
 
     async def _deliver_and_finish(out: str) -> None:
-        cards.finish(card.card_id, out)
+        await _recover(task_agent, card, out)
+        _finish(card.card_id, verb, out)
         await deliver(out)
 
     try:
-        reply = await h._handle_command(task_agent, result, spawn,
-                                        _deliver_and_finish if background else deliver,
-                                        fetch_media)
+        with cards.lineage(card):
+            reply = await h._handle_command(task_agent, result, spawn,
+                                            _deliver_and_finish if background else deliver,
+                                            fetch_media)
     except Exception as e:
         logger.error("card %s: the confirm line raised: %s", card.card_id, e, exc_info=True)
-        cards.finish(card.card_id, f"Command failed: {str(e)[:200]}")
+        _finish(card.card_id, verb, f"Command failed: {str(e)[:200]}")
         raise
     if not background:
-        cards.finish(card.card_id, reply_text(reply))
+        await _recover(task_agent, card, reply_text(reply))
+        _finish(card.card_id, verb, reply_text(reply))
     return reply
+
+
+async def _recover(task_agent: Any, card: Any, text: str) -> None:
+    """084 R13: a confirm that stopped at the extra check for a value that is
+    NOT VERIFIED offers that step as a card (it was plain text, so the owner
+    re-typed the address by hand). Made BEFORE the confirmed card finishes, so
+    the open recovery card keeps the group from settling. Fail-open."""
+    try:
+        if card is None or card.kind != cards.KIND_QUOTE or not cards.failed_result(text):
+            return
+        with cards.lineage(card):
+            ack = cards._ack_step_card(card.user_id, card.verb, list(card.typed or card.args),
+                                       text)
+        if ack is None:
+            return
+        from core.surfaces.user_delivery import deliver_user_message
+        await deliver_user_message(getattr(task_agent, "container", None), card.user_id,
+                                   cards.render_text(ack), source="action_card",
+                                   session_id=card.session_id, card_id=ack.card_id)
+    except Exception:
+        logger.warning("card %s: recovery card skipped", getattr(card, "card_id", "?"),
+                       exc_info=True)
+
+
+def _finish(card_id: str, verb: str, text: str) -> None:
+    """``cards.finish`` plus the one INFO line per finished card (079 W5)."""
+    done = cards.finish(card_id, text)
+    logger.info("card %s: finish verb=%s state=%s", card_id, verb,
+                getattr(done, "state", "unchanged"))
+
+
+def thread_line(text: str, user_id: str) -> str:
+    """The owner-thread words for a card tap: the line it stands for (079 R5)."""
+    return cards.tap_line(text, user_id)
+
+
+def _records_out(cmd: str) -> bool:
+    """A money verb (a ``core.verbs`` row with a background word), a confirmable
+    verb, or a card answer: its reply is a line of the owner's conversation."""
+    if cmd == "/cards" or cmd in cards.CONFIRMABLE_VERBS:
+        return True
+    from core.verbs import background_word
+    return bool(background_word(cmd))
+
+
+def record_out(task_agent: Any, result: Any, cmd: str, reply: Any) -> Any:
+    """079 R5: write a money-verb or card reply into the ONE owner thread as an
+    "out" row (``source="owner_verb"``), and log the outcome once. The agent
+    read only the inbound line before, so it never knew a `/bridge … go` had
+    been refused or had landed. Returns ``reply`` unchanged; never raises."""
+    try:
+        text = reply_text(reply).strip()
+        if not text or not _records_out(cmd):
+            return reply
+        outcome = ("refused" if cards.refused_quote(text)
+                   else "failed" if cards.failed_result(text) else "ok")
+        logger.info("owner verb %s: outcome=%s%s", cmd, outcome,
+                    "" if outcome == "ok" else f" why={_why_line(text)!r}")
+        from surfaces.telegram import harness as h
+        user_id = result.inbound.identity.user_id
+        if not h._is_admin_owner(user_id):
+            return reply
+        from core.surfaces.owner_thread import record_owner_out
+        from surfaces.telegram.status_ops import _seat_via
+        record_owner_out(getattr(task_agent, "container", None), user_id, text,
+                         via=_seat_via(result),
+                         session_id=getattr(result.decision, "session_id", None) or "",
+                         source="owner_verb")
+    except Exception:
+        logger.debug("owner verb %s: out row skipped (fail-open)", cmd, exc_info=True)
+    return reply
+
+
+_WHY_MARKS = ("NOT VERIFIED", "refused", "NOT SENT", "cap", "❌", "Nothing was")
+
+
+def _why_line(text: str) -> str:
+    """084 WS6: the line that says WHY a money verb did not happen, for the log
+    (the journal read only ``outcome=failed`` on 2026-10-19)."""
+    for ln in (text or "").splitlines():
+        if any(m in ln for m in _WHY_MARKS):
+            return ln.strip()[:160]
+    return (text or "").strip().splitlines()[0][:160] if (text or "").strip() else ""
 
 
 def carded(user_id: str, cmd: str, text: str, reply: Any) -> Any:

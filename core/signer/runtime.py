@@ -36,6 +36,8 @@ def build_signer_wallet(cfg: SignerConfig, seed: str):
         network=cfg.network if cfg.network in ("testnet", "mainnet") else "mainnet",
         max_per_tx_usd=cfg.per_tx_usd, x402_client_enabled=False,
         x402_facilitator_url="", daily_cap_usd=cfg.daily_usd,
+        # 085 W4 (S-1): EIP-3009 authorizations get their own venue daily cap.
+        per_venue_daily_cap_usd={"x402": cfg.x402_daily_usd},
         operational_venue=cfg.operational_venue)
     sink = JsonlAuditSink(os.path.join(cfg.state_dir, "wallet", "audit.jsonl"))
     return AgentWallet(wcfg, audit_sink=sink)

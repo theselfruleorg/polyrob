@@ -13,10 +13,6 @@ REPO = pathlib.Path(__file__).resolve().parents[4]
 # always registered (approval stages depend on configuration).
 _FACTORIES = {
     "wallet_authority": ("tools.controller.wallet_authority", "make_wallet_authority_hook"),
-    "financial_claim": ("tools.controller.financial_claim_gate", "make_financial_claim_hook"),
-    "refusal_taint_gate": ("tools.controller.refusal_taint_gate", "make_refusal_taint_gate_hook"),
-    "refusal_taint_record": ("tools.controller.refusal_taint_gate",
-                             "make_refusal_taint_record_hook"),
     "effect_gate": ("tools.controller.effect_hooks", "make_effect_gate_hook"),
     "effect_record": ("tools.controller.effect_hooks", "make_effect_record_hook"),
     "command_guard": ("tools.controller.command_guard_hook", "make_command_guard_hook"),

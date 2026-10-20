@@ -1,5 +1,5 @@
 """Owner asks (§7.2b) and the hold-by-open-ask rule: create/dedup/decide/obsolete/fulfil an
-ask, consume its grant, escalate spent objectives, and hold goals an OPEN ask names.
+ask, consume its grant, and hold goals an OPEN ask names.
 
 A mixin of ``GoalBoard`` (split out of ``agents/task/goals/board.py``, W9 2026-10-10). It relies
 on the host for ``db_path``, ``_now``, ``_id``, ``_event``, ``get`` and ``create``; every
@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from core.sqlite_util import execute_retry
 from core.goal_vocab import (
-    KIND_OBJECTIVE, KIND_ASK, ASK_OPEN, ASK_FULFILLED, ASK_REJECTED, ASK_OBSOLETE, OBJ_ACTIVE,
+    KIND_ASK, ASK_OPEN, ASK_FULFILLED, ASK_REJECTED, ASK_OBSOLETE,
 )
 from agents.task.goals.board_types import (
     ASK_AUTO_UNBLOCK, Goal, _ask_goal_keys, title_similarity,
@@ -22,6 +22,17 @@ from agents.task.goals.board_types import (
 
 # The board's logger name, so a log filter on agents.task.goals.board still sees these.
 logger = logging.getLogger("agents.task.goals.board")
+
+#: How many owner decisions a goal keeps on ``payload.owner_answers`` (newest last).
+_OWNER_ANSWERS_KEPT = 5
+
+
+def create_auto_unblock_ask(board: Any, goal: Any) -> Any:
+    """The dispatcher's automatic "Unblock goal: …" ask for a blocked *goal*."""
+    why = getattr(goal, "last_failure_error", None) or "repeated failures"
+    return board.create_ask(user_id=goal.user_id, what=f"Unblock goal: {goal.title}",
+                            why=why, blocks_goal_ids=[goal.id],
+                            extra_payload={ASK_AUTO_UNBLOCK: True})
 
 
 class BoardAsksMixin:
@@ -35,8 +46,7 @@ class BoardAsksMixin:
     # owner" is a failed run, the goal goes straight back to ``ready``, and the
     # dispatcher served it again (7 re-fires in 75 min, ~$0.42, an overclaim the
     # judge had to reject, and a ping per run). The hold lives in the ready
-    # selection so every caller (dispatcher, `ready_fair`, the planner's view)
-    # sees the same board. Fail-open: an unreadable ask set holds nothing.
+    # selection so every caller (the dispatcher, the views) sees the same board. Fail-open: an unreadable ask set holds nothing.
 
     def _held_by_open_ask(self) -> Dict[str, str]:
         """goal_id -> ask_id for every goal an OPEN ask names (all tenants; goal
@@ -79,6 +89,17 @@ class BoardAsksMixin:
             except Exception:
                 logger.debug("held_by_ask event skipped", exc_info=True)
         return kept
+
+    def holding_asks(self, goal_id: str, *, user_id: str) -> List[Goal]:
+        """The OPEN asks of this tenant that name *goal_id* (080 F-7): the
+        decision a ready goal is waiting on. ``/goal show`` names it and
+        ``/goal retry`` closes the dispatcher's own ones. Never raises."""
+        try:
+            return [a for a in self.asks(user_id=user_id, status=ASK_OPEN)
+                    if goal_id in ((a.payload or {}).get("blocks_goal_ids") or [])]
+        except Exception:
+            logger.debug("holding asks unreadable for %s", goal_id, exc_info=True)
+            return []
 
     def _note_hold(self, goal_id: str, ask_id: str) -> None:
         """ONE ``held_by_ask`` event per (goal, ask) — a durable, legible reason
@@ -130,7 +151,6 @@ class BoardAsksMixin:
 
     def create_ask(self, *, user_id: str, what: str, why: str = "",
                    blocks_goal_ids: Optional[List[str]] = None,
-                   objective_id: Optional[str] = None,
                    extra_payload: Optional[Dict[str, Any]] = None,
                    force: bool = False) -> Goal:
         """A durable owner-facing need ("I require X from you to proceed").
@@ -190,89 +210,8 @@ class BoardAsksMixin:
         if extra_payload:
             payload.update(extra_payload)
         return self.create(user_id=user_id, title=what, body=why, kind=KIND_ASK,
-                           status=ASK_OPEN, parent_id=objective_id, force=True,
+                           status=ASK_OPEN, force=True,
                            payload=payload, actor="none")
-
-    #: ``payload.kind`` discriminator for the budget-exhaustion ask below, so the
-    #: "does one already exist" check is an EXACT match on a stable key rather
-    #: than fuzzy title similarity against unrelated asks.
-    ASK_KIND_OBJECTIVE_SPENT = "objective_budget_spent"
-
-    def escalate_spent_objectives(self, *, user_id: str) -> List[str]:
-        """Raise ONE open ask per active objective that has spent its goal budget.
-
-        ``_check_objective_budget`` refuses the child and tells the AGENT to raise
-        an ask, and the planner prompt repeats it — but both are prompt-shaped, so
-        whether the owner ever hears about it depends on the model complying. Live
-        evidence (prod, 2026-08-28): two of four active objectives sat at 25/25 for
-        days, the planner could open no work on either, and no ask was ever raised.
-        A budget-exhausted objective is a STALLED objective; the owner learning
-        about it must not be model-dependent.
-
-        Idempotent: an existing OPEN ask carrying this payload kind for the same
-        objective is left alone (no refresh churn). Returns the ask ids created.
-        Fail-open per objective — this runs on the dispatch tick and must never be
-        the reason a tick fails.
-        """
-        created: List[str] = []
-        try:
-            objectives = [o for o in self.list(user_id=user_id, status=OBJ_ACTIVE,
-                                               limit=200)
-                          if o.kind == KIND_OBJECTIVE]
-            open_asks = self.asks(user_id=user_id, status=ASK_OPEN)
-        except Exception:
-            logger.debug("spent-objective escalation skipped (board read failed)",
-                         exc_info=True)
-            return created
-        spent_asks = {(a.payload or {}).get("objective_id"): a
-                      for a in open_asks
-                      if (a.payload or {}).get("kind") == self.ASK_KIND_OBJECTIVE_SPENT}
-        for o in objectives:
-            try:
-                budget = self.objective_budget(o)
-                spent = False
-                live_children: List[Goal] = []
-                if budget > 0:  # a stream is uncapped by design
-                    live_children = self.children_of(user_id, o.id)
-                    spent = len(live_children) >= budget
-                existing = spent_asks.get(o.id)
-                if existing is not None:
-                    if not spent:
-                        # The NEED went away — the objective became a stream, its
-                        # budget was raised, or children were cancelled. An ask
-                        # that outlives its condition is a permanent, misleading
-                        # "owner decision pending" (prod 2026-08-29: the planner
-                        # cited two such asks as REAL BLOCKERs every hour).
-                        self._obsolete_ask(existing.id, user_id=user_id,
-                                           reason="objective_no_longer_spent",
-                                           payload=dict(existing.payload or {}))
-                    continue
-                if not spent:
-                    continue
-                ask = self.create_ask(
-                    user_id=user_id,
-                    what=f"Objective at its goal budget: {o.title}",
-                    why=(f"'{o.title}' has {len(live_children)}/{budget} live goals — its "
-                         f"lifetime budget. The planner can open NO further work on it, so "
-                         f"it is stalled, not finished. Decide one: drop it "
-                         f"(`/goal objective drop {o.id}`) if it is done; raise its "
-                         f"`goal_budget` if it should continue; or convert it to a stream "
-                         f"for standing recurring work."),
-                    blocks_goal_ids=[g.id for g in live_children[:20]],
-                    objective_id=o.id,
-                    extra_payload={"kind": self.ASK_KIND_OBJECTIVE_SPENT,
-                                   "objective_id": o.id,
-                                   "live": len(live_children), "budget": budget},
-                    force=True)  # exact-match dedup above; skip fuzzy title merging
-                if ask is not None:
-                    created.append(ask.id)
-                    self._event(o.id, "objective_budget_spent",
-                                {"live": len(live_children), "budget": budget,
-                                 "ask_id": ask.id})
-            except Exception:
-                logger.debug("spent-objective escalation failed for %s", o.id,
-                             exc_info=True)
-        return created
 
     def asks(self, *, user_id: str, status: Optional[str] = None) -> List[Goal]:
         sql = "SELECT * FROM goals WHERE kind=? AND user_id=?"
@@ -297,7 +236,10 @@ class BoardAsksMixin:
         Generalizes :meth:`fulfill_ask` (Task 9 / G-2 — a ``tool_approval`` ask
         needs a real reject outcome, not just fulfilled/still-open). Approving
         flips BLOCKED dependent goals back to ready (the original unblock hop);
-        rejecting never touches dependent goals. The decision is also stamped
+        rejecting never changes a goal's status. Either decision is appended to
+        ``payload.owner_answers`` of every goal the ask is about (its
+        ``blocks_goal_ids`` and its ``goal:<id>`` rail), whatever that goal's
+        status, so the goal's next run reads it (2026-10-13 review B1/B2). The decision is also stamped
         into the ask's own ``payload.decision`` (``"approved"``/``"rejected"``)
         so a poller (e.g. ``OwnerQueueApprover``) can read the outcome straight
         off the row without a second status vocabulary. Tenant-scoped CAS —
@@ -330,14 +272,32 @@ class BoardAsksMixin:
             from agents.task.goals.rail_answers import rearm_cron_rail
             rearm_cron_rail(self, self.get(ask_id))
         unblocked = 0
-        if approved:
-            for gid in (ask.payload or {}).get("blocks_goal_ids", []) if ask else []:
+        blocks = [str(g) for g in ((ask.payload or {}).get("blocks_goal_ids") or [])] if ask else []
+        # 2026-10-13 review B1/B2: EVERY goal the ask is about — the goals it
+        # holds AND the goal whose run raised it (`rail_id="goal:<id>"`) — gets
+        # the decision on its payload, WHATEVER its status. Before, only a
+        # `blocked` goal in `blocks_goal_ids` heard the answer: a goal that
+        # asked with `owner_ask` (no blocks) or was held in `ready` re-ran blind
+        # while the agent and the owner were both told "the next run reads it".
+        for gid in sorted(_ask_goal_keys(blocks, payload)):
+            dep = self.get(gid)
+            if dep is None or dep.kind != "goal" or dep.user_id != user_id:
+                continue
+            dep_payload = dict(dep.payload or {})
+            record = {"ts": now, "ask_id": ask_id,
+                      "question": str(getattr(ask, "title", "") or "")[:300],
+                      "decision": payload["decision"]}
+            if answer_text:
+                record["answer"] = answer_text
+                record["answer_via"] = payload.get("answer_via", "")
+            dep_payload["owner_answers"] = (
+                list(dep_payload.get("owner_answers") or []) + [record])[-_OWNER_ANSWERS_KEPT:]
+            flip = approved and gid in blocks
+            if flip:
                 # 2026-07-14 night-2: stamp the fulfillment onto the goal payload so
                 # the retry prompt (context.build_goal_run_task) tells the run the
                 # blocker was FIXED — without this the agent reads only the old
                 # failure ledger and declares BLOCKED from memory without retrying.
-                dep = self.get(gid)
-                dep_payload = dict(dep.payload or {}) if dep else {}
                 dep_payload["owner_unblocked"] = {"ts": now, "ask_id": ask_id}
                 if answer_text:
                     dep_payload["owner_unblocked"]["answer"] = answer_text
@@ -348,17 +308,22 @@ class BoardAsksMixin:
                 # provider_retry_exhausted are untouched (only this ONE key is
                 # popped) so the requeue-cap ledger survives the episode.
                 dep_payload.pop("block_kind", None)
-                rc2 = execute_retry(
-                    self.db_path,
-                    """UPDATE goals SET status='ready', consecutive_failures=0,
-                          last_failure_error=NULL, claim_lock=NULL, claim_expires=NULL,
-                          payload=?
-                        WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
-                    (json.dumps(dep_payload), gid, user_id),
-                )
-                if rc2 == 1:
-                    self._event(gid, "unblocked_by_ask", {"ask_id": ask_id})
-                    unblocked += 1
+            execute_retry(
+                self.db_path,
+                "UPDATE goals SET payload=? WHERE id=? AND kind='goal' AND user_id=?",
+                (json.dumps(dep_payload), gid, user_id))
+            if not flip:
+                continue
+            rc2 = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='ready', consecutive_failures=0,
+                      last_failure_error=NULL, claim_lock=NULL, claim_expires=NULL
+                    WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
+                (gid, user_id),
+            )
+            if rc2 == 1:
+                self._event(gid, "unblocked_by_ask", {"ask_id": ask_id})
+                unblocked += 1
         return (True, unblocked)
 
     def _release_asks(self, goal_id: str, reason: str) -> None:
@@ -375,8 +340,23 @@ class BoardAsksMixin:
         except Exception:
             logger.debug("ask release skipped for %s", goal_id, exc_info=True)
 
+    def release_auto_unblock_asks(self, goal_id: str) -> None:
+        """A blocked goal went back to ``ready`` (owner retry, provider-outage requeue):
+        close the dispatcher's own "Unblock goal: …" ask, because the re-queue answered it.
+
+        Prod 2026-10-12: the ask stayed OPEN after the re-queue, ``ready()`` held the goal
+        by it, and nothing dispatched. Only ``auto_unblock`` asks move; an owner-decision
+        ask (tool approval, an agent-filed need) still holds the goal. Never raises."""
+        try:
+            goal = self.get(goal_id)
+            if goal is not None and goal.user_id:
+                self.close_asks_for_goal(goal.user_id, goal_id, reason="goal_requeued",
+                                         auto_only=True)
+        except Exception:
+            logger.debug("auto-unblock ask release skipped for %s", goal_id, exc_info=True)
+
     def close_asks_for_goal(self, user_id: str, goal_id: str, *,
-                            reason: str = "goal_resolved") -> int:
+                            reason: str = "goal_resolved", auto_only: bool = False) -> int:
         """Release *goal_id* from every OPEN ask, closing any ask left with none.
 
         Called when a goal reaches a terminal state (done / cancelled): the owner
@@ -394,6 +374,8 @@ class BoardAsksMixin:
             payload = dict(ask.payload or {})
             blocks = list(payload.get("blocks_goal_ids") or [])
             if goal_id not in blocks:
+                continue
+            if auto_only and not payload.get(ASK_AUTO_UNBLOCK):
                 continue
             remaining = [g for g in blocks if g != goal_id]
             payload["blocks_goal_ids"] = remaining

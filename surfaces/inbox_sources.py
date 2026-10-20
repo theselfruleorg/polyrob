@@ -1,7 +1,7 @@
 """The Inbox's concrete readers (043 C5).
 
 :mod:`core.surfaces.inbox` is pure and takes its collectors as an argument.
-This module is the other half: the five real stores, each wrapped so that
+This module is the other half: the real stores, each wrapped so that
 
 * a store it can read contributes :class:`~core.surfaces.inbox.Item` rows;
 * a store it **cannot** read **raises**, which the composer turns into a named
@@ -62,7 +62,12 @@ def _first_line(text: str) -> str:
     line = " ".join(str(text or "").strip().split())
     if len(line) <= _TITLE_CHARS:
         return line
-    return line[:_TITLE_CHARS - 1].rstrip() + "…"
+    # At a word boundary: a title cut mid-number ("max_usd=2.") is a wrong
+    # amount, not a short one (D T8).
+    cut = line[:_TITLE_CHARS - 1]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip() + "…"
 
 
 def _body(text: str) -> str:
@@ -95,13 +100,11 @@ def collect_self_evolution(user_id: str, *, data_dir: str,
                                            instance_id=instance_id) or []:
         kind = str(row.get("kind") or "")
         preview = row.get("preview") or ""
-        conflicts = row.get("conflicts") or []
         out.append(Item(
             kind=kind,
             id=str(row.get("id") or ""),
             title=_first_line(preview) or self_evolution.pending_kind_label(kind),
             body=_body(preview),
-            meta=("; ".join(str(c) for c in conflicts))[:300],
             blocking=True,
             actions=("approve", "reject", "show"),
             source="self_evolution",
@@ -251,6 +254,64 @@ def collect_apps(user_id: str, *, data_dir: str) -> List[Item]:
     return out
 
 
+def collect_signer_approvals(user_id: str, *, data_dir: str) -> List[Item]:
+    """Spends above ``polyrob-signer``'s hard cap, held by the signer (066 P2).
+
+    Only when a signer is in play (``WALLET_SIGNER`` not ``local``) — the SAME
+    condition ``approval_queue.all_pending`` reads, so ``/pending`` and this
+    list cannot disagree. A signer that does not answer RAISES (named).
+    The signer is instance-wide: it has no tenant, so it lists for the owner.
+    """
+    del user_id, data_dir
+    from core.signer import MODE_LOCAL, signer_mode
+    if signer_mode() == MODE_LOCAL:
+        return []
+    from core.signer.approvals import pending_items
+    out: List[Item] = []
+    for row in pending_items() or []:
+        preview = str(row.get("preview") or "")
+        out.append(Item(
+            kind=str(row.get("kind") or "signer_approval"),
+            id=str(row.get("id") or ""),
+            title=_first_line(preview),
+            body=_body(preview),
+            blocking=True,
+            actions=("approve", "reject"),
+            source="signer_approvals",
+        ))
+    return out
+
+
+def collect_cards(user_id: str, *, data_dir: str) -> List[Item]:
+    """Open action cards: a quote to confirm, an agent's proposal or question.
+
+    Each card's own tap tokens ride on the item (``meta``), so a text seat
+    prints the exact one-token answer and the console draws them in its Cards
+    section. A missing ``cards.db`` is "never carded", not unreadable.
+    """
+    from core.runtime_paths import data_home_db_path
+    from core.surfaces.cards import CardStore, card_actions
+    path = _store(data_home_db_path("cards.db", data_dir=data_dir))
+    if path is None:
+        return []
+    out: List[Item] = []
+    for card in CardStore(path).open_cards(user_id) or []:
+        taps = "   ".join(f"{a.label}: {a.command}" for a in card_actions(card))
+        out.append(Item(
+            kind="card",
+            id=card.card_id,
+            title=_first_line(card.title),
+            body=_body(card.body or card.line),
+            meta=taps,
+            blocking=True,
+            created_at=float(card.created_at or 0.0),
+            expires_at=float(card.expires_at) if card.expires_at else None,
+            source="cards",
+            extra={"card_kind": card.kind},
+        ))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # the wiring
 # --------------------------------------------------------------------------- #
@@ -258,7 +319,7 @@ def collect_apps(user_id: str, *, data_dir: str) -> List[Item]:
 def default_collectors(*, data_dir: Optional[str] = None,
                        instance_id: Optional[str] = None
                        ) -> Dict[str, Callable[[str], Any]]:
-    """The five collectors, keyed by the names
+    """Every collector, keyed by the names
     :data:`core.surfaces.inbox.SOURCE_LABELS` labels, in read order.
 
     Each is bound to one data home so a caller with its own resolved root (the
@@ -274,12 +335,14 @@ def default_collectors(*, data_dir: Optional[str] = None,
         "correspondents": lambda uid: collect_correspondents(uid, data_dir=home),
         "asks": lambda uid: collect_asks(uid, data_dir=home),
         "apps": lambda uid: collect_apps(uid, data_dir=home),
+        "signer_approvals": lambda uid: collect_signer_approvals(uid, data_dir=home),
+        "cards": lambda uid: collect_cards(uid, data_dir=home),
     }
 
 
 def build_inbox(user_id: str, *, data_dir: Optional[str] = None,
                 instance_id: Optional[str] = None) -> Dict[str, Any]:
-    """The composed Inbox for *user_id* over the five real stores."""
+    """The composed Inbox for *user_id* over every real store."""
     from core.surfaces.inbox import build_inbox as compose_inbox
     return compose_inbox(user_id, default_collectors(data_dir=data_dir,
                                                      instance_id=instance_id))

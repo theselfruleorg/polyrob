@@ -2,10 +2,9 @@
 
 ``Controller.load_tools_from_container`` used to skip a requested tool the
 container cannot serve in silence — no exception, no run-visible warning, nothing
-on the goal row. The live cost: ``data/streams/streams.yaml`` grants the
-``ship-software`` stream ``publish`` unconditionally while production runs with
-``PUBLISH_ENABLED`` off, so the seeded goal dispatched WITHOUT ``publish`` and
-neither the model nor the owner was ever told why the deliverable had no URL.
+on the goal row. The live cost: a goal granted ``publish`` while production ran
+with ``PUBLISH_ENABLED`` off dispatched WITHOUT ``publish``, and neither the
+model nor the owner was ever told why the deliverable had no URL.
 
 This module turns the omission into an attributable sentence. It deliberately
 reuses the EXISTING vocabulary rather than inventing a second one:

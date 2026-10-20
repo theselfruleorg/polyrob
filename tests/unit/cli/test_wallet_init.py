@@ -236,3 +236,19 @@ def test_cli_init_shows_caps_and_setcap_hint_when_explicitly_disabled(tmp_path, 
     assert "CEILING" in result.output
     assert "UNLIMITED" in result.output
     assert "set-cap daily" in result.output
+
+
+def test_init_in_a_running_process_records_the_seed_file(tmp_path, monkeypatch):
+    """085 W1: a REPL that runs `wallet init` in-process holds the seed from a
+    readable .env at once — the custody file gap must show before any restart."""
+    pytest.importorskip("eth_account")
+    import core.security.custody_env as ce
+    monkeypatch.setenv("WALLET_SIGNER", "local")
+    ce._reset_for_tests()
+    try:
+        run_wallet_init_flow(mnemonic=MNEMONIC, raw_seed=None, home=tmp_path,
+                             assume_yes=True, data_dir=tmp_path / "wallet")
+        ce.take_custody_secrets()
+        assert ce.readable_custody_file() == str(tmp_path / ".env")
+    finally:
+        ce._reset_for_tests()

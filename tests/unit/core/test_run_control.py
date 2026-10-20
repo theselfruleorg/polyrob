@@ -95,8 +95,18 @@ def test_nothing_running(tmp_path):
 
 
 def test_unreadable_registry_is_not_nothing(tmp_path):
+    # 080 WS-4: an ABSENT registry is a fresh install (nothing ever ran); a
+    # registry file that exists and does not read is the unreadable case.
+    from core.runtime_paths import session_registry_db_path
+    with open(session_registry_db_path(str(tmp_path)), "wb") as fh:
+        fh.write(b"not a sqlite file")
     out = asyncio.run(run_control.run_reply("alice", str(tmp_path), str(tmp_path), []))
     assert out == run_control.UNREADABLE
+
+
+def test_absent_registry_is_nothing_running(tmp_path):
+    out = asyncio.run(run_control.run_reply("alice", str(tmp_path), str(tmp_path), []))
+    assert out != run_control.UNREADABLE
 
 
 def test_bad_usage_and_bad_number(home):

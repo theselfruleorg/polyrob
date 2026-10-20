@@ -32,7 +32,6 @@ def test_ready_skips_a_goal_named_by_an_open_ask(board):
 
     assert _ids(board.ready(limit=10)) == [free.id]
     assert _ids(board.ready(limit=10, yield_ageing=2)) == [free.id]
-    assert _ids(board.ready_fair(limit=10)) == [free.id]
 
 
 def test_hold_is_recorded_once_per_goal_and_ask(board):

@@ -26,7 +26,7 @@ from core.flags_catalog import CATALOG
 # The live count. Lower it when a flag is retired; raise it only with the reason
 # in the commit message. The history lives in `git log -p` of this line and in
 # CHANGELOG.md — not here, so parallel flag commits do not conflict on a comment.
-CEILING = 672
+CEILING = 656
 # A flag row is a deliberate act — unlike file line counts there is no ordinary
 # churn to absorb, so the ceiling tracks the real count exactly.
 SLACK = 0
@@ -35,7 +35,7 @@ SLACK = 0
 # scripts/gen_flags_catalog.py) is what `doctor --flags` shows by default — the
 # operator surface. Same exact-tracking rule, slack 0: a new public flag is a
 # deliberate act, so raise this in the same commit and say why.
-PUBLIC_CEILING = 79  # D7: -10 posture members, +POLYROB_OVERRIDES
+PUBLIC_CEILING = 78  # 083: +AUTONOMOUS_MAX_STEPS; D7: -10 posture members, +POLYROB_OVERRIDES; -3 model-pin duplicates
 
 
 def test_flag_count_does_not_grow():

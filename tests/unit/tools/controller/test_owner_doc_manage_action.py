@@ -1,8 +1,7 @@
 """owner_doc_manage action — gating, quarantine, owner-gated promote, forged guard.
 
-⚠️ ``OWNER_RULES_IMMEDIATE`` defaults **ON** since 2026-09-21, so every test
-below that exercises the QUARANTINE/PROMOTE lane pins it to ``false``
-explicitly. An unset env no longer means "queued".
+A model-written rule is always a draft (``_rules_immediate`` is False): every
+write below lands in the QUARANTINE/PROMOTE lane.
 """
 import logging
 import types
@@ -42,7 +41,6 @@ def test_registered_when_flag_on(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_update_is_always_quarantined_even_review_off(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
@@ -59,7 +57,6 @@ async def test_update_is_always_quarantined_even_review_off(monkeypatch, tmp_pat
 @pytest.mark.asyncio
 async def test_local_mode_promote_activates_and_reads(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     c = _bare_controller(tmp_path)
     c._register_owner_doc_manage_action()
@@ -79,7 +76,7 @@ async def test_local_mode_promote_activates_and_reads(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_forged_turn_cannot_write_or_promote(monkeypatch, tmp_path):
-    """The control that makes OWNER_RULES_IMMEDIATE safe, asserted on the FORGED
+    """The forged-turn control, asserted on the FORGED
     turn itself rather than on a setup write.
 
     ⚠️ This test used to assert that ``owner.md`` did not exist — but the write
@@ -90,7 +87,6 @@ async def test_forged_turn_cannot_write_or_promote(monkeypatch, tmp_path):
     """
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)  # i.e. ON
     c = _bare_controller(tmp_path)
     c._register_owner_doc_manage_action()
     action = c.registry.registry.actions["owner_doc_manage"]

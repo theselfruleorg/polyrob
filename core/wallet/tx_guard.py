@@ -301,6 +301,12 @@ class TxIntent:
     #: The ids the mint creates, consecutive (``nextId .. nextId+qty-1``); ``qty`` is their
     #: count and must equal the calldata's ``qty``.
     mint_ids: Sequence[int] = ()
+    #: A plain send (``defi_trade.transfer``). A wallet sends any token it holds: with no
+    #: spend-grade price the send needs ``value_ack`` (the owner's "send anyway") and runs
+    #: on an owner lane only (``tx_guard_steps.value``).
+    is_transfer: bool = False
+    value_ack: bool = False
+    payout_shape: bool = False  # 085 W2: pays an unpinned address; step 9 = owner only
 
 
 @dataclass(frozen=True)
@@ -617,15 +623,15 @@ def _intent_is_exit_shaped(intent: TxIntent) -> bool:
 def _autonomous_turn_allowed(execution_context, tool_self, autonomous_ok_fn) -> bool:
     """True only for a goal/cron-dispatched MAIN-agent turn, with the flag on.
 
-    Fails CLOSED on every uncertainty: flag off, no detector supplied, detector
-    says no, or detector raises. The detector is injected for the same layering
-    reason ``forged_fn`` is, and it must be STRICTER than ``forged_fn`` — it
-    answers "is this specifically an autonomous goal run?", never merely "is
-    this not a genuine owner turn?".
+    Fails CLOSED on every uncertainty: flag off, a ``supervised`` money regime,
+    no detector supplied, detector says no, or detector raises. The detector is
+    injected for the same layering reason ``forged_fn`` is, and it must be
+    STRICTER than ``forged_fn`` — it answers "is this specifically an autonomous
+    goal run?", never merely "is this not a genuine owner turn?".
     """
-    if not autonomous_turn_trading_enabled():
-        return False
-    if autonomous_ok_fn is None:
+    from core.config_policy.money_regime import unattended_money_allowed
+    if not autonomous_turn_trading_enabled() or autonomous_ok_fn is None \
+            or not unattended_money_allowed():
         return False
     try:
         return bool(autonomous_ok_fn(execution_context, tool_self))
@@ -1402,10 +1408,11 @@ def _price_allowance_grants(intent: TxIntent, *, price_fn, fallback_price_fn,
     exit REFUSES rather than silently skipping the USD bound — the owner can
     still approve it by hand.
     """
+    from core.wallet.tx_guard_steps.value import _spend_price  # 085 W5: 0.0 = no price
     total = 0.0
     for (g_token, g_spender, g_amount) in intent.expected_allowance_grants:
         try:
-            unit_price = price_fn(intent.chain, g_token) if price_fn else None
+            unit_price = _spend_price(price_fn(intent.chain, g_token) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
         if unit_price is None:
@@ -1420,7 +1427,7 @@ def _price_allowance_grants(intent: TxIntent, *, price_fn, fallback_price_fn,
                                                   g_amount)
             if exit_bounded and fallback_price_fn:
                 try:
-                    unit_price = fallback_price_fn(intent.chain, g_token)
+                    unit_price = _spend_price(fallback_price_fn(intent.chain, g_token), intent.chain)
                 except Exception:
                     unit_price = None
                 if unit_price is not None:
@@ -1539,16 +1546,9 @@ def _inflow_valuation_usd(intent: TxIntent, deltas, *, price_fn,
 
 def _unpriceable_reason(what: str, *, exit_bounded: bool,
                         had_fallback: bool) -> str:
-    """Why this could not be priced, and therefore what the caller can DO.
-
-    029 R6. All three situations used to share one sentence ("no trustworthy
-    price"), and the cost of that was concrete: the prod agent wrote a full
-    design proposal for a deadlock that had already shipped as 028 and was live
-    on the deployed SHA. It could not tell whether the exit exemption had failed,
-    had never applied, or did not exist — so it assumed the last one.
-
-    The gate is unchanged. Only the sentence differs, by which lever is missing.
-    """
+    """Why this could not be priced, and therefore what the caller can DO (029 R6:
+    one shared sentence once made the prod agent re-propose a shipped fix). The
+    gate is unchanged; only the sentence differs, by which lever is missing."""
     head = f"refused: {what} has no trustworthy price, so no cap can bound "
     tail = ("what it puts at risk" if "allowance" in what else "it")
     if exit_bounded and had_fallback:

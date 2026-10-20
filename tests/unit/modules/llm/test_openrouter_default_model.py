@@ -44,11 +44,12 @@ def test_openrouter_client_uses_registry_default_when_model_unset(monkeypatch):
     assert client.model_type != "x-ai/grok-4.3"
 
 
-def test_openrouter_client_honors_per_provider_env_override(monkeypatch):
-    """get_default_model()'s POLYROB_OPENROUTER_MODEL override must flow through
-    the constructor too (proves the fallback is live-wired to the SSOT resolver,
-    not just coincidentally equal to it at import time)."""
-    monkeypatch.setenv("POLYROB_OPENROUTER_MODEL", "some/other-model")
+def test_openrouter_client_honors_the_operator_model_pin(monkeypatch):
+    """get_default_model()'s operator pin (DEFAULT_PROVIDER + DEFAULT_MODEL) must
+    flow through the constructor too (proves the fallback is live-wired to the SSOT
+    resolver, not just coincidentally equal to it at import time)."""
+    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("DEFAULT_MODEL", "some/other-model")
     config = _config_with_openrouter_key(monkeypatch)
 
     client = OpenRouterClient(config)

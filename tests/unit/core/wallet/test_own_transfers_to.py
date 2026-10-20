@@ -10,8 +10,8 @@ import json
 from core.wallet.trade_index import own_transfers_to
 from tools.defi.wallet_intel import render_own_payments
 
-PAYEE = "0x19Be8D93E29Ad69A85E105BF28841fbc50D07da6"
-TX = "0x9ae69de18e025098b4bb42ef7eafed42dd045f065e0b07213d353552d5c03037"
+PAYEE = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+TX = "0x" + "ab" * 32
 
 
 def _ledger(tmp_path, rows):

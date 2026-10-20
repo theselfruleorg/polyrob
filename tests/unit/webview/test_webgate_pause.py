@@ -33,9 +33,9 @@ def test_pause_endpoints_roundtrip(client):
 
 
 def test_scoped_resume_and_bad_body(client):
-    client.post("/api/webgate/pause", json={"scopes": ["cron", "streams"]})
+    client.post("/api/webgate/pause", json={"scopes": ["cron", "social"]})
     r = client.post("/api/webgate/resume", json={"scopes": ["cron"]})
-    assert r.json()["ok"] is True and r.json()["state"]["scopes"] == ["streams"]
-    assert "still paused: streams" in r.json()["message"]
+    assert r.json()["ok"] is True and r.json()["state"]["scopes"] == ["social"]
+    assert "still paused: social" in r.json()["message"]
     assert client.post("/api/webgate/pause", json={"scopes": "cron"}).status_code == 400
     assert client.post("/api/webgate/pause", json={"duration_minutes": "soon"}).status_code == 400

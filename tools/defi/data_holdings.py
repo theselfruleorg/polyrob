@@ -157,24 +157,28 @@ class HoldingsReadsMixin:
 
         lines = [f"holdings for {holder} (chain {chain})",
                  f"coverage: {coverage}{scanned_note}", ""]
-        lines += self._gas_lines(holder, chain) + [""]
-        # Before the holdings, not after: this is the screen a caller reads to
-        # decide which address a ticker means, and a warning below the list
-        # arrives after the decision.
-        lines += _ticker_collision_lines(symbols_seen)
+        native_out: Dict[str, Any] = {}
+        lines += self._gas_lines(holder, chain, native_out=native_out) + [""]
         lines += _valued_lines(valued)
+        # 079 W1: below the valued rows — the money is read first. Still above
+        # the total, so it arrives before any decision made off this screen.
+        lines += _ticker_collision_lines(symbols_seen)
         reads = len(raw)
         failed_reads = sum(1 for u in raw.values() if u is None)
-        lines += ["", _total_line(total, reads=reads, failed=failed_reads)]
+        lines += [""] + _totals_with_native(
+            _total_line(total, reads=reads, failed=failed_reads), total,
+            all_failed=bool(reads and failed_reads >= reads), native=native_out)
         # Immediately after the total, because the total is the number a reader
         # acts on and it is INCOMPLETE whenever this section is non-empty.
         lines += _holdings_rest_lines(
             own=own, known=unpriced_known, ours=ours_unvalued, others=other_unvalued,
             budget_rows=budget_skipped, priced=priced_count, read_failed=read_failed_other)
-        return self._ar(content="\n".join(lines), metadata=_holdings_metadata(
+        md = _holdings_metadata(
             holder=holder, chain=chain, own=own, coverage=coverage,
             complete=(indexed is not None and index_complete) and not budget_skipped,
-            total_usd=total, rows=md_rows))
+            total_usd=total, rows=md_rows)
+        md["native_usd"] = native_out.get("usd")
+        return self._ar(content="\n".join(lines), metadata=md)
 
     def _own_addresses(self) -> List[str]:
         out: List[str] = []
@@ -318,16 +322,18 @@ class HoldingsReadsMixin:
         else:
             lines += ["coverage: complete (SPL + Token-2022, enumerated from the "
                       "chain; no indexer key needed here)", ""]
+        sol_native: Dict[str, Any] = {}
         if native is None:
-            lines.append("  gas (SOL): balance UNKNOWN — the read failed. This "
+            sol_native["note"] = "SOL balance UNKNOWN"
+            lines.append("  SOL: balance UNKNOWN — the read failed. This "
                          "is NOT a zero.")
         elif native == 0:
-            lines.append("  gas (SOL): 0 — no SOL. Every Solana transaction "
-                         "pays a fee in SOL, and a first-time token transfer "
-                         "also funds rent, so nothing can be sent from here.")
+            lines.append("  SOL: 0 — no SOL, the gas tank is EMPTY. Every Solana "
+                         "transaction pays a fee in SOL, and a first-time token "
+                         "transfer also funds rent, so nothing can be sent from here.")
         else:
-            lines.append(f"  gas (SOL): {native:,.9f} SOL — pays fees and "
-                         f"account rent. Not a position.")
+            lines.append(self._native_money_line(chain, "SOL", native, ",.9f",
+                                                 sol_native, label="SOL (gas + buying power)"))
         lines.append("")
 
         valued, total = [], 0.0
@@ -383,7 +389,8 @@ class HoldingsReadsMixin:
             valued.append((value, f"  {h.mint}  {shown}  = {_fmt_usd(value)}{t22}"))
             sol_md.append(_holding_md(h.mint, symbol, decimals, h.raw, amount, info, value))
         lines += _valued_lines(valued)
-        lines += ["", _total_line(total, reads=0, failed=0)]
+        lines += [""] + _totals_with_native(_total_line(total, reads=0, failed=0), total,
+                                            all_failed=False, native=sol_native)
         lines += _holdings_rest_lines(
             own=own, known=[], ours=ours_unvalued, others=other_unvalued,
             budget_rows=budget_skipped, priced=priced)
@@ -401,6 +408,7 @@ class HoldingsReadsMixin:
                       "unavailable" if held is None else "partial"),
             complete=sol_complete, total_usd=total, rows=sol_md)
         md["native_sol"] = native
+        md["native_usd"] = sol_native.get("usd")
         return self._ar(content="\n".join(lines), metadata=md)
 
     def _solana_holder(self) -> Optional[str]:
@@ -427,8 +435,9 @@ class HoldingsReadsMixin:
         except Exception:
             return None
 
-    def _gas_lines(self, holder: str, chain: str) -> List[str]:
-        """The native-balance row. NEVER omitted (proposal 029 R2).
+    def _gas_lines(self, holder: str, chain: str, *,
+                   native_out: Optional[Dict[str, Any]] = None) -> List[str]:
+        """The native-coin row. NEVER omitted (proposal 029 R2).
 
         This block exists because of a live failure, not a feature request. The
         prod agent escalated "no ETH row in the portfolio — the gas tank may be
@@ -439,23 +448,93 @@ class HoldingsReadsMixin:
 
         So the row is unconditional, and the three states are kept apart in
         words: a number, "UNKNOWN" (read failed), and "EMPTY" (a real zero, the
-        only one of the three that actually blocks a broadcast). Gas is a fee
-        reserve rather than a position, so it is deliberately NOT summed into
-        the holdings total.
+        only one of the three that actually blocks a broadcast).
+
+        079 W1: the native coin is MONEY. Only the chain's fee reserve
+        (`chains.fee_reserve`) is kept back for gas; the rest is buying power, so
+        the row carries its USD value and ``native_out`` hands that value to
+        the ``total incl. native`` line. On 2026-10-12 the old wording ("Not a
+        position and not counted in the total") made the agent tell the owner
+        0.14 ETH was "not there".
         """
         from core.wallet import chains
         row = chains.get(chain)
         symbol = row.native_symbol if row else "native"
+        out = native_out if native_out is not None else {}
         try:
             native = self._native_balance(holder, chain)
         except Exception as exc:                       # fail-open: lose the row, not the report
             logger.debug("portfolio: native balance read failed on %s (%s)", chain, exc)
             native = None
         if native is None:
-            return [f"  gas ({symbol}): balance UNKNOWN — the read failed. "
+            out["note"] = f"{symbol} balance UNKNOWN"
+            return [f"  {symbol}: balance UNKNOWN — the read failed. "
                     f"This is NOT a zero — never read a failed read as an unfunded tank."]
         if native == 0:
-            return [f"  gas ({symbol}): 0 — the gas tank is EMPTY. No transaction can "
+            return [f"  {symbol}: 0 — the gas tank is EMPTY. No transaction can "
                     f"broadcast on {chain}, entries and EXITS alike, until it is funded."]
-        return [f"  gas ({symbol}): {native:,.6f} {symbol} — pays fees on {chain}. "
-                f"Not a position and not counted in the total below."]
+        label = f"{symbol} (gas + buying power)" if chain == "robinhood" else symbol
+        return [self._native_money_line(chain, symbol, native, ",.6f", out, label=label)]
+
+    def _native_price(self, chain: str) -> Optional[float]:
+        """The native coin's USD price through its wrapped native — the proxy
+        ``tx_guard`` values native by — or None. Only a ``high`` confidence quote
+        counts, the same bar a token row must clear; never an invented figure."""
+        from core.wallet import chains
+        row = chains.get(chain)
+        proxy = getattr(row, "wrapped_native", None) if row else None
+        if not proxy or getattr(row, "valueless", False):
+            return None
+        try:
+            info = self._price_for(chain, proxy)
+        except Exception:
+            logger.debug("native price unreadable on %s", chain, exc_info=True)
+            return None
+        price = getattr(info, "price_usd", None)
+        if price is None or getattr(info, "confidence", None) != "high":
+            return None
+        return float(price)
+
+    def _native_money_line(self, chain: str, symbol: str, native: float, fmt: str,
+                           out: Dict[str, Any], *, label: str) -> str:
+        """``ETH 0.140662 ($352.10) — 0.138662 spendable above a 0.002 ETH fee
+        reserve``. Writes ``out["usd"]`` when priced, else ``out["note"]``."""
+        from core.wallet import chains
+        price = self._native_price(chain)
+        if price is None:
+            out["note"] = f"{symbol} unpriced"
+            worth = "(unpriced — not counted in the total)"
+        else:
+            out["usd"] = native * price
+            worth = f"({_fmt_usd(native * price)})"
+        reserve = chains.fee_reserve(chain)
+        if reserve is None:
+            tail = (f"no fee reserve is set for {chain}; keep enough {symbol} "
+                    f"for the fees of an exit")
+        elif native > float(reserve):
+            tail = (f"{format(native - float(reserve), fmt)} spendable above a "
+                    f"{format(reserve, 'f')} {symbol} fee reserve")
+        else:
+            tail = (f"BELOW the {format(reserve, 'f')} {symbol} fee reserve: nothing "
+                    f"is spendable and the gas tank is nearly EMPTY — fund it before "
+                    f"an entry or an EXIT on {chain}")
+        return f"  {label} {format(native, fmt)} {worth} — {tail}."
+
+
+def _totals_with_native(token_line: str, token_total: float, *, all_failed: bool,
+                        native: Dict[str, Any]) -> List[str]:
+    """079 W1: ``total incl. native`` first, the token total as a sub-line.
+    An unpriced or unread native coin is NAMED as not counted, never summed."""
+    sub = "  tokens" + token_line[len("total"):]
+    if all_failed:
+        return ["total incl. native: UNKNOWN — the token balance reads failed", sub]
+    usd = native.get("usd")
+    if usd is not None:
+        head = (f"total incl. native: {_fmt_usd(token_total + usd)} "
+                f"(native {_fmt_usd(usd)} + tokens {_fmt_usd(token_total)})")
+    elif native.get("note"):
+        head = (f"total incl. native: {_fmt_usd(token_total)} — {native['note']}, "
+                f"not counted")
+    else:
+        head = f"total incl. native: {_fmt_usd(token_total)}"
+    return [head, sub]

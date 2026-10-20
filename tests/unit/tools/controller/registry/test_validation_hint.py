@@ -1,7 +1,7 @@
 """A validation hint describes THIS call's args, never the schema in the abstract.
 
 Live 2026-09-01 21:03:52 and 21:04:30 UTC: `twitter_get_timeline` was called with
-`{'max_results': 3, 'user': 'tmachinroBot'}`, failed a `greater_than_equal`
+`{'max_results': 3, 'user': 'ExampleBot'}`, failed a `greater_than_equal`
 constraint on `max_results`, and the hint appended "Required: ['user']" — the
 schema's whole required list. `user` had been supplied, so the agent read it as a
 missing field, re-sent the identical call and failed again 38 seconds later.
@@ -26,7 +26,7 @@ class _NoRequired(BaseModel):
 
 
 def test_supplied_param_is_never_reported_as_missing():
-    hint = build_validation_hint(_TimelineParams, {"max_results": 3, "user": "tmachinroBot"})
+    hint = build_validation_hint(_TimelineParams, {"max_results": 3, "user": "ExampleBot"})
     # `user` may well be NAMED (as one of the requirements that were met); what it
     # must never be is framed as absent, which is what sent the agent in a circle.
     assert "Missing required" not in hint
@@ -92,7 +92,7 @@ def test_hint_is_appended_by_the_converter(monkeypatch):
 
     reg.tool_calls_to_actions([
         {"id": "call-1", "name": "twitter_get_timeline",
-         "args": {"max_results": 3, "user": "tmachinroBot"}},
+         "args": {"max_results": 3, "user": "ExampleBot"}},
     ])
     msg = reg._last_validation_errors.get("call-1", "")
     assert "greater than or equal to 5" in msg

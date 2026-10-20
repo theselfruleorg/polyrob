@@ -16,6 +16,15 @@ import pytest
 
 from core.wallet import simulation
 
+
+@pytest.fixture(autouse=True)
+def _zero_fee_context(monkeypatch):
+    """085 W8: these tests read events and balances. The fee context (latest base
+    fee, payer balance, validation) is tested in test_085_w8_simulation_fees.py."""
+    monkeypatch.setattr(simulation, "_fee_context",
+                        lambda rpc, payer: simulation._FeeContext(0, 30_000_000, 10 ** 18))
+
+
 HOLDER = "0x2222222222222222222222222222222222222222"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 SPENDER = "0x1111111111111111111111111111111111111111"

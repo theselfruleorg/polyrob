@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Read ANY wallet's public token holdings on ONE chain: native balance, every token with human amounts, USD where the price is trustworthy, and an explicit coverage line. Works for Solana (base58) and EVM (0x) wallets. Use this when someone asks you to check / look up a wallet address. Public chain data — read-only.",
+    "name": "defi_data_wallet_holdings",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The WALLET address to read — any owner, not only this agent's. A Solana wallet is base58 (e.g. 7xKX…); an EVM wallet is 0x… (40 hex). Give a wallet, not a token: for a token contract/mint use token_info.",
+          "type": "string"
+        },
+        "chain": {
+          "default": null,
+          "description": "Chain to read. Omit for a base58 address (it is read on solana). REQUIRED for a 0x address — the same 0x wallet exists on every EVM chain with different holdings. Chain to read the wallet on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

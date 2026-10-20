@@ -3,9 +3,11 @@ name: trade-execution
 description: 'Execute an on-chain trade safely: dry run first, native-in needs no approval, exact approve to the quoted spender, send once, read RESULT lines (pending is not failed), revoke after, the Solana one-verb path, and the money-parameter sources you may trust.'
 license: MIT
 metadata:
+  polyrob-when: 'Sending an on-chain swap, approve or revoke'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["defi_trade_swap","defi_trade_approve_token","defi_trade_revoke_approval","defi_trade_solana_swap"],"keywords":["execute the trade","execute a swap","execute the swap","send the swap","dry run the swap","approve_token","revoke_approval","token allowance","solana_swap"],"task_patterns":["(execute|send|place) (the|a|this|my) (swap|trade)"],"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-requires: '["token-identity","pre-trade-check"]'
   polyrob-version: '3'
 ---
 # Trade Execution — dry run, approve exact, send once

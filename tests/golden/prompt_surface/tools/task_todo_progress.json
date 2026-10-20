@@ -1,0 +1,13 @@
+{
+  "function": {
+    "description": "Get current todo progress",
+    "name": "task_todo_progress",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Get current todo progress",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

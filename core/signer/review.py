@@ -82,3 +82,37 @@ def evm_review(intent, tx, decision, *, digest, unpriced_assets):
     if len(text) > MAX_REVIEW_CHARS:
         raise ValueError('Transaction detail exceeds signer review limit; split the request')
     return text
+
+
+def x402_digest(*, chain_id: int, contract: str, payer: str, payee: str, value: int) -> str:
+    """The approval key of an EIP-3009 authorization (085 W4, S-1).
+
+    It binds the chain, the USDC contract, the payer, the payee and the exact
+    value — not the nonce or the window, which the payer draws fresh on each
+    attempt — so the owner's one-use grant unlocks the retry of THAT payment.
+    """
+    canon = json.dumps({"op": "x402.authorize", "chain_id": int(chain_id),
+                        "contract": str(contract).lower(), "from": str(payer).lower(),
+                        "to": str(payee).lower(), "value": int(value)},
+                       sort_keys=True, separators=(",", ":"))
+    return "x402:" + hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def x402_review(*, chain: str, contract: str, payer: str, payee: str, value: int,
+                usd: float, reason: str, digest: str) -> str:
+    """The owner's review of an x402 authorization above the signer's caps."""
+    review = {
+        'request_digest': digest,
+        'op': 'x402.authorize (EIP-3009 TransferWithAuthorization)',
+        'chain': chain,
+        'usdc_contract': contract,
+        'payer': payer,
+        'decoded_payee': {'kind': 'usdc.transferWithAuthorization', 'recipient': payee,
+                          'amount_raw': int(value)},
+        'priced_risk_usd': usd,
+        'guard_reason': reason,
+    }
+    text = json.dumps(review, indent=2, sort_keys=True, ensure_ascii=True)
+    if len(text) > MAX_REVIEW_CHARS:
+        raise ValueError('x402 detail exceeds signer review limit')
+    return text

@@ -39,7 +39,7 @@ class _Container:
 def _send(**kw):
     from tools.controller.message_send import perform_message_send
     base = dict(router=_Router(), allowlist=None,
-                owner_targets={"telegram": "28436760"}, user_id="rob",
+                owner_targets={"telegram": "100000001"}, user_id="rob",
                 surface="telegram", target="owner", text="the owner report",
                 container=_Container())
     base.update(kw)

@@ -88,3 +88,21 @@ async def test_bridge_summary_is_wrapped_as_untrusted_data(provider):
     head, rest = msg.content.split("<untrusted_tool_result", 1)
     assert "Continuing an earlier conversation" in head
     assert "ignore your owner" in rest.split("</untrusted_tool_result>", 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_e_c4_owner_bridge_wording_cap_and_open_errand(provider):
+    """E-C4 (review 2026-10-13): owner wording (not "this contact"), a longer cap
+    than 600, and the open errand when the last session did not finish."""
+    long_summary = "We compared bridge routes to Base. " * 60   # ~2,100 chars
+    await finalize_episode(session_id="old-o", user_id="u1", kind="chat",
+                           thread_key="tg:owner", outcome="partial",
+                           task="bridge 0.5 ETH to Base and report the arrival",
+                           summary=long_summary)
+    msg = await build_bridge_message(user_id="u1", thread_key="tg:owner", owner=True)
+    assert "this contact" not in msg.content
+    assert "with the owner" in msg.content
+    assert len(msg.content) > 1200
+    assert "ended partial; the open errand was: bridge 0.5 ETH to Base" in msg.content
+    other = await build_bridge_message(user_id="u1", thread_key="tg:owner")
+    assert "this contact" in other.content and "open errand" not in other.content

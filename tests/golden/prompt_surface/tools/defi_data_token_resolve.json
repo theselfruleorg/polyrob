@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Find CANDIDATE contract addresses for a ticker. Returns a ranked list, never a single answer — you must choose an address before using any other verb.",
+    "name": "defi_data_token_resolve",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "description": "Ticker to look up. Returns CANDIDATES ranked by liquidity — never a single answer. You must then choose a contract address yourself; several different contracts commonly claim the same ticker.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

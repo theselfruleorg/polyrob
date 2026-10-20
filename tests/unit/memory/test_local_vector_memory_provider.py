@@ -311,3 +311,56 @@ async def test_kb_secrets_are_scrubbed_before_embedding_and_storage(db_path):
     with wal_connect(db_path) as conn:
         rows = conn.execute('SELECT content FROM kb_chunks').fetchall()
     assert len(rows) == 2 and secret not in repr([tuple(r) for r in rows])
+
+
+@requires_vec
+async def test_d11_vector_only_hit_is_dated_and_a_purged_twin_never_returns(db_path, monkeypatch):
+    """D11 (review 2026-10-13): a vector-only hit rendered with no date, and a hit
+    whose keyword row was pruned/purged (its vector twin left behind) came back."""
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "true")
+    p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
+    await p.sync_turn("q", "The postgres cluster is on version 16 now.", session_id="s1",
+                      user_id="u")
+    ghost = "Ghost row about the postgres replica that the curator purged."
+
+    def fake_vec(query, norm, limit, exclude_session_id=None, scope=None):
+        return [ghost, "The postgres cluster is on version 16 now."]
+    monkeypatch.setattr(p, "_vector_contents", fake_vec)
+    out = await p.search("database engine", user_id="u")   # no keyword hit: vector only
+    assert ghost not in out
+    assert "- [" in out and "version 16" in out
+    out2 = await p.prefetch("database engine", session_id="other", user_id="u")
+    assert ghost not in out2 and out2.startswith("- [")
+
+
+def _tag(p, session_id, user_id, kind, job_id=None):
+    import json as _json
+    from core.sqlite_util import execute_retry
+    execute_retry(
+        p.db_path,
+        "INSERT INTO episodes (ts, user_id, session_id, kind, artifacts, spend_usd, "
+        "steps, surfaced, meta, created_at) VALUES (0, ?, ?, ?, '[]', 0, 0, 0, ?, 0)",
+        (user_id, session_id, kind, _json.dumps({"source": kind, "job_id": job_id})))
+
+
+@requires_vec
+async def test_hybrid_merge_keeps_the_reader_group_order(db_path, monkeypatch):
+    """Re-validation of D2 on local_vector: the RRF merge put a vector-only cron
+    row above the owner-chat keyword row; an owner-chat reader must still see
+    chat first, and a cron reader its own run first."""
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "true")
+    p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
+    chat = "Owner chat: the invoice for the logo goes to Alice."
+    cron = "Cron run: postgres replica lag measured at noon today."
+    await p.sync_turn("q", chat, session_id="s_chat", user_id="u")
+    await p.sync_turn("q", cron, session_id="s_cron", user_id="u")
+    _tag(p, "s_cron", "u", "cron", job_id="job-a")
+
+    def fake_vec(query, norm, limit, exclude_session_id=None, scope=None):
+        return [cron]                       # the KNN liked the cron row best
+    monkeypatch.setattr(p, "_vector_contents", fake_vec)
+    out = await p.search("invoice", user_id="u", demote_automation=True)
+    assert out.index("invoice for the logo") < out.index("replica lag")
+    out = await p.prefetch("invoice", session_id="s_now", user_id="u",
+                           demote_automation=False, prefer_job_id="job-a")
+    assert out.index("replica lag") < out.index("invoice for the logo")

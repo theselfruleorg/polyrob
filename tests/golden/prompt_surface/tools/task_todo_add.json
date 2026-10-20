@@ -1,0 +1,27 @@
+{
+  "function": {
+    "description": "Add a new todo item",
+    "name": "task_todo_add",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Add a new todo item",
+      "properties": {
+        "parent_pattern": {
+          "default": null,
+          "description": "Optional parent todo to nest under",
+          "nullable": true,
+          "type": "string"
+        },
+        "text": {
+          "description": "The todo item text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

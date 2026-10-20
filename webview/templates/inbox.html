@@ -93,7 +93,9 @@
         </div>
 {%- endfor %}
       </div>
-{%- else %}
+{%- elif inbox_uncertain or not cards_waiting %}
+      {# Only cards wait: they are below, in their own section — "nothing
+         needs you" above them would be false (080 WS-3). #}
       <div class="state">
         <div class="state-glyph" aria-hidden="true">{{ page_glyph }}</div>
 {%- if inbox_uncertain %}

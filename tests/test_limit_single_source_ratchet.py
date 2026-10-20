@@ -43,6 +43,7 @@ CAP_FLAG_READERS = {
     },
     "X402_AUTONOMOUS_MAX_USD": {
         "core/config_policy/spend_lane.py",   # the resolver
+        "core/signer/provision.py",           # reads an env FILE to write signer.toml (085 D4)
     },
 }
 

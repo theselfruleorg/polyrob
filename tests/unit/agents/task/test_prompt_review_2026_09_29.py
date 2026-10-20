@@ -18,10 +18,10 @@ def _text(**kw):
 
 # --- B1 -----------------------------------------------------------------------
 
-def test_owner_session_is_taught_propose_action_and_present_choice():
+def test_owner_session_is_taught_present_choice():
     text = _text(surface=_dm())
-    assert "propose_action(command=...)" in text
-    assert "Never write the command for them to type" in text
+    # propose_action teaches itself in its own description
+    assert "propose_action(command=...)" not in text
     assert "present_choice(question, options)" in text
     # the one-token rule is for approvals only
     assert "An approval you ask them for must be ONE tappable token" in text
@@ -30,7 +30,6 @@ def test_owner_session_is_taught_propose_action_and_present_choice():
 
 def test_autonomous_session_gets_no_present_choice():
     text = _text(autonomous=True)
-    assert "propose_action(command=...)" in text
     assert "present_choice" not in text
 
 
@@ -42,7 +41,7 @@ def test_room_gets_no_owner_moves():
 def test_communication_does_not_claim_send_message_is_the_only_verb():
     text = _text()
     assert "only verb" not in text
-    assert "done(text) never reaches them" in text
+    assert "The user NEVER sees it" in text
 
 
 # --- C2 -----------------------------------------------------------------------
@@ -51,7 +50,7 @@ def test_correspondent_dm_is_not_framed_as_the_owner_chat():
     text = _text(surface=_dm(correspondent=True))
     assert "private chat with your owner" not in text
     assert "with a correspondent, NOT your owner" in text
-    assert "The verbs that exist on this surface" not in text
+    assert "The verbs that exist in this chat" not in text
     assert "propose_action" not in text
 
 
@@ -149,10 +148,9 @@ def test_tool_catalog_named_only_when_pinned(monkeypatch):
     assert "<tool-catalog>" in _text()
 
 
-def test_polymarket_section_uses_namespaced_ids():
-    text = _text(tool_ids=["polymarket"])
-    assert "polymarket_place_limit_order" in text
-    assert "pUSD" in text
+def test_no_polymarket_section():
+    """The markets pack's own skill and tool schemas carry the venue."""
+    assert "<polymarket>" not in _text(tool_ids=["polymarket"])
 
 
 def test_identity_and_memory_wording():
@@ -181,3 +179,50 @@ def test_data10_resumed_correspondent_session_without_a_chat_key_is_not_the_owne
     owner = SimpleNamespace(_chat_session_key=None, container=None)
     assert AgentConstructionMixin._resolve_surface_profile(
         SimpleNamespace(orchestrator=owner, logger=None)) is None
+
+
+# --- 079 D5 -------------------------------------------------------------------
+
+def test_owner_question_about_money_rule_lives_on_propose_action():
+    """079 D5: a QUESTION about moving money is carded; only an imperative owner
+    line is executed. The rule lives once, in the propose_action description."""
+    import pathlib
+    src = pathlib.Path("tools/controller/card_actions.py").read_text(encoding="utf-8")
+    assert "execute one only on an imperative line" in src
+    assert "QUESTION about moving money" not in _text(surface=_dm())
+
+
+def test_autonomous_session_gets_no_owner_question_rule():
+    assert "QUESTION about moving money" not in _text(autonomous=True)
+
+
+# --- 081 WS-3.5 (B-14): owner-only blocks render only where the owner speaks ---
+
+@pytest.fixture
+def _routing_on(monkeypatch):
+    import core.config_policy as cp
+    monkeypatch.setattr(cp, "prefs_tool_enabled", lambda: True)
+
+
+@pytest.mark.parametrize("kw", [
+    dict(surface=_dm(chat_type="group", chat_name="den")),
+    dict(surface=_dm(correspondent=True)),
+    dict(sub_agent=True),
+    dict(autonomous=True),
+], ids=["room", "correspondent", "leaf", "autonomous"])
+def test_owner_instructions_only_on_an_owner_seat(_routing_on, kw):
+    assert "<owner-instructions>" in _text(surface=_dm())
+    assert "<owner-instructions>" not in _text(**kw)
+
+
+@pytest.mark.parametrize("kw", [
+    dict(surface=_dm(chat_type="group", chat_name="den")),
+    dict(surface=_dm(correspondent=True)),
+    dict(sub_agent=True),
+], ids=["room", "correspondent", "leaf"])
+def test_standing_goals_and_operations_lines_stay_on_owner_seats(kw):
+    owner = _text(surface=_dm())
+    assert "act on your standing goals" in owner and "(<operations>" in owner
+    other = _text(**kw)
+    assert "act on your standing goals" not in other
+    assert "<operations>" not in other

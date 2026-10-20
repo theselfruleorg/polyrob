@@ -20,7 +20,7 @@ from core.config import BotConfig
 from core.exceptions import ConfigurationError, APIError, AuthenticationError, ToolError
 from tools.base_tool import BaseTool, ToolStatus
 from agents.task.loop_types.controller_types import ActionResult
-from tools.email_providers.mime import _decode, auto_headers, is_auto_generated
+from tools.email_providers.mime import _decode, auto_headers
 
 
 # Memory of rejected SMTP logins. 057 WS-F moved it into the DURABLE core-tier
@@ -116,28 +116,6 @@ class EmailSendAction(BaseModel):
     attachments: List[str] = Field(
         default_factory=list,
         description="Files to attach: paths inside this session's workspace.")
-
-class EmailReadMachineMailAction(BaseModel):
-    """Read the agent's own machine-sent mail (activation links, verification codes)."""
-    model_config = ConfigDict(extra="forbid")
-    sender_contains: Optional[str] = Field(
-        None, description="Only mail whose From contains this text (e.g. 'magicians').")
-    limit: int = Field(10, ge=1, le=500, description="How many recent messages to scan.")
-
-
-# Machine senders only: a human's mail reaches the agent through the gated email
-# SURFACE (owner / allowlisted / correspondent tiers), never through this read.
-_MACHINE_SENDER_MARKERS = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply",
-                           "notifications", "notification", "mailer")
-_READ_SCAN_CAP = 50
-_READ_BODY_CAP = 2000
-
-
-def _is_machine_sender(from_header: str) -> bool:
-    addr = from_header.rsplit("<", 1)[-1].rstrip(">").strip().lower()
-    local = addr.split("@", 1)[0]
-    return any(m in local for m in _MACHINE_SENDER_MARKERS)
-
 
 def split_addresses(value: Union[str, List[str], None]) -> List[str]:
     """``"a@x, b@y"`` / ``["a@x"]`` / None -> a clean, de-duplicated address list."""
@@ -1027,50 +1005,6 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                                 "— a reply may not route back", address, e,
                                 exc_info=True)
 
-    @BaseTool.action(
-        "Read your OWN machine-sent mail: account activation links and verification "
-        "codes from no-reply or auto-generated senders, so you can finish a sign-up yourself. Ordinary "
-        "correspondents' mail is not returned here (it reaches you through the normal email "
-        "channel; email_list/email_read reach any mail). "
-        "Read-only: nothing is marked read and nothing is answered.",
-        param_model=EmailReadMachineMailAction,
-    )
-    async def email_read_machine_mail(self, params: EmailReadMachineMailAction,
-                                      execution_context=None) -> ActionResult:
-        """Prod 2026-10-04: an authorized sign-up's activation mail was dropped by the
-        surface (auto-generated: never answered) and the agent had no way to read it.
-        Reads with the non-consuming `read_emails` (BODY.PEEK) and filters to machine
-        mail — a no-reply sender, or what the surface's `is_auto_generated` drops —
-        so the surface's UNSEEN queue and the human-mail gate are untouched."""
-        if not isinstance(params, EmailReadMachineMailAction):
-            from pydantic import TypeAdapter
-            params = TypeAdapter(EmailReadMachineMailAction).validate_python(params)
-        try:
-            mails = await self.read_emails(limit=min(params.limit, _READ_SCAN_CAP),
-                                           unread_only=False)
-        except Exception as e:
-            return ActionResult(error=f"Could not read the mailbox: {e}", include_in_memory=True)
-        needle = (params.sender_contains or "").lower()
-        rows = []
-        for m in reversed(mails or []):  # newest first
-            frm = str(m.get("from") or "")
-            # 0009: exactly what the surface refuses to answer (headers, ONE
-            # classifier) plus the no-reply sender names.
-            machine = _is_machine_sender(frm) or is_auto_generated(m)
-            if not machine or (needle and needle not in frm.lower()):
-                continue
-            body = (m.get("content") or m.get("html_content") or "")[:_READ_BODY_CAP]
-            rows.append(f"From: {frm}\nDate: {m.get('date', '')}\n"
-                        f"Subject: {m.get('subject', '')}\n\n{body}")
-        if not rows:
-            return ActionResult(
-                extracted_content="No machine-sent mail matched in the recent mailbox.",
-                include_in_memory=True)
-        return ActionResult(
-            extracted_content=f"📬 {len(rows)} machine-sent mail(s), newest first:\n\n"
-                              + "\n\n---\n\n".join(rows),
-            include_in_memory=True)
-
     async def read_emails(
         self,
         folder: str = 'INBOX',
@@ -1190,8 +1124,7 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                             'date': date_str,
                             'content': content,
                             'html_content': html_content,
-                            # OS5 markers: `email_read_machine_mail` selects with
-                            # the surface's own `is_auto_generated` (0009).
+                            # OS5 markers: the surface's `is_auto_generated` reads them.
                             'headers': auto_headers(email_message),
                         })
                     

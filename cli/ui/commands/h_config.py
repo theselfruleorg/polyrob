@@ -341,8 +341,8 @@ def _cmd_check(ctx: ConfigCtx, rest: List[str]) -> str:
 
     # The home .env is the one file the CLI writes (there is no project tier:
     # ./.polyrob/.env is never loaded).
-    cands = env_file_candidates(local_mode=True)
-    findings = list(check_env_files([c.path for c in cands if c.tier == "home"]))
+    cands = env_file_candidates()
+    findings = list(check_env_files([cands[0].path]))
 
     for key, err in find_invalid_preferences(ctx.home_dir, ctx.user_id):
         findings.append(f"preferences.toml: {key}: {err}")

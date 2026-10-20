@@ -102,6 +102,7 @@ def _manager_with_every_block():
 	mm.set_skill_message("skills")
 	mm.set_worker_catalog_message("workers")
 	mm.set_tool_catalog_message("catalog")
+	mm.set_workspace_message("workspace")
 	return mm
 
 
@@ -114,6 +115,16 @@ def test_both_assemblies_share_the_table_order():
 	n = len(expected)
 	assert mm.get_messages()[:n] == expected
 	assert mm.get_messages_for_llm(consume_ephemeral=False)[:n] == expected
+
+
+def test_per_session_rows_come_after_the_catalogs():
+	"""081 WS-3.3: a byte-prefix cache reuses only up to the first differing
+	byte. Every row that differs per session (the workspace path, the task) sits
+	after every row that is the same for two runs of one job."""
+	keys = [layer.key for layer in FL.FOUNDATION_LAYERS]
+	per_session = {"workspace", "initial_task"}
+	first = min(keys.index(k) for k in per_session)
+	assert set(keys[first:]) == per_session, keys[first:]
 
 
 def test_one_self_context_layer_per_group():

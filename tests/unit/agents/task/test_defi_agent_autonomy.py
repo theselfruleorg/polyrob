@@ -68,7 +68,7 @@ def test_it_is_resolved_at_call_time_not_frozen(monkeypatch):
 
 
 @pytest.mark.parametrize("consumer", [
-    "surfaces/telegram/interactive_tools.py",
+    "agents/task/tool_defaults.py",   # owner_seat_tools (the owner chat seats)
     "agents/task/goals/dispatcher.py",
     "tools/goal_tools.py",
 ])

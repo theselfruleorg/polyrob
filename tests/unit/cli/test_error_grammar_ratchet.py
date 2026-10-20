@@ -31,7 +31,7 @@ PINNED_ERROR_SITES = {
     "cli/commands/_surface_runner.py": 3,
     "cli/commands/chat.py": 5,
     "cli/commands/email.py": 1,
-    "cli/commands/goals.py": 20,
+    "cli/commands/goals.py": 6,
     "cli/commands/run.py": 5,
     "cli/commands/skills.py": 4,
     "cli/commands/todos.py": 2,

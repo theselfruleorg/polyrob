@@ -91,7 +91,7 @@ def _record(attrs: Dict[str, Any], *, record_fn=None) -> None:
 
 
 def pool_metrics(rpc: Callable, chain: str, token: str, *, expect_pool_id: Optional[str] = None,
-                 depth_pct=(1.0, 2.0, 5.0), mint_native: float = 0.021,
+                 depth_pct=(1.0, 2.0, 5.0), mint_native: float = 0.00825,
                  hook_fee_bps: int = 100, now: Optional[float] = None,
                  query_fn=None, record_fn=None) -> Dict[str, Any]:
     """The metrics as a dict: ``lines`` (text, ALERT lines first), ``alerts``,

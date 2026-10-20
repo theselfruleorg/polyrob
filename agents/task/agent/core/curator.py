@@ -103,7 +103,8 @@ class SkillCurator:
                 plan["archived"].append(key)
                 if not self.dry_run:
                     try:
-                        self.sm.delete_skill(skill_id, user_id=user_id, absorbed_into=None)
+                        self.sm.delete_skill(skill_id, user_id=user_id, created_by="curator",
+                                             aged=True)
                         self._set_mark(key, "archived")
                         self._self_mod_ev("archive", skill_id, user_id)
                     except Exception as e:
@@ -327,18 +328,12 @@ class SkillCurator:
         try:
             from core.config_policy import AutonomyConfig
             from modules.memory.registry import get_memory_registry
-            from modules.memory.retention import autonomous_window_days, purge_noise_rows
+            from modules.memory.retention import autonomous_window_days
             days = AutonomyConfig.memory_retention_days()
             if days <= 0:
                 logger.info("curator: memory retention disabled (MEMORY_RETENTION_DAYS=%d)", days)
                 return
             prov = get_memory_registry().active()
-            # The one-time purge runs FIRST so its pre-purge backup holds every
-            # row, including the ones the age sweep below removes.
-            if prov is not None and getattr(prov, "db_path", ""):
-                got = purge_noise_rows(prov)
-                if not got.get("skipped") or got.get("backup_failed"):
-                    logger.info("curator: memory noise purge %s", got)
             if prov is not None and hasattr(prov, "prune_memories"):
                 auto_days = autonomous_window_days(days)
                 now = int(self._now())

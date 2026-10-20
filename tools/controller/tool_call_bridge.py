@@ -83,7 +83,11 @@ class ToolCallBridgeMixin:
         and BEFORE the first emit, so the Registry can arm the freeze.
         """
         if not bridge_enabled():
-            return
+            # E-4 / 081 WS-3.1: an autonomous disclosure run and an owner chat
+            # seat get the bridge by default.
+            from tools.late_tool_mode import disclosure_bridge
+            if not disclosure_bridge(getattr(self, "session_id", None)):
+                return
 
         @self.registry.action(
             "Call an action that is NOT in your tool list because it was loaded "
@@ -98,6 +102,24 @@ class ToolCallBridgeMixin:
             return await perform_tool_call(
                 self, params.name, params.arguments,
                 execution_context=execution_context)
+
+
+def _param_shape(param_model) -> str:
+    """One line per field (name, type, required, description) — prod 2026-10-14: a
+    bare "Field required" plus "run tool_describe" got the same empty call 18 times."""
+    try:
+        schema = param_model.model_json_schema()
+    except Exception:
+        return "Run tool_describe for the exact parameter shape.\n"
+    required = set(schema.get("required") or [])
+    lines = []
+    for name, prop in (schema.get("properties") or {}).items():
+        kind = prop.get("type") or "/".join(
+            str(o.get("type")) for o in prop.get("anyOf") or [] if o.get("type") != "null") or "any"
+        need = "required" if name in required else "optional"
+        desc = " ".join(str(prop.get("description") or "").split())[:160]
+        lines.append(f"  {name} ({kind}, {need})" + (f": {desc}" if desc else ""))
+    return ("Parameters:\n" + "\n".join(lines) + "\n") if lines else ""
 
 
 async def perform_tool_call(controller, name: str, arguments, execution_context=None):
@@ -125,12 +147,13 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
 
     action = controller.registry.get_action(target)
     if action is None:
+        # 081 WS-3.1: the ONE not-loaded refusal (names load_tool, or for money
+        # the owner grant) — the same text a rejected native call gets.
+        from tools.tool_disclosure import not_loaded_text
         return ActionResult(
-            extracted_content=(
-                f"tool_call refused: no action named '{target}' is registered in this "
-                f"session. Use tool_search(\"<keyword>\") to find the tool, "
-                f"load_tool(\"<id>\") if it is [loadable], then tool_describe(\"<id>\") "
-                f"for the exact action name and parameters."),
+            extracted_content="tool_call refused: " + not_loaded_text(
+                target, controller,
+                is_leaf=bool(getattr(execution_context, "is_sub_agent", False))),
             include_in_memory=True)
 
     # Native schema validation is what a late tool LOSES under the freeze; this is
@@ -140,10 +163,12 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
         try:
             param_model(**args)
         except Exception as e:
+            empty = "`arguments` was empty — put the parameters inside it.\n" if not args else ""
             return ActionResult(
                 extracted_content=(
-                    f"tool_call: '{target}' rejected these arguments — {e}\n"
-                    f"Run tool_describe for the exact parameter shape and call again."),
+                    f"tool_call: '{target}' rejected these arguments — {e}\n{empty}"
+                    f"{_param_shape(param_model)}"
+                    f"Call again with these inside `arguments` (tool_describe has the full schema)."),
                 include_in_memory=True)
 
     try:

@@ -404,7 +404,7 @@ async def test_status_leads_with_degraded_health(env, monkeypatch):
     lines = out.splitlines()
     assert lines[0] == "Status:"
     # 031: the pause line leads every seat (running here), THEN health
-    assert lines[1].startswith("▶ RUNNING") or lines[1].startswith("⏸ PAUSED")
+    assert lines[1].startswith(("▶ RUNNING", "⏸ PAUSED", "■ IDLE"))  # 080 WS-4: IDLE
     assert lines[2].startswith("Health: DEGRADED")
     assert "credit sentinel TRIPPED for openrouter" in lines[3]
     assert "Grant defi_trade" in out and "/fulfill" in out

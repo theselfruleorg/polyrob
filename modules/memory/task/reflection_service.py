@@ -8,8 +8,10 @@ caller can substitute a simple concat.
 Gate: ``REFLECTION_LLM_ENABLED`` — read once at construction time via the
 single-source helper ``core.config_policy.reflection_llm_enabled_default()``.
 The aux LLM is provisioned externally (by ``construction.py``) and injected as
-the ``llm`` parameter; when ``llm is None`` the service returns None immediately
-(fail-open, same as disabled).
+the ``llm`` parameter (the aux model, else an isolated copy of the session's main
+model — ``agents.task.constants.resolve_aux_chain``); when ``llm is None`` the service
+returns None immediately (fail-open, same as disabled) and logs ``event=reflection_off``
+once per process.
 
 Behaviour contract (matches the historical _llm_consolidate exactly):
 - Returns the LLM-synthesized text when enabled + model available + findings non-empty.
@@ -25,9 +27,26 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+#: The marker a finding carries when it was written while a tool call failed
+#: (``agents/task/agent/core/memory_writer.py::UNVERIFIED_PREFIX``).
+UNVERIFIED_MARK = "[unverified] "
+
 # P0-7: strong refs to fire-and-forget metering tasks scheduled onto the loop from
 # its own thread, so they aren't garbage-collected before they run.
 _INFLIGHT_METER_TASKS: set = set()
+
+
+_OFF_LOGGED = False
+
+
+def _log_off_once() -> None:
+    """Say ONCE per process that reflection is enabled but has no model (review B-2:
+    it was silently off on every openrouter box for a month)."""
+    global _OFF_LOGGED
+    if not _OFF_LOGGED:
+        _OFF_LOGGED = True
+        logger.warning("event=reflection_off H-MEM reflection is enabled but no model was "
+                       "provisioned for it; phase summaries fall back to a plain concat")
 
 
 class ReflectionService:
@@ -115,6 +134,8 @@ class ReflectionService:
         Returns:
             Synthesised summary string, or None on any failure / when disabled.
         """
+        if self._enabled and not self._llm and findings:
+            _log_off_once()
         if not (self._enabled and self._llm and findings):
             return None
 
@@ -123,10 +144,17 @@ class ReflectionService:
             from core.async_bridge import run_coroutine_sync
             from modules.llm.messages import HumanMessage
 
+            # D6 (review 2026-10-13): a finding written while a tool call failed
+            # carries "[unverified] ". The summary used to drop it, so one failed
+            # lookup became an unmarked "X does not exist" row in recall.
+            unverified = any(str(f).startswith(UNVERIFIED_MARK) for f in findings)
             prompt = (
                 "Consolidate these related findings into a concise phase summary "
                 "(<=3 sentences). Preserve concrete facts, names, and numbers; drop "
-                "redundancy:\n\n" + "\n".join(f"- {f}" for f in findings)
+                "redundancy. A finding marked [unverified] is a claim the run could "
+                "not check (a tool call failed): keep the [unverified] marker on any "
+                "sentence built from it and never state it as a confirmed fact:\n\n"
+                + "\n".join(f"- {f}" for f in findings)
             )
             _t0 = time.perf_counter()
             resp = run_coroutine_sync(
@@ -143,6 +171,8 @@ class ReflectionService:
                 self._meter(mc, resp, _duration)
 
             text = (getattr(resp, "content", None) or "").strip()
+            if text and unverified and not text.startswith(UNVERIFIED_MARK):
+                text = UNVERIFIED_MARK + text  # any unverified input taints the summary
             if text:
                 logger.info(
                     f"event=reflection_consolidate findings={len(findings)} chars={len(text)}"

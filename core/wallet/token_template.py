@@ -9,9 +9,19 @@ structural rather than promised:
 * **no transfer fee, no rebase, no upgrade path, no proxy**.
 
 The source lives beside this file (``contracts/FixedSupplyToken.sol``) so it can
-be read, and ``scripts/build_token_template.py`` recompiles it and fails if the
-bytes below have drifted. ``tests/unit/core/wallet/test_token_template.py`` pins
-the same hashes without needing a compiler.
+be read. The bytes below are reproducible from it, byte for byte, with solc
+0.8.24 (verified 2026-10-19, 085 W7)::
+
+    solc --optimize --optimize-runs 200 --evm-version paris --no-cbor-metadata \
+         --combined-json bin,bin-runtime core/wallet/contracts/FixedSupplyToken.sol
+
+``bin`` is :data:`INIT_CODE` and ``bin-runtime`` is :data:`RUNTIME`. To change
+the contract: edit the source, run that command, paste both outputs here, and
+update :data:`SOURCE_SHA256`, :data:`INIT_CODE_HASH`, :data:`RUNTIME_HASH` and
+:data:`IMMUTABLE_SLOTS` (from ``immutableReferences``).
+``tests/unit/core/wallet/test_token_template_reproducible.py`` pins the source
+and the bytes by hash without a compiler, and recompiles and compares when a
+``solc`` 0.8.24 is on ``PATH``.
 
 ⚠️ The bytes are the contract. The Solidity beside them is EVIDENCE, not the
 artifact — a reader who wants the guarantee should check the hash, recompile, or
@@ -24,13 +34,18 @@ this init code returns 1686 runtime bytes differing from :data:`RUNTIME` at
 exactly bytes 242-250 (totalSupply) and 325 (decimals) — the two immutable
 slots, and nothing else.
 """
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Tuple
 
 #: solc version and settings the bytes below were produced with. Reproduce with
-#: ``python scripts/build_token_template.py --check``.
+#: the command in the module docstring (``--no-cbor-metadata``: no metadata
+#: hash, so the bytes depend only on the source and these settings).
 SOLC_VERSION = "0.8.24+commit.e11b9ed9"
 OPTIMIZER_RUNS = 200
 EVM_VERSION = "paris"
+#: sha256 of ``contracts/FixedSupplyToken.sol`` — the source the bytes come from.
+SOURCE_SHA256 = "180223c3945da9259d91940a4f8df0492b00fc4782f6bda5fd6991694bf0923b"
 
 #: Creation bytecode. Constructor arguments are ABI-appended by
 #: :func:`build_init_code` — never by string concatenation at a call site.
@@ -185,7 +200,14 @@ class TokenTemplateError(ValueError):
     """The requested token cannot be built. Always carries the reason."""
 
 
-def _validate_text(value: str, *, field: str, limit: int) -> str:
+def validate_token_text(value: str, *, field: str, limit: int) -> str:
+    """A token name or symbol, printable ASCII only (085 W7, D6).
+
+    ⚠️ An allowlist, not a denylist. The old filter blocked C0, DEL and a few
+    zero-width / bidi code points, so a name with a bidi ISOLATE, a C1 control
+    or a Cyrillic homoglyph still minted — and a token name never changes. The
+    same function guards the EVM template and the Token-2022 metadata.
+    """
     if not isinstance(value, str):
         raise TokenTemplateError(f"{field} must be text")
     text = value.strip()
@@ -195,16 +217,23 @@ def _validate_text(value: str, *, field: str, limit: int) -> str:
         raise TokenTemplateError(
             f"{field} is {len(text)} characters, above the {limit}-character limit")
     for ch in text:
-        if ord(ch) < 0x20 or ord(ch) == 0x7F:
+        if not 0x20 <= ord(ch) <= 0x7E:
             raise TokenTemplateError(
-                f"{field} contains a control character — a token name that can "
-                f"hide part of itself on a screen is not one this rail will mint")
-        if 0x200B <= ord(ch) <= 0x200F or 0x202A <= ord(ch) <= 0x202E or ord(ch) == 0xFEFF:
-            raise TokenTemplateError(
-                f"{field} contains a zero-width or bidirectional-override "
-                f"character (U+{ord(ch):04X}) — those exist to make a name read "
-                f"as a different name")
+                f"{field} contains U+{ord(ch):04X} — this rail mints printable "
+                f"ASCII names only, because a name with a hidden or look-alike "
+                f"character reads as a different name on somebody's screen")
     return text
+
+
+#: Back-compat name for the in-module callers.
+_validate_text = validate_token_text
+
+
+def validate_token_names(name: str, symbol: str) -> Tuple[str, str]:
+    """``(name, symbol)`` stripped and checked — the ONE rule every seat that
+    takes a token name uses (deploy, Token-2022, the launchpad, the CLI)."""
+    return (validate_token_text(name, field="name", limit=MAX_NAME_CHARS),
+            validate_token_text(symbol, field="symbol", limit=MAX_SYMBOL_CHARS))
 
 
 def _abi_encode_string(text: str) -> str:
@@ -256,7 +285,96 @@ def build_init_code(*, name: str, symbol: str, decimals: int,
         name=name, symbol=symbol, decimals=decimals, supply_raw=supply_raw)
 
 
-def whole_to_raw(supply: float, decimals: int) -> int:
+#: A float carries at most this many significant decimal digits exactly
+#: (DBL_DIG). A JSON number with more digits was already rounded by the JSON
+#: parser before any code here saw it.
+_FLOAT_EXACT_DIGITS = 15
+
+#: A supply written with thousands commas: 1,000,000 or 1,234.5 — groups of
+#: exactly three digits after the first.
+_GROUPED = re.compile(r"^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
+
+
+def _trimmed(d: Decimal) -> Tuple[int, int]:
+    """``(coefficient, exponent)`` of a finite Decimal with trailing zeros of
+    the coefficient folded into the exponent. Pure integer work: no Decimal
+    context, so nothing rounds at 28 digits (``normalize``/``*`` would)."""
+    sign, digits, exp = d.as_tuple()
+    coeff = int("".join(map(str, digits)) or "0")
+    if coeff == 0:
+        return 0, 0
+    while coeff % 10 == 0:
+        coeff //= 10
+        exp += 1
+    return (-coeff if sign else coeff), exp
+
+
+def to_exact_supply(value) -> Decimal:
+    """A supply as an EXACT :class:`~decimal.Decimal`, or a refusal.
+
+    A string and an int convert exactly. A float converts through ``repr`` (never
+    ``Decimal(float)``, which carries the binary error in), and only when it has
+    15 significant digits or fewer — above that the value was rounded in the
+    tool-call JSON, and the caller must send the supply as a string.
+    """
+    if isinstance(value, bool):
+        raise TokenTemplateError("supply must be a number, not true/false")
+    if isinstance(value, Decimal):
+        out = value
+    elif isinstance(value, int):
+        out = Decimal(value)
+    elif isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise TokenTemplateError("supply must be a finite number")
+        out = Decimal(repr(value))
+        if len(str(abs(_trimmed(out)[0]))) > _FLOAT_EXACT_DIGITS:
+            raise TokenTemplateError(
+                f"a supply of {repr(value)} has more significant digits than a "
+                f"JSON number keeps exactly — send the supply as a string, "
+                f"e.g. \"123456789.123456789\"")
+    elif isinstance(value, str):
+        text = value.strip().replace("_", "")
+        if "," in text:
+            # Thousands separators only ("1,000,000"): a comma anywhere else
+            # ("1,5" in a European locale) is ambiguous, and a supply guess
+            # is not one this rail makes.
+            if not _GROUPED.match(text):
+                raise TokenTemplateError(
+                    f"supply {value!r} is not a number — use 1000000, "
+                    f"1,000,000, 1_000_000 or 1e6")
+            text = text.replace(",", "")
+        try:
+            out = Decimal(text)
+        except (InvalidOperation, ValueError, ArithmeticError):
+            raise TokenTemplateError(f"supply {value!r} is not a number")
+    else:
+        raise TokenTemplateError(f"supply {value!r} is not a number")
+    if not out.is_finite():
+        raise TokenTemplateError("supply must be a finite number")
+    return out
+
+
+def format_supply(value) -> str:
+    """The EXACT supply in plain notation — never ``{:g}``, never rounded.
+
+    ``{:g}`` printed 1234567 as ``1.23457e+06``: the owner approved a number
+    that was not the one minted, and a retry hint built from it minted 1234570.
+    """
+    try:
+        coeff, exp = _trimmed(to_exact_supply(value))
+    except TokenTemplateError:
+        return str(value)
+    if abs(exp) > 64:
+        return str(value)
+    sign = "-" if coeff < 0 else ""
+    digits = str(abs(coeff))
+    if exp >= 0:
+        return sign + digits + "0" * exp
+    digits = digits.rjust(-exp + 1, "0")
+    return f"{sign}{digits[:exp]}.{digits[exp:]}"
+
+
+def whole_to_raw(supply, decimals: int) -> int:
     """Whole units -> raw units, EXACTLY.
 
     ⚠️ Decimal, not float, and this is not fastidiousness. The first live dry
@@ -266,26 +384,29 @@ def whole_to_raw(supply: float, decimals: int) -> int:
     integer part. The token would have been minted with a supply nobody asked
     for, on a contract with no mint function, forever.
 
+    ``supply`` is a Decimal (085 W7: the param models parse it exactly); an int,
+    a string or a short float are accepted through :func:`to_exact_supply`.
+
     ``1.5`` at 0 decimals still refuses: it is not 1 and not 2, it is a caller
     who has not said what they mean, and silently truncating a SUPPLY is not a
     rounding error anyone can undo later.
     """
-    from decimal import Decimal, InvalidOperation
-
-    if supply <= 0:
+    exact = to_exact_supply(supply)
+    shown = format_supply(exact)
+    if exact <= 0:
         raise TokenTemplateError("supply must be greater than zero")
-    if supply > MAX_WHOLE_SUPPLY:
+    if exact > MAX_WHOLE_SUPPLY:
         raise TokenTemplateError(
-            f"a supply of {supply:g} whole units is above the "
-            f"{MAX_WHOLE_SUPPLY:g} sanity ceiling — refusing a number this large "
+            f"a supply of {shown} whole units is above the "
+            f"{MAX_WHOLE_SUPPLY} sanity ceiling — refusing a number this large "
             f"as a typo, because minting is not reversible")
-    try:
-        # str() first: Decimal(float) would faithfully carry the binary error in.
-        scaled = Decimal(str(supply)) * (Decimal(10) ** int(decimals))
-    except (InvalidOperation, ValueError, ArithmeticError) as exc:
-        raise TokenTemplateError(f"supply {supply!r} is not a usable number ({exc})")
-    if scaled != scaled.to_integral_value():
+    if not isinstance(decimals, int) or isinstance(decimals, bool) or decimals < 0:
+        raise TokenTemplateError("decimals must be a whole number, 0 or more")
+    coeff, exp = _trimmed(exact)
+    fractional = max(0, -exp)
+    if fractional > decimals:
         raise TokenTemplateError(
-            f"a supply of {supply:g} is not a whole number of units at "
-            f"{decimals} decimals")
-    return int(scaled)
+            f"a supply of {shown} has {fractional} fractional digits, more "
+            f"than the {decimals} decimals — it is not a whole number of units")
+    # Integer arithmetic only: exact at any size.
+    return coeff * 10 ** (exp + decimals)

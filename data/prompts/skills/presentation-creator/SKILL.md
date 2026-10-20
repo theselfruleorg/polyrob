@@ -3,9 +3,9 @@ name: presentation-creator
 description: Create reveal.js presentations with multi-file structure
 license: MIT
 metadata:
+  polyrob-when: 'Making a slide deck (reveal.js)'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["presentation","slides","slideshow","slideshows","slide deck","deck","pitch deck","powerpoint","keynote"],"task_patterns":["create.*presentation","make.*(slides|slide ?deck|slideshow)","build.*deck","presentation.*about","slides.*for"],"tool_ids":[]}'
   polyrob-version: '1'
 ---
 # Presentation Creator

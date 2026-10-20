@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Scroll to specific text on the page.",
+    "name": "browser_scroll_to_text",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for sending keyboard keys.",
+      "properties": {
+        "keys": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -3,9 +3,9 @@ name: person-analyzer
 description: Person intelligence workflow using LinkedIn and web research
 license: MIT
 metadata:
+  polyrob-when: 'Researching a person (LinkedIn and the web)'
   polyrob-priority: '1'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["analyze person","research person","person intelligence","profile analysis","sales prospect","contact research","background check","linkedin profile"],"task_patterns":["analy[sz]e.*\\bperson\\b","research.*\\b(person|founder|ceo|executive)\\b","find.*about.*\\bperson\\b","\\bprofile analysis\\b","prospect.*research","\\bwho is\\b.*\\b(on linkedin|linkedin)\\b"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Person Analyzer

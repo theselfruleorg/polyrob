@@ -58,21 +58,23 @@ def test_cancel_records_actor_and_via(tmp_path, event_log):
     assert row["source"] == "cron"
 
 
-def test_via_defaults_to_empty_but_still_audits(tmp_path, event_log):
-    # A caller that does not name a surface (e.g. the console cancel today) is
-    # still audited — the domain event is never silent.
+def test_schedule_via_defaults_to_empty_but_stop_requires_it(tmp_path, event_log):
+    # A schedule that does not name a surface is still audited; a stop (080
+    # WS-2) must name its actor — `via=""` left "who stopped it?" unanswerable.
     svc, _ = _svc(tmp_path)
     job = svc.schedule(task="ping", schedule_spec="1h", user_id="u2")
     assert event_log.query(kind=CRON_SCHEDULED)[0]["attrs"]["via"] == ""
-    svc.cancel(job.id, user_id="u2")
-    assert event_log.query(kind=CRON_CANCELLED)[0]["attrs"]["via"] == ""
+    with pytest.raises(ValueError):
+        svc.cancel(job.id, user_id="u2", via="")
+    svc.cancel(job.id, user_id="u2", via="cli")
+    assert event_log.query(kind=CRON_CANCELLED)[0]["attrs"]["via"] == "cli"
 
 
 def test_noop_cancel_records_nothing(tmp_path, event_log):
     # A cancel that changed no state (missing / wrong tenant) is not a domain
     # event — only a real cancel is recorded.
     svc, _ = _svc(tmp_path)
-    assert svc.cancel("does-not-exist", user_id="u1") is False
+    assert svc.cancel("does-not-exist", user_id="u1", via="cli") is False
     assert event_log.query(kind=CRON_CANCELLED) == []
 
 

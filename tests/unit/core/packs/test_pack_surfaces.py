@@ -82,13 +82,12 @@ def test_install_resolves_index_ids_and_a_first_party_pack_ships_in_polyrob(echo
 def test_pack_skills_are_a_trusted_scope_after_builtin(use_packs, monkeypatch, tmp_path):
     use_packs("echo").load_packs()
     assert state.record("echo").status == state.LOADED, state.record("echo").reason
-    from agents.task.agent import skill_store
+    from core.skills import scopes
     from agents.task.agent.skill_manager import SkillManager
-    names = [s.name for s in skill_store.resolve_scopes()]
-    assert names[-1] == "pack:echo" and names.index("builtin") < names.index("pack:echo")
-    scope = skill_store.pack_scopes()[0]
-    assert scope.trusted and not scope.writable and skill_store.scan_exempt(scope)
-    monkeypatch.setattr(skill_store, "builtin_skill_ids", lambda: ["echo-basics"])
+    assert [s.name for s in scopes.pack_scopes()] == ["pack:echo"]
+    scope = scopes.pack_scopes()[0]
+    assert scope.trusted and not scope.writable and scopes.scan_exempt(scope)
+    monkeypatch.setattr(scopes, "builtin_skill_ids", lambda: ["echo-basics"])
     index = SkillManager()._load_external_skills()
     assert "echo:echo-basics" in index, "a builtin id is protected; the pack skill is namespaced"
     assert "echo-basics" not in index

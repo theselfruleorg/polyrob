@@ -45,7 +45,9 @@ async def test_show_names_when_and_via_for_a_cancelled_job(tmp_path, evlog):
 
 
 @pytest.mark.asyncio
-async def test_agent_cancel_is_recorded_as_agent(tmp_path, evlog):
+async def test_agent_cancel_is_recorded_as_agent(tmp_path, evlog, monkeypatch):
+    import tools.goal_tools as gt
+    monkeypatch.setattr(gt, "owner_seat_turn", lambda ctx: False)
     t = _tool(tmp_path)
     job = t._cron_service.schedule(task="x", schedule_spec="1h", user_id="u1")
     await t.cronjob_cancel(CronCancelAction(job_id=job.id), execution_context=_ctx())
@@ -61,18 +63,17 @@ async def test_live_job_has_no_cancel_line(tmp_path, evlog):
     assert "cancelled:" not in out
 
 
-def test_cli_cancel_passes_via_cli():
+def test_cli_stop_passes_via_cli():
     import inspect
     from cli.commands import cron as cron_cli
-    src = inspect.getsource(cron_cli.cancel.callback)
-    assert 'via="cli"' in src
+    assert 'via="cli"' in inspect.getsource(cron_cli._stop)
 
 
-def test_every_owner_seat_cancel_passes_via():
-    """Telegram `/cron cancel` and the console cancel record their surface too,
-    so `cronjob_show` never says 'unrecorded surface' for a post-10-06 cancel."""
+def test_every_owner_seat_stop_passes_via():
+    """`/job stop` (Telegram, console chat, REPL) and the console route record
+    their seat too; 080 WS-2 made ``via`` a required argument of the stop."""
     import inspect
-    from surfaces.telegram import owner_ops
-    from webview import pages
-    assert 'svc.cancel(job_id, user_id=user_id, via="telegram")' in inspect.getsource(owner_ops)
-    assert 'service.cancel(job_id, user_id=user_id, via="webview")' in inspect.getsource(pages.api_cron_cancel)
+    from surfaces.telegram import job_ops
+    from webview import job_routes
+    assert "stop_job(svc, job, user_id=user_id, via=via" in inspect.getsource(job_ops)
+    assert 'service.cancel(job_id, user_id=user_id, via="webview")' in inspect.getsource(job_routes.api_cron_cancel)

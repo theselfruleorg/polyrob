@@ -97,7 +97,7 @@ def test_index_page_uses_branding_config_defaults(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
     html = _layout_html(server)
     assert "your-polyrob-host.example" not in html
-    assert "theselfrule.org" not in html
+    assert "t.me/" not in html  # no default support channel either
     # Beta banner removed 2026-07-06 — must never come back
     assert "beta-banner" not in html
     assert "DEN holders" not in html

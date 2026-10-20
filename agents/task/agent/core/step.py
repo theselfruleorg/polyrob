@@ -456,6 +456,15 @@ class StepMixin:
 					_c_before = self.message_manager.get_token_count()
 					_c_t0 = time.time()
 					_emit_compaction_event(self, 'started', 'llm', tokens_before=_c_before)
+					# E-A6: the owner section is lifted as instructions only where an
+					# owner turn wins (not a room / correspondent / child session).
+					try:
+						from agents.task.session_class import regime_policy
+						self.message_manager.owner_instructions_authority = bool(
+							regime_policy(self).latest_owner_turn_wins)
+					except Exception:
+						self.logger.debug("regime probe failed; owner section not lifted", exc_info=True)
+						self.message_manager.owner_instructions_authority = False
 					_compacted = await self.message_manager.llm_compact_history()
 					_emit_compaction_event(
 						self, 'finished', 'llm', tokens_before=_c_before,
@@ -622,6 +631,9 @@ class StepMixin:
 		# the SAME health facts the owner's /status renders (<live-health>), so
 		# "how are you doing?" is never answered from stale context. Fail-open.
 		await self._maybe_inject_live_health()
+		# Review 2026-10-15 rec. 2: the <operations> block — live jobs, goals,
+		# /pause and owner stops, owner-memory regimes only. Volatile tail.
+		await self._maybe_inject_operations()
 
 		# Task 5: session-start "recent activity" digest — first step only, chat/
 		# owner sessions only (never goal/cron/sub-agent). Fail-open; inert unless
@@ -732,8 +744,23 @@ class StepMixin:
 			except Exception:
 				pass
 			raise
+		finally:
+			# 081 WS-0.2: the step-1 manifest, once the schemas, the step-1 blocks
+			# and the provider's usage are known. A no-op after step 1 (and on a
+			# host that does not compose the logging mixin).
+			emit_manifest = getattr(self, '_emit_prompt_manifest', None)
+			if emit_manifest is not None:
+				emit_manifest()
+		# 2026-10-14 review C-1: recall, <live-health> (the spend limits) and the
+		# activity digests are one-shot ephemerals. A step that produced NO action
+		# (a text-only planning turn, an empty reply, every call rejected) did not
+		# use them — so they are re-queued like a failed call's and the next step
+		# (the one that acts) sees them. Once an action runs they are consumed.
 		try:
-			self.message_manager.commit_ephemeral_consumption()
+			if model_output is not None and getattr(model_output, 'action', None):
+				self.message_manager.commit_ephemeral_consumption()
+			else:
+				self.message_manager.restore_ephemeral_on_failure()
 		except Exception:
 			pass
 
@@ -830,7 +857,6 @@ class StepMixin:
 				brain_state=model_output.current_state.model_dump(),
 				actions=actions if actions else [],
 				results=result if result else [],
-				step_info=step_info
 			)
 
 		# PERSISTENCE: Auto-save agent state and message history periodically
@@ -937,6 +963,8 @@ class StepMixin:
 				await self._trip_sentinel_if_credit_death(e)
 				self.state.consecutive_failures = self.max_failures  # Force max failures
 				self.state.stopped = True  # Mark session as stopped
+				from agents.task.runtime.stop_reason import StopReason, set_stop
+				set_stop(self, StopReason.ERROR)  # 083 WS-1
 
 				# Create error result for user visibility
 				self._last_result = [ActionResult(

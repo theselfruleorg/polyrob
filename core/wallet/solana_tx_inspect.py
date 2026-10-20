@@ -201,8 +201,14 @@ TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 #: existing account can block every later route sell), held to the grant rule.
 _T22_TRANSFER_FEE = 26          # TransferFeeExtension; sub 1 = TransferCheckedWithFee
 _T22_OUTFLOW = {(_T22_TRANSFER_FEE, 1): "TransferCheckedWithFee"}
-_T22_POLICY_TAGS = {27: "ConfidentialTransferExtension", 30: "MemoTransferExtension",
-                    34: "CpiGuardExtension"}
+#: Token-2022 instructions with no sub-instruction that move value out of their first
+#: account (085 W8 L2: WithdrawExcessLamports sends a token account's excess lamports
+#: to any destination).
+_T22_OUTFLOW_TAGS = {38: "WithdrawExcessLamports"}
+#: 085 W8 L2: Reallocate (29) grows an existing account at our expense and enables
+#: extensions on it — an account-policy change, held to the same rule.
+_T22_POLICY_TAGS = {27: "ConfidentialTransferExtension", 29: "Reallocate",
+                    30: "MemoTransferExtension", 34: "CpiGuardExtension"}
 
 _COMPUTE_SET_LIMIT = 2
 _COMPUTE_SET_PRICE = 3
@@ -461,9 +467,11 @@ def instruction_refusal(instructions: Sequence[DecodedIx], *,
                             f"account's lamports to another program")
         elif ix.program in SPL_TOKEN_PROGRAMS and ix.data:
             tag = ix.data[0]
-            if ix.program == TOKEN_2022_PROGRAM_ID and tag in (_T22_TRANSFER_FEE, *_T22_POLICY_TAGS):
+            if ix.program == TOKEN_2022_PROGRAM_ID and tag in (
+                    _T22_TRANSFER_FEE, *_T22_POLICY_TAGS, *_T22_OUTFLOW_TAGS):
                 sub = ix.data[1] if len(ix.data) > 1 else None
-                name = _T22_OUTFLOW.get((tag, sub)) or _T22_POLICY_TAGS.get(tag)
+                name = (_T22_OUTFLOW.get((tag, sub)) or _T22_OUTFLOW_TAGS.get(tag)
+                        or _T22_POLICY_TAGS.get(tag))
                 target = _account(ix, 0)
                 if name and (target is None or target not in created):
                     return (f"instruction #{n} is a Token-2022 {name} on "
@@ -817,6 +825,38 @@ def observation_plan(owner: str, *, mints: Sequence[str] = (),
     return addresses, ours
 
 
+def wallet_account_refusal(after: Any) -> Optional[str]:
+    """085 W8 solana L1: why the wallet's own account post-state must not be signed.
+
+    The wallet is a System-owned account with no data. A CPI that re-assigns or
+    re-allocates it (an allowed program forwarding our signer to System
+    ``Assign``/``Allocate``) leaves the lamports unchanged, so the native delta
+    reads clean — but the new owner program takes every lamport later. Refuse
+    unless the post-state owner is the System program, the data is empty and
+    the account is not executable. A missing ``owner`` field refuses too (the
+    pinned RPC always reports it). ``None`` (no post-state) is left to the
+    native-delta rule.
+    """
+    if not isinstance(after, dict):
+        return None
+    prog = after.get("owner")
+    if prog != SYSTEM_PROGRAM_ID:
+        return (f"the simulation shows the wallet account owned by program {prog} "
+                f"afterwards, not the System program — a re-assigned wallet "
+                f"account hands every lamport to that program")
+    if after.get("executable"):
+        return "the simulation shows the wallet account executable afterwards"
+    data = after.get("data")
+    empty = data in (None, "", [], b"") or (
+        isinstance(data, (list, tuple)) and len(data) >= 1 and data[0] in ("", None))
+    space = after.get("space")
+    if not empty or (space not in (None, 0)):
+        return ("the simulation shows data allocated on the wallet account "
+                "afterwards — a System account holds none, and an allocated one "
+                "is the first step of handing it to another program")
+    return None
+
+
 def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
              rpc: Callable, extra_allowed: frozenset = frozenset(),
              locally_built_transfer: bool = False, swap_bounds=None) -> SolanaDeltas:
@@ -876,8 +916,7 @@ def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
                 return parse_deltas(sim, owner=owner, owned_pubkeys=addresses,
                                     ours=ours)
             if value.get("err") is not None:
-                return SolanaDeltas(False, f"simulation reverted: {value['err']}",
-                                    reverted=True)
+                return SolanaDeltas(False, f"simulation reverted: {value['err']}")
             accounts = list(value.get("accounts") or [])
             if len(accounts) != len(chunk):
                 return SolanaDeltas(
@@ -892,6 +931,11 @@ def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
         return SolanaDeltas(False, f"the observation set is incomplete: {exc}")
     except Exception as exc:
         return SolanaDeltas(False, f"simulation failed: {exc}")
+    if owner in addresses:
+        idx = addresses.index(owner)
+        why = wallet_account_refusal(post[idx] if idx < len(post) else None)
+        if why:
+            return SolanaDeltas(False, why)
     sim = {"value": {"err": None, "accounts": post, "unitsConsumed": units},
            "_pre": pre}
     # `addresses` is what we FETCHED; `ours` is what is actually OURS. Passing

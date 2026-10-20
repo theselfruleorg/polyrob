@@ -246,8 +246,14 @@ class SpendLedger:
                        "(the owner lifts it with /resume)")
         self._refresh_caps()
         if amount_usd > self._ceiling:
-            return PolicyDecision(False, f"amount ${amount_usd:.2f} exceeds catastrophic ceiling ${self._ceiling:.2f}",
-                                  cap_exceeded=True)
+            # 079 R6: the old words ("catastrophic ceiling") named no remedy and
+            # read as if the owner's own verbs were exempt. They are not.
+            from core.money import PER_TX_CAP_REMEDY
+            return PolicyDecision(
+                False, f"amount ${amount_usd:.2f} exceeds the per-transaction cap "
+                       f"${self._ceiling:.2f} (binds the owner's own verbs too) — owner "
+                       f"raises it: {PER_TX_CAP_REMEDY}",
+                cap_exceeded=True)
         try:
             journal = _hooks.submission_journal()
             if journal is None:

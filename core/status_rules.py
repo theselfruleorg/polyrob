@@ -214,7 +214,7 @@ def _rail_prose(sec: Section, uid: str, cron_db: str) -> None:
 
 
 def _goal_prose(sec: Section, uid: str, data_dir: str) -> None:
-    """Use the sweep's existing instruction reader for live goal/objective prose."""
+    """Use the sweep's existing instruction reader for live goal prose."""
     from core.rules_sweep import _rail_texts
     from core.runtime_paths import goals_db_path
     db = goals_db_path(data_dir)
@@ -230,7 +230,7 @@ def _goal_prose(sec: Section, uid: str, data_dir: str) -> None:
         return
     info["goal_rows"] = len(texts)
     info["goal_chars"] = sum(len(text) for _, text in texts)
-    sec.lines.append(f"goal/rail prose: {len(texts)} live goal/objective row(s) carry "
+    sec.lines.append(f"goal/rail prose: {len(texts)} live goal row(s) carry "
                      f"{info['goal_chars']:,} chars of instruction")
 
 
@@ -267,8 +267,8 @@ def _rail_skill_misses(sec: Section, tele: Optional[Section]) -> None:
     sec.health.append(HealthItem(
         key="rail_skill_missing", severity=SEVERITY_WARN,
         text=(f"{len(rows)} rail run(s) pinned skill(s) that did NOT load: "
-              f"{', '.join(missing[:6])} — they ran on keyword-matched doctrine"),
-        remedy="fix the id in the job's `skills` (see /cron show <id>) or author the skill"))
+              f"{', '.join(missing[:6])} — they ran with the skill index only"),
+        remedy="fix the id in the job's `skills` (see /job show <id>) or author the skill"))
 
 
 def rules_section(user_id: str, data_dir: str, cron_db: str,

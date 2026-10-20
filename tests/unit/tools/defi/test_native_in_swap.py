@@ -128,6 +128,17 @@ def test_univ3_declines_native_instead_of_treating_it_as_an_address():
 
 # --- the lifi provider -----------------------------------------------------
 
+def _lifi_native_in_data():
+    """A known-facet LI.FI native-in swap call (085 W8: an unknown facet refuses)."""
+    from core.wallet import abi, lifi_calldata as L
+    zero = "0x" + "0" * 40
+    step = (zero, zero, zero, TOKEN_OUT, AMOUNT, b"\x01", False)
+    name = "swapTokensSingleV3NativeToERC20"
+    return abi.encode_call(name, L._HEAD + [L._FACETS[name]],
+                           [b"\x00" * 32, "polyrob", "",
+                            "0x2222222222222222222222222222222222222222", 1, step])
+
+
 def test_lifi_translates_the_sentinel_at_the_edge_and_keeps_the_value():
     """Measured against the live API on Robinhood 2026-09-13: a native quote
     returns value == fromAmount, an ERC-20 quote returns 0x0."""
@@ -143,7 +154,7 @@ def test_lifi_translates_the_sentinel_at_the_edge_and_keeps_the_value():
                          "approvalAddress": chains.get(CHAIN).aggregator_spender},
             "transactionRequest": {
                 "to": chains.get(CHAIN).aggregator_spender,
-                "data": "0x" + "22" * 40,
+                "data": _lifi_native_in_data(),
                 "value": hex(AMOUNT),
                 "chainId": chains.get(CHAIN).chain_id},
             "tool": "test"}

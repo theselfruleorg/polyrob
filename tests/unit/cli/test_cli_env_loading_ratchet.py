@@ -4,7 +4,7 @@ Failure mode C in proposal 026: 14 command modules never called ``load_env``,
 so a value written by ``polyrob config set`` was invisible to them (`polyrob
 cron` warned "CRON_ENABLED is off" right after the owner turned it on). The
 seam is ``cli.commands._bootstrap.ensure_env_loaded`` — a memoized
-``load_env(local_mode=True)`` called from each command group's callback.
+``load_env()`` called from each command group's callback.
 
 This is a SHRINK-ONLY ratchet (house pattern): a module may satisfy it via any
 of the accepted seams; the exempt set may only shrink, never grow.
@@ -84,4 +84,4 @@ def test_ensure_env_loaded_is_memoized(monkeypatch):
     bootstrap.ensure_env_loaded()
     bootstrap.ensure_env_loaded()
     assert len(calls) == 1
-    assert calls[0][1] == {"local_mode": True}
+    assert calls[0] == ((), {})

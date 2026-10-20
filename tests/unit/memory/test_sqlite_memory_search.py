@@ -214,15 +214,64 @@ def test_before_id_clamp_interplay(provider):
 # --------------------------------------------------------------------------------- #
 
 def test_automation_session_demoted_below_interactive_on_rank(provider):
-    """A 'cron'-tagged session's row sorts AFTER an interactive one even when the
-    automation row has objectively stronger raw FTS5 relevance (more term hits) —
-    proves demotion actually overrides plain rank, not just a coincidental order."""
+    """OWNER-CHAT reader (``demote_automation=True``, the default and the owner
+    chat regime's policy): a 'cron'-tagged session's row sorts AFTER an
+    interactive one even when the automation row has objectively stronger raw
+    FTS5 relevance (more term hits) — demotion overrides plain rank."""
     asyncio.run(provider.sync_turn("q", "widget report", session_id="s_chat", user_id="alice"))
     asyncio.run(provider.sync_turn("q", "widget widget widget urgent",
                                    session_id="s_cron", user_id="alice"))
     _tag_episode(provider, session_id="s_cron", user_id="alice", kind="cron")
-    out = asyncio.run(provider.search("widget", user_id="alice"))
+    out = asyncio.run(provider.search("widget", user_id="alice", demote_automation=True))
     assert out.index("widget report") < out.index("widget widget widget urgent")
+
+
+def test_automation_reader_is_not_demoted(provider):
+    """D2 (review 2026-10-13): a cron / goal reader's regime says
+    ``demote_automation_recall=False`` — plain relevance decides."""
+    asyncio.run(provider.sync_turn("q", "widget report", session_id="s_chat", user_id="alice"))
+    asyncio.run(provider.sync_turn("q", "widget widget widget urgent",
+                                   session_id="s_cron", user_id="alice"))
+    _tag_episode(provider, session_id="s_cron", user_id="alice", kind="cron")
+    out = asyncio.run(provider.search("widget", user_id="alice", demote_automation=False))
+    assert out.index("widget widget widget urgent") < out.index("widget report")
+
+
+def _tag_job_episode(provider, *, session_id, user_id, job_id=None, goal_id=None, kind="cron"):
+    import json as _json
+    execute_retry(
+        provider.db_path,
+        "INSERT INTO episodes (ts, user_id, session_id, kind, artifacts, spend_usd, "
+        "steps, surfaced, meta, goal_id, created_at) VALUES (0, ?, ?, ?, '[]', 0, 0, 0, ?, ?, 0)",
+        (user_id, session_id, kind, _json.dumps({"source": kind, "job_id": job_id}), goal_id))
+
+
+def test_cron_reader_recalls_its_own_prior_run_first(provider):
+    """D2 / A7: the release-watch cron's previous run must outrank an unrelated
+    chat row (and another job's run) that shares the words."""
+    asyncio.run(provider.sync_turn("q", "release owner release owner release notes chat",
+                                   session_id="s_chat", user_id="alice"))
+    asyncio.run(provider.sync_turn("q", "release watch other job owner release",
+                                   session_id="s_other", user_id="alice"))
+    asyncio.run(provider.sync_turn("q", "v1.4.0 release already announced",
+                                   session_id="s_mine", user_id="alice"))
+    _tag_job_episode(provider, session_id="s_other", user_id="alice", job_id="job-b")
+    _tag_job_episode(provider, session_id="s_mine", user_id="alice", job_id="job-a")
+    out = asyncio.run(provider.prefetch("release owner", session_id="s_now", user_id="alice",
+                                        demote_automation=False, prefer_job_id="job-a"))
+    mine = out.index("v1.4.0 release already announced")
+    assert mine < out.index("release owner release owner") and mine < out.index("other job")
+
+
+def test_goal_reader_recalls_its_own_goal_rows_first(provider):
+    asyncio.run(provider.sync_turn("q", "bridge bridge bridge chat note",
+                                   session_id="s_chat", user_id="alice"))
+    asyncio.run(provider.sync_turn("q", "bridge arrived on base",
+                                   session_id="s_goal", user_id="alice"))
+    _tag_job_episode(provider, session_id="s_goal", user_id="alice", goal_id="g1", kind="goal")
+    out = asyncio.run(provider.search("bridge", user_id="alice", demote_automation=False,
+                                      prefer_goal_id="g1"))
+    assert out.index("bridge arrived on base") < out.index("bridge bridge bridge")
 
 
 def test_goal_session_also_demoted(provider):
@@ -284,3 +333,35 @@ def test_demotion_is_tenant_scoped(provider):
     # Alice's own row keeps plain rank order — bob's cron tag on a colliding
     # session_id string (a different tenant) must not leak into her ordering.
     assert out.index("widget widget widget urgent") < out.index("widget report")
+
+
+def test_own_run_keyed_on_the_run_record_thread_key(provider):
+    """WS2 run records carry thread_key "cron:<job_id>" (no meta.job_id)."""
+    asyncio.run(provider.sync_turn("q", "release release release chat", session_id="s_chat",
+                                   user_id="alice"))
+    asyncio.run(provider.sync_turn("q", "release posted already", session_id="s_rr",
+                                   user_id="alice"))
+    execute_retry(
+        provider.db_path,
+        "INSERT INTO episodes (ts, user_id, session_id, thread_key, kind, artifacts, spend_usd, "
+        "steps, surfaced, meta, created_at) VALUES (0, 'alice', 's_rr', 'cron:job-z', 'cron', "
+        "'[]', 0, 0, 0, '{}', 0)")
+    out = asyncio.run(provider.search("release", user_id="alice", demote_automation=False,
+                                      prefer_job_id="job-z"))
+    assert out.index("release posted already") < out.index("release release release")
+
+
+def test_malformed_episode_meta_does_not_break_own_run_recall(provider):
+    """A legacy episode row with non-JSON meta made json_extract raise; since D3
+    a recall read error is fatal to the turn's recall, so the own-run probe must
+    skip such a row instead."""
+    asyncio.run(provider.sync_turn("q", "bridge arrived on base", session_id="s_old",
+                                   user_id="alice"))
+    execute_retry(
+        provider.db_path,
+        "INSERT INTO episodes (ts, user_id, session_id, kind, artifacts, spend_usd, "
+        "steps, surfaced, meta, created_at) VALUES (0, 'alice', 's_old', 'cron', '[]', "
+        "0, 0, 0, 'not json', 0)")
+    out = asyncio.run(provider.search("bridge", user_id="alice", demote_automation=False,
+                                      prefer_job_id="job-a"))
+    assert "bridge arrived on base" in out

@@ -3,9 +3,9 @@ name: coding-workflow
 description: Edit code safely (read, plan, edit, run tests, iterate)
 license: MIT
 metadata:
+  polyrob-when: 'Editing code: read, plan, edit, run tests, iterate'
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["fix","implement","refactor","add function","bug","write code","run tests","debug","edit code"],"task_patterns":["fix.*bug","implement.*","refactor.*","add.*function","write.*code","run.*tests","debug.*"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Coding Workflow

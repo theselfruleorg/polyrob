@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from agents.task.loop_types.controller_types import ActionResult
 
@@ -204,14 +204,32 @@ def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=
     if activated is not None:
         activated.add(sid)
         activated.discard(ack_marker)
+    # 081 WS-5.1: the sha256 of the SKILL.md this body came from is the token a
+    # skill_manage patch/edit/delete must carry (read-before-write, no session state).
+    sha = skill_file_sha256(skill_dir) if skill_dir is not None else None
+    tag = f'<skill id="{sid}" sha256="{sha}">' if sha else f'<skill id="{sid}">'
     result = ActionResult(
-        extracted_content=f'<skill id="{sid}">\n{body}\n</skill>',
+        extracted_content=f'{tag}\n{body}\n</skill>',
         include_in_memory=True,
         metadata={'skill_loaded': sid},
     )
     if skill_dir is not None:
         result.metadata['skill_resources'] = list_skill_resources(skill_dir)
+    if sha:
+        result.metadata['skill_sha256'] = sha
     return result
+
+
+def skill_file_sha256(skill_dir) -> Optional[str]:
+    """sha256 of ``<skill_dir>/SKILL.md`` as stored (frontmatter included) — the
+    revision the skill writer compares. ``None`` when it cannot be read."""
+    import hashlib
+    from pathlib import Path
+    try:
+        raw = (Path(skill_dir) / "SKILL.md").read_bytes()
+    except (OSError, TypeError):
+        return None
+    return hashlib.sha256(raw).hexdigest()
 
 
 def self_mod_emitter(execution_context, controller, user_id, *, kind, source,

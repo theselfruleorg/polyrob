@@ -44,13 +44,13 @@ async def test_transition_hook_holds_dispatcher_and_cancels_cron(home):
         await asyncio.sleep(0.05)
         # a resume edge does nothing; a second identical pause does nothing
         ac.resume(str(home))
-        ac.pause(str(home), scopes=("streams",), via="test")
+        ac.pause(str(home), scopes=("social",), via="test")
         await asyncio.sleep(0.05)
     finally:
         ac._TRANSITION_HOOKS.clear()
     assert ("cron", None) in calls and any(c[0] == "hold" for c in calls)
     assert h._loops["goals"].dispatcher._paused_seen is True
-    # the streams-only pause must NOT hold dispatch/cron (their kinds are not covered)
+    # the social-only pause must NOT hold dispatch/cron (their kinds are not covered)
     assert calls.count(("cron", None)) == 1
 
 

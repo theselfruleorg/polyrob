@@ -81,7 +81,7 @@ def test_the_trading_stream_reads_the_solana_balance_every_run():
 
 
 def test_the_trading_skill_marks_solana_as_money_capable():
-    text = SKILL.read_text(encoding="utf-8")
+    text = (SKILL.parent / "references" / "chains.md").read_text(encoding="utf-8")
     row = next(l for l in text.splitlines()
                if l.startswith("| **solana**"))
     assert "solana_swap" in row, \
@@ -89,9 +89,10 @@ def test_the_trading_skill_marks_solana_as_money_capable():
     assert "SOL" in row, "the row must say which asset pays Solana gas"
 
 
-def test_the_skill_activates_on_a_solana_swap():
-    """polyrob-triggers gates auto-activation. defi_trade_solana_swap was
-    missing, so the one skill that governs trading did not fire on the Solana
-    money verb."""
-    text = SKILL.read_text(encoding="utf-8")
-    assert "defi_trade_solana_swap" in text
+def test_the_skill_is_an_index_line_for_the_money_rail():
+    """The one skill that governs trading is in the index of a session that holds
+    the money rail (081 Q2: the model loads it; no keyword matcher)."""
+    from agents.task.agent.skill_manager import SkillManager
+    got = [m.skill_id for m in SkillManager().get_catalog_skills(
+        tool_ids=["defi_trade", "defi_data"], max_skills=500)]
+    assert "treasury-trading" in got

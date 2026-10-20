@@ -1,6 +1,6 @@
 # tests/unit/agents/task/test_skill_compliance_library.py
 from pathlib import Path
-from agents.task.agent.skill_frontmatter import parse_frontmatter
+from core.skills.frontmatter import parse_frontmatter
 
 SKILLS = Path("data/prompts/skills")
 NAME_OK = __import__("re").compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")

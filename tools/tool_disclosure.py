@@ -24,15 +24,23 @@ never bypasses it; the delegation blocklist honours the DELEGATE_BLOCKED_TOOLS e
 override via ``get_blocked_child_tools``; correspondent-taint, posture and approval
 gates are EXECUTION-time gates and apply unchanged after a load — loading only
 registers schemas, it grants no execution rights. Gated by
-TOOL_PROGRESSIVE_DISCLOSURE (default OFF; ON under POLYROB_LOCAL).
+TOOL_PROGRESSIVE_DISCLOSURE (default OFF; ON under POLYROB_LOCAL) or, for an
+autonomous run, AUTONOMOUS_TOOL_DISCLOSURE (default ON since 2026-10-14, E-4); an
+owner chat seat always has it (081 WS-3.1). An autonomous run and an owner seat
+reach a late tool through the ``tool_call`` bridge (:func:`session_late_tool_mode`).
+
+081 WS-3.1 — ONE experience on every seat: :data:`CATALOG_INTRO` (the catalog
+wording), :func:`load_result_text` (after a load) and :func:`not_loaded_text`
+(a call to an action the session does not hold) are the only texts; the remedy
+strings live in ``core.tool_gates.REMEDIES``.
 """
 import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional, Set
 
-logger = logging.getLogger(__name__)
+from core.tool_gates import remedy_text
 
-_ASK_OWNER = "message the owner / file an ops ask"
+logger = logging.getLogger(__name__)
 
 # Tools that cannot act without a browser. Under wallet custody they are exactly
 # as available as the remote browser rail (core/security/browser_rail.py).
@@ -48,11 +56,11 @@ def disclosure_ceiling(controller):
         from agents.task.session_class import is_autonomous_session
         if not is_autonomous_session(sid):
             return None
-        # An OWNER-authored cron job carries the owner's standing authority
-        # (CHAT-5): it loads what its task needs, like the owner's own chat.
-        # Money tools stay explicit-grant-only (checked before the ceiling).
-        from core.autonomy_marker import owner_job_task_for_session
-        if owner_job_task_for_session(sid):
+        # A standing cron job or goal carries standing authority (CHAT-5): it
+        # loads what its task needs, like the owner's own chat. Money tools
+        # stay explicit-grant-only (checked before the ceiling).
+        from core.autonomy_marker import job_task_for_session
+        if job_task_for_session(sid):
             return None
         from tools.goal_tools import allowed_self_goal_tools
         from tools.descriptors import get_tool_display_name
@@ -180,66 +188,64 @@ def resolve_tool_status(
 
     caps = TOOL_CAPABILITIES.get(display)
     if caps is None and display not in TOOL_DESCRIPTORS:
-        return ToolStatus(
-            display, "gated", "unknown-tool",
-            "not a known tool id — see <tool-catalog> for the valid ids")
+        return ToolStatus(display, "gated", "unknown-tool", remedy_text("unknown-tool"))
     caps = caps or frozenset()
 
     if "money" in caps:
-        # ⚠️ Do NOT reintroduce "request it on the goal payload" here. A goal the
-        # agent creates itself can never carry a money tool: goal_create filters
-        # the whole money-SPEND set out (tools/goal_tools.py), deliberately, so
-        # an injected goal cannot launder itself into a trade. Naming that as
-        # the remedy sent the prod agent round a loop — try it, watch it get
-        # stripped, file "defi_trade not granted" as an owner ask, repeat — ~50
-        # times in two weeks. A refusal naming an impossible remedy is worse
-        # than one naming none.
-        return ToolStatus(
-            display, "gated", "money",
-            "money tools are explicit-grant-only. A goal you create yourself can "
-            "NEVER carry one — goal_create strips money tools by design, so do "
-            "not retry by adding it to your own goal payload. Only the "
-            "owner/operator grants it: on a goal THEY seeded (the standing "
-            "trading cycle already carries it), or at session creation. If you "
-            "have a candidate and no grant, record it where the granted run will "
-            "read it and say so plainly — then escalate ONCE, not every run.\n"
-            "⚠️ AND, when the OWNER is the one asking: the money capability is "
-            "not missing, it is simply not YOURS. It is reachable from their "
-            "seat as a chat verb they type themselves — `/trade <what to do>` "
-            "for a run that carries the money verb, `/bridge <from> <to> "
-            "<amount>` to move native value between chains, `/pay <url> "
-            "<max_usd> go` to pay one x402 resource, `/wallet` for "
-            "balances and caps. Say THAT. Do not answer an owner's 'do X' with "
-            "a list of grants you would need: naming a capability you cannot "
-            "reach as though the system lacked it is a capability DENIAL, and "
-            "the owner then believes a shipped feature is broken (live, "
-            "2026-09-12: the owner was told the bridge 'has not reached my "
-            "toolset' and asked to grant defi_trade, when `/bridge` was "
-            "deployed and working the whole time).")
+        # One predicate picks the text (core.tool_gates REMEDIES "money" vs
+        # "money_armed" — the ⚠️ history of both lives there): when the money
+        # regime is ARMED the self-goal ceiling holds the tool and goal_create
+        # keeps it, so "a goal you create can NEVER carry one" would be false.
+        try:
+            from tools.goal_tools import allowed_self_goal_tools
+            _self_grantable = display in allowed_self_goal_tools()
+        except Exception:
+            _self_grantable = False
+        return ToolStatus(display, "gated", "money", remedy_text(
+            "money_armed" if _self_grantable else "money", tool=display)
+            + "\n" + remedy_text("money_owner_move"))
 
     if allowed_ids is not None and display not in allowed_ids:
         return ToolStatus(display, 'gated', 'autonomous-ceiling',
-                          'not in this autonomous run\'s self-service tool ceiling; the owner must grant it explicitly')
+                          remedy_text('autonomous-ceiling'))
 
     if is_leaf:
         from tools.controller.delegation import get_blocked_child_tools
         if display in get_blocked_child_tools():
-            return ToolStatus(
-                display, "gated", "leaf-blocked",
-                "not available to delegated sub-agents — report back and let "
-                "the parent agent run this itself")
+            return ToolStatus(display, "gated", "leaf-blocked", remedy_text("leaf-blocked"))
 
     if _container_has_tool(container, display):
-        return ToolStatus(
-            display, "loadable", "", f'call load_tool("{display}") to use it')
+        return ToolStatus(display, "loadable", "", remedy_text("load_tool", tool=display))
 
+    gate = _gate_line(display)
+    if gate:
+        # 081 bar 2: the tool's own gate (the flag, the posture limb that is
+        # actually unmet) — the catalog owns tool status; <tool-availability>
+        # does not repeat it when the catalog is pinned.
+        return ToolStatus(display, "gated", "unavailable-on-this-deploy", gate)
     desc = TOOL_DESCRIPTORS.get(display) or TOOL_DESCRIPTORS.get(tool_id)
     required = list(getattr(desc, "required_config", None) or [])
-    if required:
-        remedy = f"needs config: {', '.join(required)} — {_ASK_OWNER}"
-    else:
-        remedy = f"not constructed in this deploy shape — {_ASK_OWNER}"
+    remedy = (remedy_text("needs-config", flag=", ".join(required)) if required
+              else remedy_text("not-constructed"))
     return ToolStatus(display, "gated", "unavailable-on-this-deploy", remedy)
+
+
+def _gate_line(display: str) -> str:
+    """``"<gate> → <remedy>"`` from the tool's disclosed gate (core row or
+    pack.toml; the compute tools name the limb that is unmet), else ``""``."""
+    try:
+        from core.tool_capabilities import row_field
+        gate = row_field(display, "gate")
+        disc = gate.disclosure(display) if gate is not None else None
+        if not disc or disc[1] == "reserved":
+            return ""
+        label, _tier, remedy = disc
+        from agents.task.agent.core.tool_availability import _COMPUTE_TOOLS, compute_gate
+        if display in _COMPUTE_TOOLS:
+            label, _tier, remedy = compute_gate(display)
+        return f"gate: {label} → {remedy}"
+    except Exception:
+        return ""
 
 
 def _one_liner(description: str, cap: int = 100) -> str:
@@ -255,6 +261,75 @@ def _status_suffix(st: ToolStatus) -> str:
     if st.status == "loadable":
         return f'[loadable — load_tool("{st.tool_id}")]'
     return f"[gated:{st.reason} — {st.remedy}]"
+
+
+#: 081 WS-3.1 — the ONE wording of the catalog, the same on every seat (owner
+#: chat, cron, goal, leaf): the agent holds only part of the catalog, and
+#: load_tool is the one way to the rest. It names no late-tool mode on purpose;
+#: the load result (:func:`load_result_text`) says how to call what was loaded.
+CATALOG_INTRO = (
+    "Every tool this deployment knows, with its status for this session. You hold "
+    "only the [loaded] tools now; the catalog lists more. When the task needs a tool "
+    "you do not hold, call load_tool(\"<id>\") on a [loadable] one: the result says "
+    "how to call its actions. A [gated:...] tool does not load here: it names the "
+    "reason and the remedy; follow the remedy or tell the owner, and never work "
+    "around a missing tool in silence. tool_search(\"<keyword>\") finds a tool by "
+    "keyword, including the tools behind connected MCP servers (not listed here); "
+    "tool_describe(\"<id>\") gives its actions and parameters.")
+
+
+def how_to_call(display: str, bridged: bool) -> str:
+    """How the agent calls the actions of a tool loaded mid-session — the ONE
+    sentence the load result and ``tool_describe`` both print. In BRIDGE mode
+    (F9) the emitted schema list is pinned, so a late action never joins
+    ``tools[]``: it is reached by name through ``tool_call``. ``grow`` and
+    ``deferred`` do show it (deferred via a tool_addition message)."""
+    if bridged:
+        return (f'call its actions through tool_call(name="<action>", arguments={{...}}); '
+                f'tool_describe("{display}") gives the action names and parameters')
+    return "its actions are in your tool list from the next step"
+
+
+def load_result_text(display: str, n_actions: Optional[int], bridged: bool) -> str:
+    """The ``load_tool`` success text (one wording on every seat). It is a tool
+    result in this turn, so the agent may tell the owner it loaded the tool."""
+    detail = f" ({n_actions} actions)" if n_actions else ""
+    return f"Tool '{display}' loaded{detail}: {how_to_call(display, bridged)}."
+
+
+def action_tool_id(action_name: str) -> Optional[str]:
+    """The display tool id an action name belongs to (``email_send`` -> ``email``),
+    by the longest known tool id that prefixes it; None when no tool owns it."""
+    from core.tool_capabilities import TOOL_CAPABILITIES
+    from tools.descriptors import TOOL_DESCRIPTORS, get_tool_display_name
+    name = (action_name or "").strip()
+    best = None
+    for tid in set(TOOL_CAPABILITIES) | {get_tool_display_name(t) for t in TOOL_DESCRIPTORS}:
+        if (name == tid or name.startswith(tid + "_")) and (best is None or len(tid) > len(best)):
+            best = tid
+    return get_tool_display_name(best) if best else None
+
+
+def not_loaded_text(action_name: str, controller, *, is_leaf: bool = False) -> str:
+    """081 WS-3.1 — the ONE refusal for a call to an action this session does not
+    hold (a native tool call the registry rejects, or ``tool_call``): it names
+    the tool, and ``load_tool`` — or, for money, the owner grant — as the way."""
+    name = (action_name or "").strip()
+    tid = action_tool_id(name)
+    if tid is None:
+        return (f"'{name}' is not an action you hold, and no tool in this deployment "
+                f"owns it. tool_search(\"<keyword>\") finds the right tool.")
+    st = resolve_tool_status(
+        tid, container=getattr(controller, "container", None),
+        loaded_ids=set(controller.list_tools() or ()), is_leaf=is_leaf,
+        allowed_ids=disclosure_ceiling(controller))
+    if st.status == "loaded":
+        return (f"'{name}' is not an action of the loaded tool '{tid}'. "
+                f"tool_describe(\"{tid}\") lists its actions.")
+    if st.status == "loadable":
+        return (f"'{name}' is not loaded: it belongs to the tool '{tid}'. Call "
+                f"load_tool(\"{tid}\") first; the result says how to call it.")
+    return f"'{name}' is not loaded: its tool '{tid}' is gated:{st.reason} — {st.remedy}"
 
 
 def render_tool_catalog(
@@ -273,26 +348,9 @@ def render_tool_catalog(
         TOOL_DESCRIPTORS, get_tool_init_order, get_tool_display_name)
 
     loaded = set(loaded_ids or ())
-    # F9 (063 WS-4): in BRIDGE mode a tool loaded mid-session never joins the
-    # emitted tools[] — it is called by name through the bridge, so the header
-    # must not promise a verb that will never be shown. In `grow` and `deferred`
-    # mode the actions DO appear (deferred surfaces them with a tool_addition),
-    # so both keep the pre-F9 wording.
-    _reach = ('call its actions through tool_call(name=..., arguments={...}) — '
-              'tool_describe("<id>") gives the names and parameters'
-              if _bridge_mode()
-              else "actions appear on the next step")
-    lines = [
-        "<tool-catalog>",
-        "Every tool this deployment knows about, with its HONEST status for this "
-        "session. A [loadable] tool is one load_tool(\"<id>\") call away — then "
-        f"{_reach}. A [gated:...] tool names the reason and "
-        "the remedy channel; ask/act on it instead of working around a missing "
-        "tool in silence. Use tool_search(\"<keyword>\") to find a tool by name "
-        "(including the tools behind connected MCP servers, which are NOT listed "
-        "here) and tool_describe(\"<id>\") for its parameters.",
-    ]
+    lines = ["<tool-catalog>", CATALOG_INTRO]
     seen = set()
+    money_notes: dict = {}   # the money remedy, stated ONCE below the lines (B-8)
     for name in get_tool_init_order():
         display = get_tool_display_name(name)
         if display in seen:
@@ -301,7 +359,27 @@ def render_tool_catalog(
         st = resolve_tool_status(
             display, container=container, loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
         desc = _one_liner(TOOL_DESCRIPTORS[name].description)
+        if st.status == "gated" and st.reason == "money":
+            money_notes.setdefault(st.remedy.replace(f"'{display}'", "'<id>'"), []).append(display)
+            lines.append(f"- {display}: {desc} [gated:money — see the money note]")
+            continue
         lines.append(f"- {display}: {desc} {_status_suffix(st)}")
+    # A gated tool with no descriptor (e.g. x402_pay before it is constructed)
+    # still gets its one catalog line, so no tool status lives anywhere else.
+    from core.tool_capabilities import gate_disclosure_map
+    for display in sorted(set(gate_disclosure_map()) - seen):
+        st = resolve_tool_status(
+            display, container=container, loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
+        if st.status == "gated" and st.reason == "money":
+            money_notes.setdefault(st.remedy.replace(f"'{display}'", "'<id>'"), []).append(display)
+            lines.append(f"- {display}: [gated:money — see the money note]")
+        else:
+            lines.append(f"- {display}: {_status_suffix(st)}")
+    move = "\n" + remedy_text("money_owner_move")
+    for text, tools in money_notes.items():
+        lines.append(f"Money note ({', '.join(tools)}): {text.replace(move, '')}")
+    if money_notes:
+        lines.append(move.strip())
     lines.append("</tool-catalog>")
     return "\n".join(lines)
 
@@ -332,7 +410,8 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
     if st.status == "loaded":
         return ActionResult(
             extracted_content=(
-                f"Tool '{display}' is already loaded — its actions are available now."),
+                f"Tool '{display}' is already loaded — its actions are available now."
+                + (f" {how_to_call(display, True)}." if _bridge_armed(controller) else "")),
             include_in_memory=True)
 
     if st.status != "loadable":
@@ -349,39 +428,36 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
                 f"the container — see session logs"))
 
     n_actions = len(getattr(loaded[display], "actions", None) or ()) or None
-    detail = f" ({n_actions} actions)" if n_actions else ""
-    # F9 (063 WS-4): in BRIDGE mode the emitted schema list is pinned, so a newly
-    # registered action never joins `tools[]` — saying "available from the next
-    # step" would send the model looking for a verb it will never be shown. It is
-    # reachable, by name, through the bridge. `grow` and `deferred` both do show
-    # it (deferred via a tool_addition message), so they keep the old sentence.
-    if _bridge_armed(controller):
-        how = (f" — call it through tool_call(name=\"<action>\", arguments={{...}}); "
-               f"run tool_describe(\"{display}\") first for the action names and "
-               f"their parameters.")
-    else:
-        how = " — its actions are available from the next step."
     return ActionResult(
-        extracted_content=f"Tool '{display}' loaded{detail}{how}",
+        extracted_content=load_result_text(display, n_actions, _bridge_armed(controller)),
         include_in_memory=True)
 
 
-def _bridge_mode() -> bool:
-    """Is the deployment in F9 BRIDGE mode (shape (a))? Fail-open to False.
+# E-4: the per-session late-tool resolver lives in a leaf module (the registry
+# and the tool_call bridge import it; this module is inside the big import cycle).
+from tools.late_tool_mode import (  # noqa: E402,F401
+    autonomous_bridge, disclosure_bridge, session_late_tool_mode)
+
+
+def _bridge_mode(controller=None) -> bool:
+    """Is the deployment (or this session: autonomous or an owner seat) in F9
+    BRIDGE mode? Fail-open to False.
 
     Not "is a freeze recorded" — `deferred` mode records one too, and its late
     actions ARE emitted, so the bridge wording would be a lie there.
     """
     try:
         from modules.llm.deferred_tools import late_tool_mode, LATE_TOOL_MODE_BRIDGE
-        return late_tool_mode("") == LATE_TOOL_MODE_BRIDGE
+        if late_tool_mode("") == LATE_TOOL_MODE_BRIDGE:
+            return True
+        return disclosure_bridge(getattr(controller, "session_id", None))
     except Exception:
         return False
 
 
 def _bridge_armed(controller) -> bool:
     """Is BRIDGE mode on AND this session's emitted ``tools[]`` already pinned?"""
-    if not _bridge_mode():
+    if not _bridge_mode(controller):
         return False
     try:
         return bool(controller.registry.schemas_frozen())

@@ -1,0 +1,60 @@
+{
+  "function": {
+    "description": "Quote a Uniswap v3 liquidity deposit: given one or both token amounts and a price range, compute the liquidity this would mint and the exact paired amounts. Works against an existing pool (its live price is read) or a not-yet-created one (give initial_price). Read-only — never deposits. protocol='v4' quotes a full-range deposit into a Pons graduated pool.",
+    "name": "defi_data_lp_quote",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_a": {
+          "default": null,
+          "description": "Human units of token_a to deposit (give one or both).",
+          "nullable": true,
+          "type": "number"
+        },
+        "amount_b": {
+          "default": null,
+          "nullable": true,
+          "type": "number"
+        },
+        "chain": {
+          "default": "robinhood",
+          "description": "Chain to quote a Uniswap v3 deposit on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "fee": {
+          "default": 3000,
+          "description": "100 | 500 | 3000 | 10000",
+          "type": "integer"
+        },
+        "initial_price": {
+          "default": null,
+          "description": "token_b per token_a — REQUIRED when the pool does not exist yet.",
+          "nullable": true,
+          "type": "number"
+        },
+        "protocol": {
+          "default": "v3",
+          "description": "v3, or v4 for a Pons graduated pool (full range only; the other side is 'native').",
+          "type": "string"
+        },
+        "range": {
+          "default": "full",
+          "description": "'full' or 'price_lo,price_hi' in token_b per token_a.",
+          "type": "string"
+        },
+        "token_a": {
+          "type": "string"
+        },
+        "token_b": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token_a",
+        "token_b"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

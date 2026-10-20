@@ -24,6 +24,7 @@ from typing import Any, Callable, Optional
 from core.surfaces.access_log import record_pre_route_drop
 from core.surfaces.poll_health import record_poll_error
 from core.surfaces.dispatcher import RouteKind
+from core.surfaces.cards import close_choices_for_text
 from core.surfaces import voice_guard as _core_vg
 from core.surfaces.serialize import KeyedLock
 from core.surfaces.tappable import parse_ask_option as _parse_ask_option
@@ -176,9 +177,8 @@ _USAGE = {
     "/run": "[pause|resume|stop <n>]",
     "/inbox": "[n]",
     "/fulfill": "<id> [what you want to tell the run]",
-    "/cron": "[list|show|add|edit|cancel]",
-    "/goal": "<show|ready|pause|resume|retry|cancel [--once]|allow> <id>",
-    "/rail": "[show|new|edit|on|off|drop|grant|revoke|grants|templates|proposals|accept|dismiss] [name]",
+    "/job": "<new|show|edit|pause|resume|run|stop> …",
+    "/goal": "new <what> · <show|retry|pause|stop [--forever]|allow> <id>",
     "/apps": "[list|show|approve|reject|kill|logs <slug>]",
     "/mcp": "[add <id> <url>|remove <id>|test <id>]",
     "/recap": "[window]",
@@ -189,7 +189,7 @@ _USAGE = {
     "/invoices": "[status]",
     "/settle": "<id> [tx]",
     "/trade": "<what to do>",
-    "/bridge": "<from> <to> <amount> [as <asset>] [go]",
+    "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
     "/lp": "positions|pool|quote|add|remove|collect",
     "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
     "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]",
@@ -198,7 +198,6 @@ _USAGE = {
     "/send": "<amount> <native|token-address> to <address> on <chain> [max <usd>] [go]",
     "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
     "/cards": "[<id> ok|no|re|1-6]",
-    "/adopt": "[<id>]",
     "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
             "revoke <contract> <operator> [go]",
     "/dapp": "list|revoke <id>",
@@ -217,6 +216,10 @@ _USAGE = {
     "/paid": "<status|enable|disable|price <verb> <usd>|asset <id>|offers|"
              "cancel <id>>",
     "/prefs": "[all]",
+    "/config": "[get|explain <key> | set <key> <value>]",
+    "/model": "[<provider>/<model>]",
+    "/usage": "[days]",
+    "/skills": "[words]",
     "/kb": "[list [collection] | search <query> | <words>]",
     "/files": "[n]",
     "/dev": "[message]",
@@ -254,7 +257,6 @@ _DETAIL = {
 #: verb -> extra full command lines for its SUBVERBS. A subverb is not a
 #: ``_COMMANDS`` row, so it has no table entry and its words live here.
 _SUBVERBS = {
-    "/goal": ("/goal objective <list|pause|activate|drop> [id] — steer a whole stream",),
     "/wallet": ("/wallet autonomous <usd> — how much runs without asking you",
                 "/wallet tokens — which tokens I trust, and what is quarantined",
                 "/wallet trust|untrust <chain> <address> [go] — your word on one token"),
@@ -334,7 +336,7 @@ def _help_text() -> str:
 def _help_for(verb: str) -> str:
     """`/help <verb>` (030 WS-C4): the verb's line(s) from the SSOT — its
     command line, its indented detail, and its subverb lines like
-    `/goal objective …` — without triggering the verb.
+    `/wallet tokens` — without triggering the verb.
 
     ⚠️ D42: an ALIAS resolves through the table too, so `/help h` answers for
     `/help`. And `/start` now has a row, so `/help start` is no longer the
@@ -400,7 +402,7 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/paid",             # 046: paid room actions
                          "/unmute", "/ban", "/unban",   # 046 phase 2
                          "/halt", "/resume", "/pause", "/run",
-                         "/cron", "/goal", "/rail", "/wallet", "/invoices", "/settle",
+                         "/jobs", "/job", "/goal", "/wallet", "/invoices", "/settle",
                          "/trade", "/bridge", "/launch", "/deploy", "/lp",
                          "/claim", "/pay", "/nft", "/dapp", "/identity", "/contacts", "/thread",
                          "/why",
@@ -408,6 +410,8 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/avatar", "/cwd",
                          "/missed", "/apps", "/mcp",
                          "/kb", "/files", "/dev",
+                         "/model", "/skills",  # 080 D8
+                         "/usage",  # 2026-10-14 D6: the owner spend view
                          "/restart", "/update",  # 077: drained restart / update
                          "/cards")  # 2026-09-27: action cards (core/surfaces/cards.py)
 
@@ -428,7 +432,7 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
 #: else, its writes are the room's own overlay, and it names no money the agent
 #: can move. Refusing it from the room would send an admin to a DM to configure
 #: the room he is standing in.
-#: D43: `/cron`, `/goal` and `/fulfill` were MISSING. Each of them MUTATES
+#: D43: `/job`, `/goal` and `/fulfill` were MISSING. Each of them MUTATES
 #: durable autonomous work — scheduling a recurring run, cancelling a goal,
 #: declaring an owner ask satisfied — from inside a room where a member can
 #: read the ids off the screen and talk the owner into typing one. The
@@ -704,10 +708,7 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
     # case (mirrors chat_once's marker branch) — deliver it and stop. Scoped
     # to the budget marker; every other failure keeps the notice/extraction rail.
     if failed:
-        try:
-            from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
-        except ImportError:  # pragma: no cover - core-only install
-            RUN_BUDGET_MARKER = "run_budget_exhausted"
+        from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
         if RUN_BUDGET_MARKER in str(status):
             try:
                 await _deliver_owner_aware(task_agent, notice_key, deliver, f"⚠️ {status}")
@@ -914,6 +915,8 @@ def _record_owner_line(task_agent: Any, result: InboundResult, *, session_id: st
             # runs a money line, a pick answers the agent.
             if _c not in _THREAD_COMMANDS and not _c.startswith("/card_"):
                 return
+            from surfaces.telegram.card_ops import thread_line   # 079 R5: the line, not the token
+            text, kind = ((thread_line(text, inbound.identity.user_id), "card_tap") if _c.startswith("/card_") else (text, kind))
         elif not text:
             # An attachment-only turn is still a line: name the media.
             names = [getattr(m, "filename", None) or getattr(m, "kind", "file")
@@ -948,38 +951,16 @@ def _stamp_fresh_referent(task_agent: Any, result: InboundResult, session_id: st
 
 
 def _with_forwarded(result: Any, metadata: Optional[dict]) -> Optional[dict]:
-    """CR-L22: a FORWARDED body taints the turn it lands in.
+    """A FORWARDED body is a third party's words, not the owner's answer.
 
-    `inbound.py` frames the body as quoted data (H06); the frame alone left the
-    money / high-impact verbs open on a turn whose words are a third party's.
-    The flag rides the QUEUED message's own metadata so the drain
-    (``agents/task/agent/core/user_ingress.py::_update_forged_turn_marker``)
-    taints exactly the batch that carries it — never a rejected submission.
+    `inbound.py` frames the body as quoted data (H06). The flag rides the
+    QUEUED message's own metadata so the drain
+    (``agents/task/agent/core/user_ingress.py``) keeps it out of the owner's
+    own words for the turn (``_owner_turn_text``).
     """
     if not getattr(getattr(result, "inbound", None), "forwarded", False):
         return metadata
     return {**(metadata or {}), "forwarded": True}
-
-
-def _taint_forwarded_seed(task_agent: Any, result: Any, session_id: str) -> None:
-    """CR-L22: turn 1's seed task bypasses the queue, so a forwarded cold start
-    taints the fresh orchestrator directly. The initial drain cannot clear it:
-    every message the harness queues for this turn carries ``forwarded`` too."""
-    if not getattr(getattr(result, "inbound", None), "forwarded", False):
-        return
-    get_orch = getattr(task_agent, "get_orchestrator", None)
-    orch = get_orch(session_id) if callable(get_orch) else None
-    if orch is None:
-        logger.warning("telegram: forwarded cold start %s has no resident "
-                       "orchestrator to taint", session_id)
-        return
-    try:
-        orch._set_correspondent_taint("telegram", "forwarded")
-    except Exception as e:
-        # Fail closed: the flag alone is what the capability gate reads.
-        orch._correspondent_tainted = True
-        logger.warning("telegram: forwarded cold start %s tainted without its "
-                       "source record: %s", session_id, e)
 
 
 async def _start_task_session(task_agent: Any, result: InboundResult, spawn, deliver=None,
@@ -1008,16 +989,19 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         # conservative default stands.
         from surfaces.telegram.interactive_tools import owner_interactive_tool_ids
         tool_ids = owner_interactive_tool_ids(inbound.identity.user_id)
+    from core.surfaces.inbound_attachments import owner_typed_text
     info = await task_agent.create_session(
         session_user_id,
         request=request_text,
         session_source=inbound.identity.source,
         chat_session_key=result.decision.session_key,
         tool_ids=tool_ids,
+        # 085 W3 (A1): the owner's own words for turn 1 — "" for a forwarded
+        # body or a room's framed line (the request may be either).
+        typed_text=owner_typed_text(inbound),
     )
     session_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
     if session_id:
-        _taint_forwarded_seed(task_agent, result, str(session_id))
         if room_turn is None:
             _record_owner_line(task_agent, result, session_id=str(session_id), kind="comment")
             _stamp_fresh_referent(task_agent, result, str(session_id))
@@ -1435,6 +1419,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
             except Exception as e:
                 logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
                 text = f"Command failed: {str(e)[:200]} (details in the server log)"
+            card_ops.record_out(task_agent, result, cmd, text)   # 079 R5
             if text:
                 try:
                     await deliver(text)
@@ -1459,9 +1444,9 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         return await card_ops.handle(task_agent, result, spawn, deliver, fetch_media)
     if cmd in _owner_verbs():
         try:
-            return card_ops.carded(result.inbound.identity.user_id, cmd,
-                                   result.inbound.text,
-                                   await _handle_owner_admin(task_agent, result, cmd))
+            return card_ops.record_out(task_agent, result, cmd, card_ops.carded(
+                result.inbound.identity.user_id, cmd, result.inbound.text,
+                await _handle_owner_admin(task_agent, result, cmd)))
         except Exception as e:
             logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
             # 030 C-14: cap + soften — raw exception text can carry absolute
@@ -1723,6 +1708,7 @@ async def _act_on_inbound_locked(
                 logger.debug("telegram STEER touch_chat_binding failed: %s", e)
 
         if status == "delivered":
+            close_choices_for_text(result.inbound.identity.user_id, decision.session_id, _text)
             _spawn(_run_and_deliver(task_agent, result.inbound.identity.user_id,
                                     decision.session_id, deliver,
                                     notice_key=decision.session_key), spawn)

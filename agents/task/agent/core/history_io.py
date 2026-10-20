@@ -144,6 +144,20 @@ class HistoryIOMixin:
         ))
         return result
 
+    def append_terminal_summary_item(self, text: str) -> List[ActionResult]:
+        """Append the agent's last report at the step limit (083 WS-2) to the
+        in-memory history. ``is_done`` stays False on purpose: the run did not
+        finish, so ``completed_via_done`` and ``extract_done_text`` must not see
+        a completion (T2-01). The text is the agent's words, never a done()."""
+        result = [ActionResult(extracted_content=text, is_done=False, include_in_memory=True,
+                               metadata={"exhausted_summary": True})]
+        self.history.history.append(AgentHistory(
+            model_output=None,
+            result=result,
+            state=BrowserStateHistory(url="", title="", tabs=[], interacted_element=[None]),
+        ))
+        return result
+
     def save_history(self, file_path: Optional[str | Path] = None) -> None:
         """Save the history to a file"""
         if not file_path:

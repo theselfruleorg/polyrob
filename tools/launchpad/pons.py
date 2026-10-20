@@ -295,6 +295,13 @@ def _token_params(*, name: str, symbol: str, logo: str, description: str,
         raise PonsError(
             f"creator_tax_bps must be 0..{P.MAX_CREATOR_TAX_BPS} "
             f"(the factory's maxCreatorTaxBps), got {creator_tax_bps}")
+    # 085 W7 (D6): the SAME printable-ASCII name/symbol rule as deploy_token and
+    # the Token-2022 deploy. A launched token's name is as permanent as a
+    # deployed one's, and a homoglyph reads as somebody else's token.
+    # TokenTemplateError is a ValueError, which every caller already turns
+    # into a refusal.
+    from core.wallet.token_template import validate_token_names
+    name, symbol = validate_token_names(name, symbol)
     return [name, symbol, logo, description, list(socials), creator,
             int(creator_tax_bps), bool(buyback), economics, salt]
 

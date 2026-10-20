@@ -1,0 +1,17 @@
+{
+  "function": {
+    "description": "End the task. The text is an internal completion record the user never sees; talk to the user with send_message. (A sub-agent's done text is its report to the parent agent.)",
+    "name": "done",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

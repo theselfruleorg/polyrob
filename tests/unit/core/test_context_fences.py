@@ -48,6 +48,7 @@ def test_multiple_blocks_are_each_removed():
 _OTHER_INJECTED = (
     "restart-note",        # agents/task/runtime/run_as_session.py
     "live-health",         # agents/task/agent/core/live_health.py
+    "operations",          # agents/task/agent/core/live_health.py
     "delegation-result",   # agents/task/agent/async_delegation.py
     "environment",         # agents/task/agent/core/env_context.py
     "prior_summary_data",  # agents/task/agent/messages/compactor.py

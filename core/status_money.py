@@ -15,6 +15,7 @@ unreadable store is ``unavailable`` or a counted line, never an empty list.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from core import status_snapshot as _ss
@@ -91,31 +92,52 @@ def _wallet_section(data_dir: Optional[str]) -> Section:
     return sec
 
 
-def _positions_line(data_dir: Optional[str]) -> str:
-    """One line naming how many positions the LEDGER records as open.
+def _positions_line(user_id: str, data_dir: Optional[str]) -> str:
+    """One line naming how many positions the rail book (``open_positions.db``,
+    the ONE position store) holds open for this owner.
 
-    The treasury figure is cash flow; it cannot see a held bag. Saying only
-    "open positions NOT included" leaves the owner unable to tell an empty book
-    from two unsellable positions — on 2026-08-28 it was two, and on 2026-08-25
-    that same blind spot was published to X as "book flat". This is the cheap
-    half of the fix (a file read, no network); verifying the count against chain
-    stays with the `reconcile` verb, which is what the remedy points at.
-
-    UNKNOWN is never zero: an unreadable/absent ledger says so.
+    The treasury figure is cash flow; it cannot see a held bag. UNKNOWN is never
+    zero: an unreadable store says so. Verifying against chain stays with the
+    `reconcile` verb, which is what the remedy points at.
     """
-    from core.position_ledger import open_positions, read_open_positions
-    parsed, err = read_open_positions(data_dir)
-    if err:
-        return f"open positions: UNKNOWN — {err} (not the same as none)"
-    # A row left in the table after a full exit (`Size` = `0 — FULL EXIT …`) is
-    # a record, not a holding — counting it told the owner they held one more
-    # position than they did.
-    rows = open_positions(parsed)
+    from core.open_positions import STATUS_OPEN, open_positions_db_path, positions_for
+    try:
+        rows = positions_for(user_id, db_path=open_positions_db_path(data_dir))
+    except Exception as e:
+        return f"open positions: UNKNOWN — {type(e).__name__} (not the same as none)"
+    rows = [r for r in rows if r.status == STATUS_OPEN and r.qty > 0]
     if not rows:
-        return "open positions: none recorded in the ledger"
-    syms = ", ".join(r.symbol for r in rows[:5]) + ("…" if len(rows) > 5 else "")
-    return (f"open positions: {len(rows)} recorded in the ledger ({syms}) — "
-            f"ledger-recorded, NOT verified against chain; run `reconcile`")
+        return "open positions: none in the rail book"
+    syms = ", ".join((r.symbol or r.address[:10]) for r in rows[:5])
+    syms += "…" if len(rows) > 5 else ""
+    return (f"open positions: {len(rows)} in the rail book ({syms}) — "
+            f"NOT verified against chain; run `reconcile`")
+
+
+def _runtime_window(user_id: str, ledger: Dict[str, Any], r: Dict[str, Any],
+                    data_dir: Optional[str]) -> tuple:
+    """``(usd, label)`` for the runtime line, labelled with the window the figure
+    ACTUALLY covers (080 WS-4: ``agent_status`` once passed a 7-day ledger and
+    this line called it "last 24h"). A 24 h window reuses THE economics read
+    (``core.status_economics.cost_window_usd``) when its ledger file is here, so
+    the money and economics lines cannot disagree; else the ledger's own sum."""
+    days = ledger.get("window_days") or r.get("window_days")
+    try:
+        days = int(days) if days is not None else None
+    except (TypeError, ValueError):
+        days = None
+    spend = float(r.get("spend_window_usd") or 0.0)
+    if days in (None, 1):
+        if data_dir:
+            from core.status_economics import bot_db_path, cost_window_usd
+            if os.path.exists(bot_db_path(data_dir)):
+                import time as _time
+                try:
+                    spend = float(cost_window_usd(user_id, data_dir, now=_time.time()))
+                except Exception as e:
+                    return spend, f"last 24h (usage ledger: {type(e).__name__})"
+        return spend, "last 24h"
+    return spend, f"last {days} days"
 
 
 def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) -> Section:
@@ -133,9 +155,9 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
     if r.get("available") is False:
         line = "runtime cost (owner's compute bill): unavailable (usage records not readable)"
     else:
-        spend = float(r.get("spend_window_usd") or 0.0)
+        spend, label = _runtime_window(user_id, ledger, r, data_dir)
         total = float(r.get("spend_total_usd") or 0.0)
-        line = f"runtime cost (owner's compute bill): ${spend:.2f} last 24h · ${total:.2f} total"
+        line = f"runtime cost (owner's compute bill): ${spend:.2f} {label} · ${total:.2f} total"
         if r.get("provider_balance_usd") is not None:
             line += f" · provider balance ${float(r['provider_balance_usd']):.2f}"
     sec.lines.append(line)
@@ -169,10 +191,9 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
             text=(f"{_refund_n} settled payment(s) worth ${_refund_usd:.2f} are "
                   f"owed back — the work failed after the money arrived"),
             remedy="`/invoices refund_due` to see them, then refund each payer"))
-    # Positions are read separately and must never take the money section down:
-    # a missing ledger is a fact about the ledger, not about the treasury.
+    # Positions are read separately and must never take the money section down.
     try:
-        sec.lines.append(_positions_line(data_dir))
+        sec.lines.append(_positions_line(user_id, data_dir))
     except Exception as e:
         sec.lines.append(f"open positions: UNKNOWN ({type(e).__name__}: {e})")
     from core.activity_evidence import ledger_note

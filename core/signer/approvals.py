@@ -29,9 +29,30 @@ def pending_items(client=None) -> List[Dict[str, Any]]:
     out = []
     for row in rows:
         preview = f"signer review: ${float(row.get('amount_usd') or 0):.2f} priced risk\n{row.get('summary', '')}"
+        op = str(row.get("op") or "evm.send")
         out.append({"kind": KIND, "id": str(row.get("id")), "chars": len(preview),
-                    "preview": preview, "tool": "signer.evm_send"})
+                    "preview": preview, "tool": "signer." + op.replace(".", "_")})
     return out
+
+
+def review(approval_id: str, *, client=None) -> Tuple[bool, str]:
+    """``(True, text)``: the signer's own review of pending *approval_id*, for
+    the owner to read BEFORE granting (085 W8, signer L-4). ``(False, why)``
+    when the signer does not answer or holds no such pending request."""
+    from core.signer.client import SignerClient, SignerRefused, SignerUnavailable
+    if client is None:
+        client = SignerClient(timeout=10.0)
+    try:
+        rows = client.call("approvals.list").get("pending") or []
+    except (SignerRefused, SignerUnavailable) as exc:
+        return False, f"could not read the signer's review of {approval_id}: {exc}"
+    for row in rows:
+        if str(row.get("id")) == str(approval_id):
+            return True, (f"signer approval {approval_id} — {row.get('op') or 'evm.send'}"
+                          f" on {row.get('chain') or '?'}, "
+                          f"${float(row.get('amount_usd') or 0):.2f} priced risk\n"
+                          f"{row.get('summary', '')}")
+    return False, f"no pending signer approval {approval_id!r} (expired, decided, or a wrong id)"
 
 
 def decide(approval_id: str, *, approve: bool, client=None) -> Tuple[bool, str]:

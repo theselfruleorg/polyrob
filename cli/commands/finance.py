@@ -26,7 +26,7 @@ def finance(days: int, user: Optional[str]) -> None:
     # (else the tenant silently resolves to "local" and the sheet reads $0). Mirrors
     # owner.py / journey.
     try:
-        load_env(local_mode=True)
+        load_env()
     except Exception:
         pass
 

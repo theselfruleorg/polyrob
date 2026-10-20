@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from core.event_kinds import CONSOLE_INBOX_DECIDE
-from core.surfaces.inbox import Item, compose  # noqa: F401 — the seat's own names
+from core.surfaces.inbox import SOURCE_LABELS, Item, compose  # noqa: F401 — the seat's own names
 from core.surfaces.inbox import build_inbox as _compose_inbox
 from webview import webgate
 from webview.audit import console_write
@@ -91,14 +91,36 @@ def _collect_apps(user_id: str):
 
 def _collectors() -> dict:
     """Resolved at CALL time, not import time, so a monkeypatched seam is the
-    one that runs."""
-    return {
+    one that runs.
+
+    080 WS-3: EVERY collector ``surfaces.inbox_sources.default_collectors``
+    reads (signer approvals and cards too), with this console's
+    five seams in their places — one list on every seat, never a console-only
+    subset."""
+    from surfaces.inbox_sources import default_collectors
+    out = default_collectors(data_dir=_data_dir(), instance_id=_instance_id())
+    out.update({
         "self_evolution": _collect_self_evolution,
         "tool_approvals": _collect_tool_approvals,
         "correspondents": _collect_correspondents,
         "asks": _collect_asks,
         "apps": _collect_apps,
-    }
+    })
+    signer = out.get("signer_approvals")
+    if signer is not None:
+        out["signer_approvals"] = lambda uid: _owner_only_signer(uid, signer)
+    return out
+
+
+def _owner_only_signer(user_id: str, collect):
+    """The signer is instance-wide (the owner's wallet, no tenant): on a
+    multitenant console only the owner tenant sees its held spends. Other
+    postures have one owner by construction, so nothing changes there."""
+    if webgate.posture() == "multitenant":
+        from core.instance import resolve_owner_user_id
+        if str(user_id) != resolve_owner_user_id():
+            return []
+    return collect(user_id)
 
 
 #: How the composer spells a source that refused: ``unreadable(<why>)``.
@@ -136,8 +158,25 @@ def with_source_reasons(body: dict) -> dict:
 
 
 def build_inbox(user_id: str) -> dict:
-    """The composed Inbox for *user_id* over this console's five stores."""
+    """The composed Inbox for *user_id* over every store."""
     return with_source_reasons(_compose_inbox(user_id, _collectors()))
+
+
+def build_view(user_id: str, name: str) -> dict:
+    """One VIEW of the Inbox (``core.surfaces.inbox.VIEWS``) — ``pending`` is
+    what ``GET /api/webgate/pending`` and the chat ``/pending`` both list."""
+    from core.surfaces.inbox import view
+    return with_source_reasons(view(build_inbox(user_id), name))
+
+
+def page_ledger(body: dict) -> list:
+    """The Inbox page's ledger rows: every item but a card — cards render in
+    the page's own Cards section (cards.js, with their taps), never twice."""
+    return [i for i in body.get("items") or () if i.get("source") != "cards"]
+
+
+def cards_waiting(body: dict) -> int:
+    return sum(1 for i in body.get("items") or () if i.get("source") == "cards")
 
 
 # --- tenant ----------------------------------------------------------------- #

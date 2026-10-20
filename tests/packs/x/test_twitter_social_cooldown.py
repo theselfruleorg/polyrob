@@ -225,6 +225,7 @@ async def test_cooldown_refusal_teaches_the_reschedule_not_the_drop(monkeypatch)
     err = res.error or ""
     assert "retry_after_sec=" in err
     assert "cronjob_schedule" in err
-    assert "one-shot ISO" in err and "schedule_spec='20" in err  # an ISO instant, not a duration
+    assert "one-shot ISO" in err and "schedule='20" in err  # an ISO instant, not a duration
+    assert "schedule_spec" not in err  # the real field is `schedule` (extra="forbid")
     assert "do not drop" in err.lower()
     assert "re-fire" in err.lower()

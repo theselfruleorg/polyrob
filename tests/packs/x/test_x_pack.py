@@ -126,11 +126,8 @@ def test_pack_skills_carry_their_rules_and_left_the_builtin_library():
     sm = SkillManager()
     sm._ensure_rules_loaded()
     assert {"x-engagement", "social-discovery"} <= sm._pack_rule_ids
-    matched = sm.get_skills_for_session(tool_ids=["twitter", "x_browser"],
-                                        task="reply to mentions on x", available_actions=[],
-                                        user_id=None)
-    assert "x-engagement" in [m.skill_id for m in matched]
+    index = sm.get_catalog_skills(tool_ids=["twitter", "x_browser"], max_skills=500)
+    assert "x-engagement" in [m.skill_id for m in index]
     base = REPO / "data" / "prompts" / "skills"
-    rules = json.loads((base / "rules.json").read_text())
     for sid in ("x-engagement", "social-discovery"):
-        assert sid not in rules and not (base / sid).exists()
+        assert not (base / sid).exists()

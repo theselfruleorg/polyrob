@@ -18,6 +18,8 @@ class _Stub(MemoryPrefetchMixin):
     def __init__(self, task, brain_state):
         self.task = task
         self._last_brain_state = brain_state
+        # mid-run: a brain of THIS run (step 1 ignores the previous run's, D7)
+        self.state = SimpleNamespace(n_steps=3)
 
 
 def test_recall_query_ignores_brain_memory():

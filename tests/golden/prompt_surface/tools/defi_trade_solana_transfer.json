@@ -1,0 +1,47 @@
+{
+  "function": {
+    "description": "Send SOL (token='native') or an SPL token (by MINT address) on SOLANA from the agent wallet to a wallet address. The recipient's token account is created if missing (its rent counts toward max_spend_usd). Simulated and asserted against max_spend_usd before anything is broadcast. For an EVM chain use transfer. dry_run defaults to TRUE.",
+    "name": "defi_trade_solana_transfer",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "description": "Human amount to send (e.g. 0.25 SOL, or 10 of the token).",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) builds, simulates and returns the guard's verdict without broadcasting. Set false to actually move funds.",
+          "type": "boolean"
+        },
+        "max_spend_usd": {
+          "description": "The most USD you authorize for this send, INCLUDING the fee and any rent for creating the recipient's token account. Asserted against the SIMULATED outflow.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "send_anyway": {
+          "default": false,
+          "description": "Only for a token whose value is NOT VERIFIED (no spend-grade price). It sends only on the owner's own turn; your call goes to the owner.",
+          "type": "boolean"
+        },
+        "to": {
+          "description": "Recipient WALLET address (base58). Not a token account: the recipient's token account is derived and created if missing. Solana addresses have no checksum — a mistyped one is a valid different account, so copy it exactly.",
+          "type": "string"
+        },
+        "token": {
+          "description": "'native' (or 'SOL') to send SOL itself, or the SPL token's MINT address (base58). A ticker is not accepted — resolve it to a mint with defi_data.token_resolve first. Wrapped SOL: send 'native'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "to",
+        "amount",
+        "max_spend_usd"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

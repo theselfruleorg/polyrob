@@ -1,7 +1,7 @@
 """034 §3.5/§11.1 — what the owner switched OFF stays off.
 
-One table (`goal_suppressions`), three read sites (stream seeding, board.create,
-the planner prompt), `/goal cancel` = never again (`--once` = this run only),
+One table (`goal_suppressions`), one read site (board.create), `/goal cancel` =
+never again (`--once` = this run only),
 `/goal allow` revokes, and `/goals` shows an OFF section.
 """
 import sqlite3
@@ -64,7 +64,7 @@ def test_expired_suppression_is_not_in_force(home):
     assert gs.find(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="t", now=101) is None
 
 
-# --- read site 2: board.create -----------------------------------------------
+# --- the read site: board.create ---------------------------------------------
 
 def test_create_refuses_a_suppressed_title_even_with_force(home):
     b = _board(home)
@@ -78,70 +78,13 @@ def test_create_refuses_a_suppressed_title_even_with_force(home):
     assert b.create(user_id="rob", title="Post to the den").id
 
 
-def test_create_refuses_under_a_suppressed_stream(home):
-    b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_STREAM, value="treasury-trading")
-    with pytest.raises(SuppressedGoalError):
-        b.create(user_id="rob", title="anything", payload={"stream": "treasury-trading"},
-                 force=True)
-
-
-# --- read site 1: stream seeding ---------------------------------------------
-
-def _stream():
-    return {"id": "s", "cadence_hours": 1, "objective": {"title": "Mission", "body": "b"},
-            "goals": [{"title": "leg one", "body": "a", "tools": ["filesystem"]},
-                      {"title": "leg two", "body": "b", "tools": ["filesystem"]},
-                      {"title": "leg three", "body": "c", "tools": ["filesystem"]}]}
-
-
-def test_a_suppressed_leg_is_skipped_and_the_chain_holds(home):
-    from agents.task.goals.streams import ensure_objective, seed_stream, stream_is_due
-    b = _board(home)
-    oid, _ = ensure_objective(b, "rob", _stream())
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="leg two")
-    assert stream_is_due(b, "rob", _stream())[0] is True     # two legs still on
-    created = seed_stream(b, "rob", _stream(), oid)
-    assert [g.title for g in created] == ["leg one", "leg three"]
-    assert b.dependencies(created[1].id) == [created[0].id]
-
-
-def test_stream_not_due_when_switched_off(home):
-    from agents.task.goals.streams import stream_is_due
-    b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_STREAM, value="s")
-    due, why = stream_is_due(b, "rob", _stream())
-    assert due is False and "switched off" in why
-
-
-def test_stream_not_due_when_every_leg_is_off(home):
-    from agents.task.goals.streams import stream_is_due
-    b = _board(home)
-    for t in ("leg one", "leg two", "leg three"):
-        gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value=t)
-    due, why = stream_is_due(b, "rob", _stream())
-    assert due is False and "every leg" in why
-
-
-# --- read site 3: the planner --------------------------------------------------
-
-def test_planner_prompt_names_what_is_off(home):
-    from agents.task.goals.planner import build_planner_prompt
-    b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE,
-                value="Degen watchlist beyond Base", reason="STOP the watchlist work")
-    prompt = build_planner_prompt(b, "rob", None)
-    assert "SUPPRESSED (the owner said never again" in prompt
-    assert "Degen watchlist beyond Base" in prompt and "STOP the watchlist work" in prompt
-
-
 # --- the owner verbs (Telegram + REPL share goal_reply) -----------------------
 
-def test_goal_cancel_means_never_again(home):
+def test_goal_stop_forever_means_never_again(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
     g = b.create(user_id="rob", title="Publish the track record")
-    out = owner_ops.goal_reply("rob", str(home), ["cancel", g.id[:8], "not", "again"])
+    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], "--forever", "not", "again"])
     assert "switched OFF" in out and "/goal allow" in out
     assert _board(home).get(g.id).status == "cancelled"
     [s] = _board(home).suppressions(user_id="rob")
@@ -150,12 +93,25 @@ def test_goal_cancel_means_never_again(home):
         _board(home).create(user_id="rob", title="Publish the track record", force=True)
 
 
-def test_goal_cancel_once_is_just_this_run(home):
+@pytest.mark.parametrize("flag", ["\u2014forever", "\u2013forever"])
+def test_goal_stop_forever_accepts_the_phone_dash(home, flag):
+    """A phone keyboard turns `--` into a dash; /job stop already took it."""
     from surfaces.telegram import owner_ops
     b = _board(home)
     g = b.create(user_id="rob", title="Publish the track record")
-    out = owner_ops.goal_reply("rob", str(home), ["cancel", g.id[:8], "--once"])
-    assert "→ cancelled" in out and "switched OFF" not in out
+    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], flag])
+    assert "switched OFF" in out
+    [s] = _board(home).suppressions(user_id="rob")
+    assert "forever" not in (s.reason or "")
+
+
+def test_goal_stop_is_once_by_default(home):
+    from surfaces.telegram import owner_ops
+    b = _board(home)
+    g = b.create(user_id="rob", title="Publish the track record")
+    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8]])
+    assert "stopped" in out and "switched OFF" not in out and "--forever" in out
+    assert _board(home).get(g.id).status == "cancelled"
     assert _board(home).suppressions(user_id="rob") == []
 
 
@@ -163,22 +119,22 @@ def test_goal_allow_by_id_and_by_title(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
     g = b.create(user_id="rob", title="Publish the track record")
-    owner_ops.goal_reply("rob", str(home), ["cancel", g.id[:8]])
+    owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], "--forever"])
     out = owner_ops.goal_reply("rob", str(home), ["allow", g.id[:8]])
     assert "Back ON" in out and _board(home).suppressions(user_id="rob") == []
     g2 = _board(home).create(user_id="rob", title="Refresh the watchlist")
-    owner_ops.goal_reply("rob", str(home), ["cancel", g2.id[:8]])
+    owner_ops.goal_reply("rob", str(home), ["stop", g2.id[:8], "--forever"])
     out = owner_ops.goal_reply("rob", str(home), ["allow", "refresh", "the", "watch"])
     assert "Back ON" in out
     assert "Nothing switched off" in owner_ops.goal_reply("rob", str(home), ["allow", "zzz"])
 
 
-def test_cancelling_an_already_cancelled_goal_still_switches_it_off(home):
+def test_stopping_an_already_cancelled_goal_forever_still_switches_it_off(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
     g = b.create(user_id="rob", title="Old thing")
     b.cancel(g.id, user_id="rob")
-    out = owner_ops.goal_reply("rob", str(home), ["cancel", g.id[:8]])
+    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], "--forever"])
     assert "switched OFF" in out
     assert len(_board(home).suppressions(user_id="rob")) == 1
 
@@ -191,7 +147,7 @@ async def test_repl_goal_is_the_same_helper(home, monkeypatch):
     monkeypatch.setattr(h_goal_one, "_tenant", lambda ctx: "rob")
     monkeypatch.setattr(h_goal_one, "_admin_data_dir", lambda write=False: str(home))
     seen = []
-    ctx = types.SimpleNamespace(args=["cancel", g.id[:8]],
+    ctx = types.SimpleNamespace(args=["stop", g.id[:8], "--forever"],
                                 emit=lambda text, title=None: seen.append(text))
     await h_goal_one.h_goal(ctx)
     assert "switched OFF" in seen[0]

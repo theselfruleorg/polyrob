@@ -28,6 +28,36 @@ _LOCK_STALE_SECONDS = 600
 
 Runner = Callable[[CronJob], Awaitable[bool]]
 
+#: 2026-10-14 review C-6: the per-run cap a MODEL run gets at least. GLM-5.3
+#: cron runs were cut at their 180 s cap at ~40 s per step, half before done().
+#: A money-class run (``cron.jobs.is_money_job``: priority=money, or a rig or
+#: toolset holding a money tool) reconciles, quotes, gates, swaps and reports,
+#: so its floor is higher. Floors only RAISE a cap; the hard ceiling holds.
+MODEL_RUN_FLOOR_SECONDS = 300
+MONEY_RUN_FLOOR_SECONDS = 900
+RUN_CAP_CEILING_SECONDS = 1800
+
+#: Payload keys of a job that runs no model turn (the floors do not apply).
+_MODEL_FREE_KEYS = ("digest", "read_verb", "write_verb")
+
+
+def effective_cap_seconds(job: CronJob) -> float:
+    """The cap this run is held to: the job's own cap, raised to the model-run
+    floor (money-class: the money floor) and never above the ceiling. A
+    model-free job (digest, read or write verb, ``wake_agent=false``) and a
+    non-positive cap keep their own value."""
+    base = job.max_duration_seconds
+    try:
+        payload = dict(job.payload or {})
+        if base <= 0 or any(payload.get(k) for k in _MODEL_FREE_KEYS) \
+                or payload.get("wake_agent", True) is False:
+            return base
+        from cron.jobs import is_money_job
+        floor = MONEY_RUN_FLOOR_SECONDS if is_money_job(job) else MODEL_RUN_FLOOR_SECONDS
+        return min(max(base, floor), max(base, RUN_CAP_CEILING_SECONDS))
+    except Exception:
+        return base
+
 
 class TickLock:
     """Exclusive cross-process lock via O_CREAT|O_EXCL, with stale-steal."""
@@ -108,6 +138,39 @@ class TickResult:
     yielded: List[str] = field(default_factory=list)
     skipped_locked: bool = False
     skipped_busy: bool = False
+
+
+
+def release_scope_paused(store, now: datetime) -> List[str]:
+    """Resume every job paused BY the pause scope once its run kind may run
+    again. Called on the scheduler tick; idempotent (a CAS on status)."""
+    from core.autonomy_control import allows
+    from core.cron_lanes import PAUSE_SCOPE_BY
+    released: List[str] = []
+    try:
+        rows = [j for j in store.list(user_id=None, enabled_only=True)
+                if j.status == "paused"
+                and ((j.payload or {}).get("paused") or {}).get("by") == PAUSE_SCOPE_BY]
+    except Exception:
+        logger.warning("release_scope_paused: store unreadable", exc_info=True)
+        return released
+    allowed: dict = {}
+    for job in rows:
+        kind = "digest" if (job.payload or {}).get("digest") else "cron_run"
+        if kind not in allowed:
+            allowed[kind] = bool(allows(kind).allowed)
+        if not allowed[kind]:
+            continue
+        try:
+            nxt = parse_schedule(job.schedule_spec).next_run_after(now)
+        except ScheduleError:
+            nxt = None
+        if store.resume(job.id, user_id=None, next_run_at=nxt or now):
+            released.append(job.id)
+    if released:
+        logger.info("cron: the pause is lifted — resumed %d job(s) created while "
+                    "paused: %s", len(released), ", ".join(released))
+    return released
 
 
 class CronScheduler:
@@ -235,6 +298,9 @@ class CronScheduler:
         # 'running' row is genuinely stale (a live run always writes a terminal status
         # after itself). This replaces the unsafe reclaim-in-__init__.
         self.store.reclaim_stale_running()
+        # 0011: a job created while `/pause cron` was on is stored paused; once
+        # the owner lifts the pause it runs (one CAS per row, idempotent).
+        release_scope_paused(self.store, now)
         for candidate in self.store.due(now):
             # Atomic claim: only run if WE flipped it scheduled->running. Guards against
             # ever double-running a job (defense-in-depth alongside the TickLock).
@@ -273,10 +339,11 @@ class CronScheduler:
         self._approval_deferred = False
         self._current_job = job
         started = time.time()
+        cap = effective_cap_seconds(job)
         self._current = asyncio.create_task(self.runner(job))
         try:
             return bool(await asyncio.wait_for(
-                self._current, timeout=max(job.max_duration_seconds, 0.001),
+                self._current, timeout=max(cap, 0.001),
             ))
         except asyncio.TimeoutError:
             # A timeout is a real failure even if a pause cancel raced in: the job
@@ -292,14 +359,15 @@ class CronScheduler:
                 self._approval_deferred = True
                 logger.info(
                     "cron job %s hit its %ss cap waiting on owner approval (ask %s) "
-                    "— deferred, not failed", job.id, job.max_duration_seconds, ask_id)
+                    "— deferred, not failed", job.id, cap, ask_id)
                 self._terminal_ev(job, "deferred", f"owner_ask:{ask_id}",
-                                  cap_s=job.max_duration_seconds,
+                                  cap_s=cap,
                                   duration_s=round(time.time() - started, 3))
                 return False
-            logger.warning("cron job %s timed out after %ss", job.id, job.max_duration_seconds)
-            self._terminal_ev(job, "cut_by_cap", f"{job.max_duration_seconds}s",
-                              cap_s=job.max_duration_seconds,
+            logger.warning("cron job %s timed out after %ss", job.id, cap)
+            from agents.task.runtime.stop_reason import StopReason
+            self._terminal_ev(job, "cut_by_cap", f"{cap}s",
+                              cap_s=cap, stop_reason=StopReason.WALL_CLOCK.value,
                               duration_s=round(time.time() - started, 3))
             return False
         except asyncio.CancelledError:
@@ -379,6 +447,13 @@ class CronScheduler:
 
     def _record(self, job: CronJob, now: datetime, success: bool,
                 *, deferred: bool = False) -> None:
+        # 080 WS-2: the last outcome lives on the job row (a recurring job is
+        # back to 'scheduled' after every run, so status alone cannot say).
+        try:
+            self.store.record_outcome(
+                job.id, "deferred" if deferred else ("done" if success else "failed"), now)
+        except Exception:
+            logger.debug("last-outcome write failed for %s", job.id, exc_info=True)
         if job.one_shot:
             if deferred:
                 # FIX 3: a one-shot cut off on an unanswered owner prompt must not

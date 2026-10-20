@@ -66,19 +66,17 @@ def test_toolsets_keys():
     m = _import_tool_defaults()
     expected = {
         "minimal", "safe", "default", "research", "trading_research", "coding",
-        "development", "browser", "social", "full", "earn", "owner_interactive",
+        "development", "browser", "social", "full", "earn",
     }
     assert set(m.TOOLSETS.keys()) == expected
 
 
-def test_earn_and_owner_interactive_toolsets(monkeypatch):
-    """WS-7: the flagship-earn and owner-interactive tool lists are now named TOOLSETS
-    entries (SSOT), consumed by scripts/seed_goal.py and surfaces/telegram/interactive_tools.py."""
+def test_earn_toolset(monkeypatch):
+    """WS-7: the flagship-earn tool list is a named TOOLSETS entry (SSOT), consumed
+    by scripts/seed_goal.py. (The owner chat reads the `owner` rig — 081 WS-3.1.)"""
     m = _import_tool_defaults()
     assert m.resolve_toolset("earn") == [
         "filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"]
-    assert m.resolve_toolset("owner_interactive") == [
-        "goal", "twitter", "web_fetch", "filesystem", "task", "defi_data"]
 
 
 def test_social_toolset_exists_with_valid_ids():

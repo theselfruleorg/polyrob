@@ -75,10 +75,11 @@ def test_live_body_names_a_missing_store_never_a_confident_zero(tmp_path):
     data = tmp_path / "empty"
     data.mkdir()
     body = mod._live_body("rob", str(data), str(tmp_path / "nowhere"))
-    assert body["goals"] is None and body["cron"] is None and body["sessions"] is None
-    assert {line.split(":", 1)[0] for line in body["unreadable"]} == {
-        "goals", "cron", "sessions"}
-    assert body["count"] is None
+    assert body["goals"] is None and body["cron"] is None
+    # 080 WS-4: no session registry yet = nothing has ever run — EMPTY, not
+    # unreadable. The two stores that did not answer keep the count a floor.
+    assert body["sessions"] == []
+    assert {line.split(":", 1)[0] for line in body["unreadable"]} == {"goals", "cron"}
     assert body["partial"] is True
 
 
@@ -125,7 +126,12 @@ def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
     html = TestClient(app).get("/work").text
     assert "Rob is running, 2 in progress." in html
     monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
+    import core.status_loops as loops
+    monkeypatch.setattr(loops, "autonomy_idle_reason", lambda: None)
     assert "Rob is running. Nothing needs you." in TestClient(app).get("/work").text
+    # 080: nothing running and both loops off — the head says idle and why.
+    monkeypatch.setattr(loops, "autonomy_idle_reason", lambda: "autonomy is off")
+    assert "Rob is idle: autonomy is off." in TestClient(app).get("/work").text
 
 
 def test_head_line_says_the_count_is_a_floor_when_a_store_refused(monkeypatch):

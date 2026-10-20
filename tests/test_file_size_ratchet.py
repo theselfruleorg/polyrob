@@ -53,7 +53,7 @@ CEILINGS = {
     # (status SSOT); the action now renders from core/status_snapshot.py.
     # Tightened 2026-09-08: the two document-authoring actions (self_context_manage,
     # owner_doc_manage) moved to tools/controller/doc_authoring.py::DocAuthoringMixin.
-    "tools/controller/action_registration.py": 1971,
+    "tools/controller/action_registration.py": 1833,
     "api/task_http_api.py": 1876,
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file
@@ -89,7 +89,7 @@ CEILINGS = {
     # landed here, paid for by trimming a dated change-story out of a docstring.
     # 2026-09-23 (025): 491 -> 466. prune_memories moved to the new scope/retention
     # mixin (modules/memory/sqlite_scope_store.py) with the scope verbs.
-    "modules/memory/sqlite_memory_provider.py": 466,
+    "modules/memory/sqlite_memory_provider.py": 320,
     "modules/x402/invoicing.py": 1169,
     "modules/llm/adapters.py": 1140,
     "modules/memory/task/task_context_manager.py": 1135,
@@ -108,7 +108,6 @@ CEILINGS = {
     "surfaces/telegram/harness.py": 2934,  # W9: admin verbs -> admin_verbs.py + *_ops.py
     "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
     "packs/x/polyrob_x/twitter_tool.py": 2824,
-    "agents/task/goals/dispatcher.py": 1676,  # W9: _run_goal + its failure helpers -> goal_run.py
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
     "packs/markets/polyrob_markets/hyperliquid/service.py": 1907,
     "webview/pages_new.py": 1858,
@@ -116,8 +115,6 @@ CEILINGS = {
     "webview/pages.py": 1841,
     "tools/browser/context.py": 1793,
     "tools/mcp/protocol.py": 1694,
-    "agents/task/agent/skill_manager.py": 1674,
-    "agents/task/agent/prompts.py": 1666,
     "cli/commands/owner.py": 1646,
     "agents/task/agent/core/next_action_internal.py": 1625,
     "tools/browser/browser.py": 1604,

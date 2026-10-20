@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Full detail for ONE tool id from tool_search / the <tool-catalog>: its parameters, capability dimensions, honest status + remedy, and how to invoke it (direct action, load_tool first, or the mcp_execute_tool shape). Read-only.",
+    "name": "tool_describe",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "tool_id": {
+          "description": "Tool id (built-in) or MCP tool name from tool_search",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

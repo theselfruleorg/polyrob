@@ -219,6 +219,9 @@ Content-Type: application/json
 }
 ```
 
+`max_steps` is this interactive session's budget (default and billed ceiling 50). Goal, cron
+and delegated runs have no per-run budget: they stop at the operator's `AUTONOMOUS_MAX_STEPS`.
+
 ⚠️ A `user_id` in the body is IGNORED — the tenant comes from the authenticated
 request, never from the payload (trusting it let any caller act as another
 tenant). `model`/`provider` are optional; when omitted the session resolves the

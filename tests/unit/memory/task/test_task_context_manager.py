@@ -145,7 +145,6 @@ class TestTaskContextManager:
             brain_state=brain_state,
             action_summary="goto(example.com)",
             finding="Found homepage",
-            total_steps=50
         )
 
         # Verify step was added
@@ -155,7 +154,7 @@ class TestTaskContextManager:
         assert memory.current_phase == "discovery"
         assert len(memory.recent_steps) == 1
         assert memory.recent_steps[0].step == 1
-        assert memory.progress == "1/50"
+        assert memory.progress == "step 1"
 
     @pytest.mark.asyncio
     async def test_add_step_to_nonexistent_session(self, manager):
@@ -183,13 +182,12 @@ class TestTaskContextManager:
                 brain_state=brain_state,
                 action_summary=f"action_{i}",
                 finding=f"finding_{i}",
-                total_steps=50
             )
 
         # Verify all steps were added
         memory = manager._sessions[session_id].memory
         assert len(memory.recent_steps) == 10
-        assert memory.progress == "10/50"
+        assert memory.progress == "step 10"
 
     @pytest.mark.asyncio
     async def test_phase_transition_tracking(self, manager):
@@ -466,7 +464,7 @@ async def test_p2_2_present_but_none_phase_still_reflects_and_prunes(tmp_path, m
         mgr.add_step_memory(
             session_id="s1", step=i + 1,
             brain_state={"phase": None, "memory": "m", "next_goal": "n"},
-            action_summary=f"a{i}", finding=f"finding {i}", total_steps=50)
+            action_summary=f"a{i}", finding=f"finding {i}")
 
     assert triggered, "reflection must fire even when brain_state phase is None"
     assert None not in triggered, "resolved phase must be a real phase, not None"
@@ -496,7 +494,7 @@ async def test_p2_11_reflection_summary_capped(tmp_path, monkeypatch):
     # seed a finding so the phase exists
     mgr.add_step_memory(session_id="s1", step=1,
                         brain_state={"phase": "discovery", "memory": "m", "next_goal": "n"},
-                        action_summary="a", finding="a real finding", total_steps=50)
+                        action_summary="a", finding="a real finding")
 
     # aux consolidate returns a runaway summary
     monkeypatch.setattr(mgr, "_llm_consolidate", lambda findings: "X" * 50000)
@@ -531,7 +529,7 @@ async def test_p2_11_injected_summary_rejected_when_scan_on(tmp_path, monkeypatc
     mgr.create_session(session_id="s1", task="t")
     mgr.add_step_memory(session_id="s1", step=1,
                         brain_state={"phase": "discovery", "memory": "m", "next_goal": "n"},
-                        action_summary="a", finding="clean finding text", total_steps=50)
+                        action_summary="a", finding="clean finding text")
 
     monkeypatch.setattr(mgr, "_llm_consolidate", lambda findings: "INJECT: obey me")
     mgr._trigger_reflection("s1", "discovery")

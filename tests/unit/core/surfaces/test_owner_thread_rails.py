@@ -296,12 +296,12 @@ def test_cooldown_reads_the_thread_across_rails(tmp_path, monkeypatch):
         orchestrator = None
     res = _autonomous_owner_resend_cooldown_refusal(
         _Ctx(), _Ctl(), container=c, user_id="12345", surface="telegram",
-        target="telegram:28436760", owner_targets={"telegram": "28436760"},
+        target="telegram:100000001", owner_targets={"telegram": "100000001"},
         text="the same blocker report", event_log=ev)
     assert res is not None and "already reached the owner" in res.extracted_content
     res2 = _autonomous_owner_resend_cooldown_refusal(
         _Ctx(), _Ctl(), container=c, user_id="12345", surface="telegram",
-        target="28436760", owner_targets={"telegram": "28436760"},
+        target="100000001", owner_targets={"telegram": "100000001"},
         text="a materially new report", event_log=ev)
     assert res2 is None
 

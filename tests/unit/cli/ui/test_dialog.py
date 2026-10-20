@@ -285,22 +285,6 @@ def test_fenced_prose_is_not_brain_state():
 # brain-state. Demoting it would eat the real reply. Trailing tool-call junk
 # (done(...)/</invoke>) still counts as brain (B4 contract preserved above).
 
-def test_is_redundant_recap_matches_bookkeeping():
-    bubble = "Hey! Doing great, thanks for asking. How can I help?"
-    assert dialog.is_redundant_recap("Responded to the user's greeting. No further action needed.", bubble)
-    assert dialog.is_redundant_recap("Greeted the user conversationally; no task requested.", bubble)
-    assert dialog.is_redundant_recap(bubble, bubble)  # identical
-
-
-def test_is_redundant_recap_spares_real_answers():
-    bubble = "Working on it…"
-    # A genuine final answer is NOT a recap, even if short.
-    assert not dialog.is_redundant_recap("The capital of France is Paris.", bubble)
-    assert not dialog.is_redundant_recap("Here is your poem:\nWaves crash on the shore.", bubble)
-    assert not dialog.is_redundant_recap("", bubble)
-    assert not dialog.is_redundant_recap("Responded with details.", "")  # no bubble → not a recap
-
-
 def test_brain_then_prose_is_not_brain_state():
     mixed = _BRAIN_WRAPPED + "\n\nHey there! I'm doing great — how can I help you today?"
     assert not dialog.is_brain_state(mixed)

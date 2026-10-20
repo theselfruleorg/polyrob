@@ -1,0 +1,51 @@
+{
+  "function": {
+    "description": "Monitor a Pons graduated Uniswap v4 pool (090 §3): price, tick, in-range liquidity and reserves, depth to move the price ±X%, the impact of one buy, the 24h change and a median reference from earlier readings, and a code-hash check of the pinned v4 contracts and the hook. ALERT lines come first. Read-only; each reading is journaled. Safe for a cron read job.",
+    "name": "defi_data_pool_metrics",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "robinhood",
+          "description": "Chain to read a Pons v4 pool on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "depth_pct": {
+          "description": "Price moves (in %) to size the depth for, both directions.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "expect_pool_id": {
+          "default": null,
+          "description": "The pool id you expect (bytes32). A different PoolKey hash is reported as an ALERT.",
+          "nullable": true,
+          "type": "string"
+        },
+        "hook_fee_bps": {
+          "default": 100,
+          "description": "Fee the hook takes from the input, in bps (090: 1%). An assumption, not read.",
+          "maximum": 10000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mint_native": {
+          "default": 0.00825,
+          "description": "Native size of one buy, for the impact figure.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "token": {
+          "description": "The Pons token whose graduated v4 pool to read (0x…). EVM only — Pons is a Robinhood-chain launchpad.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

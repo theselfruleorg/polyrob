@@ -25,7 +25,8 @@ def _held(tool, params, execution_context):
     from core.wallet.nft_account import NftAccountError
     wallet = tool._get_wallet()
     if wallet is None:
-        raise NftAccountError("agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        raise NftAccountError(WALLET_OFF_TEXT)
     signer = wallet.operational_signer()
     held = nft_holdings.select(params.chain, getattr(params, "nft", None),
                                account=getattr(params, "account", None),

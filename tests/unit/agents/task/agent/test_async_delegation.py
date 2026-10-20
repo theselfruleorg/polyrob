@@ -57,10 +57,12 @@ def test_max_async_floor_and_clamp(monkeypatch):
 # --- AsyncDelegationRegistry -------------------------------------------------
 
 class _Result:
-    def __init__(self, success=True, output="ok", error=None):
+    def __init__(self, success=True, output="ok", error=None, stop_reason=None):
         self.success = success
         self.output = output
         self.error = error
+        self.stop_reason = stop_reason
+        self.stop_description = "cut by the wall-clock cap" if stop_reason else ""
 
     @property
     def output_text(self):
@@ -82,7 +84,8 @@ class _Manager:
         if self.behavior == "fail":
             return _Result(success=False, error="boom")
         if self.behavior == "timeout":
-            raise asyncio.TimeoutError()
+            # run_subtask returns its own wall-clock timeout typed; it never raises.
+            return _Result(success=False, error="Timeout after 600s", stop_reason="wall_clock")
         raise RuntimeError("unexpected")
 
 
@@ -154,6 +157,9 @@ async def test_error_and_timeout_each_deliver_once(monkeypatch):
         await asyncio.sleep(0)
         assert len(delivered) == 1
         assert delivered[0][1] == expect
+        assert "STOPPED without a result" in delivered[0][2]
+        assert "has finished" not in delivered[0][2]
+    assert "the child cut by the wall-clock cap" in delivered[0][2]
 
 
 @pytest.mark.asyncio

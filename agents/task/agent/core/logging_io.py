@@ -89,10 +89,12 @@ class LoggingIOMixin:
             # prompt_tokens once a call has completed.
             mark = "" if usage["source"] == "provider_usage" else "≈"
 
-            # Determine emoji
-            if usage_pct >= 65:
+            # Determine emoji — the bands are the ONE compaction ladder
+            # (agents/task/constants.py), never a literal here.
+            from agents.task.constants import COMPACTION_LLM_PCT, COMPACTION_WARN_PCT
+            if usage_pct >= COMPACTION_LLM_PCT:
                 emoji = "🔴"
-            elif usage_pct >= 55:
+            elif usage_pct >= COMPACTION_WARN_PCT:
                 emoji = "🟡"
             else:
                 emoji = "🟢"
@@ -115,14 +117,87 @@ class LoggingIOMixin:
                 )
             self.logger.info(line)
 
-            # Warning if approaching compaction
-            if usage_pct >= 55:
+            # Warning if approaching compaction (same ladder).
+            if usage_pct >= COMPACTION_WARN_PCT:
                 self.logger.warning(
-                    f"⚠️  Context at {usage_pct:.0f}% - will compact at 65%"
+                    f"⚠️  Context at {usage_pct:.0f}% - will compact at {COMPACTION_LLM_PCT}%"
                 )
 
         except Exception as e:
             self.logger.debug(f"Context breakdown failed: {e}")
+
+    def _emit_prompt_manifest(self, slots: dict | None = None) -> None:
+        """2026-10-14 review D-10: ONE ``prompt_manifest`` row per session —
+        the slot sizes of the first step's prompt, the skills active, the
+        regime and model, and the size of the ``<previous-runs>`` block the task
+        carries. Sizes only, never text. Fail-open.
+
+        081 WS-0.2: called from ``_call_llm`` once the first call returned
+        (step 1 only), so the row sees what the request carried: the tool-schema
+        cost (set inside ``get_next_action``), the step-1 blocks (recall,
+        ``<live-health>``, ``<operations>``, digests, bridges — consumed into the
+        pending buffer), one size per ``FOUNDATION_LAYERS`` row, and the
+        provider's own ``prompt_tokens`` when the call reported usage."""
+        try:
+            import re as _re
+            from core.prompt_manifest import emit_prompt_manifest
+            extra = {}
+            if slots is None:
+                if getattr(getattr(self, "state", None), "n_steps", 1) != 1:
+                    return
+                slots, extra = self._prompt_manifest_measure()
+            try:
+                from agents.task.session_class import session_regime
+                regime = session_regime(self)
+            except Exception:
+                regime = ""
+            act = getattr(getattr(self, "controller", None), "_activated_skills", None)
+            skills = [str(x) for x in act if x and "#" not in str(x)] \
+                if isinstance(act, (set, frozenset, list, tuple)) else None
+            task = str(getattr(self, "task", "") or "")
+            m = _re.search(r"<previous-runs\b.*?</previous-runs>", task, _re.S)
+            extra["precheck"] = "<precheck" in task
+            emit_prompt_manifest(
+                session_id=str(getattr(self, "session_id", "") or ""),
+                user_id=str(getattr(self, "user_id", "") or ""),
+                regime=regime,
+                model=str(getattr(getattr(self, "llm", None), "model_name", "") or ""),
+                slots=dict(slots or {}), skills=skills,
+                previous_runs_chars=len(m.group(0)) if m else 0,
+                extra=extra)
+        except Exception as e:
+            self.logger.debug(f"prompt manifest skipped: {e}")
+
+    def _prompt_manifest_measure(self) -> tuple:
+        """(slots, extra) for the first-call manifest row (081 WS-0.2).
+
+        ``slots`` is the ONE gauge (``context_usage()``) with the ephemeral slot
+        recounted over the queued AND the consumed-for-this-call blocks (the
+        gauge counts only the queued ones, and the call consumed them).
+        ``extra`` carries ``layers`` (tokens per ``FOUNDATION_LAYERS`` key,
+        empty layers left out), ``ephemeral`` (tokens per origin) and the
+        provider's ``prompt_tokens``/``cached_tokens`` when the call reported
+        usage."""
+        from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
+        mm = self.message_manager
+        usage = mm.context_usage()
+        slots = dict(usage.get("slots") or {})
+        blocks = list(getattr(mm, "_ephemeral_messages", None) or []) \
+            + list(getattr(mm, "_ephemeral_pending", None) or [])
+        by_origin: dict = {}
+        for msg in blocks:
+            key = str(getattr(msg, "origin", None) or "untagged")
+            by_origin[key] = by_origin.get(key, 0) + mm.estimate_tokens([msg])
+        slots["ephemeral"] = sum(by_origin.values())
+        layers = {layer.key: int(getattr(mm, layer.tokens_attr, 0) or 0)
+                  for layer in FOUNDATION_LAYERS}
+        extra = {"layers": {k: v for k, v in layers.items() if v},
+                 "ephemeral": by_origin}
+        last = usage.get("last_call") or {}
+        if last.get("prompt_tokens"):
+            extra["prompt_tokens"] = int(last["prompt_tokens"])
+            extra["cached_tokens"] = int(last.get("cached_tokens", 0) or 0)
+        return slots, extra
 
     def _save_conversation(self, input_messages: list[BaseMessage], response: Any) -> None:
         """Save conversation to disk or telemetry for later retrieval"""

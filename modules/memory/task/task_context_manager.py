@@ -35,7 +35,7 @@ from core.config import BotConfig
 from core.exceptions import ComponentError
 
 from .hierarchical_memory import HierarchicalMemory
-from .phase_manager import PhaseManager, STRATEGIC_CLUE_PREFIX
+from .phase_manager import PhaseManager
 from .context_retriever import ContextRetriever
 from .semantic_retriever import SemanticRetriever
 
@@ -487,7 +487,6 @@ class TaskContextManager(BaseComponent):
         brain_state: Dict[str, Any],
         action_summary: str,
         finding: Optional[str] = None,
-        total_steps: Optional[int] = None
     ) -> bool:
         """Add memory for a step.
 
@@ -499,7 +498,6 @@ class TaskContextManager(BaseComponent):
             brain_state: Brain state from agent (contains 'phase')
             action_summary: Summary of action taken
             finding: Optional finding from this step
-            total_steps: Optional total steps for progress tracking
 
         Returns:
             True if successful, False if session not found
@@ -523,8 +521,7 @@ class TaskContextManager(BaseComponent):
             )
 
             # Update progress
-            if total_steps:
-                session_data.phase_manager.update_progress(step, total_steps)
+            session_data.phase_manager.update_progress(step)
 
             # H-MEM Section 3.3: Memory Update Mechanisms
             # OPTIMIZATION (Nov 14, 2025): More aggressive consolidation
@@ -750,11 +747,8 @@ class TaskContextManager(BaseComponent):
                     logger.debug("session-close reflection skipped for %s", session_id,
                                  exc_info=True)
 
-            # Save AFTER reflection so the disk copy carries the consolidated summary.
-            self.save_session(session_id, user_id)
-
-            # P0-7: drain the promoted findings (incl. the just-consolidated reflection
-            # summary) BEFORE deleting the session, so the caller can sync them to the
+            # P0-7: drain the queued reflection summaries (incl. the just-consolidated
+            # one) BEFORE deleting the session, so the caller can sync them to the
             # cross-session store. Fail-open — draining must never block the close.
             drained: List[str] = []
             try:
@@ -762,6 +756,9 @@ class TaskContextManager(BaseComponent):
             except Exception:
                 logger.debug("promoted-findings drain skipped for %s", session_id,
                              exc_info=True)
+
+            # Save AFTER reflection so the disk copy carries the consolidated summary.
+            self.save_session(session_id, user_id)
 
             # Clear reflection tracking
             if session_id in self._memories_since_reflection:
@@ -868,7 +865,13 @@ class TaskContextManager(BaseComponent):
                 if pending is None:
                     pending = []
                     session_data._pending_reflection_summaries = pending
-                pending.append(f"[phase-summary:{phase_name}] {new_summary}")
+                # D6: an unverified summary keeps the marker FIRST, where the
+                # writer's count, the write filter and recall all look for it.
+                _mark = "[unverified] "
+                if new_summary.startswith(_mark):
+                    pending.append(f"{_mark}[phase-summary:{phase_name}] {new_summary[len(_mark):]}")
+                else:
+                    pending.append(f"[phase-summary:{phase_name}] {new_summary}")
             if new_summary is None:
                 if len(recent_findings) <= 3:
                     new_summary = "; ".join(recent_findings)
@@ -935,37 +938,45 @@ class TaskContextManager(BaseComponent):
         return svc.consolidate(findings)
 
     def drain_promoted_findings(self, session_id: str) -> List[str]:
-        """Return curated findings not yet handed to the cross-session store.
+        """Return the reflection summaries (LLM-consolidated phase summaries) not
+        yet handed to the cross-session store; each is returned once.
 
-        Tracks emitted findings by CONTENT (a per-session set), NOT a positional
-        high-water mark: key_findings is pruned/evicted and phases can be resumed,
-        so any index/count over the flattened list loses or re-emits findings. The
-        content set guarantees each distinct finding is emitted exactly once even as
-        the underlying lists shrink.
+        Raw per-step findings stay in the session's H-MEM. They are working
+        notes (step narration, tool echoes, phase hints), not cross-session
+        facts: on 2026-10-11 they were about four stored rows in five. A durable
+        fact goes through the ``memory`` tool.
         """
         session_data = self._sessions.get(session_id)
         if not session_data:
             return []
-        emitted = getattr(session_data, '_emitted_findings', None)
-        if emitted is None:
-            emitted = set()
-            session_data._emitted_findings = emitted
-        new: List[str] = []
-        for pm in session_data.memory.phase_memories:
-            for finding in pm.key_findings:
-                if finding not in emitted:
-                    emitted.add(finding)
-                    # The phase-transition clue is an in-session hint, not a
-                    # fact; it used to land in recall with its bracket prefix.
-                    if not finding.startswith(STRATEGIC_CLUE_PREFIX):
-                        new.append(finding)
-        # SA-07: reflection's LLM-synthesized phase summaries ride the same drain
-        # (queued by _trigger_reflection, cleared here => emitted exactly once).
-        pending = getattr(session_data, '_pending_reflection_summaries', None)
-        if pending:
-            new.extend(pending)
-            session_data._pending_reflection_summaries = []
-        return new
+        pending = list(getattr(session_data, '_pending_reflection_summaries', None) or [])
+        session_data._pending_reflection_summaries = []
+        return pending
+
+    def release_unsent_findings(self, session_id: str, findings, user_id=None) -> bool:
+        """Re-queue summaries the cross-session store did not take (a failed or
+        refused write) so a later drain retries them. A closed session's queue is
+        gone: False."""
+        sd = self._sessions.get(session_id)
+        if sd is None:
+            return False
+        queue = [f for f in findings or () if f] + list(
+            getattr(sd, '_pending_reflection_summaries', None) or [])
+        # The next drain is joined into ONE stored row, cut at the row cap: keep only
+        # the newest summaries that fit (a store that stays full must not grow this
+        # queue without bound, nor have the cut drop the tail silently).
+        from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
+        cap, kept, size = SqliteMemoryProvider._row_cap(), [], 0
+        for f in reversed(queue):
+            if cap > 0 and kept and size + len(f) + 1 > cap:
+                break
+            kept.insert(0, f)
+            size += len(f) + 1
+        if len(kept) < len(queue):
+            logger.warning("memory: %d unsent summary(ies) dropped for session %s "
+                           "(more than one stored row holds)", len(queue) - len(kept), session_id)
+        sd._pending_reflection_summaries = kept
+        return True
 
     def _check_and_prune_memories(self, session_id: str, phase_name: str) -> None:
         """Check if pruning needed and prune low-importance memories (H-MEM Section 3.3).

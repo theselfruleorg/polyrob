@@ -157,12 +157,9 @@ def _mcp_metadata(controller) -> List[Dict[str, Any]]:
 
 def _hit_line(h: ToolHit) -> str:
     if h.where == "builtin":
-        if h.status == "loaded":
-            tag = "[loaded]"
-        elif h.status == "loadable":
-            tag = f'[loadable — load_tool("{h.id}")]'
-        else:
-            tag = f"[gated:{h.reason} — {h.remedy}]"
+        # The catalog's own status tag (one wording, tools/tool_disclosure.py).
+        from tools.tool_disclosure import ToolStatus, _status_suffix
+        tag = _status_suffix(ToolStatus(h.id, h.status, h.reason, h.remedy))
         loc = "builtin"
     else:
         tag = "[available via mcp]"
@@ -250,7 +247,7 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
     try:
         from tools.tool_disclosure import _bridge_mode
         frozen = (bool(registry.schemas_frozen()) if registry is not None else False) \
-            and _bridge_mode()
+            and _bridge_mode(registry)
     except Exception:
         frozen = False
     _via_bridge = ' — call it with tool_call(name="<action>", arguments={...})'
@@ -276,10 +273,9 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
                     props = "(schema unavailable)"
                 lines.append(f"  - {name}({props})")
     elif st.status == "loadable":
+        from tools.tool_disclosure import how_to_call
         lines.append(f'status: loadable — call load_tool("{display}") first, then '
-                     + ("call its actions with "
-                        'tool_call(name="<action>", arguments={...})' if frozen
-                        else "its actions appear next step"))
+                     + how_to_call(display, frozen))
     else:
         lines.append(f"status: gated:{st.reason} — {st.remedy}")
     return "\n".join(lines)

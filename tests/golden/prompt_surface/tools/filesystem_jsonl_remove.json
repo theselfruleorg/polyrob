@@ -1,0 +1,32 @@
+{
+  "function": {
+    "description": "Remove every line of a JSON-lines file whose <key> equals one of <values>. Backs up to <file>.bak, verifies every remaining line parses and the counts match, then replaces atomically; a single bad line refuses the rewrite and leaves the file untouched.",
+    "name": "filesystem_jsonl_remove",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "056 WS2: remove every line whose `key` equals one of `values`; backs the\nfile up to `<file>.bak` first, verifies every remaining line parses and\ncounts match, then atomically replaces. A single bad line refuses the whole\nrewrite (the store is left untouched) and names the line.",
+      "properties": {
+        "filePath": {
+          "type": "string"
+        },
+        "key": {
+          "description": "Top-level field to match, e.g. 'id'.",
+          "type": "string"
+        },
+        "values": {
+          "description": "Values of `key` whose lines are removed (compared as strings).",
+          "items": {},
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "filePath",
+        "key",
+        "values"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

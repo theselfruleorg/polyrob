@@ -16,3 +16,10 @@ with the rail. This package imports nothing above ``core``
 (``tests/test_layering_ratchet.py``); the submodules are imported lazily so a
 plain ``import core.money`` costs nothing.
 """
+
+#: 079 D3: the ONE text for how the per-transaction cap is raised. The OWNER
+#: proposes the new value from chat and approves it in /pending (the agent can
+#: propose, never approve). The PolicyGate refusal and ``core.owner_remedy``'s
+#: ``over_cap`` remedy import it.
+PER_TX_CAP_REMEDY = ("/config set budget.wallet_per_tx_usd <usd>, "
+                     "then approve it in /pending")

@@ -1,0 +1,30 @@
+{
+  "function": {
+    "description": "The agent wallet's own token holdings on ONE chain, USD-valued, with explicit coverage. Holdings on other chains are NOT included — ask per chain. Reveals own funds — treated as high-impact. For SOMEONE ELSE's wallet use wallet_holdings.",
+    "name": "defi_data_portfolio",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "default": null,
+          "description": "Optional (069 v4) — report the holdings of the token-bound ERC-6551 account of an NFT this treasury OWNS instead of the treasury's (a pinned collection only; needs AGENT_NFT_ENABLED).",
+          "nullable": true,
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to report holdings on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "nft": {
+          "default": null,
+          "description": "Optional — the same as `account`, naming the NFT: '<collection>#<id>' or '<id>'.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

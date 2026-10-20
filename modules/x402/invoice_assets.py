@@ -84,8 +84,12 @@ def resolve_invoice_asset(chain: Optional[str], asset_id: Optional[str]):
         if _chain_family(chain) == "svm":
             requested = _assets.solana_default_asset_id()
         else:
+            # 085 M-2: the chain's USDC is the PINNED address, never a row
+            # that only calls itself "USDC".
+            from core.payments.quote import is_stable
             for row in _assets.all_assets():
-                if row.chain == chain and (row.symbol or "").upper() == "USDC":
+                if (row.chain == chain and (row.symbol or "").upper() == "USDC"
+                        and is_stable(row)):
                     return row
             raise ValueError(
                 f"no default payable asset for chain {chain!r} — pin one with "

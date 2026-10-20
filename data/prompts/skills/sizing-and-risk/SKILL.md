@@ -3,9 +3,10 @@ name: sizing-and-risk
 description: 'Size a trade from the risk you accept: risk per trade, caps by asset class, quarter Kelly for bets, loss breakers kept in the ledger (none exist in code yet), and the units check that stops a 1000x amount error.'
 license: MIT
 metadata:
+  polyrob-when: 'Deciding how much to put into a trade'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["position size","position sizing","risk per trade","max drawdown","daily loss","kelly","bankroll","exposure cap"],"task_patterns":["\\b(size|sizing)\\b.*\\b(trade|bet|ticket)\\b","position siz(e|ing)"],"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '4'
 ---
 # Sizing and Risk — how much, and when to stop

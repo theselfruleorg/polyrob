@@ -492,7 +492,8 @@ def record_boot(*, command: str = "", data_home: Optional[os.PathLike] = None,
         attempts = 1 if prev.get("healthy_at") or not prev else int(prev.get("attempts") or 0) + 1
         rec = {"pid": os.getpid(), "started_at": time.time(), "version": code_version(),
                "sha": code_sha() or "", "command": command, "attempts": attempts,
-               "healthy_at": None, "stopped_at": None, "supervisor": supervisor() or ""}
+               "healthy_at": None, "stopped_at": None, "supervisor": supervisor() or "",
+               "env_files": _env_ladder()}
         _write_json(_boot_file(d, role), rec)
         return rec
 
@@ -536,15 +537,38 @@ def running_service(data_home: Optional[os.PathLike] = None) -> Optional[dict]:
     return boot if _pid_alive(int(boot.get("pid") or 0)) else None
 
 
-def restart_hint(surface: str = "local",
-                 data_home: Optional[os.PathLike] = None) -> str:
-    """One line naming how a written-but-not-live setting reaches the RUNNING
-    service, or '' when no service runs (the next start reads it anyway)."""
+def _env_ladder() -> list:
+    """The env files this process's ladder reads (080 WS-1), for the boot record."""
     try:
-        if running_service(data_home) is None:
-            return ""
+        from core.paths import env_file_candidates
+        return [str(Path(c.path).resolve()) for c in env_file_candidates()]
+    except Exception:
+        return []
+
+
+def restart_hint(surface: str = "local",
+                 data_home: Optional[os.PathLike] = None,
+                 written: Optional[os.PathLike] = None) -> str:
+    """One line naming how a written-but-not-live setting reaches the RUNNING
+    service, or '' when no service runs (the next start reads it anyway).
+
+    080 WS-1: with *written* (the env file the write landed in) the restart is
+    promised only when that file is on the running service's ladder (its boot
+    record's ``env_files``); a file it never reads is named instead, and a boot
+    record without a ladder (an older process) promises nothing."""
+    try:
+        boot = running_service(data_home)
     except LifecycleUnreadable:
         return ""
+    if boot is None:
+        return ""
+    if written is not None:
+        ladder = boot.get("env_files")
+        if not ladder:
+            return ""
+        if str(Path(written).resolve()) not in ladder:
+            return (f"The running service does not read {written}, so a restart "
+                    f"does not apply it.")
     if surface == "local":
         return "The running service applies it after `polyrob service restart` (or /restart)."
     return "Send /restart to apply it now."
@@ -656,6 +680,15 @@ def status_facts(data_dir: Optional[os.PathLike]) -> dict:
             health.append((f"restart_{outcome}",
                            str(last[0].get("detail") or outcome)[:300],
                            "/restart or /update again when it suits you"))
+    # 080 WS-1: a posture member set on its own env line is ignored — say so here,
+    # not only in the journal.
+    try:
+        from core.config_policy.members import ignored_member_health
+        item = ignored_member_health()
+    except Exception:
+        item = None
+    if item is not None:
+        health.append(item)
     return out
 
 

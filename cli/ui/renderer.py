@@ -38,6 +38,7 @@ from typing import Any, List
 
 from cli.ui import dialog
 from cli.ui.events import (
+    AgentEnd,
     ApprovalDecision,
     ApprovalPending,
     ErrorEvent,
@@ -256,6 +257,12 @@ class Renderer(ABC):
             if line:
                 self._emit_line(line, dim=(spec.layer is Layer.TRACE))
             return
+
+        # 083: a main-agent turn that stopped for a reason other than a normal
+        # finish says so in one dim line (e.g. "stopped at the step limit (8/8)").
+        if isinstance(event, AgentEnd) and event.stop_line \
+                and not self._state.is_sub_agent(event.agent_id):
+            self._emit_line(event.stop_line, dim=True)
 
         # Everything else is trace — live only when verbose.
         if self.verbose:

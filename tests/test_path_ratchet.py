@@ -58,7 +58,8 @@ BASELINE = {
     # polyrob/app/bootstrap.py: row DROPPED 2026-10-10 (W8) — the server
     # path_manager default is resolve_session_data_root(); api/kb/endpoints.py:
     # row DROPPED (W8) — the KB opens the agent's <data_home>/memory.db.
-    "core/config.py": 2,              # Field defaults, anchored by bootstrap
+    # core/config.py: row DROPPED 2026-10-13 (080 WS-1) — data_dir/db_path
+    # default to the data home; no relative "data/" Field default is left.
     "core/credit_sentinel.py": 1,     # T3-fixed; "data" only in the last-resort except
     "core/runtime_paths.py": 1,       # _LEGACY_SESSIONS_DEFAULT (deliberate terminal fallback)
     "webview/repair_sessions.py": 1,

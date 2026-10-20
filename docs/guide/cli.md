@@ -107,7 +107,7 @@ is done or it hits a step or budget limit.
 | `--no-input` | Disable onboarding and deny interactive approval prompts; structured formats imply it |
 | `-m, --model` / `-p, --provider` | Model and provider for this run |
 | `-t, --tools` | Comma-separated tool ids; takes precedence over `--toolset` |
-| `--toolset` | `minimal`, `safe`, `default`, `research`, `trading_research`, `coding`, `development`, `browser`, `social`, `full`, `earn`, `owner_interactive` |
+| `--toolset` | `minimal`, `safe`, `default`, `research`, `trading_research`, `coding`, `development`, `browser`, `social`, `full`, `earn` |
 | `--max-steps` | Maximum steps (default 50) |
 | `--plain` / `-v, --verbose` | Plain output / debug logging on the console |
 
@@ -367,31 +367,37 @@ every loop, timer and script reads. See [owner-controls.md](owner-controls.md).
 ### `polyrob goals` — the durable goal board
 
 `create`, `list`, `show`, `ready`, `edit`, `cancel`, `pause`, `resume`, `retry`,
-`events`, `tree`, and the `objective` subgroup (`add`, `list`, `show`, `pause`,
-`activate`, `drop`).
+`events` and `tree`.
 
 ```bash
 polyrob goals create "Draft the weekly report" -b "…" -p 7 --acceptance report.md
 polyrob goals list --status ready --json
-polyrob goals tree                       # objectives with their goals
+polyrob goals tree                       # goals with their sub-goals
 polyrob goals events <id>                # the event timeline for one goal
 ```
 
-`create` also takes `--parent`, `--objective`, `--tools`, `--triage` and
-`--force`. Standing work and objectives: [streams.md](streams.md).
+`create` also takes `--parent`, `--tools`, `--triage` and
+`--force`. Jobs, goals, decisions and pauses: [streams.md](streams.md).
 
-### `polyrob cron` — scheduled runs
+### `polyrob job` — scheduled jobs
 
 ```bash
-polyrob cron schedule "check the feed" 30m [--max-duration 180] [--user ID]
-polyrob cron list
-polyrob cron show <id>
-polyrob cron edit <id> --max-duration 1800     # raise/lower a job's hard cap (≤1800 s), applies from its next run
-polyrob cron edit <id> --slot-cap 6            # $0 preflight: skip the run while the ledger's Open-positions table holds ≥6 rows (`--slot-cap none` drops it)
-polyrob cron cancel <id>
-polyrob cron prune [--cancelled-older-than 7d] [--dry-run] [--all]
-polyrob cron digest ["every day 08:00"] [--off] [--deliver telegram] [--days 1]
+polyrob job new "every day 08:00" check the feed [--max-duration 180] [--user ID]   # or: 30m | check the feed
+polyrob job list                                # next run, last outcome, who wrote it
+polyrob job show <id>
+polyrob job edit <id> --max-duration 1800     # raise/lower a job's hard cap (≤1800 s), applies from its next run
+polyrob job pause <id>                        # the job's own state: shown as paused, no next run
+polyrob job resume <id>
+polyrob job run <id>                          # run it on the next scheduler pass
+polyrob job stop <id>                         # end it for good (the job records who stopped it)
+polyrob job prune [--cancelled-older-than 7d] [--dry-run] [--all]
+polyrob job digest ["every day 08:00"] [--off] [--deliver telegram] [--days 1]
 ```
+
+`polyrob cron` is an alias of `polyrob job` for one minor release (with
+`schedule` and `cancel` as aliases of `new` and `stop`); then it is removed.
+When the scheduler is off, the terminal, Telegram and this console print the
+same sentence and the one command that turns it on.
 
 Schedule specs: a duration (`30m`), `every monday 09:00`, a 5-field cron
 expression, or an ISO timestamp for a one-shot.
@@ -402,33 +408,13 @@ truncates it), `cronjob_edit` and `cronjob_cancel`. `cronjob_edit` patches a
 live job in place: it replaces one exact passage of the task (the passage must
 occur once) and can change the schedule, cap, rig, delivery or pinned skills.
 It never rewrites the whole task, so rules elsewhere in the task survive the
-edit. An autonomous run may edit only jobs it scheduled itself; a job you
-scheduled changes only when you ask in chat or through `polyrob cron edit`.
+edit.
 
-**Who wrote a job decides what it may do.** A job you schedule — `polyrob cron
-schedule`/`digest`, `/cron add`, the console, `/groups service` — is stamped
-owner-authored. A job the agent schedules is agent-authored, and so is one
-created in an owner turn that had already read third-party content (a page, a
-post, a mail, a tool result); the agent tells you when that happens. An
-agent-authored job runs under agent limits: the agent's tool ceiling, and no X
-post, room moderation, money rig or write job without your approval on each run.
-To make one yours, run `/adopt <id>` in chat or the REPL: it shows the whole
-task, schedule, rig, tools, target and every payload key, and your Confirm on
-the action card stamps it owner-authored. Pinned skills are bound by a content
-digest, so a skill edited after adoption makes the job the agent's again until
-you re-adopt it. Adoption never grants money tools; grant those yourself.
-Goals follow the same rule.
-
-Rows from before 1.3 carry no stamp and now count as the agent's. Stamp them
-once (it changes nothing on a second run):
-
-```bash
-python -m cron.stamp_authorship --dry-run    # print the plan, write nothing
-python -m cron.stamp_authorship              # apply it  [--db PATH] [--cutoff ISO]
-```
-
-Unstamped rows created on or after the cutoff become owner-authored; older ones
-become agent-authored and appear in `/adopt` for you to confirm.
+**What a job may do.** Every job carries the same standing authority: its rig and
+tools are used as written, it may post on X without a per-run approval, and it may
+moderate a room its task names. A job the agent schedules from an autonomous run may
+ask only for tools inside the agent's self-goal ceiling, and only your own turn may
+put a write verb on a job. Goals follow the same rule.
 
 `digest` is the owner daily digest — the roll-up of everything the delivery
 rail could not send you live. It composes from the ledger, the event log and
@@ -675,7 +661,6 @@ landed.
 ```bash
 polyrob owner halt / polyrob owner resume            # aliases of autonomy pause / resume
 polyrob owner pause-entries / resume-entries         # no NEW treasury positions; exits still run
-polyrob owner pause-streams / resume-streams         # no new stream reseeds
 ```
 
 `polyrob approvals` manages the approval-gated action set and renders on the
@@ -767,8 +752,8 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | Command | Description |
 |---|---|
 | `/goals` | Goal board summary |
-| `/adopt [<id>]` | Make a cron job or goal the agent wrote your own: bare lists them, `<id>` shows one in full, then confirm on its action card |
-| `/cron` (`/crons`) `[list\|show <id>\|add <schedule> <task…> [tools=a,b] [target=<address> chain=<chain>]\|edit <id> schedule\|task <value>\|cancel <id>]` | Durable scheduled runs: list, show, add, edit one field, or cancel |
+| `/jobs` | Scheduled jobs: next run, last outcome, and who wrote each |
+| `/job` `new <when> <what> [tools=a,b] [target=<address> chain=<network>]\|show\|edit <id> schedule\|what <value>\|pause\|resume\|run\|stop <id>` | Add, change, pause, resume, run now, or stop one scheduled job (`<when>` quoted or ended with `\|`) |
 | `/apps` | Deployed apps and their state |
 | `/todos` | Workspace todos from `todo.md` |
 | `/subagents` | Delegation capability and limits |
@@ -780,7 +765,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | Command | Description |
 |---|---|
 | `/finance [days]` | Treasury and runtime cost, as two blocks that are never summed |
-| `/usage` (`/cost`) | Authoritative usage breakdown for this session |
+| `/usage [days]` (`/cost`) | AI cost over the last N days (default 7): by kind of work, by scheduled job or goal, by model, purpose and day, with the cache share and the cost per useful run. A bare `/usage` shows this chat's breakdown first. The same view is on Telegram and the console |
 | `/check <address> [chain]` · `/check <TICKER>` | Read any wallet or token: a wallet's holdings, or a token's identity, price, safety screen and holders |
 | `/book` | The ledger against every money chain: one verdict, then what disagrees |
 | `/invoices [<status>]` | Agent invoices (x402 receivables). Statuses: `pending`, `settling`, `completed`, `settled_no_tx`, `expired`, `refund_due` |
@@ -830,7 +815,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/meter` | THIS turn's token meter (the REPL-only counter `/status` used to be) |
 | `/doctor` | The `polyrob doctor` health report |
 | `/contacts [<surface> <address>]` | Who the agent has written to, and the transcript with one of them |
-| `/thread [n \| <hours>h]` | Your conversation with the agent across every session and rail, newest last |
+| `/thread [n \| <hours>h]` | Your conversation with the agent across every session and background run, newest last |
 | `/files [n]` | Recent files the agent produced |
 | `/why [n]` | The last n refusals (default 5, at most 20): when, which tool, and the gate's reason word for word |
 | `/context` | What is in the window: per-slot token counts and share, a row for the one-shot messages riding this turn, and the provider's own figures for the last request (prompt · cached · written · uncached). A `≈` marks a number that is still a local estimate |
@@ -881,8 +866,7 @@ one goal; `/goals` shows the board. Use `/help <verb>` for their current syntax.
 `/pending` includes tool approvals and pending contacts as well as self-evolution
 proposals. **`/approve <id>` DECIDES one of them** — the same decider Telegram
 and the console run, over the same union `/pending` reads. Approval *policy*
-(which actions need a tap at all) is `/gates`; `/approve list|add|remove` still
-routes there as a deprecated alias and says so.
+(which actions need a tap at all) is `/gates`.
 
 User-facing replies and tool progress render as they arrive. Raw model-stream
 content may contain structured internal state, so it remains buffered rather

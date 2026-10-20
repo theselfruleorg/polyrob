@@ -1,0 +1,12 @@
+{
+  "function": {
+    "description": "List scheduled cron jobs for the current user.",
+    "name": "cronjob_list",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

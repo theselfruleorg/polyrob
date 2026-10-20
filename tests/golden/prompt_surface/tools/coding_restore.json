@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Restore a file to a prior pre-edit snapshot (I-4/H2; defaults to the latest snapshot of that file); requires CODING_SNAPSHOT_ENABLED",
+    "name": "coding_restore",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "description": "File to restore (relative to the workspace)",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "default": null,
+          "description": "Snapshot id (short sha, from `snapshots`) to restore; omit for the latest snapshot of this file",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

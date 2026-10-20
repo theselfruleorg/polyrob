@@ -142,22 +142,3 @@ def test_update_status_correct_user_id_applies(board):
     assert board.get(g.id).status == STATUS_BLOCKED
 
 
-def test_children_no_user_id_is_legacy_cross_tenant(board):
-    """The default (user_id=None) lists children regardless of tenant — today's
-    contract, used by the objective->children rollup that already tenant-scopes
-    the parent objective lookup itself."""
-    o1 = board.create_objective(user_id="u1", title="obj1")
-    g1 = board.create(user_id="u1", title="g1", parent_id=o1.id)
-    # a second tenant's goal parented to the SAME objective id (edge case /
-    # corrupted or malicious parent_id) still shows up with no filter.
-    g2 = board.create(user_id="u2", title="g2", parent_id=o1.id)
-    ids = {c.id for c in board.children(o1.id)}
-    assert ids == {g1.id, g2.id}
-
-
-def test_children_user_id_filters_to_tenant(board):
-    o1 = board.create_objective(user_id="u1", title="obj1")
-    g1 = board.create(user_id="u1", title="g1", parent_id=o1.id)
-    board.create(user_id="u2", title="g2", parent_id=o1.id)
-    ids = {c.id for c in board.children(o1.id, user_id="u1")}
-    assert ids == {g1.id}

@@ -12,7 +12,7 @@ from tools.launchpad import pons, pons_abi as P
 from tools.launchpad.tool import (
     LaunchParams, LaunchpadTool, QuoteParams, StatusParams, TradeParams)
 
-HOLDER = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+HOLDER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 TOKEN = "0xD8c32C1585758Bd7505F9ceA9C977a4294873ab2"
 CURVE = "0x526fce0f274615695073fd3a09a54f2646DF1E00"
 

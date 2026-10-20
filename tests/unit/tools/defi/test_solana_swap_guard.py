@@ -107,6 +107,15 @@ def _tool(wallet=None, *, deltas=None, **kw):
 
 
 @pytest.fixture(autouse=True)
+def _regime_allows_unattended_money(monkeypatch):
+    """These tests isolate the guard's lanes; the money regime itself is
+    tested in tests/unit/core/test_money_regime_e2e.py."""
+    import importlib
+    money_regime = importlib.import_module("core.config_policy.money_regime")
+    monkeypatch.setattr(money_regime, "unattended_money_allowed", lambda: True)
+
+
+@pytest.fixture(autouse=True)
 def _armed(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
@@ -632,3 +641,24 @@ async def test_a_swap_declared_at_exactly_its_value_passes_and_the_fee_hits_the_
     res = await tool.solana_swap(_params(amount_in=1.0, max_spend_usd=1.0, dry_run=True))
     assert res.error is None, res.error
     assert wallet.policy.checked[0][1] == 1.01
+
+
+# -- 085 reval: the receipt check uses the same 5 bp grace as the instruction --
+
+@pytest.mark.asyncio
+async def test_a_receipt_1_7_bp_below_the_floor_passes_the_receipt_check():
+    from core.wallet.solana_simulation import SolanaDeltas
+    # floor 990_000; received = native + fee = 989_832 (1.7 bp below).
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
+                          native_delta=984_832)
+    res = await _tool(deltas=deltas).solana_swap(_params(dry_run=True))
+    assert res.error is None, res.error
+
+
+@pytest.mark.asyncio
+async def test_a_receipt_6_bp_below_the_floor_refuses():
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, fee_lamports=5_000, token_deltas={USDC: -1_000_000},
+                          native_delta=984_406)
+    res = await _tool(deltas=deltas).solana_swap(_params(dry_run=True))
+    assert res.error and "below the route's floor" in res.error

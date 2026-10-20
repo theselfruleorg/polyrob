@@ -105,7 +105,9 @@ def _missed_reply(user_id: str, data_dir: str, args: list) -> str:
         lines.extend(format_notice_lines(
             float(r.get("ts") or 0), str(r.get("kind") or "capped"),
             str(r.get("text") or "").strip(), gutter="• ", width=_MISSED_WIDTH))
-    lines.append("Raise the cap: /config set delivery.daily_cap N")
+    from core.surfaces.missed import cap_caused
+    if cap_caused(rows):
+        lines.append("Raise the cap: /config set delivery.daily_cap N")
     return "\n".join(lines)
 
 

@@ -498,7 +498,8 @@ class WalletBridge:
             return self._refuse(USER_REJECTED, "bad-value",
                                 "value is not a hex quantity")
 
-        if value_wei > 0 and not allow:
+        payout = False
+        if value_wei > 0:
             try:
                 code = await asyncio.to_thread(self._rpc, "eth_getCode", [to, "latest"])
             except Exception:
@@ -508,9 +509,13 @@ class WalletBridge:
             except ValueError:
                 contract_code = b""
             if not contract_code or not any(contract_code):
-                return self._refuse(USER_REJECTED, "value-to-eoa", (
-                    "the page cannot transfer native value to an unverified contract or EOA; "
-                    "authorize the exact recipient in allow_contracts"))
+                if not allow:
+                    return self._refuse(USER_REJECTED, "value-to-eoa", (
+                        "the page cannot transfer native value to an unverified contract or EOA; "
+                        "authorize the exact recipient in allow_contracts"))
+                # 085 W2 (money L-4): a page-authored native send to a non-contract
+                # is a payout, even to an allowlisted address — the owner taps it.
+                payout = True
 
         from tools.defi.call_verb import typed_verb_only_refusal
         pinned_err = typed_verb_only_refusal(to)
@@ -524,7 +529,7 @@ class WalletBridge:
 
         reply, pending = await self._attempt(
             rail=rail, gate=gate, signer=signer, to=to, data=data,
-            value_wei=value_wei)
+            value_wei=value_wei, payout=payout)
         if reply is not None:
             return reply
 
@@ -536,7 +541,7 @@ class WalletBridge:
 
         reply, pending = await self._attempt(
             rail=rail, gate=gate, signer=signer, to=to, data=data,
-            value_wei=value_wei, owner_approved_usd=approved_usd)
+            value_wei=value_wei, owner_approved_usd=approved_usd, payout=payout)
         if reply is not None:
             return reply
         # Still only the ceiling in the way after re-pricing, and the re-priced
@@ -586,7 +591,7 @@ class WalletBridge:
         return ctx, None
 
     async def _attempt(self, *, rail, gate, signer, to, data, value_wei,
-                       owner_approved_usd=None):
+                       owner_approved_usd=None, payout=False):
         """``(reply, pending)`` — exactly one is None.
 
         A ``reply`` is final (sent, or refused). A ``pending`` Decision means the
@@ -648,7 +653,7 @@ class WalletBridge:
             intent = tx_guard.TxIntent(
                 chain=self.envelope.chain, token=None, to=to,
                 amount_raw=value_wei, max_spend_usd=ceiling,
-                idempotency_key=idem)
+                idempotency_key=idem, payout_shape=payout)
 
             decision = await asyncio.to_thread(authorize, intent, tx, holder=signer.address, gate=gate,
                                  execution_context=ctx, tool_self=self,

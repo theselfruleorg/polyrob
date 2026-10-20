@@ -25,6 +25,8 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     app = FastAPI()
     app.include_router(pages.router)
     app.include_router(pages.money_router)  # 067 P5a: Money readers
+    from webview import job_routes  # 080: the job stop/pause/resume/run routes
+    app.include_router(job_routes.router)
     # 043 phase 5: pages.router carries the /api/webgate/* endpoints; the
     # WEBVIEW_UI legacy switch and webview.legacy were removed.
     return TestClient(app), pages
@@ -121,26 +123,38 @@ def test_goal_verb_tenant_scoping(monkeypatch, tmp_path):
     assert board.get(goal.id).status == "ready"
 
 
-def test_goal_pause_resume_retry_cancel(monkeypatch, tmp_path):
+def test_goal_pause_retry_stop_drop(monkeypatch, tmp_path):
+    """080 WS-2: the console's buttons are the `/goal` verbs — Pause writes
+    `paused` (never `blocked`), Resume is retry, Stop is once, Drop it is
+    forever; `resume` and `cancel` are gone."""
+    from core.goal_suppressions import blocking
     board, goal = _make_goal(tmp_path, user_id="u1")
     client, _ = _client(monkeypatch, tmp_path, user_id="u1")
 
     r = client.post(f"/api/webgate/goals/{goal.id}/pause")
     assert r.status_code == 200 and r.json()["ok"] is True
-    assert board.get(goal.id).status == "blocked"
+    assert board.get(goal.id).status == "paused"
 
-    r = client.post(f"/api/webgate/goals/{goal.id}/resume")
+    r = client.post(f"/api/webgate/goals/{goal.id}/retry")
     assert r.status_code == 200 and r.json()["status"] == "ready"
     assert board.get(goal.id).status == "ready"
 
-    # retry is only valid from blocked — the transition table refuses honestly
+    # a queued goal has nothing to retry — refused honestly
     r = client.post(f"/api/webgate/goals/{goal.id}/retry")
     assert r.status_code == 409
     assert board.get(goal.id).status == "ready"
 
-    r = client.post(f"/api/webgate/goals/{goal.id}/cancel")
+    for gone in ("resume", "cancel"):
+        assert client.post(f"/api/webgate/goals/{goal.id}/{gone}").status_code == 400
+
+    r = client.post(f"/api/webgate/goals/{goal.id}/stop")
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
-    assert board.get(goal.id).status == "cancelled"
+    assert not blocking(board.db_path, user_id="u1", title=goal.title)
+
+    g2 = board.create(user_id="u1", title=goal.title, force=True)
+    r = client.post(f"/api/webgate/goals/{g2.id}/drop")
+    assert r.status_code == 200 and "switched OFF" in r.json()["message"]
+    assert blocking(board.db_path, user_id="u1", title=goal.title)
 
 
 def test_goal_unknown_verb_is_400(monkeypatch, tmp_path):
@@ -250,7 +264,7 @@ def test_correspondent_approve_still_promotes(monkeypatch, tmp_path):
     ("POST", "/api/webgate/halt"),
     ("POST", "/api/webgate/resume"),
     ("POST", "/api/webgate/goals/some-goal/pause"),
-    ("POST", "/api/webgate/goals/some-goal/cancel"),
+    ("POST", "/api/webgate/goals/some-goal/stop"),
     ("POST", "/api/webgate/cron/some-job/cancel"),
     ("POST", "/api/webgate/invoices/some-invoice/settle"),
 ])

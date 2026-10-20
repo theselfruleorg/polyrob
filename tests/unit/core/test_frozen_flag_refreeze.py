@@ -36,7 +36,7 @@ def _reset(monkeypatch, tmp_path):
 def test_process_env_value_lands_after_load_env(monkeypatch):
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "2")
     assert policy.compute_posture() == 0  # frozen pre-load
-    bootstrap.load_env(local_mode=True)
+    bootstrap.load_env()
     assert policy.compute_posture() == 2
 
 
@@ -45,7 +45,7 @@ def test_env_file_value_lands_after_load_env(monkeypatch):
     os.makedirs(dotdir, exist_ok=True)
     with open(os.path.join(dotdir, ".env"), "w") as f:
         f.write("AGENT_COMPUTE_POSTURE=1\nPAYMENT_APPROVAL_MODE=auto\n")
-    bootstrap.load_env(local_mode=True)
+    bootstrap.load_env()
     assert policy.compute_posture() == 1, (
         "owner home value must reach the frozen posture")
     assert policy.payment_approval_mode() == "auto"
@@ -53,23 +53,23 @@ def test_env_file_value_lands_after_load_env(monkeypatch):
 
 def test_mid_session_env_mutation_stays_inert(monkeypatch):
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")
-    bootstrap.load_env(local_mode=True)
+    bootstrap.load_env()
     assert policy.compute_posture() == 1
     # a later env mutation (the prompt-injection class) must NOT move the freeze
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "3")
     assert policy.compute_posture() == 1
     # even through another load_env call — the once-guard is consumed
-    bootstrap.load_env(local_mode=True)
+    bootstrap.load_env()
     assert policy.compute_posture() == 1
 
 
 def test_garbage_still_degrades_closed(monkeypatch):
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "9")
-    bootstrap.load_env(local_mode=True)
+    bootstrap.load_env()
     assert policy.compute_posture() == 0
 
 
-def test_refreeze_fires_for_server_mode_too(monkeypatch):
+def test_refreeze_fires_for_the_api_entry_point_too(monkeypatch):
     monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
-    bootstrap.load_env(local_mode=False)
+    bootstrap.load_env()
     assert policy.payment_approval_mode() == "auto"

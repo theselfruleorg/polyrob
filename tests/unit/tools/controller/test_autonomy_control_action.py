@@ -210,6 +210,7 @@ def test_the_description_does_not_turn_a_bare_stop_or_a_resume_into_a_pause(home
 def test_the_system_prompt_scopes_stop_and_forbids_unbacked_state_claims():
     from agents.task.agent.prompts import SystemPrompt
     sec = SystemPrompt._get_security_content(None)
-    assert "FIRST" not in sec and "must NEVER call pause" in sec
+    # the stop/pause scoping lives once, in the autonomy_control description
+    assert "autonomy_control" not in sec
     rules = SystemPrompt._get_rules_content(None)
     assert "A dry run stages nothing" in rules and "quote the id" in rules

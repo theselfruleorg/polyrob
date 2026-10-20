@@ -3,7 +3,7 @@
 The automatic import of provider keys from config/.env.{production,development}
 is gone (`polyrob config migrate` is the explicit replacement). What stays: a
 one-time WARN that names the migrate verb when the old path WOULD have fired.
-Server path (local_mode=False) is never touched.
+No entry point reads config/.env.* (080 WS-1: one env ladder).
 """
 import os
 
@@ -46,14 +46,14 @@ def test_load_env_default_does_not_backfill_and_warns_once(clean_environ, monkey
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(bootstrap, "_warned_backfill_retired", False)
     with caplog.at_level(logging.WARNING, logger="polyrob.app.bootstrap"):
-        bootstrap.load_env(local_mode=True)
+        bootstrap.load_env()
     assert os.environ.get("OPENROUTER_API_KEY") is None
     warned = [r for r in caplog.records if "polyrob config migrate" in r.getMessage()]
     assert warned, "the retired backfill must name the migrate verb when it WOULD have fired"
     # one-time: a second load_env must stay silent
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="polyrob.app.bootstrap"):
-        bootstrap.load_env(local_mode=True)
+        bootstrap.load_env()
     assert not [r for r in caplog.records if "polyrob config migrate" in r.getMessage()]
 
 
@@ -63,11 +63,11 @@ def test_load_env_no_warn_when_a_usable_key_exists(clean_environ, monkeypatch, c
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-have-one-0123456789")
     monkeypatch.setattr(bootstrap, "_warned_backfill_retired", False)
     with caplog.at_level(logging.WARNING, logger="polyrob.app.bootstrap"):
-        bootstrap.load_env(local_mode=True)
+        bootstrap.load_env()
     assert not [r for r in caplog.records if "polyrob config migrate" in r.getMessage()]
 
 
-def test_server_load_env_does_not_backfill(clean_environ, monkeypatch):
+def test_load_env_never_reads_config_env_files(clean_environ, monkeypatch):
     _write(clean_environ / "config" / ".env.production", "OPENROUTER_API_KEY=sk-or-z\n")
-    bootstrap.load_env(local_mode=False)
+    bootstrap.load_env("production")
     assert os.environ.get("OPENROUTER_API_KEY") is None

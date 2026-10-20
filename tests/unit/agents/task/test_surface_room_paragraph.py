@@ -17,7 +17,7 @@ def _render(profile):
 def _group(**over):
     base = {"surface_id": "telegram", "max_message_bytes": 4096, "media_out": True,
             "supports_interactive_ask": False, "chat_type": "supergroup",
-            "chat_id": "-100", "chat_name": "The Public Den"}
+            "chat_id": "-100", "chat_name": "The Lobby"}
     base.update(over)
     return base
 
@@ -88,3 +88,11 @@ def test_a_dm_never_carries_room_instructions():
                    "media_out": True, "supports_interactive_ask": True,
                    "chat_type": "dm", "chat_instructions": "should not appear"})
     assert "Standing instructions" not in out
+
+
+def test_the_owner_may_ask_for_any_text_in_a_room():
+    """2026-10-14 review C-12: GLM-5.3 refused the owner's explicit ask to post
+    a command line, citing room doctrine. The paragraph says the owner may."""
+    out = _render(_group())
+    assert "the owner may ask you to post any text in this room" in out
+    assert "Room rules bind members, not the owner." in out

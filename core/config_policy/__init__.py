@@ -27,6 +27,7 @@ from core.config_policy.members import (  # noqa: E402,F401 — D7: the ONE memb
     member_flag,
 )
 from core.config_policy.compute_posture import compute_posture_allows_safe  # noqa: E402,F401
+from core.config_policy.goal_flags import INTERACTIVE_MAX_STEPS  # noqa: E402,F401 — 083 interactive default
 from core.config_policy.builder_mode import (  # noqa: E402 — 032 bundle
     _builder_capability_default,
     agent_builder_mode,

@@ -2,7 +2,7 @@
 
 The agent has two pending→promote pipelines that let it evolve from experience:
 the writable SELF-context doc (``core/self_context_writer.py``) and authored skills
-(``agents/task/agent/skill_writer.py``). Both quarantine agent/background proposals
+(``modules/skills/writer.py``). Both quarantine agent/background proposals
 to ``.pending`` and require an owner promote. Historically the owner was **never told**
 a proposal existed and — for self-context — had **no reachable approve surface** at all.
 
@@ -102,6 +102,91 @@ def resolve_pending_alias(alias: str, items: List[dict]) -> Optional[dict]:
     hits = [it for it in items
             if pending_tap_alias(it.get("kind", ""), it.get("id", "")) == want]
     return hits[0] if len(hits) == 1 else None
+
+
+def last_decision_for_alias(alias: str, *, user_id: str, events=None,
+                            within_s: float = 7 * 86400) -> Optional[dict]:
+    """The owner decision that already consumed ``alias``, or ``None``.
+
+    A tap token outlives its item: the owner taps ``/approve_p_a9d770`` on an
+    old notification after the item was decided elsewhere (2026-10-15 06:42 —
+    the maintenance loop had promoted it at 05:07), and "No pending proposal"
+    reads as if the approval was lost. The decision events carry the
+    ``(kind, id)`` the alias hashes, so the stale token can name what happened.
+    Returns ``{"action", "kind", "item_id", "ts"}``; newest decision wins.
+    """
+    want = str(alias or "").strip().lower().replace("_", "-")
+    if not want.startswith(PENDING_ALIAS_PREFIX):
+        return None
+    if events is None:
+        try:
+            import time as _time
+            from core.event_log import get_event_log
+            events = get_event_log().query(
+                kind="self_modification", user_id=str(user_id or ""),
+                since_ts=_time.time() - within_s, limit=500)
+        except Exception as e:
+            logger.debug("self_evolution: decision lookup skipped: %s", e)
+            return None
+    for ev in events or []:  # most-recent-first
+        a = ev.get("attrs") or {}
+        if ev.get("source") != "owner_review" or a.get("pending"):
+            continue
+        if a.get("action") not in ("promote", "reject"):
+            continue
+        if pending_tap_alias(a.get("kind", ""), a.get("item_id", "")) == want:
+            return {"action": a["action"], "kind": a.get("kind", ""),
+                    "item_id": a.get("item_id", ""), "ts": ev.get("ts")}
+    return None
+
+
+_TOKEN_RE = re.compile(r"/(approve|reject)_p_([0-9a-f]{6})\b", re.IGNORECASE)
+
+
+def annotate_decided_tokens(text: str, *, user_id: str, live_items: List[dict],
+                            events=None) -> str:
+    """Rewrite each ``/approve_p_<hex>`` / ``/reject_p_<hex>`` in an owner-bound
+    text whose item the owner ALREADY decided as ``(approved <time>)``.
+
+    2026-10-17 01:52Z: Rob told the owner "Still waiting on your one tap …:
+    /approve_p_a9d770" — the owner had approved it at 10-16 17:16Z. The decision
+    lands outside the agent's turn, so the agent's own context still says
+    pending. A token that resolves in the LIVE queue is left alone (a re-proposed
+    draft keeps its alias); only a token with no live item and a recorded
+    decision is rewritten. Never raises; on any doubt the text is unchanged."""
+    if not text or "_p_" not in text:
+        return text
+    try:
+        def _sub(m: "re.Match") -> str:
+            alias = f"{PENDING_ALIAS_PREFIX}{m.group(2).lower()}"
+            if resolve_pending_alias(alias, live_items or []) is not None:
+                return m.group(0)
+            dec = last_decision_for_alias(alias, user_id=user_id, events=events)
+            if not dec:
+                return m.group(0)
+            word = "approved" if dec["action"] == "promote" else "rejected"
+            when = ""
+            try:
+                import datetime as _dt
+                when = " " + _dt.datetime.fromtimestamp(
+                    float(dec["ts"]), _dt.timezone.utc).strftime("%m-%d %H:%MZ")
+            except Exception:
+                pass
+            done.append(f"{word}{when}")
+            return f"(already {word}{when} — nothing to tap)"
+        done: List[str] = []
+        out = _TOKEN_RE.sub(_sub, text)
+        if done:
+            # 2026-10-17: the token was fixed but the prose around it ("still a
+            # draft, the jobs read the old rules") survived 5 turns. Say it once,
+            # in the message itself, so the owner reads the truth and the
+            # agent's own history carries it into the next turn.
+            out += ("\n\n(Correction: that item was already " + "; ".join(done)
+                    + " — it is in effect now, not a pending draft.)")
+        return out
+    except Exception:
+        logger.debug("self_evolution: decided-token annotation skipped", exc_info=True)
+        return text
 
 
 def pending_kind_label(kind: str) -> str:
@@ -337,13 +422,6 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
     # sixth pending pipeline, DB-backed (memory.db) not a file quarantine.
     items.extend(_curated_list_pending(home_dir, user_id))
 
-    # 035 P0-5: name the ACTIVE lines this draft appears to contradict, so a
-    # stale promoted rule can never silently out-rank the owner's newer one.
-    for it in items:
-        conflicts = _conflicts_for(it, home_dir, instance_id, user_id)
-        if conflicts:
-            it["conflicts"] = conflicts
-
     return items
 
 
@@ -361,6 +439,17 @@ def _self_mod_ev(kind: str, action: str, item_id: str, user_id: str, ok: bool) -
         logger.debug("self_evolution: event emit skipped: %s", e)
 
 
+def _rebase_note(res) -> str:
+    """Name what a doc promote retired / kept (``doc_claims.rebase_draft``)."""
+    try:
+        from core.self_context_writer import describe_rebase
+        note = describe_rebase(getattr(res, "retired", []) or [],
+                               getattr(res, "kept", []) or [])
+    except Exception:
+        return ""
+    return f" — {note}" if note else ""
+
+
 def promote(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
             instance_id: str, skill_manager=None) -> Tuple[bool, str]:
     """Promote a pending proposal to active. Returns ``(ok, message)``."""
@@ -373,14 +462,14 @@ def promote(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
         ok = bool(res.ok and not res.pending)
         _self_mod_ev(kind, "promote", item_id, user_id, ok)
         return ok, (
-            "self-context promoted (active next session)" if res.ok
+            "self-context promoted (active next session)" + _rebase_note(res) if res.ok
             else "; ".join(res.errors) or "promote failed")
     if kind == KIND_OWNER:
         res = _owner_writer(home_dir, instance_id).promote(user_id=user_id)
         ok = bool(res.ok and not res.pending)
         _self_mod_ev(kind, "promote", item_id, user_id, ok)
         return ok, (
-            "owner-facts doc promoted (active next session)" if res.ok
+            "owner-facts doc promoted (active next session)" + _rebase_note(res) if res.ok
             else "; ".join(res.errors) or "promote failed")
     if kind == KIND_CONTRACT:
         res = _contract_writer(home_dir, instance_id).promote(user_id=user_id)
@@ -558,9 +647,6 @@ def build_pending_notification(items: List[dict]) -> Optional[str]:
         if len(preview) > 140:
             preview = preview[:137] + "…"
         lines.append(f"• {label} — {preview}")
-        # 035 P0-5: a contradiction is the reason this needs the owner NOW.
-        for c in (it.get("conflicts") or [])[:2]:
-            lines.append(f"   ⚠ CONFLICT — {c}")
         lines.append(f"   {pending_tap_token('approve', it)}   "
                      f"{pending_tap_token('reject', it)}")
     lines.append("Everything at once: /approve_all · the full list: /pending")
@@ -768,115 +854,6 @@ def summarize_doc_change(before: Optional[str], after: Optional[str]) -> str:
         return "changed"
 
 
-# --- 035 P0-5: a pending rule that contradicts an ACTIVE one -----------------
-#
-# On 09-08 the ACTIVE self.md said "Telegram den = public-facing content only"
-# while the PENDING draft said "STOP ALL posting to the Telegram public den".
-# Promotion alone would not have been enough — the new rule had to SUPERSEDE an
-# older promoted one, and nothing detected that. Deterministic and LLM-free: a
-# prohibition in the draft whose subject also appears in a NON-prohibiting active
-# line is a contradiction worth naming.
-
-_PROHIBITION_RE = re.compile(
-    r"\b(no|not|never|stop|cease|halt|don'?t|do not|avoid|forbid(?:den)?|"
-    r"disallow(?:ed)?|prohibit(?:ed)?)\b", re.IGNORECASE)
-
-_CONFLICT_STOPWORDS = frozenset({
-    "the", "and", "for", "all", "any", "with", "from", "this", "that", "into",
-    "only", "your", "will", "must", "should", "until", "when", "what", "content",
-    "rule", "owner", "directive", "priority", "highest", "effective",
-    "immediately", "overrides", "policy", "posting", "posts", "post", "report",
-    "reporting", "never", "stop", "always",
-})
-
-#: How many significant terms a pending prohibition and an active line must share
-#: before the pair is called a contradiction. Two is enough to bind a subject
-#: ("telegram" + "den") and high enough to ignore incidental word reuse.
-_CONFLICT_MIN_OVERLAP = 2
-
-
-def _significant_terms(line: str) -> set:
-    """Content words of a line, >=3 chars, minus stopwords.
-
-    Hyphens SPLIT (they are not word characters here) — otherwise
-    "public-facing" and "public" are different terms and the 09-08 den case
-    scores 1 overlap instead of 2, which is exactly the pair this must catch.
-    "NO-DEN" likewise yields "den".
-    """
-    words = re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", line.lower())
-    return {w for w in words if w not in _CONFLICT_STOPWORDS}
-
-
-def detect_conflicts(pending_text: str, active_text: str) -> List[str]:
-    """Active lines a pending draft appears to contradict. Pure, LLM-free.
-
-    Returns owner-readable strings, most specific first, or ``[]``. Deliberately
-    conservative: it only fires when the draft PROHIBITS something and an active
-    line that does NOT prohibit it shares at least
-    :data:`_CONFLICT_MIN_OVERLAP` significant terms. Two prohibitions about the
-    same subject agree, and are not reported.
-    """
-    if not pending_text or not active_text:
-        return []
-    try:
-        bans = [ln.strip() for ln in pending_text.splitlines()
-                if ln.strip() and _PROHIBITION_RE.search(ln)]
-        if not bans:
-            return []
-        ban_terms = set()
-        for ln in bans:
-            ban_terms |= _significant_terms(ln)
-        if not ban_terms:
-            return []
-        out: List[str] = []
-        seen = set()
-        for ln in active_text.splitlines():
-            line = ln.strip().lstrip("#-* ").strip()
-            if not line or _PROHIBITION_RE.search(line):
-                continue
-            overlap = ban_terms & _significant_terms(line)
-            if len(overlap) < _CONFLICT_MIN_OVERLAP:
-                continue
-            shared = ", ".join(sorted(overlap)[:4])
-            msg = (f"the ACTIVE doc still says: \"{line[:140]}\" "
-                   f"(shares: {shared})")
-            if msg not in seen:
-                seen.add(msg)
-                out.append(msg)
-        return out[:5]
-    except Exception as e:  # never let advisory detection break a listing
-        logger.debug("self_evolution: conflict detection failed: %s", e)
-        return []
-
-
-#: Which ACTIVE doc a pending kind would replace. Skills and pref changes have no
-#: single active prose doc, so they are not conflict-checked.
-_ACTIVE_LOADER_BY_KIND = {
-    KIND_SELF_CONTEXT: "load_self_doc",
-    KIND_OWNER: "load_owner_doc",
-    KIND_CONTRACT: "load_contract_doc",
-}
-
-
-def _conflicts_for(item: dict, home_dir: Path | str, instance_id: str,
-                   user_id: str) -> List[str]:
-    loader_name = _ACTIVE_LOADER_BY_KIND.get(item.get("kind", ""))
-    if not loader_name:
-        return []
-    try:
-        import core.instance as _inst
-        active = getattr(_inst, loader_name)(home_dir, user_id, instance_id)
-        if not active:
-            return []
-        path = item.get("path")
-        pending = Path(path).read_text(encoding="utf-8", errors="replace") if path else ""
-        return detect_conflicts(pending, active)
-    except Exception as e:
-        logger.debug("self_evolution: conflict lookup failed: %s", e)
-        return []
-
-
-
 def _record_owner_notice(text: str) -> None:
     """T4-04 fallback: persist an owner-facing notice to the durable event log when a
     live push couldn't be delivered, so a REPL/local owner (no telegram daemon) still
@@ -1018,7 +995,7 @@ __all__ = [
     "PENDING_KIND_LABELS", "pending_kind_label",
     "list_pending", "promote", "reject", "decide_all", "show", "build_pending_notification",
     "push_owner_message", "maybe_notify_owner_pending",
-    "NOTIFY_SOURCE", "detect_conflicts", "summarize_doc_change",
+    "NOTIFY_SOURCE", "summarize_doc_change",
     "pending_notify_state", "pending_needs_notification",
     "load_notified_state", "save_notified_state", "clear_notified_item",
 ]

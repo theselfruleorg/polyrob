@@ -123,3 +123,47 @@ async def test_sub_agent_is_ungated(monkeypatch):
     agent._is_sub_agent = True
     await agent.run(max_steps=2, _continue_session=True)
     assert agent.step.await_count == 2
+
+
+# --- 083 WS-3: per-run cap for autonomous runs, wired through run() ---
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_halts_on_spend_since_run_start(monkeypatch):
+    monkeypatch.delenv("RUN_BUDGET_USD", raising=False)
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "2.0")
+    monkeypatch.setattr(rb, "_is_autonomous", lambda agent: True)
+    # snapshot 10.0 (old spend), then 11.0 before step 2, 12.0 before step 3
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_sequence([10.0, 10.0, 11.0, 12.0]))
+    agent = _build_agent()
+    await agent.run(max_steps=10, _continue_session=True)
+    assert agent.state.run_spend_baseline == 10.0
+    assert agent.step.await_count == 2
+    assert agent.state.stop_reason == "run_budget"
+    last = agent.history.history[-1].result[-1]
+    assert rb.RUN_BUDGET_MARKER in (last.error or "")
+    assert "AUTONOMOUS_RUN_BUDGET_USD" in (last.error or "")
+
+
+@pytest.mark.asyncio
+async def test_resumed_autonomous_run_starts_a_fresh_baseline(monkeypatch):
+    monkeypatch.delenv("RUN_BUDGET_USD", raising=False)
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "2.0")
+    monkeypatch.setattr(rb, "_is_autonomous", lambda agent: True)
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_sequence([50.0]))
+    agent = _build_agent()
+    await agent.run(max_steps=3, _continue_session=True)
+    assert agent.step.await_count == 3      # $50 of old spend is not this run's
+
+
+@pytest.mark.asyncio
+async def test_blocking_child_halts_on_parent_budget_in_run(monkeypatch):
+    monkeypatch.delenv("RUN_BUDGET_USD", raising=False)
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "2.0")
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_sequence([1.0, 3.0]))
+    agent = _build_agent()
+    agent._is_sub_agent = True
+    agent._run_budget_limit = (1.0, 2.0, "blocking")
+    await agent.run(max_steps=5, _continue_session=True)
+    assert agent.step.await_count == 1
+    assert agent.state.stop_reason == "run_budget"

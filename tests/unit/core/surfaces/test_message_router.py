@@ -130,9 +130,9 @@ def test_capabilities_returns_none_for_unknown_surface(router):
 def test_bot_username_returns_subscribed_surface_handle(router):
     r, reg = router
     surf = _RecordingSurface()
-    surf.bot_username = "tmachinroBot"
+    surf.bot_username = "ExampleBot"
     r.subscribe("telegram", surf)
-    assert r.bot_username("telegram") == "tmachinroBot"
+    assert r.bot_username("telegram") == "ExampleBot"
 
 
 def test_bot_username_returns_none_for_unknown_surface(router):

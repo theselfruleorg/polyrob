@@ -135,7 +135,7 @@ class _Agent:
 def test_blocked_escalation_creates_ask(board, monkeypatch):
     from agents.task.goals.dispatcher import GoalDispatcher
     monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     g = board.create(user_id="rob", title="Post the OSS launch announcement thread")
     _block(board, g)
     d = GoalDispatcher(board, _Agent(_Sink()))

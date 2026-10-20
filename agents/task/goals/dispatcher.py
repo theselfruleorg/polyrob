@@ -25,7 +25,6 @@ from agents.task.goals.board import (  # noqa: F401 — STATUS_* read by goal_ru
 )
 from agents.task.goals.goal_run import GoalRunMixin
 from agents.task.runtime.run_as_session import (
-    run_task_as_session as _run_task_as_session,  # noqa: F401 — legacy seam, kept for planner
     run_task_to_outcome as _run_task_to_outcome,  # noqa: F401 — goal_run reads it here (tests patch it)
 )
 
@@ -67,10 +66,7 @@ LLM_EXHAUSTED_MARKER = "llm_provider_exhausted"
 # T1.1 validation fix (2026-07-23): the RUN_BUDGET_USD halt marker, greppable
 # in goals.last_failure_error just like LLM_EXHAUSTED_MARKER — a budget-halted
 # goal was previously indistinguishable from any other refusal on the board.
-try:
-    from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
-except ImportError:  # pragma: no cover - core-only install
-    RUN_BUDGET_MARKER = "run_budget_exhausted"
+from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER  # noqa: E402
 
 # Provider-exhaustion phrasings the credit-death markers don't cover: the
 # LLMProviderExhaustedError halt strings ("ALL LLM PROVIDERS EXHAUSTED" /
@@ -248,26 +244,10 @@ def imminent_cron_job(data_dir: str, now, headroom_sec: int) -> Optional[str]:
 
 
 def _payload_is_money(payload) -> bool:
-    """Mirror of ``cron.jobs.is_money_job`` over the raw stored payload (the
-    layering ratchet forbids agents -> cron)."""
-    try:
-        if isinstance(payload, (str, bytes)):
-            payload = json.loads(payload or "{}")
-        return str((payload or {}).get("priority") or "").lower() == "money"
-    except Exception:
-        return False
-
-
-def _owner_authored_goal(payload) -> bool:
-    """True only for a goal the OWNER wrote: an explicit ``authored_by: owner``
-    stamp (a genuine owner turn or an owner seat) or an owner-seat grant. An
-    agent-authored, stream-seeded or unstamped (legacy) goal is not."""
-    if not isinstance(payload, dict):
-        return False
-    from core.config_policy.rigs import AUTHORED_BY_KEY, OWNER_AUTHOR
-    if payload.get("owner_granted"):
-        return True
-    return str(payload.get(AUTHORED_BY_KEY) or "").strip().lower() == OWNER_AUTHOR
+    """The money class over the raw stored payload — a thin delegator over
+    ``core.money.classify.is_money_class`` (the ONE predicate, review B-1)."""
+    from core.money.classify import is_money_class
+    return is_money_class(payload)
 
 
 def _payload_preempts(payload) -> bool:
@@ -347,9 +327,8 @@ def _tick_owner_user_id() -> Optional[str]:
     """Representative tenant for TICK-level (pre-claim, cross-tenant) autonomy
     knobs — the in-flight cap and daily quota are read ONCE per dispatch tick
     (design constraint: resolve once per tick, not per item), before the ready
-    set (which may span tenants) is even fetched. v1 is single-owner (mirrors
-    ``_maybe_plan``'s ``sorted(users)[0]`` convention elsewhere in this file),
-    so the resolved owner tenant is the sound representative tenant.
+    set (which may span tenants) is even fetched. v1 is single-owner, so the
+    resolved owner tenant is the sound representative tenant.
     Fail-open to None (=> legacy env-only value; see ``core.prefs.resolve``).
 
     Reads the ONE owner-tenant resolver (``resolve_owner_user_id``) so a pref the
@@ -362,9 +341,8 @@ def _tick_owner_user_id() -> Optional[str]:
 
 
 def _deliverables_root() -> Optional[Path]:
-    """The shared-workspace root, or None — one resolution shared by the planner's
-    EXISTING DELIVERABLES listing AND the T9 artifact-existence stamping (goal task
-    + planner BLOCKED list). Per-session server workspaces have no single root pm()
+    """The shared-workspace root, or None — the T9 artifact-existence stamping in
+    the goal task. Per-session server workspaces have no single root pm()
     can name (each session is its own sandbox), so this is scoped to the shared
     project-root workspace (CLI/headless project mode) exactly like
     ``effective_goal_concurrency``'s clamp above. Fail-open to None."""
@@ -445,11 +423,6 @@ class GoalDispatcher(GoalRunMixin):
         #: 031: True once the paused edge was reconciled (hold + one log line).
         self._paused_seen = False
         self._quota_logged = False
-        # §7.2 tail: the "consecutive empty planner runs" streak and the
-        # once-per-stall escalation marker are DURABLE on the board
-        # (GoalBoard.mark_planner_outcome / mark_stall_escalated). They were
-        # instance attributes until 2026-08-29, when 14 service restarts in 36 h
-        # (maintenance-loop deploys) re-armed the owner push on every restart.
 
     def _home_dir(self) -> str:
         """Data-home for pref resolution (owner-UX P1 T4), derived from the
@@ -487,33 +460,14 @@ class GoalDispatcher(GoalRunMixin):
             return False
 
     def _ready_for_dispatch(self, slots: int) -> list:
-        """The ready goals this tick will claim — round-robin across objectives.
-
-        Fail-open by design: any error in the fair path falls back to the legacy
-        global ``board.ready`` order. A fairness bug must never be able to stop
-        autonomous dispatch; an unfair tick is a far smaller failure than an idle
-        board.
-        """
+        """The ready goals this tick will claim, highest priority first."""
         from agents.task.constants import AutonomyConfig
         # 057 WS-C (B11): a repeatedly pre-empted goal climbs the queue. 0 = off.
         try:
             ageing = int(AutonomyConfig.goal_yield_ageing())
         except Exception:
             ageing = 0
-        cap = AutonomyConfig.goal_per_objective_cap()
-        try:
-            return self.board.ready_fair(
-                limit=slots,
-                per_objective_cap=cap,
-                yield_ageing=ageing,
-                # ready_fair consults in_flight ONLY when a cap is set, so with the
-                # default cap of 0 this GROUP BY would run every tick for a value
-                # nothing reads.
-                in_flight=self.board.count_running_by_objective() if cap > 0 else None)
-        except Exception:
-            logger.warning("fair dispatch failed — using the global ready order",
-                           exc_info=True)
-            return self.board.ready(limit=slots)
+        return self.board.ready(limit=slots, yield_ageing=ageing)
 
     async def dispatch_once(self) -> int:
         """Claim and run up to GOAL_MAX_CONCURRENT ready goals. Returns #dispatched.
@@ -670,14 +624,6 @@ class GoalDispatcher(GoalRunMixin):
                             "goal daily quota exhausted (%d started/24h >= %d) — pausing dispatch",
                             used, quota)
                         self._quota_logged = True
-                    # §5.4: quota exhaustion pauses RUNS, not curation — the
-                    # planner may still top up the board (its own cooldown +
-                    # min-ready gates bound the cost); queued goals run when
-                    # the quota window rolls over.
-                    try:
-                        await self._maybe_plan(headroom_after=0)
-                    except Exception:
-                        logger.debug("quota-paused planning skipped", exc_info=True)
                     return 0
                 self._quota_logged = False
                 slots = min(slots, headroom)
@@ -724,6 +670,12 @@ class GoalDispatcher(GoalRunMixin):
                 claimed = self.board.claim(g.id, worker, ttl_seconds=ttl)
                 if claimed is None:
                     continue  # another worker won the race
+                # A paused-then-retried goal can be re-claimed while its old run
+                # (which lost the claim) still runs until the next heartbeat;
+                # stop it now so the goal never has two live runs.
+                _prev = self._goal_tasks.get(claimed.id)
+                if _prev is not None and not _prev.done():
+                    _prev.cancel()
                 t = asyncio.create_task(self._run_goal(claimed))
                 self._inflight.add(t)
                 t.add_done_callback(self._inflight.discard)
@@ -735,10 +687,6 @@ class GoalDispatcher(GoalRunMixin):
                 dispatched += 1
             # Fire-and-forget: the ticker doesn't block on goal completion (goals may
             # run minutes). The runs self-report via record_success/failure + self-wake.
-            try:
-                await self._maybe_plan(headroom_after=slots - dispatched)
-            except Exception:
-                logger.debug("planner check failed (non-fatal)", exc_info=True)
             return dispatched
         finally:
             try:
@@ -756,11 +704,8 @@ class GoalDispatcher(GoalRunMixin):
         try:
             from agents.task.constants import AutonomyConfig
             from agents.task.goals.preflight import crossing_rail
-            payload = goal.payload or {}
-            steps = int(payload.get("max_steps")
-                        or AutonomyConfig.goal_default_max_steps())
             return crossing_rail(
-                goal.id, steps,
+                goal.id,
                 data_dir=os.path.dirname(self.board.db_path), now=now,
                 fallback_step_sec=AutonomyConfig.goal_preflight_step_sec(),
                 max_run_sec=AutonomyConfig.goal_max_run_seconds())
@@ -1051,6 +996,31 @@ class GoalDispatcher(GoalRunMixin):
         return " ".join(bits)
 
     def _resolve_tools(self, goal: Goal) -> list:
+        """The goal run's toolset (:meth:`_resolve_declared_tools`), re-judged by
+        ``core.tool_grants.dispatch_recheck`` against the row's stored actor
+        (085 W8 A4): a gated id the writer could not grant is dropped, loudly."""
+        tools = self._resolve_declared_tools(goal)
+        payload = goal.payload or {}
+        if payload.get("group"):
+            return tools
+        try:
+            from core.config_policy.rigs import rig_tools
+            from core.tool_grants import dispatch_recheck
+            from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
+            declared = payload.get("tools") or rig_tools(payload.get("rig")) or []
+            kept, refused = dispatch_recheck(
+                tools, payload, declared=declared,
+                agent_ceiling=set(allowed_self_goal_tools()) | set(_SELF_GOAL_BASELINE_TOOLS))
+        except Exception as e:   # fail closed: no gated id on an unjudgeable row
+            logger.warning("goal %s: tool re-check failed (%s); gated ids dropped", goal.id, e)
+            from core.tool_grants import gated_ids
+            return [t for t in tools if t not in gated_ids()]
+        if refused:
+            logger.warning("goal %s: dropped %s at dispatch — its writer (%s) cannot grant "
+                           "them", goal.id, refused, payload.get("actor"))
+        return kept
+
+    def _resolve_declared_tools(self, goal: Goal) -> list:
         """Resolve the toolset for a goal run.
 
         Precedence: the goal's own ``payload.tools`` if set; else, for a CHILD goal
@@ -1089,11 +1059,7 @@ class GoalDispatcher(GoalRunMixin):
         # the default; an explicit payload.tools above still wins verbatim.
         try:
             from core.config_policy.rigs import resolve_rig_tools
-            from tools.goal_tools import allowed_self_goal_tools
-            # H05: an agent-authored rig never widens past what goal_create
-            # would have granted as `tools=`.
-            rigged = resolve_rig_tools(payload, base,
-                                       agent_ceiling=sorted(allowed_self_goal_tools()))
+            rigged = resolve_rig_tools(payload, base)
             if rigged is not None and list(rigged) != list(base):
                 logger.info("goal %s: rig narrows the toolset to %s", goal.id, rigged)
                 return list(rigged)
@@ -1167,13 +1133,8 @@ class GoalDispatcher(GoalRunMixin):
                         goal.id, "needs_input", only_if_absent=True)
                 except Exception:
                     logger.debug("needs_input stamp skipped for %s", goal.id, exc_info=True)
-                self.board.create_ask(
-                    user_id=goal.user_id,
-                    what=f"Unblock goal: {goal.title}",
-                    why=(goal.last_failure_error or "repeated failures"),
-                    blocks_goal_ids=[goal.id],
-                    extra_payload={"auto_unblock": True},
-                )
+                from agents.task.goals.board_asks import create_auto_unblock_ask
+                create_auto_unblock_ask(self.board, goal)
         except Exception:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
 
@@ -1345,283 +1306,6 @@ class GoalDispatcher(GoalRunMixin):
         except Exception as e:
             logger.debug("goal self-wake skipped for %s: %s", goal.id, e)
 
-    async def _maybe_plan(self, *, headroom_after: int) -> None:
-        """Fire ONE planning session when the queue is thin. All gates mechanical."""
-        from agents.task.constants import AutonomyConfig
-        from agents.task.goals.planner import planner_ceilings
-        if not AutonomyConfig.goal_planner_enabled():
-            return
-        # 031: the `planner` scope of the owner pause (dispatch may still run).
-        from core.autonomy_control import allows
-        if not allows("plan").allowed:
-            return
-        # Resolve the standing objectives FIRST: the thinness gate below scales with
-        # how many streams exist. A fixed floor of 2 means a 16-stream board must
-        # nearly empty before the planner may refill it, and by then most streams
-        # have been dark for days.
-        # any tenant with an active objective (v1: single-user) — this list is
-        # CROSS-TENANT while the prompt built below is per-tenant, which is why
-        # the run is pinned to sorted(users)[0]. Both the count fed to
-        # planner_ceilings and that pick assume one owner; a real multi-tenant
-        # board needs a planner run per tenant, not a wider ceiling.
-        active = self._active_objective_owners()
-        users = {o.user_id for o in active}
-        if not users:
-            return
-        # An objective at its lifetime goal budget is STALLED: the planner can
-        # open nothing on it, and every prompt-shaped nudge to "raise an ask"
-        # depends on the model complying (prod 2026-08-28: two objectives sat at
-        # 25/25 for days, silently). Escalate deterministically, here, where the
-        # active objectives are already loaded. Idempotent + fail-open.
-        for _uid in sorted(users):
-            try:
-                self.board.escalate_spent_objectives(user_id=_uid)
-            except Exception as e:
-                logger.debug("spent-objective escalation skipped for %s: %s", _uid, e)
-        ceilings = planner_ceilings(len(active))
-        min_ready = max(AutonomyConfig.goal_planner_min_ready(),
-                        min(len(active), ceilings["ready_ceiling"]))
-        if len(self.board.ready(limit=min_ready)) >= min_ready:
-            return
-        # FIX 5: the planner runs for ONE tenant (see the cross-tenant note above),
-        # so every piece of its bookkeeping — cooldown, backoff streak, stall
-        # dedup — is keyed to THAT tenant. Resolved before the first read.
-        user_id = sorted(users)[0]
-        last = self.board.last_planner_run_at(user_id=user_id)
-        cooldown = AutonomyConfig.goal_planner_cooldown_sec()
-        # Back off after consecutive empty runs (planner_backoff_multiplier): an
-        # hourly run that keeps concluding "nothing to add" is paid repetition.
-        try:
-            from agents.task.goals.planner import planner_backoff_multiplier
-            cooldown *= planner_backoff_multiplier(
-                self.board.consecutive_empty_planner_runs(user_id=user_id))
-        except Exception:
-            logger.debug("planner backoff lookup failed (using base cooldown)",
-                         exc_info=True)
-        import time as _time
-        # The board's clock, not time.time(): mark_planner_run stamps with it, so
-        # the comparison must read the same clock (and tests can inject one).
-        now = getattr(self.board, "_now", _time.time)()
-        if last is not None and (now - last) < cooldown:
-            return
-        # BEFORE dispatch: no double-fire while running
-        self.board.mark_planner_run(user_id=user_id)
-        t = asyncio.create_task(self._run_planner(user_id))
-        self._inflight.add(t)
-        t.add_done_callback(self._inflight.discard)
-
-    def _active_objective_owners(self):
-        from agents.task.goals.board import OBJ_ACTIVE
-        try:
-            rows = self.board.list(status=OBJ_ACTIVE, limit=50)
-            return [r for r in rows if r.kind == "objective"]
-        except Exception:
-            return []
-
-    async def _run_planner(self, user_id: str) -> None:
-        try:
-            from agents.task.constants import AutonomyConfig
-            from agents.task.goals.planner import (
-                PLANNER_MAX_STEPS, PLANNER_TOOLS, build_planner_prompt,
-                planner_session_tools,
-            )
-            deliverables_root = _deliverables_root()
-            prompt = build_planner_prompt(
-                self.board, user_id, deliverables_root,
-                history_n=AutonomyConfig.goal_planner_history_n())
-            from core.runtime_config import resolve_default_provider
-            provider = resolve_default_provider()[0]
-            model = None
-            try:
-                from modules.llm.llm_client_registry import get_default_model
-                model = get_default_model(provider)
-            except Exception:
-                model = None
-            request = {
-                "task": prompt,
-                "provider": provider,
-                "model": model,
-                "tools": planner_session_tools(),
-                "max_steps": PLANNER_MAX_STEPS,
-                "temperature": 0.0,
-            }
-            from agents.task.goals.planner import planner_memory_fields
-            request.update(planner_memory_fields(user_id))
-            session_id, final = await _run_task_as_session(
-                self.task_agent, user_id=user_id, request=request, autonomous=True,
-                creator="goal")
-            # 015 #3 (planner leg): a planner run killed by provider exhaustion
-            # must not read as "planner correctly found nothing to do" — that
-            # ambiguity hid a 13h board-dark outage from two intel reviews.
-            from core.credit_sentinel import credit_sentinel_active
-            if _is_llm_provider_exhausted(final or "") or \
-                    (not final and credit_sentinel_active(provider)):
-                logger.error(
-                    "%s: goal planner run died on provider outage, NOT an "
-                    "empty pipeline (session=%s): %s",
-                    LLM_EXHAUSTED_MARKER, session_id,
-                    (final or "no output")[:200])
-                return
-            logger.info("goal planner ran (session=%s): %s",
-                        session_id, (final or "no result")[:200])
-            # Read the outcome from the BOARD, not the model's summary text: how
-            # many goals this session actually created, and whether anything is
-            # still in flight. Both persist (backoff + once-per-stall marker).
-            try:
-                queued = self.board.count_created_by_session(str(session_id))
-                live = 1 if self.board.has_live_goals(user_id=user_id) else 0
-                self.board.mark_planner_outcome(queued=queued, live=live,
-                                                user_id=user_id)
-            except Exception:
-                logger.debug("planner outcome not recorded", exc_info=True)
-            await self._maybe_escalate_empty_pipeline(user_id, planner_summary=final)
-        except Exception as e:
-            if _is_llm_provider_exhausted(e):
-                logger.error("%s: goal planner run failed on provider outage: %s",
-                             LLM_EXHAUSTED_MARKER, e)
-            else:
-                logger.error("goal planner run failed: %s", e, exc_info=True)
-
-    async def _maybe_escalate_empty_pipeline(self, user_id: str, *,
-                                             planner_summary: Optional[str] = None) -> None:
-        """§7.2 tail: a planner run that STILL leaves the board with NO work is a
-        stall — surface it to the owner exactly once per stall. Fail-open.
-
-        What is NOT a stall (2026-08-29 forensics — prod pushed "my pipeline is
-        empty" twice in five hours while the trading stream had run ten clean
-        cycles):
-        - work in flight (running/waiting/triage legs of a cycle) — only
-          ``ready`` was checked before;
-        - a manifest stream idle BETWEEN cycles (its cadence window reopens at a
-          known time — ``streams.next_seed_at``);
-        - every active objective either a stream or at its goal budget with the
-          spent-objective ask already open — the owner has the decision, there
-          is nothing new to say.
-        The push names an objective that could actually take work (starved order),
-        never the first row by priority (which was a budget-spent one). The
-        streak and the once-per-stall marker are durable on the board, so a
-        restart cannot re-arm the push.
-        """
-        try:
-            from agents.task.constants import AutonomyConfig
-            if self.board.has_live_goals(user_id=user_id):
-                return
-            runs = self.board.consecutive_stall_runs(user_id=user_id)
-            if runs < AutonomyConfig.goal_empty_pipeline_escalate_after():
-                return
-            streak_started = self.board.empty_streak_started_at(user_id=user_id)
-            if self.board.stall_escalated_since(streak_started, user_id=user_id):
-                return
-            import time as _time
-            now = _time.time()
-            streams = self._declared_streams()
-            if streams:
-                from agents.task.goals.streams import next_seed_at
-                reopens = next_seed_at(self.board, user_id, streams, now)
-                if reopens is not None and reopens > now:
-                    logger.info(
-                        "goal pipeline idle, not stalled: the next stream seed is due "
-                        "at %s", _time.strftime("%Y-%m-%d %H:%MZ", _time.gmtime(reopens)))
-                    return
-            servable = self._servable_objectives(user_id, streams=streams, now=now)
-            if servable is not None and not servable:
-                logger.info("goal pipeline covered, not stalled: every objective is a "
-                            "stream or at its goal budget with its ask open")
-                return
-            objective_title = servable[0].title if servable else None
-            # Mark the stall escalated once the threshold is reached, independent of
-            # whether the owner PUSH lands — the durable ask below is the owner-visible
-            # artifact and must be created even under the silent posture.
-            self.board.mark_stall_escalated(user_id=user_id)
-            try:
-                stall_number = self.board.stall_escalation_count(user_id=user_id)
-            except Exception:
-                stall_number = None
-            # The planner's done() text is a bookkeeping record: the owner sees
-            # it only at style.verbosity == detailed (core.prefs, fail-closed).
-            try:
-                from core.prefs import done_records_visible
-                planner_word_visible = done_records_visible(user_id, self._home_dir())
-            except Exception:
-                planner_word_visible = False
-            from agents.task.goals.escalation import maybe_escalate_empty_pipeline
-            await maybe_escalate_empty_pipeline(
-                self.task_agent, objective_title=objective_title,
-                planner_summary=planner_summary,
-                planner_word_visible=planner_word_visible,
-                stall_number=stall_number, stalled_since=streak_started)
-            # §7.2b: track the stall as an ask so it is fulfillable regardless of push.
-            try:
-                self.board.create_ask(
-                    user_id=user_id,
-                    what=f"Goal pipeline empty for '{objective_title or 'the objective'}'",
-                    why=(planner_summary or "")[:2000],
-                )
-            except Exception:
-                logger.debug("empty-pipeline ask creation skipped", exc_info=True)
-        except Exception:
-            logger.debug("empty-pipeline escalation skipped", exc_info=True)
-
-    def _declared_streams(self) -> list:
-        """The manifest's streams, or ``[]`` when there is no readable manifest.
-        Fail-open: an unreadable manifest must never block an escalation."""
-        try:
-            from agents.task.goals.streams import default_manifest_path, load_manifest
-            path = default_manifest_path()
-            if not path or not os.path.exists(path):
-                return []
-            return load_manifest(path)
-        except Exception:
-            logger.debug("stream manifest unavailable to the dispatcher", exc_info=True)
-            return []
-
-    def _servable_objectives(self, user_id: str, *, streams: Optional[list] = None,
-                             now: Optional[float] = None):
-        """Active objectives that could take a new goal right now, hungriest first;
-        ``[]`` when every objective is covered; ``None`` if the board read failed.
-
-        Covered = a manifest stream that is busy, inside its cadence window, or due
-        for less than ``SEEDER_GRACE_SEC`` (the hourly seeder will refill it); or an
-        objective at its goal budget whose spent-objective ask is already open (the
-        owner holds the decision). A stream objective whose stream is NOT in the
-        manifest, or is overdue past the grace, is a stall and stays servable so
-        the escalation names it. Order: fewest in-flight children, oldest activity
-        — the same order the planner is told to serve.
-        """
-        try:
-            from agents.task.goals.board import ASK_OPEN, OBJ_ACTIVE
-            from agents.task.goals.planner import _starved_order_with_stats
-            from agents.task.goals.streams import SEEDER_GRACE_SEC, stream_overdue_by
-            objectives = self.board.objectives(user_id=user_id, status=OBJ_ACTIVE)
-            open_spent = {(a.payload or {}).get("objective_id")
-                          for a in self.board.asks(user_id=user_id, status=ASK_OPEN)
-                          if (a.payload or {}).get("kind")
-                          == self.board.ASK_KIND_OBJECTIVE_SPENT}
-            by_id = {str(st.get("id")): st for st in (streams or [])}
-            servable = []
-            for o in objectives:
-                if (o.payload or {}).get("recurrence"):
-                    continue  # 036: a rail's own schedule covers it (rails.py)
-                sid = (o.payload or {}).get("stream_id")
-                if sid:
-                    st = by_id.get(str(sid))
-                    if st is not None and stream_overdue_by(
-                            self.board, user_id, st, now) <= SEEDER_GRACE_SEC:
-                        continue  # the stream's own cadence covers it
-                    servable.append(o)
-                    continue
-                budget = self.board.objective_budget(o)
-                if budget > 0 and o.id in open_spent and \
-                        len(self.board.children_of(user_id, o.id)) >= budget:
-                    continue
-                servable.append(o)
-            return [o for o, _live, _last in
-                    _starved_order_with_stats(self.board, user_id, servable)]
-        except Exception:
-            logger.debug("servable-objective scan failed", exc_info=True)
-            return None
-
-
 class GoalTicker:
     """Periodically run dispatch_once until stopped (mirrors CronTicker)."""
 
@@ -1651,13 +1335,6 @@ class GoalTicker:
             is_active=is_active,
             max_interval_seconds=max_interval,
         ).run_forever(stop_event=stop_event)
-
-
-def build_rails_ticker(*, data_dir: str):
-    """036: the in-process rails loop, reached through this module so the autonomy
-    runtime adds no new core -> agents edge (``tests/test_layering_ratchet.py``)."""
-    from agents.task.goals.rails import build_rails_ticker as _build
-    return _build(data_dir=data_dir)
 
 
 def build_goal_ticker(task_agent: Any, *, data_dir: str = "data",

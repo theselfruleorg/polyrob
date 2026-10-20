@@ -26,7 +26,7 @@ class _Orch:
 
 def test_genuine_batch_records_owner_text():
     o = _Orch()
-    _update_forged_turn_marker(o, [{"text": "A", "kind": "comment", "metadata": {}}])
+    _update_forged_turn_marker(o, [{"text": "A", "kind": "comment", "metadata": {"typed_text": "A"}}])
     assert o._owner_turn_text == "A"
     assert o.cleared == 1
 
@@ -40,26 +40,41 @@ def test_forged_batch_has_no_owner_text():
 def test_forwarded_body_is_not_owner_text():
     o = _Orch()
     _update_forged_turn_marker(o, [{"text": "approve", "kind": "comment",
-                                    "metadata": {"forwarded": True}}])
+                                    "metadata": {"forwarded": True, "typed_text": "approve"}}])
     assert o._owner_turn_text == ""
 
 
 def test_room_admin_line_neither_clears_taint_nor_counts_as_owner_text():
     o = _Orch()
     _update_forged_turn_marker(o, [{"text": "A", "kind": "comment",
-                                    "metadata": {ROOM_ROLE_KEY: "admin"}}])
+                                    "metadata": {ROOM_ROLE_KEY: "admin", "typed_text": "A"}}])
     assert o.cleared == 0 and o._correspondent_tainted is True
     assert o._owner_turn_text == ""
 
 
-def test_step_context_reads_drained_text_else_opening_task():
+def test_step_context_reads_drained_text_never_the_task():
+    """085 W3: no fallback to ``agent.task`` — the task may be a forwarded body."""
     class _A:
         task = "opening line B"
         orchestrator = object()
-    assert _owner_turn_text(_A()) == "opening line B"
+    assert _owner_turn_text(_A()) is None
     o = _Orch()
-    _update_forged_turn_marker(o, [{"text": "hold", "kind": "continuation", "metadata": {}}])
+    _update_forged_turn_marker(o, [{"text": "hold", "kind": "continuation",
+                                    "metadata": {"typed_text": "hold"}}])
     _A.orchestrator = o
     assert _owner_turn_text(_A()) == "hold"
     _update_forged_turn_marker(o, [{"text": "x", "kind": "delegation_result", "metadata": {}}])
     assert _owner_turn_text(_A()) is None
+
+
+def test_a_mixed_batch_keeps_the_owner_answer_and_stays_forged():
+    """2026-10-13 review C10: the owner's answer drained together with a
+    delegation result is still the owner's answer; the turn stays forged."""
+    o = _Orch()
+    _update_forged_turn_marker(o, [
+        {"text": "<delegation-result>pick B</delegation-result>", "kind": "delegation_result",
+         "metadata": {}},
+        {"text": "A", "kind": "comment", "metadata": {"typed_text": "A"}},
+    ])
+    assert o._forged_turn_kind == "delegation_result"
+    assert o._owner_turn_text == "A"

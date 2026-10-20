@@ -114,6 +114,7 @@ _CRON_KINDS = frozenset({ek.CRON_RUN})
 _DIAGNOSTIC_KINDS = frozenset({
     "llm_started",
     "llm_request",
+    ek.MODEL_CALL_QUALITY,
     "retry_wait",
     "step",
     "tool_started",

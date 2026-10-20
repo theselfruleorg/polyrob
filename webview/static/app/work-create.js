@@ -14,7 +14,7 @@
  * because the next reader trusts it, so it is gone rather than "fixed".
  *
  * ⚠️ A44: the forms now carry the fields the writers already accept (a goal's
- * body / priority / tools / step budget, a schedule's delivery and wake). The
+ * body / priority / tools, a schedule's delivery and wake). The
  * payload is TYPED here — an empty control is OMITTED rather than sent as an
  * empty string, a number is a number, and the tools box is one name per line,
  * which is the list shape the writer validates.
@@ -22,7 +22,7 @@
 import { postJson, serverAnswer } from './http.js';
 
 //: Fields the writers want as an integer, not as text.
-const NUMERIC = new Set(['priority', 'max_steps']);
+const NUMERIC = new Set(['priority']);
 //: Fields the writers want as a list of names, typed one per line.
 const LINE_LIST = new Set(['tools']);
 //: Fields that are a plain yes/no. A checkbox is ABSENT from FormData when it

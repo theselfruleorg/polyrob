@@ -22,7 +22,6 @@ import logging
 import os
 import time
 import uuid
-from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional
 
 from core.sqlite_util import execute_retry, wal_connect
@@ -33,31 +32,33 @@ logger = logging.getLogger(__name__)
 # is terminal. `waiting` (T2.1) is a goal created with unresolved `depends_on` edges —
 # it is NOT dispatchable (ready()'s filter excludes it with zero query changes) and
 # flips to `ready` only when every prerequisite lands `done` (see deps_satisfied /
-# the record_success completion sweep).
+# the record_success completion sweep). `paused` (080) is the OWNER's hold: never
+# dispatched (ready() reads `ready` only), lifted by `/goal retry`.
 # The literals live in core.goal_vocab (core may not import agents; the status
-# snapshot, the renderer, streams and goal_list all read the SAME spelling).
+# snapshot, the renderer and goal_list all read the SAME spelling).
 from core.goal_vocab import (  # noqa: E402,F401 — re-exported by name
     STATUS_TRIAGE, STATUS_WAITING, STATUS_READY, STATUS_RUNNING,
-    STATUS_BLOCKED, STATUS_DONE, STATUS_CANCELLED,
-    KIND_GOAL, KIND_OBJECTIVE, KIND_ASK,
+    STATUS_BLOCKED, STATUS_PAUSED, STATUS_DONE, STATUS_CANCELLED,
+    KIND_GOAL, KIND_ASK,
     ASK_OPEN, ASK_FULFILLED, ASK_REJECTED, ASK_OBSOLETE,
-    OBJ_ACTIVE, OBJ_PAUSED, OBJ_DROPPED, OBJ_DONE,
 )
 
 
 from agents.task.goals.board_types import (  # noqa: E402,F401 — re-exported by name
-    READY_SCAN_LIMIT, _OBJECTIVE_STATUSES, DuplicateGoalError, SuppressedGoalError,
-    _trigrams, title_similarity, ASK_AUTO_UNBLOCK, _ask_goal_keys, Goal,
+    DuplicateGoalError, SuppressedGoalError,
+    _trigrams, title_similarity, ASK_AUTO_UNBLOCK, _ask_goal_keys, Goal, clip_keep_end,
 )
 from agents.task.goals.board_deps import BoardDepsMixin  # noqa: E402
 from agents.task.goals.board_asks import BoardAsksMixin  # noqa: E402
-from agents.task.goals.board_objectives import BoardObjectivesMixin  # noqa: E402
-from agents.task.goals.board_planner import BoardPlannerMixin  # noqa: E402
 from core.goal_vocab import normalize_title  # noqa: E402,F401 — the ONE title key
 
+#: A goal a rate guard deferred (``defer_run``) is not claimable before its
+#: ``payload.not_before`` (unix seconds). Bound parameter: now.
+_NOT_HELD_SQL = ("(json_extract(g.payload, '$.not_before') IS NULL "
+                 "OR json_extract(g.payload, '$.not_before') <= ?)")
 
-class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
-                BoardPlannerMixin):
+
+class GoalBoard(BoardDepsMixin, BoardAsksMixin):
     """SQLite-backed durable goal store with atomic claim + circuit breaker."""
 
     def __init__(self, db_path: str, *, clock: Callable[[], float] = time.time,
@@ -134,31 +135,25 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
                payload: Optional[Dict[str, Any]] = None, status: str = STATUS_READY,
                kind: str = KIND_GOAL, force: bool = False,
                depends_on: Optional[List[str]] = None,
-               actor: Optional[str] = None, rail_id: Optional[str] = None,
+               actor: Optional[str] = None,
                tool_ceiling: Optional[List[str]] = None) -> Goal:
         """Write one row. ``actor`` names WHO is writing it (036 §3.3,
         ``core.tool_grants``): ``payload.tools`` must pass
         :func:`core.tool_grants.assert_grantable` for that actor —
-        ``owner_seat`` / ``agent`` (+ ``tool_ceiling``) / ``rail`` (+ ``rail_id``)
-        / ``none``. ``actor=None`` is the legacy/test path; every production call
+        ``owner_seat`` / ``agent`` (+ ``tool_ceiling``) / ``none``. ``actor=None`` is the legacy/test path; every production call
         site names one (``tests/test_board_create_grant_ratchet.py``).
         A refusal raises :class:`core.tool_grants.GrantRefused` (a ``ValueError``)
         before any row is written."""
         from core.identity import is_anonymous
         if is_anonymous(user_id):
             raise ValueError("goal create requires a real (non-anonymous) user_id (tenant scope)")
-        # An objective is allowed to be standing; it is not allowed to be infinite.
-        if kind == KIND_GOAL:
-            self._check_objective_budget(user_id, parent_id)
         from agents.task.constants import AutonomyConfig
 
         # 034 §3.5 read site 2: what the owner switched OFF is refused BEFORE,
         # and independent of, the dedup check — and `force` does not bypass it.
         if kind == KIND_GOAL:
             from core.goal_suppressions import blocking
-            hit = blocking(self.db_path, user_id=user_id, title=title,
-                           objective_id=parent_id,
-                           stream_id=(payload or {}).get("stream"), now=self._now())
+            hit = blocking(self.db_path, user_id=user_id, title=title, now=self._now())
             if hit is not None:
                 raise SuppressedGoalError(hit)
 
@@ -167,8 +162,7 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             from core.tool_grants import assert_grantable
             payload = dict(payload or {})
             payload["tools"] = assert_grantable(
-                payload["tools"], actor=actor, rail_id=rail_id, user_id=user_id,
-                db_path=self.db_path, ceiling=tool_ceiling)
+                payload["tools"], actor=actor, ceiling=tool_ceiling)
 
         # Check for near-duplicates in the last 7 days
         threshold = AutonomyConfig.goal_dedup_threshold()
@@ -226,6 +220,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             effective_status = status
 
         effective_payload = dict(payload or {})
+        if actor is not None:
+            # 085 W8 A4: WHO wrote the row — the dispatch re-check reads it.
+            effective_payload["actor"] = actor
         if terminal_bad_ids:
             effective_payload["block_kind"] = "dep_failed"
 
@@ -308,7 +305,7 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             """UPDATE goals
                   SET status='done', result=?, session_id=COALESCE(?,session_id),
                       consecutive_failures=0, claim_lock=NULL, claim_expires=NULL,
-                      completed_at=?
+                      completed_at=?, payload=json_remove(payload, '$.run_deferrals')
                 WHERE id=? AND status='running' AND claim_token IS ?""",
             (result, session_id, now, goal_id, claim_token),
         )
@@ -341,7 +338,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
                    completed_at=CASE WHEN consecutive_failures+1>=max_retries
                                      THEN ? ELSE completed_at END,
                    last_failure_error=?, session_id=COALESCE(?,session_id),
-                   claim_lock=NULL, claim_expires=NULL
+                   claim_lock=NULL, claim_expires=NULL,
+                   payload=json_remove(payload, '$.run_deferrals')
                  WHERE id=? AND status='running' AND claim_token IS ? RETURNING *""",
             (now, error[:2000], session_id, goal_id, claim_token), fetch="one",
         )
@@ -359,6 +357,43 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             self._cascade_dep_failed(goal_id)
         self._append_attempt(goal_id, error=error, session_id=session_id)
         return g
+
+    #: A rate guard may defer one goal this many times in a row; past it the run
+    #: goes back through ``record_failure`` so a guard can never hold a goal forever.
+    MAX_RUN_DEFERRALS = 3
+
+    def defer_run(self, goal_id: str, *, retry_after_sec: int,
+                  claim_token: Optional[str] = None, reason: str = "") -> Optional[Goal]:
+        """Requeue a running goal that a rate guard cut short, with no failure counted.
+
+        Prod 2026-10-14: the X post cooldown refused a goal run with
+        ``retry_after_sec=3364``; the run was recorded as a failure, re-claimed a
+        minute later into the same refusal, and the goal gave up in ten minutes.
+        ``payload.not_before`` keeps ``ready()`` from claiming it before the guard
+        reopens. Returns None (caller records a failure) for a stale claim or once
+        the goal has been deferred :data:`MAX_RUN_DEFERRALS` times in a row (a
+        recorded success or failure ends the row: both drop ``run_deferrals``)."""
+        g = self.get(goal_id)
+        if g is None:
+            return None
+        payload = dict(g.payload or {})
+        n = int(payload.get("run_deferrals") or 0)
+        if n >= self.MAX_RUN_DEFERRALS:
+            return None
+        payload["run_deferrals"] = n + 1
+        payload["not_before"] = self._now() + max(1, int(retry_after_sec))
+        row = execute_retry(
+            self.db_path,
+            """UPDATE goals SET status='ready', claim_lock=NULL, claim_expires=NULL,
+                   payload=?
+                 WHERE id=? AND status='running' AND claim_token IS ? RETURNING *""",
+            (json.dumps(payload), goal_id, claim_token), fetch="one",
+        )
+        if row is None:
+            return None
+        self._event(goal_id, "deferred", {"retry_after_sec": int(retry_after_sec),
+                                          "deferrals": n + 1, "reason": str(reason)[:300]})
+        return Goal.from_row(row)
 
     def block_from_ready(self, goal_id: str, *, error: str) -> bool:
         """Flip a 'ready' goal straight to 'blocked' (agent-declared BLOCKED, §3.1).
@@ -615,6 +650,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
         )
         if rc == 1:
             self._event(goal_id, "unblocked", {"rationale": str(rationale)[:500]})
+            # Prod 2026-10-14: an unblock left the dispatcher's own ask OPEN and
+            # ready() held the goal by it; the unblock answers that ask.
+            self.release_auto_unblock_asks(goal_id)
         return rc == 1
 
     def stamp_block_kind(self, goal_id: str, block_kind: str, *,
@@ -665,14 +703,11 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
     def merge_payload(self, goal_id: str, updates: Dict[str, Any]) -> bool:
         """Merge ``updates`` into a row's JSON payload, preserving every other key.
 
-        ``stamp_block_kind`` does this for exactly one key on exactly one status.
-        The stream seeder needs the general form — to adopt a legacy objective by
-        stamping ``stream_id`` onto it without discarding its ``success_criteria``.
-        Read-modify-write under a single ``execute_retry``. Callers live in
-        ``agents/task/goals/streams.py``, which runs on the hourly stream-seeding
-        tick rather than only in an interactive operator run. The write is
-        idempotent — a concurrent caller racing this method re-applies the same
-        merge rather than losing an update, so no additional locking is needed.
+        ``stamp_block_kind`` does this for exactly one key on exactly one status;
+        this is the general form. Read-modify-write under a single
+        ``execute_retry``. The write is idempotent — a concurrent caller racing
+        this method re-applies the same merge rather than losing an update, so no
+        additional locking is needed.
         """
         row = self.get(goal_id)
         if row is None:
@@ -782,6 +817,7 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
                         self._event(g.id, "provider_outage_retried",
                                     {"provider_retry_min": provider_retry_min,
                                      "requeues": requeues + 1})
+                        self.release_auto_unblock_asks(g.id)
                     continue
                 # Cap reached: stop self-healing, stamp ONCE, then fall through
                 # below to the same terminal rail every other kind uses. The
@@ -909,7 +945,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             attempts = list(merged.get("attempts") or [])
             attempts.append({
                 "ts": self._now(),
-                "error": str(error)[:500],
+                # B9: head + tail — the detail a retry needs trails the error.
+                "error": clip_keep_end(error, 600),
                 "session_id": session_id,
             })
             merged["attempts"] = attempts[-self._MAX_ATTEMPTS_KEPT:]
@@ -974,39 +1011,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
         except (KeyError, TypeError, IndexError):
             return int(row[0])
 
-    def count_running_by_objective(self) -> Dict[str, int]:
-        """Live in-flight goal count PER objective, keyed by ``parent_id``.
-
-        ``count_running`` answers "how many goals are running" — enough for the
-        global GOAL_MAX_CONCURRENT ceiling, but not enough to stop ONE objective
-        taking every slot while its neighbours wait. Goals with no parent share the
-        single ``""`` bucket: they are one undifferentiated stream, not many.
-        Expired claims are excluded on the same terms as ``count_running``, so call
-        this after ``reclaim_stale`` and under the tick lock for an authoritative
-        number.
-        """
-        now = self._now()
-        rows = execute_retry(
-            self.db_path,
-            """SELECT COALESCE(parent_id,'') AS k, COUNT(*) AS n FROM goals
-                WHERE kind='goal' AND status='running'
-                  AND (claim_expires IS NULL OR claim_expires > ?)
-                GROUP BY k""",
-            (now,),
-            fetch="all",
-        ) or []
-        out: Dict[str, int] = {}
-        for r in rows:
-            try:
-                key, n = r["k"], r["n"]
-            except (KeyError, TypeError, IndexError):
-                key, n = r[0], r[1]
-            out[key or ""] = int(n)
-        return out
-
     def cancel(self, goal_id: str, *, user_id: Optional[str] = None) -> bool:
-        # kind guard: objectives are dropped (set_objective_status), never 'cancelled' —
-        # without it goal_cancel on an objective id writes a status outside its enum.
+        # kind guard: only a goal row is cancelled — an ask has its own statuses.
         sql = ("UPDATE goals SET status='cancelled', claim_lock=NULL "
                "WHERE id=? AND kind='goal' AND status NOT IN ('done','cancelled')")
         params: tuple = (goal_id,)
@@ -1028,7 +1034,7 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
         ``None`` — every pre-existing internal caller (breaker/aging/sweep code
         in this module, which already reasons about tenancy elsewhere) is
         byte-identical. When a caller passes ``user_id`` (the CLI, `polyrob
-        goals ready/pause/resume/retry` — this was IDOR-shaped before: any
+        goals pause/retry` — this was IDOR-shaped before: any
         caller could flip any tenant's goal status by id), the UPDATE adds
         ``AND user_id=?`` so a wrong/foreign tenant is a harmless no-op
         (``rc=0``), not a cross-tenant mutation.
@@ -1045,6 +1051,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
         rc = execute_retry(self.db_path, sql, tuple(params))
         if rc == 1:
             self._event(goal_id, f"status_{new_status}", {})
+            if new_status == STATUS_READY:
+                self.release_auto_unblock_asks(goal_id)
         return rc == 1
 
     # --- queries -------------------------------------------------------------
@@ -1116,38 +1124,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
     def suppressions(self, *, user_id: str) -> list:
         """What the owner switched OFF (034), newest first. A read: never
         creates the table."""
-        from core.goal_suppressions import active
-        return active(self.db_path, user_id=user_id, now=self._now())
-
-    def has_live_goals(self, *, user_id: str) -> bool:
-        """True while any goal of this tenant is in flight (triage/waiting/ready/
-        running). ``blocked`` is NOT live here: it needs an owner, it is not
-        work that will finish on its own."""
-        row = execute_retry(
-            self.db_path,
-            "SELECT 1 AS x FROM goals WHERE kind=? AND user_id=? AND status IN (?,?,?,?) "
-            "LIMIT 1",
-            (KIND_GOAL, user_id, STATUS_TRIAGE, STATUS_WAITING, STATUS_READY,
-             STATUS_RUNNING), fetch="one")
-        return row is not None
-
-    def count_created_by_session(self, session_id: str) -> int:
-        """Goals *session_id* created — how many a planner run actually queued,
-        read from the board rather than from the model's own summary text.
-        Matches the always-stamped audit id ``payload.created_by_session_id``
-        (031) OR the legacy wake-target ``payload.origin_session_id`` (stamped
-        only for a genuine owner turn, so a planner's own goals never carried it
-        and its outcome accounting under-counted)."""
-        row = execute_retry(
-            self.db_path,
-            "SELECT COUNT(*) AS n FROM goals WHERE kind=? AND ("
-            "json_extract(payload,'$.created_by_session_id')=? OR "
-            "json_extract(payload,'$.origin_session_id')=?)",
-            (KIND_GOAL, str(session_id), str(session_id)), fetch="one")
-        try:
-            return int(row["n"]) if row else 0
-        except (KeyError, TypeError, IndexError):
-            return int(row[0]) if row else 0
+        from core.goal_suppressions import SCOPE_TITLE, active
+        return active(self.db_path, user_id=user_id, now=self._now(), scope=SCOPE_TITLE)
 
     def ready(self, *, limit: int = 10, yield_ageing: int = 0) -> List[Goal]:
         """Ready goals across all tenants, highest priority first (dispatcher feed).
@@ -1161,66 +1139,21 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             rows = execute_retry(
                 self.db_path,
                 """SELECT * FROM goals g WHERE g.status='ready' AND g.claim_lock IS NULL
-                    AND g.kind='goal'
+                    AND g.kind='goal' AND """ + _NOT_HELD_SQL + """
                     ORDER BY (g.priority + ? * (SELECT COUNT(*) FROM goal_events e
                         WHERE e.goal_id = g.id AND e.kind='yielded')) DESC,
                         g.created_at LIMIT ?""",
-                (int(yield_ageing), int(limit)), fetch="all",
+                (self._now(), int(yield_ageing), int(limit)), fetch="all",
             ) or []
             return self._drop_held([Goal.from_row(r) for r in rows])
         rows = execute_retry(
             self.db_path,
-            """SELECT * FROM goals WHERE status='ready' AND claim_lock IS NULL AND kind='goal'
+            """SELECT * FROM goals g WHERE status='ready' AND claim_lock IS NULL AND kind='goal'
+                AND """ + _NOT_HELD_SQL + """
                 ORDER BY priority DESC, created_at LIMIT ?""",
-            (int(limit),), fetch="all",
+            (self._now(), int(limit)), fetch="all",
         ) or []
         return self._drop_held([Goal.from_row(r) for r in rows])
-
-    def ready_fair(self, *, limit: int, per_objective_cap: int = 0,
-                   in_flight: Optional[Dict[str, int]] = None,
-                   yield_ageing: int = 0) -> List[Goal]:
-        """Ready goals, round-robined across objectives instead of globally ordered.
-
-        ``ready()`` sorts the WHOLE board by ``priority DESC, created_at``, so one
-        objective's backlog takes every dispatch slot while its neighbours starve —
-        tolerable at 6 standing objectives, the dominant failure at 16. This walks
-        the same ordered window in PASSES, taking at most one goal per objective per
-        pass. Priority therefore still decides who is served first; it no longer
-        decides who is served at all.
-
-        Throughput is preserved: with a single active objective every pass takes
-        from it, so all ``limit`` slots still fill.
-
-        ``per_objective_cap`` is an OPTIONAL additional ceiling on how many goals one
-        objective may have in flight at once (``<=0`` disables it, the default).
-        ``in_flight`` is the caller's ``count_running_by_objective()`` snapshot; it
-        is only consulted when a cap is set. Goals with no parent share the ``""``
-        bucket — they are one stream, not many.
-        """
-        if limit <= 0:
-            return []
-        counts = dict(in_flight or {})
-        buckets: "OrderedDict[str, List[Goal]]" = OrderedDict()
-        for g in self.ready(limit=READY_SCAN_LIMIT, yield_ageing=yield_ageing):
-            buckets.setdefault(g.parent_id or "", []).append(g)
-        picked: List[Goal] = []
-        taken: Dict[str, int] = {}
-        while len(picked) < limit:
-            progressed = False
-            for key, queue in buckets.items():
-                if len(picked) >= limit:
-                    break
-                if not queue:
-                    continue
-                if per_objective_cap > 0 and \
-                        counts.get(key, 0) + taken.get(key, 0) >= per_objective_cap:
-                    continue
-                picked.append(queue.pop(0))
-                taken[key] = taken.get(key, 0) + 1
-                progressed = True
-            if not progressed:
-                break
-        return picked
 
     def events(self, goal_id: str) -> List[Dict[str, Any]]:
         rows = execute_retry(
@@ -1233,18 +1166,6 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin, BoardObjectivesMixin,
             d["payload"] = json.loads(d.get("payload") or "{}")
             out.append(d)
         return out
-
-    def create_objective(self, *, user_id: str, title: str, body: str = "",
-                         priority: int = 5, force: bool = False,
-                         payload: Optional[Dict[str, Any]] = None) -> Goal:
-        """An objective is a standing, never-dispatched row goals attach to.
-
-        ``payload`` may carry ``success_criteria`` (§7.3) so the planner measures
-        against what the owner actually wants, not a self-set proxy.
-        """
-        return self.create(user_id=user_id, title=title, body=body, priority=priority,
-                           kind=KIND_OBJECTIVE, status=OBJ_ACTIVE, force=force,
-                           payload=payload, actor="none")
 
     def update_fields(self, goal_id: str, *, user_id: Optional[str] = None,
                       title: Optional[str] = None, body: Optional[str] = None,

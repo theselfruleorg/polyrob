@@ -162,6 +162,15 @@ def _pack_toml(entry_point: str) -> dict:
     return {}
 
 
+def first_party_tool_ids() -> frozenset:
+    """Every ``[tools.<id>]`` a first-party pack declares, read WITHOUT importing it
+    (a bare CLI process never loads packs, so the core capability table lacks them)."""
+    ids = set()
+    for entry_point in first_party_entry_points().values():
+        ids.update((_pack_toml(entry_point).get("tools") or {}).keys())
+    return frozenset(ids)
+
+
 def first_party_rows() -> List[dict]:
     """One validated row per first-party entry point, built at runtime."""
     from core.version import get_version

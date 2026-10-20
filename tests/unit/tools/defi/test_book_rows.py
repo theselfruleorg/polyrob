@@ -1,20 +1,18 @@
 """tools.defi.book — typed position rows for the Money Book (043 A34/A35 read side).
 
-The book used to expose only a per-chain reconcile verdict + PROSE holdings.
 `/money`'s Book tab needs typed rows (symbol/chain/amount/worth_now/entry/
-since_entry). These tests pin the read side:
+since_entry), one per position of the rail-written book. These tests pin the
+read side:
  - a chain with N positions yields N typed rows (symbol/chain/amount/worth_now
-   present; entry/since_entry None WITH a reason until A35 writes the store);
+   present; entry/since_entry None WITH a reason when the basis is unknown);
  - a disagreement chain's rows still render, carrying the chain verdict;
  - an unreadable chain yields `unknown` rows with a reason, never dropped;
  - a value no store carries is None + a reason, never a fabricated `$0.00`.
 """
 import pytest
 
-from core.book import (
-    NO_ENTRY_RECORDED_REASON, PNL_NEEDS_WORTH_REASON, BookRow,
-)
-from core.position_ledger import LedgerPosition
+from core.book import BASIS_UNKNOWN_REASON, PNL_NEEDS_WORTH_REASON, BookRow
+from core.open_positions import PositionEntry
 from tools.defi.book import book_rows
 
 A1 = "0xb200000000000000000000Ea8625786a776539FB"
@@ -22,8 +20,11 @@ A2 = "0xb200000000000000000000b344cB4a1E8BD51968"
 SOL = "So11111111111111111111111111111111111111112"
 
 
-def _pos(symbol, address, qty):
-    return LedgerPosition(symbol=symbol, address=address, qty=qty, line="")
+def _pos(symbol, address, qty, *, chain=None, entry_usd=None, **kw):
+    if chain is None:
+        chain = "base" if address.startswith("0x") else "solana"
+    return PositionEntry(chain=chain, address=address, symbol=symbol, qty=qty,
+                         entry_usd=entry_usd, entry_ts=1.0, **kw)
 
 
 class _AR:
@@ -48,8 +49,8 @@ def test_two_positions_on_a_chain_yield_two_typed_rows():
     chains_out = {
         "base": {
             "verdict": "clean",
-            "report": {"matched": [f"PONS {A1} — 1 (ledger 1) ✓",
-                                   f"WUF {A2} — 2 (ledger 2) ✓"]},
+            "report": {"matched": [f"PONS {A1} — 1 (book 1) ✓",
+                                   f"WUF {A2} — 2 (book 2) ✓"]},
             "portfolio_text": (f"  {A1}  4,963,574.39 PONS  = $12.34\n"
                                f"  {A2}  3,997,365.84 WUF  = $1,000.50"),
             "error": None,
@@ -70,17 +71,17 @@ def test_two_positions_on_a_chain_yield_two_typed_rows():
     assert wuf.usd == 1000.50          # commas handled
     assert wuf.chain == "base"
 
-    # entry / since_entry are None WITH a reason until A35's store lands
+    # entry / since_entry are None WITH a reason when the basis is unknown
     for r in rows:
-        assert r.entry is None and r.entry_reason == NO_ENTRY_RECORDED_REASON
-        assert r.since_entry is None and r.since_entry_reason == NO_ENTRY_RECORDED_REASON
+        assert r.entry is None and r.entry_reason == BASIS_UNKNOWN_REASON
+        assert r.since_entry is None and r.since_entry_reason == BASIS_UNKNOWN_REASON
 
 
 def test_disagreement_chain_rows_still_render_with_the_verdict():
     chains_out = {
         "base": {
             "verdict": "disagreement",
-            "report": {"mismatched": [f"PONS {A1} — ledger 1 vs chain 2 (100% apart)"]},
+            "report": {"mismatched": [f"PONS {A1} — book 1 vs chain 2 (100% apart)"]},
             "portfolio_text": None,
             "error": None,
         },
@@ -112,7 +113,7 @@ def test_unreadable_chain_yields_unknown_rows_never_dropped():
     assert "node down" in rows[0].worth_now_reason
 
 
-def test_confirmed_chain_wins_over_an_unreadable_one():
+def test_a_position_is_read_on_its_own_chain_only():
     chains_out = {
         "arbitrum": {"verdict": "unverified", "report": None,
                      "portfolio_text": None, "error": "rpc timeout"},
@@ -127,16 +128,16 @@ def test_confirmed_chain_wins_over_an_unreadable_one():
     assert rows[0].usd == 5.00
 
 
-def test_ledger_row_no_readable_chain_backs_is_unbacked_never_dropped():
+def test_book_row_its_chain_does_not_back_is_unbacked_never_dropped():
     chains_out = {
         "base": {"verdict": "clean", "report": {"matched": []},
                  "portfolio_text": "", "error": None},
     }
     rows = book_rows(chains_out, [_pos("GHOST", A1, 1.0)])
 
-    assert len(rows) == 1                      # a stale ledger row is NOT dropped
+    assert len(rows) == 1                      # a stale book row is NOT dropped
     assert rows[0].state == "unbacked"
-    assert rows[0].chain is None
+    assert rows[0].chain == "base"
     assert rows[0].usd is None and rows[0].worth_now_reason
 
 
@@ -171,30 +172,27 @@ def test_worth_from_excluded_price_line_is_none_with_reason():
 def test_to_dict_shape_matches_the_money_book_row():
     row = BookRow(symbol="PONS", address=A1, chain="base", qty=1.0, usd=12.34,
                   state="matched", worth_now_reason=None,
-                  entry=None, entry_reason=NO_ENTRY_RECORDED_REASON,
-                  since_entry=None, since_entry_reason=NO_ENTRY_RECORDED_REASON)
+                  entry=None, entry_reason=BASIS_UNKNOWN_REASON,
+                  since_entry=None, since_entry_reason=BASIS_UNKNOWN_REASON)
     d = row.to_dict()
     assert set(d) >= {"symbol", "chain", "amount", "worth_now", "entry",
                       "since_entry"}
     assert d["amount"] == 1.0 and d["worth_now"] == 12.34
-    assert d["entry"] is None and d["entry_reason"] == NO_ENTRY_RECORDED_REASON
-    assert d["since_entry"] is None and d["since_entry_reason"] == NO_ENTRY_RECORDED_REASON
+    assert d["entry"] is None and d["entry_reason"] == BASIS_UNKNOWN_REASON
+    assert d["since_entry"] is None and d["since_entry_reason"] == BASIS_UNKNOWN_REASON
 
 
 # --------------------------------------------------------------------------
-# book_rows — entry/since_entry from the rail-written store (043 A35)
+# book_rows — entry/since_entry from the book row (043 A35)
 # --------------------------------------------------------------------------
 
 def test_store_entry_computes_cost_basis_and_signed_pnl():
-    from core.open_positions import PositionEntry
     chains_out = {
         "base": {"verdict": "clean",
                  "report": {"matched": [f"PONS {A1} — ok ✓"]},
                  "portfolio_text": f"  {A1}  1.0 PONS  = $12.34", "error": None},
     }
-    entries = {A1.lower(): PositionEntry(chain="base", address=A1, symbol="PONS",
-                                        qty=1.0, entry_usd=10.00, entry_ts=1.0)}
-    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0)], entries)
+    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0, entry_usd=10.00)])
     assert rows[0].entry == 10.00                 # cost basis, a USD figure
     assert rows[0].entry_reason is None
     # since_entry is the SIGNED USD P&L: worth_now (12.34) - entry (10.00).
@@ -208,26 +206,24 @@ def test_store_entry_but_no_worth_leaves_pnl_uncomputable():
                  "report": {"matched": [f"PONS {A1} — ok ✓"]},
                  "portfolio_text": "", "error": None},        # no priced holding
     }
-    from core.open_positions import PositionEntry
-    entries = {A1.lower(): PositionEntry("base", A1, "PONS", 1.0, 10.0, 1.0)}
-    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0)], entries)
+    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0, entry_usd=10.0)])
     assert rows[0].entry == 10.0                  # cost basis known
     assert rows[0].usd is None                    # worth unknown
     assert rows[0].since_entry is None
     assert rows[0].since_entry_reason == PNL_NEEDS_WORTH_REASON
 
 
-def test_no_store_entry_reads_no_entry_recorded_not_the_old_placeholder():
+def test_an_unknown_basis_reads_basis_unknown_never_zero():
     chains_out = {
         "base": {"verdict": "clean",
                  "report": {"matched": [f"PONS {A1} — ok ✓"]},
                  "portfolio_text": f"  {A1}  1.0 PONS  = $12.34", "error": None},
     }
-    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0)], {})
+    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0)])
     assert rows[0].entry is None
-    assert rows[0].entry_reason == NO_ENTRY_RECORDED_REASON
+    assert rows[0].entry_reason == BASIS_UNKNOWN_REASON
     assert rows[0].since_entry is None
-    assert rows[0].since_entry_reason == NO_ENTRY_RECORDED_REASON
+    assert rows[0].since_entry_reason == BASIS_UNKNOWN_REASON
 
 
 def test_negative_pnl_is_a_signed_loss():
@@ -236,9 +232,7 @@ def test_negative_pnl_is_a_signed_loss():
                  "report": {"matched": [f"PONS {A1} — ok ✓"]},
                  "portfolio_text": f"  {A1}  1.0 PONS  = $4.00", "error": None},
     }
-    from core.open_positions import PositionEntry
-    entries = {A1.lower(): PositionEntry("base", A1, "PONS", 1.0, 10.0, 1.0)}
-    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0)], entries)
+    rows = book_rows(chains_out, [_pos("PONS", A1, 1.0, entry_usd=10.0)])
     assert rows[0].since_entry == pytest.approx(-6.0)   # a loss, signed
 
 
@@ -267,25 +261,21 @@ async def test_read_book_carries_typed_rows(monkeypatch, tmp_path):
     monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
     monkeypatch.setattr(DefiDataTool, "portfolio", fake_portfolio)
 
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text(
-        "## Open positions\n\n"
-        "| Token | Address | Size |\n"
-        "|-------|---------|------|\n"
-        f"| PONS | {A1} | 4,963,574.39 |\n"
-        f"| WUF | {A2} | 3,997,365.84 |\n")
+    from core.open_positions import PositionDelta, apply_delta
+    store = str(tmp_path / "open_positions.db")
+    apply_delta("u1", PositionDelta("base", A1, "PONS", 4963574.39, None), db_path=store)
+    apply_delta("u1", PositionDelta("base", A2, "WUF", 3997365.84, None), db_path=store)
 
     from tools.defi.book import read_book
-    body = await read_book("u1", str(tmp_path), chains=["base", "solana"],
-                            ledger_path=str(ledger))
+    body = await read_book("u1", str(tmp_path), chains=["base", "solana"])
 
     rows = body["rows"]
     assert isinstance(rows, list) and len(rows) == 2
     for r in rows:
         assert r["chain"] == "base"
         assert r["worth_now"] is not None          # priced from portfolio
-        assert r["entry"] is None and r["entry_reason"] == NO_ENTRY_RECORDED_REASON
-        assert r["since_entry"] is None and r["since_entry_reason"] == NO_ENTRY_RECORDED_REASON
+        assert r["entry"] is None and r["entry_reason"] == BASIS_UNKNOWN_REASON
+        assert r["since_entry"] is None and r["since_entry_reason"] == BASIS_UNKNOWN_REASON
 
 
 @pytest.mark.asyncio
@@ -294,7 +284,7 @@ async def test_read_book_rows_render_even_under_disagreement(monkeypatch, tmp_pa
 
     async def fake_reconcile(self, params, execution_context=None):
         return _AR(metadata={"report": {
-            "mismatched": [f"PONS {A1} — ledger 1 vs chain 2"],
+            "mismatched": [f"PONS {A1} — book 1 vs chain 2"],
             "verdict": "DISAGREEMENT"}})
 
     async def fake_portfolio(self, params, execution_context=None):
@@ -304,16 +294,12 @@ async def test_read_book_rows_render_even_under_disagreement(monkeypatch, tmp_pa
     monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
     monkeypatch.setattr(DefiDataTool, "portfolio", fake_portfolio)
 
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text(
-        "## Open positions\n\n"
-        "| Token | Address | Size |\n"
-        "|-------|---------|------|\n"
-        f"| PONS | {A1} | 1 |\n")
+    from core.open_positions import PositionDelta, apply_delta
+    apply_delta("u1", PositionDelta("base", A1, "PONS", 1.0, 1.0),
+                db_path=str(tmp_path / "open_positions.db"))
 
     from tools.defi.book import read_book
-    body = await read_book("u1", str(tmp_path), chains=["base"],
-                            ledger_path=str(ledger))
+    body = await read_book("u1", str(tmp_path), chains=["base"])
 
     assert body["verdict"] == "disagreement"
     assert len(body["rows"]) == 1                  # rows still render
@@ -349,13 +335,6 @@ async def test_read_book_joins_the_rail_written_store(monkeypatch, tmp_path):
     monkeypatch.setattr(DefiDataTool, "reconcile", fake_reconcile)
     monkeypatch.setattr(DefiDataTool, "portfolio", fake_portfolio)
 
-    ledger = tmp_path / "ledger.md"
-    ledger.write_text(
-        "## Open positions\n\n"
-        "| Token | Address | Size |\n"
-        "|-------|---------|------|\n"
-        f"| PONS | {A1} | 1.0 |\n")
-
     # A recorded buy wrote this row for owner "u1" at the data-dir store.
     from core.open_positions import PositionDelta, apply_delta
     store = str(tmp_path / "open_positions.db")
@@ -363,32 +342,28 @@ async def test_read_book_joins_the_rail_written_store(monkeypatch, tmp_path):
                 db_path=store, now=1.0)
 
     from tools.defi.book import read_book
-    body = await read_book("u1", str(tmp_path), chains=["base"],
-                            ledger_path=str(ledger))
+    body = await read_book("u1", str(tmp_path), chains=["base"])
     row = body["rows"][0]
     assert row["entry"] == 10.00
     assert row["since_entry"] == pytest.approx(2.34)   # 12.34 worth - 10.00 cost
 
-    # A different tenant reading the same book sees no entry (tenant-scoped).
-    other = await read_book("intruder", str(tmp_path), chains=["base"],
-                             ledger_path=str(ledger))
-    assert other["rows"][0]["entry"] is None
-    assert other["rows"][0]["entry_reason"] == NO_ENTRY_RECORDED_REASON
+    # A different tenant reading the same store sees no position (tenant-scoped).
+    other = await read_book("intruder", str(tmp_path), chains=["base"])
+    assert other["rows"] == []
 
 
 def test_a_quarantined_lookalike_row_says_so_and_keeps_its_cost():
     """W0: the book carries the tracked position's lifecycle, so a look-alike the
     identity gate quarantined reads as one — with its cost basis intact."""
-    from core.open_positions import PositionEntry
     chains_out = {"base": {"verdict": "clean",
-                           "report": {"matched": [f"PONS {A1} — 1 (ledger 1) ✓"]},
+                           "report": {"matched": [f"PONS {A1} — 1 (book 1) ✓"]},
                            "portfolio_text": f"  {A1}  1 PONS  = $2.00", "error": None}}
     entry = PositionEntry(chain="base", address=A1.lower(), symbol="PONS", qty=1.0,
                           entry_usd=134.54, entry_ts=1.0, status="quarantined",
                           status_reason="look-alike")
-    [row] = book_rows(chains_out, [_pos("PONS", A1, 1.0)], {A1.lower(): entry})
+    [row] = book_rows(chains_out, [entry])
     d = row.to_dict()
     assert d["lifecycle"] == "quarantined" and d["lifecycle_reason"] == "look-alike"
     assert d["entry"] == 134.54 and d["since_entry"] == pytest.approx(2.0 - 134.54)
     [plain] = book_rows(chains_out, [_pos("PONS", A1, 1.0)])
-    assert plain.to_dict()["lifecycle"] is None
+    assert plain.to_dict()["lifecycle"] == "open"

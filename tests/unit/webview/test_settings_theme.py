@@ -23,7 +23,7 @@ def test_multitenant_and_readonly_never_offer_env_writes(monkeypatch):
         monkeypatch.setenv('WEBVIEW_READ_ONLY', readonly)
         assert not flag_metadata('MEMORY_BACKEND')['console_writable']
         assert flag_metadata('MEMORY_BACKEND')['write_reason']
-    assert not flag_metadata('POLYROB_<PROVIDER>_MODEL')['console_writable']
+    assert not flag_metadata('AUX_MODEL_<SLOT>')['console_writable']
 
 
 def test_theme_roundtrip_and_public_isolation(monkeypatch, tmp_path):

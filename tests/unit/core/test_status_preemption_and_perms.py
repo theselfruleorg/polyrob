@@ -15,7 +15,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("GOALS_ENABLED", "false")
     monkeypatch.setenv("CRON_ENABLED", "false")
     monkeypatch.delenv("DB_PATH", raising=False)
-    _seed_goals(d, ready=1, blocked=False, asks=False, exhausted_objective=False)
+    _seed_goals(d, ready=1, blocked=False, asks=False)
     _seed_cron(d)
     from core.event_log import TelemetryEventLog
     return d, TelemetryEventLog(os.path.join(d, "telemetry_events.db"))

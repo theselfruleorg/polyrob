@@ -67,6 +67,11 @@ PROFILES: Dict[str, Tuple[str, ...]] = {
     # Static base of the CLI / "default" toolset; tool_defaults adds the
     # dynamic coding / anysite / defi_data members at call time.
     "default:cli": _CLI_BASE,
+    # A correspondent session (conversation resume) is third-party-facing for
+    # its whole life; the capability gate denies every high-impact tool there, so
+    # it holds only what it can use: read its files, its TODO, and `message` (the
+    # reply rail, an action id). See the chat access model.
+    "default:correspondent": ("filesystem", "task", "message"),
 
     # ── the POLYROB_AGENT_TOOLSET vocabulary (key order = the init wizard's) ─
     "toolset:minimal": _BASE,
@@ -86,9 +91,6 @@ PROFILES: Dict[str, Tuple[str, ...]] = {
     "toolset:full": _SERVER_DEFAULT,
     # Flagship "earn real money, safely" goal: research / browse / code only.
     "toolset:earn": ("filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"),
-    # Owner interactive chat supervised default (surfaces/telegram/interactive_tools.py).
-    "toolset:owner_interactive": ("goal", "twitter", "web_fetch", "filesystem", "task",
-                                  "defi_data"),
 
     # ── the autonomous grant (013 §2.3) and its armed extensions ────────────
     # NEVER money-spend and NEVER host/compute (those ride AGENT_COMPUTE_POSTURE).
@@ -119,6 +121,11 @@ PROFILES: Dict[str, Tuple[str, ...]] = {
     "rig:research": ("web_fetch", "anysite", "knowledge", "filesystem", "task", "message",
                      "defi_data"),
     "rig:ops": ("filesystem", "task", "goal", "cronjob", "message"),
+    # 081 WS-3.1: the owner's chat seat EAGER set (agents.task.tool_defaults.
+    # owner_seat_tools adds the granted money tools). Everything else is one
+    # load_tool away in the <tool-catalog>: files, the TODO list, a web read, and
+    # the board and the schedule — the owner chat is where those are asked about.
+    "rig:owner": ("filesystem", "task", "web_fetch", "goal", "cronjob", "message"),
 
     # ── the goal rails ──────────────────────────────────────────────────────
     # Proposal 001/009/029: what an agent-created goal may request (a SET — order

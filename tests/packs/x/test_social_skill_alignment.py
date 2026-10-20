@@ -17,13 +17,9 @@ SKILLS = (Path(__file__).resolve().parents[3] / "packs" / "x" / "polyrob_x"
 
 
 def test_x_engagement_routes_both_x_rails_and_current_actions():
-    rules = json.loads((SKILLS / "rules.json").read_text())
-    triggers = rules["x-engagement"]["triggers"]
+    from core.skills.catalog import load_builtin_rules
+    triggers = load_builtin_rules(SKILLS)["x-engagement"]["triggers"]
     assert {"twitter", "x_browser"} <= set(triggers["tool_ids"])
-    assert {
-        "twitter_get_dms", "twitter_dm", "twitter_post",
-        "x_read_dms", "x_dm", "x_post",
-    } <= set(triggers["action_names"])
 
 
 def test_social_template_has_matching_skills_and_tools():

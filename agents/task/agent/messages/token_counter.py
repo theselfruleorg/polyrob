@@ -66,6 +66,20 @@ def autonomous_context_budget() -> int:
 	return int_env("AUTONOMOUS_CONTEXT_BUDGET_TOKENS", 0)
 
 
+#: B-5 (2026-10-14 model-utilization review): the conversation-history budget of
+#: an INTERACTIVE session (owner chat, room, correspondent). Compaction used to
+#: divide the WHOLE prompt by ``max_input`` (200k on prod), but ~93k of it was a
+#: fixed prefix (foundation + H-MEM + tool schemas) that no compaction can cut:
+#: the 85 % trigger fired at ~77k of history, one cut moved the gauge 6-9 %, the
+#: anti-thrash guard stopped compaction, and the 90 % emergency prune lost the
+#: owner's current request (10-12, the R1 event). The history budget drives the
+#: same ``history / budget`` gauge term the autonomous budget uses, so a chat
+#: compacts at ~68k of HISTORY whatever the prefix weighs. ``max_input``
+#: (``TASK_MAX_INPUT_TOKENS``) stays the total safety cap — pre-call check and
+#: emergency prune — and is NOT what sizes the chat any more.
+CHAT_HISTORY_BUDGET_TOKENS = 80_000
+
+
 def _foundation_tokens(manager) -> int:
 	"""060 WS-2: the pinned foundation's token cost, summed over the ONE layer
 	table (``foundation_layers.FOUNDATION_LAYERS``) instead of a hand-kept list
@@ -92,16 +106,28 @@ class TokenCounterMixin:
 		   additionally clamped to ``AUTONOMOUS_CONTEXT_BUDGET_TOKENS`` so the
 		   85%/95% compaction thresholds are reachable within its real history
 		   size. ``0`` (default) = no clamp.
+		3. B-5 — an INTERACTIVE session (owner chat, room, correspondent) gauges
+		   its history against ``CHAT_HISTORY_BUDGET_TOKENS`` (80k) the same way,
+		   so the fixed prefix no longer decides when a chat compacts.
+		   ``max_input`` stays the total safety cap.
 
 		Returns:
 			(max_input_tokens, safe_input_tokens, completion_reserve)
 		"""
 		max_input, safe_input, reserve = self._model_token_limits(llm, max_input_override)
 		self._history_budget_tokens = 0
+		from agents.task.session_class import budget_class_autonomous
+		autonomous = budget_class_autonomous(getattr(self, "session_id", None))
+		if not autonomous:
+			# B-5: an interactive session gauges its HISTORY against
+			# CHAT_HISTORY_BUDGET_TOKENS. A model window at or below the budget
+			# keeps the whole-prompt gauge (the budget would never be reached).
+			if max_input > CHAT_HISTORY_BUDGET_TOKENS:
+				self._history_budget_tokens = CHAT_HISTORY_BUDGET_TOKENS
+			return max_input, safe_input, reserve
 		budget = autonomous_context_budget()
 		if budget > 0 and max_input > budget:
-			from agents.task.session_class import budget_class_autonomous
-			if budget_class_autonomous(getattr(self, "session_id", None)):
+			if autonomous:
 				# The budget bounds what the run CONTROLS — its conversation
 				# history — and drives the compaction gauge only. It must NOT
 				# clamp max_input/safe_input: the pre-call safety check counts the
@@ -142,8 +168,18 @@ class TokenCounterMixin:
 		if max_input_override is not None:
 			max_input = max_input_override
 			safe_input = int(max_input * (1 - RobustParseConfig.SAFETY_MARGIN_PERCENT))
-			self.logger.info(f"Using explicit token limit: max={max_input}, safe={safe_input}")
-			return max_input, safe_input, 4096  # Default completion reserve
+			# B-10: the same CAPPED reserve the auto path uses (it was a flat
+			# 4,096 here, a quarter of the 16,384 the model path reserves).
+			reserve = 4096
+			try:
+				_cfg = get_model_config(self._model_name)
+				if _cfg and _cfg.max_completion_tokens:
+					reserve = _capped_reserve(int(_cfg.max_completion_tokens))
+			except Exception:
+				pass
+			self.logger.info(f"Using explicit token limit: max={max_input}, safe={safe_input}, "
+			                 f"completion_reserve={reserve}")
+			return max_input, safe_input, reserve
 
 		# Auto-calculate from model
 		model_name = self._model_name

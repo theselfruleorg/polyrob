@@ -1,0 +1,19 @@
+{
+  "function": {
+    "description": "List files in a directory",
+    "name": "filesystem_list_directory",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for listing files in a directory",
+      "properties": {
+        "directoryPath": {
+          "default": ".",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

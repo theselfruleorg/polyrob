@@ -239,8 +239,8 @@ def _dispatcher():
     return board, GoalDispatcher(board, agent)
 
 
-def _assert_real_provenance(call):
-    assert call["outcome"] == "failed"
+def _assert_real_provenance(call, outcome="failed"):
+    assert call["outcome"] == outcome
     assert call["steps"] == 7, "episodes must record the run's REAL step count"
     assert call["spend_usd"] == 0.42, "episodes must record the run's REAL spend"
     assert call["artifacts"] == _REAL_ARTIFACTS, "episodes must record the run's artifacts"
@@ -254,7 +254,8 @@ def test_blocked_declared_failure_threads_real_provenance(monkeypatch):
     asyncio.run(disp._run_goal(Goal(id="g-b", user_id="u1", title="t")))
     assert board.failures and not board.successes
     assert calls, "a blocked-declared failure must still finalize the episode"
-    _assert_real_provenance(calls[0])
+    # C-11 (2026-10-13 review): a declared BLOCKED is recorded as blocked, not failed.
+    _assert_real_provenance(calls[0], outcome="blocked")
 
 
 def test_no_done_failure_threads_real_provenance(monkeypatch):
@@ -382,56 +383,3 @@ def test_generic_exception_keeps_plain_error(monkeypatch):
     assert not board.failures[0][1].startswith(LLM_EXHAUSTED_MARKER)
 
 
-def test_planner_outage_logs_marker_and_skips_escalation(monkeypatch, caplog):
-    """015 #3 planner leg: a planner run killed by provider exhaustion logs the
-    distinct marker and does NOT count as an empty-pipeline stall."""
-    import logging
-    import agents.task.goals.dispatcher as disp
-    import agents.task.goals.planner as planner
-    import core.credit_sentinel as cs
-
-    async def fake_run(task_agent, *, user_id, request, autonomous, **_kw):
-        return "sess-outage", None
-
-    monkeypatch.setattr(disp, "_run_task_as_session", fake_run)
-    monkeypatch.setattr(planner, "build_planner_prompt", lambda *a, **k: "P")
-    monkeypatch.setattr(cs, "credit_sentinel_active", lambda provider=None: True)
-
-    escalated = []
-
-    async def esc(user_id, *, planner_summary=None):
-        escalated.append(user_id)
-
-    fake = SimpleNamespace(board=object(), task_agent=None,
-                           _maybe_escalate_empty_pipeline=esc)
-    with caplog.at_level(logging.ERROR, logger=disp.logger.name):
-        asyncio.run(disp.GoalDispatcher._run_planner(fake, "rob"))
-    assert any(disp.LLM_EXHAUSTED_MARKER in r.getMessage() for r in caplog.records)
-    assert escalated == [], "outage must not be treated as an empty-pipeline stall"
-
-
-def test_planner_normal_run_still_escalates(monkeypatch, caplog):
-    import logging
-    import agents.task.goals.dispatcher as disp
-    import agents.task.goals.planner as planner
-    import core.credit_sentinel as cs
-
-    async def fake_run(task_agent, *, user_id, request, autonomous, **_kw):
-        return "sess-ok", "queued 2 goals"
-
-    monkeypatch.setattr(disp, "_run_task_as_session", fake_run)
-    monkeypatch.setattr(planner, "build_planner_prompt", lambda *a, **k: "P")
-    monkeypatch.setattr(cs, "credit_sentinel_active", lambda provider=None: False)
-
-    escalated = []
-
-    async def esc(user_id, *, planner_summary=None):
-        escalated.append((user_id, planner_summary))
-
-    fake = SimpleNamespace(board=object(), task_agent=None,
-                           _maybe_escalate_empty_pipeline=esc)
-    with caplog.at_level(logging.INFO, logger=disp.logger.name):
-        asyncio.run(disp.GoalDispatcher._run_planner(fake, "rob"))
-    assert any("goal planner ran" in r.getMessage() for r in caplog.records)
-    assert not any(disp.LLM_EXHAUSTED_MARKER in r.getMessage() for r in caplog.records)
-    assert escalated == [("rob", "queued 2 goals")]

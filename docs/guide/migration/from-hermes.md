@@ -62,9 +62,10 @@ billing, quota or rate-limit error.
 Both projects use `SKILL.md` with YAML frontmatter, but the frontmatter differs.
 POLYROB follows the agentskills.io standard, so everything POLYROB-specific is
 namespaced under `metadata` as flat `polyrob-*` string values — the valid key set
-is in [skills.md](../skills.md#the-skillmd-format-quick-reference). Hermes'
-top-level `triggers:` becomes `metadata.polyrob-triggers`, JSON-encoded as one
-string:
+is in [skills.md](../skills.md#the-skillmd-format-quick-reference). POLYROB has no
+keyword triggers: Rob sees one line per skill and loads the skill whose line fits.
+Hermes' top-level `triggers:` becomes that line, `metadata.polyrob-when` (60
+characters or fewer, it says when to load the skill):
 
 ```yaml
 ---
@@ -72,8 +73,7 @@ name: web-scraper
 description: Scrapes web pages
 license: MIT
 metadata:
-  polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["scrape"],"task_patterns":[],"tool_ids":[]}'
+  polyrob-when: 'When you need text or data from a web page'
 ---
 ```
 

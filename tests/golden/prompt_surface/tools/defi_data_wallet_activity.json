@@ -1,0 +1,33 @@
+{
+  "function": {
+    "description": "Read ANY wallet's RECENT ACTIVITY on one chain (up to 25 transactions, newest first): receive / send / swap / failed rows with exact amounts, the counterparty when it is obvious, fees, and a per-token NET FLOW over the rows read (computed here — not a cost-basis PnL). Solana (base58) and EVM (0x, needs chain). For any address other than our own it also lists OUR recorded payments to it (the audit ledger) — use it before calling a payment unverified. Read-only.",
+    "name": "defi_data_wallet_activity",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The WALLET whose recent activity to read — any owner. Solana is base58; EVM is 0x… (40 hex). For a token's history use token_origin.",
+          "type": "string"
+        },
+        "chain": {
+          "default": null,
+          "description": "Omit for a base58 address (read on solana). REQUIRED for a 0x address — the same 0x wallet has different activity on each EVM chain.",
+          "nullable": true,
+          "type": "string"
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many recent transactions to show (max 25).",
+          "maximum": 25,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -121,12 +121,11 @@ def test_owner_doc_pending_labeled_in_notification(tmp_path):
     assert "owner-facts note" in note  # NOT mislabeled as skill '<uid>'
 
 
-def test_promote_of_a_sourced_rewrite_passes_the_claim_guard(tmp_path, monkeypatch):
+def test_promote_of_a_sourced_rewrite_keeps_the_draft_stamps(tmp_path, monkeypatch):
     """2026-09-20 07:23Z prod: /approve_all on a draft whose every line carried
     '[from: owner said 2026-09-20]' was refused 'this line makes a durable claim
     with no provenance'. The owner-review gate must accept a sourced draft, and
     stamp the owner's approval onto anything the draft left bare."""
-    monkeypatch.setenv("DOC_CLAIM_PROVENANCE_REQUIRED", "true")
     monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
     w = OwnerDocWriter(tmp_path)
     w.propose("NOTIFY ON EVERY BUYBACK: every executed tranche is announced.",

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, List
 
 # Import credit constants from single source of truth
-from modules.credits.pricing import WELCOME_BONUS, DEN_SIGNUP_ALLOWANCE
+from modules.credits.pricing import WELCOME_BONUS
 from core.token_check_hook import token_checker
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,6 @@ class IdentityMapper:
         Update user tier based on NFT ownership.
 
         BETA MODEL: Must have ≥1 token for access.
-        Grants ONE-TIME bonus per token ID (prevents multi-wallet abuse).
 
         IMPORTANT: Preserves admin-granted tiers (free_access, admin, x402).
         Only updates tier if user is currently 'free' or 'holder'.
@@ -198,8 +197,6 @@ class IdentityMapper:
 
             has_token = result.get('has_token', False)
             token_count = result.get('token_count', 0)
-            token_ids = result.get('token_ids', [])
-            contract_address = result.get('contract_address', '')
 
             # Determine tier based on token ownership
             # SIMPLIFIED: holder = 1+ tokens (no premium tier)
@@ -208,15 +205,6 @@ class IdentityMapper:
                 self.logger.info(f"User {user_id} has no DEN tokens - tier set to 'free'")
             else:
                 tier = "holder"
-                # Grant ONE-TIME Sign Up Allowance for each unused token ID
-                if token_ids and contract_address:
-                    allowance_granted = await self._grant_den_signup_allowance(
-                        user_id=user_id,
-                        token_ids=token_ids,
-                        contract_address=contract_address
-                    )
-                    if allowance_granted > 0:
-                        self.logger.info(f"Granted {allowance_granted} DEN Sign Up Allowance to {user_id}")
 
             # Update tier and token count
             await self.db.execute("""
@@ -230,107 +218,3 @@ class IdentityMapper:
         except Exception as e:
             self.logger.error(f"Error updating tier for user {user_id}: {e}")
             raise
-
-    async def _grant_den_signup_allowance(
-        self,
-        user_id: str,
-        token_ids: List[str],
-        contract_address: str
-    ) -> int:
-        """
-        Grant ONE-TIME Sign Up Allowance for each unused DEN token ID.
-
-        Each token ID can only grant allowance ONCE.
-        We track by TOKEN ID only - not by user.
-
-        NOTE: This is SEPARATE from access. User gets "holder" tier
-        based on current token ownership, regardless of whether
-        the allowance was already claimed by someone else.
-
-        Args:
-            user_id: User to grant credits to
-            token_ids: List of token IDs currently owned
-            contract_address: NFT contract address
-
-        Returns:
-            int: Total credits granted
-        """
-        total_granted = 0
-        contract_address = contract_address.lower()
-
-        for token_id in token_ids:
-            # Normalize token_id to string
-            token_id_str = str(token_id).strip()
-            if not token_id_str:
-                self.logger.warning(f"Skipping empty token_id")
-                continue
-
-            # Check if this token ID already used for allowance
-            existing = await self.db.fetch_one("""
-                SELECT 1 FROM den_token_bonuses
-                WHERE token_id = ? AND contract_address = ?
-            """, (token_id_str, contract_address))
-
-            if existing:
-                # Token already used - skip (but user still has access!)
-                self.logger.debug(f"Token #{token_id_str} allowance already granted - skipping")
-                continue
-
-            # Token is fresh - grant allowance
-            try:
-                # Mark token as used FIRST (prevents race condition on token claim)
-                await self.db.execute("""
-                    INSERT INTO den_token_bonuses (token_id, contract_address)
-                    VALUES (?, ?)
-                """, (token_id_str, contract_address))
-
-                # ATOMIC balance update to prevent race condition
-                # Uses UPDATE with arithmetic instead of read-then-write
-                # Also handles case where user_credits record might not exist
-                update_result = await self.db.execute("""
-                    UPDATE user_credits
-                    SET balance = balance + ?,
-                        lifetime_earned = lifetime_earned + ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = ?
-                """, (DEN_SIGNUP_ALLOWANCE, DEN_SIGNUP_ALLOWANCE, user_id))
-
-                # Get updated balance for transaction record
-                balance_result = await self.db.fetch_one("""
-                    SELECT balance FROM user_credits WHERE user_id = ?
-                """, (user_id,))
-
-                if balance_result:
-                    new_balance = balance_result['balance']
-                    balance_before = new_balance - DEN_SIGNUP_ALLOWANCE
-
-                    # Record transaction
-                    await self.db.execute("""
-                        INSERT INTO credit_transactions (
-                            user_id, amount, transaction_type, reason,
-                            balance_before, balance_after, timestamp
-                        ) VALUES (?, ?, 'den_allowance', ?, ?, ?, CURRENT_TIMESTAMP)
-                    """, (user_id, DEN_SIGNUP_ALLOWANCE, f"DEN Sign Up Allowance - Token #{token_id_str}",
-                          balance_before, new_balance))
-
-                    total_granted += DEN_SIGNUP_ALLOWANCE
-                    self.logger.info(f"Granted {DEN_SIGNUP_ALLOWANCE} Sign Up Allowance for token #{token_id_str}")
-                else:
-                    # user_credits record doesn't exist - this shouldn't happen
-                    # as welcome bonus creates it, but handle gracefully
-                    self.logger.error(f"No user_credits record for {user_id} - cannot grant allowance")
-                    # Rollback token claim
-                    await self.db.execute("""
-                        DELETE FROM den_token_bonuses
-                        WHERE token_id = ? AND contract_address = ?
-                    """, (token_id_str, contract_address))
-
-            except Exception as e:
-                # Primary key violation = token already used (race condition)
-                if "UNIQUE constraint" in str(e) or "PRIMARY KEY" in str(e):
-                    self.logger.debug(f"Token #{token_id_str} already claimed by another request")
-                else:
-                    self.logger.error(f"Error granting allowance for token #{token_id_str}: {e}")
-                continue
-
-        return total_granted

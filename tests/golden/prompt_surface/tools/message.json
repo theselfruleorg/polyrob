@@ -1,0 +1,69 @@
+{
+  "function": {
+    "description": "Send a message — and any FILES you made — to a chat/recipient on a surface (telegram/email/slack/discord/signal/whatsapp/feishu/dingtalk/x). Attach with media_paths, one call per file; a path in text is NOT a delivery. Owner/allowlisted only. action=posts/delete: name/delete my own posts.",
+    "name": "message",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Send a message to a specific chat/recipient on a specific surface.\nOnly owner + owner-allowlisted targets are permitted (default-deny).",
+      "properties": {
+        "action": {
+          "default": "send",
+          "description": "send | reply | posts (list what I posted, with ledger rows) | delete (my OWN post, owner's instruction only, telegram <48h: give post=<row>, or message_id + target, or last=N + target)",
+          "type": "string"
+        },
+        "last": {
+          "default": null,
+          "description": "delete/posts: the N most recent posts to target",
+          "nullable": true,
+          "type": "integer"
+        },
+        "media_paths": {
+          "default": null,
+          "description": "Optional file paths (MUST resolve inside THIS session's workspace) to send as media alongside the text — images go as photos, other files as document attachments. Paths outside the workspace are rejected (the whole call fails). Only delivered on surfaces that support media (currently telegram, email); other surfaces still get the text, plus an honest note that media wasn't sent.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "message_id": {
+          "default": null,
+          "description": "delete: the message id in target's chat",
+          "nullable": true,
+          "type": "string"
+        },
+        "post": {
+          "default": null,
+          "description": "delete: the post-ledger row a send receipt named",
+          "nullable": true,
+          "type": "integer"
+        },
+        "reply_to": {
+          "default": null,
+          "description": "Message id to reply to",
+          "nullable": true,
+          "type": "string"
+        },
+        "surface": {
+          "default": null,
+          "description": "Surface id, e.g. 'telegram', 'email', 'whatsapp'. Omit to use the owner's primary surface. 'email' sets a fixed subject line (a reply keeps the thread); to choose the subject use email_send.",
+          "nullable": true,
+          "type": "string"
+        },
+        "target": {
+          "default": null,
+          "description": "Recipient/chat id on that surface (chat id, @user, or email address). Omit, or pass 'owner', to message the owner.",
+          "nullable": true,
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "description": "Message body to send (unused for delete/posts)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

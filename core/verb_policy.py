@@ -120,9 +120,6 @@ class VerbPolicy:
     room_denied: bool = False
     #: The outbound kind (:data:`OUTBOUND_KINDS`).
     outbound: str = ""
-    #: The param fields whose words leave the box. The send-time financial-claim
-    #: gate reads them (``financial_claim_gate.OUTBOUND_TEXT_FIELDS``).
-    text_fields: Tuple[str, ...] = ()
     #: A late owner approval sends exactly the approved params ONCE and never
     #: re-runs the job that asked (``approval_queue.OUTBOUND_WRITE_TOOLS``).
     late_send: bool = False
@@ -138,14 +135,8 @@ class VerbPolicy:
                       "late_send", "output", "read_job"):
             if type(getattr(self, field)) is not bool:
                 raise ValueError(f"VerbPolicy {self.name}: {field} must be a boolean")
-        if isinstance(self.text_fields, str) or not all(
-                isinstance(f, str) and f for f in self.text_fields):
-            raise ValueError(f"VerbPolicy {self.name}: text_fields must be field names")
-        object.__setattr__(self, "text_fields", tuple(self.text_fields))
         if self.outbound not in OUTBOUND_KINDS:
             raise ValueError(f"VerbPolicy {self.name}: unknown outbound kind {self.outbound!r}")
-        if self.text_fields and not self.outbound:
-            raise ValueError(f"VerbPolicy {self.name}: text_fields needs an outbound kind")
         if self.late_send and self.outbound != "write":
             raise ValueError(f"VerbPolicy {self.name}: late_send needs outbound='write'")
         if self.read_job and (self.outbound or self.effect not in {"none", "inherit"}

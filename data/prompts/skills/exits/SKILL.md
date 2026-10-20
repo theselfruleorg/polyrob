@@ -3,10 +3,11 @@ name: exits
 description: 'Declare the exit at entry: stop loss, take profit, time limit and trailing stop, run by a scheduled check because the on-chain rail has no native stop, limit or trigger orders; the DEFI_MONITOR_EXITS lane and the exit clamp.'
 license: MIT
 metadata:
+  polyrob-when: 'Setting a stop loss, take profit or time exit'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["stop loss","stop-loss","take profit","take-profit","trailing stop","trade exit plan","sell the position","exit the position"],"task_patterns":["(set|plan|define|add).*(stop.?loss|take.?profit|trailing stop)"],"tool_ids":["defi_trade","defi_data","cronjob"]}'
-  polyrob-version: '5'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data","cronjob"]}'
+  polyrob-version: '6'
 ---
 # Exits — decide the way out before the way in
 
@@ -76,7 +77,12 @@ time limit and an owner's direct sell instruction remain separate reasons to exi
 1. **At entry:** quote the exit route (`pre-trade-check`, step 4). If there is
    no route back, do not enter.
 2. **Schedule the check** with `cronjob_schedule`, pinned to this skill, with
-   the address and the three barriers in the task text.
+   the address and the three barriers in the task text. Give it a `$0`
+   `precheck` so a quiet tick costs nothing: `{"verb": "defi_data.price",
+   "params": {"chain": …, "address": …}, "alert": {"field": …, "below": <stop
+   price>, "above": <target price>}, "move_pct": 5, "field": …,
+   "max_quiet_hours": 24}`. The model then runs only when a price bound is
+   crossed, the price moved, or a day passed (for the time limit).
 3. **When a barrier fires:** read `defi_data.positions` (or `defi_data.price`
    or `ohlcv` for the market), and confirm it with the exit quote itself
    (`swap_quote` for the sell) — what you would actually receive. `price` comes from the deepest priced pool and `ohlcv`
@@ -88,6 +94,15 @@ time limit and an owner's direct sell instruction remain separate reasons to exi
    "position closed — cancel job <id>" to the owner; you cancel it
    (`cronjob_cancel`) from a session that holds `cronjob`, never by leaving the
    job to fire on an empty position.
+
+## Dust — skip it, never escalate it
+
+A position worth less than $1 is DUST: `defi_data.positions` marks it `DUST`
+(and `dust: true` in its metadata). Gas to sell it costs more than it is worth.
+On an exit check, skip every dust position: do not quote, approve or sell it,
+and do not message the owner about it. If every open position is dust, the
+check has nothing to do: close the run with `SKIPPED: only dust` and stop. A
+position with an UNKNOWN value is not dust — treat it by the rules above.
 
 ## Never
 

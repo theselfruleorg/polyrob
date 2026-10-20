@@ -337,7 +337,7 @@ class TaskTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             session_id = self._get_session_id(execution_context)
@@ -382,7 +382,7 @@ class TaskTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             session_id = self._get_session_id(execution_context)
@@ -435,7 +435,7 @@ class TaskTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             session_id = self._get_session_id(execution_context)
@@ -518,7 +518,7 @@ class TaskTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             session_id = self._get_session_id(execution_context)
@@ -554,7 +554,7 @@ class TaskTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             session_id = self._get_session_id(execution_context)

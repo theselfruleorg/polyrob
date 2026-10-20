@@ -1,9 +1,8 @@
 """Library invariants — standing gate that every shipped skill must satisfy.
 
 Three checks:
-(a) Every auto_activate rule in rules.json has a SKILL.md body on disk.
-    A bodiless auto_activate rule is a silent failure: the manager matches it,
-    then drops it with only a WARNING log when the body is empty.
+(a) Every rule in the index has a SKILL.md body on disk (the index is built
+    from the bodies' frontmatter since 081 WS-4.2, so this holds by construction).
 (b) No shipped SKILL.md uses the retired ``mcp_execute_tool`` verb.
     The current anysite shape is ``anysite_api(endpoint=..., params={...})``;
     see docs/SKILL_AUTHORING_STANDARD.md.
@@ -11,11 +10,10 @@ Three checks:
     (OpenAI key, AWS access key, or PEM private key header).
 """
 from pathlib import Path
-import json
 import re
 
-from agents.task.agent.skill_frontmatter import parse_frontmatter
-from agents.task.agent.skill_validation import validate_authored
+from core.skills.frontmatter import parse_frontmatter
+from core.skills.frontmatter import validate_authored
 
 BASE = Path(__file__).resolve().parents[4] / "data" / "prompts" / "skills"
 
@@ -27,10 +25,9 @@ _SECRET_PATTERNS = [
 
 
 def test_every_auto_activate_rule_has_a_body():
-    rules = json.loads((BASE / "rules.json").read_text())
-    for sid, r in rules.items():
-        if r.get("auto_activate"):
-            assert (BASE / sid / "SKILL.md").exists(), f"{sid} auto_activate but no body"
+    from core.skills.catalog import load_builtin_rules
+    for sid in load_builtin_rules(BASE):
+        assert (BASE / sid / "SKILL.md").exists(), f"{sid} has a rule but no body"
 
 
 def test_no_dead_anysite_shape_in_bodies():

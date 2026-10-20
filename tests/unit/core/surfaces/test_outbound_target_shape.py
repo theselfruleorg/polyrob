@@ -1,9 +1,9 @@
 """C8 (2026-09-15 prod review): a target of the wrong SHAPE for its surface.
 
 Prod's dead-target registry held exactly four rows, and one of them was
-`telegram / rob@theselfrule.org / chat_not_found` — an EMAIL address sent to
+`telegram / rob@example.org / chat_not_found` — an EMAIL address sent to
 the Bot API. The other three were the same channel under three spellings
-(`thepublicden`, `t.me/thepublicden`, and the normalized `@thepublicden`),
+(`examplegroup`, `t.me/examplegroup`, and the normalized `@examplegroup`),
 which is one broken relationship counted three times.
 
 A target that can never succeed should be refused with the reason, the way a
@@ -18,7 +18,7 @@ from core.surfaces.outbound_target import (
 
 
 @pytest.mark.parametrize("target", [
-    "rob@theselfrule.org", "glbschv@gmail.com", " owner@example.co.uk ",
+    "rob@example.org", "someone@gmail.com", " owner@example.co.uk ",
 ])
 def test_an_email_address_is_refused_on_telegram(target):
     why = wrong_surface_target_reason("telegram", target)
@@ -26,21 +26,21 @@ def test_an_email_address_is_refused_on_telegram(target):
 
 
 @pytest.mark.parametrize("target", [
-    "@thepublicden", "thepublicden", "28436760", "-1001234567890",
-    "t.me/thepublicden",
+    "@examplegroup", "examplegroup", "100000001", "-1001234567890",
+    "t.me/examplegroup",
 ])
 def test_a_real_telegram_target_is_not_refused(target):
     assert wrong_surface_target_reason("telegram", target) is None
 
 
-@pytest.mark.parametrize("target", ["28436760", "@thepublicden", "t.me/x"])
+@pytest.mark.parametrize("target", ["100000001", "@examplegroup", "t.me/x"])
 def test_a_telegram_shaped_target_is_refused_on_email(target):
     why = wrong_surface_target_reason("email", target)
     assert why and "email address" in why.lower()
 
 
 def test_a_real_email_target_is_not_refused():
-    assert wrong_surface_target_reason("email", "glbschv@gmail.com") is None
+    assert wrong_surface_target_reason("email", "someone@gmail.com") is None
 
 
 def test_unknown_surfaces_are_never_refused():
@@ -51,9 +51,9 @@ def test_unknown_surfaces_are_never_refused():
 def test_the_three_spellings_normalize_to_one_address():
     """The registry and the conversation store must not hold one relationship
     three times — that is what prod's dead-target table shows."""
-    forms = ["thepublicden", "@thepublicden", "t.me/thepublicden",
-             "https://t.me/thepublicden"]
-    assert {normalize_surface_target("telegram", f) for f in forms} == {"@thepublicden"}
+    forms = ["examplegroup", "@examplegroup", "t.me/examplegroup",
+             "https://t.me/examplegroup"]
+    assert {normalize_surface_target("telegram", f) for f in forms} == {"@examplegroup"}
 
 
 def test_conversation_store_collapses_the_three_spellings(tmp_path):
@@ -61,28 +61,28 @@ def test_conversation_store_collapses_the_three_spellings(tmp_path):
     arrives under any spelling resolves to the history we already have."""
     from core.surfaces.conversations import ConversationStore
     store = ConversationStore(str(tmp_path / "c.db"))
-    store.record_outbound("rob", "telegram", "@thepublicden", "first")
-    store.record_outbound("rob", "telegram", "t.me/thepublicden", "second")
-    store.record_outbound("rob", "telegram", "ThePublicDen", "third")
+    store.record_outbound("rob", "telegram", "@examplegroup", "first")
+    store.record_outbound("rob", "telegram", "t.me/examplegroup", "second")
+    store.record_outbound("rob", "telegram", "ExampleGroup", "third")
     assert len(store.list("rob")) == 1
-    for spelling in ("thepublicden", "@thepublicden", "t.me/thepublicden"):
+    for spelling in ("examplegroup", "@examplegroup", "t.me/examplegroup"):
         conv = store.get("rob", "telegram", spelling)
         assert conv is not None, spelling
-    assert store.outbound_count_since("rob", "telegram", "thepublicden", 3600) == 3
+    assert store.outbound_count_since("rob", "telegram", "examplegroup", 3600) == 3
 
 
 def test_an_email_address_is_not_mangled_by_the_normalizer(tmp_path):
     from core.surfaces.conversations import ConversationStore
     store = ConversationStore(str(tmp_path / "c.db"))
-    store.record_outbound("rob", "email", "Rob@TheSelfRule.org", "hi")
-    assert store.get("rob", "email", "rob@theselfrule.org") is not None
-    assert store.list("rob")[0]["address"] == "rob@theselfrule.org"
+    store.record_outbound("rob", "email", "Rob@Example.org", "hi")
+    assert store.get("rob", "email", "rob@example.org") is not None
+    assert store.list("rob")[0]["address"] == "rob@example.org"
 
 
 # --- round-2: the spellings ALREADY on disk must collapse too ---------------
 #
-# `_norm_addr` stops NEW splits, but prod already holds `thepublicden`,
-# `@thepublicden` and `t.me/thepublicden` as three conversations with three
+# `_norm_addr` stops NEW splits, but prod already holds `examplegroup`,
+# `@examplegroup` and `t.me/examplegroup` as three conversations with three
 # histories — and the owner-resend cooldown reads this store by address. After
 # the normalizer lands, reads resolve to one key and the other two rows become
 # orphans still holding real messages. A fix that only helps fresh installs
@@ -96,7 +96,7 @@ def _legacy_store(tmp_path):
     ConversationStore(str(path))                      # schema
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA user_version = 0")   # as a pre-migration file reports
-    for i, addr in enumerate(["thepublicden", "@thepublicden", "t.me/thepublicden"]):
+    for i, addr in enumerate(["examplegroup", "@examplegroup", "t.me/examplegroup"]):
         conn.execute("INSERT INTO conversations (user_id, surface, address, created_at,"
                      " updated_at, last_outbound_ts) VALUES (?,?,?,?,?,?)",
                      ("rob", "telegram", addr, 1.0, 1.0 + i, 1.0 + i))
@@ -114,10 +114,10 @@ def test_pre_existing_split_rows_are_merged_on_open(tmp_path):
     store = ConversationStore(str(path))              # reopen: migration runs
     convs = store.list("rob")
     assert len(convs) == 1, f"three spellings must merge, got {[c['address'] for c in convs]}"
-    assert convs[0]["address"] == "thepublicden"
-    history = store.history("rob", "telegram", "@thepublicden", limit=10)
+    assert convs[0]["address"] == "examplegroup"
+    history = store.history("rob", "telegram", "@examplegroup", limit=10)
     assert len(history) == 3, "no message may be lost in the merge"
-    assert store.outbound_count_since("rob", "telegram", "t.me/thepublicden", 10**12) == 3
+    assert store.outbound_count_since("rob", "telegram", "t.me/examplegroup", 10**12) == 3
 
 
 def test_the_merge_is_idempotent(tmp_path):
@@ -126,7 +126,7 @@ def test_the_merge_is_idempotent(tmp_path):
     ConversationStore(str(path))
     store = ConversationStore(str(path))
     assert len(store.list("rob")) == 1
-    assert len(store.history("rob", "telegram", "thepublicden", limit=10)) == 3
+    assert len(store.history("rob", "telegram", "examplegroup", limit=10)) == 3
 
 
 def test_an_address_needing_no_change_is_untouched(tmp_path):

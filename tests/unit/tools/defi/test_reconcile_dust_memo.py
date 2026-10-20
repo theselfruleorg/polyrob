@@ -11,17 +11,6 @@ import pytest
 from tools.defi import data_tool
 from tools.defi.data_tool import DefiDataTool, ReconcileParams
 
-FLAT_LEDGER = """# Ledger
-
-## Open positions
-
-| Token | Address | Size |
-|-------|---------|------|
-| *(none)* | | |
-
-## Closed positions
-"""
-
 DUST = "0x" + "d" * 40
 DUST2 = "0x" + "e" * 40
 
@@ -53,18 +42,20 @@ def _tool(balances, counter):
                         identity_fn=counter.identity, price_fn=counter.quote)
 
 
+_CTX = type("Ctx", (), {"user_id": "owner-1", "session_id": "s"})()
+
+
 async def _run(tool, ledger):
-    res = await tool.reconcile(ReconcileParams(chain="base", ledger_path=str(ledger)))
+    res = await tool.reconcile(ReconcileParams(chain="base"), execution_context=_CTX)
     assert res.error is None, res.error
     return res.extracted_content or ""
 
 
 @pytest.fixture
 def ledger(tmp_path, monkeypatch):
+    """An empty book (no open_positions.db): every holding is outside it."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    p = tmp_path / "ledger.md"
-    p.write_text(FLAT_LEDGER)
-    return p
+    return tmp_path
 
 
 @pytest.mark.asyncio

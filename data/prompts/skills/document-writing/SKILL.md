@@ -3,9 +3,9 @@ name: document-writing
 description: Draft and edit long-form documents, reports and summaries
 license: MIT
 metadata:
+  polyrob-when: 'Writing or editing a long document, report or summary'
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["write a report","write a document","draft a report","draft a document","summarize","outline","essay","memo","article","long-form"],"task_patterns":["write.*(report|memo|doc|article|summary|essay)","draft.*(report|memo|doc|article|essay|proposal)","summari[sz]e.*","outline.*for"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Document Writing

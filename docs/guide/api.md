@@ -183,7 +183,9 @@ POST /api/task/sessions
 }
 ```
 
-`model`, `provider`, `tools`, and `max_steps` are optional and default from your config (run
+`model`, `provider`, `tools`, and `max_steps` are optional and default from your config
+(`max_steps` bounds this one request, default 50; goals, scheduled jobs and helpers stop at
+`AUTONOMOUS_MAX_STEPS` instead) (run
 `polyrob model list` to see available models). The response echoes what was actually used:
 
 ```json

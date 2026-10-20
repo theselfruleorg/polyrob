@@ -1,0 +1,44 @@
+{
+  "function": {
+    "description": "Manage your typed conversational preferences (approvals, budget caps, goal quotas, digest/delivery settings, reply style, session defaults) and propose durable operating rules. operation='list' shows every preference (effective value/source/applies); operation='get' with `key` shows one; operation='explain' with `key` shows the full provenance chain for ANY setting (preference or env flag) — use it to answer 'why is X off?'. operation='set' with `key`+`value` changes one — SAFE keys apply immediately (per their `applies` granularity: live/next-turn/next-session); GUARDED keys (budget/approval ceilings) are NEVER changed directly by you — `set` instead queues a proposal for the owner to review (see /pending). operation='contract_propose' with `text` records a durable operating rule/constraint in the owner's RULES doc as a draft: it is not in force until the owner confirms it (see /pending).",
+    "name": "preferences",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "default": null,
+          "description": "Preference key — REQUIRED for get/explain/set (e.g. key='style.verbosity'); an env flag name (e.g. 'TWITTER_ENABLED') works for explain only",
+          "nullable": true,
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "list",
+            "get",
+            "set",
+            "explain",
+            "contract_propose"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "default": null,
+          "description": "contract_propose ONLY: full operating-contract body. NOT used by explain/get/set — those take `key`.",
+          "nullable": true,
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "description": "set only: new value (str; coerced per the key's type)",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

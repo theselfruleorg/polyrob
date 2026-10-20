@@ -35,8 +35,7 @@ class EnvFileCandidate:
     tier: str
 
 
-def env_file_candidates(resolved_env: str = "development", *, local_mode: bool = False,
-                        config_dir: str = "config") -> "list[EnvFileCandidate]":
+def env_file_candidates() -> "list[EnvFileCandidate]":
     """THE canonical .env candidate list, in PRECEDENCE order (highest wins first).
 
     This is the single source of truth for which files configure the process and
@@ -44,24 +43,18 @@ def env_file_candidates(resolved_env: str = "development", *, local_mode: bool =
     the display/snapshot/guard sites (``/config check``, ``cli.keys``,
     ``cli.update.context``) derive their subsets from it (R-1).
 
-    local_mode=True (CLI): process env > ``~/.polyrob/.env`` > legacy
-    ``~/.rob/.env`` (read-only transition fallback). A project checkout is
-    untrusted input: merely entering it must not replace providers or keys.
-    load_env loads these first-to-last with override=False, so list order IS the
-    precedence order.
-
-    local_mode=False (server): ``config/.env.{env}.local`` > ``config/.env.{env}`` >
-    root ``.env`` (and files override process env). load_env loads the REVERSED
-    list with override=True, so later loads win.
+    ONE ladder for every entry point (080 WS-1 — the server ladder, where
+    ``config/.env.*`` beat the process env, is deleted): process env > the
+    instance file ``<deployed data home>/.env`` (only on a box with a deployed
+    instance) > ``~/.polyrob/.env`` > legacy ``~/.rob/.env`` (read-only
+    transition fallback). A project checkout is untrusted input: merely entering
+    it must not replace providers or keys. load_env loads these first-to-last
+    with override=False, so list order IS the precedence order.
     """
-    server_layers = [
-        EnvFileCandidate(Path(config_dir) / f".env.{resolved_env}.local", "config-env-local"),
-        EnvFileCandidate(Path(config_dir) / f".env.{resolved_env}", "config-env"),
-        EnvFileCandidate(Path(".env"), "root"),
-    ]
-    if not local_mode:
-        return server_layers
-    return [
+    from core.runtime_paths import instance_env_path
+    instance = instance_env_path()
+    top = [EnvFileCandidate(instance, "instance")] if instance is not None else []
+    return top + [
         EnvFileCandidate(polyrob_home() / ".env", "home"),
         EnvFileCandidate(Path.home() / ".rob" / ".env", "legacy-home"),
     ]

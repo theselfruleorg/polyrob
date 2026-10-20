@@ -1019,8 +1019,8 @@ class Registry:
 		and the agent tier can never disagree about which shape a session is in.
 		"""
 		try:
-			from modules.llm.deferred_tools import late_tool_mode
-			return late_tool_mode(provider)
+			from tools.late_tool_mode import session_late_tool_mode  # E-4: per session
+			return session_late_tool_mode(provider, self.session_id)
 		except Exception:  # pragma: no cover - defensive
 			return "grow"
 
@@ -1383,6 +1383,8 @@ class Registry:
 		# 2. Validate parameters directly
 		try:
 			if action.param_model:
+				from tools.controller.registry.arg_cleanup import drop_redundant_action_arg
+				args = drop_redundant_action_arg(action.name, action.param_model, args)
 				validated_args = action.param_model(**args)
 				args = validated_args.model_dump()
 		except Exception as validation_error:

@@ -60,17 +60,9 @@ async def downgrade(db, db_manager):
 async def verify(db, db_manager):
     """Verify schema was applied correctly."""
 
+    # The DEN sign-up allowance is retired: no code reads den_token_bonuses, and a
+    # fresh install does not create it. Only the version row is checked.
     try:
-        # Check table exists
-        tables = await db.fetch_all("""
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name = 'den_token_bonuses'
-        """)
-
-        if len(tables) == 0:
-            logger.error("den_token_bonuses table not found")
-            return False
-
         # Check version is recorded
         result = await db.fetch_one("""
             SELECT version FROM schema_versions WHERE version = ?

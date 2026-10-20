@@ -1,0 +1,60 @@
+{
+  "function": {
+    "description": "Withdraw a percentage of your v3 position and collect both tokens; optionally burn the empty NFT at 100%. Both receipts are asserted. dry_run defaults true.",
+    "name": "defi_trade_lp_remove",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "burn": {
+          "default": false,
+          "description": "At 100% only: also burn the emptied position NFT.",
+          "type": "boolean"
+        },
+        "chain": {
+          "default": "robinhood",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) simulates and asserts without broadcasting.",
+          "type": "boolean"
+        },
+        "liquidity_pct": {
+          "default": 100,
+          "description": "Percent of the position's liquidity to withdraw.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_spend_usd": {
+          "default": 5.0,
+          "description": "Maximum gas fee in USD.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "protocol": {
+          "default": "v3",
+          "description": "'v3' only.",
+          "type": "string"
+        },
+        "slippage_bps": {
+          "default": 100,
+          "description": "Withdrawal minimums, in basis points (max 1000).",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token_id": {
+          "description": "Your position NFT id.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "token_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

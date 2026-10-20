@@ -46,6 +46,7 @@ RemedyTable = Mapping[str, Sequence[Tuple[str, str]]]
 REPL_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
     "app": (("yes", "/apps approve {id}"), ("no", "/apps reject {id}")),
     "ask": (("mark it done", "/fulfill {id}"),),
+    "card": (),    # the card's own tap tokens ride on the item (meta)
     "tool_approval": (("yes", "/pending approve tool_approval {id}"),
                       ("no", "/pending reject tool_approval {id}")),
     "correspondent": (("yes", "/pending approve correspondent {id}"),
@@ -63,6 +64,7 @@ CLI_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
     "app": (("yes", "polyrob apps approve {id}"),
             ("no", "polyrob apps reject {id}")),
     "ask": (("mark it done", "polyrob owner fulfill {id}"),),
+    "card": (),
     "tool_approval": (("yes", "polyrob owner promote tool_approval {id}"),
                       ("no", "polyrob owner reject tool_approval {id}")),
     "correspondent": (("yes", "polyrob owner promote correspondent {id}"),
@@ -84,6 +86,7 @@ CLI_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
 CHAT_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
     "app": (("yes", "/apps approve {id}"), ("no", "/apps reject {id}")),
     "ask": (("mark it done", "/fulfill {id}"),),
+    "card": (),
     KIND_UNREADABLE: (("look", "/inbox"), ("why", "/status")),
     "": (("yes", "{tap_approve}"), ("no", "{tap_reject}")),
 }
@@ -116,15 +119,28 @@ def _wrap(text: str, indent: str, width: int = WIDTH) -> list:
 
 
 def _headline(mark: str, title: str, right: str, width: int = WIDTH) -> str:
-    """``  ! <title>                      waiting 2h`` — right-aligned age."""
-    left = f"  {mark} {' '.join(str(title or '').split())}"
-    if not right:
-        return left[:width]
-    room = width - len(right) - 1  # one space, minimum, between the two
-    if len(left) > room:
-        left = left[:max(0, room - 1)].rstrip() + "…"
-    gap = max(1, width - len(left) - len(right))
-    return f"{left}{' ' * gap}{right}"
+    """``  ! <title>                      waiting 2h`` — right-aligned age.
+
+    ⚠️ A title that does not fit WRAPS, it is never cut: Telegram's 60 columns
+    cut a spend approval's title at "max_usd=2." (D T8) — a number the owner
+    then reads as the amount. The age goes on the last line when it fits.
+    """
+    title = " ".join(str(title or "").split())
+    left = f"  {mark} {title}"
+    if len(left) + (len(right) + 1 if right else 0) <= width:
+        if not right:
+            return left
+        return f"{left}{' ' * max(1, width - len(left) - len(right))}{right}"
+    lines = textwrap.wrap(title, width=width, initial_indent=f"  {mark} ",
+                          subsequent_indent="    ", break_long_words=False,
+                          break_on_hyphens=False) or [left]
+    if right:
+        last = lines[-1]
+        if len(last) + len(right) + 1 <= width:
+            lines[-1] = f"{last}{' ' * max(1, width - len(last) - len(right))}{right}"
+        else:
+            lines.append(f"{' ' * max(0, width - len(right))}{right}")
+    return "\n".join(lines)
 
 
 def _remedy_line(item: Mapping[str, Any], table: RemedyTable,
@@ -192,7 +208,9 @@ def _sources_footer(body: Mapping[str, Any], width: int) -> list:
         lines += _wrap("Could not read "
                        + ", ".join(SOURCE_LABELS.get(n, n) for n in refused)
                        + ".", "  ", width)
-    elif read:
+    elif read and not body.get("count"):
+        # 080 WS-3 (D F-9): only with NOTHING waiting. Beside a list of
+        # decisions "all of them answered" reads as "you have answered them".
         lines += _wrap("All of them answered.", "  ", width)
     return lines
 
@@ -207,6 +225,21 @@ def _more_line(hidden: int, width: int) -> str:
     return "\n".join(_wrap(
         f"{what} waiting here and not shown. Ask for the whole list.",
         "  ", width))
+
+
+def elsewhere_line(body: Mapping[str, Any], view_name: str) -> str:
+    """One line under a VIEW (``/pending``, ``/asks``, ``/cards``): what else
+    waits in the one Inbox, so a filtered list never reads as the whole of it.
+    ``""`` when the view IS everything waiting (080 WS-3)."""
+    from core.surfaces.inbox import view
+    narrowed = view(body, view_name)
+    rest = int(body.get("count") or 0) - int(narrowed["count"])
+    if body.get("uncertain"):
+        return "Some lists could not be read — /inbox names them."
+    if rest <= 0:
+        return ""
+    what = "One more thing waits" if rest == 1 else f"{rest} more things wait"
+    return f"{what} on you elsewhere — /inbox lists everything."
 
 
 def render_inbox(body: Mapping[str, Any], *, remedies: RemedyTable = REPL_REMEDIES,
@@ -348,18 +381,18 @@ def render_book(body: Mapping[str, Any], *, width: int = WIDTH,
 #: "I will not trade … until this is settled", and no trade verb reads the
 #: verdict (token-management evaluation P0-8). The true behavior, said plainly.
 BOOK_DISAGREEMENT_NOTE = (
-    "The chain is the truth; the ledger is my memory of it, and where they "
-    "disagree the memory is wrong. This verdict does not stop a trade — the "
-    "identity check and the caps decide that — so I correct the ledger before "
-    "I report or claim anything about these positions.")
+    "The chain is the truth; my book is my record of it, and where they "
+    "disagree the record is wrong. This verdict does not stop a trade — the "
+    "identity check and the caps decide that — so I settle the disagreement "
+    "before I report or claim anything about these positions.")
 
 _LIFECYCLE_WORDS = {"quarantined": "quarantined (a look-alike, not the real token)",
                     "written_off": "written off"}
 
 
 def _lifecycle_lines(body: Mapping[str, Any], width: int) -> list:
-    """W1: positions that are not simply open, and what the rail tracks that
-    the ledger does not list — the store the identity gate reads."""
+    """W1: positions that are not simply open, and the positions that wait
+    on an owner decision — the store the identity gate reads."""
     out: list = []
     closed = [r for r in body.get("rows") or ()
               if str(r.get("lifecycle") or "open") != "open"]
@@ -372,7 +405,7 @@ def _lifecycle_lines(body: Mapping[str, Any], width: int) -> list:
                          "    ", width)
     tracked = list(body.get("tracked") or ())
     if tracked:
-        out += ["", "  Tracked by the rail, not in my ledger:"]
+        out += ["", "  Waiting on your decision:"]
         for r in tracked:
             cost = r.get("entry")
             state = str(r.get("lifecycle") or "open")

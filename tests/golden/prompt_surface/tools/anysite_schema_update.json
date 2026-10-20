@@ -1,0 +1,12 @@
+{
+  "function": {
+    "description": "Refresh the local AnySite endpoint/schema cache (run once if endpoints look stale).",
+    "name": "anysite_schema_update",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

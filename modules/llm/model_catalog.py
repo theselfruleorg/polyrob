@@ -740,13 +740,13 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # reasoning + structured outputs, TEXT-ONLY (verified live 2026-09-15: given a
     # base64 image on the z.ai Anthropic endpoint it narrated a URL it could not
     # fetch rather than reading the pixels — so vision here would be a hallucination
-    # licence, not a capability). Specs/pricing from the live OpenRouter models API.
+    # licence, not a capability). Specs from the OpenRouter models API; price = 2026-10-14 DeepInfra list.
     register(ModelConfig(
         name="z-ai/glm-5.3",
         provider=ModelProvider.OPENROUTER,
         context_window=1310720,  # 1.31M tokens (OpenRouter API is authoritative)
         max_completion_tokens=131072,  # z.ai rejects max_tokens>131072 (live probe)
-        pricing=ModelPricing(input_price=1.40, cached_input_price=0.26, output_price=4.40),
+        pricing=ModelPricing(input_price=0.56, cached_input_price=0.125, output_price=2.5),
         capabilities=ModelCapabilities(
             supports_vision=False,  # text->text
             supports_function_calling=True,
@@ -1453,18 +1453,18 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
 
     # DeepSeek V4.1 Flash — the cheap 1M-context workhorse, and it SEES: OpenRouter
     # reports modality text+image->text, unlike every other DeepSeek row here.
-    # ⚠️ Time-of-day pricing. The figures below are DeepSeek's off-peak rate, which is
-    # also what `pricing.prompt` reports. On weekdays 01:00-04:00 and 06:00-10:00 UTC the
+    # ⚠️ Time-of-day pricing on DeepSeek's own upstream: on weekdays 01:00-04:00 and 06:00-10:00 UTC the
     # rate DOUBLES to 0.30/1.20 (cache read 0.006). Cost telemetry computed from this row
     # is therefore a FLOOR during those windows, not an exact charge — re-check against
     # `GET https://openrouter.ai/api/v1/models` before quoting a spend figure from it.
-    # Verified live 2026-09-16.
+    # Re-priced 2026-10-14 to the OpenRouter list (DeepInfra); billed_cost_usd is the
+    # spend truth and `polyrob doctor` prints the billed/catalog ratio (A-1).
     register(ModelConfig(
         name="deepseek/deepseek-v4.1-flash",
         provider=ModelProvider.OPENROUTER,
         context_window=1048576,
         max_completion_tokens=384000,
-        pricing=ModelPricing(input_price=0.15, cached_input_price=0.003, output_price=0.60),
+        pricing=ModelPricing(input_price=0.14, cached_input_price=0.004, output_price=0.42),
         capabilities=ModelCapabilities(
             supports_vision=True, supports_function_calling=True,
             supports_tools=True, supports_streaming=True,

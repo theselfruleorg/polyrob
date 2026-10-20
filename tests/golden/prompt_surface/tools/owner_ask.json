@@ -1,0 +1,44 @@
+{
+  "function": {
+    "description": "Ask the OWNER for a decision the durable way, or record the owner's answer to an open ask. question=… raises (any session, never a leaf); answer=… decides (a genuine owner turn only). In an autonomous (goal/cron) run, a decision you need from the owner is an owner_ask, never a question in a message. In a live chat turn with the owner, offer the options with present_choice instead.",
+    "name": "owner_ask",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "default": null,
+          "description": "ANSWER (owner turn only): the owner's decision, QUOTED from their message in this turn (e.g. \"A\"). Words that are not in the owner's message are refused.",
+          "maxLength": 2000,
+          "nullable": true,
+          "type": "string"
+        },
+        "approved": {
+          "default": true,
+          "description": "ANSWER: False records a decline.",
+          "type": "boolean"
+        },
+        "ask_id": {
+          "default": null,
+          "description": "ANSWER: the ask to decide. Omit when exactly one ask is open.",
+          "nullable": true,
+          "type": "string"
+        },
+        "question": {
+          "default": null,
+          "description": "RAISE: the decision or resource you need from the owner, as ONE question answerable in a word or two (name the options: 'A) … or B) …'). Durable, deduplicated, shown on every owner seat; the answer reaches this rail's next run. In an autonomous run, never ask this in a message instead.",
+          "maxLength": 600,
+          "nullable": true,
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "description": "RAISE: one line of context.",
+          "maxLength": 1200,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

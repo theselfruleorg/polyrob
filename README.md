@@ -41,7 +41,7 @@ POLYROB doesn't just answer — it *works*, and it keeps working when you're not
 - **Self-wake** — re-enters idle sessions to continue or follow up, with depth and backoff guards so it never loops.
 - **Background review + curator** — a cheap aux model reviews what worked every few turns and can distill a new skill; unused skills are retired automatically and revived when relevant again.
 - **Parallel delegation** — `delegate_task` spawns least-privilege sub-agents for concurrent workstreams (no money/comms/code-exec, can't re-delegate), sync or detached in the background.
-- **Your standing work stays yours** — every cron job and goal records who wrote it. One you create carries your standing authority (its toolset as written, an X post without a per-run tap); one the agent wrote — or that a turn wrote after reading outside text — runs as the agent's. `/adopt` shows you what such a job will do and makes it yours.
+- **Your standing work runs as written** — every cron job and goal carries the same standing authority (its toolset as written, an X post without a per-run tap); a job the agent schedules on its own may ask only for tools inside its self-goal ceiling, and under the supervised money regime no job moves funds unattended.
 
 ## 🧬 It learns and gets better with use
 
@@ -295,7 +295,6 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | Cron | natural-language schedules + out-of-band delivery (Telegram/email/X) |
 | Self-wake | re-enters idle sessions with depth/backoff guards |
 | Self-authored skills | background review → scan → quarantine → owner approval |
-| Authorship | every cron job and goal records owner or agent; `/adopt` makes an agent-written one yours |
 | Skill curator | retires unused skills, revives on reuse |
 | Delegation | least-privilege sub-agents, sync or detached background |
 
@@ -341,7 +340,6 @@ checks around it. The core protections below are **on by default**:
 | **Self-modification review** | New skills / identity edits are quarantined and reviewed before taking effect | **On** |
 | **Code-exec containment** | Hardened Docker container by default on a server; the local subprocess backend is a convenience, not a sandbox, and a server refuses it; no inherited API keys | On when code-exec enabled |
 | **Shell command guard** | Every shell line (wrappers, substitutions and heredocs included) is classified: a floor no approval lifts, a dangerous class that waits for you, unattended runs refuse it; a write to the agent's own state databases needs you whatever the path | On when the shell tools are on |
-| **Read taint** | A turn that read outside text (a web page, mail, a room) cannot grant itself authority: its new goals and jobs are agent-authored, and its transfers wait for your tap | **On** |
 | **Run budget** | Cap a session's provider spend; the run halts honestly at the ceiling rather than claiming success | Opt-in (`RUN_BUDGET_USD`) |
 | **Four-tier access** | OWNER / CORRESPONDENT / GROUP MEMBER / DENIED routing for chat surfaces | Opt-in (`CORRESPONDENT_ACCESS_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
 | **Group chats (rooms)** | Allowlisted room + per-chat role; every room turn runs a read-only, audience-bounded toolset (never money/exec/delegation) in a session that carries no owner state | Opt-in (`GROUP_CHAT_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
@@ -369,7 +367,7 @@ and off by default:
 - **x402 pay-per-request** — USDC micropayments on Base (opt-in Solana settlement) via the x402 protocol; the agent can both charge for its API and pay for external resources, and invoices settle facilitator-free by on-chain detection.
 - **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default. The spend ledger is sealed with a seed-derived MAC, so an edited row fails closed. An optional separate signer process (`WALLET_SIGNER`) holds its own hard caps, and those caps are the outer envelope every other cap sits inside.
 - **On-chain token sight** — a read-only tool (over twenty verbs, NFTs and LP positions included) for token identity, price, liquidity, a safety screen, pool discovery, any wallet's holdings and recent activity, a token's deployer history, and the agent's own positions across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
-- **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and a spend the agent starts above a configurable ceiling waits for an owner approval and is sent once approved; the owner's own `/send`, `/swap` and `/bridge` (typed, or built and confirmed with buttons) pass the ceiling but stay inside the per-transaction and daily caps. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
+- **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and a spend the agent starts above a configurable ceiling — or one that can pay an address nobody pinned, at any value — waits for an owner approval and is sent once approved; the owner's own `/send`, `/swap` and `/bridge` (typed, or built and confirmed with buttons) pass the ceiling but stay inside the per-transaction and daily caps. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
 - **Venue trading** — Hyperliquid (perps) and Polymarket (prediction markets) tools, dry-run by default behind a master + per-venue live switch and per-venue caps.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
 - **SIWE** wallet auth for the multi-tenant posture.
@@ -496,7 +494,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/console.md](docs/guide/console.md) | Web console — the five destinations, owner actions, posture |
 | [docs/guide/payments.md](docs/guide/payments.md) | Payments, wallet & crypto — the complete money reference |
 | [docs/guide/security-model.md](docs/guide/security-model.md) | Honest trust model — heuristic gates vs. the OS/container boundary |
-| [docs/guide/streams.md](docs/guide/streams.md) | Goals and standing work — the goal board, objectives, fair dispatch, cron |
+| [docs/guide/streams.md](docs/guide/streams.md) | Jobs, goals, decisions and pauses — which one to use, the goal board, scheduled jobs, the inbox |
 | [docs/guide/x-twitter.md](docs/guide/x-twitter.md) | The agent's X account — posts, X Chat DMs, sign-in |
 | [docs/comparison.md](docs/comparison.md) | Comparison with other frameworks |
 | [docs/examples.md](docs/examples.md) | Real-world usage examples |

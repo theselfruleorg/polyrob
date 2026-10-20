@@ -6,18 +6,18 @@ on the goal / cron / rig path key off one predicate instead of each re-deriving
 a subset of it (the 2026-09-23 security pass added four gates that did exactly
 that, and an owner who had armed every flag still saw ``money_rail`` refused).
 
-    supervised — ``AUTONOMY_MODE`` is not effectively ``autonomous``. Work the
-                 AGENT writes (goals, cron jobs, rigs) never carries a money
-                 tool. The owner may still grant one from an owner seat.
+    supervised — ``AUTONOMY_MODE`` is not effectively ``autonomous``. No goal
+                 or cron run moves funds unattended
+                 (:func:`unattended_money_allowed`: ``tx_guard``'s autonomous
+                 lane and the x402 autonomous lane refuse).
     autonomous — the single-owner act-and-report instance
                  (:func:`full_autonomy_enabled`), money NOT armed: the agent
-                 schedules its own recurring work, but its self-authored work
-                 cannot trade unattended.
+                 schedules its own recurring work; ``missing`` names what the
+                 unattended trade path still lacks.
     armed      — autonomous + every key the unattended trade path checks:
 
                  * ``DEFI_AGENT_AUTONOMY``        — the grant (``defi_trade`` in
-                   the autonomous toolset, so a self-authored ``money_rail``
-                   rig passes the ceiling);
+                   the autonomous toolset and the self-goal ceiling);
                  * ``DEFI_TRADE_ENABLED``         — the tool registers at all;
                  * ``DEFI_AUTONOMOUS_TURN_TRADING`` — ``tx_guard`` step 2 lets a
                    goal/cron-dispatched MAIN-agent turn sign;
@@ -87,11 +87,20 @@ def autonomous_money_armed() -> bool:
     return money_regime().name == REGIME_ARMED
 
 
+def unattended_money_allowed() -> bool:
+    """May a goal/cron run move funds with no owner in the loop? Never under
+    the ``supervised`` regime. Fail closed."""
+    try:
+        return money_regime().name != REGIME_SUPERVISED
+    except Exception:
+        return False
+
+
 def money_regime_display() -> str:
     """One line for the status seats (posture card)."""
     regime = money_regime()
     if regime.name == REGIME_SUPERVISED:
-        return "supervised — agent-written goals/cron cannot hold money tools"
+        return "supervised — goals and cron never move funds unattended"
     if regime.name == REGIME_ARMED:
         try:
             from core.config_policy.spend_lane import autonomous_ceiling_usd

@@ -1,7 +1,7 @@
 """A member's refusal is answered WHERE THE MEMBER IS.
 
 ⚠️ Live incident, 2026-09-15, Playground Env. A plain member replied to his own
-message with `/ban@tmachinroBot 1h`. The self-target guard fired correctly — and
+message with `/ban@ExampleBot 1h`. The self-target guard fired correctly — and
 the refusal went to his DM as a bare string, so the ROOM saw nothing at all.
 Three people concluded the feature was broken; the ledger shows the owner
 relaying "написал мне в личку" / "что типа я сам против себя покупаю".

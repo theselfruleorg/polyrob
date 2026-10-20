@@ -10,10 +10,13 @@ floor, and the receiver is held to our own wallet.
 Every known facet takes ``(bytes32 transactionId, string integrator,
 string referrer, address receiver, uint256 minAmount, SwapData…)``.
 
-An unknown selector returns ``None``: the caller falls back to the measured
-inflow floor it already asserts. A natural swap is never refused because LI.FI
-shipped a new facet. A KNOWN selector whose body does not decode raises
-``ValueError`` — that is malformed, not new.
+``decode`` returns ``None`` for an unknown selector. ``floor_refusal`` (the
+guard's step 3a, run only for a call to the pinned diamond that declares an
+output floor) REFUSES an unknown selector (085 W8 txguard LEAD-1): without a
+decoded on-chain minimum the only floor left is the simulated one, and a
+contract can tell a simulation apart from the block. When LI.FI ships a new
+same-chain swap facet, add it to ``_FACETS``. A KNOWN selector whose body does
+not decode raises ``ValueError`` — that is malformed, not new.
 """
 import functools
 from dataclasses import dataclass
@@ -81,14 +84,16 @@ def floor_refusal(data, *, receiver: str, token_out: Optional[str],
                   floor: int) -> Optional[str]:
     """Why this LI.FI call may not be signed, or ``None``.
 
-    ``None`` also for an unknown facet: the measured-inflow floor still applies.
+    The caller runs this only for a call to the pinned LI.FI diamond that
+    declares an output floor. An unknown selector refuses (085 W8 LEAD-1): its
+    on-chain minimum cannot be read, and the simulated floor alone can be gamed.
     """
     try:
         swap = decode(data)
     except ValueError as exc:
         return str(exc)
     if swap is None:
-        return None
+        return unknown_selector_refusal(data)
     if swap.receiver != str(receiver or "").lower():
         return (f"the LI.FI calldata pays its output to {swap.receiver}, not the "
                 f"wallet {receiver}")
@@ -100,3 +105,13 @@ def floor_refusal(data, *, receiver: str, token_out: Optional[str],
                 f"below the floor {floor} — the chain would accept a worse fill than "
                 f"was agreed")
     return None
+
+
+def unknown_selector_refusal(data) -> str:
+    """The refusal for a diamond call whose swap layout this module does not know."""
+    text = str(data or "").lower()
+    sel = text[:10] if text.startswith("0x") and len(text) >= 10 else "(none)"
+    return (f"the LI.FI diamond call uses selector {sel}, which is not a known "
+            f"same-chain swap facet — its on-chain minimum output cannot be read, "
+            f"and a floor judged only on a simulation can be gamed (add the facet "
+            f"to core/wallet/lifi_calldata.py _FACETS if LI.FI shipped a new one)")

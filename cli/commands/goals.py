@@ -15,10 +15,10 @@ import click
 
 from agents.task.goals.board import (
     KIND_GOAL,
-    KIND_OBJECTIVE,
     STATUS_BLOCKED,
     STATUS_CANCELLED,
     STATUS_DONE,
+    STATUS_PAUSED,
     STATUS_READY,
     STATUS_RUNNING,
     STATUS_TRIAGE,
@@ -89,6 +89,7 @@ def _format_goal(goal: Goal) -> str:
         STATUS_RUNNING: "yellow",
         STATUS_DONE: "blue",
         STATUS_BLOCKED: "red",
+        STATUS_PAUSED: "magenta",
         STATUS_CANCELLED: "bright_black",
         STATUS_TRIAGE: "cyan",
     }.get(goal.status, "white")
@@ -98,7 +99,7 @@ def _format_goal(goal: Goal) -> str:
         f"  status: {click.style(goal.status, fg=status_color)}",
         f"  created: {created}",
     ]
-    if goal.kind == KIND_OBJECTIVE:
+    if goal.kind != KIND_GOAL:
         lines.append(f"  kind: {goal.kind}")
     if goal.body:
         lines.append(f"  body: {goal.body}")
@@ -146,7 +147,7 @@ def _goal_to_dict(goal: Goal) -> dict:
 
 
 @goals.command("list")
-@click.option("--status", type=click.Choice(["ready", "running", "done", "blocked", "cancelled", "triage"]), help="Filter by status.")
+@click.option("--status", type=click.Choice(["ready", "running", "done", "blocked", "paused", "cancelled", "triage", "waiting"]), help="Filter by status.")
 @click.option("--user", default=None, help="Tenant id (default: this instance's owner).")
 @click.option("-n", "limit", type=int, default=30, show_default=True,
               help="How many of the newest goals to show (1-500).")
@@ -215,10 +216,14 @@ def goals_show(goal_id: str, as_json: bool):
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"goal not found: {goal_id}")
         sys.exit(1)
 
+    from core.goal_owner_verbs import reason
+    why = reason(board, goal, goal.user_id) if goal.kind == KIND_GOAL else ""
     if as_json:
-        click.echo(json.dumps(_goal_to_dict(goal), indent=2))
+        click.echo(json.dumps({**_goal_to_dict(goal), "status_reason": why}, indent=2))
     else:
         click.echo(_format_goal(goal))
+        if why:
+            click.echo(f"  why: {why}")
 
 
 @goals.command("create")
@@ -229,21 +234,20 @@ def goals_show(goal_id: str, as_json: bool):
 @click.option("--triage", is_flag=True, help="Create in 'triage' status instead of 'ready'.")
 @click.option("--tools", help="Comma-separated tool ids this goal may use.")
 @click.option("--acceptance", help="What 'done' must prove (ids/paths/urls).")
-@click.option("--objective", "objective_id", help="Parent objective id.")
 @click.option("--force", is_flag=True, help="Bypass near-duplicate rejection.")
 @click.option("--memory-regime", "memory_regime",
               type=click.Choice(["shared", "scoped", "sealed"]),
               help="Memory isolation for this goal's runs (needs memory scopes on).")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_create(title: str, body: str, priority: int, parent: Optional[str], triage: bool,
-                  tools: Optional[str], acceptance: Optional[str], objective_id: Optional[str],
+                  tools: Optional[str], acceptance: Optional[str],
                   force: bool, as_json: bool, memory_regime: Optional[str] = None):
     """Create a new goal."""
     board = _get_board()
     status = STATUS_TRIAGE if triage else STATUS_READY
 
-    # 034 §7 stamp gap: the owner seat is the author (origin() read it as LEGACY).
-    payload = {"authored_by": "owner"}
+    # 034 §7: the owner seat is the origin (origin() reads ``owner_granted``).
+    payload = {"owner_granted": True}
     if tools:
         payload["tools"] = [t.strip() for t in tools.split(",") if t.strip()]
     if acceptance:
@@ -262,7 +266,7 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
             title=title,
             body=body,
             priority=priority,
-            parent_id=objective_id or parent,
+            parent_id=parent,
             status=status,
             payload=payload or None,
             force=force,
@@ -285,32 +289,27 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
     _warn_if_goals_off()
 
 
-@goals.command("ready")
-@click.argument("goal_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def goals_ready(goal_id: str, as_json: bool):
-    """Mark a triage/blocked goal as ready."""
+def _owner_goal(goal_id: str) -> Goal:
+    """The OWNER tenant's goal by id, or exit 1 (a foreign id is not found)."""
     board = _get_board()
-    goal = board.get(goal_id)
-
-    if goal is None:
+    goal = board.get(goal_id, user_id=_owner_tenant())
+    if goal is None or goal.kind != KIND_GOAL:
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"goal not found: {goal_id}")
         sys.exit(1)
+    return goal
 
-    if goal.status not in (STATUS_TRIAGE, STATUS_BLOCKED):
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") +
-                   f"goal is {goal.status}, only triage/blocked goals can be marked ready")
-        sys.exit(1)
 
-    success = board.update_status(goal_id, STATUS_READY, user_id=_owner_tenant())
-    if success:
-        if as_json:
-            updated = board.get(goal_id)
-            click.echo(json.dumps(_goal_to_dict(updated), indent=2))
-        else:
-            click.echo(click.style("[polyrob] ", fg="green") + f"Goal {goal_id} marked as ready")
+def _echo_verb(board: GoalBoard, goal_id: str, res, as_json: bool) -> None:
+    """One answer shape for pause / retry / stop — the core sentence, never a
+    second wording (080: the SAME verbs as the chat seats)."""
+    if as_json:
+        click.echo(json.dumps({"ok": res.ok, "message": res.message,
+                               "goal": _goal_to_dict(board.get(goal_id))}, indent=2))
+    elif res.ok:
+        click.echo(click.style("[polyrob] ", fg="green") + res.message)
     else:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to update goal")
+        click.echo(click.style("[polyrob] ERROR: ", fg="red") + res.message)
+    if not res.ok:
         sys.exit(1)
 
 
@@ -318,123 +317,38 @@ def goals_ready(goal_id: str, as_json: bool):
 @click.argument("goal_id")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_pause(goal_id: str, as_json: bool):
-    """Pause a goal (move to blocked status)."""
+    """Pause a goal (status paused; `goals retry` resumes it)."""
+    from core.goal_owner_verbs import pause_goal
+    goal = _owner_goal(goal_id)
     board = _get_board()
-    goal = board.get(goal_id)
-
-    if goal is None:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"goal not found: {goal_id}")
-        sys.exit(1)
-
-    if goal.status == STATUS_RUNNING:
-        click.echo(click.style("[polyrob] WARNING: ", fg="yellow") +
-                   "goal is currently running — pause may not take effect immediately")
-
-    success = board.update_status(goal_id, STATUS_BLOCKED, user_id=_owner_tenant())
-    if success:
-        if as_json:
-            updated = board.get(goal_id)
-            click.echo(json.dumps(_goal_to_dict(updated), indent=2))
-        else:
-            click.echo(click.style("[polyrob] ", fg="green") + f"Goal {goal_id} paused (blocked)")
-    else:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to update goal")
-        sys.exit(1)
+    _echo_verb(board, goal.id, pause_goal(board, user_id=_owner_tenant(), goal=goal),
+               as_json)
 
 
-@goals.command("resume")
+@goals.command("stop")
 @click.argument("goal_id")
+@click.option("--forever", is_flag=True,
+              help="Also switch the title off: no job or agent creates it again.")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def goals_resume(goal_id: str, as_json: bool):
-    """Resume a paused/blocked goal."""
+def goals_stop(goal_id: str, forever: bool, as_json: bool):
+    """Stop a goal — once by default; --forever means never again."""
+    from core.goal_suppressions import stop_goal
+    goal = _owner_goal(goal_id)
     board = _get_board()
-    goal = board.get(goal_id)
-
-    if goal is None:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"goal not found: {goal_id}")
-        sys.exit(1)
-
-    if goal.status != STATUS_BLOCKED:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") +
-                   f"goal is {goal.status}, only blocked goals can be resumed")
-        sys.exit(1)
-
-    success = board.update_status(goal_id, STATUS_READY, user_id=_owner_tenant())
-    if success:
-        if as_json:
-            updated = board.get(goal_id)
-            click.echo(json.dumps(_goal_to_dict(updated), indent=2))
-        else:
-            click.echo(click.style("[polyrob] ", fg="green") + f"Goal {goal_id} resumed")
-    else:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to update goal")
-        sys.exit(1)
-
-
-@goals.command("cancel")
-@click.argument("goal_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def goals_cancel(goal_id: str, as_json: bool):
-    """Cancel a goal."""
-    board = _get_board()
-    goal = board.get(goal_id)
-
-    if goal is None:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"goal not found: {goal_id}")
-        sys.exit(1)
-
-    # A goal already in a terminal state can't be cancelled (board.cancel excludes
-    # done/cancelled) — that's a clean no-op, NOT a "failed to cancel" error+exit 1.
-    if goal.status in (STATUS_DONE, "cancelled"):
-        if as_json:
-            click.echo(json.dumps(_goal_to_dict(goal), indent=2))
-        else:
-            click.echo(click.style("[polyrob] ", fg="yellow")
-                       + f"goal {goal_id} is already {goal.status} — nothing to cancel")
-        return
-
-    success = board.cancel(goal_id)
-    if success:
-        if as_json:
-            updated = board.get(goal_id)
-            click.echo(json.dumps(_goal_to_dict(updated), indent=2))
-        else:
-            click.echo(click.style("[polyrob] ", fg="green") + f"Goal {goal_id} cancelled")
-    else:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to cancel goal")
-        sys.exit(1)
+    _echo_verb(board, goal.id, stop_goal(board, user_id=_owner_tenant(), goal=goal,
+                                         forever=forever), as_json)
 
 
 @goals.command("retry")
 @click.argument("goal_id")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_retry(goal_id: str, as_json: bool):
-    """Retry a blocked/failed goal (resets failures)."""
+    """Re-queue a blocked or paused goal (clears the failures)."""
+    from core.goal_owner_verbs import retry_goal
+    goal = _owner_goal(goal_id)
     board = _get_board()
-    goal = board.get(goal_id)
-
-    if goal is None:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"goal not found: {goal_id}")
-        sys.exit(1)
-
-    if goal.status not in (STATUS_BLOCKED,):
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") +
-                   f"goal is {goal.status}, only blocked goals can be retried")
-        sys.exit(1)
-
-    # Reset to ready and clear failures
-    success = board.update_status(goal_id, STATUS_READY, reset_failures=True,
-                                  user_id=_owner_tenant())
-    if success:
-        if as_json:
-            updated = board.get(goal_id)
-            click.echo(json.dumps(_goal_to_dict(updated), indent=2))
-        else:
-            click.echo(click.style("[polyrob] ", fg="green") +
-                       f"Goal {goal_id} reset to ready (failures cleared)")
-    else:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to retry goal")
-        sys.exit(1)
+    _echo_verb(board, goal.id, retry_goal(board, user_id=_owner_tenant(), goal=goal),
+               as_json)
 
 
 @goals.command("events")
@@ -462,125 +376,6 @@ def goals_events(goal_id: str, as_json: bool):
         click.echo(f"  {ts}  {e['kind']:<12} {payload_str}")
 
 
-@goals.group("objective")
-def objective():
-    """Manage standing objectives (the durable 'why' behind goals)."""
-
-
-@objective.command("add")
-@click.argument("title")
-@click.option("--body", "-b", default="", help="What success looks like; constraints.")
-@click.option("--priority", "-p", type=int, default=5)
-@click.option("--success-criteria", default=None,
-              help="What the planner measures against (shown in its prompt).")
-@click.option("--goal-budget", type=int, default=None,
-              help="Max LIVE child goals before creates are refused (0 = no cap).")
-@click.option("--stream-id", default=None,
-              help="Ties this objective to a data/streams/streams.yaml entry.")
-@click.option("--force", is_flag=True, help="Bypass near-duplicate rejection.")
-def objective_add(title, body, priority, success_criteria, goal_budget, stream_id, force):
-    board = _get_board()
-    payload = {}
-    if success_criteria:
-        payload["success_criteria"] = success_criteria
-    if goal_budget is not None:
-        payload["goal_budget"] = int(goal_budget)
-    if stream_id:
-        payload["stream_id"] = stream_id
-    try:
-        o = board.create_objective(user_id=_owner_tenant(), title=title, body=body,
-                                   priority=priority, force=force,
-                                   payload=payload or None)
-    except DuplicateGoalError as e:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red")
-                   + f"near-duplicate of {e.match_id} '{e.match_title}' "
-                     f"(similarity {e.similarity:.2f}); use --force to override")
-        sys.exit(1)
-    click.echo(click.style("[polyrob] ", fg="green") + f"Created objective {o.id} [active]: {o.title}")
-
-
-@objective.command("show")
-@click.argument("objective_id")
-def objective_show(objective_id):
-    """Show one objective: criteria, budget use, and its live children."""
-    board = _get_board()
-    user_id = _owner_tenant()
-    o = board.get(objective_id)
-    # GoalBoard.get() has no tenant filter (it is a plain SELECT by id), so a
-    # known-id lookup must reject another tenant's row here rather than leak
-    # its title/body/payload. Same idiom as GoalBoard.update_fields: fetch via
-    # get(), then check user_id. Same message/exit as "not found" — a
-    # different one would itself be a cross-tenant existence oracle.
-    if o is None or o.kind != "objective" or o.user_id != user_id:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + "no such objective")
-        sys.exit(1)
-    payload = o.payload or {}
-    click.echo(f"{o.id} [{o.status}] {o.title}")
-    if o.body:
-        click.echo(o.body)
-    if payload.get("stream_id"):
-        click.echo(f"stream: {payload['stream_id']}")
-    if payload.get("success_criteria"):
-        click.echo(f"success criteria: {payload['success_criteria']}")
-    children = board.children_of(user_id, o.id)
-    # children_of drops only cancelled/dropped, so `done` children are IN this
-    # list — which is correct for the budget (a lifetime tally) and wrong to call
-    # "live". Report the two numbers separately rather than one mislabelled one.
-    in_flight = [c for c in children if c.status != "done"]
-    budget = board.objective_budget(o)
-    if budget > 0:
-        click.echo(f"goal budget: {len(children)}/{budget} spent "
-                   f"({len(in_flight)} in flight, done children count)")
-    elif payload.get("stream_id"):
-        click.echo(f"goal budget: none — stream objectives are uncapped "
-                   f"({len(in_flight)} goal(s) in flight)")
-    else:
-        click.echo(f"goal budget: no cap ({len(in_flight)} goal(s) in flight, "
-                   f"{len(children)} incl. done)")
-    for c in children:
-        click.echo(f"  {c.id[:8]} [{c.status}] {c.title}")
-
-
-@objective.command("list")
-@click.option("--status", type=click.Choice(["active", "paused", "done", "dropped"]))
-def objective_list(status):
-    board = _get_board()
-    user_id = _owner_tenant()
-    objs = board.objectives(user_id=user_id, status=status)
-    if not objs:
-        click.echo("No objectives.")
-        return
-    for o in objs:
-        kids = board.children(o.id, user_id=user_id)
-        counts = {}
-        for k in kids:
-            counts[k.status] = counts.get(k.status, 0) + 1
-        summary = ", ".join(f"{v} {s}" for s, v in sorted(counts.items())) or "no goals yet"
-        click.echo(f"{click.style(o.id, fg='cyan')} [{o.status}] p{o.priority}: "
-                   f"{click.style(o.title, bold=True)} ({summary})")
-        if o.body:
-            click.echo(f"  {o.body}")
-
-
-def _objective_status_cmd(name, target):
-    @objective.command(name)
-    @click.argument("objective_id")
-    def _cmd(objective_id):
-        ok = _get_board().set_objective_status(objective_id, target,
-                                               user_id=_owner_tenant())
-        if ok:
-            click.echo(click.style("[polyrob] ", fg="green") + f"Objective {objective_id} -> {target}")
-        else:
-            click.echo(click.style("[polyrob] ERROR: ", fg="red") + "no such objective")
-            sys.exit(1)
-    return _cmd
-
-
-_objective_status_cmd("pause", "paused")
-_objective_status_cmd("activate", "active")
-_objective_status_cmd("drop", "dropped")
-
-
 @goals.command("edit")
 @click.argument("goal_id")
 @click.option("--title", help="Replace the one-line title.")
@@ -601,6 +396,10 @@ def goals_edit(goal_id, title, body, priority, tools, acceptance):
         patch["acceptance"] = acceptance
     if tools is not None:
         patch["tools"] = [t.strip() for t in tools.split(",") if t.strip()]
+        # 085 W8 A4: the operator wrote this tool set — the dispatch re-check
+        # keys on the stored actor and must not drop the owner's grant.
+        from core.tool_grants import ACTOR_KEY, ACTOR_OWNER
+        patch[ACTOR_KEY] = ACTOR_OWNER
     ok = board.update_fields(goal_id, title=title, body=body, priority=priority,
                              payload_patch=patch or None)
     if ok:
@@ -615,49 +414,42 @@ def goals_edit(goal_id, title, body, priority, tools, acceptance):
 @goals.command("tree")
 @click.option("--user", default=None, help="Tenant id (default: this instance's owner)")
 def goals_tree(user: Optional[str]):
-    """Objectives with their goals; orphan goals at the end.
+    """Goals with their sub-goals (``--parent``).
 
-    Reads ``objectives()`` + ``list_recent()`` (newest first), never
+    Reads ``list_recent()`` (newest first), never
     ``board.list`` — the dispatcher's priority order showed the OLDEST rows
     and hid every recent leg (2026-08-29; pinned by the parity ratchet).
     """
     board = _get_board()
     tenant = _owner_tenant(user)
     _TREE_LIMIT = 500
-    objectives = board.objectives(user_id=tenant)
     recent = board.list_recent(user_id=tenant, limit=_TREE_LIMIT)
     truncated = len(recent) >= _TREE_LIMIT
+    goals_ = [g for g in recent if g.kind == KIND_GOAL]
+    ids = {g.id for g in goals_}
     by_parent = {}
-    orphans = []
-    for g in recent:
-        if g.kind != KIND_GOAL:
-            continue
-        if g.parent_id:
+    roots = []
+    for g in goals_:
+        if g.parent_id and g.parent_id in ids:
             by_parent.setdefault(g.parent_id, []).append(g)
         else:
-            orphans.append(g)
+            roots.append(g)
 
-    def _leaf(g):
+    def _line(g, indent):
         outcome = (g.payload or {}).get("outcome")
         note = f"  outcome: {outcome}" if outcome else ("  [no outcome]" if g.status == "done" else "")
-        click.echo(f"  - {click.style(g.id, fg='cyan')} [{g.status}] {g.title}{note}")
+        click.echo(f"{indent}- {click.style(g.id, fg='cyan')} [{g.status}] {g.title}{note}")
 
-    if not objectives and not orphans:
+    if not roots:
         # A blank answer is the one thing a board view may never give: it reads
         # identically to "the command did nothing". The ONE empty grammar.
         from cli.ui.candy import empty
-        click.echo(empty("objectives or goals",
-                         f"nothing is on tenant {tenant}'s board"))
+        click.echo(empty("goals", f"nothing is on tenant {tenant}'s board"))
         return
-    for o in objectives:
-        click.echo(f"{click.style(o.id, fg='cyan')} [{o.status}] "
-                   f"{click.style(o.title, bold=True)}")
-        for g in by_parent.get(o.id, []):
-            _leaf(g)
-    if orphans:
-        click.echo(click.style("(no objective)", dim=True))
-        for g in orphans:
-            _leaf(g)
+    for g in roots:
+        _line(g, "")
+        for c in by_parent.get(g.id, []):
+            _line(c, "    ")
     if truncated:
         # The remedy must be reachable: `goals list` is capped at 500 too, so
         # "the full set" was a promise no verb here keeps. Narrowing IS the

@@ -13,7 +13,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL = {"done", "failed", "partial", "cancelled", None}   # None allowed for chat close
+# "blocked" / "skipped" (2026-10-13 review C-11): a run that ended by declaring
+# BLOCKED or SKIPPED is not a plain success; the run record says which.
+_TERMINAL = {"done", "failed", "partial", "cancelled", "blocked", "skipped",
+             None}   # None allowed for chat close
 
 
 async def finalize_episode(*, session_id: str, user_id: Optional[str], kind: str,
@@ -23,15 +26,44 @@ async def finalize_episode(*, session_id: str, user_id: Optional[str], kind: str
                            spend_usd: float = 0.0, steps: int = 0,
                            goal_id: Optional[str] = None, thread_key: Optional[str] = None,
                            started_ts: Optional[int] = None,
-                           meta: Optional[Dict[str, Any]] = None) -> None:
+                           meta: Optional[Dict[str, Any]] = None,
+                           skills_loaded: Optional[List[str]] = None,
+                           skills_activation: Optional[Dict[str, Any]] = None,
+                           run_record: bool = False) -> None:
+    """``skills_loaded`` (080 WS-5): the skill ids this run had active, stamped
+    onto ``meta["skills_loaded"]`` so "which skill did last night's job use?"
+    has a per-run answer (``skill_usage`` is only a lifetime count).
+
+    ``skills_activation`` (081 WS-4.6, :func:`skills_activation`): how they got
+    there. ``meta["skills_auto"]`` = the skills the session PINNED at start (a
+    job's or goal's pins, persona seeds, their ``requires``); every other id in
+    ``skills_loaded`` the model chose with ``load_skill`` (explicit).
+    ``meta["skills_regime"]`` = the session regime, so the auto/explicit split
+    reads per regime. Measurement only: nothing retires a skill from it.
+
+    ``run_record`` (2026-10-13 review R3): the row is a cron job's or a goal's
+    RUN RECORD — the next run of the same job/goal reads it as its
+    ``<previous-runs>`` block (``thread_key`` = ``cron:<id>``/``goal:<id>``).
+    The caller decides it from the regime seam
+    (``agents.task.session_class.regime_policy(...).run_record``). A run record
+    is the job's own continuity, so it is written even when the posture leaves
+    ``EPISODIC_MEMORY_ENABLED`` off; the memory backend still decides whether
+    any episode store exists."""
     try:
         from core.config_policy import AutonomyConfig
-        if not AutonomyConfig.episodic_memory_enabled():
+        if not (run_record or AutonomyConfig.episodic_memory_enabled()):
             return
         if outcome not in _TERMINAL:                # don't stamp an in-progress row
             return
         from modules.memory.provider import EpisodeRecord
         from modules.memory.registry import memory_record_episode
+        if skills_loaded:
+            meta = {**(meta or {}), "skills_loaded": sorted({str(s) for s in skills_loaded})}
+        act = skills_activation if isinstance(skills_activation, dict) else {}
+        if act.get("auto"):
+            meta = {**(meta or {}), "skills_auto": sorted({str(s) for s in act["auto"]})}
+        if act.get("regime"):
+            meta = {**(meta or {}), "skills_regime": str(act["regime"])}
         rec = EpisodeRecord(
             ts=int(time.time()), started_ts=started_ts, user_id=user_id or "",
             session_id=session_id, thread_key=thread_key, kind=kind, task=task,
@@ -71,9 +103,12 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
     ``None`` usage_tracker, or a DB error all degrade silently to the zero value.
     This function NEVER raises and NEVER blocks a run/reset completion.
     """
-    out: Dict[str, Any] = {"spend_usd": 0.0, "steps": 0, "artifacts": []}
+    out: Dict[str, Any] = {"spend_usd": 0.0, "steps": 0, "artifacts": [],
+                           "skills_loaded": [], "skills_activation": {}}
     if orchestrator is None:
         return out
+    out["skills_loaded"] = skills_loaded(orchestrator)
+    out["skills_activation"] = skills_activation(orchestrator)
     try:
         steps = 0
         for agent in list((getattr(orchestrator, "agents", None) or {}).values()):
@@ -101,6 +136,51 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
             out["artifacts"] = arts
     except Exception:
         pass
+    return out
+
+
+def skills_loaded(orchestrator: Any) -> List[str]:
+    """The skill ids a run had ACTIVE (eager-pinned or ``load_skill``-ed): the
+    session controller's ``_activated_skills`` set, minus the repeat-ack
+    markers. ``[]`` on any error — never raises."""
+    ids: set = set()
+    try:
+        ctls = [getattr(orchestrator, "controller", None)]
+        for agent in list((getattr(orchestrator, "agents", None) or {}).values()):
+            if not getattr(agent, "_is_sub_agent", False):
+                ctls.append(getattr(agent, "controller", None))
+        for ctl in ctls:
+            act = getattr(ctl, "_activated_skills", None)
+            if isinstance(act, (set, frozenset, list, tuple)):
+                ids.update(str(s) for s in act if s and "#" not in str(s))
+    except Exception:
+        return []
+    return sorted(ids)
+
+
+def skills_activation(orchestrator: Any) -> Dict[str, Any]:
+    """081 WS-4.6: ``{"auto": [ids], "regime": str}`` — the skills the session
+    pinned at start (``controller._auto_skills``, set at construction) and its
+    regime (``controller._skill_regime``). ``{}`` on any error — never raises."""
+    auto: set = set()
+    regime = ""
+    try:
+        ctls = [getattr(orchestrator, "controller", None)]
+        for agent in list((getattr(orchestrator, "agents", None) or {}).values()):
+            if not getattr(agent, "_is_sub_agent", False):
+                ctls.append(getattr(agent, "controller", None))
+        for ctl in ctls:
+            pins = getattr(ctl, "_auto_skills", None)
+            if isinstance(pins, (set, frozenset, list, tuple)):
+                auto.update(str(s) for s in pins if s)
+            regime = regime or str(getattr(ctl, "_skill_regime", "") or "")
+    except Exception:
+        return {}
+    out: Dict[str, Any] = {}
+    if auto:
+        out["auto"] = sorted(auto)
+    if regime:
+        out["regime"] = regime
     return out
 
 

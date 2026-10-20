@@ -22,28 +22,11 @@ to a frozen list: the default is posture- and mode-aware (compute tools at
 posture>=1, the ship rails under ``AGENT_BUILDER_MODE``), and freezing a copy
 here would be a second home for a fact that already has one.
 
-⚠️ **A rig is a REQUEST, not a grant — but only because of the ceiling.**
-Until 2026-09-23 this docstring claimed ``goal_create`` strips money tools from
-an agent-authored rig. It did not: it stripped ``tools=`` and stored ``rig=``
-unchecked, so ``rig="money_rail"`` resolved to ``defi_trade`` at dispatch
-(``social`` -> ``x_browser``, ``ops`` -> ``cronjob``/``goal``) — security
-analysis H05. Two layers now hold that line:
-
-* creation — ``goal_create`` / ``cronjob_schedule`` REFUSE a rig whose ids
-  leave ``allowed_self_goal_tools()``, and stamp ``authored_by="agent"``;
-* dispatch — :func:`resolve_rig_tools` intersects a rig on an AGENT-AUTHORED
-  payload (:func:`is_agent_authored`) with the ``agent_ceiling`` the caller
-  passes, so a row written before the refusal existed is narrowed too.
-
-An owner seat (``polyrob cron rig``, ``/trade``, ``polyrob goals create``)
-stamps no agent marker, so an owner-set rig is honoured as written.
-``goal_create`` / ``cronjob_schedule`` stamp ``authored_by="owner"`` only on a
-genuine owner turn that has read no third-party content
-(``tools.goal_tools.owner_authored_turn``); any other turn stamps ``agent``. Under the ``armed``
-money regime (``core/config_policy/money_regime.py``) the ceiling itself holds
-``defi_trade``, so a self-authored ``money_rail`` passes too. Every
-execution-time gate (money authority in ``load_tools_from_container``, the
-delegation blocklist, taint/posture/approval) still runs on top.
+⚠️ **A rig is used as written at dispatch.** What a turn may WRITE is decided
+at creation: ``goal_create`` / ``cronjob_schedule`` REFUSE, on a turn that is
+not an owner seat, a rig whose ids leave ``allowed_self_goal_tools()``. Every
+execution-time gate (money authority, the money regime in ``tx_guard``, the
+delegation blocklist, posture, approval) runs on top.
 
 ⚠️ ``message`` is a controller ACTION id, not a container tool id (the two
 vocabularies, 055 §2.4). ``load_tools_from_container`` handles that explicitly
@@ -73,10 +56,8 @@ FULL_RIG = "full"
 #: one ordered table; the ``rig:`` prefix keeps them apart from the colliding
 #: ``toolset:research``/``toolset:social``/``toolset:full``). What each rig is for:
 #:
-#: * ``money_rail`` — the on-chain rail. ``defi_trade`` is listed so a granted
-#:   run is NARROW, not so an ungranted one becomes able to trade: on an
-#:   agent-authored row the ceiling (allowed_self_goal_tools) drops it unless
-#:   the money regime is armed (core/config_policy/money_regime.py).
+#: * ``money_rail`` — the on-chain rail. An unattended run trades only when the
+#:   money regime allows it (core/config_policy/money_regime.py).
 #: * ``social`` — build-in-public: the API rail and the browser rail, plus what
 #:   it takes to read a source and draft from it.
 #: * ``research`` — read the world, write notes. No comms rail beyond
@@ -125,51 +106,6 @@ def default_rig_name() -> str:
     return raw or FULL_RIG
 
 
-#: Payload provenance for an AGENT-authored goal / cron row. An owner seat never
-#: writes it. ``created_by_session_id`` is the older goal-only stamp that
-#: ``goal_create`` has written on every call since 031 — honoured too, so a row
-#: written before ``authored_by`` existed is still recognised as the agent's.
-AUTHORED_BY_KEY = "authored_by"
-AGENT_AUTHOR = "agent"
-#: A goal / cron row an OWNER SEAT wrote (``/cron add``, ``/goal``, the CLI, the
-#: console — ``core/owner_create.py``), or the agent's tool on an owner turn that
-#: has read no third-party content (``tools.goal_tools.owner_authored_turn``).
-#: Its rig is honoured as written. Only code writes a payload.
-OWNER_AUTHOR = "owner"
-
-
-def is_agent_authored(payload: Optional[Mapping]) -> bool:
-    """True when the agent (not an owner seat) wrote this payload.
-
-    An explicit ``authored_by`` wins: ``owner`` is NOT agent-authored even
-    though ``goal_create`` also stamps ``created_by_session_id`` on it. The
-    session stamp alone marks a row written before ``authored_by`` existed."""
-    if not isinstance(payload, Mapping):
-        return False
-    author = str(payload.get(AUTHORED_BY_KEY) or "").strip().lower()
-    if author:
-        return author != OWNER_AUTHOR
-    return bool(payload.get("created_by_session_id"))
-
-
-def is_owner_authored(payload: Optional[Mapping]) -> bool:
-    """True ONLY for a row the owner wrote: an explicit ``authored_by: owner``
-    stamp, or an owner-seat grant (``owner_granted``, goals).
-
-    The POSITIVE check every standing owner authority reads — the rig as
-    written (no agent ceiling), ``payload.tools`` verbatim, an X post or room
-    moderation without a per-run approval, a write verb, a trusted buy target.
-    An unstamped row is NOT the owner's: rows from before cron authorship was
-    stamped (``d2ef4acff``, 2026-09-23) may be the agent's, and every owner path
-    stamps since (``core/owner_create.py``, the CLI, the seeders, room service;
-    ``python -m cron.stamp_authorship`` stamps the old rows once)."""
-    if not isinstance(payload, Mapping):
-        return False
-    if payload.get("owner_granted"):
-        return True
-    return str(payload.get(AUTHORED_BY_KEY) or "").strip().lower() == OWNER_AUTHOR
-
-
 def rig_ungrantable_ids(name: Optional[str],
                         ceiling: Sequence[str]) -> List[str]:
     """The ids rig *name* requests that *ceiling* does not allow — ``[]`` for
@@ -184,22 +120,11 @@ def rig_ungrantable_ids(name: Optional[str],
 def resolve_rig_tools(
     payload: Optional[Mapping],
     default_tools: Optional[Sequence[str]] = None,
-    *,
-    agent_ceiling: Optional[Sequence[str]] = None,
 ) -> Optional[List[str]]:
     """Resolve the toolset for one autonomous run. Pure; no I/O beyond env.
 
     Precedence: ``payload.tools`` (verbatim) > ``payload.rig`` >
     ``AUTONOMOUS_RIG_DEFAULT`` > *default_tools*.
-
-    ``agent_ceiling`` (H05): when given AND the payload is not OWNER-authored
-    (:func:`is_owner_authored` — an unstamped row included), the
-    ids the rig resolves to are intersected with it (order kept) — a
-    ``payload.rig`` AND the deploy-wide ``AUTONOMOUS_RIG_DEFAULT``. The default
-    is the operator's, but it is a DEFAULT: ``AUTONOMOUS_RIG_DEFAULT=money_rail``
-    must not hand ``defi_trade`` to work the agent wrote itself unless the money
-    regime put it in the ceiling (the flag map, 2026-09-23). An owner-authored
-    row is never intersected.
 
     Returns ``None`` only when *default_tools* is None and nothing else applied
     — the signal a caller (the goal dispatcher) uses to fall through to its own
@@ -216,17 +141,6 @@ def resolve_rig_tools(
         rig_tools(named)  # logs the unknown-rig warning, returns None
         named = ""
     ids = list(own) if own else (rig_tools(named) if named else rig_tools(default_rig_name()))
-    if ids is None and default_tools is not None:
-        ids = list(default_tools)
-    if ids is not None and agent_ceiling is not None and not is_owner_authored(data):
-        allowed = set(agent_ceiling)
-        dropped = [t for t in ids if t not in allowed]
-        if dropped:
-            logger.warning(
-                "rig %r on an agent-authored payload: %s NOT granted (outside "
-                "the self-goal ceiling)", named or default_rig_name(),
-                ", ".join(dropped))
-            ids = [t for t in ids if t in allowed]
     if ids is not None:
         return ids
     return list(default_tools) if default_tools is not None else None
@@ -242,7 +156,7 @@ def pinned_skills(payload: Optional[Mapping]) -> List[str]:
 
     A list of non-empty strings, deduplicated in order, at most
     :data:`MAX_PINNED_SKILLS`. Anything else (absent, a string, junk) is ``[]`` —
-    the run then keyword-matches exactly as before. Pinning loads doctrine TEXT
+    the run then pins no skill. Pinning loads doctrine TEXT
     only; it grants no tool (the toolset is still ``resolve_rig_tools``'s).
     """
     raw = (payload or {}).get("skills") if isinstance(payload, Mapping) else None

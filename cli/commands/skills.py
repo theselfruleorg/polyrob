@@ -46,7 +46,7 @@ def skills_list(as_json: bool):
 def skills_validate(skill_id: Optional[str]):
     """Validate one skill (by id) or the whole authored library.
 
-    With SKILL_ID: the legacy per-skill check (rules.json wiring + content shape).
+    With SKILL_ID: the legacy per-skill check (rule wiring + content shape).
     With no argument: the strict agentskills.io frontmatter compliance check
     (``SkillManager.validate_all_authored``) run across every shipped skill —
     the same gate `polyrob doctor` and CI's library-invariant test use.

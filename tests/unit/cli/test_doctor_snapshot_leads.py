@@ -19,7 +19,8 @@ def test_doctor_snapshot_leads(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     out = [ln for ln in result.output.splitlines() if ln.strip()]
     assert out, "doctor produced no output"
-    assert out[0].startswith(("▶", "⏸")) or "Health:" in out[0]
+    # 080 WS-4: "■ IDLE" when autonomy is off (no loop runs on its own).
+    assert out[0].startswith(("▶", "⏸", "■")) or "Health:" in out[0]
 
 
 def test_doctor_plain_hides_transcript_by_default(tmp_path, monkeypatch):
@@ -79,7 +80,7 @@ def test_doctor_flags_mode_is_unaffected():
 # --------------------------------------------------------------------------- #
 
 def _isolate_home_and_cwd(tmp_path, monkeypatch):
-    """`doctor()` calls `load_env(local_mode=True)`, which re-reads
+    """`doctor()` calls `load_env()`, which re-reads
     `./.polyrob`/`~/.polyrob/.env` after a bare ``monkeypatch.delenv`` — on a
     dev box with real credentials configured there, that re-populates the
     exact vars a test just cleared (reproduced live: a first attempt at this

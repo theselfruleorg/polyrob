@@ -144,7 +144,7 @@ def _x402_payer_is_base_exact_only() -> bool:
 CLAIMS = (
     CapabilityClaim(
         id="nft-no-rail",
-        file="data/prompts/skills/treasury-trading/SKILL.md",
+        file="data/prompts/skills/treasury-trading/references/nfts.md",
         phrase="no rail yet",
         still_true=_no_nft_marketplace_integration,
         why="a MARKETPLACE verb (Seaport, Reservoir, or similar buy/sell/list) "

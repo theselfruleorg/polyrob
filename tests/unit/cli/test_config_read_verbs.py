@@ -157,8 +157,8 @@ def test_explain_shows_full_provenance_chain(isolated, monkeypatch):
     res = runner.invoke(config, ["explain", "GOAL_DAILY_QUOTA"])
     assert res.exit_code == 0, res.output
     assert "provenance" in res.output
-    assert "env:process" in res.output       # the running process's value
-    assert "env-file" in res.output          # the file that also holds it
+    assert "env:shell" in res.output         # the running process's value (080 label)
+    assert "env:file" in res.output          # the file that also holds it
     assert "built-in:catalog" in res.output  # the documented default
 
 
@@ -176,7 +176,7 @@ def test_explain_json_carries_the_chain(isolated, monkeypatch):
     assert res.exit_code == 0, res.output
     payload = json.loads(res.output)
     origins = [rung["origin"] for rung in payload["chain"]]
-    assert "env:process" in origins
+    assert "env:shell" in origins
     assert "built-in:catalog" in origins
 
 

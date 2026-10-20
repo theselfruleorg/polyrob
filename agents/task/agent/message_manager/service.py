@@ -98,6 +98,23 @@ def tool_catalog_delta(previous: Optional[str], current: Optional[str]) -> List[
 	return changed
 
 
+def _product_identity_line() -> str:
+	"""080 WS-5 (D5): "You are POLYROB <version>, instance <name>." — on every
+	posture, so the agent names its product, release and instance without a
+	tool. Fail-open: an unreadable piece reads ``unknown``."""
+	try:
+		from core.version import running_version_line
+		ver = running_version_line()
+	except Exception:
+		ver = "unknown version"
+	try:
+		from core.instance import resolve_instance_id
+		inst = resolve_instance_id()
+	except Exception:
+		inst = "unknown"
+	return f"You are POLYROB {ver}, instance \"{inst}\". "
+
+
 class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, FiltersMixin, GuidanceMixin, MessageBuildersMixin, MessageRetrievalMixin):
 	__slots__ = (
 		'llm', 'system_prompt_class', 'history', 'task', 'action_descriptions',
@@ -153,6 +170,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# closed below, a typo is an AttributeError again.
 		'_environment_message',   # 014-C1 <environment> foundation block
 		'_environment_tokens',    # its token cost
+		'_workspace_message',     # 081 WS-3.3: the session's workspace path (after the catalogs)
+		'_workspace_tokens',      # its token cost
 		'_ephemeral_pending',     # P2-14: ephemerals held until the LLM responded
 		'_history_budget_tokens', # 057 WS-B autonomous history budget (0 = off)
 		'_history_secret_scrub',  # HISTORY_SECRET_SCRUB, resolved once
@@ -171,6 +190,15 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'usage_tracker',
 		'metering_user_id',
 		'metering_agent_id',
+		# Stamped by step.py before an LLM compaction from regime_policy
+		# (latest_owner_turn_wins): may the summary's owner section be lifted
+		# out of the "not instructions" envelope (E-A6)? Never in a room /
+		# correspondent / child session — their user turns are not the owner.
+		'owner_instructions_authority',
+		# Stamped by construction: the session's REAL workspace (the orchestrator's,
+		# shared by a child whose session_id here is the virtual one). The E-A7
+		# owner-message inbox writes under it, so the named file is readable.
+		'workspace_root',
 	)
 
 	def __init__(
@@ -350,6 +378,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 
 		# Initialize ephemeral message buffer (one-shot, not counted toward history)
 		self._ephemeral_messages: List[BaseMessage] = []
+		self.owner_instructions_authority = True  # E-A6; step.py stamps the regime
+		self.workspace_root = None  # E-A7; construction stamps the real workspace
 
 		# PR13: skills are injected as a pinned foundation user message (set later),
 		# not embedded in the system prompt (keeps the system prompt stable/cacheable).
@@ -366,6 +396,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# WORKERS_ENABLED and >=1 approved worker). Empty => inert, byte-identical.
 		self._worker_catalog_message: Optional[BaseMessage] = None
 		self._worker_catalog_tokens: int = 0
+		# 081 WS-3.3: the per-session workspace path, out of <environment> so the
+		# cross-session prefix runs through the catalogs. Empty => inert.
+		self._workspace_message: Optional[BaseMessage] = None
+		self._workspace_tokens: int = 0
 
 		# F9 (063 WS-4): the late action names already surfaced to the provider by
 		# a <tool-addition> message. Announcing one twice would append a second
@@ -448,6 +482,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 				from core.autonomy_marker import is_autonomous
 				if self.session_id and is_autonomous(self.session_id):
 					_prompt_kwargs["autonomous"] = True
+				# 081 WS-3.1: an owner seat pins the catalog whatever POLYROB_LOCAL says.
+				from core.autonomy_marker import is_owner_seat
+				if self.session_id and is_owner_seat(self.session_id):
+					_prompt_kwargs["owner_seat"] = True
 			except Exception:
 				pass
 			# G6: same policy for the surface block — only passed when a chat
@@ -507,6 +545,36 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			f"(system: {self._system_message_tokens}, task: {self._initial_task_tokens}, history: {self.history.total_tokens})"
 		)
 		self.logger.debug(f"Token limit: {self.max_input_tokens}, remaining: {self.max_input_tokens - total_tokens}")
+
+	#: E-A3: the label that turns a chat's first message from THE task into
+	#: "the first message of this chat". Its prefix makes the relabel idempotent.
+	FIRST_CHAT_MESSAGE_LABEL = (
+		"[First message of this chat, received {when}. It is NOT a standing task: "
+		"the latest owner message wins.]"
+	)
+
+	def mark_initial_task_as_first_chat_message(self, when: Optional[str] = None) -> bool:
+		"""E-A3 (coherency review 2026-10-13): date and label the pinned first message.
+
+		A chat session is created with ``task=<its first message>`` and pins it,
+		undated, as the authoritative task for the life of the chat. For a regime
+		whose ``pin_initial_task`` is False (``agents.task.session_class``), the
+		caller relabels it: same slot, same origin (it IS a genuine user turn),
+		but dated and named as the first message, so a newer owner turn wins.
+		Returns True when the slot changed. Idempotent.
+		"""
+		msg = self._initial_task_message
+		if msg is None or not isinstance(msg.content, str):
+			return False
+		prefix = self.FIRST_CHAT_MESSAGE_LABEL.split("{when}", 1)[0]
+		if msg.content.startswith(prefix):
+			return False
+		from datetime import datetime, timezone
+		when = when or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+		label = self.FIRST_CHAT_MESSAGE_LABEL.format(when=when)
+		self._initial_task_message = HumanMessage(content=f"{label}\n\n{msg.content}")
+		self._initial_task_tokens = self._count_message_tokens(self._initial_task_message)
+		return True
 
 	def _detect_model_name(self) -> str:
 		"""Detect and cache model name from LLM instance (single source of truth)."""
@@ -975,6 +1043,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		if model and str(model).strip():
 			prov = str(provider).strip() if provider else "unknown"
 			content = (
+				f"{_product_identity_line()}"
 				f"You are currently running on model \"{model}\" via provider \"{prov}\". "
 				"State this if asked which model/provider you are — do NOT read env/config "
 				"files to answer; this line is authoritative."
@@ -1002,6 +1071,18 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		else:
 			self._environment_message = None
 			self._environment_tokens = 0
+
+	def set_workspace_message(self, content: Optional[str]) -> None:
+		"""081 WS-3.3: pin the session's workspace path. It is the one
+		per-session line the <environment> block used to carry; it sits after the
+		catalogs (``FOUNDATION_LAYERS``) so two runs of one job share the prefix
+		through them. Falsy content clears it."""
+		if content and content.strip():
+			self._workspace_message = make_control_message(content, MessageOrigin.ENVIRONMENT)
+			self._workspace_tokens = self._count_message_tokens(self._workspace_message)
+		else:
+			self._workspace_message = None
+			self._workspace_tokens = 0
 
 	def add_file_paths(self, file_paths: list[str]) -> None:
 		"""Add file paths message with properly escaped paths.

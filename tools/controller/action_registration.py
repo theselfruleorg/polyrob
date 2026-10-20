@@ -47,7 +47,7 @@ from tools.controller.emit import (  # noqa: E402
 	_ROUTE_OUTCOME_NOT_DELIVERED,  # noqa: F401  (re-export for existing importers)
 )
 from tools.controller.send_message_route import (  # noqa: E402
-	route_autonomous_send, route_status, third_party_address_refusal,
+	route_autonomous_send, route_status, third_party_address_refusal, annotate_decided_tokens,
 )
 
 
@@ -96,7 +96,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					# Sub-agent: Just log and return - output captured via normal result flow
 					self.logger.debug(f"💬 Sub-agent message (captured in result): {params.text[:100]}...")
 					return ActionResult(extracted_content=f"Message: {params.text}", include_in_memory=True)
-				# 2026-10-09 den→owner-DM: an autonomous "@handle …" line is not for the owner.
+				params.text = annotate_decided_tokens(self, params.text, getattr(execution_context, 'user_id', '') or '')  # 10-17 stale /approve_p; 10-09 @handle guard below
 				_misaddressed = third_party_address_refusal(self, params.text)
 				if _misaddressed is not None:
 					return _misaddressed
@@ -212,7 +212,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						extracted_content=_paused_summary,
 						include_in_memory=True,
 						is_done=True,  # Stop execution, wait for user via continuous chat
-						metadata={'delivery_outcome': _route_outcome}
+						metadata={'delivery_outcome': _route_outcome, 'awaiting_reply': True}
 					)
 
 				# Non-blocking message sent.
@@ -521,8 +521,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		# INSIGHTS_TOOL (default false). Tenant-scoped.
 		self._register_insights_action()
 
-		# I-6: read-only runtime self-introspection (steps/tools/context/wallet+
-		# ledger), gated AGENT_STATUS_TOOL (default false; ON under POLYROB_LOCAL).
+		# I-6: read-only runtime self-introspection, on EVERY posture (080 WS-5);
+		# the wallet/ledger/config detail is gated AGENT_STATUS_TOOL.
 		self._register_agent_status_action()
 
 		# Task 13 (Phase 3 R3): read-only tenant-scoped usage rollup + non-binding
@@ -627,8 +627,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				return False
 
 		async def _run_session_search(params: SessionSearchAction, execution_context=None) -> ActionResult:
-			# Tenant scoping + empty-user_id refusal are enforced in the provider
-			# (_anon_blocked, UP-03); the controller does NOT re-read MEMORY_REQUIRE_USER_ID.
+			# Tenant scoping + anon refusal live in the provider (_anon_blocked, UP-03).
 			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
 			session_id = getattr(execution_context, 'session_id', None) or getattr(self, 'session_id', '')
 
@@ -661,24 +660,24 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					return ActionResult(error=f"Knowledge-base search failed ({e}); nothing was searched.",
 					                    include_in_memory=True)
 
-			try:
-				from modules.memory.registry import memory_search
+			from agents.task.agent.core.memory_prefetch import memory_read_error, recall_reader
+			from modules.memory.registry import memory_search
+			try:  # D2: the reader's regime ranks; D3: a read failure is never "no match"
 				recalled = await memory_search(
 					params.query, session_id=session_id, user_id=user_id,
 					limit=params.limit, sort=params.sort, before_id=params.before_id, with_ids=True,
-				)
+					raise_errors=True, **recall_reader(session_id=session_id, is_sub_agent=bool(
+						getattr(execution_context, 'is_sub_agent', False))))
 			except Exception as e:
-				self.logger.debug(f"session_search failed: {e}")
-				return ActionResult(extracted_content="No memory available.", include_in_memory=False)
+				self.logger.warning(f"session_search failed: {e}")
+				return ActionResult(error=memory_read_error(e), include_in_memory=False)
 			if not recalled or not recalled.strip():
 				label = params.query if params.query else "(recent sessions)"
 				return ActionResult(
 					extracted_content=f"No past-session memory matched: {label!r}",
 					include_in_memory=True,
 				)
-			# W6/UP-06: recalled cross-session content may carry indirect injection
-			# (it can include previously-ingested web/tool output) — frame it as DATA.
-			# session_search is NOT in the automatic untrusted-tool set, so wrap here.
+			# W6/UP-06: recall may carry indirect injection — frame it as DATA (not auto-wrapped).
 			try:
 				from core.security.untrusted_wrap import wrap_untrusted
 				recalled = wrap_untrusted("session_search", recalled)
@@ -757,9 +756,11 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			for e in rows:
 				total += float(e.spend_usd or 0)
 				arts = ", ".join(a.get("path", "") for a in (e.artifacts or [])[:3])
+				skills = ", ".join(((e.meta or {}).get("skills_loaded") or [])[:5])  # 080 WS-5
 				lines.append(
 					f"- {e.kind}:{e.outcome or '?'} ${float(e.spend_usd or 0):.2f} "
-					f"\"{(e.task or '')[:60]}\"" + (f" -> {arts}" if arts else ""))
+					f"\"{(e.task or '')[:60]}\"" + (f" -> {arts}" if arts else "")
+					+ (f" [skills: {skills}]" if skills else ""))
 			body = "\n".join(lines) + f"\n({len(rows)} runs, ${total:.2f} total)"
 			try:
 				from core.security.untrusted_wrap import wrap_untrusted
@@ -828,12 +829,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					return "?"
 
 			if params.action == "read":
-				notes = await prov.curated_read(user_id)
+				try:
+					notes = await prov.curated_read(user_id)
+				except Exception as e:  # D14: never "your curated memory is empty"
+					from agents.task.agent.core.memory_prefetch import memory_read_error
+					return ActionResult(error=memory_read_error(e, "Curated memory"), include_in_memory=False)
 				if notes.strip():
-					# P1-7: curated notes are agent-authored (possibly under injection
-					# influence) and read back in FUTURE sessions — a durable persistence-
-					# laundering channel. Frame as untrusted DATA like every other recall
-					# surface (session_search/kb_search/recent_activity).
+					# P1-7: agent-authored notes read back later — untrusted DATA, like all recall.
 					content = f"## Your curated memory\n{wrap_untrusted('memory', notes)}"
 				else:
 					content = "Your curated memory is empty."
@@ -1001,114 +1003,12 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		except Exception:
 			return
 
-		from typing import Literal as _Literal
+		from tools.controller.skill_manage import (
+			SKILL_MANAGE_DESCRIPTION, SkillManageAction, run_skill_manage)
 
-		class SkillManageAction(BaseModel):
-			action: _Literal["create", "patch", "delete", "promote"]
-			skill_id: str
-			content: Optional[str] = None        # create: full SKILL.md body
-			old_string: Optional[str] = None     # patch: exact text to replace
-			new_string: Optional[str] = None     # patch: replacement
-			replace_all: bool = False
-			description: str = ""
-			expected_revision: Optional[str] = None  # promote/patch CAS token from pending review
-
-		@self.registry.action(
-			"Author your own durable SKILLS (procedures you can reload in future "
-			"sessions). action='create' writes a new SKILL.md (markdown, starts with a "
-			"# heading); action='patch' edits one by exact-string replace; "
-			"action='delete' archives one; action='promote' activates a pending draft "
-			"(owner-only — only the bound owner principal can promote; neither a "
-			"background/sub-agent turn nor a non-owner turn can self-promote). New/edited "
-			"skills are quarantined for review before they activate. Use to capture a "
-			"reusable procedure you just worked out.",
-			param_model=SkillManageAction,
-		)
+		@self.registry.action(SKILL_MANAGE_DESCRIPTION, param_model=SkillManageAction)
 		async def skill_manage(params: SkillManageAction, execution_context=None) -> ActionResult:
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-			if not user_id:
-				return ActionResult(error="skill authoring requires a user (tenant scope).",
-				                    include_in_memory=True)
-
-			# T4-06: every effected skill mutation records a first-class
-			# self_modification event (durable log → /telemetry + /activity). Fail-open.
-			_self_mod_ev = self_mod_emitter(
-				execution_context, self, user_id,
-				kind="skill", source="skill_manage",
-				item_id=params.skill_id, created_by="")
-			# A forged (non-user-initiated) turn must never auto-activate a skill. The
-			# RELIABLE signal is the execution context: the background-review reviewer
-			# (and any delegated worker) runs as a sub-agent / leaf role — those fields
-			# ARE set in _build_execution_context. A self-wake/delegation-result
-			# re-entry into the MAIN agent is additionally detected via
-			# `execution_context.metadata['turn_kind']` being one of `FORGED_TURN_KINDS`
-			# (SK-F10, stamped live from the drained HITL message kind — see
-			# `_is_forged_or_autonomous_turn` above). A sub-agent/leaf author → background_review (ALWAYS
-			# quarantined); a normal interactive main-agent turn → agent (follows
-			# SKILLS_WRITABLE_REQUIRE_REVIEW).
-			from agents.task.agent.skill_writer import PROVENANCE_AGENT, PROVENANCE_BACKGROUND
-			# C7: fold autonomous (goal/cron) runs into "forged" so they can't
-			# auto-activate or self-promote a skill either.
-			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
-			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-			try:
-				from agents.task.agent.skill_manager import get_skill_manager
-				sm = get_skill_manager()
-				if params.action == "promote":
-					return ActionResult(
-						error="Promotion requires the owner to review the draft through /pending; a model tool call cannot approve it.",
-						include_in_memory=True)
-				if params.action == "create":
-					if not params.content:
-						return ActionResult(error="create requires `content`.", include_in_memory=True)
-					res = sm.create_skill(params.skill_id, params.content, user_id=user_id,
-					                      description=params.description, created_by=created_by)
-				elif params.action == "patch":
-					if params.old_string is None or params.new_string is None:
-						return ActionResult(error="patch requires `old_string` and `new_string`.",
-						                    include_in_memory=True)
-					res = sm.patch_skill(params.skill_id, user_id=user_id,
-					                     old_string=params.old_string, new_string=params.new_string,
-					                     replace_all=params.replace_all, created_by=created_by,
-					                     expected_revision=params.expected_revision)
-				else:  # delete
-					ok = sm.delete_skill(params.skill_id, user_id=user_id, created_by=created_by)
-					if ok:
-						forget_activated_skill(self, params.skill_id)  # archived — never re-ack it
-						_self_mod_ev("delete", created_by=created_by)
-					return ActionResult(
-						extracted_content=(f"Archived skill `{params.skill_id}`." if ok
-						                   else f"No skill `{params.skill_id}` to archive."),
-						include_in_memory=True,
-					)
-			except Exception as e:
-				self.logger.debug(f"skill_manage failed: {e}")
-				return ActionResult(error=f"skill_manage failed: {e}", include_in_memory=True)
-
-			if not res.ok:
-				return ActionResult(error=f"Skill rejected: {'; '.join(res.errors)}",
-				                    include_in_memory=True)
-			where = "pending review" if res.pending else "active"
-			# The body just changed: let the next `load_skill` re-emit it instead
-			# of the "already active this session" ack (see forget_activated_skill).
-			forget_activated_skill(self, params.skill_id)
-			_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by)
-			# §7.1: notify the owner when a skill lands in pending (fail-open, gated).
-			if res.pending:
-				try:
-					from core import self_evolution as _se
-					from core.instance import resolve_instance_id as _rii
-					_cfg = getattr(getattr(self, 'container', None), 'config', None)
-					_dd = data_dir_or_home(getattr(_cfg, 'data_dir', None))
-					await _se.maybe_notify_owner_pending(
-						getattr(self, 'container', None), user_id,
-						home_dir=_dd, instance_id=_rii(), skill_manager=sm)
-				except Exception as _e:
-					self.logger.debug(f"self-evolution notify skipped: {_e}")
-			return ActionResult(
-				extracted_content=f"Skill `{params.skill_id}` saved ({where}).",
-				include_in_memory=True,
-			)
+			return await run_skill_manage(self, params, execution_context)
 
 	def _register_message_action(self):
 		"""Register the gated `message` action: resolve the target's tier
@@ -1246,9 +1146,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		  create/patch idiom instead: it is NOT refused for a forged turn, but
 		  `created_by` is forced to `PROVENANCE_BACKGROUND`, which makes the
 		  RULES writer quarantine unconditionally (never active) — the owner
-		  promotes with `/pending`. Since 035 P1-7 it records into `owner.md`,
-		  so a GENUINE owner turn may bind it now (`OWNER_RULES_IMMEDIATE`); a
-		  forged one still cannot, which is what makes that safe.
+		  promotes with `/pending`. Since 035 P1-7 it records into `owner.md`.
+		  A model-written rule is always a draft (``_rules_immediate`` is
+		  False), on a genuine owner turn too: the owner confirms it.
 		- A leaf/sub-agent additionally never sees this tool at all — it is
 		  excluded from the child's registry via
 		  `tools.controller.delegation.delegation_exclusions_for_child`
@@ -1284,11 +1184,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		@self.registry.action(
 			"Manage your typed conversational preferences (approvals, budget caps, "
 			"goal quotas, digest/delivery settings, reply style, session defaults) and "
-			"propose durable operating rules. PREFER THIS over writing prose into an "
-			"identity doc whenever the owner's instruction maps to a typed key "
-			"(e.g. 'be brief' -> style.verbosity, 'write in German' -> style.language): "
-			"a SAFE key applies immediately and is actually enforced at read time, "
-			"while a prose note is only advisory. operation='list' shows every preference "
+			"propose durable operating rules. operation='list' shows every preference "
 			"(effective value/source/applies); operation='get' with `key` shows one; "
 			"operation='explain' with `key` shows the full provenance chain for ANY "
 			"setting (preference or env flag) — use it to answer 'why is X off?'. "
@@ -1297,8 +1193,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			"GUARDED keys (budget/approval ceilings) are NEVER changed directly by you — "
 			"`set` instead queues a proposal for the owner to review (see /pending). "
 			"operation='contract_propose' with `text` records a durable operating "
-			"rule/constraint in the owner's RULES doc (it binds immediately when the "
-			"owner asks for it on this turn, otherwise it is queued for review).",
+			"rule/constraint in the owner's RULES doc as a draft: it is not in force "
+			"until the owner confirms it (see /pending).",
 			param_model=PreferencesAction,
 		)
 		async def preferences(params: PreferencesAction, execution_context=None) -> ActionResult:
@@ -1385,9 +1281,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			#     changes). A GUARDED key never writes active state either way.
 			#   - `contract_propose` (035 P1-7: writes the RULES doc) is allowed to
 			#     PROPOSE on a forged turn, just forced to PROVENANCE_BACKGROUND,
-			#     which makes the writer quarantine unconditionally. Activation is
-			#     decided by OWNER_RULES_IMMEDIATE + a genuine owner turn, not by
-			#     a per-doc review flag.
+			#     which makes the writer quarantine unconditionally. A genuine
+			#     owner turn queues a draft too (`_rules_immediate` is False);
+			#     the owner confirms it.
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
 			_self_mod_ev = self_mod_emitter(
@@ -1681,15 +1577,13 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			self.logger.debug("Sub-agents disabled - skipping subtask action registration")
 			return
 
-		from tools.controller.views import SubtaskAction, ParallelSubtasksAction, DelegateTaskAction
+		from tools.controller.views import DelegateTaskAction
 		from tools.controller.delegation import evaluate_delegation
 
-		# UP-10 2.4: single gated delegation core. subtask / parallel_subtasks /
-		# delegate_task all route through _delegate so the role+depth gate
-		# (evaluate_delegation) is enforced for ALL three verbs — previously only
-		# delegate_task ran the gate, so a leaf could still delegate via subtask.
+		# UP-10 2.4: the single gated delegation core (role+depth gate,
+		# evaluate_delegation).
 		async def _delegate(*, goal=None, tasks=None, role="leaf", profile="executor",
-		                     max_steps=30, background=False, model=None, provider=None,
+		                     background=False, model=None, provider=None,
 		                     execution_context=None, label="delegate_task") -> ActionResult:
 			"""Gated delegation dispatch. Provide goal XOR tasks (list of SubtaskAction).
 
@@ -1769,7 +1663,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				if registry is None:
 					return ActionResult(error="Background delegation not available in this session", include_in_memory=True)
 				deleg = await registry.dispatch(
-					goal=goal, profile=profile, max_steps=max_steps,
+					goal=goal, profile=profile,
 					parent_agent_id=parent_agent_id, caller_is_sub=caller_is_sub,
 				)
 				if deleg.get("status") == "rejected":
@@ -1832,23 +1726,23 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						task=goal,
 						parent_agent_id=parent_agent_id,
 						profile_id=profile,
-						max_steps=max_steps,
 						parent_llm=child_llm,
 						is_parent_sub_agent=caller_is_sub,
 					)
 					if result.success:
-						_head = ("## Delegated goal STOPPED before it finished ⚠️ (the child hit its "
-							"step limit without calling done — the result is partial; check it "
-							"before you rely on it)" if getattr(result, 'finished', None) is False
+						_head = ("## Delegated goal STOPPED before it finished ⚠️ (no done — the child "
+							f"{getattr(result, 'stop_description', 'stop reason unknown')}; the result is "
+							"partial; check it before you rely on it)" if getattr(result, 'finished', None) is False
 							else "## Delegated goal completed ✅")
 						return ActionResult(
 							extracted_content=(
 								f"{_head}\n\n**Goal:** {goal}\n\n"
-								f"**Result:**\n{result.output}"
+								f"**Result:**\n{getattr(result, 'output_text', None) or result.output}"
 							),
 							include_in_memory=True,
 						)
-					return ActionResult(error=f"Delegated goal failed: {result.error}", include_in_memory=True)
+					_why = f" ({result.stop_description})" if getattr(result, 'stop_reason', None) else ""
+					return ActionResult(error=f"Delegated goal failed: {result.error}{_why}", include_in_memory=True)
 
 				# tasks shape -> parallel. Per-task `model` wins; a task without its own
 				# falls back to the top-level `model` (if set), else inherits the parent's
@@ -1865,8 +1759,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						if build_err:
 							return ActionResult(error=build_err, include_in_memory=True)
 					subtask_dicts.append({
-						'task': st.task, 'profile': st.profile, 'max_steps': st.max_steps,
-						'llm': st_llm,
+						'task': st.task, 'profile': st.profile, 'llm': st_llm,
 					})
 				results = await mgr.run_parallel_subtasks(
 					subtasks=subtask_dicts,
@@ -1889,36 +1782,6 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 
 		# Expose the gated core so UP-12 (background delegation) and tests can reach it.
 		self._delegate_core = _delegate
-		# One-shot deprecation notices for the legacy verbs.
-		_deprecation_warned = {"subtask": False, "parallel_subtasks": False}
-		@self.registry.action(
-			'Delegate a subtask to a sub-agent for focused execution '
-			'(deprecated alias of delegate_task; use delegate_task with goal=...)',
-			param_model=SubtaskAction
-		)
-		async def subtask(params: SubtaskAction, execution_context=None) -> ActionResult:
-			"""Deprecated alias — forwards into the gated delegate_task core."""
-			if not _deprecation_warned["subtask"]:
-				_deprecation_warned["subtask"] = True
-				self.logger.info("subtask is deprecated; use delegate_task (goal=...)")
-			return await _delegate(
-				goal=params.task, profile=params.profile, max_steps=params.max_steps,
-				execution_context=execution_context, label="subtask",
-			)
-
-		@self.registry.action(
-			'Run multiple subtasks in parallel using sub-agents '
-			'(deprecated alias of delegate_task; use delegate_task with tasks=[...])',
-			param_model=ParallelSubtasksAction
-		)
-		async def parallel_subtasks(params: ParallelSubtasksAction, execution_context=None) -> ActionResult:
-			"""Deprecated alias — forwards into the gated delegate_task core."""
-			if not _deprecation_warned["parallel_subtasks"]:
-				_deprecation_warned["parallel_subtasks"] = True
-				self.logger.info("parallel_subtasks is deprecated; use delegate_task (tasks=[...])")
-			return await _delegate(
-				tasks=params.subtasks, execution_context=execution_context, label="parallel_subtasks",
-			)
 		# Unified Reference-style delegation surface (roadmap P1): one ergonomic tool
 		# (goal XOR tasks) with an explicit role/depth gate.
 		@self.registry.action(
@@ -1937,8 +1800,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			"""Spawn sub-agent(s) for delegated work, gated by role + depth."""
 			return await _delegate(
 				goal=params.goal, tasks=params.tasks, role=params.role,
-				profile=params.profile, max_steps=params.max_steps,
-				background=params.background, model=params.model, provider=params.provider,
+				profile=params.profile, background=params.background, model=params.model, provider=params.provider,
 				execution_context=execution_context, label="delegate_task",
 			)
 

@@ -20,7 +20,7 @@ def _isolate_defi_data_home(tmp_path, monkeypatch):
     data_home = tmp_path / "data_home"
     data_home.mkdir()
     monkeypatch.setenv("POLYROB_DATA_DIR", str(data_home))
-    # A CLI test earlier in the full run calls load_env(local_mode=True), which
+    # A CLI test earlier in the full run calls load_env(), which
     # leaks the developer's REAL ~/.polyrob/.env (incl. ALCHEMY_API_KEY) into
     # os.environ — alchemy_index.available() then flips true and portfolio tests
     # make LIVE network calls for the fixture holder. Unit tests never network.
@@ -66,4 +66,20 @@ def _no_indexer_network(monkeypatch):
     monkeypatch.setattr("core.wallet.spl_facts._rpc", _blocked, raising=False)
     monkeypatch.setattr("core.wallet.evm_facts._rpc", _blocked, raising=False)
     monkeypatch.setattr("tools.defi.providers.token_audits._get", _blocked, raising=False)
+    yield
+
+
+#: 085 L3: what a plain, extension-free SPL mint reads as on-chain.
+CLEAN_SPL_MINT = {"value": {"data": {"program": "spl-token", "parsed": {
+    "type": "mint", "info": {"decimals": 6, "supply": "0", "isInitialized": True,
+                             "mintAuthority": None, "freezeAuthority": None}}}}}
+
+
+@pytest.fixture(autouse=True)
+def _clean_solana_buy_mint(monkeypatch):
+    """085 L3: a Solana buy reads the bought mint's extensions on-chain. The RPC
+    is blocked above, so every buy test would refuse "could not read the mint";
+    a test of the trap check patches ``_read_mint`` itself."""
+    monkeypatch.setattr("tools.defi.solana_swap_verb._read_mint",
+                        lambda mint: CLEAN_SPL_MINT, raising=False)
     yield

@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "This agent's OWN open positions from the money rail's book, with the arithmetic done: per token the size (measured or quoted), the cost basis (average cost) or 'basis unknown', the current price, value, unrealized P&L in USD and %, realized P&L, and the high-water price. Repeat its figures; never compute or convert a money figure yourself. Reveals own funds — owner-only. For SOMEONE ELSE's wallet use wallet_holdings.",
+    "name": "defi_data_positions",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "071 W3: the rail book, with the arithmetic done.",
+      "properties": {
+        "chain": {
+          "default": null,
+          "description": "Optional — one chain. Omit for every chain the rail book tracks.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

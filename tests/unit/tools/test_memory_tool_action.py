@@ -184,3 +184,21 @@ async def test_scan_failure_blocks_write(tool, provider, monkeypatch):
     r = await _memory_action(tool, action="create", title="t", content="benign")
     assert "Rejected" in r.extracted_content
     assert await provider.note_list("tenant-A") == []
+
+
+@pytest.mark.asyncio
+async def test_d14_read_failure_is_named_not_empty(provider, monkeypatch):
+    """D14 (review 2026-10-13): a curated_read error rendered "Your curated
+    memory is empty."."""
+    monkeypatch.setenv("MEMORY_TOOL_ENABLED", "true")
+
+    async def boom(user_id):
+        raise RuntimeError("disk I/O error")
+    monkeypatch.setattr(provider, "curated_read", boom)
+    c = _controller()
+    c._register_memory_tool_action()
+    action = c.registry.registry.actions["memory"]
+    res = await action.function(action.param_model(action="read"),
+                                execution_context=_owner_ctx())
+    assert res.error and "could not be read (RuntimeError)" in res.error
+    assert "empty" not in (res.extracted_content or "")

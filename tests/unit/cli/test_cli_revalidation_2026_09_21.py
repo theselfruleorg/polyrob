@@ -35,27 +35,11 @@ def test_gate_manager_usage_names_gates_not_approve(tmp_path):
         assert "/approve" not in out, (args, out)
 
 
-def test_approve_alias_still_runs_the_gate_manager(tmp_path):
-    """The deprecated alias must keep WORKING — an owner with the old grammar
-    in muscle memory is answered, and told where it moved."""
-    import io
-
-    from cli.ui.commands.registry import CommandContext
+def test_approve_list_alias_is_deleted():
+    """080: ``/approve list|add|remove`` (the deprecated gate alias) is gone —
+    ``/gates`` is the one gate manager."""
     from cli.ui.commands import h_gates
-    from cli.ui.plain_renderer import PlainRenderer
-    from cli.ui.state import SessionState
-
-    buf = io.StringIO()
-    state = SessionState()
-    ctx = CommandContext(renderer=PlainRenderer(state=state, stream=buf),
-                         state=state, user_id="local", args=["list"])
-    h_gates._HOME_RESOLVER = lambda _c: str(tmp_path)
-    try:
-        h_gates.h_approve(ctx)
-    finally:
-        h_gates._HOME_RESOLVER = None
-    out = buf.getvalue()
-    assert "gate management moved to `/gates`" in out
+    assert not hasattr(h_gates, "_GATE_SUBCOMMANDS")
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +241,7 @@ def test_goals_tree_never_answers_with_a_blank(tmp_path, monkeypatch, capsys):
     res = click.testing.CliRunner().invoke(goals, ["tree"])
     assert res.exit_code == 0, res.output
     assert res.output.strip(), "`goals tree` answered with a blank"
-    assert "no objectives or goals" in res.output
+    assert "no goals" in res.output
 
 
 # ---------------------------------------------------------------------------

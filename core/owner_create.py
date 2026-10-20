@@ -63,14 +63,20 @@ def _clean_tools(tools: Optional[Sequence[Any]]) -> List[str]:
 
 def _normalize_target_in(payload: Dict[str, Any]) -> None:
     """068 G2: validate + normalize ``payload.target_token`` in place, so a bad
-    target is refused at CREATE time (ValueError), not discovered by a run."""
-    from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
-    if PAYLOAD_KEY in payload:
-        target = normalize_target(payload.get(PAYLOAD_KEY))
-        if target:
-            payload[PAYLOAD_KEY] = target
-        else:
-            payload.pop(PAYLOAD_KEY, None)
+    target is refused at CREATE time (ValueError), not discovered by a run.
+
+    Every caller is an owner seat, so a target written here is stamped
+    ``target_authored_by: owner`` — the ONE stamp the identity gate trusts
+    (``buy_target.with_authorship``); an unstamped row is restrict-only."""
+    from core.wallet.buy_target import (OWNER, PAYLOAD_KEY, TARGET_AUTHOR_KEY,
+                                        normalize_target)
+    target = normalize_target(payload.get(PAYLOAD_KEY)) if PAYLOAD_KEY in payload else None
+    if target:
+        payload[PAYLOAD_KEY] = target
+        payload[TARGET_AUTHOR_KEY] = OWNER
+    else:
+        payload.pop(PAYLOAD_KEY, None)
+        payload.pop(TARGET_AUTHOR_KEY, None)
 
 
 def create_goal(board: Any, *, user_id: str, title: str, body: str = "",
@@ -99,9 +105,8 @@ def create_goal(board: Any, *, user_id: str, title: str, body: str = "",
 
     payload: Dict[str, Any] = dict(extra_payload or {})
     _normalize_target_in(payload)
-    # 034 §7 stamp gap: an owner-seat create carried no provenance, so origin()
-    # read it as LEGACY. The owner seat IS the author.
-    payload.setdefault("authored_by", "owner")
+    # 034 §7: an owner-seat create is the owner's grant (origin() reads it).
+    payload.setdefault("owner_granted", True)
     named_tools = _clean_tools(tools)
     if named_tools:
         payload["tools"] = named_tools
@@ -156,10 +161,8 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
         raise ValueError("cron create requires a real (non-anonymous) tenant")
 
     payload: Dict[str, Any] = dict(extra_payload or {})
-    # Every owner seat creates through here: the row is the owner's, stamped
-    # (an UNSTAMPED row has no standing owner authority — ``is_owner_authored``).
-    payload.setdefault("authored_by", "owner")
     _normalize_target_in(payload)
+    payload["actor"] = OWNER_ACTOR  # 085 W8 A4: the dispatch re-check reads it
     named_tools = _clean_tools(tools)
     if named_tools:
         payload["tools"] = named_tools
@@ -173,14 +176,19 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
     return service.schedule(
         task=clean_task, schedule_spec=clean_spec, user_id=user_id,
         payload=payload or None, max_duration_seconds=max_duration_seconds,
-        via=via,
+        via=via, owner_seat=True,  # 0011: every owner seat creates through here
     )
 
 
 #: O13/A14: the ``key=value`` tokens a chat seat's ``/cron add`` accepts — the
 #: SAME grant the console's ``POST /api/webgate/cron`` carries (``tools``), plus
 #: the declared buy target ``cronjob_schedule`` stores (``target`` + ``chain``).
-CRON_OPTION_KEYS = ("target", "chain", "tools")
+#: 085 W3: ``rig``, ``skills`` and ``deliver`` too, so an agent's standing money
+#: work fits on ONE seat line its card carries (``/goal new``, ``/job new``).
+CRON_OPTION_KEYS = ("target", "chain", "tools", "rig", "skills", "deliver")
+
+#: ``payload["actor"]`` of a row an owner seat wrote (``core.tool_grants.ACTOR_OWNER``).
+OWNER_ACTOR = "owner_seat"
 
 
 def split_cron_options(tokens: Sequence[str]):
@@ -205,14 +213,12 @@ def split_cron_options(tokens: Sequence[str]):
 def cron_options_payload(options: Dict[str, str]):
     """``(tools, extra_payload)`` for :func:`create_cron` from parsed options.
 
-    The payload is stamped ``authored_by: owner`` — a chat seat IS the owner
-    (the agent's ``cronjob_schedule`` follows ``owner_authored_turn``). A target needs
-    its chain and a valid address for that chain (``ValueError`` otherwise), so
-    a bad address is refused at create time, never stored.
+    A target needs its chain and a valid address for that chain
+    (``ValueError`` otherwise), so a bad address is refused at create time,
+    never stored. A chat seat IS the owner, so its target is trust.
     """
-    from core.config_policy.rigs import AUTHORED_BY_KEY, OWNER_AUTHOR
-    from core.wallet.buy_target import PAYLOAD_KEY, normalize_target
-    extra: Dict[str, Any] = {AUTHORED_BY_KEY: OWNER_AUTHOR}
+    from core.wallet.buy_target import OWNER, PAYLOAD_KEY, TARGET_AUTHOR_KEY, normalize_target
+    extra: Dict[str, Any] = {}
     target, chain = options.get("target"), options.get("chain")
     if chain and not target:
         raise ValueError("chain= goes with target=0x… (the token the job may buy)")
@@ -220,12 +226,43 @@ def cron_options_payload(options: Dict[str, str]):
         if not chain:
             raise ValueError("target= needs chain=<name> too, e.g. chain=base")
         extra[PAYLOAD_KEY] = normalize_target({"chain": chain, "address": target})
+        extra[TARGET_AUTHOR_KEY] = OWNER
     tools = [t for t in (options.get("tools") or "").split(",") if t.strip()] or None
+    if options.get("rig"):
+        from core.config_policy.rigs import is_rig, rig_names
+        rig = options["rig"].strip().lower()
+        if not is_rig(rig):
+            raise ValueError(f"unknown rig {rig!r}; rigs: {', '.join(rig_names())}")
+        extra["rig"] = rig
+    if options.get("skills"):
+        from core.config_policy.rigs import pinned_skills
+        extra["skills"] = pinned_skills({"skills": options["skills"].split(",")})
+    if options.get("deliver"):
+        extra["deliver"] = options["deliver"].strip().lower()
     return tools, extra
 
 
-#: The job fields a chat seat's ``/cron edit`` changes.
-CRON_EDIT_FIELDS = ("schedule", "task")
+def grant_payload(tokens: Sequence[str]) -> Dict[str, Any]:
+    """085 W3: the payload a seat's ``grant`` line writes onto an existing goal or
+    job (``/goal grant <id> …``, ``/job edit <id> grant …``) — only the
+    :data:`CRON_OPTION_KEYS` words, stamped as the owner's. Raises ValueError for
+    any other word or an empty grant."""
+    rest, options = split_cron_options(tokens)
+    if rest:
+        raise ValueError(f"a grant takes only {'=… '.join(CRON_OPTION_KEYS)}=… words, "
+                         f"not {' '.join(rest)!r}")
+    tools, extra = cron_options_payload(options)
+    if tools:
+        extra["tools"] = _clean_tools(tools)
+    if not extra:
+        raise ValueError("nothing to grant")
+    extra["actor"] = OWNER_ACTOR
+    return extra
+
+
+#: The job fields a chat seat's ``/cron edit`` changes (``grant`` = the
+#: :data:`CRON_OPTION_KEYS` words, 085 W3).
+CRON_EDIT_FIELDS = ("schedule", "task", "grant")
 
 
 def edit_cron(service: Any, job: Any, *, user_id: str, field: str, value: str,
@@ -243,4 +280,7 @@ def edit_cron(service: Any, job: Any, *, user_id: str, field: str, value: str,
         raise ValueError(f"a new {field} is required")
     if field == "schedule":
         return service.edit(job.id, user_id=user_id, via=via, schedule_spec=value)
+    if field == "grant":
+        return service.edit(job.id, user_id=user_id, via=via,
+                            payload_updates=grant_payload(value.split()))
     return service.edit(job.id, user_id=user_id, via=via, old_text=job.task, new_text=value)

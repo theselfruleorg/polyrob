@@ -70,12 +70,11 @@ _SAFE_LOCAL_FLAGS = frozenset({
 # off => the whole group off). Keeping this as one named set makes "autonomy off" a
 # single line a new user understands.
 _AUTONOMY_LOCAL_FLAGS = frozenset({
-    # W1 self-wake re-entry; W2 background review; W4 goal board + planner; W5
+    # W1 self-wake re-entry; W2 background review; W4 goal board; W5
     # curator + note consolidation; W7 insights.
     "SELF_WAKE_ENABLED",
     "BACKGROUND_REVIEW_ENABLED",
     "GOALS_ENABLED",
-    "GOAL_PLANNER_ENABLED",
     "CURATOR_ENABLED",
     "KNOWLEDGE_CURATOR_ENABLED",
     "INSIGHTS_TOOL",

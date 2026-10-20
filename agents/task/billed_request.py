@@ -2,14 +2,34 @@
 from contextlib import asynccontextmanager, contextmanager
 
 from core.billing_context import billed_tool_refusal, is_billed
+from core.config_policy import INTERACTIVE_MAX_STEPS
+
+#: The most steps a billed request may ask for: the interactive default (50).
+#: Never raised for autonomous runs (083 WS-4).
+BILLED_STEP_CEILING = INTERACTIVE_MAX_STEPS
 
 
-def validate_billed_request(request, *, required=False) -> None:
+def clamp_autonomous_billed_steps(request, session_id) -> None:
+    """083 WS-4: a credit-billed tenant's goal/cron run keeps the billed
+    ceiling — the operator's ``AUTONOMOUS_MAX_STEPS`` (150) is clamped to it
+    here instead of refusing the run. An interactive request is untouched
+    (it is refused above the ceiling, as before)."""
+    from agents.task.session_class import is_autonomous_session
+    if not is_autonomous_session(session_id):
+        return
+    ceiling = BILLED_STEP_CEILING
+    if isinstance(request.max_steps, int) and request.max_steps > ceiling:
+        request.max_steps = ceiling
+
+
+def validate_billed_request(request, *, required=False, session_id=None) -> None:
     if not (required or is_billed()):
         return
+    if session_id is not None:
+        clamp_autonomous_billed_steps(request, session_id)
     from modules.llm.billing_guard import require_billable_model
     require_billable_model(request.model, request.provider)
-    ceiling = request.__dataclass_fields__["max_steps"].default
+    ceiling = BILLED_STEP_CEILING
     steps = request.max_steps
     if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= ceiling:
         raise ValueError(f"Billed requests require max_steps between 1 and {ceiling}")

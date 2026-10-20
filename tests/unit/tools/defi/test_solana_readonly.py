@@ -142,7 +142,10 @@ async def test_portfolio_on_solana_reports_holdings(monkeypatch):
                                         pool_count=22, confidence="high"),
         identity_fn=lambda c, a: _ident())
     out = _text(await tool.portfolio(PortfolioParams(chain="solana")))
-    assert "gas (SOL): 0.500000000 SOL" in out
+    # 079 W1: native SOL is money — valued, and counted in `total incl. native`.
+    assert ("SOL (gas + buying power) 0.500000000 ($0.50) — 0.480000000 spendable "
+            "above a 0.02 SOL fee reserve") in out
+    assert "total incl. native: $12.41" in out
     assert "$11.91" in out
     assert "complete" in out.lower()
 

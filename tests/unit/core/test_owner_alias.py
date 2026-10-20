@@ -15,7 +15,7 @@ from core.instance import (
     resolve_owner_telegram_id,
 )
 
-OWNER_TG = "28436760"
+OWNER_TG = "100000001"
 OWNER_ENV = {"POLYROB_OWNER_USER_ID": "rob", "POLYROB_OWNER_TELEGRAM_ID": OWNER_TG}
 
 

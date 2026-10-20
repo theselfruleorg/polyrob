@@ -24,6 +24,8 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional
 
+from core.surfaces.cards import is_go_word, with_go_hint
+
 logger = logging.getLogger(__name__)
 
 #: Chain used when the owner names none — matches the tool default.
@@ -98,7 +100,7 @@ async def identity_reply(user_id: Optional[str], data_dir: str,
         return f"Unknown /identity verb {verb!r}.\n{USAGE}"
 
     execute = False
-    if tokens and tokens[-1].lower() in ("go", "execute", "confirm"):
+    if tokens and is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
 
@@ -140,8 +142,8 @@ async def identity_reply(user_id: Optional[str], data_dir: str,
             return f"The registration did not run: {exc}"
         body = _render(result)
         if not execute and not body.startswith("❌"):
-            body += ("\n\nAdd `go` to mint it: /identity register "
-                     f"on {chain} go\n⚠️ Permanent, and I can only do it once.")
+            body = with_go_hint(body, "\n\nAdd `go` to mint it: /identity register "
+                                f"on {chain} go\n⚠️ Permanent, and I can only do it once.")
         return body
 
     agent_id = agent_id_raw if agent_id_raw is not None else existing
@@ -165,8 +167,8 @@ async def identity_reply(user_id: Optional[str], data_dir: str,
         return f"The update did not run: {exc}"
     body = _render(result)
     if not execute and not body.startswith("❌"):
-        body += ("\n\nAdd `go` to publish it: /identity set-uri "
-                 f"on {chain} id {agent_id_int} go")
+        body = with_go_hint(body, "\n\nAdd `go` to publish it: /identity set-uri "
+                            f"on {chain} id {agent_id_int} go")
     return body
 
 

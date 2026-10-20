@@ -1,0 +1,74 @@
+{
+  "function": {
+    "description": "Author your own durable SKILLS (procedures you can reload in future sessions). create: a new SKILL.md (markdown, a # heading) plus when = the index line that says when to load it (<= 60 chars). patch: exact-string replace. edit: replace the whole body. delete: archive. patch/edit/delete need expected_sha256 = the sha256 load_skill returned for the body you read. rollback: restore an archived revision (to_sha, default the one the last change replaced). A background delete names absorbed_into. promote is owner-only. New and edited skills wait for review before they activate; a bundled skill's fix waits for the owner.",
+    "name": "skill_manage",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "absorbed_into": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "create",
+            "patch",
+            "edit",
+            "delete",
+            "rollback",
+            "promote"
+          ],
+          "type": "string"
+        },
+        "content": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "type": "string"
+        },
+        "expected_sha256": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "new_string": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "old_string": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "replace_all": {
+          "default": false,
+          "type": "boolean"
+        },
+        "skill_id": {
+          "type": "string"
+        },
+        "to_sha": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "when": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "skill_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

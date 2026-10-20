@@ -124,9 +124,17 @@ def test_finding_after_a_failed_step_is_marked_unverified():
     _step(h, 2, "The changelog file is not on disk; it never existed.", [SimpleNamespace(error=None)])
     _step(h, 3, "Wrote the summary to reports/summary.md.", [SimpleNamespace(error=None)])
     f = h.task_context_manager.findings
-    assert f[0].startswith("[unverified] ")
+    # D16: step 1's brain memory was written BEFORE its own failing action ran
+    assert not f[0].startswith("[unverified]")
     assert f[1].startswith("[unverified] ")  # the brain saw step 1's failure
     assert not f[2].startswith("[unverified]")
+
+
+def test_a_step_without_brain_memory_writes_no_finding():
+    """No raw tool result (`Error: …` / `Found: …`) is written as a finding."""
+    h = _host()
+    _step(h, 1, "", [SimpleNamespace(error="File not found: c.md", extracted_content=None)])
+    assert h.task_context_manager.findings == [None]
 
 
 def test_strategic_clue_is_not_promoted_to_cross_session_memory():
@@ -137,7 +145,7 @@ def test_strategic_clue_is_not_promoted_to_cross_session_memory():
     session = SimpleNamespace(memory=SimpleNamespace(phase_memories=[pm]))
     tcm = object.__new__(TaskContextManager)
     tcm._sessions = {"s1": session}
-    assert tcm.drain_promoted_findings("s1") == ["Real finding about the repo."]
+    assert tcm.drain_promoted_findings("s1") == []
 
 
 # --- step telemetry: a failed read is not a read -----------------------------
@@ -164,3 +172,36 @@ def test_files_read_counts_only_successful_actions():
                            include_in_memory=False)]
     asyncio.run(h._emit_step_telemetry(mo, None, res))
     assert captured["files_read"] == ["reports/ok.md"]
+
+
+# --- D6: the reflection summary keeps [unverified] ---------------------------
+
+def test_d6_reflection_over_an_unverified_input_keeps_the_marker():
+    from modules.memory.task.reflection_service import ReflectionService
+    seen = {}
+
+    class _LLM:
+        async def ainvoke(self, msgs, tools=None):
+            seen["prompt"] = msgs[0].content
+            return SimpleNamespace(content="Discovery: report.md does not exist.")
+    svc = ReflectionService(enabled=True, llm=_LLM(), meter_ctx={})
+    out = svc.consolidate(["[unverified] report.md never existed in the workspace",
+                           "Read the README."])
+    assert out.startswith("[unverified] ")
+    assert "keep the [unverified] marker" in seen["prompt"]
+    clean = svc.consolidate(["Read the README.", "Bridge arrived."])
+    assert not clean.startswith("[unverified]")
+
+
+def test_d6_unverified_summary_is_drained_with_the_marker_first(monkeypatch):
+    from core.config import BotConfig
+    from modules.memory.task.task_context_manager import TaskContextManager
+    tcm = TaskContextManager(name="d6", config=BotConfig())
+    tcm.create_session("s6", task="t")
+    tcm.add_step_memory("s6", 1, {"phase": "p1", "memory": "x"}, "a",
+                        finding="[unverified] file never existed")
+    monkeypatch.setattr(TaskContextManager, "_llm_consolidate",
+                        lambda self, f, session_id="": "[unverified] The file does not exist.")
+    tcm._trigger_reflection("s6", "discovery")
+    drained = tcm.drain_promoted_findings("s6")
+    assert "[unverified] [phase-summary:discovery] The file does not exist." in drained

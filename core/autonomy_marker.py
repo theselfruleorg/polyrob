@@ -16,7 +16,7 @@ the same "owner intent does not stick" failure one layer down.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Optional
+from typing import Any, Optional
 
 _MAX = 512
 #: session_id -> the goal id it is running (or None for a cron/planner run that
@@ -70,52 +70,89 @@ def cron_job_for_session(session_id: Optional[str]) -> Optional[str]:
     return _CRON_JOBS.get(session_id)
 
 
-#: cron job id -> the job's task text, recorded ONLY for an OWNER-authored job
-#: (CHAT-5). A standing owner instruction ("moderate The Public Den") is the
-#: authority an autonomous run carries for that room; an agent-authored job
-#: carries none. Server-side only, like the rest of this registry.
-_OWNER_JOBS: "OrderedDict[str, str]" = OrderedDict()
+#: cron job id -> the job's task text (CHAT-5). A standing instruction
+#: ("moderate The Lobby") is the authority an autonomous run carries for
+#: that room. Server-side only, like the rest of this registry.
+_JOBS: "OrderedDict[str, str]" = OrderedDict()
 
 
-def note_owner_job(job_id: Optional[str], task: Optional[str]) -> None:
-    """Record an owner-authored cron job's task text (the cron runner calls this)."""
-    if not job_id or not task:
+#: cron job id -> its ``payload.post_spacing_hours`` (packs/x/polyrob_x/post_spacing.py).
+_JOB_SPACING: "OrderedDict[str, float]" = OrderedDict()
+
+
+def note_job(job_id: Optional[str], task: Optional[str], *,
+             post_spacing_hours: Any = None) -> None:
+    """Record a cron job's task text and post spacing (the cron runner calls this)."""
+    if not job_id:
         return
-    _OWNER_JOBS[job_id] = str(task)
-    _OWNER_JOBS.move_to_end(job_id)
-    while len(_OWNER_JOBS) > _MAX:
-        _OWNER_JOBS.popitem(last=False)
+    try:
+        spacing = float(post_spacing_hours) if post_spacing_hours is not None else 0.0
+    except (TypeError, ValueError):
+        spacing = 0.0
+    if spacing > 0:
+        _JOB_SPACING[job_id] = spacing
+        _JOB_SPACING.move_to_end(job_id)
+        while len(_JOB_SPACING) > _MAX:
+            _JOB_SPACING.popitem(last=False)
+    else:
+        _JOB_SPACING.pop(job_id, None)
+    if not task:
+        return
+    _JOBS[job_id] = str(task)
+    _JOBS.move_to_end(job_id)
+    while len(_JOBS) > _MAX:
+        _JOBS.popitem(last=False)
 
 
-#: goal id -> the goal's text, recorded ONLY for an OWNER-authored goal (the
-#: goal dispatcher calls :func:`note_owner_goal`). An owner-authored standing
-#: goal carries the same standing authority as an owner-authored cron job; an
-#: agent-authored (or unstamped) goal is never recorded.
-_OWNER_GOALS: "OrderedDict[str, str]" = OrderedDict()
+def post_spacing_for_job(job_id: Optional[str]) -> Optional[float]:
+    """The job's minimum hours between its own posts, or None (no rule)."""
+    return _JOB_SPACING.get(job_id) if job_id else None
 
 
-def note_owner_goal(goal_id: Optional[str], text: Optional[str]) -> None:
-    """Record an owner-authored goal's text (the goal dispatcher calls this)."""
+#: goal id -> the goal's text (the goal dispatcher calls :func:`note_goal`). A
+#: standing goal carries the same standing authority as a cron job.
+_GOALS: "OrderedDict[str, str]" = OrderedDict()
+
+
+def note_goal(goal_id: Optional[str], text: Optional[str]) -> None:
+    """Record a goal's text (the goal dispatcher calls this)."""
     if not goal_id or not text:
         return
-    _OWNER_GOALS[goal_id] = str(text)
-    _OWNER_GOALS.move_to_end(goal_id)
-    while len(_OWNER_GOALS) > _MAX:
-        _OWNER_GOALS.popitem(last=False)
+    _GOALS[goal_id] = str(text)
+    _GOALS.move_to_end(goal_id)
+    while len(_GOALS) > _MAX:
+        _GOALS.popitem(last=False)
 
 
-def forget_owner_goal(goal_id: Optional[str]) -> None:
-    """Drop a goal's owner record (a run of an agent-authored goal re-checks)."""
-    if goal_id:
-        _OWNER_GOALS.pop(goal_id, None)
-
-
-def owner_job_task_for_session(session_id: Optional[str]) -> Optional[str]:
-    """The task text of the OWNER-authored cron job or goal this session runs,
-    or None (an agent-authored job or goal, a planner run, an interactive
-    session)."""
+def job_task_for_session(session_id: Optional[str]) -> Optional[str]:
+    """The task text of the cron job or goal this session runs, or None (a
+    planner run, an interactive session)."""
     job = cron_job_for_session(session_id)
     if job:
-        return _OWNER_JOBS.get(job)
+        return _JOBS.get(job)
     goal = goal_for_session(session_id)
-    return _OWNER_GOALS.get(goal) if goal else None
+    return _GOALS.get(goal) if goal else None
+
+
+#: 081 WS-3.1: the OWNER's interactive chat seats — a session of the owner
+#: principal that is not a room, not a correspondent session and not an
+#: autonomous run (``agents.task.session_class.stamp_owner_seat`` decides and
+#: stamps it before the session's Controller is built). Such a session runs on a
+#: narrow eager rig, so it always pins the ``<tool-catalog>`` + ``load_tool`` and
+#: reaches a late tool through the ``tool_call`` bridge — the same shape as a
+#: cron run (``tools/late_tool_mode.py``). Not an authority: it grants nothing.
+_OWNER_SEATS: "OrderedDict[str, None]" = OrderedDict()
+_MAX_SEATS = 4096
+
+
+def mark_owner_seat(session_id: Optional[str]) -> None:
+    if not session_id:
+        return
+    _OWNER_SEATS[session_id] = None
+    _OWNER_SEATS.move_to_end(session_id)
+    while len(_OWNER_SEATS) > _MAX_SEATS:
+        _OWNER_SEATS.popitem(last=False)
+
+
+def is_owner_seat(session_id: Optional[str]) -> bool:
+    return bool(session_id) and session_id in _OWNER_SEATS

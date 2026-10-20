@@ -20,8 +20,7 @@ TREES = ("agents", "tools", "cli", "surfaces", "core", "polyrob", "cron", "api",
          "modules", "scripts")
 BOARD_FILE = "agents/task/goals/board.py"
 # The GoalBoard store mixins (W9 split) are the board too: their ``self.create(`` counts.
-BOARD_FILES = (BOARD_FILE, "agents/task/goals/board_asks.py", "agents/task/goals/board_deps.py",
-               "agents/task/goals/board_objectives.py", "agents/task/goals/board_planner.py")
+BOARD_FILES = (BOARD_FILE, "agents/task/goals/board_asks.py", "agents/task/goals/board_deps.py")
 
 
 def _tracked():
@@ -62,7 +61,7 @@ def test_every_board_create_names_its_actor():
     assert sites, "the scan found no board.create call sites — the scanner is broken"
     missing = [f"{rel}:{line}" for rel, line, kws in sites if "actor" not in kws]
     assert not missing, (
-        "board.create(...) without actor= — name the writer (owner_seat / agent / rail / "
+        "board.create(...) without actor= — name the writer (owner_seat / agent / "
         "none) so core.tool_grants.assert_grantable can judge payload.tools:\n"
         + "\n".join(missing))
 
@@ -72,5 +71,5 @@ def test_known_writers_are_covered():
     files = {rel for rel, _l, _k in _create_sites()}
     for rel in ("tools/goal_tools.py", "cli/commands/goals.py",
                 "surfaces/telegram/owner_ops.py", "core/owner_create.py",
-                "agents/task/goals/rails.py", BOARD_FILE):
+                "agents/task/goals/board_asks.py"):
         assert rel in files, rel

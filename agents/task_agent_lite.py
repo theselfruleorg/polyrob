@@ -38,7 +38,7 @@ from agents.task.task_agent_support import (  # noqa: F401  (re-exported: existi
     _resolve_chat_runtime,
     _resolve_session_runtime,
     build_session_metadata, bind_memory_scope, memory_scope_fields,
-    room_session_source,
+    room_session_source, INTERACTIVE_MAX_STEPS,
     _spawn_detached,
     task_unavailable_message,
 )
@@ -408,7 +408,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 model=request.get('model'),
                 provider=request.get('provider'),
                 tools=request.get('tools') or default_session_tools(),
-                max_steps=request.get('max_steps', 50),
+                max_steps=request.get('max_steps', INTERACTIVE_MAX_STEPS),
                 temperature=request.get('temperature', 0.0),
                 use_vision=request.get('use_vision', True),
                 session_config=request.get('session_config'),
@@ -418,7 +418,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
 
         from agents.task.billed_request import credit_billing_required, validate_billed_request
         credit_billed = await credit_billing_required(self.container, user_id)
-        validate_billed_request(session_request, required=credit_billed)
+        validate_billed_request(session_request, required=credit_billed, session_id=session_id)
 
         # A caller-supplied ID must not replace another tenant's session.
         self._assert_session_owner(session_id, user_id)
@@ -445,9 +445,11 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             except Exception as e:
                 logger.debug(f"Webview streaming unavailable, running headless: {e}")
 
+        from agents.task.session_class import stamp_owner_seat  # 081 WS-3.1: before the Controller is built
+        stamp_owner_seat(session_id=actual_id, user_id=user_id, public=room_session_source(kwargs.get("session_source")),
+                         correspondent=resolve_creator(kwargs.get("creator"), kwargs.get("session_source")) == "correspondent")
         orchestrator = SessionOrchestrator(
-            session_id=actual_id,
-            user_id=user_id,
+            session_id=actual_id, user_id=user_id,
             container=self.container,  # Pass container for tools
             on_stream_chunk=stream_callback,
         )
@@ -462,11 +464,10 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         orchestrator._money_target, orchestrator._recall_seed = (session_request.money_target, session_request.recall_seed)  # 068 G2; B1
         bind_memory_scope(actual_id, session_request)  # 025: goal/cron memory scope
         # H16: a session created FOR a correspondent (conversation resume) is
-        # third-party-facing for its whole life — owner-only state (the owner
-        # thread tail, owner asks) never enters it. Restored from `creator` on
-        # recreate (task_agent_delivery), like `_public_session`.
+        # third-party-facing for life, owner-only state never enters it (restored from `creator` on recreate).
         orchestrator._correspondent_session = (
             resolve_creator(kwargs.get("creator"), kwargs.get("session_source")) == "correspondent")
+        from agents.task.agent.core.user_ingress import opening_owner_text; orchestrator._owner_turn_text = opening_owner_text(kwargs, session_request.task, public=orchestrator._public_session)  # noqa: E702 — 085 W3 (A1): turn 1's typed words
 
         # P1b-2: bind this session's orchestrator to the Singular Chat outbound bus
         # BEFORE initialize() — _register_stream_callback captures the router+key by
@@ -487,10 +488,9 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         except Exception as e:
             logger.debug(f"chat-surface bind skipped: {e}")
 
-        # Initialize orchestrator with tools. A surface may pass an explicit
-        # `tool_ids` override (e.g. the telegram owner-interactive toolset) WITHOUT
-        # going through the request-dict path, so provider/model resolution stays
-        # untouched. 044 T5 fix round 1: an explicit override is AUTHORITATIVE
+        # Initialize orchestrator with tools. A surface may pass an explicit `tool_ids`
+        # override (the telegram owner toolset) WITHOUT the request-dict path, so
+        # provider/model resolution stays untouched. 044 T5 fix round 1: an explicit override is AUTHORITATIVE
         # including an EMPTY list (`or` treated `[]` as falsy and widened a
         # locked-down `GROUP_TURN_TOOLS=""` room back to `filesystem` read/write).
         # Only None — no kwarg at all — falls through to the request-dict toolset.
@@ -777,7 +777,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             results = await orchestrator.execute_session(
                 agent_sequence=[agent.agent_id],
                 max_steps_per_agent={
-                    agent.agent_id: request.get('max_steps', 100)
+                    agent.agent_id: request.get('max_steps', INTERACTIVE_MAX_STEPS)
                 }
             )
 

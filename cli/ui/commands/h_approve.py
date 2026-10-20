@@ -1,8 +1,8 @@
 """h_approve.py — the approval-GATE manager behind ``/gates`` (owner-UX P2 T4).
 
 ⚠️ The verb is ``/gates``, not ``/approve`` (C5, 2026-09-21): ``/approve``
-now DECIDES a pending item on every seat, and ``/approve list|add|remove``
-survives only as a deprecated alias routed here by ``h_gates.py``. Every
+now DECIDES a pending item on every seat (its old ``list|add|remove``
+alias is deleted, 080). Every
 usage/error line this module emits therefore names ``/gates`` — a remedy
 that names the retired grammar is the defect C5 existed to remove.
 

@@ -643,6 +643,12 @@ class PathManager:
                     break
 
             if session_exists:
+                # A thread that is creating this session records its user BEFORE
+                # it makes the directory (below), so look once more: the dir we
+                # just saw may be that thread's.
+                with self._cache_lock:
+                    user_id = self._user_session_cache.get(clean_id)
+            if session_exists and user_id is None:
                 # Session exists but we can't determine user - CRITICAL ERROR
                 import traceback
                 stack = traceback.extract_stack()
@@ -654,7 +660,7 @@ class PathManager:
                 )
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            else:
+            elif user_id is None:
                 # Session doesn't exist - fallback to default user is OK
                 import traceback
                 stack = traceback.extract_stack()
@@ -670,12 +676,13 @@ class PathManager:
         # Create the session path (NEW: Direct under user, no "sessions" subdirectory)
         session_root = user_root / clean_id
 
-        # Ensure directory exists
-        self.ensure_directory_exists(session_root)
-        
-        # If we found this session, update the cache
+        # Record the user BEFORE the directory exists: a concurrent first call
+        # that sees the new directory then finds its user (see above).
         with self._cache_lock:
             self._user_session_cache[clean_id] = user_id
+
+        # Ensure directory exists
+        self.ensure_directory_exists(session_root)
         
         return session_root
     

@@ -3,10 +3,11 @@ name: token-identity
 description: 'Resolve a token to ONE contract address before any trade: trusted address sources, token_resolve candidates, token_info verified line, the one-symbol-two-contracts warning, owner pins, and the swap identity refusals. Read before buying anything named only by a ticker.'
 license: MIT
 metadata:
+  polyrob-when: 'A token named by ticker only: find its address first'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["defi_data_token_resolve","defi_data_token_info"],"keywords":["token address","contract address","which contract","token_resolve","pin a token","pin-token","look-alike","lookalike","ticker collision","same symbol","one symbol","verify the token","wrong token"],"task_patterns":["(resolve|verify|confirm|check).*(token|contract) address","(buy|swap|trade).*(by|from) (ticker|symbol)","\\b(buy|sell|swap|ape into)\\b.*\\b(usdc|usdg|usdt|eth|weth|sol|wsol|btc|wbtc|pnl|tokens?|coins?|memecoins?|meme coins?)\\b"],"tool_ids":["defi_trade","defi_data"]}'
-  polyrob-version: '3'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-version: '4'
 ---
 # Token Identity — which contract you mean
 
@@ -85,7 +86,7 @@ him to one.
 ## The procedure
 
 1. **Take the address from a source you trust, in this order:** our own launch;
-   the job's owner-authored `target_token`; a token `token_info` reports as
+   a `target_token` the owner typed or wrote from a seat; a token `token_info` reports as
    `verified` (canonical, owner approved, owner pin); your own ledger row for a
    position you hold. A cron or goal text that names only a symbol is NOT an
    address source — do not guess; the identity check asks the owner for you.

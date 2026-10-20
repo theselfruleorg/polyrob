@@ -53,20 +53,6 @@ def test_pinned_provider_becomes_primary_over_dead_openrouter(monkeypatch):
     assert mgr.primary_client_name == "zai-coding_client"
 
 
-def test_chat_provider_outranks_default_provider(monkeypatch):
-    """CHAT_PROVIDER is the higher-precedence operator pin."""
-    monkeypatch.setenv("CHAT_PROVIDER", "zai-coding")
-    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
-    mgr = _manager_with_clients(
-        monkeypatch,
-        clients=["openrouter_client", "zai-coding_client"],
-    )
-    import asyncio
-
-    asyncio.run(mgr._set_primary_client())
-    assert mgr.primary_client_name == "zai-coding_client"
-
-
 def test_unkeyed_or_absent_pinned_provider_falls_through_to_order(monkeypatch):
     """A pin whose client isn't registered must fall through to the hardcoded
     order (fail-open, never pick a missing client)."""

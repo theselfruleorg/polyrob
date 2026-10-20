@@ -132,51 +132,12 @@ def _action_fn(c: Controller, name: str):
     return c.registry.registry.actions[name].function
 
 
-@pytest.mark.asyncio
-async def test_legacy_subtask_leaf_denied(monkeypatch):
-    """A leaf caller hitting the deprecated `subtask` verb is now refused (was
-    allowed by the old inline check, which had no role concept)."""
+def test_legacy_aliases_are_gone(monkeypatch):
     c = _controller(enabled=True, monkeypatch=monkeypatch)
     c._register_subtask_action()
-    from tools.controller.views import SubtaskAction
-
-    res = await _action_fn(c, "subtask")(
-        SubtaskAction(task="a sufficiently long delegated subtask description"),
-        execution_context=_ctx(role="leaf", is_sub=True),
-    )
-    assert res.error  # denied via evaluate_delegation
-    assert not c._fake_mgr.run_subtask_calls
-
-
-@pytest.mark.asyncio
-async def test_legacy_subtask_orchestrator_spawns(monkeypatch):
-    c = _controller(enabled=True, monkeypatch=monkeypatch)
-    c._register_subtask_action()
-    from tools.controller.views import SubtaskAction
-
-    res = await _action_fn(c, "subtask")(
-        SubtaskAction(task="a sufficiently long delegated subtask description"),
-        execution_context=_ctx(role="orchestrator"),
-    )
-    assert res.error is None
-    assert c._fake_mgr.run_subtask_calls
-
-
-@pytest.mark.asyncio
-async def test_legacy_parallel_leaf_denied(monkeypatch):
-    c = _controller(enabled=True, monkeypatch=monkeypatch)
-    c._register_subtask_action()
-    from tools.controller.views import ParallelSubtasksAction
-
-    res = await _action_fn(c, "parallel_subtasks")(
-        ParallelSubtasksAction(subtasks=[
-            {"task": "scrape source one thoroughly please"},
-            {"task": "scrape source two thoroughly please"},
-        ]),
-        execution_context=_ctx(role="leaf", is_sub=True),
-    )
-    assert res.error  # denied via evaluate_delegation
-    assert not c._fake_mgr.run_parallel_calls
+    names = set(c.registry.registry.actions)
+    assert "delegate_task" in names
+    assert not {"subtask", "parallel_subtasks"} & names
 
 
 # --- UP-12: background delegation handler branch ----------------------------
@@ -267,6 +228,6 @@ def test_prompt_teaches_only_delegate_task():
         section = inst._get_subtask_section()
     finally:
         TimeoutConfig.get_sub_agents_enabled = orig
-    assert "delegate_task(" in section
+    assert "delegate_task" in section
     assert "subtask(task" not in section
     assert "parallel_subtasks(subtasks" not in section

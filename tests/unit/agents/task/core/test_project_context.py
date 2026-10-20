@@ -1073,3 +1073,47 @@ class TestNamedTruncationSharedHelper:
         content = "small"
         assert named_truncation(content, 1000, way_out="x", keep_tail_ratio=0.2) is content
         assert named_truncation(content, 0, way_out="x") is content
+
+
+class TestCodeRootNeverAutoloads:
+    """C-2 / A-3 (2026-10-14 review): prod runs POLYROB_LOCAL=1 from /opt/polyrob,
+    so the local tier injected the repo's own developer AGENTS.md as TRUSTED
+    steering into every session. The code root is never the owner's project."""
+
+    def test_the_repo_root_is_the_code_root(self):
+        from agents.task.agent.core.project_context import code_root, is_code_root_dir
+        root = code_root()
+        assert (root / "agents" / "task").is_dir()
+        assert is_code_root_dir(str(root))
+        assert is_code_root_dir(str(root / "agents"))
+        assert not is_code_root_dir(str(root.parent))
+
+    def test_local_from_the_code_root_reads_the_workspace_as_data(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import (
+            build_project_context_message, code_root,
+        )
+        assert (code_root() / "AGENTS.md").is_file()  # the file that leaked on prod
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "AGENTS.md").write_text("WORKSPACE_NOTE", encoding="utf-8")
+        msg = build_project_context_message(
+            local=True, autoload=True, server_mode=False,
+            cwd=str(code_root()), workspace_dir=str(ws),
+        )
+        assert msg is not None and "WORKSPACE_NOTE" in msg
+        assert "Branching policy" not in msg
+        assert msg.lstrip().startswith("<untrusted_tool_result")
+
+    def test_local_from_the_code_root_without_a_workspace_loads_nothing(self):
+        from agents.task.agent.core.project_context import (
+            build_project_context_message, code_root,
+        )
+        assert build_project_context_message(
+            local=True, autoload=True, server_mode=False,
+            cwd=str(code_root()), workspace_dir=None,
+        ) is None
+
+    def test_local_in_a_user_project_is_unchanged(self, tmp_path: Path):
+        from agents.task.agent.core.project_context import resolve_project_context_root
+        assert resolve_project_context_root(
+            local=True, cwd=str(tmp_path), workspace_dir="/ws") == str(tmp_path)

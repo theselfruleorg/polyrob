@@ -14,10 +14,8 @@ One name, one meaning:
   over ``all_pending``), so no two seats can disagree about what a decision is.
 * ``/approve``             lists the pending union (nothing to guess at).
 * ``/approve all``         decides the whole union (``decide_all_pending``).
-* ``/gates list|add|remove`` is the gate manager, under its own name.
-* ``/approve list|add|remove`` still works and prints the new name — a
-  DEPRECATED ALIAS, because an owner with the old grammar in muscle memory must
-  not be answered with "unknown subcommand".
+* ``/gates list|add|remove`` is the gate manager, under its own name. The old
+  ``/approve list|add|remove`` alias is deleted (080): ``/approve`` decides.
 
 The gate logic itself is unchanged and still lives in ``h_approve.py``
 (``cmd_approve``); this module only routes.
@@ -27,14 +25,6 @@ from __future__ import annotations
 from typing import Any, Callable, List
 
 from cli.ui import candy
-
-#: The three gate subcommands, kept reachable under ``/approve`` as a
-#: deprecated alias so no existing habit breaks silently.
-_GATE_SUBCOMMANDS = ("list", "add", "remove")
-
-_DEPRECATION = ("note: gate management moved to `/gates` — "
-                "`/approve` now approves what is waiting on you.")
-
 
 def _owner_home(ctx) -> str:
     """The ONE owner/admin home seam (031 deployed-home rule)."""
@@ -106,18 +96,12 @@ def _list_pending(ctx) -> str:
 
 
 def h_approve(ctx) -> None:
-    """``/approve [<id>|all|list|add|remove …]`` — decide, or the gate alias."""
+    """``/approve [<id>|all]`` — decide what is waiting on you."""
     args = list(getattr(ctx, "args", None) or [])
     if not args:
         ctx.emit(_list_pending(ctx), title="approve")
         return
-    first = args[0].lower()
-    if first in _GATE_SUBCOMMANDS:
-        # Deprecated alias — run it, and say where it lives now.
-        out = _gates_body(ctx, args)
-        ctx.emit(f"{out}\n\n{_DEPRECATION}", title="gates")
-        return
-    if first == "all":
+    if args[0].lower() == "all":
         ctx.emit(_decide_all(ctx), title="approve")
         return
     try:

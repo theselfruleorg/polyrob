@@ -100,7 +100,8 @@ def completed_via_done(orchestrator: Any) -> Optional[bool]:
 
 
 async def _resume_existing_session(task_agent: Any, session_id: str, *,
-                                   user_id: str, note: Optional[str]) -> Optional[str]:
+                                   user_id: str, note: Optional[str],
+                                   max_steps: Optional[int] = None) -> Optional[str]:
     """Make *session_id* live again and inject *note*, or return None (057 WS-C B9).
 
     Returns None — never raises — for every "cannot resume" shape: no session
@@ -120,6 +121,8 @@ async def _resume_existing_session(task_agent: Any, session_id: str, *,
         logger.warning("resume refused: session %s belongs to %s, not %s",
                        session_id, owner, user_id)
         return None
+    if max_steps:
+        _refresh_step_cap(task_agent, session_id, info, int(max_steps))
     resolve = getattr(task_agent, "_resolve_or_recreate", None)
     if not callable(resolve):
         return None
@@ -133,6 +136,23 @@ async def _resume_existing_session(task_agent: Any, session_id: str, *,
     if note:
         _inject_resume_note(orchestrator, note)
     return session_id
+
+
+def _refresh_step_cap(task_agent: Any, session_id: str, info: dict, max_steps: int) -> None:
+    """083: a resumed run gets the step cap of THIS dispatch, not the one stored
+    in the session — a pre-083 goal session stored its model-chosen budget, and
+    a re-entry reply narrows the stored request to the chat budget. Fail-open."""
+    try:
+        req = dict(info.get("request") or {})
+        if req.get("max_steps") == max_steps:
+            return
+        req["max_steps"] = max_steps
+        updater = getattr(task_agent.session_manager, "update_session_request", None)
+        if callable(updater):
+            updater(session_id, req)
+        info["request"] = req
+    except Exception:
+        logger.debug("resume: step-cap refresh failed for %s", session_id, exc_info=True)
 
 
 def _inject_resume_note(orchestrator: Any, note: str) -> None:
@@ -233,7 +253,8 @@ async def run_task_to_outcome(
     resume_note = request.pop("resume_note", None) if isinstance(request, dict) else None
     if resume_sid:
         resumed = await _resume_existing_session(
-            task_agent, str(resume_sid), user_id=user_id, note=resume_note)
+            task_agent, str(resume_sid), user_id=user_id, note=resume_note,
+            max_steps=request.get("max_steps") if isinstance(request, dict) else None)
         if resumed:
             if autonomous:
                 from core.autonomy_marker import mark_autonomous

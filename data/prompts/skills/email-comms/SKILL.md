@@ -3,9 +3,9 @@ name: email-comms
 description: Compose, triage and reply to email and short comms
 license: MIT
 metadata:
+  polyrob-when: 'Writing, sorting or answering email'
   polyrob-priority: '4'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["email","send a message","reply to","draft email","follow up","compose email","inbox"],"task_patterns":["(send|draft|reply|compose).*email","follow up.*with","reply.*to"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Email & Comms

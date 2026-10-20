@@ -8,6 +8,11 @@ from typing import Callable, Dict, Mapping, Optional
 TESTNET_FACILITATOR_URL = "https://x402.org/facilitator"
 
 from core.env import bool_from as _bool_from, parse_opt_float as _parse_opt_float
+from core.remedy import flag_remedy as _flag_remedy
+
+#: The ONE refusal text for a money verb on an instance with no agent wallet.
+WALLET_OFF_TEXT = ("the agent wallet is off on this instance; the owner can turn it on — "
+                   + _flag_remedy("AGENT_WALLET_ENABLED"))
 
 
 def _b(env: Mapping[str, str], key: str, default: bool) -> bool:

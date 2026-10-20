@@ -56,8 +56,6 @@ def delivered(monkeypatch):
 
 
 def _job(payload):
-    # An owner seat stamps its jobs (an unstamped row has no owner authority).
-    payload = {"authored_by": "owner", **payload}
     return CronJob(id="j1", task="reveal due POLYROB ids (spends gas only)", schedule_spec="1m",
                    user_id="rob", next_run_at=None, payload=payload, max_duration_seconds=120)
 
@@ -70,15 +68,8 @@ async def test_flag_off_refuses_and_calls_nothing(delivered, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_an_agent_authored_job_refuses(delivered):
-    ok, why = await W.run_write_job(None, _job({"write_verb": SPEC, "authored_by": "agent"}),
-                                    tool_factory=_Tool)
-    assert (ok, why) == (False, "write_job_not_owner") and not _Tool.calls
-
-
-@pytest.mark.asyncio
 async def test_an_owner_job_runs_the_verb_with_no_turn_and_stays_quiet(delivered):
-    ok, why = await W.run_write_job(None, _job({"write_verb": SPEC, "authored_by": "owner"}),
+    ok, why = await W.run_write_job(None, _job({"write_verb": SPEC}),
                                     tool_factory=_Tool)
     assert ok and why == "write_verb" and not delivered
     params, ctx = _Tool.calls[0]
@@ -210,15 +201,9 @@ async def test_the_agent_tool_accepts_write_verb_only_on_an_owner_turn(tmp_path,
     res = await tool.cronjob_schedule(params, execution_context=ctx)
     assert res.error and "owner turn" in res.error and not store.list(user_id="rob")
 
-    # An owner turn that has read third-party content is not the owner's word.
+    # A genuine owner turn schedules it (round-2 collateral restored).
     monkeypatch.setattr(goal_tools, "owner_seat_turn", lambda c: True)
-    tainted = SimpleNamespace(user_id="rob", metadata={"untrusted_read": True})
-    res = await tool.cronjob_schedule(params, execution_context=tainted)
-    assert res.error and "owner turn" in res.error and not store.list(user_id="rob")
-
-    # A genuine, untainted owner turn schedules it (round-2 collateral restored).
     res = await tool.cronjob_schedule(params, execution_context=ctx)
     assert not res.error, res.error
     (job,) = store.list(user_id="rob")
-    assert job.payload["authored_by"] == "owner"
     assert job.payload["write_verb"]["verb"] == "agent_nft.agent_nft_collection_reveal"

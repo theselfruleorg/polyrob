@@ -95,8 +95,7 @@ _OWNER_HELP_SECTIONS = [
     # 046: `paid` is MONEY — it prices what a room sells and names what the
     # treasury OWES a payer whose effect never landed.
     ("Money", ["invoices", "settle", "sub", "paid"]),
-    ("Control", ["halt", "resume", "pause-entries", "resume-entries",
-                 "pause-streams", "resume-streams", "show"]),
+    ("Control", ["halt", "resume", "pause-entries", "resume-entries", "show"]),
     # 025: quarantined goal/cron findings (memory scopes).
     ("Memory", ["memory"]),
 ]
@@ -109,11 +108,11 @@ def owner():
     # `polyrob config set …` (e.g. POLYROB_OWNER_USER_ID, CORRESPONDENT_ACCESS_ENABLED)
     # live in the .env layer, so without this `owner show` reports "unbound" and
     # `owner invite` can't honour a file-set access posture. Mirrors serve/kb/model
-    # (order + local_mode=True).
+    # (the ONE ladder).
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
-    load_env(local_mode=True)
+    load_env()
 
 
 @owner.command("show")
@@ -193,32 +192,6 @@ def resume_entries_cmd():
     from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
     res = resume_autonomy_scopes(_data_dir(write=True), scopes=("trading",), via="cli")
     click.echo(render_resume_result(res, halt_hint="`polyrob owner pause-entries`"))
-
-
-@owner.command("pause-streams")
-@as_root_option
-def pause_streams_cmd():
-    """Refuse NEW stream-manifest reseeds (no restart needed).
-
-    The `streams` scope of the 031 pause record: every declared stream
-    (`data/streams/streams.yaml`) refuses to seed fresh goals on its cadence while
-    it holds. Goals already live, ad-hoc goals, and cron are untouched. Lift it
-    with `polyrob owner resume-streams`.
-    """
-    from core.surfaces.owner_admin import pause_autonomy, render_pause_result
-    res = pause_autonomy(_data_dir(write=True), scopes=("streams",),
-                         reason="`polyrob owner pause-streams`", via="cli")
-    click.echo(render_pause_result(res, resume_hint="`polyrob owner resume-streams`",
-                                   status_hint="`polyrob autonomy status`", chat=False))
-
-
-@owner.command("resume-streams")
-@as_root_option
-def resume_streams_cmd():
-    """Lift the stream-seeding pause set by `polyrob owner pause-streams`."""
-    from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
-    res = resume_autonomy_scopes(_data_dir(write=True), scopes=("streams",), via="cli")
-    click.echo(render_resume_result(res, halt_hint="`polyrob owner pause-streams`"))
 
 
 @owner.command("correspondents")
@@ -515,10 +488,6 @@ def pending(user, as_json):
                    f"{click.style(it['kind'] + ':' + str(it['id']), bold=True)}"
                    f"  ({it['chars']} chars)")
         click.echo(f"           {it['preview']}")
-        # 035 P0-5: a pending rule that contradicts an ACTIVE one must be loud —
-        # the 09-08 den directives were silently out-ranked by a stale active doc.
-        for c in (it.get("conflicts") or []):
-            click.echo("           " + click.style(f"⚠ CONFLICT — {c}", fg="red"))
     if pending_set.unavailable:
         click.echo(click.style(pending_set.degraded_line(), fg="yellow"))
     click.echo(click.style("\napprove: ", dim=True)
@@ -592,6 +561,8 @@ def promote(kind, item_id, user):
     if kind == "all":
         _decide_all_and_echo(True, tenant)
         return
+    if kind == "signer_approval" and not _confirm_signer_review(item_id):
+        raise SystemExit(1)
     # ONE decider for every kind in the queue (2026-09-15) — this seat used to
     # special-case `tool_approval` and hand every other kind, `correspondent`
     # included, to the self-evolution promoter, which answered "unknown kind".
@@ -603,6 +574,26 @@ def promote(kind, item_id, user):
     click.echo(click.style(msg, fg="green" if ok else "yellow"))
     if not ok:
         raise SystemExit(1)
+
+
+def _confirm_signer_review(item_id) -> bool:
+    """085 W8 (signer L-4): print the signer's own review of the request and ask
+    for ``y`` before the grant. An id named in a chat message may be a different
+    request than the one described there; the review shows what it really is."""
+    from core.signer.approvals import review
+    ok, text = review(str(item_id or ""))
+    if not ok:
+        click.echo(click.style(f"{text}. Nothing was granted.", fg="yellow"))
+        return False
+    click.echo(text)
+    try:
+        granted = click.confirm("Grant this signer approval (one use)?", default=False, err=True)
+    except click.exceptions.Abort:      # no terminal / EOF: never a yes
+        granted = False
+    if not granted:
+        click.echo(click.style(f"signer approval {item_id} NOT granted.", fg="yellow"))
+        return False
+    return True
 
 
 @owner.command("reject")
@@ -712,7 +703,7 @@ def missed(count, user):
     an active owner pause, or undelivered (no live sink / send failed). The
     SAME rows Telegram `/missed` and the REPL `/missed` read.
     """
-    from core.surfaces.missed import format_notice_lines, missed_notices
+    from core.surfaces.missed import cap_caused, format_notice_lines, missed_notices
     n = max(1, min(20, int(count)))
     tenant = _owner_tenant(user)
     try:
@@ -729,12 +720,12 @@ def missed(count, user):
     for r in rows:
         kind = r.get("kind") or "capped"
         text = str(r.get("text") or "")
-        # Wrapped, never clipped — /missed exists to recover text the owner
-        # never received live (fix round 1, 2026-09-14).
+        # Wrapped, never clipped (fix round 1, 2026-09-14).
         for line in format_notice_lines(r.get("ts") or 0, kind, text, gutter="  "):
             click.echo(line)
-    click.echo(click.style("\nRaise the cap: ", dim=True)
-               + "polyrob config set delivery.daily_cap N --global")
+    if cap_caused(rows):  # D F-18: only a capped notice has this remedy
+        click.echo(click.style("\nRaise the cap: ", dim=True)
+                   + "polyrob config set delivery.daily_cap N --global")
 
 
 def _do_approve_all(registry, user_id=None, surface=None):

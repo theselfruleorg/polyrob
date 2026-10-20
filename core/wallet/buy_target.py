@@ -14,17 +14,22 @@ any acquisition of a non-canonical token other than the target, on any chain
 (canonical USDC / wrapped native / native stay free to move).
 
 It RESTRICTS for everyone: a run with no target is unchanged, moving working
-capital between canonical assets is unchanged, and an agent-authored target can
-never widen what a verb allows — an agent-authored job may declare one too.
+capital between canonical assets is unchanged, and a target the model chose can
+never widen what a verb allows.
 
-W0: an OWNER-authored target is also TRUST for that run. The owner wrote the
+W0: an OWNER-typed target is also TRUST for that run. The owner wrote the
 address into the job: an owner SEAT (``/cron add … target=``, the CLI, the
-console), or an owner-authored chat turn whose owner message names the address
-VERBATIM (DEFI-5; otherwise ``target_authored_by: agent`` keeps it
-restrict-only). So the identity gate
+console), or an owner chat turn whose owner message names the address
+VERBATIM (DEFI-5; any other target is stamped ``target_authored_by: agent`` and
+stays restrict-only). So the identity gate
 treats that contract as verified for this run only (``owner_target_matches``).
 The runner stamps ``authored_by: owner`` onto the run's target; the model never
 writes the run metadata, so it cannot forge the stamp.
+
+Trust is POSITIVE: the stored row must carry ``target_authored_by: owner``,
+which only an owner seat (``core.owner_create``) or a verbatim owner turn
+writes. A row with a target and NO stamp (written before the stamp existed,
+when agent-created rows were not stamped either) is restrict-only.
 """
 from __future__ import annotations
 
@@ -32,14 +37,13 @@ from typing import Any, Dict, Optional
 
 PAYLOAD_KEY = "target_token"
 METADATA_KEY = "money_target"
-#: Stamped on the RUN's target (never on a stored payload) when the job that
-#: declared it is owner-authored.
+#: Stamped on the RUN's target (never on a stored payload) when the owner typed it.
 AUTHOR_KEY = "authored_by"
 OWNER = "owner"
 AGENT = "agent"
-#: Stored on a goal/cron PAYLOAD: ``agent`` when the row is owner-authored but
-#: the owner did not type its target address (DEFI-5) — the target restricts
-#: and is never identity trust.
+#: Stored on a goal/cron PAYLOAD beside the target: ``owner`` when the owner
+#: typed the address (an owner seat, or a verbatim owner turn), ``agent``
+#: otherwise (DEFI-5). Only ``owner`` is identity trust; a missing stamp is not.
 TARGET_AUTHOR_KEY = "target_authored_by"
 
 
@@ -63,15 +67,14 @@ def normalize_target(raw: Any) -> Optional[Dict[str, str]]:
 
 def with_authorship(target: Optional[Dict[str, str]],
                     payload: Any) -> Optional[Dict[str, str]]:
-    """The run's target, stamped ``authored_by: owner`` when the job/goal that
-    declared it is OWNER-authored (``core.config_policy.rigs.is_owner_authored``,
-    a positive stamp — an unstamped legacy row is not trusted)."""
+    """The run's target, stamped ``authored_by: owner`` only when the row marks
+    it ``target_authored_by: owner``. An unstamped row (a legacy row, or one
+    whose author is unknown) is restrict-only — fail closed."""
     if not target:
         return target
-    from core.config_policy.rigs import is_owner_authored
     out = {"chain": target["chain"], "address": target["address"]}
     p = payload if isinstance(payload, dict) else {}
-    if is_owner_authored(p) and p.get(TARGET_AUTHOR_KEY) != AGENT:
+    if p.get(TARGET_AUTHOR_KEY) == OWNER:
         out[AUTHOR_KEY] = OWNER
     return out
 
@@ -92,18 +95,21 @@ def address_in_owner_text(execution_context, address: Optional[str]) -> bool:
 
 
 def target_provenance(execution_context, target: Optional[Dict[str, str]],
-                      owner_authored: bool) -> Optional[str]:
-    """The ``TARGET_AUTHOR_KEY`` stamp for a target an owner-authored row
-    declares, or None. A target the owner did not TYPE in this turn is the
-    model's choice — restrict-only (``AGENT``) even on an owner-authored row."""
-    if not target or not owner_authored:
+                      owner_turn: bool) -> Optional[str]:
+    """The ``TARGET_AUTHOR_KEY`` stamp for a target a goal/cron tool writes, or
+    None when there is no target. Only a genuine owner turn whose owner message
+    names the address VERBATIM stamps ``OWNER`` (trust); any other target is
+    the model's choice — restrict-only (``AGENT``)."""
+    if not target:
         return None
-    return None if address_in_owner_text(execution_context, target.get("address")) else AGENT
+    if owner_turn and address_in_owner_text(execution_context, target.get("address")):
+        return OWNER
+    return AGENT
 
 
 def owner_target_matches(execution_context, *, chain: str,
                          token: Optional[str]) -> bool:
-    """True when *token* on *chain* IS this run's OWNER-authored target."""
+    """True when *token* on *chain* IS this run's owner-typed target."""
     target = target_from_context(execution_context)
     if target is None or target.get(AUTHOR_KEY) != OWNER or not token:
         return False

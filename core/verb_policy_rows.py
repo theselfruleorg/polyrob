@@ -20,10 +20,10 @@ CORE_VERB_ROWS = {
         # room_denied (044): a room turn may never call it, whoever spoke: deferred execution,
         # cross-session recall, owner state, outbound to other targets, money-adjacent reads,
         # self-modification, control.
-        # W4: outbound/text_fields/output are the ONE source of the outbound lists
-        # (financial_claim_gate, approval_queue, evidence, refusal_taint_gate).
+        # W4: outbound/output are the ONE source of the outbound lists
+        # (approval_queue, evidence).
         "message": dict(effect="comms", correspondent_blocked=True, room_denied=True,
-                        outbound="text", text_fields=("text",), output=True),
+                        outbound="text", output=True),
         "skill_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "self_context_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
         # owner.md: the richest PII target in the process plus a write path; its own forged-turn
@@ -40,15 +40,13 @@ CORE_VERB_ROWS = {
         "load_tool": dict(effect="self", correspondent_blocked=True, room_denied=True),
         # The owner lane: core/surfaces/user_delivery.py records send_message and done as
         # user_delivery. Classifying them again would double every owner reply.
-        "send_message": dict(effect="none", outbound="text", text_fields=("text",)),
+        "send_message": dict(effect="none", outbound="text"),
         "done": dict(effect="none"),
         # effect=none from here to room_read in this group: internal or read-only.
-        # Delegation (delegate_task/subtask/parallel_subtasks), identity and self-evolution
+        # Delegation (delegate_task), identity and self-evolution
         # (skill_manage/self_context_manage/worker_manage), tenant preferences (owner-UX P2 T2)
         # and the gated outbound message: a tainted session reaches none of them.
         "delegate_task": dict(effect="none", correspondent_blocked=True, room_denied=True),
-        "subtask": dict(effect="none", correspondent_blocked=True, room_denied=True),
-        "parallel_subtasks": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # 031: a tainted turn must not RESUME autonomy; a third party steering the pause state
         # at all is not the owner driving.
         "autonomy_control": dict(effect="none", correspondent_blocked=True, room_denied=True),
@@ -326,16 +324,16 @@ CORE_VERB_ROWS = {
             effect="money", lane="owner_always", side="spend", approval_owner="hook",
             correspondent_blocked=True,
         ),
-        # Permanent public writes through an NFT account: their words are claim-gated.
+        # Permanent public writes through an NFT account.
         "agent_nft_bind_identity": dict(
             effect="money", lane="owner_always", side="spend", simulatable=True, approval_owner="hook",
-            correspondent_blocked=True, outbound="text", text_fields=("agent_uri",),
+            correspondent_blocked=True, outbound="text",
         ),
         # 050: fee-only writes. A journal anchor and a bind cost only the fee (held to
         # max_spend_usd); revoke_all only RETIRES standing approvals.
         "agent_nft_journal": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
-            correspondent_blocked=True, outbound="text", text_fields=("text",),
+            correspondent_blocked=True, outbound="text",
         ),
         "agent_nft_revoke_all": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
@@ -353,16 +351,9 @@ CORE_VERB_ROWS = {
         # room_denied on every verb: outbound to anywhere but this room, or the
         # owner's mailbox (its contents and its organisation).
         # outbound="write" + late_send: a late owner approval sends the approved mail once.
-        "email_send": dict(effect="comms", room_denied=True, outbound="write",
-                           text_fields=("subject", "body", "html"), late_send=True),
-        # The agent's own inbox (activation links / codes): a read, but of the agent's
-        # private mailbox, so the agent_status disclosure class.
-        "email_read_machine_mail": dict(effect="none", correspondent_blocked=True,
-                                        room_denied=True),
-        "email_reply": dict(effect="comms", room_denied=True, outbound="write",
-                            text_fields=("body", "html"), late_send=True),
-        "email_forward": dict(effect="comms", room_denied=True, outbound="write",
-                              text_fields=("note",), late_send=True),
+        "email_send": dict(effect="comms", room_denied=True, outbound="write", late_send=True),
+        "email_reply": dict(effect="comms", room_denied=True, outbound="write", late_send=True),
+        "email_forward": dict(effect="comms", room_denied=True, outbound="write", late_send=True),
         # Reads of the agent's own mailbox (read-only select, BODY.PEEK) and a
         # save into the session workspace: no external write.
         "email_list": dict(effect="none", correspondent_blocked=True, room_denied=True),

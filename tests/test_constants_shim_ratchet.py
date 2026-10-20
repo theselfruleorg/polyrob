@@ -20,7 +20,7 @@ from tests.support.repo_index import REPO_ROOT, repo_index
 SHIM = "agents/task/constants.py"
 
 # Remaining: the goal board and dispatcher (W9 splits in flight on 2026-10-10).
-CEILING = 16
+CEILING = 13
 
 _DOTTED = re.compile(r"agents\.task\.constants\.([A-Za-z_]\w*)")
 

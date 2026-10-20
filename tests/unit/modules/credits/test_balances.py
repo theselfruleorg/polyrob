@@ -66,23 +66,6 @@ async def test_provider_balance_none_on_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_provider_balance_chat_provider_takes_precedence(monkeypatch):
-    """CHAT_PROVIDER ('which provider is actually active' — task_agent_lite.py,
-    cli/config_store.py) must win over a stale DEFAULT_PROVIDER. If
-    DEFAULT_PROVIDER won here, this would wrongly return None (anthropic isn't
-    openrouter) even though the deploy is actually pinned to openrouter."""
-    monkeypatch.setenv("CHAT_PROVIDER", "openrouter")
-    monkeypatch.setenv("DEFAULT_PROVIDER", "anthropic")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-
-    async def fake_get(url, headers=None, timeout=None):
-        return {"data": {"total_credits": 10.0, "total_usage": 1.0}}
-    monkeypatch.setattr(B, "_get_json", fake_get)
-
-    assert await B.provider_balance_usd() == pytest.approx(9.0)
-
-
-@pytest.mark.asyncio
 async def test_ledger_include_balances_false_never_probes(monkeypatch):
     """The default must perform NO network read — recap calls this via a sync bridge."""
     from modules.credits.unified_ledger import build_ledger

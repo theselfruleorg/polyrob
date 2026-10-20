@@ -42,8 +42,7 @@ def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool
 
 	057 WS-D: `source`/`observed_at` ride through to the writer, which stamps the
 	NEW or CHANGED lines ` [from: <source> <date>]`. Both are optional — with
-	neither, the write is byte-identical to pre-057 unless
-	`DOC_CLAIM_PROVENANCE_REQUIRED` is armed.
+	neither, the write is byte-identical to pre-057.
 	"""
 	prov = {"source": getattr(params, "source", None),
 	        "observed_at": getattr(params, "observed_at", None)}
@@ -161,6 +160,16 @@ def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0) -> s
 	return out
 
 
+def skill_saved_text(skill_id: str, where: str) -> str:
+	"""The `skill_manage` reply. 2026-10-14: "saved (pending review)" read as
+	DONE — the agent told the owner a promo-bounty rule was "Fixed" while the
+	patch sat inert in `.pending/`, so a pending save now says it is inert."""
+	if where == "active":
+		return f"Skill `{skill_id}` saved (active)."
+	return (f"Skill `{skill_id}` is pending review. " + _queued_text("Skill", "skill", skill_id)
+	        + "\nDo not tell the owner it is fixed or live until they approve it.")
+
+
 def _queue_depth(user_id: str, data_dir, instance_id: str) -> int:
 	"""How many proposals are waiting on the owner (035 P1-8). Fail-open to 0."""
 	try:
@@ -180,9 +189,9 @@ def perform_rules_propose(text: str, *, user_id: str, data_dir, instance_id: str
 	subsystem on prod, ZERO writes — a dead lane behind live plumbing, costing a
 	document kind, a writer and a tool-description slot. An owner-authored prose
 	rule and an "operating contract" are the same thing, so
-	`preferences(contract_propose)` now routes here and writes `owner.md`, which
-	also means it inherits P1-6: on a genuine owner turn the rule BINDS
-	immediately instead of queueing.
+	`preferences(contract_propose)` now routes here and writes `owner.md`. The
+	rule is a draft on every turn, an owner turn too (`_rules_immediate` is
+	False): the owner confirms it with `/pending`.
 
 	No NEW contract draft is ever created. An EXISTING one stays listable and
 	promotable via `/pending` for one release (035 §6 migration step 2); the
@@ -262,9 +271,7 @@ class DocAuthoringMixin:
 
 		@self.registry.action(
 			"Refine your evolving SELF context — YOUR OWN durable notes: lessons "
-			"learned, conventions you follow, what worked and what did not. NOT the "
-			"place for an owner instruction (use `owner_doc_manage`) and NOT for a "
-			"typed setting like reply length or tone (use `preferences`). "
+			"learned, conventions you follow, what worked and what did not. "
 			"action='read' "
 			f"returns the current text; action='update' replaces it (≤{SELF_DOC_MAX_CHARS} chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
@@ -403,12 +410,9 @@ class DocAuthoringMixin:
 
 		@self.registry.action(
 			"Record the OWNER's durable facts and STANDING RULES — their timezone, "
-			"projects, and any instruction they give you about how to operate "
-			"(\"never post to X\", \"always do Y\", \"stop Z\"). This is where an owner "
-			"directive belongs, so it survives the turn. For a TYPED setting "
-			"(reply length, tone, digest, quotas, caps) use `preferences` instead — "
-			"it applies immediately and is actually enforced (a small owner.md, "
+			"projects, and how they want you to operate (a small owner.md, "
 			f"≤{OWNER_DOC_MAX_CHARS} chars). "
+			"It holds preferences and policy, NOT on/off switch states or job ids. "
 			"It is the file owner.md in your identity directory "
 			"(<data_dir>/identity/<instance>/user_<id>/, next to self.md); "
 			"action='read' returns it with its path — never search the disk for it. "

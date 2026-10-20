@@ -3,9 +3,10 @@ name: hyperliquid-account-review
 description: Read Hyperliquid account state, balances, open orders, and fills (the tool queries the master address itself; no address parameter); confirm agent authorization
 license: MIT
 metadata:
+  polyrob-when: 'Reading the Hyperliquid account: balances, orders, fills'
   polyrob-priority: '5'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["hyperliquid account","hyperliquid margin","hyperliquid open orders","hyperliquid fills","hyperliquid agent status","hyperliquid balances"],"task_patterns":["hyperliquid.*(account|balance|margin|orders|fills)","open.*orders.*hyperliquid"],"tool_ids":["hyperliquid_data"]}'
+  polyrob-triggers: '{"tool_ids":["hyperliquid_data"]}'
   polyrob-version: '2'
 ---
 # Hyperliquid Account Review

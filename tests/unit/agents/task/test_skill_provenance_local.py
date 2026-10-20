@@ -16,8 +16,8 @@ import inspect
 
 import pytest
 
-from agents.task.agent import skill_writer
-from agents.task.agent.skill_frontmatter import parse_frontmatter
+from modules.skills import writer as skill_writer
+from core.skills.frontmatter import parse_frontmatter
 from agents.task.agent.skill_manager import get_skill_manager
 from modules.skills import skill_usage as skill_usage_mod
 

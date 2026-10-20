@@ -1,0 +1,50 @@
+{
+  "function": {
+    "description": "PRICE HISTORY as candles. A 24h change figure cannot tell a steady climber from one spike twenty hours ago, and that difference is the whole read: the tokens that survived climbed over WEEKS in steps, the wash-traded ones peaked 2-6 hours after launch and lost 75-99%. Candles are POOL-scoped, so the pool actually read is named.",
+    "name": "defi_data_ohlcv",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The TOKEN contract address. Candles are POOL-scoped on this indexer, so the deepest pool for this token is resolved and named in the answer.",
+          "type": "string"
+        },
+        "aggregate": {
+          "default": 1,
+          "description": "Bars to merge per candle, e.g. timeframe='minute' aggregate=15.",
+          "maximum": 60,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to read candles on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "limit": {
+          "default": 48,
+          "description": "How many candles to return.",
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pool": {
+          "default": null,
+          "description": "Read this exact POOL instead of resolving one. Use it when you already know which pool you mean — a token's pools disagree.",
+          "nullable": true,
+          "type": "string"
+        },
+        "timeframe": {
+          "default": "hour",
+          "description": "Candle window: 'day', 'hour' or 'minute'. Use 'day' to see whether a token climbed over weeks, 'hour' to see whether it went vertical.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

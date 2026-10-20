@@ -69,7 +69,7 @@ def test_another_tenants_goal_id_is_a_miss_not_a_mutation(monkeypatch, tmp_path)
     client, pages = _pages_client(monkeypatch, tmp_path, user_id="alice")
     monkeypatch.setattr(pages, "_webgate_goal_board", lambda: board)
 
-    resp = client.post(f"/api/webgate/goals/{theirs.id}/cancel")
+    resp = client.post(f"/api/webgate/goals/{theirs.id}/stop")
     assert resp.status_code == 404
     assert board.get(theirs.id).status == "ready"
 
@@ -81,7 +81,7 @@ def test_an_ask_id_is_not_a_goal_id(monkeypatch, tmp_path):
     client, pages = _pages_client(monkeypatch, tmp_path)
     monkeypatch.setattr(pages, "_webgate_goal_board", lambda: board)
 
-    assert client.post(f"/api/webgate/goals/{ask.id}/cancel").status_code == 404
+    assert client.post(f"/api/webgate/goals/{ask.id}/stop").status_code == 404
 
 
 # --- A7: the goal says which session it runs in ------------------------------ #
@@ -315,28 +315,12 @@ def test_an_unpriced_pending_row_is_counted_never_treated_as_zero():
     assert (total, unpriced) == (10.0, 1)
 
 
-# --- A44: the console can size a goal's run ---------------------------------- #
+# --- A44 / 083 WS-4: the console sets no step budget ------------------------ #
 
-@pytest.mark.parametrize("raw,expected", [(None, None), ("", None),
-                                          (6, 6), (60, 60), ("30", 30)])
-def test_an_accepted_step_budget(raw, expected):
-    from webview.pages_new import _as_max_steps
-    value, error = _as_max_steps(raw)
-    assert (value, error) == (expected, None)
-
-
-@pytest.mark.parametrize("raw", [5, 61, 0, -1, "lots"])
-def test_a_bad_step_budget_is_refused_never_clamped(raw):
-    """⚠️ A priority is a preference, so clamping it loses nothing. A step
-    budget is what the owner believes the run will cost — quietly halving it
-    produces a run that stops short for a reason nobody was told."""
-    from webview.pages_new import _as_max_steps
-    value, error = _as_max_steps(raw)
-    assert value is None and error
-
-
-def test_a_goal_created_with_a_budget_carries_it_into_the_payload(monkeypatch,
-                                                                  tmp_path):
+def test_a_goal_created_from_the_console_carries_no_step_budget(monkeypatch,
+                                                                 tmp_path):
+    """083 WS-4: the run's step cap is the operator's AUTONOMOUS_MAX_STEPS. The
+    form has no budget field and a posted ``max_steps`` is ignored."""
     import webview.pages as pages
     import webview.pages_new as mod
     board = _board(tmp_path)
@@ -349,11 +333,8 @@ def test_a_goal_created_with_a_budget_carries_it_into_the_payload(monkeypatch,
     resp = client.post("/api/webgate/goals",
                        json={"title": "Sized work", "max_steps": 45})
     assert resp.status_code == 201, resp.text
-    assert board.get(resp.json()["id"]).payload["max_steps"] == 45
-
-    bad = client.post("/api/webgate/goals",
-                      json={"title": "Too big", "max_steps": 900})
-    assert bad.status_code == 400
+    assert "max_steps" not in (board.get(resp.json()["id"]).payload or {})
+    assert not hasattr(mod, "_as_max_steps")
 
 
 # --- 2026-09-21 revalidation: residue found re-reading the audit commit ------ #

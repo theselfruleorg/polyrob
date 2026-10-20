@@ -35,7 +35,7 @@ READ_LEAVES = frozenset({
 
 #: Groups whose BARE call runs a read view (``polyrob wallet`` = the overview).
 #: A bare group without ``invoke_without_command`` only prints help, which is a read.
-BARE_READ_GROUPS = frozenset({"wallet", "rails", "avatar", "service"})
+BARE_READ_GROUPS = frozenset({"wallet", "avatar", "service"})
 
 _VERSION_ONLY = (["-V"], ["--version"])
 

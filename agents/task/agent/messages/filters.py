@@ -106,9 +106,47 @@ def tool_result_age_chars() -> int:
 	return int_env("TOOL_RESULT_AGE_CHARS", 2000)
 
 
+#: E-A5 (coherency review 2026-10-13): a wrapped result opens with a frame tag
+#: alone on its first line (``<untrusted_tool_result source="…">``). Keeping only
+#: that line kept ZERO data and left an open tag mid-history.
+_OPEN_FRAME_LINE = re.compile(r"^<([A-Za-z][\w\-]*)(\s[^<>]*)?>$")
+#: the fixed DATA preamble ``wrap_untrusted`` writes under the open tag.
+_FRAME_PREAMBLE_PREFIX = "The following content was retrieved from an external source."
+
+
+def _aged_head(content: str) -> tuple:
+	"""``(open_tag_line, close_tag, first_content_line)`` of a result.
+
+	When the result is framed (an open tag alone on line 1 and the matching close
+	tag at its end), skip the tag line, the DATA preamble and blank lines, and keep
+	the first content line; the caller re-closes the frame. Unframed: no tag, and
+	the first line that holds a letter or digit.
+	"""
+	lines = content.split("\n")
+	first = lines[0].strip()
+	match = _OPEN_FRAME_LINE.match(first)
+	if match:
+		close = f"</{match.group(1)}>"
+		if content.rstrip().endswith(close):
+			for line in lines[1:]:
+				text = line.strip()
+				if not text or text == close or text.startswith(_FRAME_PREAMBLE_PREFIX):
+					continue
+				return first, close, text[:TOOL_RESULT_AGE_HEAD_CHARS]
+			return first, close, ""
+	# A JSON result often opens with a bare "{" / "[": keep the first line that
+	# carries data instead.
+	for line in lines:
+		text = line.strip()
+		if any(ch.isalnum() for ch in text):
+			return "", "", text[:TOOL_RESULT_AGE_HEAD_CHARS]
+	return "", "", first[:TOOL_RESULT_AGE_HEAD_CHARS]
+
+
 def _aged_body(content: str) -> str:
-	"""The demoted form: the first line (capped) + ONE named pointer."""
-	head = content.split("\n", 1)[0].strip()[:TOOL_RESULT_AGE_HEAD_CHARS]
+	"""The demoted form: the first content line (capped) + ONE named pointer,
+	inside the original frame when the result was framed (E-A5)."""
+	open_tag, close_tag, head = _aged_head(content)
 	pointer = _OFFLOAD_POINTER.search(content)
 	if pointer:
 		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars dropped from the context to make "
@@ -117,12 +155,69 @@ def _aged_body(content: str) -> str:
 		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars dropped from the context to make "
 		        f"room; this result was never offloaded to the workspace, so there is no file to "
 		        f"read — re-run the tool if you still need it]")
-	return f"{head}\n{note}" if head else note
+	body = f"{head}\n{note}" if head else note
+	if open_tag:
+		return f"{open_tag}\n{body}\n{close_tag}"
+	return body
+
+
+#: 079 W7 (R8): a MONEY verb's result (a swap receipt, a transfer hash, a quote)
+#: keeps its full text for this long. "Money verb" is NOT a list here — it is
+#: ``core.money.classify.money_action``, i.e. the ``money`` dimension of the ONE
+#: capability table (``core/tool_capabilities.py``).
+MONEY_RESULT_PROTECT_SECONDS = 24 * 3600
+
+
+def _tool_call_names(messages: List[BaseMessage]) -> Dict[str, str]:
+	"""``tool_call_id`` -> the action name the AIMessage declared for it."""
+	names: Dict[str, str] = {}
+	for msg in messages:
+		if not isinstance(msg, AIMessage):
+			continue
+		for call in getattr(msg, "tool_calls", None) or []:
+			cid = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+			name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+			if cid and name:
+				names[str(cid)] = str(name)
+	return names
+
+
+def _is_young(stamp: Optional[str], now) -> bool:
+	"""True when *stamp* (ISO) is younger than the money window — or unknown.
+
+	An unknown age is treated as YOUNG: a missing timestamp must never be the
+	reason a money receipt loses its text."""
+	from datetime import datetime, timezone
+	if not stamp:
+		return True
+	try:
+		when = datetime.fromisoformat(str(stamp))
+	except (TypeError, ValueError):
+		return True
+	ref = now or datetime.now(timezone.utc if when.tzinfo else None)
+	if (ref.tzinfo is None) != (when.tzinfo is None):
+		ref = ref.replace(tzinfo=None) if when.tzinfo is None else ref.replace(tzinfo=when.tzinfo)
+	return (ref - when).total_seconds() < MONEY_RESULT_PROTECT_SECONDS
+
+
+def _money_protected(msg: BaseMessage, names: Dict[str, str], stamp: Optional[str], now) -> bool:
+	name = names.get(str(getattr(msg, "tool_call_id", "") or ""))
+	if not name:
+		return False
+	try:
+		from core.money.classify import money_action
+		is_money = money_action(name)
+	except Exception:
+		logger.debug("money-result classification failed", exc_info=True)
+		return False
+	return is_money and _is_young(stamp, now)
 
 
 def age_old_tool_results(messages: List[BaseMessage],
                          keep_recent: int = TOOL_RESULT_AGE_KEEP_RECENT,
-                         max_chars: Optional[int] = None) -> List[BaseMessage]:
+                         max_chars: Optional[int] = None,
+                         timestamps: Optional[List[Optional[str]]] = None,
+                         now=None) -> List[BaseMessage]:
 	"""Demote long tool results OUTSIDE the protected tail to one line + a pointer.
 
 	Pairing is never at risk: the ``ToolMessage`` stays exactly where it is and
@@ -130,6 +225,10 @@ def age_old_tool_results(messages: List[BaseMessage],
 	``AIMessage(tool_calls)`` is ever left without its answer.
 
 	A ``load_skill`` result (``SKILL_RESULT_PREFIX``) is never aged (D4).
+
+	A money verb's result younger than ``MONEY_RESULT_PROTECT_SECONDS`` keeps its
+	full text (079 W7). *timestamps* runs parallel to *messages* (ISO strings,
+	the ``ManagedMessage`` metadata); a missing one counts as young.
 
 	IDEMPOTENT: an aged body carries ``AGED_RESULT_MARKER`` and is skipped, and the
 	surviving head is capped so a single-line blob lands under the threshold too.
@@ -139,12 +238,15 @@ def age_old_tool_results(messages: List[BaseMessage],
 	if limit <= 0 or not messages:
 		return list(messages)
 	protected = max(0, len(messages) - max(0, int(keep_recent)))
+	names = _tool_call_names(messages)
 	out: List[BaseMessage] = []
 	for idx, msg in enumerate(messages):
 		content = getattr(msg, "content", None)
+		stamp = timestamps[idx] if timestamps is not None and idx < len(timestamps) else None
 		if (idx < protected and isinstance(msg, ToolMessage) and isinstance(content, str)
 				and len(content) > limit and AGED_RESULT_MARKER not in content
-				and not content.startswith(SKILL_RESULT_PREFIX)):
+				and not content.startswith(SKILL_RESULT_PREFIX)
+				and not _money_protected(msg, names, stamp, now)):
 			aged = copy.copy(msg)
 			aged.content = _aged_body(content)
 			out.append(aged)

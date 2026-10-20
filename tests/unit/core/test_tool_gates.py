@@ -56,7 +56,7 @@ def test_gate_views_are_derived_from_the_rows():
         if gate is not None and gate.flag:
             flags[tid] = gate.flag
         if gate is not None and gate.tier:
-            disclosed[tid] = (gate.label, gate.tier, gate.remedy)
+            disclosed[tid] = gate.disclosure(tid)
     assert TOOL_GATE_FLAGS == flags
     assert GATED_TOOL_REGISTRY == disclosed
 
@@ -71,10 +71,43 @@ def test_the_gate_store_is_one_module():
 def test_toolgate_validates_its_disclosure():
     import pytest
 
-    from core.tool_gates import ToolGate
+    from core.tool_gates import REMEDIES, ToolGate
     assert ToolGate(flag="X_ENABLED").disclosure() is None
-    assert ToolGate(label="l", tier="reserved", remedy="r").disclosure() == ("l", "reserved", "r")
+    assert ToolGate(label="l", tier="disabled", remedy="unknown-tool").disclosure() == (
+        "l", "disabled", REMEDIES["unknown-tool"])
     with pytest.raises(ValueError):
-        ToolGate(tier="bogus", label="l", remedy="r")
+        ToolGate(tier="bogus", label="l", remedy="unknown-tool")
+    with pytest.raises(ValueError):   # 081 B-1: a remedy is a key, never prose
+        ToolGate(label="l", tier="reserved", remedy="owner-only; trading is never autonomous")
     with pytest.raises(ValueError):
         ToolGate(tier="disabled")
+
+
+def test_one_gate_text_per_tool_on_both_blocks():
+    """081 B-1: the <tool-availability> line and the <tool-catalog> refusal of a
+    money tool render the SAME text (no "never autonomous" second wording)."""
+    from agents.task.agent.core.tool_availability import GATED_TOOL_REGISTRY
+    from tools.tool_disclosure import resolve_tool_status
+    _label, tier, remedy = GATED_TOOL_REGISTRY["x402_pay"]
+    assert tier == "reserved"
+    status = resolve_tool_status("x402_pay", container=None, loaded_ids=set())
+    assert status.reason == "money" and status.remedy.startswith(remedy)
+    for _tool, (_l, _t, text) in GATED_TOOL_REGISTRY.items():
+        assert "never autonomous" not in text
+
+
+def test_every_pack_gate_names_a_remedy_key():
+    """A pack.toml gate row carries a key of core.tool_gates.REMEDIES, not prose."""
+    import tomllib
+    from pathlib import Path
+
+    from core.tool_gates import REMEDIES
+    root = Path(__file__).resolve().parents[3] / "packs"
+    seen = 0
+    for manifest in root.glob("*/polyrob_*/pack.toml"):
+        for tid, spec in (tomllib.loads(manifest.read_text()).get("tools") or {}).items():
+            remedy = (spec.get("gate") or {}).get("remedy")
+            if remedy is not None:
+                seen += 1
+                assert remedy in REMEDIES, (manifest, tid, remedy)
+    assert seen >= 4

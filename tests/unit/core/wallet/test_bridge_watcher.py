@@ -13,7 +13,7 @@ import pytest
 
 from core.wallet import bridge_guard, bridge_watcher as bw
 
-RECIPIENT = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+RECIPIENT = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 BASE_ID = 8453
 FLOOR = 35_900_000_000_000_000
 BEFORE = 10 ** 15
@@ -22,6 +22,16 @@ BEFORE = 10 ** 15
 @pytest.fixture
 def db(tmp_path):
     return str(tmp_path / "bridges.db")
+
+
+@pytest.fixture(autouse=True)
+def delivered(monkeypatch):
+    """085 B-2: an EVM arrival is proven by Relay's destination tx (one per
+    request id here) AND the measured balance rise. The tx pays the floor."""
+    from core.wallet import bridge_status
+    monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: [f"0xfill{rid}"])
+    monkeypatch.setattr(bridge_guard, "evm_tx_inflow",
+                        lambda h, r, c, n, **k: (FLOOR, int(time.time())))
 
 
 def _quote(request_id="0xreq"):
@@ -70,7 +80,7 @@ def _collect_notices():
 def test_a_late_arrival_is_measured_and_settled(db):
     bid = _row(db)
     seen, notify = _collect_notices()
-    out = _run(bw.tick(db_path=db, provider=_Provider(),
+    out = _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),
                        read_balance=lambda a, c: BEFORE + FLOOR, notify=notify))
     assert out.arrived == 1
     rows = bridge_guard.open_bridges("owner", db_path=db)
@@ -111,13 +121,15 @@ def test_a_refund_with_no_inflow_is_the_one_case_that_may_be_called_failed(db):
 
 
 def test_a_provider_failure_WITH_a_measured_arrival_is_not_believed(db):
-    """One of the two is wrong and we do not get to pick which — so the row is
-    settled by the MEASUREMENT, which is ours, not by the claim, which is not."""
+    """One of the two is wrong and we do not get to pick which. Since 085 B-2 a
+    balance rise alone is not an arrival (an unrelated inflow raises it too), so
+    the row is neither failed nor arrived: it stays open for the owner."""
     _row(db)
     out = _run(bw.tick(db_path=db, provider=_Provider("failure", "refunded"),
                        read_balance=lambda a, c: BEFORE + FLOOR,
                        notify=_collect_notices()[1]))
-    assert out.arrived == 1 and out.failed == 0
+    assert out.arrived == 0 and out.failed == 0
+    assert bridge_guard.open_bridges("owner", db_path=db)
 
 
 def test_a_stuck_bridge_escalates_once_not_every_tick(db):
@@ -177,7 +189,7 @@ def test_rows_are_read_across_tenants_but_notified_per_tenant(db):
     bridge_guard.record_pending(user_id="bob", quote=_quote("0xb"),
                                 amount_usd=1.0, balance_before=BEFORE, db_path=db)
     seen, notify = _collect_notices()
-    _run(bw.tick(db_path=db, provider=_Provider(),
+    _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),
                  read_balance=lambda a, c: BEFORE + FLOOR, notify=notify))
     assert sorted(u for u, _ in seen) == ["alice", "bob"]
 
@@ -250,7 +262,7 @@ def test_a_store_written_before_escalated_at_existed_is_still_readable(tmp_path)
     assert rows[0]["escalated_at"] is None
     assert bridge_guard.open_bridges("owner", db_path=db)
 
-    out = _run(bw.tick(db_path=db, provider=_Provider(),
+    out = _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),
                        read_balance=lambda a, c: BEFORE + FLOOR,
                        notify=_collect_notices()[1]))
     assert out.checked == 1 and out.arrived == 1
@@ -293,8 +305,8 @@ def test_a_solana_destination_is_measured_by_the_watcher(monkeypatch):
         def status(self, rid):
             return "success", "filled"
     monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: ["5igSig"])
-    monkeypatch.setattr("core.wallet.solana_onchain.tx_inflow",
-                        lambda sig, owner, mint=None, **k: 100)
+    monkeypatch.setattr("core.wallet.solana_onchain.tx_inflow_at",
+                        lambda sig, owner, mint=None, **k: (100, 10))
     res = asyncio.run(bridge_watcher.tick(provider=_Ok(), notify=_notify,
                                           now=lambda: 10.0))
     assert res.arrived == 1
@@ -306,3 +318,46 @@ def test_a_solana_destination_is_measured_by_the_watcher(monkeypatch):
     res = asyncio.run(bridge_watcher.tick(provider=_Ok(), notify=_notify,
                                           now=lambda: 10.0))
     assert res.arrived == 0 and not settled
+
+
+def test_a_row_closed_as_never_sent_tells_the_owner_once(db):
+    """085 L-6: the stale-row sweep removes the row from every open view, so a
+    rare funded-but-unrecorded order would vanish silently. The owner gets ONE
+    notice that names the origin chain and the request id; a second tick is
+    silent."""
+    from core.sqlite_util import execute_retry
+    from core.wallet import tx_notify
+    quote = SimpleNamespace(
+        request_id="0xstale", origin_chain_id=BASE_ID, dest_chain_id=42161,
+        recipient=RECIPIENT, currency_out="0x0000000000000000000000000000000000000000",
+        amount_in_raw=10 ** 9, min_out_raw=FLOOR)
+    bid = bridge_guard.record_pending(user_id="owner", quote=quote, amount_usd=12.5,
+                                      balance_before=BEFORE, db_path=db)
+    execute_retry(db, "UPDATE bridges SET created_at=? WHERE id=?",
+                  (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, bid))
+    seen, notify = _collect_notices()
+    _run(bw.tick(db_path=db, provider=_Provider(), read_balance=lambda a, c: BEFORE,
+                 notify=notify))
+    assert len(seen) == 1
+    user, notice = seen[0]
+    assert user == "owner" and notice.state == tx_notify.STATE_NEVER_SENT
+    assert notice.chain == "base" and notice.route == "base→arbitrum"
+    assert notice.extra_refs == ("0xstale", bid) and notice.usd == 12.5
+    text = tx_notify.render_settled(notice)
+    assert "NEVER SENT" in text and "re-send" in text and "0xstale" in text
+    _run(bw.tick(db_path=db, provider=_Provider(), read_balance=lambda a, c: BEFORE,
+                 notify=notify))
+    assert len(seen) == 1, "one notice per closed row, never repeated"
+
+
+def test_a_stale_row_relay_reports_filled_sends_no_notice(db):
+    from core.sqlite_util import execute_retry
+    bid = bridge_guard.record_pending(user_id="owner", quote=_quote("0xfilled"),
+                                      amount_usd=1.0, balance_before=BEFORE, db_path=db)
+    execute_retry(db, "UPDATE bridges SET created_at=? WHERE id=?",
+                  (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, bid))
+    seen, notify = _collect_notices()
+    _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),
+                 read_balance=lambda a, c: None, notify=notify))
+    assert [n.state for _, n in seen if n.state == "never_sent"] == []
+    assert bid in {r["id"] for r in bridge_guard.open_bridges("owner", db_path=db)}

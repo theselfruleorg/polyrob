@@ -3,9 +3,11 @@ name: pre-trade-check
 description: 'Measure before you commit a trade: gas row, swap_quote lines (rate, spender, cross-check, value), price impact by a half-size quote, the exit quote, the token screen, and slippage by asset class. Lists what the swap verb already refuses.'
 license: MIT
 metadata:
+  polyrob-when: 'Measuring a trade before you send it'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["defi_data_swap_quote"],"keywords":["pre-trade","pre trade","before a trade","before the swap","price impact","slippage","swap_quote","quote a swap","exit liquidity","exit route"],"task_patterns":["(check|quote|price|measure).*(before|prior to).*(buy|swap|trade)"],"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-requires: '["token-identity"]'
   polyrob-version: '3'
 ---
 # Pre-Trade Check — measure before you commit
@@ -29,7 +31,7 @@ on `swap_quote` or `swap` yet. You measure it with a second quote (step 3).
 
 ## The procedure
 
-1. **Balances first.** `defi_data.portfolio(chain=…)`. Read the `gas (…)` row:
+1. **Balances first.** `defi_data.portfolio(chain=…)`. Read the native-coin row (`ETH …`, `SOL …`):
    a number, `UNKNOWN` (the read failed — not zero), or `EMPTY` (a real zero —
    you cannot pay for the swap or for the exit). Reserve native gas for the
    WHOLE round trip before you size anything: an ERC-20 entry is approve + swap
@@ -68,7 +70,7 @@ on `swap_quote` or `swap` yet. You measure it with a second quote (step 3).
 - any figure you need came back unknown and you would be guessing to fill it;
 - the cross-check says `SUSPECT QUOTE` twice;
 - the exit quote has no route;
-- the gas row is `EMPTY` or `UNKNOWN`.
+- the native-coin row is `EMPTY` or `UNKNOWN`.
 
 ## If a tool is missing
 

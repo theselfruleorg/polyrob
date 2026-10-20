@@ -1,0 +1,23 @@
+{
+  "function": {
+    "description": "Scroll the page in the specified direction (up, down, left, right).",
+    "name": "browser_scroll",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for scrolling the page.",
+      "properties": {
+        "amount": {
+          "default": null,
+          "nullable": true,
+          "type": "integer"
+        },
+        "direction": {
+          "default": "down",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

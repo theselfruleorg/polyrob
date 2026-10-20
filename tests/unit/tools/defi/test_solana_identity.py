@@ -64,30 +64,23 @@ async def test_portfolio_values_solana_usdc_instead_of_calling_it_spam():
 
 
 # --------------------------------------------------------------------------
-# reconcile — the ledger/chain check must cover the Solana book too
+# reconcile — the book/chain check must cover the Solana book too
 # --------------------------------------------------------------------------
 # `reconcile` exists because on 2026-08-25 the agent held three positions
-# on-chain, its ledger said "Open positions: NONE", and it published the wrong
+# on-chain, its record said "Open positions: NONE", and it published the wrong
 # side of that disagreement. Refusing non-EVM chains left the Solana book
 # exposed to the identical failure, and told the agent to "compare it by hand"
 # — the exact manual recall the verb was built to replace.
 
-_SOL_LEDGER = """# Position ledger
-
-## Open positions
-
-| Symbol | Address | Size | Entry | Thesis |
-|---|---|---|---|---|
-| JOY | 9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E | 1000.0 | $0.001 | fresh pump-fun launch |
-"""
+JOY = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E"
+_CTX = type("Ctx", (), {"user_id": "owner-1", "session_id": "s"})()
 
 
-def _sol_ledger(tmp_path, monkeypatch):
+def _sol_book(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    led = tmp_path / "project" / "kb-root-position-ledger.md"
-    led.parent.mkdir(parents=True, exist_ok=True)
-    led.write_text(_SOL_LEDGER)
-    return led
+    from core.open_positions import PositionDelta, apply_delta, open_positions_db_path
+    apply_delta("owner-1", PositionDelta("solana", JOY, "JOY", 1000.0, 1.0),
+                db_path=open_positions_db_path())
 
 
 def _sol_tool(held):
@@ -109,22 +102,20 @@ def _sol_tool(held):
 @pytest.mark.asyncio
 async def test_reconcile_accepts_solana(tmp_path, monkeypatch):
     from tools.defi.data_tool import ReconcileParams
-    led = _sol_ledger(tmp_path, monkeypatch)
+    _sol_book(tmp_path, monkeypatch)
     tool = _sol_tool({RANDOM_MINT: 1000})
-    res = await tool.reconcile(ReconcileParams(chain="solana",
-                                               ledger_path=str(led)))
+    res = await tool.reconcile(ReconcileParams(chain="solana"), execution_context=_CTX)
     assert res.error is None, res.error
     assert "EVM chains only" not in (res.extracted_content or "")
 
 
 @pytest.mark.asyncio
-async def test_reconcile_catches_an_unbacked_solana_ledger_row(tmp_path, monkeypatch):
-    """Ledger claims JOY; the chain holds none of it."""
+async def test_reconcile_catches_an_unbacked_solana_book_row(tmp_path, monkeypatch):
+    """The book holds JOY; the chain holds none of it."""
     from tools.defi.data_tool import ReconcileParams
-    led = _sol_ledger(tmp_path, monkeypatch)
+    _sol_book(tmp_path, monkeypatch)
     tool = _sol_tool({})
-    res = await tool.reconcile(ReconcileParams(chain="solana",
-                                               ledger_path=str(led)))
+    res = await tool.reconcile(ReconcileParams(chain="solana"), execution_context=_CTX)
     assert "DISAGREEMENT" in (res.extracted_content or "")
 
 
@@ -132,10 +123,9 @@ async def test_reconcile_catches_an_unbacked_solana_ledger_row(tmp_path, monkeyp
 async def test_reconcile_reports_a_failed_solana_read_as_unknown_not_zero(tmp_path, monkeypatch):
     """A failed token-account read must never read as 'the position is gone'."""
     from tools.defi.data_tool import ReconcileParams
-    led = _sol_ledger(tmp_path, monkeypatch)
+    _sol_book(tmp_path, monkeypatch)
     tool = _sol_tool(None)
-    res = await tool.reconcile(ReconcileParams(chain="solana",
-                                               ledger_path=str(led)))
+    res = await tool.reconcile(ReconcileParams(chain="solana"), execution_context=_CTX)
     text = res.extracted_content or ""
     assert "DISAGREEMENT" not in text
     assert "UNAVAIL" in text.upper() or "UNVERIFIED" in text.upper()

@@ -120,6 +120,7 @@ from __future__ import annotations
 import asyncio
 
 import logging
+import math
 from typing import Optional
 
 from core.wallet.onchain import USDC_BASE_MAINNET, USDC_BASE_SEPOLIA
@@ -147,6 +148,21 @@ _USDC_ATOMIC_PER_USD = 1_000_000
 #: CR-L26: the longest EIP-3009 authorization window we sign (seconds). The
 #: SDK signs `validBefore = now + max_timeout_seconds`, which the SERVER picks.
 _MAX_AUTHORIZATION_SECONDS = 600
+
+
+def _settle_amount_usd(raw) -> Optional[float]:
+    """The seller-written settle amount in USD, or None when it is not a finite
+    non-negative number (085 W4, x402out L4: a "nan"/"inf"/negative header must
+    not raise AFTER the payment, and must never reach the spend ledger)."""
+    if raw is None:
+        return None
+    try:
+        value = float(raw) / _USDC_ATOMIC_PER_USD
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
 
 
 def _max_authorization_seconds() -> int:
@@ -351,7 +367,15 @@ class RealX402Client:
                 version = int(version) if version is not None else None
             except (TypeError, ValueError):
                 version = None
-            if version == 1:
+            asset = entry.get("asset") or decoded.get("asset")
+            pinned_usdc = RealX402Client._asset_is_canonical_usdc(configured, asset)
+            if pinned_usdc:
+                # 085 W4 (x402out L2): the pinned USDC entry is priced the way
+                # the SDK will sign it — 6 decimals, never the challenge's own
+                # `decimals`, and the field the SDK reads: V1 only on an explicit
+                # `x402Version: 1`, else V2 `amount` (the SDK's default version).
+                raw = entry.get("maxAmountRequired") if version == 1 else entry.get("amount")
+            elif version == 1:
                 raw = entry.get("maxAmountRequired")
             elif version == 2:
                 raw = entry.get("amount")
@@ -369,11 +393,10 @@ class RealX402Client:
                 raw = entry.get("maxAmountRequired")
                 if raw is None:
                     raw = entry.get("amount")
-            decimals = RealX402Client._challenge_decimals(entry)
+            decimals = 6 if pinned_usdc else RealX402Client._challenge_decimals(entry)
             amount = (float(raw) / (10 ** decimals)) if raw is not None else None
             network = entry.get("network") or decoded.get("network")
             pay_to = entry.get("payTo") or entry.get("pay_to") or decoded.get("payTo")
-            asset = entry.get("asset") or decoded.get("asset")
             return {"amount": amount, "network": network, "pay_to": pay_to, "asset": asset}
         except Exception as exc:  # noqa: BLE001
             logger.debug("quote: could not parse 402 header: %s", exc)
@@ -499,9 +522,7 @@ class RealX402Client:
         try:
             from x402.http.utils import decode_payment_response_header
             sr = decode_payment_response_header(header)
-            amount = (
-                float(sr.amount) / _USDC_ATOMIC_PER_USD if sr.amount is not None else None
-            )
+            amount = _settle_amount_usd(sr.amount)
             return {
                 "amount": amount,
                 "network": sr.network,
@@ -553,12 +574,32 @@ class RealX402Client:
             return False, 0.0, False
 
         amount_is_estimate = False
+        authorized = payment_info.get("authorized_amount")
+        if authorized is None:
+            authorized = payment_info.get("amount")
         if settle and settle.get("amount") is not None:
             amount_paid = settle["amount"]
             # success present but not explicitly True (e.g. None/missing field on
             # an older header) → we can't confirm settlement, so the header amount
             # is not gospel: mark it an estimate rather than authoritative.
             amount_is_estimate = settle_success is None
+            # 085 W4 (X402OUT-1): EIP-3009 moves exactly the signed `value`. A
+            # seller header above it is hostile: keep the signed amount, mark it
+            # an estimate, and log the header value — it is never shown or booked.
+            if authorized is not None and amount_paid > authorized + 1e-9:
+                logger.error(
+                    "x402: settle header for %s claims $%r, above the signed "
+                    "authorization $%.6f; using the signed amount", url, amount_paid,
+                    authorized)
+                amount_paid = authorized
+                amount_is_estimate = True
+            elif authorized is None and amount_paid > max_amount_usd:
+                logger.error(
+                    "x402: settle header for %s claims $%r, above max_amount_usd "
+                    "$%.6f with no signed amount known; using the ceiling", url,
+                    amount_paid, max_amount_usd)
+                amount_paid = max_amount_usd
+                amount_is_estimate = True
             if probe_amount is not None and amount_paid > probe_amount + 1e-9:
                 logger.error(
                     "x402: settled amount $%.6f for %s exceeds the pre-pay probe "
@@ -940,8 +981,28 @@ class RealX402Client:
                         "needs an operator release if it stays unresolved", ref,
                         type(exc).__name__)
 
+        def _release_unsent_attempt(ctx):
+            # 085 reval W4: payload creation raised (a signer refusal — its
+            # approval lane, a cap, a pause — or a build error) before the
+            # after-creation hook ran, so no signed authorization left this
+            # process. Close the attempt row; left open it refused every money
+            # rail until an operator released it. Returns None: never recovers.
+            ref = payment_info.get("submission_ref")
+            if not ref or payment_info["happened"]:
+                return None
+            try:
+                from core.wallet.submission_journal import release_unsent_x402
+                release_unsent_x402(ref)
+                payment_info["submission_ref"] = None
+            except Exception as exc:  # noqa: BLE001 — the row stays operator-only
+                logger.warning("x402: unsent attempt %s not released (%s)", ref,
+                               type(exc).__name__)
+            return None
+
         x402_c.on_before_payment_creation(_abort_if_invalid_requirement)
         x402_c.on_after_payment_creation(_capture_payment_info)
+        if hasattr(x402_c, "on_payment_creation_failure"):
+            x402_c.on_payment_creation_failure(_release_unsent_attempt)
 
         from x402.http.clients.httpx import x402AsyncTransport
         from tools.x402.net_guard import (

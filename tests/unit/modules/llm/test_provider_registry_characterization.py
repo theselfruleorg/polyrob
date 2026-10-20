@@ -260,11 +260,9 @@ class TestDefaultModels:
         for k, v in self.PINNED.items():
             assert DEFAULT_MODELS[k] == v
 
-    def test_get_default_model_env_override(self, registry_flag, monkeypatch):
+    def test_get_default_model_registry_default(self, registry_flag, monkeypatch):
         from modules.llm.llm_client_registry import get_default_model
-        monkeypatch.setenv("POLYROB_OPENROUTER_MODEL", "x-ai/grok-4.3")
-        assert get_default_model("openrouter") == "x-ai/grok-4.3"
-        monkeypatch.delenv("POLYROB_OPENROUTER_MODEL")
+        monkeypatch.delenv("DEFAULT_PROVIDER", raising=False)
         assert get_default_model("openrouter") == "z-ai/glm-5.2"
         # unknown provider falls back to the openai default
         assert get_default_model("nope") == self.PINNED["openai"]

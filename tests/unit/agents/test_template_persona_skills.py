@@ -34,18 +34,13 @@ PACK_SKILLS = {"lead-research": "polyrob_discovery", "web-scraping": "polyrob_di
 
 def _skill_sources():
     """(SKILL.md roots, merged rules): the builtin library plus every loaded pack."""
-    import json
-    import os
     from pathlib import Path
     from core.packs.state import skill_dirs
-    base = Path("data/prompts/skills")
-    roots = [base]
-    rules = json.loads((base / "rules.json").read_text())
-    for _pack_id, root in skill_dirs():
-        roots.append(Path(root))
-        extra = Path(root) / "rules.json"
-        if extra.is_file():
-            rules = {**json.loads(extra.read_text()), **rules}
+    from core.skills.catalog import load_builtin_rules
+    roots = [Path("data/prompts/skills")] + [Path(root) for _pack_id, root in skill_dirs()]
+    rules = {}
+    for root in reversed(roots):
+        rules.update(load_builtin_rules(root))
     return roots, rules
 
 
@@ -67,10 +62,9 @@ def test_seeded_skill_ids_exist_on_disk():
 
 
 def test_seeded_skill_ids_have_rules_entry():
-    """Every seeded skill id must have a rules.json entry (builtin or its pack's).
-
-    The runtime force-include path (get_skills_for_session) requires a rules
-    entry to match; a SKILL.md-only skill is invisible at runtime.
+    """Every seeded skill id must declare a rule in its frontmatter (builtin or
+    its pack's). The runtime pin path (get_pinned_skills) requires a rule to
+    load; a SKILL.md with no polyrob metadata is invisible at runtime.
     """
     _, rules = _skill_sources()
     for tpl in TEMPLATES.values():
@@ -78,6 +72,6 @@ def test_seeded_skill_ids_have_rules_entry():
             if _pack_absent(sid):
                 continue
             assert sid in rules, (
-                f"{tpl.name} seeds '{sid}' but no rules.json has an entry for it; "
+                f"{tpl.name} seeds '{sid}' but its frontmatter declares no rule; "
                 f"the skill will be invisible at runtime."
             )

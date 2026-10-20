@@ -124,6 +124,10 @@ class SessionStatusResponse(BaseModel):
         None,
         description="Live run activity: {phase, detail, seconds_in_state, step, call_id}; null when unknown/remote"
     )
+    # 083 WS-1: why the session's last run stopped (runtime.stop_reason value:
+    # done, max_steps, failures, run_budget, ...). None while unknown/remote.
+    stop_reason: Optional[str] = Field(
+        None, description="Why the last run stopped (e.g. done, max_steps); null when unknown/remote")
     
     # Debugging
     internal_status: Optional[str] = Field(

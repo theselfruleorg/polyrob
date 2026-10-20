@@ -1,6 +1,6 @@
 """Where `send_message` goes in an AUTONOMOUS run — and telling the agent so.
 
-Prod 2026-10-09 19:01: the hourly den-engagement cron read The Public Den,
+Prod 2026-10-09 19:01: the hourly room-engagement cron read its group room,
 decided to answer ``@EmilyWhale``, and called ``send_message`` instead of
 ``message(surface=…, target=<den>, …)``. In a goal/cron run ``send_message`` has
 exactly one destination — the owner's private chat (§3.1) — so the room reply
@@ -72,6 +72,29 @@ def third_party_address_refusal(controller: Any, text: str):
             "line really is for your owner, send it again without the leading "
             f"@{handle}."),
         include_in_memory=True)
+
+
+def annotate_decided_tokens(controller: Any, text: str, user_id: str) -> str:
+    """Rewrite approval tokens the owner already decided (core.self_evolution).
+
+    2026-10-17: Rob asked the owner to tap /approve_p_a9d770 nine hours after
+    the owner had approved it. Fail-open: any fault returns the text unchanged."""
+    if not text or "_p_" not in text:
+        return text
+    try:
+        from core.instance import resolve_instance_id
+        from core.runtime_paths import data_dir_or_home
+        from core import self_evolution as se
+        cfg = getattr(getattr(controller, "container", None), "config", None)
+        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        live = se.list_pending(user_id, home_dir=data_dir, instance_id=resolve_instance_id())
+        out = se.annotate_decided_tokens(text, user_id=user_id, live_items=live)
+        if out != text:
+            logger.info("send_message: rewrote an already-decided approval token")
+        return out
+    except Exception:
+        logger.debug("send_message: decided-token check skipped", exc_info=True)
+        return text
 
 
 async def route_autonomous_send(controller: Any, text: str) -> Optional[str]:

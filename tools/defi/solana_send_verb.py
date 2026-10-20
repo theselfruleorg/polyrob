@@ -82,6 +82,9 @@ class SolanaTransferParams(BaseModel):
     dry_run: bool = Field(True, description=(
         "TRUE (default) builds, simulates and returns the guard's verdict "
         "without broadcasting. Set false to actually move funds."))
+    send_anyway: bool = Field(False, description=(
+        "Only for a token whose value is NOT VERIFIED (no spend-grade price). "
+        "It sends only on the owner's own turn; your call goes to the owner."))
 
 
 # -- seams (monkeypatched in tests) ------------------------------------------
@@ -160,13 +163,14 @@ def _idem(mint: Optional[str], to: str, amount_raw: int, execution_context) -> s
 
 async def perform_solana_transfer(tool, params, execution_context=None):
     from core.wallet import spl_token, tx_guard, tx_notify
+    from core.wallet.tx_guard_steps.value import UNVERIFIED_MARK
     from core.wallet.addresses import normalize_for_chain
     from core.wallet.solana_rail import confirmation_outcome
     from tools.defi.bridge_verb import _solana_turn_refusal
     from tools.defi.trade_tool import _WSOL_MINT, _solana_trade_enabled
 
-    def refuse(why: str, kind=None):
-        return tool._ar(error=f"refused: {why}. {_NOT_SENT}", error_kind=kind)
+    def refuse(why: str):
+        return tool._ar(error=f"refused: {why}. {_NOT_SENT}")
 
     if not _solana_trade_enabled():
         from core.remedy import flag_remedy
@@ -175,7 +179,8 @@ async def perform_solana_transfer(tool, params, execution_context=None):
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return refuse("agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return refuse(WALLET_OFF_TEXT)
     try:
         signer = wallet.solana_signer()
     except Exception as exc:
@@ -308,10 +313,8 @@ async def perform_solana_transfer(tool, params, execution_context=None):
         reason = getattr(deltas, "reason", "no result") if deltas else "no result"
         hint = ("; a brand-new address must receive at least the rent-exempt "
                 "minimum (~0.00089 SOL)" if native and not recipient_exists else "")
-        from core.security.refusal_taint import simulation_kind
         return refuse(f"the simulation did not pass ({reason}){hint}. A "
-                      f"simulation that did not run is not one that passed",
-                      simulation_kind(deltas))
+                      f"simulation that did not run is not one that passed")
 
     header = (f"solana transfer {params.amount:g} {shown} -> {to}\n")
     check = _assert_deltas(deltas, native=native, mint=mint, to=to,
@@ -340,6 +343,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             "  guard: refused — SOL could not be priced, so the outflow cannot "
             f"be held to any cap\n  {_NOT_SENT}"))
     amount_usd = lamports_out / 1e9 * float(sol_px)
+    unverified = False
     if not native:
         if mint == tool._solana_usdc_mint():
             token_px = 1.0
@@ -349,11 +353,37 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             except Exception:
                 token_px = None
         if not token_px or token_px <= 0:
-            return tool._ar(content=header + (
-                f"  guard: refused — the token {mint} could not be priced by a "
-                f"trustworthy source, so the send cannot be held to any cap\n"
-                f"  {_NOT_SENT}"))
-        amount_usd += amount_raw / (10 ** decimals) * float(token_px)
+            # A wallet sends any token it holds (2026-10-17): the EVM rule
+            # (tx_guard_steps.value._unverified_send) — the owner's "send
+            # anyway", owner lanes only, never valued as free.
+            from tools.defi.transfer_verb import owner_typed_anyway
+            if not owner_typed_anyway(params, execution_context):
+                return tool._ar(content=header + (
+                    f"  guard: refused: {UNVERIFIED_MARK} — the token {mint} is not "
+                    f"priced at spend grade, so the caps cannot measure it. The "
+                    f"owner can still send it with the extra 'send anyway' step "
+                    f"(`/send … anyway`).\n  lane:  refuse\n  {_NOT_SENT}"))
+            unverified = True
+            try:
+                token_px = await asyncio.to_thread(
+                    getattr(tool, "_fallback_price", lambda c, a: None), "solana", mint)
+            except Exception:
+                token_px = None
+            if token_px and token_px > 0:
+                header += (f"  value check: {UNVERIFIED_MARK} — the only price is "
+                           f"low-confidence; the caps use it as an estimate. Check "
+                           f"the amount yourself.\n")
+            else:
+                token_px = None
+                charge = (tx_guard.autonomous_max_usd(*tx_guard.ceiling_scope(
+                    execution_context)) + tx_guard._UNVALUED_GRANT_EPSILON_USD)
+                amount_usd += charge
+                header += (f"  value check: {UNVERIFIED_MARK} — no source prices "
+                           f"this token; the caps charge ${charge:.2f} as a "
+                           f"placeholder. Check what this token is before you send "
+                           f"it.\n")
+        if token_px:
+            amount_usd += amount_raw / (10 ** decimals) * float(token_px)
     from core.money.valuation import usd_ceiling
     amount_usd = usd_ceiling(amount_usd)
     declared = float(params.max_spend_usd)
@@ -384,6 +414,11 @@ async def perform_solana_transfer(tool, params, execution_context=None):
                 f"  guard: owner approval required: ${amount_usd:.2f} is above "
                 f"the autonomous ceiling ${ceiling:.2f}\n  lane:  owner_queue\n"
                 f"  {_NOT_SENT}"))
+        if unverified and not owner_direct and not owner_granted:
+            return tool._ar(content=header + (
+                f"  guard: owner approval required: {UNVERIFIED_MARK} — only the "
+                f"owner can send a token with no spend-grade price\n"
+                f"  lane:  owner_queue\n  {_NOT_SENT}"))
         if autonomous_origin and not getattr(gate, "has_daily_cap", False):
             return tool._ar(content=header + (
                 "  guard: refused — unattended sending needs an aggregate damage "
@@ -423,10 +458,9 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             # The RPC may have accepted the bytes and lost its reply: that is
             # UNKNOWN, never "not sent". The submission journal holds the
             # signature and blocks a second spend until it is reconciled.
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            from core.wallet.broadcast.evm import broadcast_failure_text
             return tool._ar(error=broadcast_failure_text(
-                exc, nothing="funds were NOT sent"),
-                error_kind=broadcast_error_kind(exc))
+                exc, nothing="funds were NOT sent"))
         # Recorded on broadcast: a send that lands and FAILS still paid its fee,
         # and one that lands late is a spend the caps must already see.
         if _lane != "autonomous" and hasattr(gate, "note_lane"):

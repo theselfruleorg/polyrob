@@ -54,12 +54,14 @@ def test_import_and_construct_does_not_pollute_cwd(tmp_path):
     assert not (tmp_path / "logs").exists(), "import core polluted CWD with ./logs"
 
 
-def test_config_data_dir_resolves_under_base_dir(tmp_path, monkeypatch):
-    """A1: after construction the data_dir is absolute and under base_dir."""
+def test_config_data_dir_is_the_data_home(tmp_path, monkeypatch):
+    """A1 / 080 WS-1: after construction the data_dir is absolute, IS the data
+    home (never ``<code root>/data``), and nothing lands in ./data."""
     monkeypatch.chdir(tmp_path)
     from core.config import BotConfig
+    from core.runtime_paths import effective_data_home
 
     cfg = BotConfig()
     assert Path(cfg.data_dir).is_absolute()
-    assert str(cfg.data_dir).startswith(cfg.base_dir)
+    assert Path(cfg.data_dir) == effective_data_home()
     assert not (tmp_path / "data").exists()

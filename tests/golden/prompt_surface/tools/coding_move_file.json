@@ -1,0 +1,30 @@
+{
+  "function": {
+    "description": "Move/rename a file within the workspace",
+    "name": "coding_move_file",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "dest_path": {
+          "description": "Destination path (relative to the workspace)",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "description": "Allow overwriting an existing destination",
+          "type": "boolean"
+        },
+        "src_path": {
+          "description": "Existing path to move (relative to the workspace)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src_path",
+        "dest_path"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

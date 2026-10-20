@@ -107,7 +107,7 @@ _BY_ALIAS: Dict[str, RpcTool] = {t.alias: t for t in RPC_TOOLS}
 
 #: Action names that are never callable from a script, whatever the table says.
 NEVER_ACTIONS = frozenset({
-    "send_message", "message", "done", "subtask", "parallel_subtasks",
+    "send_message", "message", "done",
     "delegate_task", "tool_call", "code_execution_run_code", "memory",
     "skill_manage", "preferences", "mcp_install",
 })
@@ -118,7 +118,7 @@ HIGH_IMPACT_EXEMPT = frozenset({"web_fetch", "perplexity", "shell"})
 DELEGATE_BLOCKED_EXEMPT = frozenset({"shell"})
 #: Outward write effects a script tool may never carry.
 FORBIDDEN_EFFECTS = frozenset({
-    "writes_money", "writes_comms", "writes_social", "writes_public",
+    "money", "writes_comms", "writes_social", "writes_public",
     "writes_self", "writes_network",
 })
 

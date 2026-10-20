@@ -1,6 +1,6 @@
 """`doctor --flags`: the posture-member block (D7, 2026-10-10).
 
-The 51 posture members have no flags-catalog row, so ``flags_report`` in
+The 50 posture members have no flags-catalog row, so ``flags_report`` in
 ``cli/commands/doctor.py`` appends this block after the catalog rows.
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ _MEMBER_GROUP = "Posture bundles (members)"
 
 def member_flag_lines(env: dict, group_needle, search_needle, changed: bool,
                       show_all: bool) -> tuple:
-    """D7: the 51 posture members have no catalog row; show each with its value
+    """D7: the 50 posture members have no catalog row; show each with its value
     and source (the bundle, or its POLYROB_OVERRIDES entry). A member set on
     its own env line is marked IGNORED. Returns (lines, hidden count)."""
     from core.config_policy.members import (MEMBER_FLAGS, member_flag, member_source,

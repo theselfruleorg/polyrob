@@ -1,0 +1,38 @@
+{
+  "function": {
+    "description": "Raise a DURABLE owner ask that HOLDS specific goals (blocks_goal_ids) until the owner answers. For any other owner decision use owner_ask — it tells the owner, offers taps and hands the answer to this rail's next run. Lands on the board, shows in /status, /pending and the daily digest; dedups against your OPEN asks, so call it every time you skip on the same blocker.",
+    "name": "goal_ask",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "A durable OWNER-FACING need: \"I require a decision/resource from you to proceed\".",
+      "properties": {
+        "blocks_goal_ids": {
+          "default": null,
+          "description": "Goal ids this ask blocks (they are HELD until the owner answers, then re-armed).",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "what": {
+          "description": "The decision or resource you need from the owner, as ONE question they can answer in a word or two (name the options: 'A) … or B) …'). This lands on the durable board, shows in /status, /pending and the daily digest, and is deduplicated: a matching OPEN ask is refreshed, never duplicated — so raise it EVERY time you skip on it; never fall back to 'I asked once, I will not spam'.",
+          "maxLength": 600,
+          "minLength": 8,
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "description": "Evidence: what is blocked, since when, what you tried, the numbers. Written for a phone.",
+          "maxLength": 1200,
+          "type": "string"
+        }
+      },
+      "required": [
+        "what"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

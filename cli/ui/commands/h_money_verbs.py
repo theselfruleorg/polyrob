@@ -143,8 +143,8 @@ def register(reg, Command) -> None:
     ))
     reg.register(Command(
         "bridge", h_bridge,
-        "Move native value between chains (quotes unless you add 'go')",
-        usage="<from> <to> <amount> [go]", group="money",
+        "Move value between chains (quotes unless you add 'go')",
+        usage="<from> <to> <amount> [from usdc] [as <asset>] [go]", group="money",
         help_long=HELP_BRIDGE[0], elsewhere=HELP_BRIDGE[1],
     ))
     reg.register(Command(

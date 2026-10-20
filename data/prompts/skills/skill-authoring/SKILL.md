@@ -3,10 +3,10 @@ name: skill-authoring
 description: How to write a durable, safe skill (read-before-edit, no injection, no secrets).
 license: MIT
 metadata:
+  polyrob-when: 'Writing or editing a skill'
   polyrob-priority: '4'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"keywords":["author skill","write skill","create skill","edit skill"]}'
-  polyrob-version: '2'
+  polyrob-version: '3'
 ---
 # Skill Authoring
 
@@ -25,7 +25,10 @@ How to write a durable, safe skill in this system.
   characters, at most 40,000 (`MAX_SKILL_FILE_CHARS`) — a bigger file is refused.
 - Describe the procedure as advisory steps, tool-graceful: if a tool is absent, say so and
   fall back, never hard-fail.
-- `tool_ids` in a skill are METADATA for matching only — they do NOT grant capabilities.
+- Give the skill a `metadata.polyrob-when` line in its frontmatter: when to load it, task
+  first, at most 60 characters (e.g. `polyrob-when: 'Calibrating a widget'`). Sessions see
+  only this line in their skill index; a longer line is refused.
+- `tool_ids` in a skill are a GATE for the index only — they do NOT grant capabilities.
   Never imply a skill can use a tool the session lacks.
 
 ## Don't

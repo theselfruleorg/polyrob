@@ -896,6 +896,11 @@ async def settle_payment_request(
     return settled
 
 
+#: 085 F1: the longest a Solana invoice is held past its deadline waiting for
+#: its final uncapped reference pass.
+_SVM_EXPIRY_HOLD_SEC = 3600
+
+
 async def expire_stale_requests(*, db=None, now: Optional[float] = None) -> List[Dict[str, Any]]:
     """pending + past deadline → expired. Returns the expired invoice dicts and
     emits one payment_expired event each."""
@@ -910,7 +915,28 @@ async def expire_stale_requests(*, db=None, now: Optional[float] = None) -> List
         (cutoff, json.dumps(list(PAYABLE_KINDS))),  # CR-M17: room actions expire too
     )
     expired = []
+    svm_hold = None
     for row in rows or []:
+        meta = _row_metadata(row)
+        if meta.get("chain_family") == "svm" and not meta.get("svm_final_pass"):
+            # 085 F1: a Solana invoice expires only after ONE complete,
+            # uncapped pass over its reference (`_scan_solana` stamps
+            # `svm_final_pass`) — reference spam must not run out the clock on a
+            # real payment. Held at most an hour past the deadline, so a dead
+            # RPC cannot keep an invoice open forever; with the Solana pass
+            # switched off nothing would ever stamp it, so nothing is held.
+            if svm_hold is None:
+                try:
+                    from modules.x402.settlement_scan import solana_settle_enabled
+                    svm_hold = bool(solana_settle_enabled())
+                except Exception:
+                    svm_hold = False
+            try:
+                within = int(row["deadline"]) >= cutoff - _SVM_EXPIRY_HOLD_SEC
+            except (KeyError, TypeError, ValueError):
+                within = False
+            if svm_hold and within:
+                continue
         cur = await database.execute(
             "UPDATE x402_payment_requests SET status='expired', updated_at=datetime('now') "
             "WHERE id = ? AND status = 'pending'",
@@ -920,7 +946,6 @@ async def expire_stale_requests(*, db=None, now: Optional[float] = None) -> List
             # lost the race to a concurrent settle — not actually expired; never
             # emit a false payment_expired for a payment that was in fact paid
             continue
-        meta = _row_metadata(row)
         tenant = meta.get("tenant_id") or row.get("user_id") or ""
         _emit("payment_expired", user_id=tenant,
               session_id=meta.get("session_id") or "", attrs={

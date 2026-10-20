@@ -71,9 +71,15 @@ def test_the_book_skills_point_at_the_positions_verb():
     assert "average cost" in texts["position-journal"].lower()
 
 
+def _treasury_chains():
+    """treasury-trading's chain table lives in its references (081 WS-4.4)."""
+    path = ROOT / "data/prompts/skills/treasury-trading/references/chains.md"
+    return path.read_text(encoding="utf-8")
+
+
 def test_someone_elses_wallet_is_wallet_holdings():
     texts = dict(_skill_texts())
-    assert "defi_data.wallet_holdings" in texts["treasury-trading"]
+    assert "defi_data.wallet_holdings" in _treasury_chains()
     assert "defi_data.wallet_holdings" in texts["position-journal"]
 
 
@@ -102,7 +108,7 @@ def test_treasury_chain_table_says_which_chains_are_read_only():
     """Every chain in the treasury-trading table that the registry marks
     read-only is marked `no` in its Money column, and vice versa."""
     from core.wallet import chains
-    text = dict(_skill_texts())["treasury-trading"]
+    text = _treasury_chains()
     rows = re.findall(r"^\| \*\*(\w+)\*\* \| ([^|]+) \|", text, re.M)
     assert rows, "the chain table moved — update this ratchet"
     for chain, money in rows:

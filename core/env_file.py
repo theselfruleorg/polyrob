@@ -116,6 +116,21 @@ def upsert_env_var(path: Path, key: str, value: str, *, secure: bool = True) -> 
     else:
         lines.append(line)
     write_private_file(path, "\n".join(lines) + "\n", mode=0o600 if secure else None)
+    _note_custody_write(path, key, value)
+
+
+def _note_custody_write(path: Path, key: str, value: str) -> None:
+    """085 W1: a wallet key written into an env file (``polyrob wallet init``,
+    ``polyrob config set``, the console) is recorded, so the readable-file gap
+    shows in THIS process before a restart. Never raises."""
+    if not value:
+        return
+    try:
+        from core.security.custody_env import CUSTODY_SECRET_ENV, note_env_file
+        if key in CUSTODY_SECRET_ENV:
+            note_env_file(path)
+    except Exception:  # pragma: no cover - a record never fails a completed write
+        pass
 
 
 def remove_env_var(path: Path, key: str, *, secure: bool = True) -> bool:

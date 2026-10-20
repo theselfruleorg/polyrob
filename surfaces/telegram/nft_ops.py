@@ -28,6 +28,8 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional
 
+from core.surfaces.cards import is_go_word, with_go_hint
+
 logger = logging.getLogger(__name__)
 
 #: Chain used when the owner names none. Matches the tool defaults.
@@ -90,7 +92,7 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
         return f"Unknown /nft verb {verb!r}.\n{USAGE}"
 
     execute = False
-    if tokens and tokens[-1].lower() in ("go", "execute", "confirm"):
+    if tokens and is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
 
@@ -154,10 +156,10 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
                                   dry_run=not execute), ctx)
             body = _render(result)
             if not execute and not body.startswith("❌"):
-                body += ("\n\nAdd `go` to send it: /nft transfer "
-                         f"{tokens[0]} {token_id} {tokens[2]} on {chain} go\n"
-                         "⚠️ It is irreversible, and it will come to you for "
-                         "approval whatever your caps say.")
+                body = with_go_hint(body, "\n\nAdd `go` to send it: /nft transfer "
+                                    f"{tokens[0]} {token_id} {tokens[2]} on {chain} go\n"
+                                    "⚠️ It is irreversible, and it will come to you for "
+                                    "approval whatever your caps say.")
             return body
 
         if len(tokens) < 2:
@@ -167,8 +169,8 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
                             operator=tokens[1], dry_run=not execute), ctx)
         body = _render(result)
         if not execute and not body.startswith("❌"):
-            body += ("\n\nAdd `go` to retire it: /nft revoke "
-                     f"{tokens[0]} {tokens[1]} on {chain} go")
+            body = with_go_hint(body, "\n\nAdd `go` to retire it: /nft revoke "
+                                f"{tokens[0]} {tokens[1]} on {chain} go")
         return body
     except Exception as exc:
         logger.warning("nft verb %s failed", verb, exc_info=True)
@@ -216,8 +218,8 @@ async def _agent_nft_send(ctx, target: str, to: str, *, chain: str, execute: boo
     result = await AgentNftTool().agent_nft_withdraw_token(params, ctx)
     body = _render(result)
     if not execute and not body.startswith("❌"):
-        body += (f"\n\nAdd `go` to send it: /nft send {target} {to} on {chain} go\n"
-                 "⚠️ It is irreversible: the NFT and its account leave this treasury.")
+        body = with_go_hint(body, f"\n\nAdd `go` to send it: /nft send {target} {to} on {chain} go\n"
+                            "⚠️ It is irreversible: the NFT and its account leave this treasury.")
     return body
 
 

@@ -116,7 +116,7 @@ async def test_undownloadable_attachment_is_named_never_silent(workspace):
 
     turn = agent.delivered[0]
     assert "report.pdf" in turn["text"]
-    assert turn["metadata"] is None
+    assert turn["metadata"] == {"typed_text": "see this"}   # 085 W3: no images, typed words only
 
 
 @pytest.mark.asyncio
@@ -166,4 +166,4 @@ async def test_no_fetcher_names_the_files_it_could_not_store(workspace):
     text = agent.delivered[0]["text"]
     assert text.startswith("hi")
     assert "shot.png" in text and "could NOT store" in text
-    assert agent.delivered[0]["metadata"] is None
+    assert agent.delivered[0]["metadata"] == {"typed_text": "hi"}   # 085 W3

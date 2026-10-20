@@ -180,13 +180,31 @@ async def test_schema_validation_error_comes_back_as_a_result(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_a_rejection_shows_the_parameter_shape_inline(tmp_path, monkeypatch):
+    """Prod 2026-10-14 18:20Z: the model sent tool_call(cronjob_schedule, arguments={})
+    18 times in a row; the rejection only said "Field required" and pointed at
+    tool_describe. It now names the empty arguments and every field with its type,
+    so the next call can be right without another lookup."""
+    monkeypatch.setenv("TOOL_SCHEMAS_FROZEN", "true")
+    c = _make_controller(tmp_path)
+    _register_late(c)
+    from tools.controller.tool_call_bridge import perform_tool_call
+    res = await perform_tool_call(c, "late_echo", {})
+    text = res.extracted_content or ""
+    assert "`arguments` was empty" in text
+    assert "text (string, required): what to echo" in text
+    assert "times (integer, optional): how many times" in text
+
+
+@pytest.mark.asyncio
 async def test_unknown_name_is_a_structured_refusal(tmp_path, monkeypatch):
     monkeypatch.setenv("TOOL_SCHEMAS_FROZEN", "true")
     c = _make_controller(tmp_path)
     from tools.controller.tool_call_bridge import perform_tool_call
     res = await perform_tool_call(c, "no_such_action", {})
     assert res.error is None
-    assert "no action named 'no_such_action'" in (res.extracted_content or "")
+    # 081 WS-3.1: the one not-loaded refusal (no tool owns this name).
+    assert "'no_such_action' is not an action you hold" in (res.extracted_content or "")
     assert "tool_search" in (res.extracted_content or "")
 
 
@@ -293,7 +311,7 @@ async def test_load_tool_result_is_unchanged_when_the_freeze_is_off(tmp_path, mo
 
     from tools.tool_disclosure import perform_load_tool
     res = await perform_load_tool(c, "web_fetch")
-    assert "its actions are available from the next step." in (res.extracted_content or "")
+    assert "its actions are in your tool list from the next step." in (res.extracted_content or "")
 
 
 def test_catalog_header_and_describe_name_the_bridge_when_frozen(tmp_path, monkeypatch):
@@ -301,7 +319,10 @@ def test_catalog_header_and_describe_name_the_bridge_when_frozen(tmp_path, monke
     monkeypatch.setenv("TOOL_PROGRESSIVE_DISCLOSURE", "true")
     c = _make_controller(tmp_path)
     c.get_all_actions_for_provider("openai")
-    assert "tool_call(name=" in c.render_tool_catalog()
+    # 081 WS-3.1: ONE catalog wording on every seat — it names load_tool and says
+    # the load result tells how to call; the bridge sentence is in that result.
+    from tools.tool_disclosure import CATALOG_INTRO
+    assert CATALOG_INTRO in c.render_tool_catalog()
 
     monkeypatch.setattr(
         "tools.tool_search.resolve_tool_status",
@@ -312,3 +333,54 @@ def test_catalog_header_and_describe_name_the_bridge_when_frozen(tmp_path, monke
                          loaded_ids=set(c.list_tools()), is_leaf=False,
                          mcp_tools={}, registry=c.registry)
     assert "tool_call(" in text
+
+
+# --------------------------------------------------------------------------
+# E-4 (2026-10-14 review): an autonomous disclosure run is bridge by default
+# --------------------------------------------------------------------------
+
+def _make_session_controller(tmp_path, sid):
+    import agents.task.agent.service  # noqa: F401
+    from tools.controller.service import Controller
+    orch = types.SimpleNamespace(session_id=sid, user_id="u1", workspace_dir=str(tmp_path))
+    container = types.SimpleNamespace(config=types.SimpleNamespace(data_dir=str(tmp_path)))
+    return Controller(container=container, orchestrator=orch)
+
+
+def test_an_autonomous_run_pins_its_tools_and_bridges_late_ones(tmp_path, monkeypatch):
+    from core.autonomy_marker import mark_autonomous
+    monkeypatch.delenv("TOOL_SCHEMAS_FROZEN", raising=False)
+    monkeypatch.delenv("AUTONOMOUS_TOOL_DISCLOSURE", raising=False)
+    mark_autonomous("e4-cron-1", None, cron_job_id="j1")
+    c = _make_session_controller(tmp_path, "e4-cron-1")
+    assert c.has_action("tool_call")
+    before = _names(c.get_all_actions_for_provider("openai"))
+    assert c.registry.schemas_frozen() is True
+    _register_late(c)
+    after = _names(c.get_all_actions_for_provider("openai"))
+    assert after == before, "a late tool must not change an autonomous run's tools[]"
+
+
+def test_an_owner_chat_keeps_grow(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOOL_SCHEMAS_FROZEN", raising=False)
+    monkeypatch.delenv("TOOL_PROGRESSIVE_DISCLOSURE", raising=False)
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    c = _make_session_controller(tmp_path, "e4-owner-chat")
+    assert not c.has_action("tool_call")
+    c.get_all_actions_for_provider("openai")
+    assert c.registry.schemas_frozen() is False
+
+
+def test_autonomous_bridge_can_be_turned_off(tmp_path, monkeypatch):
+    from core.autonomy_marker import mark_autonomous
+    from tools.tool_disclosure import session_late_tool_mode
+    monkeypatch.delenv("TOOL_SCHEMAS_FROZEN", raising=False)
+    monkeypatch.delenv("TOOL_PROGRESSIVE_DISCLOSURE", raising=False)
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.setenv("AUTONOMOUS_TOOL_DISCLOSURE", "false")
+    mark_autonomous("e4-cron-2", None, cron_job_id="j2")
+    assert session_late_tool_mode("openai", "e4-cron-2") == "grow"
+    monkeypatch.setenv("AUTONOMOUS_TOOL_DISCLOSURE", "true")
+    assert session_late_tool_mode("openai", "e4-cron-2") == "bridge"
+    # a capable Anthropic seat keeps `deferred` (also prefix-stable)
+    assert session_late_tool_mode("anthropic", "e4-cron-2") == "deferred"

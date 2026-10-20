@@ -26,7 +26,7 @@ def test_an_allowed_room_is_reported_with_its_name_and_mode(tmp_path, monkeypatc
     container = types.SimpleNamespace(
         config=types.SimpleNamespace(data_dir=str(tmp_path)),
         get_service=lambda n: None)
-    group_admin.allow_here(container, "telegram", "-1", "The Public Den", owner_uid="owner")
+    group_admin.allow_here(container, "telegram", "-1", "The Lobby", owner_uid="owner")
     group_admin.set_mode(container, "owner", "telegram", "-1", "active")
 
     sec = _groups_section("owner", str(tmp_path))
@@ -37,13 +37,13 @@ def test_an_allowed_room_is_reported_with_its_name_and_mode(tmp_path, monkeypatc
     # 057 WS-D: the allowlist note is a dated LABEL beside the name, never the
     # title — `allow_here` wrote the same string to both homes, so they agree here.
     label = rooms[0].pop("label")
-    assert label.startswith('label: "The Public Den" (set 20')
+    assert label.startswith('label: "The Lobby" (set 20')
     assert rooms == [
-        {"surface": "telegram", "chat_id": "-1", "name": "The Public Den",
+        {"surface": "telegram", "chat_id": "-1", "name": "The Lobby",
          "mode": "active", "replies_today": 0, "ledger_rows": 0, "last_write": None,
          "note": "surfaces.db absent"},
     ]
-    assert any("The Public Den" in ln and "mode=active" in ln
+    assert any("The Lobby" in ln and "mode=active" in ln
               and "surfaces.db absent" in ln for ln in sec.lines)
     assert not os.path.exists(os.path.join(str(tmp_path), "surfaces.db"))
 

@@ -41,6 +41,9 @@ async def test_search_runs_sqlite_off_the_event_loop(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr(mod, "execute_retry", _fake_execute_retry)
+    # the FTS read shape moved to the keyword-recall mixin (2026-10-13 split)
+    from modules.memory import sqlite_recall
+    monkeypatch.setattr(sqlite_recall, "execute_retry", _fake_execute_retry)
 
     await provider.search("some meaningful query terms", user_id="u1", session_id="s1")
 

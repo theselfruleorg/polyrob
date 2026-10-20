@@ -29,7 +29,8 @@ async def perform_approve_token(tool, params, execution_context=None):
         return tool._ar(error=chain_err)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     try:
         token = normalize_address(params.token)
         spender = normalize_address(params.spender)
@@ -150,7 +151,8 @@ async def perform_revoke_approval(tool, params, execution_context=None):
         return tool._ar(error=chain_err)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     try:
         token = normalize_address(params.token)
         spender = normalize_address(params.spender)

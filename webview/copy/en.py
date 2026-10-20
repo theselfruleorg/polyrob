@@ -61,6 +61,9 @@ STRINGS = {
     # The in-progress count (running goals + cron runs + live sessions, from the
     # ONE live reader). Absent when nothing is measured as running — never a 0.
     "shell.state.running_busy": "Rob is running, {count} in progress.",
+    # 080: not paused, nothing running, and the scheduler and the goal loop
+    # are both off — "running" would promise work that nothing will start.
+    "shell.state.idle": "Rob is idle: {why}.",
     "shell.state.paused": "Rob is paused.",
     "shell.state.paused_until": "Rob is paused until {until}.",
     # The pause record is read fail-CLOSED: unreadable IS paused, because that
@@ -250,10 +253,10 @@ STRINGS = {
     "money.book.total_label": "Positions, at today's prices",
     "money.book.total_excludes": "not counted here: {chains}",
 
-    # W1: what the rail tracks that the ledger does not, a position's
+    # W1: the positions that wait on an owner decision, a position's
     # lifecycle, the one-symbol-two-contracts warning, and the tokens Rob
     # trusts. Every button asks before it acts.
-    "money.book.tracked_title": "Tracked by the rail, not in the ledger",
+    "money.book.tracked_title": "Waiting on your decision",
     "money.book.tracked_aside": "the identity check reads these",
     "money.book.state_quarantined": "quarantined — a look-alike, not the real token",
     "money.book.state_written_off": "written off",
@@ -717,7 +720,7 @@ STRINGS = {
     # The four Work tabs. Only Log is live this phase; the other three are the
     # names of what is coming, rendered but not yet reachable.
     "work.tab.now": "Now & next",
-    "work.tab.schedule": "On a clock",
+    "work.tab.schedule": "Scheduled jobs",
     "work.tab.apps": "Apps",
     "work.tab.log": "Log",
 
@@ -727,19 +730,16 @@ STRINGS = {
     "work.create.goal_no_title": "A goal needs a title before I can add it.",
     "work.create.goal_duplicate": "I already have a goal much like that one.",
     "work.create.goal_invalid": "I could not add that goal.",
-    "work.create.cron_ok": "I put it on the clock.",
+    "work.create.cron_ok": "I made it a scheduled job.",
     "work.create.cron_no_task": "A scheduled task needs something to do.",
     "work.create.cron_no_schedule": "A scheduled task needs a time to run.",
     "work.create.cron_bad_schedule": "I could not read that schedule.",
+    "work.create.cron_unreadable": "I could not read the job list, so I did not schedule it. Try again in a moment.",
     "work.create.tools_shape": "The tools must be a list of names.",
-    # 043 A44: a step budget is REFUSED, never clamped — quietly halving it
-    # produces a run that stops short for a reason nobody was told.
-    "work.create.max_steps_shape": "The step budget has to be a whole number.",
-    "work.create.max_steps_range": "The step budget has to be between 6 and 60.",
 
     "work.sub": (
         "Everything Rob has done, newest first — the work it starts itself, "
-        "your chats, what runs on a clock, the money, the messages it sent you, "
+        "your chats, the scheduled jobs, the money, the messages it sent you, "
         "and what it changed about itself."
     ),
 
@@ -747,7 +747,7 @@ STRINGS = {
     # words for the classes the stream is read into, keyed by the class itself.
     "work.log.everything": "Everything",
     "work.log.class_goal": "Its own work",
-    "work.log.class_cron": "On a clock",
+    "work.log.class_cron": "Scheduled job",
     "work.log.class_money": "Money",
     "work.log.class_message": "Messages to you",
     "work.log.class_system": "Rob itself",
@@ -797,8 +797,10 @@ STRINGS = {
     "work.now.live_unreadable": "Part of what is running could not be read.",
     "work.now.live_unreadable_why": "Why",
     "work.now.empty_next": "Nothing is waiting its turn.",
+    # 080 F-5: drawn ABOVE the stored goals, never instead of them.
     "work.now.disabled": (
-        "Rob's own work is switched off, so it starts nothing on its own."
+        "Rob's own work is switched off — the goals below are stored, but "
+        "nothing will run them until it is on."
     ),
     "work.now.unreadable": "I could not read the goal board.",
     "work.now.unreadable_why": "Why it failed",
@@ -809,6 +811,7 @@ STRINGS = {
     "work.now.pause": "Pause",
     "work.now.drop": "Drop it",
     "work.now.retry": "Try it again",
+    "work.now.resume": "Resume",
     "work.now.helper_lead": "A helper is doing part of this for Rob.",
     "work.now.helper_body": (
         "Helpers cannot spend money or change your files. It reports back when "
@@ -819,6 +822,7 @@ STRINGS = {
     "work.now.status_waiting": "waiting",
     "work.now.status_triage": "being sorted",
     "work.now.status_blocked": "stopped after repeated failures",
+    "work.now.status_paused": "paused by you",
     "work.now.unreachable": "The console could not reach the server.",
     # Compact durations, filled client-side from each row's own timestamp.
     "work.now.secs": "{count}s",
@@ -829,17 +833,32 @@ STRINGS = {
     # ------------------------------------------------------- Work › On a clock
     # Drawn by work-now.js from GET /api/webgate/cron; Cancel posts to
     # /api/webgate/cron/{id}/cancel — the same verb Telegram's owner uses.
-    "work.schedule.loading": "Reading the clock.",
-    "work.schedule.empty": "Nothing runs on a clock yet.",
-    "work.schedule.disabled": "Nothing runs on a clock here.",
+    "work.schedule.loading": "Reading the scheduled jobs.",
+    "work.schedule.empty": "No scheduled jobs yet.",
+    # 080 F-5: a banner above the stored jobs — never "nothing runs here"
+    # while jobs exist.
+    "work.schedule.disabled": (
+        "The scheduler is off — nothing will run. These jobs are stored and "
+        "run again when it is on."
+    ),
     "work.schedule.unreadable": "I could not read the schedule.",
     "work.schedule.unreadable_why": "Why it failed",
     "work.schedule.header_what": "What it does",
     "work.schedule.header_when": "When",
     "work.schedule.header_last": "Last run",
-    "work.schedule.cancel": "Cancel",
+    "work.schedule.cancel": "Stop",
+    # 080 WS-2: the job verbs `/job pause|resume|run` answer on the console row.
+    "work.schedule.pause": "Pause",
+    "work.schedule.resume": "Resume",
+    "work.schedule.run": "Run now",
+    "work.schedule.done_pause": "Paused. It will not run until you resume it.",
+    "work.schedule.done_resume": "Resumed.",
+    "work.schedule.done_run": "It will run on the next scheduler tick.",
+    "work.schedule.refused": "Not changed: the job is {status}.",
+    "work.schedule.outcome": "last: {outcome}",
     "work.schedule.last_never": "not yet run",
     "work.schedule.ran_ago": "{elapsed} ago",
+    "work.schedule.next": "next {when}",
     "work.schedule.unreachable": "The console could not reach the server.",
 
     # -------------------------------------------------------------- Work › Apps
@@ -1283,8 +1302,6 @@ STRINGS.update({
     "work.create.priority_hint": "A higher number is served first.",
     "work.create.tools_label": "Which tools may it use?",
     "work.create.tools_hint": "One name per line. Leave it empty and I choose.",
-    "work.create.max_steps_label": "How many steps may it take?",
-    "work.create.max_steps_hint": "Between 6 and 60. Leave it empty for my own default.",
     "work.create.deliver_label": "Where should the result go?",
     "work.create.deliver_none": "Keep it to myself",
     "work.create.deliver_telegram": "Telegram",

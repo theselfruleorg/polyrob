@@ -1,11 +1,11 @@
-"""The goal board's vocabulary — status, kind, ask and objective literals.
+"""The goal board's vocabulary — status, kind and ask literals.
 
 The board (``agents/task/goals/board.py``) owns the semantics; the LITERALS
 live here, in the core tier, because five modules below and beside it need
 them and ``core/`` may not import ``agents.*``: the status snapshot and the
 board renderer re-declared them by hand (pinned equal by a contract test),
-and the live-status set was spelled out three times (streams, goal_list, the
-snapshot). One spelling, imported everywhere.
+and the live-status set was spelled out three times (goal_list, the
+snapshot, the renderer). One spelling, imported everywhere.
 """
 from __future__ import annotations
 
@@ -17,6 +17,10 @@ STATUS_WAITING = "waiting"
 STATUS_READY = "ready"
 STATUS_RUNNING = "running"
 STATUS_BLOCKED = "blocked"
+#: 080 D3: the OWNER held it (``/goal pause``). Never dispatched (the dispatcher
+#: reads ``ready`` only); ``/goal retry`` lifts it. Never ``blocked`` for a pause:
+#: blocked means it failed, and every view reads it as "fix the cause".
+STATUS_PAUSED = "paused"
 STATUS_DONE = "done"
 STATUS_CANCELLED = "cancelled"
 
@@ -24,13 +28,12 @@ STATUS_CANCELLED = "cancelled"
 #: ``done``/``cancelled`` are history and dwarf the live rows within days
 #: (357 done vs 1 ready on prod, 2026-08-29).
 LIVE_STATUS_ORDER = (STATUS_TRIAGE, STATUS_WAITING, STATUS_READY,
-                     STATUS_RUNNING, STATUS_BLOCKED)
+                     STATUS_RUNNING, STATUS_BLOCKED, STATUS_PAUSED)
 LIVE_STATUSES = frozenset(LIVE_STATUS_ORDER)
 
-# kind: rows are goals (dispatchable), objectives (standing, never dispatched),
-# or asks (owner-facing needs, never dispatched)
+# kind: rows are goals (dispatchable) or asks (owner-facing needs, never
+# dispatched)
 KIND_GOAL = "goal"
-KIND_OBJECTIVE = "objective"
 KIND_ASK = "ask"
 
 # ask lifecycle — disjoint from goal statuses so nothing dispatches them
@@ -51,34 +54,6 @@ OWN_SURFACE_ASK_KINDS = frozenset({ASK_KIND_TOOL_APPROVAL, ASK_KIND_TOKEN_IDENTI
 def has_own_surface(payload) -> bool:
     """True when an ask with this payload is decided on /pending, not /fulfill."""
     return isinstance(payload, dict) and payload.get("ask_kind") in OWN_SURFACE_ASK_KINDS
-
-# objective lifecycle (disjoint from goal statuses so nothing dispatches them)
-OBJ_ACTIVE = "active"
-OBJ_PAUSED = "paused"
-OBJ_DROPPED = "dropped"
-OBJ_DONE = "done"
-
-#: Default lifetime child cap of an objective (env ``OBJECTIVE_GOAL_BUDGET``).
-OBJECTIVE_GOAL_BUDGET_DEFAULT = 25
-
-
-def objective_goal_budget(payload) -> int:
-    """The ONE objective-budget rule: ``GoalBoard.objective_budget`` enforces it
-    and the status snapshot reports it. A stream (``stream_id``) or a rail
-    (``recurrence``) is uncapped (0); an own ``goal_budget`` wins; else
-    ``OBJECTIVE_GOAL_BUDGET`` (default 25)."""
-    p = payload if isinstance(payload, dict) else {}
-    if p.get("stream_id") or p.get("recurrence"):
-        return 0
-    own = p.get("goal_budget")
-    if own is not None:
-        try:
-            return max(0, int(own))
-        except (TypeError, ValueError):
-            pass
-    from core.env import int_env
-    return int_env("OBJECTIVE_GOAL_BUDGET", OBJECTIVE_GOAL_BUDGET_DEFAULT)
-
 
 def normalize_title(title: str) -> str:
     """The ONE title key: lowercase, alnum words, single spaces. The board's

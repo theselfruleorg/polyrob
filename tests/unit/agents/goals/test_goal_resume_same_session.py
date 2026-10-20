@@ -23,14 +23,14 @@ def test_the_restart_note_leads_the_task_body():
     goal = Goal(id="g1", user_id="rob", title="Round 15", body="finish the report",
                 payload={"resume_note": "Yielded at 06:00Z because the rail EXIT "
                                         "came due. You had reached step 7."})
-    task = build_goal_run_task(goal, None)
+    task = build_goal_run_task(goal)
     assert task.startswith("RESTART NOTE (you were pre-empted):")
     assert "step 7" in task
 
 
 def test_a_goal_with_no_note_is_byte_identical():
     goal = Goal(id="g1", user_id="rob", title="Round 15", body="finish the report")
-    assert "RESTART NOTE" not in build_goal_run_task(goal, None)
+    assert "RESTART NOTE" not in build_goal_run_task(goal)
 
 
 class _ResumingAgent:
@@ -258,3 +258,37 @@ async def test_a_failed_resume_records_nothing(tmp_path, monkeypatch):
 
     assert [r for r in log.query(kind="goal_run")
             if r["attrs"].get("outcome") == "resumed"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_goal_runs_with_this_dispatchs_step_cap():
+    """083: the stored request may carry a pre-083 model-chosen budget or a
+    re-entry's chat budget (8); the resumed run takes the operator cap."""
+    agent = _ResumingAgent()
+    stored = {"user_id": "rob", "request": {"task": "old", "max_steps": 8}}
+    updates = []
+    agent.session_manager = SimpleNamespace(
+        get_session_info=lambda sid: stored,
+        update_session_request=lambda sid, req: updates.append((sid, req)))
+    await run_task_to_outcome(
+        agent, user_id="rob",
+        request={"task": "carry on", "max_steps": 150,
+                 "resume_session_id": "sess-15", "resume_note": "pre-empted"},
+        autonomous=True, goal_id="g1", creator="goal")
+
+    assert updates and updates[0][0] == "sess-15"
+    assert updates[0][1]["max_steps"] == 150 and updates[0][1]["task"] == "old"
+
+
+@pytest.mark.asyncio
+async def test_a_resume_with_the_same_cap_writes_nothing():
+    agent = _ResumingAgent()
+    updates = []
+    agent.session_manager = SimpleNamespace(
+        get_session_info=lambda sid: {"user_id": "rob", "request": {"max_steps": 150}},
+        update_session_request=lambda sid, req: updates.append(req))
+    await run_task_to_outcome(
+        agent, user_id="rob",
+        request={"task": "carry on", "max_steps": 150, "resume_session_id": "sess-15"},
+        autonomous=True, goal_id="g1", creator="goal")
+    assert updates == []

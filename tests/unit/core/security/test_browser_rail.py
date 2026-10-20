@@ -35,7 +35,7 @@ def test_custody_without_endpoint_is_unset_with_install_remedy(monkeypatch):
     st = br.browser_rail_status()
     assert st.state == "unset" and not st.usable
     assert "no remote browser endpoint is configured" in st.refusal()
-    assert "polyrob browser install" in st.refusal()
+    assert "install the browser service" in st.refusal()
     assert "BROWSER_CDP_URL" in st.refusal()
 
 

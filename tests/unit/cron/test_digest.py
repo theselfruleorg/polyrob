@@ -8,6 +8,13 @@ from cron import digest
 from cron.digest import compose_digest
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_top_cost(monkeypatch):
+    """The 2026-10-14 D6 top-cost seam reads the home's ledger; keep it out."""
+    monkeypatch.setattr(digest, "_top_cost", lambda uid, data_dir, days:
+                        "Top AI cost: scheduled job EXIT $0.40 (40%) of $1.00")
+
+
 def _split_ledger(**over):
     led = {
         "user_id": "rob", "window_days": 1,
@@ -68,7 +75,7 @@ async def test_compose_digest_all_empty_is_stable(monkeypatch):
     monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
-    assert "Daily digest — today" in text
+    assert "Daily digest — last 24 h" in text
     assert "Treasury:" not in text
     assert "Runtime cost:" not in text
     assert "$0.00" not in text
@@ -117,7 +124,7 @@ async def test_genuinely_quiet_day_renders_real_zeros(monkeypatch):
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     assert "Treasury: income $0.00, spend $0.00, net $0.00" in text
-    assert "Runtime cost: $0.00 today" in text
+    assert "Runtime cost: $0.00 last 24 h" in text
     assert "no data" not in text.lower()
 
 
@@ -137,7 +144,7 @@ async def test_degraded_ledger_appends_availability_note(monkeypatch):
     assert "metering degraded" in text.lower()
     # The numbers this leg's fixture DOES have still render — degradation
     # annotates, it doesn't blank the whole section.
-    assert "Runtime cost: $2.47 today" in text
+    assert "Runtime cost: $2.47 last 24 h" in text
 
 
 @pytest.mark.asyncio
@@ -151,7 +158,7 @@ async def test_digest_never_merges_treasury_and_runtime(monkeypatch):
 
     out = await compose_digest("rob", days=1)
     assert "Treasury: income $0.00, spend $0.00, net $0.00" in out
-    assert "Runtime cost: $2.47 today" in out
+    assert "Runtime cost: $2.47 last 24 h" in out
     assert "$13.97 total" in out
     assert "net $-2.47" not in out      # the old merged lie
 
@@ -403,3 +410,29 @@ async def test_digest_no_missed_messages_says_so(monkeypatch):
     monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: [])
     text = await digest.compose_digest("u1", days=1)
     assert "Missed owner messages: none" in text
+
+
+@pytest.mark.asyncio
+async def test_digest_carries_one_top_cost_line(monkeypatch):
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
+    text = await digest.compose_digest("rob", days=1)
+    assert _line_starting(text, "• Top AI cost: scheduled job EXIT $0.40") is not None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_cost_records_are_named_not_zero(monkeypatch):
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
+
+    def boom(uid, data_dir, days):
+        raise OSError("disk")
+    monkeypatch.setattr(digest, "_top_cost", boom)
+    text = await digest.compose_digest("rob", days=1)
+    assert "AI cost records (OSError: disk)" in text
+    assert "Top AI cost: could not read the records" in text
+
+
+def test_top_cost_reads_the_spend_view(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "none" / "bot.db"))
+    line = digest._top_cost("rob", str(tmp_path), 1)
+    assert line.startswith("Top AI cost: none")

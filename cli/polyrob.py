@@ -30,7 +30,6 @@ _LAZY_SUBCOMMANDS = {
     "run": "cli.commands.run:run",
     "session": "cli.commands.session:session",
     "sessions": "cli.commands.session:session",  # product vocabulary alias
-    "rails": "cli.commands.rails:rails",  # 036: standing work (rails + grants)
     "model": "cli.commands.model:model",
     "models": "cli.commands.model:model",  # product vocabulary alias
     "skills": "cli.commands.skills:skills",
@@ -55,7 +54,8 @@ _LAZY_SUBCOMMANDS = {
     "surfaces": "cli.commands.surfaces:surfaces",  # 064 F6: list / add / probe from the catalog
     "gateway": "cli.commands.gateway:gateway",
     "goals": "cli.commands.goals:goals",
-    "cron": "cli.commands.cron:cron",
+    "job": "cli.commands.cron:job",  # 080 WS-2: the owner word for scheduled work
+    "cron": "cli.commands.cron:job",  # one-release alias (prod ops scripts use it)
     "autonomy": "cli.commands.autonomy:autonomy",  # 030 WS-E4 intent verbs
     "apps": "cli.commands.apps:apps",  # 032 durable app service (owner seat + supervisor)
     "subagents": "cli.commands.subagents:subagents",
@@ -103,6 +103,7 @@ _COMMAND_ALIASES = {
     "owner": ("approvals",),
     "skills": ("skill",),
     "setup": ("init",),
+    "job": ("cron",),
 }
 _RELATED_COMMANDS = {name: _COMMAND_ALIASES.pop(name) for name in ("identity", "owner", "skills")}
 _DISPLAY_FOLDS = {**_COMMAND_ALIASES, **_RELATED_COMMANDS}
@@ -118,8 +119,8 @@ _HELP_GROUPS = [
     ("Surfaces",
      ["gateway", "surfaces", *_surface_commands(), "serve", "dashboard", "service"]),
     ("Autonomy & work",
-     ["goals", "cron", "session", "subagents", "workers", "skills", "surface", "todos",
-      "apps", "autonomy", "tools", "kb", "browser", "rails"]),
+     ["goals", "job", "session", "subagents", "workers", "skills", "surface", "todos",
+      "apps", "autonomy", "tools", "kb", "browser"]),
     ("Money",
      ["wallet", "finance", "journey"]),
     ("Owner",

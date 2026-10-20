@@ -112,27 +112,15 @@ async def test_missing_price_and_allowance_remedy(monkeypatch):
     monkeypatch.setattr(R, 'allowance', lambda *a: 0)
     res = await t.lp_add(add())
     assert 'approve_token' in res.error and NPM in res.error
-    # Our own measured shortfall: a precondition, never a refusal taint.
-    assert (res.metadata or {}).get('error_kind') == 'precondition'
 
 
 @pytest.mark.asyncio
-async def test_insufficient_balance_is_a_precondition_not_a_taint(monkeypatch):
+async def test_insufficient_balance_is_refused(monkeypatch):
     t, _ = tool()
     monkeypatch.setattr(R, 'view', lambda rpc, to, spec, args=None:
         HOLDER if spec['name'] == 'ownerOf' else 18 if spec['name'] == 'decimals' else 1)
     res = await t.lp_add(add())
     assert 'insufficient balance' in res.error
-    assert (res.metadata or {}).get('error_kind') == 'precondition'
-
-
-@pytest.mark.asyncio
-async def test_an_unexpected_build_failure_still_taints(monkeypatch):
-    t, _ = tool()
-    monkeypatch.setattr(R, 'allowance', lambda *a: (_ for _ in ()).throw(ValueError('boom')))
-    res = await t.lp_add(add())
-    assert 'boom' in res.error
-    assert (res.metadata or {}).get('error_kind') is None
 
 
 @pytest.mark.asyncio
@@ -204,7 +192,6 @@ async def test_v4_missing_permit2_grant_names_the_remedy(monkeypatch):
     monkeypatch.setattr(V4, 'permit2_allowance', lambda *a: (0, 0))
     res = await t.lp_add(v4add())
     assert "via='permit2'" in res.error
-    assert (res.metadata or {}).get('error_kind') == 'precondition'
 
 
 def test_increase_retains_range_and_checks_pair(monkeypatch):

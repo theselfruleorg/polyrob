@@ -126,3 +126,155 @@ async def test_sub_agent_skip_never_warns(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="agents.task.agent.core.run_budget"):
         assert await check_run_budget(_agent(sub=True, tracker=None)) is None
     assert not any("cannot operate" in r.message for r in caplog.records)
+
+
+# --- 083 WS-3: per-run cap for autonomous runs (AUTONOMOUS_RUN_BUDGET_USD) ---
+
+
+def _auto_agent(*, autonomous=True, sub=False):
+    a = _agent(sub=sub)
+    a.state = SimpleNamespace(run_spend_baseline=None)
+    a._autonomous = autonomous
+    return a
+
+
+@pytest.fixture
+def _auto(monkeypatch):
+    monkeypatch.delenv("RUN_BUDGET_USD", raising=False)
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "2.0")
+    monkeypatch.setattr(rb, "_is_autonomous", lambda agent: getattr(agent, "_autonomous", False))
+
+
+def _rollup_seq(values):
+    seq = list(values)
+    async def rollup(user_id, session_id=None, since=None, *, db=None):
+        return {"api_cost_usd": seq.pop(0) if len(seq) > 1 else seq[0]}
+    return rollup
+
+
+@pytest.mark.asyncio
+async def test_run_cap_measures_delta_not_session_total(monkeypatch, _auto):
+    # Resumed session: $10 of old spend before this run. Only the delta counts.
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_seq([10.0, 11.5, 12.0]))
+    a = _auto_agent()
+    await rb.snapshot_run_baseline(a)
+    assert a.state.run_spend_baseline == 10.0
+    assert await check_run_budget(a) is None            # delta 1.5 < 2.0
+    msg = await check_run_budget(a)                      # delta 2.0 >= 2.0
+    assert msg and msg.startswith(RUN_BUDGET_MARKER + ":")
+    assert "2.0000" in msg and "$2.00" in msg and "AUTONOMOUS_RUN_BUDGET_USD" in msg
+
+
+@pytest.mark.asyncio
+async def test_run_cap_counts_child_spend_booked_to_parent_session(monkeypatch, _auto):
+    # A child's calls book to the parent session_id: the same rollup rises.
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_seq([0.0, 2.4]))
+    a = _auto_agent()
+    await rb.snapshot_run_baseline(a)
+    assert await check_run_budget(a) is not None
+
+
+@pytest.mark.asyncio
+async def test_interactive_session_has_no_run_cap(monkeypatch, _auto):
+    fake = _fake_rollup(50.0)
+    monkeypatch.setattr(rb, "usage_rollup", fake)
+    a = _auto_agent(autonomous=False)
+    await rb.snapshot_run_baseline(a)
+    assert a.state.run_spend_baseline is None
+    assert await check_run_budget(a) is None
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_cap_zero_is_off(monkeypatch, _auto):
+    monkeypatch.setenv("AUTONOMOUS_RUN_BUDGET_USD", "0")
+    fake = _fake_rollup(50.0)
+    monkeypatch.setattr(rb, "usage_rollup", fake)
+    a = _auto_agent()
+    await rb.snapshot_run_baseline(a)
+    assert a.state.run_spend_baseline is None
+    assert await check_run_budget(a) is None
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_cap_probe_error_fails_open(monkeypatch, _auto):
+    async def boom(*a, **k):
+        raise RuntimeError("db exploded")
+    monkeypatch.setattr(rb, "usage_rollup", boom)
+    a = _auto_agent()
+    await rb.snapshot_run_baseline(a)                    # never raises
+    assert a.state.run_spend_baseline is None
+    a.state.run_spend_baseline = 0.0
+    assert await check_run_budget(a) is None
+
+
+@pytest.mark.asyncio
+async def test_session_budget_still_applies_and_stricter_wins(monkeypatch, _auto):
+    monkeypatch.setenv("RUN_BUDGET_USD", "5.0")
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_seq([4.0, 5.1]))
+    a = _auto_agent()
+    await rb.snapshot_run_baseline(a)
+    msg = await check_run_budget(a)                      # session cap trips first
+    assert msg and "RUN_BUDGET_USD $5.00" in msg and "AUTONOMOUS" not in msg
+
+
+def _orch(parent):
+    return SimpleNamespace(agents={"main": parent}, session_id="sess-1")
+
+
+@pytest.mark.asyncio
+async def test_blocking_child_halts_on_parent_run_budget(monkeypatch, _auto):
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_seq([3.0, 4.0, 5.0]))
+    parent = _auto_agent()
+    await rb.snapshot_run_baseline(parent)               # baseline 3.0
+    child = _agent(sub=True)
+    await rb.attach_parent_run_budget(child, _orch(parent), "main")
+    assert child._run_budget_limit == (3.0, 2.0, "blocking")
+    assert await check_run_budget(child) is None         # parent run spent 1.0
+    msg = await check_run_budget(child)                  # parent run spent 2.0
+    assert msg and msg.startswith(RUN_BUDGET_MARKER + ":")
+    assert "parent run" in msg and "AUTONOMOUS_RUN_BUDGET_USD $2.00" in msg
+
+
+@pytest.mark.asyncio
+async def test_background_child_gets_remaining_cap_at_spawn(monkeypatch, _auto):
+    monkeypatch.setattr(rb, "usage_rollup", _rollup_seq([1.0, 2.5, 2.9, 3.0]))
+    parent = _auto_agent()
+    await rb.snapshot_run_baseline(parent)               # baseline 1.0
+    child = _agent(sub=True)
+    await rb.attach_parent_run_budget(child, _orch(parent), "main", background=True)
+    base, cap, kind = child._run_budget_limit            # spawn at 2.5: 0.5 left
+    assert (base, kind) == (2.5, "background") and cap == pytest.approx(0.5)
+    assert await check_run_budget(child) is None         # +0.4
+    msg = await check_run_budget(child)                  # +0.5
+    assert msg and "background sub-agent" in msg and "$0.50" in msg
+
+
+@pytest.mark.asyncio
+async def test_child_of_uncapped_parent_is_ungated(monkeypatch, _auto):
+    fake = _fake_rollup(99.0)
+    monkeypatch.setattr(rb, "usage_rollup", fake)
+    parent = _auto_agent(autonomous=False)
+    await rb.snapshot_run_baseline(parent)
+    child = _agent(sub=True)
+    await rb.attach_parent_run_budget(child, _orch(parent), "main")
+    await rb.attach_parent_run_budget(child, _orch(parent), "missing", background=True)
+    assert not hasattr(child, "_run_budget_limit")
+    assert await check_run_budget(child) is None
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_child_probe_error_fails_open(monkeypatch, _auto):
+    async def boom(*a, **k):
+        raise RuntimeError("db exploded")
+    monkeypatch.setattr(rb, "usage_rollup", boom)
+    child = _agent(sub=True)
+    child._run_budget_limit = (0.0, 2.0, "blocking")
+    assert await check_run_budget(child) is None
+    parent = _auto_agent()
+    parent.state.run_spend_baseline = 0.0
+    other = _agent(sub=True)
+    await rb.attach_parent_run_budget(other, _orch(parent), "main", background=True)
+    assert not hasattr(other, "_run_budget_limit")

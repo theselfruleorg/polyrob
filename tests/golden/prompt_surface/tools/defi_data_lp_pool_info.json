@@ -1,0 +1,45 @@
+{
+  "function": {
+    "description": "Read a Uniswap v3 pool's live state: tokens, fee tier, current tick, price and liquidity. Give a pool address, OR token_a + token_b + fee to locate one. A pair with no pool yet is reported, not invented. Read-only. protocol='v4' reads a Pons graduated pool (token_a/token_b = 'native' + the Pons token).",
+    "name": "defi_data_lp_pool_info",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "robinhood",
+          "description": "Chain to read a Uniswap v3 pool on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "fee": {
+          "default": null,
+          "description": "Fee tier in hundredths of a bip: 100, 500, 3000, 10000.",
+          "nullable": true,
+          "type": "integer"
+        },
+        "pool": {
+          "default": null,
+          "description": "Pool address, OR give token_a+token_b+fee.",
+          "nullable": true,
+          "type": "string"
+        },
+        "protocol": {
+          "default": "v3",
+          "description": "v3, or v4 for a Pons graduated pool (give token_a + token_b; the other side is 'native').",
+          "type": "string"
+        },
+        "token_a": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "token_b": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

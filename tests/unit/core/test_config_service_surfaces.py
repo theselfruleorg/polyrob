@@ -24,17 +24,18 @@ def test_local_surface_still_writes_credential_flags(monkeypatch):
 
 
 def test_pattern_flag_key_routes_to_flag_writer(monkeypatch):
-    """POLYROB_<PROVIDER>_MODEL is a documented dynamic pattern — a concrete
+    """AUX_MODEL_<SLOT> is a documented dynamic pattern — a concrete
     instance must route to the flag writer, not 'unknown key'."""
     sentinel = config_service.SetResult(True, "written", "ok")
     monkeypatch.setattr(config_service, "_set_flag", lambda *a, **k: sentinel)
-    res = config_service.set_value("POLYROB_OPENROUTER_MODEL", "x-ai/grok-4.3")
+    res = config_service.set_value("AUX_MODEL_JUDGE", "x-ai/grok-4.3")
     assert res is sentinel
 
 
 def test_pattern_flag_registered_in_catalog():
     from core.flags import PATTERNS
-    assert any(f.name == "POLYROB_<PROVIDER>_MODEL" for f in PATTERNS)
+    assert any(f.name == "AUX_MODEL_<SLOT>" for f in PATTERNS)
+    assert not any(f.name == "POLYROB_<PROVIDER>_MODEL" for f in PATTERNS)  # retired
 
 
 def test_unknown_key_still_refused():

@@ -129,7 +129,7 @@ def test_on_writes_the_file_the_cli_loads_never_the_project_one(isolated):
     res = runner.invoke(autonomy, ["on"])
     assert res.exit_code == 0, res.output
     assert not (proj / ".polyrob" / ".env").exists()
-    loaded = env_file_candidates(local_mode=True)[0].path
+    loaded = env_file_candidates()[0].path
     assert read_env_file(loaded).get("AUTONOMY_ENABLED") == "true"
     res = runner.invoke(autonomy, ["off", "--global"])  # old flag still accepted
     assert res.exit_code == 0, res.output

@@ -1,0 +1,13 @@
+{
+  "function": {
+    "description": "Get the next incomplete task",
+    "name": "task_todo_next",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Get the next incomplete task",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

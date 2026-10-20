@@ -10,6 +10,36 @@ from __future__ import annotations
 import asyncio
 
 
+def _value_check_line(basis, amount_usd) -> str:
+    """The quote's line for a send valued below spend grade (the ``/send`` seat
+    keys its extra confirmation on the marker). Empty for a verified value."""
+    from core.wallet.tx_guard_steps.value import UNVERIFIED_MARK
+    if basis == "low_confidence":
+        return (f"  value check: {UNVERIFIED_MARK} — the only price is low-"
+                f"confidence (a thin or single-pool market); the caps use it as an "
+                f"estimate. Check the amount yourself.\n")
+    if basis == "unpriced":
+        return (f"  value check: {UNVERIFIED_MARK} — no source prices this token; "
+                f"the caps charge ${amount_usd or 0:.2f} as a placeholder. Check "
+                f"what this token is before you send it.\n")
+    return ""
+
+
+def owner_typed_anyway(params, execution_context) -> bool:
+    """The owner's extra 'send anyway' step (085 W8, txguard LEAD-3).
+
+    True only when ``send_anyway`` is set AND the call comes from an owner seat
+    (``core.security.turn_facts.owner_seat_context``: the ``/send … anyway`` line
+    the owner typed, or the card Confirm that re-runs it through the seat). A
+    model tool call never carries the seat's turn kind, so a model that sets
+    ``send_anyway`` itself gets the plain refusal."""
+    if not getattr(params, "send_anyway", False):
+        return False
+    from core.security.turn_facts import OWNER_SEAT_KIND
+    meta = getattr(execution_context, "metadata", None)
+    return isinstance(meta, dict) and meta.get("turn_kind") == OWNER_SEAT_KIND
+
+
 async def perform_transfer(tool, params, execution_context=None):
     from tools.defi.trade_tool import (  # call-time: tests patch these
         _DRY_RUN_HEAD, _SYMBOL_NOTE, _intent_idem, _native_send_symbol, _not_sent_text,
@@ -23,7 +53,8 @@ async def perform_transfer(tool, params, execution_context=None):
         return tool._ar(error=chain_err)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
 
     native_symbol = _native_send_symbol(params.chain, params.token)
     try:
@@ -89,7 +120,8 @@ async def perform_transfer(tool, params, execution_context=None):
     intent = tx_guard.TxIntent(
         chain=params.chain, token=token, to=to, amount_raw=amount_raw,
         max_spend_usd=params.max_spend_usd, expected_allowance_grants=(),
-        idempotency_key=idem)
+        idempotency_key=idem, is_transfer=True,
+        value_ack=owner_typed_anyway(params, execution_context))
     guard_kw = {}
     if held is not None:
         intent = account_mode.intent_for(intent, held, acct_state,
@@ -110,15 +142,18 @@ async def perform_transfer(tool, params, execution_context=None):
         decision = await asyncio.to_thread(
             authorize, intent, tx, holder=signer.address, gate=gate,
             execution_context=execution_context, tool_self=tool,
-            price_fn=tool._price,
+            price_fn=tool._price, fallback_price_fn=getattr(tool, "_fallback_price", None),
             forged_fn=_is_forged_or_autonomous_turn,
             autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
 
+        basis = getattr(decision, "valuation_basis", None)
+        value = ("unknown" if decision.amount_usd is None or basis == "unpriced"
+                 else f"${decision.amount_usd:.4f}")
         header = (f"transfer {params.amount} {shown} -> {to}\n"
                   + (account_mode.header_line(held) if held is not None else "")
                   + (_SYMBOL_NOTE if ident is not None and ident.symbol else "") +
-                  f"  simulated value: "
-                  f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
+                  f"  simulated value: {value}\n"
+                  + _value_check_line(basis, decision.amount_usd) +
                   f"  guard: {decision.reason}\n"
                   f"  lane:  {decision.lane}\n")
 
@@ -143,10 +178,9 @@ async def perform_transfer(tool, params, execution_context=None):
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
+            from core.wallet.broadcast.evm import broadcast_failure_text
             return tool._ar(error=broadcast_failure_text(
-                exc, nothing="funds were NOT sent"),
-                error_kind=broadcast_error_kind(exc))
+                exc, nothing="funds were NOT sent"))
 
         from core.wallet import tx_notify
         _used, _limit = tx_notify.caps_from_gate(gate)

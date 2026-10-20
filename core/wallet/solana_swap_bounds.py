@@ -16,6 +16,21 @@ import struct
 from core.wallet.jupiter_v6_schema import SWAP_VARIANTS, UnknownSwapVariant, skip_swap
 
 V6 = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+
+#: How far the executable minimum may sit below the confirmed floor (bps).
+#: Jupiter builds the route instruction from a ``quoted_out`` about 1.7 bp below
+#: the quote's ``outAmount`` (measured live 2026-10-20 on SOL->USDC, USDC->SOL
+#: and SOL->PYUSD), so its on-chain minimum lands just under ``verified_floor``
+#: and a strict comparison refused every Solana swap. The simulated receipt is
+#: held to the SAME bound (:func:`min_acceptable`), so the two checks agree.
+FLOOR_GRACE_BPS = 5
+
+
+def min_acceptable(floor: int) -> int:
+    """The least output either check accepts against ``floor``: the floor less
+    :data:`FLOOR_GRACE_BPS`, rounded UP (never more than 5 bp of slack)."""
+    floor = int(floor)
+    return floor - (floor * FLOOR_GRACE_BPS) // 10000
 _ROUTE = sha256(b"global:route").digest()[:8]
 _SHARED = sha256(b"global:shared_accounts_route").digest()[:8]
 _ROUTE_V2 = sha256(b"global:route_v2").digest()[:8]
@@ -88,10 +103,15 @@ def refusal(instructions, bounds: SwapBounds, *, owner: str) -> str | None:
             end, why = _route_plan(data, offset + 22, v2=True)
         else:
             end, why = _route_plan(data, offset, v2=False)
-            if not why and len(data) == end + 19:
-                amount_in, quoted_out, slippage, platform_fee = struct.unpack_from(
-                    "<QQHB", data, end)
-                end, positive = end + 19, 0
+            if why:
+                return why
+            if len(data) != end + 19:
+                # 085 W8 L6: the amounts must follow the route plan exactly; data
+                # that ends at (or short of) them left `amount_in` unbound.
+                return "Jupiter route has truncated or trailing instruction data"
+            amount_in, quoted_out, slippage, platform_fee = struct.unpack_from(
+                "<QQHB", data, end)
+            end, positive = end + 19, 0
         if why:
             return why
         if len(data) != end:
@@ -101,7 +121,7 @@ def refusal(instructions, bounds: SwapBounds, *, owner: str) -> str | None:
         if not 0 <= slippage <= bounds.slippage_bps or platform_fee or positive:
             return "Jupiter instruction slippage or platform fee exceeds the approved bounds"
         floor = quoted_out * (10000 - slippage) // 10000
-        if floor < bounds.min_out_raw or floor <= 0:
+        if floor < min_acceptable(bounds.min_out_raw) or floor <= 0:
             return "Jupiter instruction minimum output is below the confirmed floor"
         if ix.accounts[authority] != owner or ix.accounts[mint_out] != bounds.token_out:
             return "Jupiter instruction authority or output mint is wrong or unresolved"

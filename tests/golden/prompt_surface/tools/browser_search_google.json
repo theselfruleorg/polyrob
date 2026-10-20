@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Search the query in Google in the current tab, the query should be a search query like humans search in Google, concrete and not vague or super long.",
+    "name": "browser_search_google",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for searching Google with a query.",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

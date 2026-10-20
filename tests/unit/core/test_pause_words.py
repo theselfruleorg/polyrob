@@ -1,6 +1,6 @@
 """043 A11/A19: plain-word pause mapping.
 
-The owner rejected the raw scope tokens ("trading streams planner cron social
+The owner rejected the raw scope tokens ("trading cron social
 oversight pings apps") as vocabulary; every seat now also takes five plain
 words. ``parse_pause_args`` stays a 2-tuple (``scopes, duration_minutes``) —
 it already raises ``ValueError`` on anything it does not recognize, so a
@@ -14,7 +14,7 @@ def test_each_plain_word_maps_to_its_scopes():
     assert PLAIN_WORDS == {
         "everything": ("all",),
         "trading": ("trading",),
-        "background": ("streams", "planner", "cron"),
+        "background": ("cron",),
         "messages": ("pings",),
         "deploying": ("apps",),
     }
@@ -24,7 +24,7 @@ def test_each_plain_word_maps_to_its_scopes():
         "everything", "trading", "background", "messages", "deploying"]
     assert parse_pause_args(["everything"]) == (("all",), None)
     assert parse_pause_args(["trading"]) == (("trading",), None)
-    assert parse_pause_args(["background"]) == (("streams", "planner", "cron"), None)
+    assert parse_pause_args(["background"]) == (("cron",), None)
     assert parse_pause_args(["messages"]) == (("pings",), None)
     assert parse_pause_args(["deploying"]) == (("apps",), None)
 
@@ -38,7 +38,7 @@ def test_oversight_has_no_plain_word():
 
 def test_raw_scope_tokens_still_accepted():
     from core.surfaces.owner_intent import parse_pause_args
-    assert parse_pause_args(["trading", "streams"]) == (("trading", "streams"), None)
+    assert parse_pause_args(["trading", "cron"]) == (("trading", "cron"), None)
     assert parse_pause_args(["social"]) == (("social",), None)
     assert parse_pause_args(["ALL"]) == (("all",), None)
 
@@ -57,7 +57,7 @@ def test_unknown_word_refuses_with_valueerror():
 def test_plain_word_with_duration_still_parses():
     from core.surfaces.owner_intent import parse_pause_args
     assert parse_pause_args(["background", "for", "6h"]) == (
-        ("streams", "planner", "cron"), 360)
+        ("cron",), 360)
 
 
 def test_pause_rejects_an_unknown_scope_instead_of_dropping_it(tmp_path, monkeypatch):
@@ -89,7 +89,7 @@ def test_pause_empty_scopes_still_defaults_to_all(tmp_path, monkeypatch):
     assert res.state.scopes == ("all",)
 
 
-def test_telegram_pause_background_pauses_streams_planner_and_cron(tmp_path, monkeypatch):
+def test_telegram_pause_background_pauses_cron(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
     from core.autonomy_control import allows, read_state
@@ -98,9 +98,7 @@ def test_telegram_pause_background_pauses_streams_planner_and_cron(tmp_path, mon
     text = _pause_reply(str(tmp_path), "/pause", ["background"])
     assert text.startswith("⏸ Paused")
     st = read_state(str(tmp_path))
-    assert set(st.scopes) == {"streams", "planner", "cron"}
-    assert allows("seed_stream", str(tmp_path)).allowed is False
-    assert allows("plan", str(tmp_path)).allowed is False
+    assert set(st.scopes) == {"cron"}
     assert allows("cron_run", str(tmp_path)).allowed is False
     # trading (not part of "background") stays live
     assert allows("trade_entry", str(tmp_path)).allowed is True

@@ -18,8 +18,10 @@ pop cannot remove the seed from it. That read is closed by
 :func:`core.security.process_hardening.harden_custody_process` (non-dumpable).
 Both are needed; neither replaces the other.
 
-Dependency-light on purpose (os + threading only): ``core.secret_scrub`` and
-``core.security.host_execution`` import it on hot paths.
+Dependency-light on purpose (os + threading only at import): ``core.secret_scrub``
+and ``core.security.host_execution`` import it on hot paths. The 085 W1 file
+record is fed by ``load_env`` and ``core.env_file.upsert_env_var``
+(:func:`note_env_file`); only :func:`readable_custody_file` reads those files.
 """
 import os
 import threading
@@ -37,7 +39,66 @@ CUSTODY_SECRET_ENV = (
 
 _lock = threading.Lock()
 _held: Dict[str, str] = {}
+#: 085 W1: every env file this process layered (``load_env``) or wrote a custody
+#: secret into (``core.env_file.upsert_env_var``: ``polyrob wallet init``,
+#: ``polyrob config set``, the console). PATHS only, never a value: each check
+#: reads the file again, so a seed written after the load counts and a seed
+#: removed from the file stops counting.
+_env_files: list = []
 _loaded = False
+
+SOURCE_PROCESS_ENV = "process_env"
+SOURCE_DOTENV_PREFIX = "dotenv:"
+
+
+def note_env_file(path, values: Optional[Mapping[str, Optional[str]]] = None) -> None:
+    """Record *path* as an env file this process layered or wrote (085 W1).
+
+    ``polyrob.app.bootstrap.load_env`` calls this for every ladder file it
+    layers, and ``core.env_file.upsert_env_var`` for every custody secret it
+    writes. *values* is accepted for the callers' convenience and not kept:
+    the gap re-reads the file, so no copy of the seed stays here."""
+    key = str(path)
+    with _lock:
+        if key not in _env_files:
+            _env_files.append(key)
+
+
+def _file_custody_values(path: str) -> Dict[str, str]:
+    """``{name: value}`` for each custody secret *path* holds now ({} when the
+    file is gone or this UID cannot read it). Never logged, never kept."""
+    try:
+        if not os.access(path, os.R_OK):
+            return {}
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except (OSError, ValueError):
+        return {}
+    try:
+        import io
+        from dotenv import dotenv_values  # parse parity with load_env
+        parsed = dotenv_values(stream=io.StringIO(text))
+    except Exception:
+        parsed = {}
+        for line in text.splitlines():
+            name, sep, value = line.strip().removeprefix("export ").partition("=")
+            if sep:
+                parsed[name.strip()] = value.strip().strip("'\"")
+    return {n: str(parsed[n]) for n in CUSTODY_SECRET_ENV if parsed.get(n)}
+
+
+def _recorded_files() -> list:
+    with _lock:
+        return list(_env_files)
+
+
+def _dotenv_source(name: str, value: str) -> str:
+    """``dotenv:<path>`` when a recorded env file holds *name* = *value* now,
+    else ``process_env`` (a shell export or the systemd ``EnvironmentFile``)."""
+    for path in _recorded_files():
+        if _file_custody_values(path).get(name) == value:
+            return SOURCE_DOTENV_PREFIX + path
+    return SOURCE_PROCESS_ENV
 
 
 def take_custody_secrets() -> None:
@@ -54,6 +115,44 @@ def take_custody_secrets() -> None:
             if value:
                 _held[name] = value
         _loaded = True
+
+
+def custody_secret_sources() -> Dict[str, str]:
+    """``{name: source}`` for every custody secret this process holds (085 W1):
+    ``process_env`` or ``dotenv:<path>``, never a value. A secret still in
+    ``os.environ`` (the wallet config has not loaded yet) counts too."""
+    with _lock:
+        held = dict(_held)
+    out = {}
+    for name in CUSTODY_SECRET_ENV:
+        value = os.environ.get(name) or held.get(name)
+        if value:
+            out[name] = _dotenv_source(name, value)
+    return out
+
+
+def readable_custody_file() -> Optional[str]:
+    """The path of a recorded env file that holds a custody secret NOW and that
+    the current UID can read, or None (085 W1).
+
+    A same-UID host child can open that file, whatever the in-memory isolation
+    does — and whatever this process holds: a seed left in the file under the
+    remote signer, or an older seed than the one systemd set, is still a key a
+    child can read. A seed only in the process env (systemd ``EnvironmentFile``,
+    root-owned) or no seed in any recorded file: None.
+
+    An old ``polyrob update`` snapshot copy is checked by the caller
+    (``core.security.host_execution``) with :func:`file_holds_custody_secret`:
+    this module never imports the path tier (the layering cycle)."""
+    for path in _recorded_files():
+        if _file_custody_values(path):
+            return path
+    return None
+
+
+def file_holds_custody_secret(path) -> bool:
+    """True when *path* is readable by this UID and holds a custody secret now."""
+    return bool(_file_custody_values(str(path)))
 
 
 def discard_custody_secrets() -> list:
@@ -143,4 +242,5 @@ def _reset_for_tests() -> None:
     global _loaded
     with _lock:
         _held.clear()
+        _env_files.clear()
         _loaded = False

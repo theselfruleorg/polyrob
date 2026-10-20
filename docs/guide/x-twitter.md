@@ -119,13 +119,10 @@ Every X write (a post, a thread, a reply, a DM) goes through the same owner rule
 
 - **A genuine owner turn may post.** With `TWITTER_REQUIRE_APPROVAL` ON (the
   default) the agent asks you once more before the write; OFF, your request is the
-  approval. A turn that has read third-party content since you last spoke (a page,
-  a mail, another post) always needs a real approval, whatever the flag says.
-- **An owner-authored standing cron job posts without a per-run approval**, as long
-  as its run has not read third-party content. A job the agent wrote, or one made on
-  a turn that had read such content, is agent-authored: each of its posts needs your
-  tap. `/adopt` makes such a job yours after you see what it will do.
-- **An autonomous run waits in the run for your tap.** It queues the ask (a Telegram
+  approval. A session that holds a correspondent's message (someone who is not you)
+  always needs a real approval, whatever the flag says.
+- **A standing cron job or goal posts without a per-run approval.**
+- **Any other autonomous run waits in the run for your tap.** It queues the ask (a Telegram
   card, or `/pending`) and waits inside the X action's own timeout. If you do not
   answer in time, the result reads "waiting for the owner's approval" and nothing
   was posted; the run does not retry. A later approval sends exactly the approved

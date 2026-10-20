@@ -28,7 +28,7 @@ _STATE_DEFAULTS = dict(
     _deferred_mcp_actions=[], _max_mcp_deferrals=5, _llm_call_in_progress=False,
     _llm_call_start_time=None, agent_type="task", agent_id="agent_sess123",
     sensitive_data=None, available_file_paths=None, include_attributes=None,
-    initial_actions=None, _skill_content=None, _profile_max_steps=None,
+    initial_actions=None, _skill_content=None,
     _profile_system_message=None, _enabled_actions=None, _native_tools_debug=False,
     validate_output=False, generate_gif=False, save_conversation_path=None,
     tool_output_log_path=None, register_new_step_callback=None,

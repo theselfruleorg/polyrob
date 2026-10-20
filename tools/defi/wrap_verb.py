@@ -40,7 +40,8 @@ async def perform_wrap(tool, params, execution_context=None):
         return tool._ar(error=chain_err)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
 
     row = _chains.get(params.chain)
     wrapped = getattr(row, "wrapped_native", None) if row else None
@@ -120,9 +121,8 @@ async def perform_wrap(tool, params, execution_context=None):
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was wrapped"),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was wrapped"))
 
         from core.wallet import tx_notify
         _used, _limit = tx_notify.caps_from_gate(gate)
@@ -191,7 +191,8 @@ async def perform_unwrap(tool, params, execution_context=None):
         return tool._ar(error=chain_err)
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
 
     row = _chains.get(params.chain)
     wrapped = getattr(row, "wrapped_native", None) if row else None
@@ -263,9 +264,8 @@ async def perform_unwrap(tool, params, execution_context=None):
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was unwrapped"),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was unwrapped"))
 
         from core.wallet import tx_notify
         _used, _limit = tx_notify.caps_from_gate(gate)

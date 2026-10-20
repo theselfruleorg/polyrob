@@ -111,22 +111,19 @@ def _warn_backfill_retired_once(config_dir: str = "config") -> None:
     )
 
 
-def load_env(env: Optional[str] = None, config_dir: str = "config",
-             local_mode: bool = False) -> str:
-    """Load environment variables from .env files with proper layering.
+def load_env(env: Optional[str] = None, config_dir: str = "config") -> str:
+    """Load environment variables from the ONE env ladder (080 WS-1).
 
-    Server layer order (later overrides earlier): root .env >
-    config/.env.{resolved} > config/.env.{resolved}.local.
-
-    Local mode reads the owner home .env, then legacy ~/.rob/.env, with
-    override=False so explicit process variables win. Project-local files
-    cannot configure the CLI merely because the owner enters a directory.
+    Every entry point — the CLI, the surfaces, the API (``build_bot``,
+    ``api.app``, ``api.server_boot``) — reads ``core.paths.env_file_candidates``
+    with override=False: an explicit process variable (a shell export or the
+    systemd ``EnvironmentFile``) always wins over the instance/home file.
+    Project-local files cannot configure the agent merely because the owner
+    enters a directory. The old server ladder (``config/.env.*`` loaded with
+    override=True, beating systemd) is deleted.
 
     Environment resolution priority: CONFIG_ENV > env parameter > ENV var > 'development'
     Returns the resolved environment name.
-
-    The candidate list + order is the SSOT ``core.paths.env_file_candidates`` (R-1);
-    this function only applies the per-mode override semantics described above.
     """
     resolved = os.environ.get("CONFIG_ENV") or env or os.environ.get("ENV", "development")
     from core.paths import env_file_candidates
@@ -140,43 +137,55 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
     except Exception:
         pass
 
-    if local_mode:
-        # One-time ~/.rob -> ~/.polyrob home migration BEFORE any ~/.polyrob read
-        # (copy-not-move, marker-gated, fail-open — never raises).
+    # One-time ~/.rob -> ~/.polyrob home migration BEFORE any ~/.polyrob read
+    # (copy-not-move, marker-gated, fail-open — never raises).
+    try:
+        from core.home_migration import migrate_rob_home_once
+        migrate_rob_home_once()
+    except Exception:
+        pass
+    # override=False, HIGHEST precedence first: the first file to set a key
+    # keeps it, so the helper's order IS the precedence order (and an explicit
+    # process env var always wins).
+    for cand in env_file_candidates():
+        # An inaccessible home candidate cannot configure this process.
         try:
-            from core.home_migration import migrate_rob_home_once
-            migrate_rob_home_once()
-        except Exception:
-            pass
-        # override=False, HIGHEST precedence first: the first file to set a key
-        # keeps it, so the helper's order IS the precedence order (and an explicit
-        # process env var always wins).
-        for cand in env_file_candidates(resolved, local_mode=True, config_dir=config_dir):
-            # An inaccessible home candidate cannot configure this process.
+            present = cand.path.exists()
+        except OSError:
+            present = False
+        if present:
             try:
-                present = cand.path.exists()
-            except OSError:
-                present = False
-            if present:
+                # 080 WS-1: record what a FILE put into the env, so config
+                # provenance never blames a shell export for it.
+                from dotenv import dotenv_values
+                from core.config_service import note_file_loaded
+                from core.security.custody_env import note_env_file
+                values = dotenv_values(str(cand.path))
+                note_file_loaded(cand.path, values)
+                # 085 W1: a custody secret in a file this UID can read is a gap.
+                note_env_file(cand.path, values)
                 load_dotenv(str(cand.path), override=False)
-    else:
-        # Server: lowest first with override=True — later loads win, so the
-        # REVERSED helper list keeps config/.env.{env}.local as the top layer.
-        for cand in reversed(env_file_candidates(resolved, local_mode=False, config_dir=config_dir)):
-            if cand.path.exists():
-                load_dotenv(str(cand.path), override=True)
+            except OSError as exc:
+                # 080 WS-1: an unreadable layer is named, never a crash.
+                logging.getLogger(__name__).warning(
+                    "env file %s is not readable by this process (%s); its "
+                    "values are not loaded", cand.path, exc)
 
     # The local-mode key backfill (Seam 3) is retired; the explicit
     # `polyrob config migrate` verb is the replacement. A one-time WARN names
-    # the migrate verb whenever the old behavior WOULD have fired. Server
-    # (local_mode=False) is never touched.
-    if local_mode:
-        _warn_backfill_retired_once(config_dir)
+    # the migrate verb whenever the old behavior WOULD have fired.
+    _warn_backfill_retired_once(config_dir)
 
     # 026 P1.1: the import-frozen policy flags snapshot BEFORE any file above
     # loaded (this module imports core.config_policy at line 16) — re-freeze
     # them exactly once, now that the ladder is layered.
     _refreeze_frozen_policy_flags_once()
+
+    # One way to pick the model: a retired CHAT_PROVIDER/CHAT_MODEL pin set
+    # alone refuses at start (RetiredFlagError names DEFAULT_*), never ignored.
+    from core.runtime_config import operator_model_pin, operator_provider_pin
+    operator_provider_pin()
+    operator_model_pin()
 
     # D7 (2026-10-10): a posture member set on its own env line is ignored —
     # never refused. One WARN in the log names the POLYROB_OVERRIDES line.
@@ -245,6 +254,7 @@ async def build_bot(
 
     logger = get_component_logger("bootstrap")
     logger.info(f"Bootstrapping POLYROB platform (env={resolved_env})")
+    seed_bundled_skills_at_start()
 
     config = BotConfig()
     bot = CoreBot(config=config)
@@ -258,6 +268,22 @@ async def build_bot(
 
     logger.info("Bootstrap complete — container ready")
     return bot
+
+
+def seed_bundled_skills_at_start() -> None:
+    """081 WS-5.3: copy the bundled skill library into ``<data_home>/skills/bundled``
+    (first start) or update its unmodified copies (every later start), before any
+    SkillManager is built. The report is logged and kept for the update message.
+    Never raises: on failure the package copy keeps serving."""
+    log = logging.getLogger("polyrob.skills.seed")
+    try:
+        from modules.skills.seed import seed_bundled_skills
+        rep = seed_bundled_skills()
+        log.info("bundled skills: %s", rep.summary())
+        for line in rep.owner_lines():
+            log.warning(line)
+    except Exception:
+        log.warning("bundled skill seeding skipped", exc_info=True)
 
 
 def _server_session_data_root():
@@ -594,7 +620,7 @@ async def build_cli_container(
     # is indistinguishable from a deliberate override.
     _cap_set_at_launch = "MAX_SESSIONS_PER_USER" in os.environ
 
-    load_env(env, local_mode=True)
+    load_env(env)
     # Terminal-native, single-user: mark the process local so the INTERACTIVE tools
     # default ON as a group (core.config_policy._SAFE_LOCAL_FLAGS — coding/git/KB/
     # RAG/project-context/…). The self-directed AUTONOMY loops
@@ -610,6 +636,7 @@ async def build_cli_container(
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         console_level=console_level,
     )
+    seed_bundled_skills_at_start()
 
     config = BotConfig()
     # local CLI is single-user ('local'); the multi-tenant per-user session cap

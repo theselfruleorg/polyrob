@@ -3,9 +3,10 @@ name: polymarket-portfolio-review
 description: Read the configured Polymarket account's positions and trade history from the public Data API (no address parameter); summarize exposure and P&L
 license: MIT
 metadata:
+  polyrob-when: 'Reviewing Polymarket positions and trade history'
   polyrob-priority: '5'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["polymarket positions","polymarket portfolio","polymarket pnl","polymarket trade history","polymarket exposure"],"task_patterns":["polymarket.*(position|portfolio|pnl|history)","summari[sz]e.*polymarket.*(exposure|pnl)"],"tool_ids":["polymarket_data"]}'
+  polyrob-triggers: '{"tool_ids":["polymarket_data"]}'
   polyrob-version: '2'
 ---
 # Polymarket Portfolio Review

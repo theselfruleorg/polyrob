@@ -109,7 +109,7 @@ def test_due_job_uses_current_task_and_cap(tmp_path):
 def test_cancel_during_run_survives_completion(tmp_path):
     async def scenario():
         async def runner(job):
-            service.cancel(job.id, user_id="u")
+            service.cancel(job.id, user_id="u", via="cli")
             return True
         store, service, scheduler = cron_stack(tmp_path, runner)
         job = service.schedule(task="research", user_id="u", schedule_spec="5m")

@@ -96,6 +96,20 @@ async def test_owner_can_still_read_own_session_status():
     owner_req = _FakeRequest(user_id="tenant-a")
     resp = await thp.get_session_status("shared-session-id", owner_req, agent=agent)
     assert resp.user_id == "tenant-a"
+    assert resp.stop_reason is None  # no resident orchestrator: unknown, not guessed
+
+
+@pytest.mark.asyncio
+async def test_session_status_carries_the_last_stop_reason():
+    """083 WS-1: the status payload says why the session's last run stopped."""
+    from types import SimpleNamespace
+    agent = _FakeAgent(session_owner="tenant-a")
+    main = SimpleNamespace(_is_sub_agent=False,
+                           state=SimpleNamespace(stop_reason="max_steps", max_steps=50))
+    agent.get_orchestrator = lambda sid: SimpleNamespace(agents={"m": main})
+    resp = await thp.get_session_status("shared-session-id", _FakeRequest("tenant-a"),
+                                        agent=agent)
+    assert resp.stop_reason == "max_steps"
 
 
 # ── GET/POST /users/{user_id}/... ──────────────────────────────────────────

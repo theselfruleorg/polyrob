@@ -41,7 +41,16 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-async def build_bridge_message(*, user_id: Optional[str], thread_key: Optional[str]):
+#: E-C4 (2026-10-13 review): the bridge cut the summary at 600 chars and called
+#: the owner "this contact". The owner thread gets a longer bridge, owner wording,
+#: and the open errand when the last session did not finish.
+BRIDGE_MAX_CHARS = 600
+OWNER_BRIDGE_MAX_CHARS = 1500
+_OPEN_OUTCOMES = ("partial", "failed", "cancelled")
+
+
+async def build_bridge_message(*, user_id: Optional[str], thread_key: Optional[str],
+                               owner: bool = False):
     """Recall the most recent ``kind="chat"`` episode with a non-empty summary for
     ``thread_key`` and wrap it as a ``SESSION_BRIDGE`` control message.
 
@@ -57,22 +66,43 @@ async def build_bridge_message(*, user_id: Optional[str], thread_key: Optional[s
         rows = await memory_recall_episodes(
             user_id=user_id, thread_key=thread_key, kind="chat", limit=3, order="newest")
 
-        summary = None
+        summary, row_used = None, None
         for row in rows or []:
             candidate = (getattr(row, "summary", None) or "").strip()
             if candidate:
-                summary = candidate
+                summary, row_used = candidate, row
                 break
         if not summary:
             return None
 
+        from modules.llm.messages import make_control_message, MessageOrigin
+        if owner:
+            # The owner thread: an owner chat episode is never written for a
+            # correspondent-facing session, so this is the owner's own
+            # conversation — dated, longer, and naming an unfinished errand.
+            import time as _t
+            ts = getattr(row_used, "ts", None)
+            day = ""
+            try:
+                day = f" ({_t.strftime('%Y-%m-%d %H:%M', _t.localtime(int(ts)))})" if ts else ""
+            except Exception:
+                day = ""
+            body = summary[:OWNER_BRIDGE_MAX_CHARS]
+            outcome = (getattr(row_used, "outcome", None) or "").strip()
+            errand = (getattr(row_used, "task", None) or "").strip()
+            if outcome in _OPEN_OUTCOMES and errand:
+                body += (f"\nThat session ended {outcome}; the open errand was: "
+                         f"{errand[:400]}")
+            return make_control_message(
+                f"Continuing your earlier conversation with the owner. Last time{day}:\n"
+                + body, MessageOrigin.SESSION_BRIDGE)
+
         # C7: the summary is derived from a past conversation (it can carry a
         # correspondent's words), so it rides as DATA — the lead-in stays outside.
         from core.security.untrusted_wrap import wrap_untrusted
-        from modules.llm.messages import make_control_message, MessageOrigin
         return make_control_message(
             "Continuing an earlier conversation with this contact. Last time:\n"
-            + wrap_untrusted("session_bridge", summary[:600]),
+            + wrap_untrusted("session_bridge", summary[:BRIDGE_MAX_CHARS]),
             MessageOrigin.SESSION_BRIDGE,
         )
     except Exception:

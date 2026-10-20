@@ -1,6 +1,6 @@
 """RFC 8628 device-authorization flow (proposal 024, L2).
 
-**The default flow.** Rob #1 is a headless VPS reached over SSH, where a
+**The default flow.** A typical install is a headless VPS reached over SSH, where a
 loopback browser redirect is worthless — nothing on that box can open a browser
 and nothing on your laptop can reach its 127.0.0.1. Device code works
 identically on a server and on a laptop: it prints a URL and a short code, you

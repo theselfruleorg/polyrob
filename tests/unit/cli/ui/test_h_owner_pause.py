@@ -11,8 +11,8 @@ def test_repl_pause_and_resume(tmp_path, monkeypatch):
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
     from cli.ui.commands.h_owner import h_halt, h_pause, h_resume
     out = []
-    h_pause(_ctx(out, ["streams"]))
-    assert out[-1].startswith("⏸ Paused streams")
+    h_pause(_ctx(out, ["social"]))
+    assert out[-1].startswith("⏸ Paused social")
     h_resume(_ctx(out, []))
     assert "RESUMED" in out[-1]
     h_halt(_ctx(out, ["ignored"]))

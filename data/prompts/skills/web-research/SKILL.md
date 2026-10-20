@@ -3,9 +3,9 @@ name: web-research
 description: Multi-source web research with cross-checking and cited synthesis
 license: MIT
 metadata:
+  polyrob-when: 'Researching a topic across several web sources'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["research","find out","look into","investigate","latest on","sources","cite","background on","compare options"],"task_patterns":["research.*","find out.*about","look into.*","investigate.*","latest.*on","compare.*(vs|versus|options)"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Web Research

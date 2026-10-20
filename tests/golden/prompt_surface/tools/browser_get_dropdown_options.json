@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Get available options from a dropdown element by its index.",
+    "name": "browser_get_dropdown_options",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for clicking an element on the page.",
+      "properties": {
+        "elementIndex": {
+          "type": "integer"
+        },
+        "xPath": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "elementIndex"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

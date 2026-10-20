@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Show one cron job in full: its complete task text, schedule, cap, rig, delivery and pinned skills. Read this before cronjob_edit.",
+    "name": "cronjob_show",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The id of the cron job to show in full.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

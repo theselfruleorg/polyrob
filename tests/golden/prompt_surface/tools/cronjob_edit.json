@@ -1,0 +1,110 @@
+{
+  "function": {
+    "description": "Amend a live cron job IN PLACE — patch its task (old_text -> new_text, the rest kept verbatim), or change its schedule, cap, rig, delivery or pinned skills. Use this instead of cancel + re-schedule, which re-types the task and loses its rules. To run a job sooner, set a new schedule (e.g. a one-shot ISO time a minute ahead).",
+    "name": "cronjob_edit",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Amend a live job IN PLACE. Pass only the fields to change.",
+      "properties": {
+        "deliver": {
+          "default": null,
+          "description": "New delivery sink ('telegram'|'email' to the owner, 'twitter' = a PUBLIC X post), or 'none' to drop it.",
+          "nullable": true,
+          "type": "string"
+        },
+        "job_id": {
+          "description": "The id of the cron job to edit.",
+          "type": "string"
+        },
+        "max_duration_seconds": {
+          "default": null,
+          "description": "New hard cap per run (60-1800s).",
+          "maximum": 1800,
+          "minimum": 60,
+          "nullable": true,
+          "type": "integer"
+        },
+        "new_text": {
+          "default": null,
+          "description": "Replacement for old_text ('' deletes the passage).",
+          "nullable": true,
+          "type": "string"
+        },
+        "old_text": {
+          "default": null,
+          "description": "Exact passage of the CURRENT task to replace (copy it from cronjob_show; must occur exactly once). The rest of the task is kept verbatim — never re-type a whole task to change one value.",
+          "nullable": true,
+          "type": "string"
+        },
+        "pause_windows": {
+          "default": null,
+          "description": "Replace the job's pause windows ([[start, end], ...]); [] clears them.",
+          "items": {
+            "items": {},
+            "type": "array"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "precheck": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "Replace the job's $0 pre-check (see cronjob_schedule); {} clears it.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "read_verb": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "Replace the job's read verb (see cronjob_schedule); {} clears it.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "rig": {
+          "default": null,
+          "description": "New named tool rig, or 'none' to clear it.",
+          "nullable": true,
+          "type": "string"
+        },
+        "schedule": {
+          "default": null,
+          "description": "New schedule spec; the next run is recomputed from now. This is how you run a job SOONER: set a one-shot ISO time a minute ahead. A one-shot spec makes a recurring job one-shot — set its recurring spec back after that run.",
+          "nullable": true,
+          "type": "string"
+        },
+        "skills": {
+          "default": null,
+          "description": "Replace the pinned skill ids ([] clears them).",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "target_token": {
+          "additionalProperties": false,
+          "default": null,
+          "description": "Replace the declared buy target {'chain', 'address'}; {} clears it.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "write_verb": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "OWNER TURN ONLY: replace the job's write verb (see cronjob_schedule); {} clears it.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

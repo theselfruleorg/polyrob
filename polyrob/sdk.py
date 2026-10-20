@@ -28,9 +28,6 @@ _EXPORTS: Dict[str, str] = {
     "is_leaf_or_forged": "core.security.owner_turn:is_leaf_or_forged",
     "is_leaf": "core.security.owner_turn:is_leaf",
     "forged_kind": "core.security.owner_turn:forged_kind",
-    # the read taint's cause in words, and a pack's own write-receipt verbs
-    "taint_cause": "core.security.taints:cause",
-    "register_receipt_actions": "core.security.read_taint:register_receipt_actions",
     # the ONE external-address key (dead targets, correspondents, conversations)
     "canonical_addr": "core.surfaces.address_key:canonical_addr",
     "is_room_turn": "core.security.owner_turn:is_room_turn",

@@ -319,7 +319,7 @@ def _make_chat_agent_stub(tmp_path):
         return None
     agent.run_session = _run_session
 
-    def _extract(session_id):
+    def _extract(session_id, since=None):
         return "reply"
     agent._extract_chat_reply = _extract
 

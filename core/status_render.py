@@ -21,7 +21,7 @@ from core.status_snapshot import (
 )
 
 _CHECKED = ("credit sentinel", "live provider", "open asks", "blocked goals",
-            "pending approvals", "objective budgets", "delivery cap", "loop heartbeats",
+            "pending approvals", "delivery cap", "loop heartbeats",
             "owner pause", "surface circuits", "tool timeouts")
 
 _SECTION_TITLES = {
@@ -127,6 +127,11 @@ def pause_headline_from(p: dict, live: Optional[dict] = None, *,
         until = f", auto-resumes {_hhmm_ts(p.get('until'))}" if p.get("until") else ""
         return (f"⏸ PAUSED ({words}) since {_hhmm_ts(p.get('since'))} by {who}{until} "
                 f"— {resume_hint} to continue")
+    # 080 WS-4: never RUNNING while autonomy is off — the ONE gate reader.
+    from core.status_loops import autonomy_idle_reason
+    idle = autonomy_idle_reason()
+    if idle:
+        return f"■ IDLE — {idle}: no job or goal runs on its own"
     if not live:
         return f"▶ RUNNING — {pause_hint} to stop"
     alive = live.get("loops_alive") or {}
@@ -209,23 +214,31 @@ def wallet_note_lines(snap: StatusSnapshot) -> List[str]:
     return out
 
 
-def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8) -> str:
+def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8,
+                             status_tool: bool = True,
+                             with_operations: bool = False) -> str:
     """Compact, per-turn note for the AGENT (injected as a control message):
     what is degraded right now, so "how are you doing?" is answered from the
-    same facts the owner's /status shows — never from stale context."""
+    same facts the owner's /status shows — never from stale context.
+
+    ``with_operations``: the same turn also carries ``<operations>``, which owns
+    the pause and the work state — this note then states neither (B-9)."""
     lines = [f"Live health as of {_stamp(snap)} (same source as the owner's /status):"]
     lines.append(health_headline(snap))
     # The agent's own verb is the action for PAUSE. There is no agent resume verb
     # (034 §11.2) — only an owner seat lifts a pause, so the note names /resume and
     # the agent relays that instead of trying a call that refuses.
-    lines.append(pause_headline(snap, resume_hint="/resume (owner only)",
-                                pause_hint="autonomy_control(pause)"))
+    if not with_operations:
+        lines.append(pause_headline(snap, resume_hint="/resume (owner only)",
+                                    pause_hint="autonomy_control(pause)"))
     for h in snap.health[:max_items]:
         mark = "CRITICAL" if h.severity == SEVERITY_CRIT else "warn"
         lines.append(f"- [{mark}] {h.text}")
     if len(snap.health) > max_items:
-        lines.append(f"- … +{len(snap.health) - max_items} more (call agent_status)")
-    for name in ("providers", "work", "delivery"):
+        # 080 WS-5: name `agent_status` only where this session has the tool.
+        more = "call agent_status" if status_tool else "ask the owner to run /status"
+        lines.append(f"- … +{len(snap.health) - max_items} more ({more})")
+    for name in ("providers", "delivery") if with_operations else ("providers", "work", "delivery"):
         sec = snap.sections.get(name)
         if sec is None:
             continue
@@ -238,6 +251,95 @@ def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8) -> str
     lines.append("If asked how things are going, state these facts first; do not claim "
                  "a clean state that this note contradicts.")
     return "\n".join(lines)
+
+
+#: Per-list caps of the <operations> block: 1 header + 1 pause line + three
+#: lists of (heading + items + "+N more") stay within 25 lines.
+OPS_MAX_JOBS, OPS_MAX_GOALS, OPS_MAX_STOPS = 6, 6, 5
+
+
+def _utc(ts, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """An epoch or ISO stamp as UTC text; ``?`` when it cannot be read."""
+    if ts in (None, ""):
+        return "?"
+    try:
+        return time.strftime(fmt, time.gmtime(float(ts)))
+    except (TypeError, ValueError):
+        return str(ts)[:16].replace("T", " ")
+
+
+def _ops_list(out: List[str], title: str, items: Optional[list], reason: str,
+              cap: int, more: str, line) -> None:
+    if items is None:
+        out.append(f"{title}: could not read ({reason[:100]}) — unknown, not none")
+        return
+    if not items:
+        out.append(f"{title}: none")
+        return
+    out.append(f"{title} ({len(items)}):")
+    out.extend(line(it) for it in items[:cap])
+    if len(items) > cap:
+        out.append(f"- +{len(items) - cap} more, see {more}")
+
+
+def _ops_job(j: dict) -> str:
+    st = j.get("status")
+    when = ("PAUSED" if st == "paused" else "running now" if st == "running"
+            else f"next {_utc(j.get('next_run_at'))} UTC")
+    sched = f" · {j['schedule']}" if j.get("schedule") else ""
+    return f"- {j.get('id')} \"{j.get('name')}\"{sched} · {when}"
+
+
+def render_operations_block(snap, *, now: Optional[float] = None) -> str:
+    """The agent's per-turn ``<operations>`` body: active jobs, open goals, the
+    ``/pause`` record and the owner's stops, from the ``work`` and ``loops``
+    sections (``build_operations_sections`` or a full snapshot). At most 25
+    lines; a store that could not be read says so, never "none"."""
+    sections = getattr(snap, "sections", snap) or {}
+    work, loops = sections.get("work"), sections.get("loops")
+    out = [f"Live harness state as of {_utc(now or time.time())} UTC (same source as /status):"]
+    if loops is None or not loops.available:
+        why = getattr(loops, "reason", "") or "no loops section"
+        out.append(f"Pause: could not read ({why[:100]}) — unknown")
+        jobs, jobs_why = None, why
+    else:
+        p = loops.data.get("pause") or {}
+        if str(p.get("source") or "").startswith("unreadable"):
+            out.append("Pause: could not read the pause record — treat all work as paused")
+        elif p.get("paused"):
+            who = f" by {p['set_by']}" if p.get("set_by") else ""
+            out.append(f"Pause: ON ({', '.join(p.get('scopes') or ['all'])}) since "
+                       f"{_utc(p.get('since'))} UTC{who} — only the owner's /resume lifts it")
+        else:
+            out.append("Pause: none")
+        jobs = loops.data.get("jobs")
+        jobs_why = loops.data.get("cron_reason") or "no job list"
+    _ops_list(out, "Jobs", jobs, jobs_why, OPS_MAX_JOBS, "/jobs", _ops_job)
+    if work is None or not work.available:
+        why = getattr(work, "reason", "") or "no work section"
+        goals, stops, goals_why, stops_why = None, None, why, why
+    else:
+        goals, goals_why = work.data.get("open_goals"), "no goal list"
+        stops, stops_why = work.data.get("stops"), work.data.get("stops_reason") or "?"
+    _ops_list(out, "Open goals", goals, goals_why, OPS_MAX_GOALS, "/goals",
+              lambda g: f"- {g.get('id')} \"{str(g.get('title') or '')[:60]}\" · {g.get('status')}")
+    _ops_list(out, "Owner stops", stops, stops_why, OPS_MAX_STOPS, "/goals and /jobs",
+              lambda s: f"- {s.get('scope')}: {s.get('label')} since "
+                        f"{_utc(s.get('since'), '%Y-%m-%d')} UTC")
+    return "\n".join(out)
+
+
+def _notice_author(row: dict) -> str:
+    """084 R11: name who delivered it — it read "an autonomous run" for any
+    other session, so an owner command's reply was told as an autonomous act."""
+    sid = str(row.get("session_id") or "")
+    if not sid:
+        return "a rail or an owner command"
+    try:
+        from core.autonomy_marker import is_autonomous
+        return "an autonomous run" if is_autonomous(sid) else "another chat session"
+    except Exception:
+        return "another session"
 
 
 def recent_notice_lines(snap: StatusSnapshot) -> List[str]:
@@ -256,7 +358,7 @@ def recent_notice_lines(snap: StatusSnapshot) -> List[str]:
         text = str(r.get("text") or "").replace("\n", " ")
         if len(text) > 160:
             text = text[:157] + "…"
-        out.append(f"- the owner was just told ({hhmm} UTC, by an autonomous run via "
+        out.append(f"- the owner was just told ({hhmm} UTC, by {_notice_author(r)} via "
                    f"{r.get('source') or '?'}, not by this chat): {text}")
     if out:
         out.append("  If the owner's next message reads as a correction, it most likely "

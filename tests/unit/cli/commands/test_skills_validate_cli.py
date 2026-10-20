@@ -30,8 +30,9 @@ def test_count_authored_skills_matches_bundled_library_size():
     # six polymarket-*/hyperliquid-* skills into the markets pack (19). 068 W2 added the
     # ten basic trading procedure skills (29); Codex A10 split treasury-trading's
     # 57 KB body into five sibling skills (34). incident-response and
-    # adversarial-consensus added the two generic procedure skills (36).
-    assert mgr.count_authored_skills() == 36
+    # adversarial-consensus added the two generic procedure skills (36). 079 P0 added
+    # pay-for-work + get-paid-for-work, the task-agnostic money flows (38).
+    assert mgr.count_authored_skills() == 38
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():
@@ -43,7 +44,7 @@ def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():
 
 def test_cli_skills_validate_no_arg_reports_grouped_issues_and_exits_nonzero(monkeypatch):
     import cli.commands.skills as skills_mod
-    from agents.task.agent.skill_validation import Issue
+    from core.skills.frontmatter import Issue
 
     class _FakeMgr:
         def validate_all_authored(self):

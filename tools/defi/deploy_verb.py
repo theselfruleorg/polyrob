@@ -152,9 +152,12 @@ async def perform_deploy_token(tool, params, execution_context=None):
             "the wallet — the supply would be lost. Deploy without salt/vanity. "
             "Nothing was broadcast."))
 
+    # 085 W7: the name and symbol in repr() form, so a hidden character is
+    # visible on the approval; the supply EXACT, never `{:g}`-rounded.
     describe = (
-        f"deploy token {params.symbol} ({params.name}) on {params.chain}\n"
-        f"  supply:   {params.supply:g} whole units "
+        f"deploy token {params.symbol.strip()!r} ({params.name.strip()!r}) on "
+        f"{params.chain}\n"
+        f"  supply:   {token_template.format_supply(params.supply)} whole units "
         f"({supply_raw} raw at {params.decimals} decimals)\n"
         f"  template: FixedSupplyToken — no mint function, no owner, no pause, "
         f"no fee\n")
@@ -272,7 +275,8 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     signer = wallet.operational_signer()
     gate = wallet.policy
 
@@ -311,7 +315,10 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         is_deploy=True, init_code=init_code,
         expected_runtime=expected_runtime, immutable_slots=tuple(immutable_slots),
         create2_salt=(create2["salt"] if create2 is not None else None),
-        expected_holder_mint_raw=expected_holder_mint_raw)
+        expected_holder_mint_raw=expected_holder_mint_raw,
+        # 085 W2: an endowed constructor can forward the value anywhere, so it is
+        # the owner's call in every lane (and deploy_guard proves it stayed).
+        payout_shape=value_wei > 0)
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
@@ -378,9 +385,8 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc, nothing="nothing was deployed"))
 
         _used, _limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(

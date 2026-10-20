@@ -9,7 +9,7 @@ passes ``None``), so the server never touches a home-dir file.
 
 Precedence ladder:
     explicit arg (--provider / SessionRequest.provider)
-      > pinned (CHAT_PROVIDER/DEFAULT_PROVIDER, caller-supplied)
+      > pinned (DEFAULT_PROVIDER, caller-supplied)
       > cli_store_default (~/.polyrob/cli.json, CLI only)   [intersected]
       > first provider with a key, canonical PROFILES order  [intersected]
       > last_resort
@@ -72,7 +72,7 @@ def resolve_runtime_config(
     if explicit_provider:
         return explicit_provider, explicit_model
 
-    # 2. Operator pin (CHAT_/DEFAULT_ env, resolved by the caller) — exempt.
+    # 2. Operator pin (DEFAULT_ env, resolved by the caller) — exempt.
     if pinned_provider:
         return pinned_provider, pinned_model
 
@@ -90,17 +90,17 @@ def resolve_runtime_config(
     return last_resort
 
 
-def _first_set(env, *names):
-    """The first of *names* set to a non-blank value — a blank CHAT_ never shadows DEFAULT_."""
-    for name in names:
-        value = (env.get(name) or "").strip()
-        if value:
-            return value
-    return None
+def _pin(env, name, retired):
+    """The operator pin *name*, or ``None``. The retired ``CHAT_*`` duplicate set
+    alone REFUSES (``RetiredFlagError``) — a silently ignored pin would change the
+    model every run uses."""
+    from core.config_policy.retired_flags import refuse_retired_alias
+    refuse_retired_alias(retired, env)
+    return (env.get(name) or "").strip() or None
 
 
 def operator_provider_pin(env=None):
-    """The operator's serving-provider pin, if any (``CHAT_PROVIDER`` > ``DEFAULT_PROVIDER``).
+    """The operator's serving-provider pin (``DEFAULT_PROVIDER``), if any.
 
     Returns the provider name or ``None``. Autonomous dispatch (goal/cron/planner) has no
     interactive caller to pass an explicit provider, so it must read this pin and thread it
@@ -110,25 +110,18 @@ def operator_provider_pin(env=None):
     the same pin ``task_agent_lite._resolve_chat_runtime`` honors for interactive runs.
     """
     env = _os.environ if env is None else env
-    return _first_set(env, "CHAT_PROVIDER", "DEFAULT_PROVIDER")
+    return _pin(env, "DEFAULT_PROVIDER", "CHAT_PROVIDER")
 
 
 def operator_model_pin(env=None):
-    """The operator's model pin, if any (``CHAT_MODEL`` > ``DEFAULT_MODEL``), read raw.
+    """The operator's model pin (``DEFAULT_MODEL``), if any, read raw.
 
-    This module is the ONE reader of the four pin variables
+    This module is the ONE reader of the pin variables
     (``tests/test_operator_pin_reader_ratchet.py``). Prefer ``operator_model_for`` — the
     raw pin is only meaningful paired with ``operator_provider_pin``.
     """
     env = _os.environ if env is None else env
-    chat_provider = _first_set(env, "CHAT_PROVIDER")
-    default_provider = _first_set(env, "DEFAULT_PROVIDER")
-    if (chat_provider and default_provider
-            and canonicalize_provider(chat_provider) != canonicalize_provider(default_provider)):
-        # The pin is a PAIR: CHAT_PROVIDER wins the provider, so DEFAULT_MODEL —
-        # which names a DEFAULT_PROVIDER model — must not ride along with it.
-        return _first_set(env, "CHAT_MODEL")
-    return _first_set(env, "CHAT_MODEL", "DEFAULT_MODEL")
+    return _pin(env, "DEFAULT_MODEL", "CHAT_MODEL")
 
 
 def operator_model_for(provider, env=None):
@@ -150,11 +143,65 @@ def operator_model_for(provider, env=None):
     return operator_model_pin(env)
 
 
+#: Model tiers a ``REGIME_POLICY`` row may name (``agents/task/session_class.py``).
+#: ``default`` = the operator's model; ``heavy`` = ``HEAVY_MODEL``; ``inherit`` = the
+#: caller keeps the parent's LLM (a child agent). The tier -> model map stays in env
+#: because a model id is per-provider.
+MODEL_TIERS = ("default", "heavy", "inherit")
+
+
+def model_for(payload, provider, *, tier="default", env=None):
+    """The ONE model resolver for an autonomous run (2026-10-14 review B-8 / E-9).
+
+    Precedence: ``payload.model`` (explicit) > the heavy tier (*tier* ``"heavy"``, or a
+    MONEY-CLASS payload — ``core.money.classify.is_money_class``) -> ``HEAVY_MODEL`` on
+    the operator's pinned provider > ``None``. ``None`` means "the caller fills
+    ``get_default_model(provider)``" (that registry read stays out of core) — or, for
+    *tier* ``"inherit"``, "keep the parent's model".
+
+    A job on another provider than the operator pin keeps that provider's default (a
+    model id is per-provider). No text heuristic: the class comes from the payload's
+    label and toolset only (E-10: a prompt-keyword router is deliberately absent).
+    """
+    env = _os.environ if env is None else env
+    try:
+        if isinstance(payload, (str, bytes)):
+            import json
+            payload = json.loads(payload or "{}")
+    except Exception:
+        payload = {}
+    payload = payload if isinstance(payload, dict) else {}
+    explicit = str(payload.get("model") or "").strip()
+    if explicit:
+        return explicit
+    if tier == "inherit":
+        return None
+    heavy = tier == "heavy"
+    if not heavy:
+        from core.money.classify import is_money_class
+        heavy = is_money_class(payload)
+    if not heavy:
+        return None
+    model = (env.get("HEAVY_MODEL") or "").strip()
+    if not model:
+        return None
+    pinned = canonicalize_provider(operator_provider_pin(env))
+    if not provider or not pinned or canonicalize_provider(provider) != pinned:
+        return None
+    return model
+
+
+def heavy_model_for(payload, provider, env=None):
+    """``HEAVY_MODEL`` for a money-class job or goal, or ``None`` — a thin delegator over
+    :func:`model_for` at the ``default`` tier (callers check ``payload.model`` first)."""
+    return model_for(payload, provider, tier="default", env=env)
+
+
 def resolve_default_provider(env=None, *, last_resort=("openai", None)):
     """Resolve the operator's default (provider, model) for an autonomous run.
 
     Thin wrapper over ``resolve_runtime_config`` that threads the operator pin
-    (``CHAT_PROVIDER``/``DEFAULT_PROVIDER``) so autonomous dispatch honors it. ``model``
+    (``DEFAULT_PROVIDER``) so autonomous dispatch honors it. ``model``
     is the operator's model pin for a pinned provider, else ``None`` (the caller fills it
     from the registry via ``get_default_model``, which applies the same pin).
     """
@@ -172,7 +219,7 @@ def resolve_session_runtime(provider=None, model=None, env=None):
     config instead of a hardcoded openai/gpt-5 literal.
 
     Precedence (same ladder goals/cron dispatch and chat_once use): explicit arg
-    > operator pin (``CHAT_PROVIDER``/``DEFAULT_PROVIDER``, model via
+    > operator pin (``DEFAULT_PROVIDER``, model via
     ``DEFAULT_MODEL``) > first keyed provider in canonical order > openai/gpt-5
     last resort. The model is always filled to match the resolved provider, so a
     pinned/keyed provider never inherits the gpt-5 literal (live-prod
@@ -212,9 +259,8 @@ def resolve_session_runtime(provider=None, model=None, env=None):
                     provider, live, model)
                 provider, model = None, None
 
-        # CHAT_ before DEFAULT_, mirroring operator_provider_pin's order — the
-        # pin pair is read as a unit, so a CHAT_PROVIDER/CHAT_MODEL operator is
-        # not silently served the registry default for their pinned provider.
+        # The pin pair is read as a unit, so a pinned operator is not silently
+        # served the registry default for their pinned provider.
         pinned_model = operator_model_pin(env)
         resolved_provider, resolved_model = resolve_runtime_config(
             provider or None,

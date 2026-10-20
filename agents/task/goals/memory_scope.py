@@ -5,7 +5,7 @@ the one enforcement point). This module answers the three questions only the
 goal board can:
 
 * **which scope** — ``goal:<root>``, where root is the topmost ``kind='goal'``
-  ancestor via ``parent_id`` (objectives are not scopes). A DAG therefore shares
+  ancestor via ``parent_id``. A DAG therefore shares
   one working memory, and attempt N+1 of a goal recalls attempt N's findings;
 * **which regime** — ``payload.memory_regime`` (already clamped at
   ``goal_create``) > ``AUTONOMY_MEMORY_REGIME``, then RE-clamped here against the

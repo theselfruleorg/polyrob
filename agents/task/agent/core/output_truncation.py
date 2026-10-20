@@ -13,8 +13,9 @@ step is re-run ONCE with an injected control note naming the cut and the remedy
 measurable — that is the acceptance number in 057 WS-B (``finish_reason=length``
 = 0/day).
 
-Gates: the retry rides ``LLM_OUTPUT_TRUNCATION_RETRY`` (default OFF =
-byte-identical). The telemetry event is NOT gated — it observes, it does not act.
+Gates: the retry rides ``LLM_OUTPUT_TRUNCATION_RETRY`` (default OFF). With it
+off the cut answer is used, and one ephemeral note on the NEXT request says so
+(E-A8, 2026-10-13). The telemetry event is NOT gated — it observes, it does not act.
 """
 from __future__ import annotations
 
@@ -30,6 +31,20 @@ _NOTE = (
     "a long file in two or more calls (write_file, then append_file), and keep "
     "each tool call's arguments well under the budget. Do not repeat the "
     "oversized call."
+)
+
+
+# E-A8 (coherency review 2026-10-13): with the retry OFF the cut answer IS used,
+# so the note says so instead of "nothing from it was used". One shot, on the
+# NEXT request (the ephemeral tail), so the following step knows.
+_USED_NOTE = (
+    "Your last response was CUT OFF at {tokens} output tokens — the provider "
+    "stopped because the answer reached the output budget, not because it was "
+    "finished. It was used as it was: a tool call in it may be incomplete or "
+    "repaired, and anything after the cut is missing. Check what that step "
+    "really did before you continue. Write a long file in two or more calls "
+    "(write_file, then append_file), and keep each tool call's arguments well "
+    "under the budget."
 )
 
 
@@ -79,12 +94,16 @@ def _emit(agent: Any, tokens: Optional[int], retried: bool,
 
 
 def build_truncation_note(tokens: Optional[int],
-                          reasoning_tokens: Optional[int] = None) -> Any:
+                          reasoning_tokens: Optional[int] = None,
+                          used: bool = False) -> Any:
     """The control message injected before the single retry — the write note,
-    or the reasoning note when the cut was spent thinking."""
+    or the reasoning note when the cut was spent thinking. ``used=True`` (the
+    retry is off) is the note that says the cut answer WAS used (E-A8)."""
     from modules.llm.messages import MessageOrigin, make_control_message
     shown = f"{tokens:,}" if tokens else "the model's maximum"
-    if reasoning_bound(tokens, reasoning_tokens):
+    if used:
+        text = _USED_NOTE.format(tokens=shown)
+    elif reasoning_bound(tokens, reasoning_tokens):
         text = _REASONING_NOTE.format(tokens=shown, reasoning=f"{reasoning_tokens:,}")
     else:
         text = _NOTE.format(tokens=shown)
@@ -114,6 +133,12 @@ async def handle_truncated_output(agent: Any, input_messages: List[Any],
             "LLM output was truncated at %s tokens (finish_reason=length, %s); "
             "LLM_OUTPUT_TRUNCATION_RETRY is off, using the truncated answer",
             tokens, shape)
+        # E-A8: the retry stays gated, but the NEXT step is told about the cut.
+        try:
+            agent.message_manager.push_ephemeral_message(
+                build_truncation_note(tokens, reasoning, used=True))
+        except Exception:  # pragma: no cover - a note never fails a step
+            logger.debug("truncation note skipped", exc_info=True)
         return result
 
     _emit(agent, tokens, retried=True, reasoning_tokens=reasoning)

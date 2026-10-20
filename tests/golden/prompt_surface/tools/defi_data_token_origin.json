@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Where a TOKEN came from: its deployer, the creation transaction, a launchpad (pump.fun) when the chain shows one, the deployer's other contract creations, whether the deployer still holds or sent it, and on Solana the launch buyers and any SHARED FUNDER one hop back (addresses, not people). Read-only; bounded reads say what they did not read.",
+    "name": "defi_data_token_origin",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The TOKEN: an EVM contract (0x…) or a Solana mint (base58). Not a wallet.",
+          "type": "string"
+        },
+        "chain": {
+          "default": null,
+          "description": "Omit for a base58 mint (read on solana). REQUIRED for a 0x token.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

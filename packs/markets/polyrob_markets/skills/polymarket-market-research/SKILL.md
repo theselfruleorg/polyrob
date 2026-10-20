@@ -3,9 +3,10 @@ name: polymarket-market-research
 description: Read Polymarket markets (discover, details, price as implied probability, orderbook, spread, volume) with no wallet
 license: MIT
 metadata:
+  polyrob-when: 'Reading Polymarket markets and prices'
   polyrob-priority: '5'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["polymarket","prediction market","implied probability","market odds","event probability","polymarket orderbook","polymarket spread"],"task_patterns":["polymarket.*(market|price|odds|research)","implied.*probability","prediction.*market","(odds|probability).*of.*event"],"tool_ids":["polymarket_data"]}'
+  polyrob-triggers: '{"tool_ids":["polymarket_data"]}'
   polyrob-version: '2'
 ---
 # Polymarket Market Research

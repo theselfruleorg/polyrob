@@ -65,7 +65,7 @@ def test_an_unreadable_log_reads_as_not_told():
 async def test_the_echo_is_skipped_when_the_run_already_told(monkeypatch):
     sent = []
 
-    async def _tg(task_agent, job, final, deliver_target):
+    async def _tg(task_agent, job, final, deliver_target, **_kw):
         sent.append(final)
         return "sent"
 
@@ -85,7 +85,7 @@ async def test_the_echo_is_skipped_when_the_run_already_told(monkeypatch):
 async def test_the_echo_still_goes_out_when_the_run_stayed_quiet(monkeypatch):
     sent = []
 
-    async def _tg(task_agent, job, final, deliver_target):
+    async def _tg(task_agent, job, final, deliver_target, **_kw):
         sent.append(final)
         return "sent"
 

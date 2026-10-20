@@ -1,0 +1,13 @@
+{
+  "function": {
+    "description": "Scroll up the page.",
+    "name": "browser_scroll_up",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model that accepts and discards all parameters.\n\nAccepts absolutely anything in the incoming data\nand discards it, so the final parsed model is empty.",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

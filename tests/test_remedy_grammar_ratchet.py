@@ -25,13 +25,10 @@ ALLOWED = {
     "core/llm_auth/flows/registry.py": 1,
     "tools/browser/browser.py": 1,
     "tools/controller/delegation.py": 1,
-    "tools/defi/data_reconcile.py": 1,  # W9: moved out of data_tool.py with reconcile
-    "tools/defi/data_tool.py": 1,
     "tools/defi/spl_deploy_verb.py": 1,
     "tools/defi/trade_tool.py": 3,
     "tools/filesystem.py": 1,
     "tools/mcp/self_install.py": 1,
-    "tools/x402/service.py": 2,
     "cli/commands/whatsapp.py": 1,
 }
 

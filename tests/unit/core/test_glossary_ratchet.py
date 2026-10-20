@@ -1,8 +1,8 @@
 """070 E.1 — one word per concept, counted across every seat.
 
-Eight corpora of owner text (the console copy, the core copy, the verb help,
+The corpora of owner text (the console copy, the core copy, the verb help,
 the setting labels, the Inbox render, the Telegram owner replies, the REPL
-owner replies) are matched against ``core.copy.glossary``. Each corpus has a
+owner replies, and — 080 WS-5 — the published guide and the guide skill) are matched against ``core.copy.glossary``. Each corpus has a
 CEILING equal to today's count of strings with a banned word. A commit that
 adds a hit fails ``test_corpus_within_ceiling``; a commit that removes one
 fails ``test_ceiling_is_tight`` until it lowers the number — so the counts only
@@ -26,20 +26,52 @@ _REPO = Path(__file__).resolve().parents[3]
 #: Strings with at least one banned word, per corpus. Lower a number in the
 #: same commit that removes a hit; never raise one.
 CEILINGS = {
-    "webview_copy": 79,
+    "webview_copy": 71,
     "core_copy": 3,
-    "verbs": 24,
+    "verbs": 22,
     "prefs": 0,
-    "inbox_render": 16,
-    "telegram_owner": 78,
-    "repl_owner": 26,
+    "inbox_render": 15,
+    "telegram_owner": 46,
+    "repl_owner": 24,
+    # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
+    # purpose — technical guide prose uses "session", "tool", "config"; the
+    # number only falls.
+    "guide_docs": 1935,
+    "guide_skill": 265,
 }
 
 _INBOX_RENDER = ("core/surfaces/inbox_render.py", "core/surfaces/owner_admin.py")
 _TELEGRAM = tuple(f"surfaces/telegram/{m}.py" for m in (
-    "owner_ops", "rail_ops", "history_ops", "send_ops", "token_ops", "identity_ops"))
+    "owner_ops", "history_ops", "send_ops", "token_ops", "identity_ops",
+    "job_ops"))
 _REPL = tuple(f"cli/ui/commands/{m}.py" for m in (
     "h_mode", "h_autonomy", "h_money_verbs", "h_inbox", "h_help"))
+
+
+#: 080 WS-5: the published guide and the agent's own guide skill. The generated
+#: skill references (configuration.md, verbs.md) are left out: their text comes
+#: from docs/CONFIGURATION.md and the verb table, which are counted at source.
+_GUIDE_DOCS = "docs/guide"
+_GUIDE_SKILL = "data/prompts/skills/polyrob-user-guide"
+
+
+def _markdown_strings(root: str) -> list:
+    """``(file:line, text)`` for every owner-length prose line of the ``.md``
+    files under *root* — fenced code blocks and generated files are skipped."""
+    out = []
+    for path in sorted((_REPO / root).rglob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if text.startswith("<!-- GENERATED"):
+            continue
+        rel = path.relative_to(_REPO)
+        fenced = False
+        for n, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+                continue
+            if not fenced and len(line.split()) > 3:
+                out.append((f"{rel}:{n}", line, None))
+    return out
 
 
 def _skipped_nodes(tree) -> set:
@@ -98,6 +130,10 @@ def _corpus(name: str) -> list:
         return _module_strings(_TELEGRAM)
     if name == "repl_owner":
         return _module_strings(_REPL)
+    if name == "guide_docs":
+        return _markdown_strings(_GUIDE_DOCS)
+    if name == "guide_skill":
+        return _markdown_strings(_GUIDE_SKILL)
     raise KeyError(name)
 
 
@@ -154,5 +190,5 @@ def test_every_term_has_a_word_and_a_ban():
 
 def test_the_corpora_are_not_vacuous():
     for name in ("webview_copy", "core_copy", "verbs", "inbox_render",
-                 "telegram_owner", "repl_owner"):
+                 "telegram_owner", "repl_owner", "guide_docs", "guide_skill"):
         assert len(_corpus(name)) >= 10, name

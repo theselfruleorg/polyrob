@@ -128,8 +128,15 @@ def test_owner_seat_without_the_key_cannot_approve(tmp_path):
     assert r.get("st", "u1")["status"] == "pending"
 
 
-def test_approval_key_is_private(tmp_path):
+def test_approval_key_is_private(tmp_path, monkeypatch):
+    # The dev key beside the db is 0600. Point the prod key away so a host that
+    # carries /etc/polyrob/app_approval.key (0640 polyrob-seat, by design) or a
+    # root run does not resolve to it.
+    from core.app_service import approval
+    monkeypatch.setattr(approval, "ETC_KEY_PATH", str(tmp_path / "absent" / "k"))
+    monkeypatch.setattr(approval, "ETC_DIR", str(tmp_path / "absent"))
     r = AppServiceRegistry(str(tmp_path / "a.db"))
+    assert r.approval_key_path == str(tmp_path / "app_approval.key")
     _req(r)
     assert r.mark_approved("st", "u1")
     st = os.stat(r.approval_key_path)

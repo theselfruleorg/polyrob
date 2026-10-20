@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Switch to a different browser tab by index.",
+    "name": "browser_switch_tab",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for switching to a different browser tab.",
+      "properties": {
+        "pageId": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pageId"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

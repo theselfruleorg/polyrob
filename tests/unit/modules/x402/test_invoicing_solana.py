@@ -21,7 +21,7 @@ from modules.database.user_profiles import UserProfiles
 from modules.database.x402_tables import X402Tables
 from modules.x402 import invoicing
 
-SOLANA_TREASURY = "BrsPwATRZcb2PWsEZba9Bh1mwcxU6M7R64nPgRneCpmL"
+SOLANA_TREASURY = "2cyLycfUPcu8Zhmdpzf13vQHEZcoWrRkiQGFHvJ5xveW"
 
 
 async def _setup_db(tmp_path):

@@ -145,6 +145,20 @@ def test_proposal_has_no_confirm_and_refuses_bad_shapes(tmp_path):
     assert text.startswith("🤖 From the agent")
 
 
+def test_a_send_proposal_with_a_ticker_is_refused_with_the_pinned_address(tmp_path):
+    # 2026-10-14: the bounty judge proposed `/send 30 USDC to … on base`; /send
+    # refuses a ticker, so the owner's tap failed and nothing was paid.
+    st = _store(tmp_path)
+    with pytest.raises(ValueError) as e:
+        cards.proposal_card("u1", "/send", ["30", "USDC", "to", ADDR, "on", "base"], st=st)
+    assert "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" in str(e.value)
+    with pytest.raises(ValueError):
+        cards.proposal_card("u1", "/send", ["1", "PEPE", "to", ADDR, "on", "base"], st=st)
+    for token in ("native", "ETH", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"):
+        cards.proposal_card("u1", "/send", ["1", token, "to", ADDR, "on", "base"], st=st)
+    cards.proposal_card("u1", "/send", ["1", "SOL", "to", "x" * 40, "on", "solana"], st=st)
+
+
 def test_choice_shape_is_bounded(tmp_path):
     st = _store(tmp_path)
     with pytest.raises(ValueError):

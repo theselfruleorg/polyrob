@@ -212,7 +212,54 @@ class TaskAgentChatMixin:
         has_mem = re.search(r"(?im)^\s*memory\s*:", t)
         has_next = re.search(r"(?im)^\s*next(?:[_ ]?goal)?\s*:", t)
         return bool(has_mem and has_next)
-    def _extract_chat_reply(self, session_id: str) -> str:
+    def _durable_chat_session(self, key: str, user_id: str) -> Optional[str]:
+        """2026-10-13 review C8: the REST / ``/v1`` key -> session map was
+        memory-only; a restart or an eviction lost it and the next turn started
+        empty although the old session is resumable. The key is stamped into the
+        session's metadata at creation; on a miss, the newest session of THIS user
+        carrying the key is reused (the session manager loads every metadata.json
+        at startup). Fail-open: None = start a new session, as before."""
+        try:
+            sessions = getattr(self.session_manager, "_sessions", None)
+            if not isinstance(sessions, dict):
+                return None
+            hits = [info for info in list(sessions.values())
+                    if isinstance(info, dict) and info.get("chat_session_key") == key
+                    and str(info.get("user_id") or "") == str(user_id or "")
+                    and info.get("id")]
+            if not hits:
+                return None
+            best = max(hits, key=lambda i: str(i.get("created_at") or ""))
+            self._chat_sessions[key] = best["id"]
+            return best["id"]
+        except Exception:
+            logger.debug("chat_once: durable chat-key lookup failed (fail-open)", exc_info=True)
+            return None
+
+    def _chat_turn_baseline(self, session_id: str):
+        """C7: what the session held BEFORE this turn ran — ``(ledger steps,
+        history messages, previous reply)`` — so the reply extraction never hands
+        the PREVIOUS turn's answer back as this turn's. ``None`` = no agent yet
+        (a brand-new session: nothing stale to return)."""
+        try:
+            orch = self._registry.get(session_id)
+            agent = next(iter((getattr(orch, 'agents', None) or {}).values()), None)
+            if agent is None:
+                return None
+            hist = getattr(agent, 'history', None)
+            steps = len(getattr(hist, 'history', None) or [])
+            mm = getattr(agent, 'message_manager', None)
+            # The message OBJECTS that predate the turn (held, so an id is never
+            # reused): the history is a capped deque and compaction rewrites it,
+            # so an index would not mark "new".
+            msgs = [getattr(m, 'message', m) for m in mm.history.messages] if mm is not None else []
+            previous = self._extract_chat_reply(session_id)
+            return (steps, msgs, previous)
+        except Exception:
+            logger.debug("chat turn baseline unavailable", exc_info=True)
+            return None
+
+    def _extract_chat_reply(self, session_id: str, since=None) -> str:
         """Return the agent's ACTUAL last assistant reply for a finished turn.
 
         Priority (corrected after a live GLM brain-JSON leak):
@@ -224,6 +271,10 @@ class TaskAgentChatMixin:
            send_message text; ActionResult.extracted_content is only a placeholder).
         3. final_result() as a last resort.
         Brain-state telemetry is never returned; the generic run_session string never is.
+
+        ``since`` (a :meth:`_chat_turn_baseline`) limits 1-3 to what THIS turn
+        added (2026-10-13 review C7): after a provider error mid-turn the history
+        still ends in the previous turn's answer, which must not be returned.
         """
         try:
             orch = self._registry.get(session_id)
@@ -240,6 +291,14 @@ class TaskAgentChatMixin:
             hist = getattr(agent, 'history', None)
             from agents.task.runtime.run_outcome import FRAMEWORK_PLACEHOLDER_TEXTS
 
+            new_steps = True
+            old_ids = frozenset()
+            previous = None
+            if since is not None:
+                base_steps, base_msgs, previous = since
+                new_steps = len(getattr(hist, 'history', None) or []) > base_steps
+                old_ids = frozenset(id(m) for m in base_msgs)
+
             # 0) C3: the reply this turn actually spoke, recorded where it was
             # published. This outranks done() — F4: preferring done's text meant
             # every unbound path (raw API, chat_once, /v1, a surface without the
@@ -249,7 +308,8 @@ class TaskAgentChatMixin:
             try:
                 from core.surfaces.turn_reply import last_reply_text
                 spoken = last_reply_text(orch)
-                if spoken and not self._looks_like_brain_state(spoken) \
+                stale = bool(previous) and not new_steps and (spoken or "").strip() == previous
+                if spoken and not stale and not self._looks_like_brain_state(spoken) \
                         and spoken.strip() not in FRAMEWORK_PLACEHOLDER_TEXTS:
                     return spoken.strip()
             except Exception:
@@ -258,7 +318,7 @@ class TaskAgentChatMixin:
 
             # 1) clean done() output
             try:
-                if hist is not None and hist.is_done():
+                if new_steps and hist is not None and hist.is_done():
                     fr = hist.final_result()
                     if fr and not self._looks_like_brain_state(fr) \
                             and str(fr).strip() not in FRAMEWORK_PLACEHOLDER_TEXTS:
@@ -274,6 +334,8 @@ class TaskAgentChatMixin:
                     from modules.llm.messages import AIMessage
                     for managed in reversed(list(mm.history.messages)):
                         msg = getattr(managed, 'message', None)
+                        if id(msg) in old_ids:
+                            break  # C7: older than this turn
                         content = getattr(msg, 'content', None)
                         if isinstance(msg, AIMessage) and isinstance(content, str) and content.strip():
                             text = content.strip()
@@ -285,13 +347,15 @@ class TaskAgentChatMixin:
                             if text.startswith(prefix):
                                 text = text[len(prefix):].strip()
                             if text and not self._looks_like_brain_state(text):
+                                if previous and text == previous:
+                                    break  # C7: the previous turn's answer
                                 return text
                 except Exception as e:
                     logger.debug(f"chat reply scan failed: {e}")
 
             # 3) last-resort fallback
             try:
-                fr = hist.final_result() if hist is not None else None
+                fr = hist.final_result() if (hist is not None and new_steps) else None
                 if fr and not self._looks_like_brain_state(fr) \
                         and str(fr).strip() not in FRAMEWORK_PLACEHOLDER_TEXTS:
                     return str(fr).strip()
@@ -442,7 +506,7 @@ class TaskAgentChatMixin:
         temperature: Optional[float] = None,
     ) -> str:
         """The body of chat_once, run under the per-chat-key lock (see chat_once)."""
-        session_id = self._chat_sessions.get(key)
+        session_id = self._chat_sessions.get(key) or self._durable_chat_session(key, user_id)
 
         # Validate a remembered session still exists; else drop and recreate.
         if session_id and not self.session_manager.get_session_info(session_id):
@@ -470,6 +534,7 @@ class TaskAgentChatMixin:
 
         persona = await self._resolve_chat_persona()
 
+        reused = bool(session_id)
         if session_id:
             # Reuse: queue a continuation and resume (await, unlike the
             # background process_user_message path).
@@ -493,6 +558,7 @@ class TaskAgentChatMixin:
                 # Un-recreatable — drop the mapping and fall through to create.
                 self._chat_sessions.pop(key, None)
                 session_id = None
+                reused = False
 
         if not session_id:
             from agents.task.constants import CHAT_MAX_STEPS
@@ -504,7 +570,7 @@ class TaskAgentChatMixin:
             # B3: a per-request model override for a BRAND-NEW session has no
             # live agent yet to swap_model() (that's created later, inside
             # run_session) — bake it into the SessionRequest instead, the
-            # same knob CHAT_PROVIDER/CHAT_MODEL already use above.
+            # same knob DEFAULT_PROVIDER/DEFAULT_MODEL already use above.
             if model:
                 _model = model
                 _provider = provider or _provider
@@ -527,11 +593,21 @@ class TaskAgentChatMixin:
             )
             session_id = info['id']
             self._chat_sessions[key] = session_id
+            # C8: the key rides the session's metadata.json, so a restart or the
+            # 24 h eviction no longer starts the conversation empty.
+            try:
+                self.session_manager.update_session_metadata(
+                    session_id, {"chat_session_key": key})
+            except Exception:
+                logger.debug("chat_once: chat key not persisted (fail-open)", exc_info=True)
             orch = self._registry.get(session_id)
             if orch and persona:
                 orch._persona_block = persona
 
         _record_chat_once_owner_line(self, user_id, text, session_id)   # 061
+        # C7: only a REUSED session can hand back a stale answer; a brand-new
+        # one has no agent and no earlier turn yet.
+        baseline = self._chat_turn_baseline(session_id) if reused else None
         run_result = await self.run_session(user_id, session_id)
         # Final-review fix (T1.1): a RUN_BUDGET_USD halt ends the turn BEFORE
         # any step runs (or right after one), so `_extract_chat_reply`'s
@@ -544,13 +620,17 @@ class TaskAgentChatMixin:
         # other failure strings keep their pre-existing (stale-extraction)
         # behavior, which is out of scope here.
         if isinstance(run_result, str) and run_result.startswith("Session failed:"):
-            try:
-                from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
-            except ImportError:
-                RUN_BUDGET_MARKER = "run_budget_exhausted"
+            from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
             if RUN_BUDGET_MARKER in run_result:
                 return run_result
-        return self._extract_chat_reply(session_id) or ""
+        reply = self._extract_chat_reply(session_id, since=baseline)
+        if reply:
+            return reply
+        # C7: no reply from THIS turn — a failed run says why, never returns the
+        # previous turn's answer.
+        if isinstance(run_result, str) and run_result.startswith("Session failed:"):
+            return run_result
+        return ""
 
 
 def _record_chat_once_owner_line(agent, user_id: str, text: str, session_id: str) -> None:

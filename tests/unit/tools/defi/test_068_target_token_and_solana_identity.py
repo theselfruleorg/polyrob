@@ -102,7 +102,7 @@ async def test_the_cron_request_carries_a_normalized_target():
     from cron.runner import make_agent_runner
     ta = _TaskAgent()
     job = CronJob(id="j", task="PNL buyback", schedule_spec="1d", user_id="u1", next_run_at=None,
-                  payload={"provider": "anthropic", "authored_by": "owner",
+                  payload={"provider": "anthropic", "target_authored_by": "owner",
                            "target_token": {"chain": "robinhood", "address": REAL.lower()}})
     assert await make_agent_runner(ta)(job) is True
     # W0: an owner-seat job (stamped owner) — its target carries the owner stamp.

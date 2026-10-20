@@ -76,8 +76,8 @@ def test_explain_flag_chain_attributes_env_file(home, monkeypatch, tmp_path):
     monkeypatch.setenv("TOOL_AVAILABILITY_HINT", "true")
     info = cs.explain("TOOL_AVAILABILITY_HINT", user_id="u1", home_dir=home)
     origins = [s.origin for s in info.chain]
-    assert "env:process" in origins
-    assert any(o.startswith("env-file:") for o in origins)
+    assert "env:shell" in origins        # 080: a process export is labelled by origin
+    assert any(o.startswith("env:file") for o in origins)
     assert any(o.startswith("built-in") or o.startswith("default") for o in origins)
 
 
@@ -161,7 +161,7 @@ def test_global_write_is_seen_by_the_cli_env_loader(home, tmp_path):
     from core.paths import env_file_candidates
     res = cs.set_value("GOAL_DAILY_QUOTA", "7", scope="global")
     assert res.ok, res.message
-    loaded = [c.path for c in env_file_candidates(local_mode=True)]
+    loaded = [c.path for c in env_file_candidates()]
     assert Path(res.store) in loaded
     assert read_env_file(Path(res.store))["GOAL_DAILY_QUOTA"] == "7"
 

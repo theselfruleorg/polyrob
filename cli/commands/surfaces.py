@@ -46,7 +46,7 @@ def _load_env() -> dict:
     a credential reads "cannot tell", never "missing"."""
     from polyrob.app.bootstrap import load_env
     try:
-        load_env(local_mode=True)
+        load_env()
     except Exception:
         pass
     env = dict(os.environ)

@@ -16,7 +16,7 @@ harness keeps the ORDER that matters and nothing else:
 Every handler takes ONE :class:`AdminCall` and returns the reply text (or a
 ``core.surfaces.command_reply`` envelope). The ``*_ops`` modules are imported
 LAZILY inside each handler, exactly as the chain did, so a test that patches
-``surfaces.telegram.owner_ops.cron_reply`` (and friends) still reaches the run.
+``surfaces.telegram.job_ops.jobs_reply`` (and friends) still reaches the run.
 
 ⚠️ This is a SEAT table, not a second verb table: the words, groups and seats
 of every verb stay in ``core.verbs`` (``tests/unit/core/test_verbs.py``), and
@@ -172,6 +172,21 @@ async def _config(c: AdminCall) -> str:
     return _config_reply(c.user_id, c.data_dir, c.instance_id, c.args)
 
 
+async def _model(c: AdminCall) -> str:
+    from surfaces.telegram.prefs_ops import model_reply  # 080 D8
+    return model_reply(c.user_id, c.args)
+
+
+async def _usage(c: AdminCall) -> str:
+    from surfaces.telegram.usage_ops import usage_reply  # 2026-10-14 D6
+    return usage_reply(c.user_id, c.data_dir, c.args)
+
+
+async def _skills(c: AdminCall) -> str:
+    from surfaces.telegram.skills_ops import skills_reply  # 080 D8
+    return skills_reply(c.user_id, c.args)
+
+
 async def _kb(c: AdminCall) -> str:
     # CLI7: the ONE grammar (core.kb_grammar), shared with the REPL.
     from surfaces.telegram.kb_ops import _kb_reply
@@ -252,14 +267,6 @@ async def _thread(c: AdminCall) -> str:
                          container=getattr(c.task_agent, "container", None))
 
 
-async def _rail(c: AdminCall) -> str:
-    # 036: standing work is configuration the owner sets up from here.
-    from surfaces.telegram.rail_ops import rail_reply
-    _src = getattr(getattr(c.result.inbound, "identity", None), "source", None)
-    return rail_reply(c.user_id, c.data_dir, c.args, board=c.board,
-                      seat=str(getattr(_src, "surface_id", "") or "telegram"))
-
-
 # D12: the money-quote helpers are `async def` and AWAITED. They used to
 # bridge a coroutine onto another loop and BLOCK — stalling the whole polling
 # loop for the length of a quote, and handing a loop-affine object to the
@@ -298,9 +305,11 @@ async def _trade(c: AdminCall) -> str:
     return owner_ops.trade_reply(c.user_id, c.data_dir, c.args, board=c.board)
 
 
-async def _cron(c: AdminCall) -> str:
-    from surfaces.telegram import owner_ops
-    return owner_ops.cron_reply(c.user_id, c.data_dir, c.args)
+async def _job(c: AdminCall) -> str:
+    # 080 WS-2: one handler for `/jobs` (the list) and `/job <sub> …`.
+    from surfaces.telegram import job_ops
+    args = ["list"] if c.cmd == "/jobs" else c.args
+    return job_ops.jobs_reply(c.user_id, c.data_dir, args, via="telegram")
 
 
 async def _goal(c: AdminCall) -> str:
@@ -379,6 +388,9 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/apps": _apps,
     "/prefs": _prefs,
     "/config": _config,
+    "/model": _model,
+    "/usage": _usage,
+    "/skills": _skills,
     "/kb": _kb,
     "/files": _files,
     "/dev": _dev,
@@ -394,14 +406,14 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/contacts": _contacts,
     "/thread": _thread,
     "/cwd": _cwd,
-    "/rail": _rail,
     "/lp": _lp,
     "/launch": _launch,
     "/deploy": _launch,
     "/mcp": _mcp,
     "/bridge": _bridge,
     "/trade": _trade,
-    "/cron": _cron,
+    "/jobs": _job,
+    "/job": _job,
     "/goal": _goal,
     "/wallet": _wallet,
     "/invoices": _invoices,

@@ -540,4 +540,16 @@ async def _verify_and_settle_invoice(request_id, row, payment_header):
             from modules.x402.settlement_holds import reopen_rejected_settlement
             await reopen_rejected_settlement(request_id, submitted["nonce"])
         return (False, None, getattr(settle_resp, "errorReason", None) or "settlement failed")
-    return (True, getattr(settle_resp, "transaction", None), None)
+    tx = getattr(settle_resp, "transaction", None)
+    # 085 x402in L1: the facilitator's "settled" is a claim; the receipt is the
+    # chain's answer. Only a receipt with a Transfer of the asset to the
+    # treasury for the full amount completes the invoice. Anything else keeps
+    # it held in `settling` (the SettlementPending path) for reconciliation —
+    # never completed, never reopened to a second payer.
+    from modules.x402.facilitator import prove_settlement
+    proven = await prove_settlement(request_id, tx, chain=row["chain"],
+                                    token=cfg.address, pay_to=row["recipient"],
+                                    min_raw=atomic)
+    if proven is not True:
+        raise SettlementPending("Settlement is not proven on-chain; reconciliation required")
+    return (True, tx, None)

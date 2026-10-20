@@ -22,7 +22,7 @@ from modules.database.user_profiles import UserProfiles
 from modules.database.x402_tables import X402Tables
 from modules.x402.settlement_watcher import SettlementWatcher
 
-TREASURY = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+TREASURY = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 SOLVER = "0xf70da97812cb96acdf810712aa562db8dfa3dbef"
 BASE_ID = 8453

@@ -1,5 +1,5 @@
-"""Task 17 — autonomy liveness: planner in the local safe group, self-wake
-strong ref, reclaim-before-gate (AU-F1.1 / AU-F3.1 / AU-F4.3).
+"""Task 17 — autonomy liveness: self-wake strong ref, reclaim-before-gate
+(AU-F3.1 / AU-F4.3).
 """
 import asyncio
 import types
@@ -7,41 +7,6 @@ import types
 import pytest
 
 from core.config_policy import AutonomyConfig
-
-
-# ---------------------------------------------------------------------------
-# AU-F1.1 — GOAL_PLANNER_ENABLED is in the local AUTONOMY group (0.9.0): ON under
-# POLYROB_LOCAL only when AUTONOMY_ENABLED is also set.
-# ---------------------------------------------------------------------------
-
-
-def test_goal_planner_enabled_defaults_on_under_local_autonomy(monkeypatch):
-    monkeypatch.delenv("GOAL_PLANNER_ENABLED", raising=False)
-    monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("AUTONOMY_ENABLED", "1")
-    assert AutonomyConfig.goal_planner_enabled() is True
-
-
-def test_goal_planner_enabled_off_under_local_without_autonomy(monkeypatch):
-    monkeypatch.delenv("GOAL_PLANNER_ENABLED", raising=False)
-    monkeypatch.delenv("AUTONOMY_ENABLED", raising=False)
-    monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
-    monkeypatch.setenv("POLYROB_LOCAL", "1")
-    assert AutonomyConfig.goal_planner_enabled() is False
-
-
-def test_goal_planner_enabled_defaults_off_without_local(monkeypatch):
-    monkeypatch.delenv("GOAL_PLANNER_ENABLED", raising=False)
-    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
-    assert AutonomyConfig.goal_planner_enabled() is False
-
-
-def test_goal_planner_enabled_explicit_value_wins_over_local(monkeypatch):
-    """An explicit per-flag value still wins -- only the default moves."""
-    monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("GOAL_PLANNER_ENABLED", "false")
-    assert AutonomyConfig.goal_planner_enabled() is False
 
 
 # ---------------------------------------------------------------------------

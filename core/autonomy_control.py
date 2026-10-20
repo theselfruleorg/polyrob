@@ -4,10 +4,10 @@ Capability ("what may this deployment do") stays in env flags. THIS is runtime
 state ("is autonomous work allowed right now"): a JSON record at the data home,
 written atomically to every base the runtime probes, read fail-closed by every
 process (the telegram daemon, the email daemon, the webview, the API, the
-stream-seeder timer, the on-box scripts).
+on-box scripts).
 
-Legacy sentinels (the ``AUTONOMY_HALT`` / ``TREASURY_ENTRY_PAUSE`` /
-``STREAM_SEEDING_PAUSE`` files or env flags) are read as FACETS of this record
+Legacy sentinels (the ``AUTONOMY_HALT`` / ``TREASURY_ENTRY_PAUSE`` files or
+env flags) are read as FACETS of this record
 so a ``touch`` still works; nothing writes them any more, and ``resume`` clears
 the files (an env facet needs an env edit + restart — the result says so).
 
@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 PAUSE_FILENAME = "AUTONOMY_PAUSE.json"
 LEGACY_HALT_FILENAME = "AUTONOMY_HALT"
 LEGACY_ENTRY_FILENAME = "TREASURY_ENTRY_PAUSE"
-LEGACY_STREAM_FILENAME = "STREAM_SEEDING_PAUSE"
 
 #: The ONE legacy sentinel table: file/env name -> the scope it stands for.
 #: Every legacy read, resume-clear and env-name lookup derives from this — a new
@@ -37,18 +36,19 @@ LEGACY_STREAM_FILENAME = "STREAM_SEEDING_PAUSE"
 LEGACY_FACETS: Tuple[Tuple[str, str], ...] = (
     (LEGACY_HALT_FILENAME, "all"),
     (LEGACY_ENTRY_FILENAME, "trading"),
-    (LEGACY_STREAM_FILENAME, "streams"),
 )
 
-SCOPES: Tuple[str, ...] = ("all", "trading", "streams", "planner", "cron",
+SCOPES: Tuple[str, ...] = ("all", "trading", "cron",
                            "social", "oversight", "pings", "apps", "release")
+
+#: 080 WS-6: scopes an older record may still name. Their work is deleted, so a
+#: record that names ONLY these pauses nothing (it must never widen to ``all``).
+_DELETED_SCOPES = frozenset({"streams", "planner"})
 
 #: activity kind -> the scopes whose pause denies it ("all" always denies).
 KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
     "dispatch": ("all",),
-    "plan": ("all", "planner"),
     "escalate": ("all", "pings"),
-    "seed_stream": ("all", "streams"),
     "cron_run": ("all", "cron"),
     "digest": ("all",),
     "self_wake": ("all",),
@@ -225,9 +225,13 @@ def _record_path(base: str) -> str:
 
 def _parse(raw: str) -> PauseState:
     rec = json.loads(raw)
-    scopes = tuple(s for s in rec.get("scopes", []) if s in SCOPES) or ("all",)
+    named = [s for s in rec.get("scopes", [])]
+    paused = bool(rec.get("paused", True))
+    if named and all(s in _DELETED_SCOPES for s in named):
+        paused = False
+    scopes = tuple(s for s in named if s in SCOPES) or ("all",)
     return PauseState(
-        paused=bool(rec.get("paused", True)), scopes=scopes,
+        paused=paused, scopes=scopes,
         since=rec.get("since"), until=rec.get("until"),
         set_by=str(rec.get("set_by") or ""), via=str(rec.get("via") or ""),
         reason=str(rec.get("reason") or ""), source="record")

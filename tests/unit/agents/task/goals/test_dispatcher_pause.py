@@ -48,21 +48,30 @@ async def test_paused_dispatch_holds_inflight_once(home):
     assert d._paused_seen is False
 
 
+
+
 @pytest.mark.asyncio
-async def test_planner_scope_blocks_plan_not_dispatch(home, monkeypatch):
-    from core import autonomy_control as ac
+async def test_retry_after_pause_never_runs_two_copies(home):
+    """/goal pause on a running goal, then /goal retry: the re-claim must stop
+    the old run (it lost its claim) instead of running beside it until the
+    next heartbeat."""
+    from core.goal_owner_verbs import pause_goal, retry_goal
     board = GoalBoard(str(home / "goals.db"))
+    g = board.create(user_id="rob", title="long")
     d = GoalDispatcher(board, task_agent=object())
-    ac.pause(str(home), scopes=("planner",), via="test")
-    called = []
+    assert board.claim(g.id, d._worker, ttl_seconds=60)
 
-    async def _planner(uid):
-        called.append(uid)
+    async def hang(*_a, **_k):
+        await asyncio.sleep(3600)
 
-    monkeypatch.setattr(d, "_run_planner", _planner)
-    monkeypatch.setattr(d, "_active_objective_owners",
-                        lambda: [type("O", (), {"user_id": "rob"})()])
-    monkeypatch.setenv("GOAL_PLANNER_ENABLED", "true")
-    await d._maybe_plan(headroom_after=1)
-    assert called == []
-    assert ac.allows("dispatch", str(home)).allowed is True
+    old = asyncio.create_task(hang())
+    d._goal_tasks[g.id] = old
+    assert pause_goal(board, user_id="rob", goal=board.get(g.id)).ok
+    assert retry_goal(board, user_id="rob", goal=board.get(g.id)).ok
+    d._run_goal = hang
+    assert await d.dispatch_once() == 1
+    await asyncio.sleep(0)
+    assert old.cancelled()
+    new = d._goal_tasks[g.id]
+    assert new is not old and not new.done()
+    new.cancel()

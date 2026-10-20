@@ -1,0 +1,32 @@
+{
+  "function": {
+    "description": "Send a message to the user (status update, question, or information). It goes ONLY to this session's own person: the chat you are in, or in a scheduled/goal run your owner's private chat. It never posts to a room, group or other recipient: use message(surface=..., target=..., text=...) for those.",
+    "name": "send_message",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Send a message to the user.",
+      "properties": {
+        "reply_to": {
+          "default": null,
+          "description": "044: in a GROUP room, the message id this reply answers (threads the reply to that line). Omit in a 1:1 chat — a live room turn already answers the line that triggered it.",
+          "nullable": true,
+          "type": "string"
+        },
+        "text": {
+          "description": "Message to send to user",
+          "type": "string"
+        },
+        "wait_for_response": {
+          "default": false,
+          "description": "If True, pause and wait for user to respond",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

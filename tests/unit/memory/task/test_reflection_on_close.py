@@ -44,7 +44,7 @@ def _add_findings(mgr, session_id, n):
         mgr.add_step_memory(
             session_id=session_id, step=i + 1,
             brain_state={"phase": "discovery", "memory": "x", "next_goal": "y"},
-            action_summary=f"act {i}", finding=f"finding {i}", total_steps=50)
+            action_summary=f"act {i}", finding=f"finding {i}")
 
 
 # T2-04: the flag is read from the ENVIRONMENT (core.env SSOT), NOT config.get —

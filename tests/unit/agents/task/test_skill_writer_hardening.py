@@ -24,14 +24,6 @@ def test_clean_description_passes(tmp_path):
     assert res.ok
 
 
-def test_derive_keywords_drops_generic_tokens():
-    kws = SkillManager._derive_keywords(
-        "report-helper", "a tool to make a report with file data and info", ""
-    )
-    for generic in ("data", "file", "report", "info"):
-        assert generic not in kws, f"generic token {generic!r} should be dropped"
-
-
 def test_invisible_unicode_body_rejected(tmp_path):
     """P1 (finalization): a skill body with zero-width chars hiding a second
     instruction set must be rejected — the docs promise this scan and it now runs."""

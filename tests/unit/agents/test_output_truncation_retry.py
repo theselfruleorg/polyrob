@@ -135,3 +135,43 @@ async def test_reasoning_bound_cut_gets_a_different_note_and_is_counted_apart(mo
     note = build_truncation_note(8192, reasoning_tokens=1200)
     assert "two or more calls" in note.content
 
+
+
+# --- coherency review 2026-10-13 E-A8: with the retry OFF the cut was silent.
+
+class _MM:
+    def __init__(self):
+        self.ephemeral = []
+
+    def push_ephemeral_message(self, message):
+        self.ephemeral.append(message)
+
+
+@pytest.mark.asyncio
+async def test_flag_off_still_tells_the_next_step_about_the_cut():
+    agent = _Agent("length", 16384)
+    agent.message_manager = _MM()
+    assert await handle_truncated_output(agent, ["m"], 90.0, "FIRST") == "FIRST"
+    assert agent.retries == []
+    assert len(agent.message_manager.ephemeral) == 1
+    note = agent.message_manager.ephemeral[0].content
+    assert "CUT OFF at 16,384" in note
+    assert "It was used as it was" in note
+    assert "Nothing from it was used" not in note
+
+
+@pytest.mark.asyncio
+async def test_a_clean_stop_pushes_no_note():
+    agent = _Agent("stop", 120)
+    agent.message_manager = _MM()
+    await handle_truncated_output(agent, ["m"], 90.0, "FIRST")
+    assert agent.message_manager.ephemeral == []
+
+
+@pytest.mark.asyncio
+async def test_flag_on_retry_does_not_also_push_the_used_note(monkeypatch):
+    monkeypatch.setenv("LLM_OUTPUT_TRUNCATION_RETRY", "true")
+    agent = _Agent("length", 16384)
+    agent.message_manager = _MM()
+    assert await handle_truncated_output(agent, ["m"], 90.0, "FIRST") == "RETRIED"
+    assert agent.message_manager.ephemeral == []

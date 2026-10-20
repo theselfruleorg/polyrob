@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Open a new browser tab with the specified URL.",
+    "name": "browser_open_tab",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for opening a new browser tab.",
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

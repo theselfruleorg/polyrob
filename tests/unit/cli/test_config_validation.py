@@ -49,7 +49,7 @@ def test_set_then_read_through_the_cli_env_resolution(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     r = CliRunner().invoke(config, ["set", "GOAL_DAILY_QUOTA", "4"])
     assert r.exit_code == 0, r.output
-    loaded = env_file_candidates(local_mode=True)
+    loaded = env_file_candidates()
     assert read_env_file(loaded[0].path).get("GOAL_DAILY_QUOTA") == "4"
     r = CliRunner().invoke(config, ["unset", "GOAL_DAILY_QUOTA"])
     assert r.exit_code == 0, r.output
@@ -191,13 +191,15 @@ def test_allowlisted_legacy_key_writes_without_force(tmp_path, monkeypatch):
 
 
 def test_allowlisted_legacy_provider_keys_write_without_force(tmp_path, monkeypatch):
-    # DEFAULT_PROVIDER / CHAT_MODEL / CHAT_PROVIDER have difflib close matches
-    # (e.g. HITL_MODE); their catalog rows (owner-UX P1 T10) must be
-    # checked BEFORE the closest-match rejection so they still write clean.
+    # DEFAULT_PROVIDER has difflib close matches (e.g. HITL_MODE); its catalog
+    # row (owner-UX P1 T10) must be checked BEFORE the closest-match rejection
+    # so it still writes clean. The retired CHAT_* duplicates are not written.
     monkeypatch.chdir(tmp_path)
-    for key in ("DEFAULT_PROVIDER", "CHAT_MODEL", "CHAT_PROVIDER"):
+    r = CliRunner().invoke(config, ["set", "DEFAULT_PROVIDER", "x"])
+    assert r.exit_code == 0, r.output
+    for key in ("CHAT_MODEL", "CHAT_PROVIDER"):
         r = CliRunner().invoke(config, ["set", key, "x"])
-        assert r.exit_code == 0, f"{key}: {r.output}"
+        assert r.exit_code != 0, f"{key}: {r.output}"
 
 
 # ---------------------------------------------------------------------------

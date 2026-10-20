@@ -25,9 +25,10 @@ from surfaces.telegram.harness import (
 #: to survive being written down.
 ROOM_REACHABLE = {
     # read-only
-    "/status", "/help", "/goals", "/recap", "/journey", "/missed", "/book",
+    "/status", "/help", "/goals", "/jobs", "/recap", "/journey", "/missed", "/book",
     "/inbox", "/asks", "/pending", "/allowlist", "/mode", "/avatar", "/kb",
     "/files", "/cwd", "/start",
+    "/usage",   # 2026-10-14 D6: the AI-cost view, a read answered in the owner's DM
     # scoped to THIS room, and the room is where they belong
     "/groups", "/mute", "/unmute", "/ban", "/unban", "/paid",
     # this room's own session lifecycle
@@ -55,7 +56,7 @@ def test_every_refused_verb_is_routable():
     assert _ROOM_REFUSED_COMMANDS <= set(_COMMANDS)
 
 
-@pytest.mark.parametrize("verb", ["/cron", "/goal", "/fulfill"])
+@pytest.mark.parametrize("verb", ["/job", "/goal", "/fulfill"])
 def test_the_three_mutating_verbs_the_list_was_missing(verb):
     """D43 by name, so a future edit that drops one fails loudly.
 

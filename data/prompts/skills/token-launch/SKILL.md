@@ -3,9 +3,10 @@ name: token-launch
 description: 'Launching or deploying a token, claiming its creator fees, getting gas back, metadata that must be set before a launch, and using a dapp with the native wallet.'
 license: MIT
 metadata:
+  polyrob-when: 'Launching a token, claiming its fees, or using a dapp'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["launchpad_launch","launchpad_claim","defi_trade_deploy_token","defi_trade_deploy_contract","defi_trade_solana_deploy_token","defi_trade_call","dapp_browser_dapp_connect"],"keywords":["launch a token","launchpad","deploy token","deploy contract","create a token","mint a token","bonding curve","snipe tax","vanity address","spl token","mint authority","claim fees","creator fees","creator tax","fee escrow","gas back","weth to eth","use a dapp","connect wallet"],"task_patterns":["(launch|deploy|create|mint)\\b.*\\b(token|coin|memecoin|erc-?20|spl)\\b"],"tool_ids":["defi_trade","launchpad","dapp_browser"]}'
+  polyrob-triggers: '{"tool_ids":["defi_trade","launchpad","dapp_browser"]}'
   polyrob-version: '2'
 ---
 # Token Launch — launching, deploying, claiming, and dapps

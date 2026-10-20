@@ -105,6 +105,7 @@ def test_supervisor_detection(monkeypatch):
     monkeypatch.setenv("XPC_SERVICE_NAME", lc.LAUNCHD_LABEL)
     assert lc.supervisor() == "launchd"
     monkeypatch.setenv("INVOCATION_ID", "abc")
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)  # a pytest shell is a .scope
     assert lc.supervisor() == "systemd"
 
 

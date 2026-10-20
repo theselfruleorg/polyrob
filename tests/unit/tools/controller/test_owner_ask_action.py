@@ -259,12 +259,6 @@ def test_option_ends_at_its_question_mark():
     assert ask_options(q) == {"A": "raise the per-trade cap", "B": "lower the fixed tranche size"}
 
 
-def test_cap_choice_tells_the_owner_a_tap_changes_nothing():
-    from tools.controller.owner_ask_action import owner_only_hint
-    assert "/config set budget.wallet_per_tx_usd" in owner_only_hint("A) raise the cap, or B) skip?")
-    assert owner_only_hint("Post it? A) post as written B) skip") == ""
-
-
 def test_other_tenant_cannot_raise_an_owner_ask(tmp_path):
     c, fn, model = _register(tmp_path)
     ctx = _ctx()

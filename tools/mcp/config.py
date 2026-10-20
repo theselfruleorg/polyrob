@@ -41,6 +41,15 @@ class MCPServerConfig(BaseModel):
     auto_reconnect: bool = Field(True, description="Whether to auto-reconnect on failure")
     max_concurrent_requests: int = Field(10, description="Maximum concurrent requests to this server")
     message_endpoint: Optional[str] = Field(None, description="For SSE: explicit POST endpoint for messages (FIX #7)")
+    money: bool = Field(
+        False,
+        description=(
+            "085 A5: the owner marks a server that holds its own money credential "
+            "(an exchange key, an external wallet). Its actions then classify as "
+            "money (core/money/classify.py): the principal, leaf and owner-approval "
+            "gates apply. Absent = false = today's behavior."
+        ),
+    )
     auth: Optional[Dict[str, Any]] = Field(
         None,
         description=(

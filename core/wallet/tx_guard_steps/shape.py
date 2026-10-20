@@ -65,7 +65,7 @@ def step_3a_lifi_floor(c: GuardContext) -> Optional[Decision]:
     # can tell apart from the real block. For a LI.FI facet whose layout is
     # known, the minimum the CHAIN enforces is read from the signed bytes and
     # held to the declared floor, and its receiver to the wallet. An unknown
-    # facet is not refused: 6a still applies.
+    # facet refuses (085 W8 LEAD-1): its on-chain minimum cannot be read.
     if intent.min_inflow_raw and intent.inflow_token:
         from core.wallet import chains as _chains, lifi_calldata
         _diamond = (getattr(_chains.get(intent.chain), "aggregator_spender", "") or "").lower()

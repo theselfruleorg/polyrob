@@ -23,13 +23,16 @@ def set_job_payload_key(store: Any, job_id: str, key: str, value: Any, *,
     job = store.get(job_id)
     if job is None or (user_id is not None and job.user_id != user_id):
         return False
-    payload = dict(job.payload or {})
+    # One-key json_set/json_remove in SQL, like pause/record_outcome: a
+    # read-modify-write of the whole payload lost a concurrent pause or outcome.
+    path = '$."' + str(key).replace('"', '\\"') + '"'
+    base = "COALESCE(NULLIF(payload,''),'{}')"
     if value is None:
-        payload.pop(key, None)
+        sql = f"UPDATE cron_jobs SET payload=json_remove({base}, ?) WHERE id=?"
+        params: tuple = (path, job_id)
     else:
-        payload[key] = value
-    sql = "UPDATE cron_jobs SET payload=? WHERE id=?"
-    params: tuple = (json.dumps(payload), job_id)
+        sql = f"UPDATE cron_jobs SET payload=json_set({base}, ?, json(?)) WHERE id=?"
+        params = (path, json.dumps(value), job_id)
     if user_id is not None:
         sql += " AND user_id=?"
         params = params + (user_id,)
@@ -69,23 +72,3 @@ def set_job_deliver(store: Any, job_id: str, target: Optional[str], *,
     return set_job_payload_key(store, job_id, "deliver",
                                None if clearing else str(target).strip().lower(),
                                user_id=user_id)
-
-
-def set_job_preflight_slot_cap(store: Any, job_id: str, max_open_rows: Optional[int], *,
-                               user_id: Optional[str] = None) -> bool:
-    """Set (or, with ``None``, DROP) ``payload.preflight`` as the slot-cap
-    precondition ``{"kind": "slot_cap", "max_open_rows": N}`` — the $0 skip
-    ``cron/preflight.py`` evaluates before any model call (2026-09-22: the
-    SCOUT rail ran 24×/day closing "NO ENTRY — slot cap (7 rows vs 6)").
-    Returns False for a non-positive cap, an unknown job or another tenant's job.
-    """
-    if max_open_rows is None:
-        return set_job_payload_key(store, job_id, "preflight", None, user_id=user_id)
-    try:
-        cap = int(max_open_rows)
-    except (TypeError, ValueError):
-        return False
-    if cap <= 0:
-        return False
-    return set_job_payload_key(store, job_id, "preflight",
-                               {"kind": "slot_cap", "max_open_rows": cap}, user_id=user_id)

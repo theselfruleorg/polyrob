@@ -12,12 +12,13 @@ import pytest
 from surfaces.telegram.interactive_tools import owner_interactive_tool_ids
 
 
-def test_owner_gets_goal_and_mission_tools(monkeypatch):
+def test_owner_gets_the_board_and_a_web_read(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
     tools = owner_interactive_tool_ids("rob")
     assert tools is not None
     assert "goal" in tools          # can introspect the board (no more filesystem-guessing)
-    assert "twitter" in tools       # can act on-mission (post)
+    assert "cronjob" in tools       # the owner chat is where scheduling is asked about
     assert "web_fetch" in tools
 
 
@@ -44,58 +45,62 @@ def _enable_full(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
 
 
-def test_supervised_interactive_default_unchanged(monkeypatch):
+def test_supervised_interactive_default_is_the_owner_rig(monkeypatch):
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
     monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
+    from core.config_policy.rigs import rig_tools
     from surfaces.telegram.interactive_tools import interactive_tool_ids
-    # 071: the read-only defi_data joins the supervised owner chat (it registers
-    # only under DEFI_DATA_ENABLED; the spend tool stays behind the armed key).
-    assert interactive_tool_ids() == ["goal", "twitter", "web_fetch", "filesystem", "task",
-                                      "defi_data"]
+    assert interactive_tool_ids() == rig_tools("owner")
 
 
-def test_autonomous_interactive_widens_and_env_still_wins(monkeypatch):
+# --- 081 WS-3.1: the owner chat runs on the owner rig + the granted money -----
+
+
+def test_autonomous_owner_chat_is_the_rig_not_the_whole_grant(monkeypatch):
+    """Owner chat stopped shipping the whole grant (~194 schemas, 53K of a 90K
+    first call). The rest is one load_tool away; env still wins."""
     _enable_full(monkeypatch)
     monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
+    monkeypatch.delenv("DEFI_AGENT_AUTONOMY", raising=False)
     from surfaces.telegram.interactive_tools import interactive_tool_ids
     tools = interactive_tool_ids()
-    for t in ("coding", "email", "anysite", "goal", "cronjob"):
-        assert t in tools                    # owner chat KEEPS the meta tools
-    for t in ("x402_pay", "hyperliquid", "polymarket"):
+    for t in ("goal", "cronjob", "filesystem", "task", "web_fetch"):
+        assert t in tools
+    for t in ("coding", "email", "anysite", "twitter", "browser", "x_browser"):
+        assert t not in tools                # loadable from the catalog
+    for t in ("x402_pay", "hyperliquid", "polymarket", "defi_trade"):
         assert t not in tools                # money-spend never via mode
     monkeypatch.setenv("INTERACTIVE_TOOL_IDS", "filesystem,task")
     assert interactive_tool_ids() == ["filesystem", "task"]
 
 
-def test_autonomous_interactive_adds_compute_at_posture_1(monkeypatch):
+def test_a_granted_money_tool_stays_eager(monkeypatch):
+    """load_tool never loads money, so the armed grant's money tools are eager."""
+    _enable_full(monkeypatch)
+    monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
+    monkeypatch.setenv("DEFI_AGENT_AUTONOMY", "true")
+    from core.tool_capabilities import TOOL_CAPABILITIES
+    from surfaces.telegram.interactive_tools import interactive_tool_ids
+    tools = interactive_tool_ids()
+    assert "defi_trade" in tools
+    assert "defi_data" not in tools          # read-only: one load_tool away
+    money = [t for t in tools if "money" in TOOL_CAPABILITIES.get(t, ())]
+    assert "defi_trade" in money
+
+
+def test_compute_tools_are_loadable_not_eager_at_posture_1(monkeypatch):
     import agents.task.constants as c
     _enable_full(monkeypatch)
     monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")
-    # 056 WS4: posture is the CEILING — each compute tool also needs its own flag.
     monkeypatch.setenv("CODE_EXEC_ENABLED", "true")
     monkeypatch.setenv("SHELL_TOOLS_ENABLED", "true")
-    monkeypatch.setenv("CODING_TOOLS_ENABLED", "true")
     c._refreeze_compute_posture_for_tests()
     try:
         from surfaces.telegram.interactive_tools import interactive_tool_ids
         tools = interactive_tool_ids()
-        for t in ("code_execution", "shell", "coding"):
-            assert t in tools
-    finally:
-        monkeypatch.delenv("AGENT_COMPUTE_POSTURE", raising=False)
-        c._refreeze_compute_posture_for_tests()
-
-
-def test_supervised_never_gets_compute_even_at_posture_1(monkeypatch):
-    import agents.task.constants as c
-    monkeypatch.delenv("AUTONOMY_MODE", raising=False)
-    monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
-    monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")
-    c._refreeze_compute_posture_for_tests()
-    try:
-        from surfaces.telegram.interactive_tools import interactive_tool_ids
-        assert "shell" not in interactive_tool_ids()
+        for t in ("code_execution", "shell"):
+            assert t not in tools
     finally:
         monkeypatch.delenv("AGENT_COMPUTE_POSTURE", raising=False)
         c._refreeze_compute_posture_for_tests()

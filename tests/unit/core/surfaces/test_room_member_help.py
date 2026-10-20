@@ -162,3 +162,11 @@ def test_describe_for_model_says_the_member_types_it_not_the_agent(on, tmp_path)
     assert "you do not perform" in low
     assert "no tool for it" in low
     assert "`/mute 30m`" in text
+
+
+def test_paid_action_doctrine_binds_members_not_the_owner(on, tmp_path):
+    """2026-10-14 review C-12: the doctrine beat the owner's own ask."""
+    text = room_actions.describe_for_model(_Container(str(tmp_path)),
+                                           surface="telegram", chat_id="-1",
+                                           policy=_priced())
+    assert "This binds MEMBERS" in text and "owner asks you to post any text" in text

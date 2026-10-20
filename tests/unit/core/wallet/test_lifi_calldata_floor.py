@@ -1,6 +1,7 @@
 """WAL-7: the on-chain minimum inside a LI.FI diamond swap is read from the
-signed bytes and held to our floor; an unknown facet falls back to the
-measured-inflow floor (a natural swap is never refused for a new facet)."""
+signed bytes and held to our floor. 085 W8 LEAD-1: an unknown facet on the
+pinned diamond refuses when a floor is declared (its on-chain minimum cannot be
+read, and the simulated floor alone can be gamed)."""
 from core.wallet import abi, lifi_calldata as L
 from core.wallet import tx_guard as G
 from core.wallet.policy import PolicyGate
@@ -40,9 +41,11 @@ def test_decode_reads_receiver_minimum_and_bought_asset():
         assert (swap.receiver, swap.min_amount, swap.receiving_asset) == (HOLDER, 990_000, WETH)
 
 
-def test_unknown_facet_is_not_refused():
+def test_unknown_facet_refuses():
     assert L.decode("0xdeadbeef00") is None
-    assert L.floor_refusal("0xdeadbeef", receiver=HOLDER, token_out=WETH, floor=10) is None
+    why = L.floor_refusal("0xdeadbeef", receiver=HOLDER, token_out=WETH, floor=10)
+    assert "0xdeadbeef" in why and "not a known" in why
+    assert "not a known" in L.floor_refusal(None, receiver=HOLDER, token_out=WETH, floor=10)
 
 
 def test_floor_refusals():
@@ -74,10 +77,26 @@ def test_guard_refuses_a_zero_onchain_minimum_even_when_the_simulation_looks_goo
     assert not result.allowed and "pays its output" in result.reason
 
 
-def test_guard_unknown_facet_falls_back_to_the_measured_floor():
-    assert _guard("0xdeadbeef").allowed          # measured floor still asserted (6a)
-    assert _guard(lifi_data()).allowed
-    assert not _guard("0xdeadbeef", floor=996_000).allowed
+def test_guard_refuses_an_unknown_facet_on_the_diamond():
+    result = _guard("0xdeadbeef")
+    assert not result.allowed and "not a known same-chain swap facet" in result.reason
+    assert _guard(lifi_data()).allowed           # a known facet: the natural swap passes
+    assert not _guard(lifi_data(), floor=996_000).allowed   # measured floor (6a) still holds
+
+
+def test_guard_does_not_judge_a_call_to_another_contract():
+    """Step 3a runs only on the pinned diamond: another router keeps its path."""
+    other = "0x" + "c" * 40
+    intent = G.TxIntent(chain="base", token=USDC, to=other, amount_raw=2_000_000,
+                        max_spend_usd=5, watch_spenders=(other,), inflow_token=WETH,
+                        min_inflow_raw=990_000)
+    deltas = Deltas(ok=True, token_deltas={USDC: -2_000_000, WETH: 995_000}, gas_used=1)
+    result = G.authorize(intent, dict(to=other, value=0, chainId=8453, data="0xdeadbeef"),
+                         holder=HOLDER, gate=PolicyGate(max_per_tx_usd=100, daily_cap_usd=1000),
+                         simulate_fn=lambda **kw: deltas, price_fn=lambda *a: 1.0,
+                         halted_fn=lambda: False, entry_paused_fn=lambda: False,
+                         rpc_is_pinned_fn=lambda c: True)
+    assert "not a known same-chain swap facet" not in (result.reason or "")
 
 
 def _body(data):
@@ -105,5 +124,6 @@ def test_route_refuses_calldata_that_pays_someone_else():
     assert _quote(lifi_data(receiver=ROGUE)) is None
 
 
-def test_route_unknown_facet_keeps_the_json_minimum():
-    assert _quote("0xdeadbeef").amount_out_min_raw == 990_000
+def test_route_refuses_an_unknown_facet():
+    """The guard would refuse it; refusing at the quote lets another venue win."""
+    assert _quote("0xdeadbeef") is None

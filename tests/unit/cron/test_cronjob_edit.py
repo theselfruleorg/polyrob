@@ -29,9 +29,9 @@ def _ctx(user="u1"):
                                  is_sub_agent=False, metadata={}, session_id=None)
 
 
-def _job(t, authored_by="owner", user="u1"):
+def _job(t, user="u1"):
     return t._cron_service.schedule(task=RULES, schedule_spec="1h", user_id=user,
-                                    payload={"authored_by": authored_by, "deliver": "telegram"})
+                                    payload={"deliver": "telegram"})
 
 
 @pytest.fixture
@@ -51,13 +51,12 @@ def test_actions_carry_decorator_metadata():
 
 
 @pytest.mark.asyncio
-async def test_show_returns_the_full_task_and_provenance(tmp_path):
+async def test_show_returns_the_full_task(tmp_path):
     t = _tool(tmp_path)
     job = _job(t)
     res = await t.cronjob_show(CronShowAction(job_id=job.id), execution_context=_ctx())
     assert res.error is None
     assert RULES.strip() in res.extracted_content
-    assert "authored by: owner" in res.extracted_content
     assert "deliver: telegram" in res.extracted_content
 
 
@@ -97,29 +96,9 @@ async def test_patch_must_match_exactly_once(tmp_path, owner_turn, old, why):
 
 
 @pytest.mark.asyncio
-async def test_agent_run_may_not_edit_an_owner_job(tmp_path, agent_turn):
+async def test_agent_run_may_edit_a_job(tmp_path, agent_turn):
     t = _tool(tmp_path)
-    job = _job(t, authored_by="owner")
-    res = await t.cronjob_edit(
-        CronEditAction(job_id=job.id, old_text="Buy 0.1 ETH", new_text="Buy 9 ETH"),
-        execution_context=_ctx())
-    assert res.error and "scheduled by the owner" in res.error
-    assert t._cron_service.store.get(job.id).task == RULES
-
-
-@pytest.mark.asyncio
-async def test_legacy_unstamped_job_counts_as_the_owners(tmp_path, agent_turn):
-    t = _tool(tmp_path)
-    job = t._cron_service.schedule(task=RULES, schedule_spec="1h", user_id="u1")
-    res = await t.cronjob_edit(CronEditAction(job_id=job.id, schedule="2h"),
-                               execution_context=_ctx())
-    assert res.error and "scheduled by the owner" in res.error
-
-
-@pytest.mark.asyncio
-async def test_agent_run_may_edit_its_own_job(tmp_path, agent_turn):
-    t = _tool(tmp_path)
-    job = _job(t, authored_by="agent")
+    job = _job(t)
     res = await t.cronjob_edit(
         CronEditAction(job_id=job.id, schedule="2h", max_duration_seconds=900,
                        deliver="none", skills=["x-engagement"]),
@@ -129,14 +108,13 @@ async def test_agent_run_may_edit_its_own_job(tmp_path, agent_turn):
     assert stored.schedule_spec == "2h" and stored.max_duration_seconds == 900
     assert "deliver" not in stored.payload
     assert stored.payload["skills"] == ["x-engagement"]
-    assert stored.payload["authored_by"] == "agent"
 
 
 @pytest.mark.asyncio
 async def test_agent_rig_past_the_ceiling_is_refused(tmp_path, agent_turn, monkeypatch):
     monkeypatch.setattr(gt, "allowed_self_goal_tools", lambda: gt._SELF_GOAL_ALLOWED_TOOLS)
     t = _tool(tmp_path)
-    job = _job(t, authored_by="agent")
+    job = _job(t)
     res = await t.cronjob_edit(CronEditAction(job_id=job.id, rig="money_rail"),
                                execution_context=_ctx())
     assert res.error and "NOT granted" in res.error
@@ -160,7 +138,7 @@ async def test_bad_schedule_writes_nothing(tmp_path, owner_turn):
 async def test_cancelled_job_cannot_be_edited(tmp_path, owner_turn):
     t = _tool(tmp_path)
     job = _job(t)
-    t._cron_service.cancel(job.id, user_id="u1")
+    t._cron_service.cancel(job.id, user_id="u1", via="cli")
     res = await t.cronjob_edit(CronEditAction(job_id=job.id, schedule="2h"),
                                execution_context=_ctx())
     assert res.error and "cancelled" in res.error
@@ -234,3 +212,26 @@ async def test_show_a_live_pin_says_nothing_extra(tmp_path, monkeypatch):
     res = await t.cronjob_show(CronShowAction(job_id=job.id), execution_context=_ctx())
     assert "provider: openrouter (pinned)" in res.extracted_content
     assert "credit-dead" not in res.extracted_content
+
+
+# 2026-10-17 06:53Z: Rob "verified" a BOUNTY JUDGE schedule of `0 18 */3 * *` as
+# "24h after the announce", but the announce job had the very same spec, so the
+# two fired at the same minute. Show and edit now name the job it collides with.
+
+@pytest.mark.asyncio
+async def test_show_and_edit_name_a_job_firing_the_same_minute(tmp_path, owner_turn):
+    t = _tool(tmp_path)
+    svc = t._cron_service
+    svc.schedule(task="BOUNTY ANNOUNCE post today's round", schedule_spec="0 18 */3 * *",
+                 user_id="u1")
+    judge = svc.schedule(task="BOUNTY JUDGE judge the round", schedule_spec="0 18 2-31/3 * *",
+                         user_id="u1")
+    res = await t.cronjob_show(CronShowAction(job_id=judge.id), execution_context=_ctx())
+    assert "SAME minute" not in res.extracted_content
+    res = await t.cronjob_edit(CronEditAction(job_id=judge.id, schedule="0 18 */3 * *"),
+                               execution_context=_ctx())
+    assert res.error is None
+    assert "next run" in res.extracted_content
+    assert "SAME minute" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
+    res = await t.cronjob_show(CronShowAction(job_id=judge.id), execution_context=_ctx())
+    assert "SAME minute" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content

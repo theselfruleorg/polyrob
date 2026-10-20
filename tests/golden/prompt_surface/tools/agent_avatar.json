@@ -1,0 +1,24 @@
+{
+  "function": {
+    "description": "Your avatar: the one image slot that is your face (console, chat, on-chain registration; the X/Telegram profile photos follow it only when the owner pushes it there). Reads whether it is set and where it came from. With attach=true it also places the image in your workspace so you can send it with message(media_paths=[...]). With set_from it replaces the image — only when the owner asks.",
+    "name": "agent_avatar",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "attach": {
+          "default": false,
+          "description": "Also copy the avatar image into this session's workspace and return its path, so it can be sent with message(media_paths=[...]). Reading is free; only set this when you actually intend to send it.",
+          "type": "boolean"
+        },
+        "set_from": {
+          "default": null,
+          "description": "Set a NEW avatar image (replaces the current one). One of: a workspace image file path, an https/ipfs/data URL, or nft:chain:contract:token_id (the image its metadata names). Only when the owner asks you to — it is refused on any turn that is not the owner's.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

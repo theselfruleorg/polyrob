@@ -100,7 +100,11 @@ def test_a_four_message_history_is_pruned_not_skipped(mm: MessageManager):
 
     mm.emergency_context_prune()
 
-    assert len(mm.history.messages) == 3
+    # E-A1: the kept tail is 3 conversation messages plus ONE dated cut note.
+    kept = [m.message for m in mm.history.messages]
+    notes = [m for m in kept if "[HISTORY CUT]" in str(m.content)]
+    assert len(notes) == 1
+    assert [m.content for m in kept if m not in notes] == ["m1", "m2", "m3"]
 
 
 def test_tokens_are_recounted_after_the_cut(mm: MessageManager):
@@ -115,3 +119,20 @@ def test_the_anti_thrash_signal_is_reset(mm: MessageManager):
     mm._compaction_savings = [0.05, 0.04]
     mm.emergency_context_prune()
     assert mm._compaction_savings == []
+
+
+def test_no_cut_note_when_the_pair_extension_keeps_everything(mm: MessageManager):
+    """Release review: when the tool-pair extension keeps every message, nothing
+    is cut — a ``[HISTORY CUT]`` note would tell the model turns are gone."""
+    mm._add_message_with_tokens(
+        AIMessage(content="call", tool_calls=[{"id": "c0", "name": "noop", "args": {}}]),
+        _internal=True)
+    mm._add_message_with_tokens(ToolMessage(content="result", tool_call_id="c0"), _internal=True)
+    mm._add_message_with_tokens(HumanMessage(content="h1"), _internal=True)
+    mm._add_message_with_tokens(HumanMessage(content="h2"), _internal=True)
+
+    mm.emergency_context_prune()
+
+    contents = [str(m.message.content) for m in mm.history.messages]
+    assert not any("[HISTORY CUT]" in c for c in contents)
+    assert len(contents) == 4

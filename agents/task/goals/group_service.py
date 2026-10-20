@@ -103,6 +103,19 @@ def room_binding(payload: Any) -> Optional[Tuple[SessionSource, str]]:
     return src, build_session_key(src)
 
 
+#: A room reply is a short turn, not autonomous work: a room-service run keeps
+#: its own step budget (083 WS-4 kept it; every other goal or cron run stops at
+#: the operator's ``AUTONOMOUS_MAX_STEPS``).
+ROOM_RUN_MAX_STEPS = 8
+
+
+def room_run_max_steps() -> int:
+    """The step budget of ONE room-service run: :data:`ROOM_RUN_MAX_STEPS`,
+    never above the operator's cap. A stored ``payload.max_steps`` is inert."""
+    from core.config_policy import AutonomyConfig
+    return max(1, min(ROOM_RUN_MAX_STEPS, AutonomyConfig.autonomous_max_steps()))
+
+
 def _ledger(container: Any):
     """The registered ``group_ledger``, else a handle on an EXISTING
     ``surfaces.db``. Never CREATES the store: a service run that cannot find a

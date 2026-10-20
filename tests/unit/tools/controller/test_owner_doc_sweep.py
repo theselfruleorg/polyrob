@@ -37,7 +37,6 @@ def _cron(tmp_path, task):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
 	monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-	monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
 	monkeypatch.delenv("POLYROB_LOCAL", raising=False)
 
 

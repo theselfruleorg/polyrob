@@ -1,12 +1,4 @@
-"""A money-gated tool must redirect the OWNER to their own verbs (2026-09-12).
-
-Live failure: the owner asked the agent to proceed with a bridge. The agent
-replied that no bridge verb was in its catalog, that defi_trade would not load,
-and asked the owner to GRANT defi_trade to the session — while `/bridge` was
-deployed and working. Naming a capability you cannot reach as though the system
-lacked it is a capability denial, and the owner reasonably concluded a shipped
-feature was broken.
-"""
+"""The money-gated remedy: the self-grant path, and propose_action for the owner."""
 from tools.tool_disclosure import resolve_tool_status
 
 
@@ -17,28 +9,25 @@ def _money_remedy():
     return st.remedy
 
 
-def test_the_remedy_names_the_owner_chat_verbs():
+def test_the_remedy_points_the_owner_case_at_propose_action():
     remedy = _money_remedy()
-    for verb in ("/trade", "/bridge", "/wallet"):
-        assert verb in remedy, f"the money remedy never mentions {verb}"
-
-
-def test_it_says_the_capability_is_not_missing_only_not_the_agents():
-    remedy = _money_remedy()
-    assert "not YOURS" in remedy or "not missing" in remedy
-
-
-def test_it_forbids_answering_an_owner_with_a_list_of_grants():
-    """The exact shape of the live failure."""
-    remedy = _money_remedy()
-    assert "list of grants" in remedy
-    assert "DENIAL" in remedy
+    assert "propose_action" in remedy
+    # no hand-copied verb list and no dated story
+    assert "/bridge" not in remedy and "2026-" not in remedy
 
 
 def test_the_no_self_grant_warning_survives():
-    """The older, load-bearing half must not be lost to the new half: a goal the
-    agent creates can never carry a money tool, and saying otherwise sent the
-    prod agent round a ~50-iteration loop."""
+    """A goal the agent creates can never carry a money tool (unarmed regime)."""
     remedy = _money_remedy()
     assert "NEVER carry one" in remedy
     assert "goal_create strips money tools" in remedy
+
+
+def test_under_the_armed_regime_the_remedy_says_a_goal_can_carry_it(monkeypatch):
+    """When the self-goal ceiling holds the tool, the remedy names the real path."""
+    monkeypatch.setattr("tools.goal_tools.allowed_self_goal_tools",
+                        lambda: frozenset({"defi_trade", "filesystem"}))
+    remedy = _money_remedy()
+    assert "NEVER carry" not in remedy
+    assert "rig='money_rail'" in remedy and "goal_create" in remedy
+    assert "propose_action" in remedy

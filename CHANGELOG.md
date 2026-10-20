@@ -10,6 +10,232 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-10-20
+
+### Added
+
+- The agent continues by itself once the owner has decided every card it raised: one wake per card group with each
+  card's outcome; a quote, extra-check or recovery card stays in the group; a failed confirm offers its extra check as
+  a card, and Refresh works on an expired quote.
+
+### Changed
+
+- Goal, cron, delegated and worker runs stop at one operator step cap, `AUTONOMOUS_MAX_STEPS` (150), and at
+  `AUTONOMOUS_RUN_BUDGET_USD` ($2.00) of spend, sub-agents included; at the cap they report once, and a run that stops
+  before `done()` names why in its record, the CLI and the session status.
+
+### Fixed
+
+- The interactive-terminal log formatter interpolates %-style arguments instead of printing a literal `%s`.
+- The money simulation no longer runs a built transaction at its placeholder 120k gas limit: every aggregator swap
+  ran out of gas in simulation ("execution reverted", data 0x) and was refused.
+- The owner-thread delta keeps the newest rows and names the rest; the owner's commands, card taps and their results
+  no longer read as the agent's own or an autonomous run's; a pinned stablecoin keeps its peg when one source is
+  outvoted.
+
+### Removed
+
+- The `max_steps` argument of `goal_create`, `delegate_task` and `worker_manage`, the console goal form's step field,
+  `polyrob workers new/edit --max-steps`, `polyrob cron edit --max-steps` and the `GOAL_DEFAULT_MAX_STEPS` flag.
+
+### Security
+
+- `aiohttp` is raised to 3.14.4 or later (locked 3.14.5) for the keepalive-timeout, unbounded-memory and Secure-cookie
+  advisories.
+- A payout-shaped call or endowed deploy needs the owner tap on every lane, a seed in a readable `.env` refuses host
+  code runs, owner money jobs need a card, and x402 books the signed amount.
+
+## [1.5.0] — 2026-10-18
+
+### Added
+
+- `polyrob job edit --tools a,b,c` sets a job's explicit toolset (`payload.tools`, `none` clears it), validated against the
+  core and first-party pack tool ids, so a posting job can be kept off the spending tools.
+- A cron job or goal write that pins an unknown skill id is refused (the lane gate's one validator); a pinned skill missing at
+  run time is named in the first line of the run's instructions.
+- A run record's `meta` says how its skills loaded: `skills_auto` (pinned at session start) beside `skills_loaded`, and
+  `skills_regime`; the rest were loaded with `load_skill`. Measurement only: nothing retires a skill.
+- Bundled skills are seeded into `<data_home>/skills/bundled/` and served from there: a fix is the agent's pending draft the owner
+  accepts, with no deploy; an update replaces only unmodified copies and its report names the kept ones.
+- Every shipped skill has a `metadata.polyrob-when` line (at most 60 chars) that the skill index shows after its id; a skill write
+  with a longer one is refused, and a test checks the shipped library.
+- A skill change ledger in `skill_usage.db` (action, actor, before/after sha, archive path, `absorbed_into`); archived bodies are
+  content-addressed; `rollback_skill` restores one through the write gate; a background or curator delete names its absorber.
+- `tests/golden/prompt_surface/` holds the system text and `tools[]` the model receives on eight surfaces (owner Telegram DM and
+  REPL, cron, goal, room, correspondent, leaf, prod-posture owner DM) with sizes per layer; a prompt change regenerates it: `python devtools/gen_prompt_surfaces.py`.
+- `/job stop <id> --forever` stops the job's lane (pinned skill, else rig): no non-owner job there until `/job allow`; a per-turn
+  `<operations>` block shows live jobs, goals, pauses and stops and outranks owner.md and recall; owner.md promote rebases.
+- `/usage [days]` on every seat (spend by model, kind, job and day, cache %, $ per useful run) and a "Top AI cost" digest line; a cron
+  `payload.precheck` skips a quiet watch tick with no model call; `model_call_quality` and `prompt_manifest` events; `polyrob doctor` billed-vs-catalog line.
+- `HEAVY_MODEL`: a money-class cron job or goal (`priority=money`, or a money tool in its toolset or rig) that pins no model runs on this
+  model on the pinned provider, through a `model_tier` column of `REGIME_POLICY`, so a box keeps a cheap default for chat and routine runs.
+- `/inbox` reads every decision list (open cards, signer approvals, agent-written jobs and goals); `/pending` is its view and the console API
+  agrees; `/missed` names the cap only when the cap was the cause.
+- Telegram and the console gain `/model` (the model, each pin and its source; a write goes through the config oracle), `/skills` and
+  `/config get|explain`; the REPL-only verbs are rows of `core/verbs.py` (`seats=("repl",)`). The `/approve list|add|remove` alias is removed.
+- `agent_status` (health, next runs, release notes) is on every posture; `AGENT_STATUS_TOOL` gates only wallet/ledger/config. The identity
+  names `POLYROB <version>, instance <name>`; episodes keep `meta.skills_loaded`; the guide skill gains a generated `references/verbs.md`.
+
+### Changed
+
+- `cronjob_edit` reports the job's next run, and both it and `cronjob_show` name any other live job firing at the SAME
+  minute, so a judge meant to run "24h after the announce" cannot silently share the announce's schedule.
+- A `prompt_manifest` row carries `estimate_gap` (provider `prompt_tokens` minus the slot estimates); the deploy log prints
+  the bundled-skill seed lines; `knowledge_export` moves from `core/` to `agents/task/` (no upward edge).
+- `skill_manage create` needs a `when` index line (<= 60 chars, written into the frontmatter); the skill writer and the REST
+  skill API no longer write keyword triggers into a tenant rule.
+- `skill_manage` `patch`/`edit`/`delete` carry the sha256 `load_skill` returns (a stale one refuses with the current sha); `create`
+  never overwrites; new `edit` and `rollback` actions; the scan and lint check only the lines a write adds.
+- `treasury-trading` fits the pin budget: a 19K core with the NO ROUTE rule in its head; the chain table, execution order, NFTs and
+  learning-the-meta move to `references/`. A test holds every shipped skill body to 20,000 chars.
+- Skills load on purpose: only pinned skills (a job's or goal's `payload.skills`, persona seeds, their `requires`) load at session
+  start; every other session gets a short index and calls `load_skill`. The keyword matcher and per-turn re-match are deleted.
+- One block owns tool status: with `<tool-catalog>` pinned, its lines carry each gate (flag, unmet posture limb) and
+  `<tool-availability>` keeps only the goal line; an owner seat pins the catalog without `POLYROB_LOCAL`.
+- A session resumed for a correspondent runs on `filesystem`, `task` and `message` instead of the ambient grant
+  (75 to 39 tool schemas): the capability gate refuses every high-impact tool there anyway.
+- Owner chat runs on the cron shape: the `owner` rig and granted money tools eager, `<tool-catalog>` + `load_tool` always,
+  the `tool_call` bridge, one catalog / load / not-loaded text on every seat; prod-posture owner DM 58K to 39K tokens.
+- An active user skill's reviewed revision lives in `skill_usage.db`, not the tenant `rules.json`; a legacy hash there
+  still verifies until the skill's next write moves it.
+- The system prompt's prose moved out of `prompts.py` (1,467 → 1,062 lines) into `data/prompts/system/<block>.md`, read by `core/prompt_text.py`;
+  Python keeps the conditions and the order; each block has a size ceiling, and the owner-facing texts pass the glossary.
+- A skill's SKILL.md frontmatter is its only metadata source: the builtin and pack `rules.json` files are gone,
+  the rule index is built from `metadata.polyrob-*` (the `tool_ids` gate, priority, auto-activate, and the new `polyrob-requires`).
+- `<owner-instructions>`, the standing-goals line and the live-state line render only on an owner seat (owner chat, and live state on
+  autonomous runs), never in a room, a correspondent chat or a sub-agent; the prompt golden's leaf is built as `delegate_task` builds it.
+- The session's workspace path left `<environment>` for its own foundation row, and it and the task now come after the skill and tool
+  catalogs, so two runs of one cron job or goal share the cached prefix through the catalogs.
+- One gate text per tool: `core/tool_gates.py::REMEDIES` holds every remedy, a gate row (core or `pack.toml`) names a key,
+  and `<tool-availability>` and `<tool-catalog>` render the same text; the trading venues no longer say "never autonomous".
+- One home for the skill catalog: `core/skills` holds frontmatter, scopes with one `resolve` (two non-builtin skills
+  with one name and different bodies are refused) and the gate predicates; the writer and migration move to `modules/skills`.
+- The system prompt no longer lists every action in `<available-actions>` (about 3K tokens): in native tool mode `tools[]` is the one list;
+  the JSON fallback keeps it, and the action index lists an aliased action once.
+- The system prompt states each rule once (done vs send_message, the memory field, paths, live state; pause and work only in `<operations>`),
+  names `web_fetch_fetch_url` and no `polyrob …` command, and calls a model-written rule a draft; the SOUL template drops its approval lines.
+- Agent steps: OpenRouter sends `tool_choice=required`; an empty completion retries in the call; a tool name is repaired; an autonomous
+  run that acted ends on a text reply; owner chat compacts on an 80k history budget and keeps the current request; tool disclosure is on for autonomous runs.
+- One session-regime table (`REGIME_POLICY`) decides pinning, recall rank, owner memory and run records per session kind;
+  `OWNER_THREAD_TAIL_HOURS` defaults to 24; memory filter v4 drops step narration (the purge reruns, backup first).
+- Jobs: `/jobs` (next run, last outcome, author) and `/job new|show|edit|pause|resume|run|stop` on every seat, `polyrob job …` (`polyrob cron` an
+  alias for one release); a paused job shows no next run; a stop records its seat; one scheduler-off sentence; `/cron` is removed.
+- Goals: `/goal new|show|retry|pause|stop [--forever]` on every seat (`/goal ready|resume|cancel` deleted); `paused` is a status; stop is once unless
+  `--forever`, the same on chat, CLI, console and `goal_cancel`; console Work lists stored goals and jobs when off.
+- `CHANGELOG.md` ships in the wheel (`core/CHANGELOG.md`); on a deploy `release_notes('latest')` leads with `[Unreleased]`; the guide and
+  its skill explain standing work as job / goal / decision / pause with one which-one table, and retire rail, objective and stream.
+- Status names the next 5 runs or why none runs, and says IDLE (not RUNNING) while autonomy is off; a blocked
+  goal names its error; runtime cost names its window; digest, `/recap`, `/journey` name a failed read.
+- The holdings read values the native coin as money: its row shows the USD value and what is spendable above the chain's fee reserve (`ChainRow.fee_reserve`, e.g. 0.002 ETH on an L2), and a `total incl. native` line counts it; an unpriced native is named, never counted.
+
+### Removed
+
+- Dead skill code: the `action_names` trigger (no shipped rule could fire on it), `SkillContext`, the second frontmatter parser,
+  the unused scope list, `scripts/skills_frontmatter_sync.py` and the `adopt` keyword. The guide states the real skill precedence.
+- The unread prompt constants in `agents/prompt` and every mention of the retired `OWNER_RULES_IMMEDIATE` env in code comments and tests; the docstrings now say a model-written rule is a draft the owner confirms.
+- Text-guessing gates: read taint, refusal taint, the financial-claim gate, `authored_by`/`/adopt`, the memory write filter and cron's
+  job-text regexes. Unattended money needs a non-`supervised` money regime at the verb; 4 flags retire.
+- One way to pick the model: `CHAT_PROVIDER`/`CHAT_MODEL` retire to `DEFAULT_PROVIDER`/`DEFAULT_MODEL`, `COMPACTION_AUTO_AUX` to
+  `AUX_AUTO`; `POLYROB_<PROVIDER>_MODEL` is no longer read. `polyrob doctor` names each retired line still set.
+- Rails, objectives, streams and the planner: `/rail`, `polyrob rails`, `/goal objective`, the `streams`/`planner`
+  pause scopes, `polyrob owner pause-streams`; 11 flags retire. A recurring need is a scheduled job.
+
+### Fixed
+
+- A 1.4.0 server data home (`<POLYROB_DATA_DIR>/data`) moves up into the data home at first start, under a lock;
+  nothing is merged, overwritten or deleted, and `polyrob doctor` names what stayed. Before, the upgrade opened an empty `bot.db`.
+- `propose_action`'s `replaces` closes only the owner's own proposal cards, never a quote waiting for Confirm, a choice
+  card or another user's card.
+- Telegram `/model` checks both halves of the pin before it writes either, so a higher layer that pins only
+  `DEFAULT_MODEL` no longer gets a provider of another model family.
+- REPL `/usage` still shows this chat's usage when the data home cannot be read; the spend view says "could not read".
+- Console Inbox Approve/Reject on a signer approval goes to the signer's decider (it answered "unknown pending kind").
+- `/goal stop <id> --forever` typed with a phone dash (`—forever`) switches the goal off; `/goal retry` help says it
+  re-queues a blocked or paused goal, and a pause then retry no longer runs two copies of the goal.
+- `python -m migrations.migrate status` reads the same `bot.db` that `upgrade` writes.
+- The "MCP is off" refusal names what the owner sets, not an internal key.
+- Rolling back a bundled skill after an update works; accepting a bundled fix no longer deletes a newer draft, is refused
+  when its ledger row cannot be written, and a partial first seed keeps serving the packaged library.
+- Recap and the daily digest say the episode store could not be read, instead of reporting no activity.
+- Console job create answers a named 503 when the job store cannot be read; a job edit no longer loses a pause or an
+  outcome written at the same time.
+- REPL `/skills <query>` filters on the whole query, as Telegram does; `polyrob-requires` accepts a JSON string, a YAML
+  list or a number/null.
+- Memory: while the store is full, the retry queue keeps only the newest summaries that fit one row and logs each drop.
+- The rate-guard deferral cap counts deferrals in a row, not over the goal's life.
+- Compaction keeps message ages (an old money receipt no longer keeps its full text) and adds no "[HISTORY CUT]"
+  note when nothing was cut; a rejected call's correction note no longer stacks up.
+- A reused sub-agent's new run no longer takes its opening plan as the final report.
+- A mistyped tool name is no longer repaired into a different money or outbound action (`launchpad_claim` ran as
+  `launchpad_sell`); the call gets the normal refusal instead.
+- A goal run stopped by its spend budget is recorded as a failure; it is no longer deferred and re-run at full cost.
+- When the compaction summariser fails, the owner's newest in-chat instructions stay instructions.
+- `/send` sends any held token: with no spend-grade price it asks one extra step (`anyway`), owner lane only. Pinned
+  stables (USDG) price at their peg; an L2 WETH falls back to mainnet ETH; the agent now sees its session's verb replies.
+- `goal_create` refuses a goal whose acceptance is the goal board itself ("a goal row exists", "goal_show
+  read-back"); no run can complete such a goal, and each judged failure bred more goals.
+- `send_message` rewrites an `/approve_p_…` / `/reject_p_…` token the owner already decided as "(already
+  approved <time> — nothing to tap)" and adds one "(Correction: …)" line; a token still queued is left alone.
+- A cron job's `payload.post_spacing_hours` (`polyrob job edit --post-spacing-hours`) is now enforced by the
+  X tool: a post, quote, thread or repost inside the window since that job's own last post is refused, so
+  pacing is no longer prose the model checks after posting.
+- A swap Confirm whose fresh quote still clears the confirmed minimum re-requests the route at a tighter
+  slippage instead of refusing "the minimum received fell below the confirmed quote"; the floor never drops.
+- Two first writers of a new session no longer raise "user_id cannot be determined": the session's user is recorded
+  before its directory exists. The REST skill API writes a tenant `rules.json` atomically, through the skill writer.
+- A token the owner pinned (`/wallet trust`) passes a buy-screen check no provider answered (USDG on robinhood
+  never gets `is_honeypot`); hard failures and a high sell tax still refuse. A swap dry run now runs the screen.
+- The unchecked-route refusal and the spend-limits brief now name the owner's pin verb
+  (`/wallet trust <chain> <address> <SYMBOL> go`) and say no setting raises the $5 ticket.
+- A tool call that restates its own tool as an `action` arg (`twitter_whoami(action='whoami')`) no longer fails
+  validation; the arg is dropped only when the tool declares no `action` field.
+- A scheduled run that found nothing new sends no message (the autonomous contract said "silence is a failure mode" and
+  no-op cron runs began to ping the owner every 2 hours); a job text that asks for a silent close binds.
+- The bundled-skill seed runs when the service can write the data home through its group (prod is `root:polyrob-data`);
+  an owner-uid check refused it, so nothing was seeded. A root shell on a service-group home skips without an error.
+- A one-shot cron job that ends `failed` is disabled in the same write, as `done` is; an old failed row with `enabled=1` is
+  disabled when the store opens.
+- The deploy deletes skills that left the shipped library: stale pre-pack copies on the box were indexed as builtins,
+  so every pack skill was renamed `<pack>:<id>` and a pinned plain id served the old body.
+- The `prompt_manifest` row is written after the first call, so it records the tool-schema cost and the first-step blocks (it read
+  0 and missed them), with a size per foundation layer and the provider's own `prompt_tokens`.
+- A cron job that finishes as `done` is disabled in the same write, and the cron store clears old done-but-enabled rows and the dead `authored_by`/`adopted_skills_digest` payload keys when it opens; finished jobs no longer read as live rails.
+- The owner/self doc writer refuses a second `## Superseded` heading and an agent write that would retire more than 3 active rules at once; a misplaced heading demoted 27 live owner rules twice in one morning.
+- A `/send` proposal to an address that already has an open `/send` card is refused unless it names the cards it `replaces` (closed) or says `also_owed`; re-split payouts stacked ~$233 of cards on a $100 pool.
+- A typed owner reply to an open `present_choice` card closes it at once ("replied in text", never parsed into a pick); before, the turn sat until the wait ran out.
+- A service-user write into a setgid shared store (skills, identity) is group-shared 0660, not 0600; before, only root writes were.
+- Self/owner identity docs are written 0660 (group-shared), not mkstemp's 0600 — a promote left `owner.md`/`self.md` unreadable to the `polyrob-data` group.
+- `present_choice` gets at least its declared `wait_seconds` (+30 s) from the controller; the generic 180 s action timeout cut a 300 s owner choice short.
+- A goal run a rate guard refused (`retry_after_sec=N`, e.g. the X post cooldown) is deferred, not failed: back to `ready` with `payload.not_before`, no failure counted, at most 3 deferrals in a row.
+- A `tool_call` the target rejects now lists every parameter (type, required, description) and names empty `arguments`; the X post-cooldown hint names `cronjob_schedule`'s real `schedule` field.
+- An unblocked goal is no longer held by the dispatcher's own "Unblock goal" ask: `GoalBoard.unblock` now releases it, as retry and the outage requeue already did.
+- Recall and live limits survive a tool-free step; aux calls record tokens and billed cost; `AUX_AUTO` works on OpenRouter and reflection
+  runs; a live chat follows a moved model pin; the server no longer loads the code root's `AGENTS.md` as project context.
+- Long owner chats: one compaction policy (the 90 % prune is gone); a prune keeps the summary and the latest owner message;
+  the first chat message is dated and the newest owner message wins; owner instructions survive compaction as instructions.
+- Jobs and goals keep a run record on every exit (time cap, pause, step budget) and see `<previous-runs>`; a goal reads the
+  answers to its own asks; answers are consumed after a completed run; a plain owner reply reaches the job it answers.
+- Memory recall ranks by recency and by the reader's regime (a job's own runs first), dates every hit, keeps `[unverified]`
+  through summaries, and says "could not read" on a failed read; a reload no longer re-writes old findings as new.
+- Tool results over the wire cap are saved with a real read path; children report `incomplete` and their full text; a reload
+  re-renders changed rules/prompt/skills; `<live-health>` carries the live spend limits; a money denial names the caps.
+- A deployed instance has one `<data home>/.env`, one env ladder and one data dir; a write `polyrob.env` pins is
+  refused naming that file; `explain` labels `env:systemd|file|shell`; `/restart` is promised only when it applies.
+- A guard-refused money quote makes no card and no `go` hint; the per-tx refusal names its cap and the
+  `/config set` remedy; owner-verb replies and card taps (as the line confirmed) reach the owner thread.
+- Money-verb results under 24 h keep full text through ageing; the step clock reads UTC; the compaction warning reads the 70/85 ladder; `cronjob_edit` says a new schedule runs a job sooner; an owner money QUESTION gets a quote and a card.
+- A blocked goal put back to `ready` (owner retry, provider-outage requeue) closes the dispatcher's own "Unblock goal" ask; before, that open ask held the goal and nothing dispatched. An owner-decision ask still holds it.
+- `defi_data.reconcile` compares only the chain it reads: a ledger row naming another chain (or one the rail store holds elsewhere) is skipped, a chainless row reading zero is "unscoped" (UNVERIFIED) not missing, a row marked CLOSED is closed, and an unbacked rail row names `/writeoff`.
+- OpenRouter's in-flight 402 (`in_flight_budget_exceeded`: a funded account whose concurrent reservations pass the balance) backs off and retries like a rate limit; it no longer latches the credit sentinel, pauses autonomy for 6 h or fails a goal over to another provider.
+
+### Security
+
+- A goal or cron `target_token` is identity trust only with an explicit `target_authored_by: owner` stamp (owner seat or
+  verbatim owner turn); a row with a target and no stamp, such as one written before the stamp existed, is restrict-only.
+- A multitenant console lists the instance's signer approvals only for the owner tenant.
+- `POLYROB_SUPPORT_URL` and `POLYROB_SUPPORT_HANDLE` have no default (the link is hidden until set); shipped code, tests
+  and skills carry no instance identifier; the task-API access refusal is generic.
+
 ## [1.4.0] — 2026-10-13
 
 **Upgrading from 1.3.x:** move posture-member lines (e.g. `SHELL_TOOLS_ENABLED=false`) into one
@@ -332,7 +558,7 @@ provider. `polyrob doctor` names each line to change; see [upgrading](docs/guide
 
 - Detect unlabelled English BIP-39 seed phrases by checksum and Solana key arrays by their public key before persistence or export.
 
-- Default new-wallet welcome credits to zero and refresh stale DEN holder entitlement before access; unverifiable ownership fails closed.
+- Default new-wallet welcome credits to zero and refresh stale access-token holder entitlement before access; unverifiable ownership fails closed.
 
 - Broaden address-poisoning checks, refuse unreadable history and apply the same recipient check to agent-account NFT handovers.
 
@@ -1321,7 +1547,7 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   boot and runs three processes as one non-root user: the agent runner
   (`touch /data/restart.agent` = clean restart after a `git pull` = deploy),
   the Claude dev `/loop` in tmux (the `/dev` Telegram rail pastes into it),
-  and a watchdog. Dangerob gets `dangerob.fly.env` + a container-specific
+  and a watchdog. A second instance gets its own `<name>.fly.env` + a container-specific
   `dev-loop-prompt.md`. `deployment/fly/README.md` lists what to buy and which
   secrets to set.
 - X OAuth 2.0 user token: encrypted store + **auto-refresh** (`tools/x_oauth2.py`).

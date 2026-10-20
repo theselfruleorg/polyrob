@@ -21,8 +21,8 @@ def test_pause_reply_writes_and_reports(tmp_path, monkeypatch):
     assert _pause_reply(str(tmp_path), "/halt", []).startswith("⏸ Paused everything")
     assert _pause_reply(str(tmp_path), "/resume", []).startswith("▶ Autonomy RESUMED")
     assert "unknown scope" in _pause_reply(str(tmp_path), "/pause", ["bogus"])
-    _pause_reply(str(tmp_path), "/pause", ["cron", "streams"])
-    assert "still paused: streams" in _pause_reply(str(tmp_path), "/resume", ["cron"])
+    _pause_reply(str(tmp_path), "/pause", ["cron", "social"])
+    assert "still paused: social" in _pause_reply(str(tmp_path), "/resume", ["cron"])
 
 
 @pytest.mark.parametrize("surface,want", [("webview", "console"), ("telegram", "telegram"),

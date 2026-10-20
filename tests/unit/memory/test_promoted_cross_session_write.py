@@ -1,4 +1,6 @@
-"""Tests for drain_promoted_findings — high-water-mark drain of H-MEM curated findings."""
+"""drain_promoted_findings hands ONLY the reflection summaries (LLM-consolidated)
+to the cross-session store, each once. Raw per-step findings stay in H-MEM
+(2026-10-14: they were the step narration / tool echo noise)."""
 from core.config import BotConfig
 from modules.memory.task.task_context_manager import TaskContextManager
 
@@ -7,35 +9,15 @@ def _tcm():
     return TaskContextManager(name="t-drain", config=BotConfig())
 
 
-def test_drain_returns_curated_then_empty():
+def test_raw_step_findings_never_drain_cross_session():
     tcm = _tcm()
     tcm.create_session("s", task="task")
     tcm.add_step_memory("s", 1, {"phase": "p1", "memory": "fact one"}, "a", finding="fact one")
-    first = tcm.drain_promoted_findings("s")
-    assert any("fact one" in f for f in first), f"expected curated finding, got {first}"
-    # Second drain with no new findings returns nothing (high-water mark).
-    assert tcm.drain_promoted_findings("s") == [], "drain must not re-emit already-drained findings"
-    tcm.add_step_memory("s", 2, {"phase": "p1", "memory": "fact two"}, "a", finding="fact two")
-    second = tcm.drain_promoted_findings("s")
-    assert any("fact two" in f for f in second), f"expected only the new finding, got {second}"
-    assert not any("fact one" in f for f in second), "must not re-emit fact one"
+    assert tcm.drain_promoted_findings("s") == []
 
 
 def test_drain_unknown_session_empty():
     assert _tcm().drain_promoted_findings("nope") == []
-
-
-def test_drain_exactly_once_under_pruning():
-    tcm = _tcm()
-    tcm.create_session("sp", task="long task")
-    for i in range(70):  # exceed MAX_FINDINGS_PER_PHASE (default 60) -> pruning engages
-        tcm.add_step_memory("sp", i + 1, {"phase": "p1", "memory": f"fact {i}"}, "a", finding=f"fact {i}")
-    drained = list(tcm.drain_promoted_findings("sp"))
-    tcm.add_step_memory("sp", 100, {"phase": "p1", "memory": "fact LATE"}, "a", finding="fact LATE")
-    second = tcm.drain_promoted_findings("sp")
-    assert "fact LATE" in second, "finding added after the phase hit its cap was never drained (high-water-mark bug)"
-    drained += second
-    assert len(drained) == len(set(drained)), "a finding was drained more than once"
 
 
 def test_null_context_manager_drains_empty():
@@ -74,3 +56,31 @@ def test_concat_fallback_summary_not_synced(monkeypatch):
     tcm._trigger_reflection("sc", "discovery")
     drained = tcm.drain_promoted_findings("sc")
     assert not any("[phase-summary" in f for f in drained)
+
+
+def test_unsent_summaries_are_given_back_to_a_live_session():
+    tcm = _tcm()
+    tcm.create_session("sr5", task="task", user_id="u1")
+    summary = "[phase-summary:p1] Bridge confirmed."
+    assert tcm.release_unsent_findings("sr5", [summary], "u1")
+    assert tcm.drain_promoted_findings("sr5") == [summary]
+    assert tcm.drain_promoted_findings("sr5") == []
+
+
+def test_a_closed_session_cannot_take_back_summaries():
+    assert _tcm().release_unsent_findings("gone", ["[phase-summary:p1] x"], "u1") is False
+
+
+def test_requeued_summaries_stay_within_one_stored_row(monkeypatch):
+    """A store that stays full must not grow the queue past what one row holds:
+    the next drain is joined into ONE row cut at MEMORY_ROW_MAX_CHARS, so the
+    oldest summaries are dropped (logged) instead of silently cut off the end."""
+    monkeypatch.setenv("MEMORY_ROW_MAX_CHARS", "4000")
+    tcm = _tcm()
+    tcm.create_session("sr6", task="task", user_id="u1")
+    batch = [f"[phase-summary:p{i}] " + "x" * 900 for i in range(10)]  # oldest first
+    assert tcm.release_unsent_findings("sr6", batch, "u1")
+    drained = tcm.drain_promoted_findings("sr6")
+    assert len("\n".join(drained)) <= 4000
+    assert drained and drained[-1] == batch[-1]  # the newest is kept
+    assert batch[0] not in drained

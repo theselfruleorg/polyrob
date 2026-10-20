@@ -1,0 +1,39 @@
+{
+  "function": {
+    "description": "Ask the OWNER to pick one of 2-6 options, as buttons (Telegram) or a numbered prompt (terminal), and WAIT for the pick in this turn. Use it when you need the owner's choice to continue now. Not in autonomous runs (use owner_ask there).",
+    "name": "present_choice",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "options": {
+          "description": "2 to 6 short options (each ≤ 80 characters).",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 2,
+          "type": "array"
+        },
+        "question": {
+          "description": "The one question the owner answers with a tap.",
+          "maxLength": 200,
+          "minLength": 4,
+          "type": "string"
+        },
+        "wait_seconds": {
+          "default": 300,
+          "description": "How long to wait for the tap.",
+          "maximum": 900,
+          "minimum": 10,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

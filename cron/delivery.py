@@ -26,6 +26,7 @@ Gated by ``CRON_DELIVERY_ENABLED`` (default OFF) at the call site (``cron/runner
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,47 @@ def _allow_explicit_target() -> bool:
     """
     from core.env import bool_env
     return bool_env("CRON_DELIVERY_ALLOW_EXPLICIT_TARGET", False)
+
+
+#: A run's closing bookkeeping line ("Done — cost $0.40", "✅ Finished …").
+#: It is a record for the owner, never text for a public sink (review B8).
+_CLOSING_LINE_RE = re.compile(
+    r"^[\W_]*(?:done|finished|completed|all done|run (?:done|complete|finished))\b",
+    re.IGNORECASE)
+
+
+def is_owner_sink(target: Optional[str], deliver_target: Optional[str] = None) -> bool:
+    """True when ``target`` delivers to the OWNER: a catalog chat surface (or
+    email) with no explicit recipient. A pack channel (the X post sink) or an
+    honoured explicit address is public. Mirrors :func:`deliver_result_ex`."""
+    t = str(target or "").strip().lower()
+    if not t:
+        return False
+    if deliver_target and not _allow_explicit_target():
+        deliver_target = None
+    from core.surfaces.catalog import cron_target_ids
+    return t in cron_target_ids() and not deliver_target
+
+
+def report_body(run: Any, target: Optional[str], deliver_target: Optional[str] = None) -> str:
+    """The body a cron report delivers. Owner sink: the run's LAST
+    ``send_message`` (``RunOutcome.sent_text``). Public sink: the last
+    ``send_message`` that is not the run's closing bookkeeping line — on
+    2026-10-13 a public target could receive "Done — cost $0.40". ``""`` when
+    nothing publishable was said (the caller then delivers nothing)."""
+    if run is None:
+        return ""
+    if not target or is_owner_sink(target, deliver_target):
+        return run.sent_text()
+    if getattr(run, "refusal", False):
+        return ""
+    from agents.task.runtime.run_outcome import FRAMEWORK_PLACEHOLDER_TEXTS
+    for msg in reversed(getattr(run, "user_messages", None) or []):
+        m = (msg or "").strip()
+        if not m or m in FRAMEWORK_PLACEHOLDER_TEXTS or _CLOSING_LINE_RE.match(m):
+            continue
+        return m
+    return ""
 
 
 def is_silent(final: Optional[str]) -> bool:
@@ -206,24 +248,6 @@ async def deliver_result_ex(
         logger.info("cron delivery: ignoring explicit deliver_target (owner-only by default)")
         deliver_target = None
 
-    # A run whose money verb was refused reports to the OWNER only
-    # (core/security/refusal_taint.py): an explicit recipient is dropped and a
-    # pack's public channel (the X post sink) is re-routed to the owner's
-    # Telegram lane, so the report is kept but never published.
-    if session_id:
-        from core.security.refusal_taint import is_tainted
-        if is_tainted(session_id):
-            from core.surfaces.catalog import cron_target_ids
-            # Owner-bound = a catalog chat surface; a pack channel is public.
-            is_public_sink = target not in cron_target_ids()
-            if deliver_target or is_public_sink:
-                logger.warning("cron delivery: job %s had a refused money action — "
-                               "%s report re-routed to the owner",
-                               getattr(job, "id", "?"), target)
-            deliver_target = None
-            if is_public_sink:
-                target = "telegram"
-
     # The recipient is the OWNER when the sink is a catalog chat surface (or
     # email) with no explicit address; a pack channel (the X post sink) is public.
     from core.surfaces.catalog import cron_target_ids as _owner_sinks
@@ -249,10 +273,11 @@ async def deliver_result_ex(
         if target == "email":
             ok = await _deliver_email(task_agent, job, final, deliver_target)
         elif target == "telegram":
-            ok = await _deliver_telegram(task_agent, job, final, deliver_target)
+            ok = await _deliver_telegram(task_agent, job, final, deliver_target,
+                                         session_id=session_id)
         elif target in router_targets():
             ok = await _deliver_router_surface(task_agent, job, final, target,
-                                               deliver_target)
+                                               deliver_target, session_id=session_id)
         else:
             ok = await _deliver_channel(task_agent, job, final, target)
     except Exception as e:  # fail-open: a delivery error never fails the job
@@ -376,7 +401,8 @@ async def _deliver_email(task_agent: Any, job: Any, final: str, deliver_target: 
 
 async def _deliver_router_surface(task_agent: Any, job: Any, final: str,
                                   surface_id: str,
-                                  deliver_target: Optional[str]) -> str:
+                                  deliver_target: Optional[str], *,
+                                  session_id: Optional[str] = None) -> str:
     """030 D8: deliver to any subscribed chat surface — through the ONE rail.
 
     The recipient is the job OWNER's address on that surface (owner-address
@@ -403,7 +429,7 @@ async def _deliver_router_surface(task_agent: Any, job: Any, final: str,
     outcome = await deliver_user_message(
         container, str(getattr(job, "user_id", "") or ""), final,
         source="cron", recipient_override=str(addr),
-        recipient_surface=surface_id)
+        recipient_surface=surface_id, **({"session_id": session_id} if session_id else {}))
     if outcome != "sent":
         logger.info("cron delivery: rail outcome=%s for job %s on %s",
                     outcome, getattr(job, "id", "?"), surface_id)
@@ -528,7 +554,8 @@ async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> s
     return "sent" if ok else "failed"
 
 
-async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str]) -> str:
+async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str],
+                            *, session_id: Optional[str] = None) -> str:
     # Recipient + sink resolution both live on the user-delivery rail (T6): the rail
     # does its own sink lookup and records a durable owner_notice fallback when no
     # live sink exists — strictly better than the old silent early-False. We resolve
@@ -571,9 +598,13 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
     # durable owner_notice fallback live there, shared with agent sends and
     # framework notices. The cron layer keeps its own gates above.
     from core.surfaces.user_delivery import deliver_user_message
+    # B7 (2026-10-13 review): the run's session id rides along, so the owner
+    # thread files this line under the JOB (rail ``cron:<id>``) and the job's
+    # next run sees what it reported — and the owner's reply to it.
     outcome = await deliver_user_message(
         container, str(getattr(job, "user_id", "") or ""), final,
-        source="cron", recipient_override=chat_id)
+        source="cron", recipient_override=chat_id,
+        **({"session_id": session_id} if session_id else {}))
     if outcome != "sent":
         logger.info("cron delivery: rail outcome=%s for job %s",
                     outcome, getattr(job, "id", "?"))

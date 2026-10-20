@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Fetch a single URL and return its content: an HTML page as markdown, and a JSON / CSV / XML / plain-text answer verbatim. Use this to READ a page or to call a keyless read-only HTTP API you have the URL for. Lightweight and fast — no browser. For SEARCH use perplexity/anysite; for pages needing login/clicks/forms use the browser tool.",
+    "name": "web_fetch_fetch_url",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for fetching and reading a single web page as markdown.",
+      "properties": {
+        "max_chars": {
+          "default": 40000,
+          "maximum": 200000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

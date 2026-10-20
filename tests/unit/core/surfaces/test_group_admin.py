@@ -25,8 +25,8 @@ class _C:
 
 def test_allow_here_writes_allowlist_and_name(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.allow_here(c, "telegram", "-1", "The Public Den", owner_uid="rob")
-    assert "allowed" in out.lower() and "The Public Den" in out
+    out = group_admin.allow_here(c, "telegram", "-1", "The Lobby", owner_uid="rob")
+    assert "allowed" in out.lower() and "The Lobby" in out
     from core.surfaces.group_allowlist import GroupAllowlist
     assert GroupAllowlist(str(tmp_path / "group_allowlist.db")).is_allowed("telegram", "-1")
 

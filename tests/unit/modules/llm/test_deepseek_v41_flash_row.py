@@ -26,11 +26,11 @@ def test_no_silent_fallback_to_deepseek_chat():
 
 
 def test_pricing_is_the_verified_offpeak_rate():
-    # Off-peak / headline rate. Weekday 01-04 and 06-10 UTC it doubles; the row
-    # documents that, and the figures here are the base the API reports.
+    # 2026-10-14 OpenRouter list price (DeepInfra upstream). The billed cost is the
+    # spend truth; `polyrob doctor` shows the billed/catalog ratio (review A-1).
     p = get_model_config(SLUG).pricing
-    assert (p.input_price, p.output_price) == (0.15, 0.60)
-    assert p.cached_input_price == 0.003
+    assert (p.input_price, p.output_price) == (0.14, 0.42)
+    assert p.cached_input_price == 0.004
 
 
 def test_capabilities_context_and_vision():

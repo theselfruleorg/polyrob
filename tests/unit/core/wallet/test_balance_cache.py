@@ -16,7 +16,7 @@ from core.wallet import balance_cache as bc
 
 
 class _Wallet:
-    address = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
+    address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
     solana_address = "So1anaFake1111111111111111111111111111111111"
 
 
@@ -183,7 +183,7 @@ def test_the_agent_sees_its_balances_every_turn(tmp_path, monkeypatch):
     from core.status_snapshot import build_status_snapshot
     note = render_agent_health_note(
         build_status_snapshot("owner", data_dir=str(tmp_path), include_money=False))
-    assert "wallet 0xcAda" in note
+    assert "wallet 0xf39F" in note
     assert "base: 0.0372 ETH" in note
 
 
@@ -205,7 +205,7 @@ def test_the_flag_off_removes_the_note_but_not_the_status_section(tmp_path, monk
     from core.status_snapshot import build_status_snapshot
     snap = build_status_snapshot("owner", data_dir=str(tmp_path), include_money=False)
     assert snap.sections["wallet"].state == "ok"
-    assert "wallet 0xcAda" not in render_agent_health_note(snap)
+    assert "wallet 0xf39F" not in render_agent_health_note(snap)
 
 
 def test_a_wallet_less_deployment_is_not_a_degraded_one(tmp_path, monkeypatch):

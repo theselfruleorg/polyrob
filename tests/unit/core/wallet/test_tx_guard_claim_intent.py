@@ -28,7 +28,7 @@ from core.wallet.policy import PolicyGate
 from core.wallet.simulation import Deltas
 
 ESCROW = "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e"
-HOLDER = "0xcAda546F6A6DdDe31b71Ab21ef63D3EbF09fA553"
+HOLDER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 #: The live figure, to the wei.

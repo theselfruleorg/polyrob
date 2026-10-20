@@ -16,6 +16,7 @@ from pathlib import Path
 import logging
 
 from agents.task.constants import LoopDetectionConfig
+from core.config_policy import INTERACTIVE_MAX_STEPS
 from core.env import bool_env as _bool_env
 from core.version import get_version
 import os
@@ -83,7 +84,6 @@ class TaskMode:
 
         configs = {
             TaskMode.FAST: {
-                "max_steps": 30,
                 "max_failures": 2,
                 "max_parse_retries": 1,
                 "telemetry_enabled": False,
@@ -93,7 +93,6 @@ class TaskMode:
                 "task_verification_required": False,
             },
             TaskMode.BALANCED: {
-                "max_steps": 50,
                 "max_failures": 5,
                 "max_parse_retries": int(os.getenv('MAX_PARSE_RETRIES', '3')),
                 "telemetry_enabled": False,
@@ -103,7 +102,6 @@ class TaskMode:
                 "task_verification_required": _bool_env('TASK_VERIFICATION_REQUIRED', True),
             },
             TaskMode.THOROUGH: {
-                "max_steps": 100,
                 "max_failures": 7,
                 "max_parse_retries": 5,
                 "telemetry_enabled": True,
@@ -174,7 +172,7 @@ class LimitsConfigModel(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
 
-    max_steps: int = Field(default=100, ge=1, le=1000, description="Maximum steps for execution")
+    max_steps: int = Field(default=INTERACTIVE_MAX_STEPS, ge=1, le=1000, description="Maximum steps for execution")
     # DUPLICATE: Also in MessageManagerConfig (for message formatting)
     max_actions_per_step: int = Field(default=10, ge=1, le=50, description="Maximum actions per step")
     # DUPLICATE: Also in MessageManagerConfig (for context limits)
@@ -310,7 +308,6 @@ class AgentProfileModel(BaseModel):
     # Limits configuration
     limits: Dict[str, Any] = Field(
         default_factory=lambda: {
-            "max_steps": 50,
             "max_actions_per_step": 10,
             "max_input_tokens": None,
             "max_failures": 3
@@ -364,8 +361,8 @@ class TaskSessionConfig(BaseModel):
     agent_profiles: Optional[List[AgentProfileModel]] = Field(default=None, description="Agent profile overrides")
     default_profile_id: Optional[str] = Field(default="executor", description="Default profile for single-agent sessions")
     # 060 WS-5: the doctrine a rail pins — seeded into the session through
-    # SkillManager.get_skills_for_session(seeded_skill_ids=…), bypassing keyword
-    # matching and max_skills. None = today's matching, byte-identical.
+    # SkillManager.get_pinned_skills(seeded_skill_ids=…). None = no pin: the
+    # session gets the skill index only (081 Q2).
     skills: Optional[List[str]] = Field(default=None, description="Skill ids pinned for this session")
     
     # Metadata
@@ -391,7 +388,7 @@ class TaskSessionConfig(BaseModel):
                 use_vision=True
             ),
             limits=LimitsConfigModel(
-                max_steps=mode_config.get('max_steps', 50),
+                max_steps=INTERACTIVE_MAX_STEPS,
                 max_actions_per_step=10,
                 max_input_tokens=None,  # Auto-detect from model
                 max_failures=mode_config.get('max_failures', 3)

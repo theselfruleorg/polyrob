@@ -1,0 +1,57 @@
+{
+  "function": {
+    "description": "Moderate a group room you are in: mute, unmute, ban or unban a member, or delete messages. Use room_read first to get the member's uid and the msg ids. The owner and room admins can never be targeted. The bot must be a room admin with the right permission. Act on clear rule-breaking (spam, scams, abuse) and tell the owner what you did.",
+    "name": "room_moderate",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "One of: mute, unmute, ban, unban, delete.",
+          "type": "string"
+        },
+        "delete_messages": {
+          "default": false,
+          "description": "ban/mute: also delete the target's lines from the last 48 h (spam cleanup).",
+          "type": "boolean"
+        },
+        "duration": {
+          "default": null,
+          "description": "mute/ban length, e.g. 30m, 2h, 7d (max 30d). Default mute 1h, ban 30d.",
+          "nullable": true,
+          "type": "string"
+        },
+        "message_ids": {
+          "default": null,
+          "description": "delete: the msg ids (from room_read's {msg=…}).",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "reason": {
+          "default": null,
+          "description": "Why, for the owner's record.",
+          "nullable": true,
+          "type": "string"
+        },
+        "room": {
+          "description": "The allowlisted room: chat id, 'surface:chat_id', or a distinctive fragment of its name or label.",
+          "type": "string"
+        },
+        "target": {
+          "default": null,
+          "description": "The member: their uid (from room_read's {uid=…}) or @name. Required for mute/unmute/ban/unban; for delete without message_ids, deletes that member's lines from the last 48 h.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "room",
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

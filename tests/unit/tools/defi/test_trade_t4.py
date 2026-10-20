@@ -259,7 +259,6 @@ async def test_swap_refuses_when_no_route_exists():
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "no route" in res.error
-    assert (res.metadata or {}).get("error_kind") == "precondition"
     assert "univ3" in res.error, "the refusal must name who was asked (029 R6)"
 
 
@@ -281,8 +280,6 @@ async def test_swap_refuses_without_a_sufficient_allowance(monkeypatch):
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "insufficient allowance" in res.error
-    # a precondition, tagged where it was built — the run's notice still posts
-    assert (res.metadata or {}).get("error_kind") == "precondition"
     assert "approve_token" in res.error
 
 
@@ -540,7 +537,6 @@ async def test_swap_refuses_a_stale_quote(monkeypatch):
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "stale" in res.error.lower()
-    assert (res.metadata or {}).get("error_kind") == "precondition"
 
 
 # --- guard: allowance ops legitimately move zero tokens ---------------------
@@ -659,3 +655,28 @@ async def test_confirmed_minimum_cannot_be_lowered_by_a_new_route(monkeypatch):
     result = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1,
         max_spend_usd=2, minimum_output_raw=10**18, dry_run=True))
     assert "confirmed quote" in result.error
+
+
+@pytest.mark.asyncio
+async def test_a_requote_that_still_clears_the_confirmed_minimum_is_tightened(monkeypatch):
+    """Prod 2026-10-16 14:15Z: the owner's card pinned min_raw at the first
+    quote's slippage floor; Confirm re-quoted 2 s later a hair lower and was
+    refused 4 times in a row. A fresh quote whose OUTPUT still clears the
+    confirmed minimum is re-requested at the slippage that keeps its on-chain
+    floor at or above it — never below what the owner confirmed."""
+    import tools.defi.providers.univ3 as u
+    monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
+    seen = []
+    tool, _ = _tool(quote=_quote())
+    real_route = tool._route
+
+    def _spy(*a, **k):
+        seen.append(k.get("slippage_bps"))
+        return real_route(*a, **k)
+
+    tool._route = _spy
+    confirmed = 499_000_000_000_000                  # out 500e12, a 0.2% margin
+    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1,
+        max_spend_usd=2, minimum_output_raw=confirmed, dry_run=True))
+    assert "confirmed quote" not in (res.error or "")
+    assert len(seen) == 2 and seen[1] < seen[0]

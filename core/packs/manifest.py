@@ -39,7 +39,9 @@ Shape::
     capabilities = []                # money, high_impact, writes_*, ...
     untrusted_output = false
     cli = "none"                     # | "static" (the CLI serves it) | "incompatible"
-    gate = { flag = "ECHO_ENABLED" } # optional core.tool_gates.ToolGate fields
+    gate = { flag = "ECHO_ENABLED" } # optional core.tool_gates.ToolGate fields; a
+                                     #  disclosed gate's `remedy` is a KEY of
+                                     #  core.tool_gates.REMEDIES, never prose
     permissions = ["network.read"]   # optional catalog permissions (TOOL_PERMISSIONS)
     requires = ["echo_sdk"]          # optional import names the tool cannot work
                                      #  without (probed with find_spec, never imported);

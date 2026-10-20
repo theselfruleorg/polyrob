@@ -8,9 +8,9 @@ foundation block renders:
 
     ## Owner facts (last write 2026-09-19; 3 lines older than 30 days; 2 lines undated)
 
-⚠️ An UNDATED line is reported as undated, never as fresh. Before
-`DOC_CLAIM_PROVENANCE_REQUIRED` is armed every line is undated, so the header
-says so instead of implying a document with no old claims in it.
+⚠️ An UNDATED line is reported as undated, never as fresh: a line written with
+no ``source`` carries no stamp, so the header says so instead of implying a
+document with no old claims in it.
 
 Pure core (stdlib + ``core.doc_claims``). Never raises: an unparsable document
 renders the plain heading, which is byte-identical to the pre-057 block.

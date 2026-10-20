@@ -25,7 +25,7 @@ _load_packs()
 # ---------------------------------------------------------------------------
 # Operator-env sandbox (§3.5, 2026-07-16): tests must never read the dev box
 # operator's REAL env files. The first test that built a CLI container ran
-# polyrob.app.bootstrap.load_env(local_mode=True), which read ~/.polyrob/.env (real
+# polyrob.app.bootstrap.load_env(), which read ~/.polyrob/.env (real
 # provider keys / owner binding) and could backfill config/.env.production
 # secrets into os.environ — poisoning every later test (the order-dependent
 # failures: chat_resolver_parity, budget_gate, identity, protected_config_guard).
@@ -334,6 +334,31 @@ def _isolate_path_manager():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_skill_usage_db(tmp_path_factory, monkeypatch):
+    """One skill_usage.db per test (081 WS-4.2). It holds the revision an active
+    tenant skill must match to load, keyed by (skill, user): a shared db let one
+    test's revision verify another test's body. An explicit POLYROB_DATA_DIR (a
+    test that sets one) still wins, exactly as in the product."""
+    try:
+        import modules.skills.skill_usage as _su
+    except Exception:
+        yield
+        return
+    holder = {}
+
+    def _per_test_dir():
+        env = os.getenv("POLYROB_DATA_DIR")
+        if env:
+            return os.path.abspath(env)
+        if "d" not in holder:
+            holder["d"] = str(tmp_path_factory.mktemp("skill_usage"))
+        return holder["d"]
+
+    monkeypatch.setattr(_su, "_default_data_dir", _per_test_dir)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _local_data_home_follows_cwd(monkeypatch):
     """Keep the suite out of the developer's real ``~/.polyrob/data``.
 
@@ -347,6 +372,10 @@ def _local_data_home_follows_cwd(monkeypatch):
         from pathlib import Path as _P
         import core.runtime_paths as _rp
         monkeypatch.setattr(_rp, "_local_default_data_home",
+                            lambda: (_P.cwd() / ".polyrob").resolve())
+        # 080 WS-1: BotConfig.data_dir is effective_data_home(); a non-local
+        # process with no POLYROB_DATA_DIR would otherwise land in ~/.polyrob.
+        monkeypatch.setattr(_rp, "_server_default_data_home",
                             lambda: (_P.cwd() / ".polyrob").resolve())
     except Exception:
         pass
@@ -514,13 +543,27 @@ def _isolated_data_home(tmp_path, tmp_path_factory, monkeypatch):
     except Exception:
         pass
 
-    # -- run safety state and the owner login budget --------------------------
-    refusal_taint = _try_import("core.security.refusal_taint")
-    refusal_taint_store = _try_import("core.security.refusal_taint_store")
-    if refusal_taint_store is not None:
-        monkeypatch.setattr(refusal_taint_store, "path", lambda: tmp_path / "refusal_taint.db")
-    if refusal_taint is not None:
-        refusal_taint.reset_for_tests()
+    # -- the update snapshots the custody file gap reads (085 W1) --------------
+    # A developer whose real data home holds an old `polyrob update` snapshot with
+    # a seed would see every local run_code test refuse. Same escape hatches as
+    # the pause record: an explicit root, a test-set POLYROB_DATA_DIR, or a
+    # test-patched resolve_data_home get the REAL listing.
+    try:
+        import core.runtime_paths as _rp_snap
+        _real_snap_files = _rp_snap.update_snapshot_config_files
+        _real_snap_resolver = _rp_snap.resolve_data_home
+
+        def _isolated_snap_files(root=None):
+            if (root is not None or (os.environ.get("POLYROB_DATA_DIR") or "").strip()
+                    or _rp_snap.resolve_data_home is not _real_snap_resolver):
+                return _real_snap_files(root)
+            return []
+
+        monkeypatch.setattr(_rp_snap, "update_snapshot_config_files", _isolated_snap_files)
+    except Exception:
+        pass
+
+    # -- the owner login budget -------------------------------------------------
     login_limits = _try_import("webview.login_limits")
     if login_limits is not None:
         monkeypatch.setattr(login_limits, "_db_path", lambda: tmp_path / "login_attempts.db")
@@ -576,8 +619,6 @@ def _isolated_data_home(tmp_path, tmp_path_factory, monkeypatch):
     finally:
         if _wallet_factory is not None:
             _wallet_factory.reset_agent_wallet_cache()
-        if refusal_taint is not None:
-            refusal_taint.reset_for_tests()
         _drop_store_singletons()
         if _cards is not None:
             _cards.set_store(None)
@@ -715,7 +756,7 @@ def _restore_container_singleton():
 @pytest.fixture(autouse=True)
 def _isolate_external_skill_roots(monkeypatch):
     """Default external (agentskills.io ecosystem) skill discovery to zero roots for
-    every test (Task 14, ``skill_discovery.user_external_roots``).
+    every test (Task 14, ``scopes.user_external_roots``).
 
     That function reads real host paths (``~/.agents/skills``, ``~/.claude/skills``)
     by default. On a dev machine where either is populated — e.g. a developer using
@@ -728,8 +769,8 @@ def _isolate_external_skill_roots(monkeypatch):
     runs later, inside the test. Fail-open.
     """
     try:
-        from agents.task.agent import skill_discovery
-        monkeypatch.setattr(skill_discovery, "user_external_roots", lambda: [], raising=False)
+        from core.skills import scopes
+        monkeypatch.setattr(scopes, "user_external_roots", lambda: [], raising=False)
     except Exception:
         pass
 

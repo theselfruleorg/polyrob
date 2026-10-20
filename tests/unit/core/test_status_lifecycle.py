@@ -10,6 +10,7 @@ from core.status_types import Section
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "unit")
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)  # a pytest shell is a .scope
     return str(tmp_path / "data")
 
 

@@ -96,6 +96,22 @@ def _primary_agent(orchestrator):
     return None
 
 
+def _agent_history(agent):
+    """The agent's step ledger (``AgentHistoryList``).
+
+    It lives on ``agent.history`` (``construction.py``); ``AgentState`` has NO
+    history field, so the old ``agent.state.history`` read always came back None
+    and the bridge never carried the closing reply (2026-10-13 review C2). The
+    ``state.history`` fallback keeps a duck-typed holder working.
+    """
+    if agent is None:
+        return None
+    history = getattr(agent, "history", None)
+    if history is None:
+        history = getattr(getattr(agent, "state", None), "history", None)
+    return history
+
+
 def _closing_turn_called_done(agent) -> bool:
     """Whether the closing turn ended in a ``done()`` result.
 
@@ -106,7 +122,7 @@ def _closing_turn_called_done(agent) -> bool:
     recorded outcome unchanged.
     """
     try:
-        history = getattr(getattr(agent, "state", None), "history", None)
+        history = _agent_history(agent)
         is_done = getattr(history, "is_done", None)
         return bool(is_done()) if callable(is_done) else False
     except Exception:
@@ -144,7 +160,7 @@ def _final_assistant_text(agent) -> Optional[str]:
     to None rather than raising inside teardown.
     """
     try:
-        history = getattr(getattr(agent, "state", None), "history", None)
+        history = _agent_history(agent)
         final = getattr(history, "final_result", None)
         if not callable(final):
             return None
@@ -159,7 +175,7 @@ def _derive_closing_chat_summary(orchestrator) -> Optional[str]:
 
     Preference order, matching what the cron/goal episode paths record:
 
-    1. The final assistant turn (``agent.state.history.final_result()`` — the
+    1. The final assistant turn (``agent.history.final_result()`` — the
        ``done()`` payload or the last result), i.e. the session's own account of
        itself.
     2. Failing that, the (non-sub-agent) session's
@@ -296,10 +312,11 @@ class SessionCleanupMixin:
                 # tenant (whoever opened it), so without this guard a stranger's
                 # room conversation became a row in the owner's own history, and
                 # `skip_memory` for a room was only ever half true.
-                from agents.task.session_class import may_write_owner_memory
+                from agents.task.session_class import regime_policy
                 if is_public_session(self):
                     self.logger.debug("public (room) session: no episodic write")
-                elif not may_write_owner_memory(self):
+                elif not regime_policy(orchestrator=self,
+                                       session_id=_episode_session_id).owner_memory:
                     # AGT-6 / DATA-9: a session a correspondent drives (created for
                     # one, or tainted by one) is not the owner's history either.
                     self.logger.debug("correspondent-facing session: no episodic write")
@@ -350,6 +367,8 @@ class SessionCleanupMixin:
                             spend_usd=_prov.get("spend_usd", 0.0),
                             steps=_prov.get("steps", 0),
                             artifacts=_prov.get("artifacts", []),
+                            skills_loaded=_prov.get("skills_loaded"),
+                            skills_activation=_prov.get("skills_activation"),
                             thread_key=getattr(self, "_chat_session_key", None),
                             meta={"source": "session_end", "status": status},
                         )
@@ -492,11 +511,13 @@ class SessionCleanupMixin:
                                     # P0-7: push the consolidated summary + any unsynced
                                     # findings to the cross-session store (same path the
                                     # per-step loop uses). Previously discarded at close.
-                                    from agents.task.session_class import may_write_owner_memory
-                                    if _drained and may_write_owner_memory(self):
+                                    from agents.task.session_class import regime_policy
+                                    if _drained and regime_policy(
+                                            orchestrator=self,
+                                            session_id=getattr(self, "session_id", None)).owner_memory:
                                         try:
-                                            from modules.memory.registry import memory_sync_turn
-                                            await memory_sync_turn(
+                                            from modules.memory.registry import SYNC_INSERTED, memory_sync_turn
+                                            _sync = await memory_sync_turn(
                                                 getattr(agent, 'task', '') or '',
                                                 "\n".join(_drained),
                                                 session_id=self.session_id,
@@ -506,6 +527,18 @@ class SessionCleanupMixin:
                                             # it rides the session's memory scope (the
                                             # registry resolves it from session_id) and
                                             # now records the memory_write event it lacked.
+                                            # 2026-10-13 D4: only a real insert is a write.
+                                            from modules.memory.registry import SYNC_FAILED, SYNC_REFUSED_CAP
+                                            if _sync in (SYNC_FAILED, SYNC_REFUSED_CAP):
+                                                # Not stored. The session is closed, so nothing can
+                                                # retry them; the summaries stay only in this
+                                                # session's saved H-MEM file.
+                                                self.logger.warning(
+                                                    f"close-time memory sync not stored ({_sync}): "
+                                                    f"{len(_drained)} finding(s) not in cross-session "
+                                                    f"memory (kept only in the session's H-MEM file)")
+                                            if _sync != SYNC_INSERTED:
+                                                raise RuntimeError(f"close-time memory sync: {_sync}")
                                             from agents.task.telemetry.memory_events import emit_memory_event
                                             from modules.memory.scope import session_scope, telemetry_attrs
                                             emit_memory_event(

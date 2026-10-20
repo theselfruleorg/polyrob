@@ -193,7 +193,7 @@ def test_help_unknown_verb(_columns_80):
     "verb",
     [
         "pause", "resume", "halt", "pending", "asks", "fulfill", "finance",
-        "invoices", "settle", "goals", "cron", "status", "doctor", "missed",
+        "invoices", "settle", "goals", "jobs", "job", "status", "doctor", "missed",
         "config", "model",
     ],
 )

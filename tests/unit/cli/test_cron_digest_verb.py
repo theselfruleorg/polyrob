@@ -1,4 +1,4 @@
-"""`polyrob cron digest` — the public way to schedule the owner daily digest.
+"""`polyrob job digest` (alias `polyrob cron digest`) — the public way to schedule the owner daily digest.
 
 Round-2 review. C4 added a health item that fires when `OWNER_DIGEST_ENABLED`
 is on with no digest job scheduled, and its remedy named
@@ -20,7 +20,7 @@ def _home(tmp_path, monkeypatch):
 
 
 def _run(*args):
-    from cli.commands.cron import cron
+    from cli.commands.cron import job as cron
     return CliRunner().invoke(cron, list(args) + ["--user", "rob"])
 
 
@@ -74,5 +74,5 @@ def test_the_status_remedy_names_this_verb():
     import inspect
     import core.status_snapshot as ss
     src = inspect.getsource(ss._digest_health)
-    assert "polyrob cron digest" in src
+    assert "polyrob job digest" in src
     assert "scripts/" not in src, "a published health item may not name the private tree"

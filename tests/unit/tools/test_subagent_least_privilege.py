@@ -115,7 +115,7 @@ def test_leaf_excludes_delegation_actions():
     # never change tenant config / propose contract rules) even though it is
     # not a delegation verb — see the DELEGATION_ACTION_NAMES docstring.
     assert delegation_exclusions_for_child(LEAF) == frozenset(
-        {"subtask", "parallel_subtasks", "delegate_task", "preferences",
+        {"delegate_task", "preferences",
          "autonomy_control",  # 031: a leaf never touches the owner pause record
          # review F13: a leaf never speaks to the owner
          "owner_ask", "present_choice", "propose_action"}
@@ -206,6 +206,6 @@ async def test_build_child_controller_narrows_and_excludes(monkeypatch):
     assert set(captured["tool_ids"]) == {"filesystem", "browser"}
     # delegation actions (+ `preferences`, owner-UX P2 T2) excluded for the leaf child
     assert set(captured["exclude_actions"]) == {
-        "subtask", "parallel_subtasks", "delegate_task", "preferences", "autonomy_control",
+        "delegate_task", "preferences", "autonomy_control",
         "owner_ask", "present_choice", "propose_action",
     }

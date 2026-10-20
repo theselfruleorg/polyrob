@@ -4,7 +4,7 @@ import pytest
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    for k in ("AUTONOMY_HALT", "TREASURY_ENTRY_PAUSE", "STREAM_SEEDING_PAUSE", "DATA_ROOT"):
+    for k in ("AUTONOMY_HALT", "TREASURY_ENTRY_PAUSE", "DATA_ROOT"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
@@ -23,15 +23,15 @@ def test_legacy_halt_api_writes_the_one_record(home):
     assert still is False and removed == [str(home / PAUSE_FILENAME)]
 
 
-def test_entry_and_stream_pauses_are_scopes(home):
+def test_entry_pause_is_a_scope(home):
     from core.surfaces import owner_admin as oa
     from core.autonomy_control import read_state
     oa.pause_entries(str(home))
-    oa.pause_stream_seeding(str(home))
-    assert set(read_state(str(home)).scopes) == {"trading", "streams"}
-    assert oa.entry_pause_active() and oa.stream_seeding_paused_active() and not oa.halt_active()
+    oa.pause_autonomy(str(home), scopes=("social",))
+    assert set(read_state(str(home)).scopes) == {"trading", "social"}
+    assert oa.entry_pause_active() and not oa.halt_active()
     oa.resume_entries(str(home))
-    assert read_state(str(home)).scopes == ("streams",)
+    assert read_state(str(home)).scopes == ("social",)
 
 
 def test_autonomy_config_predicates_delegate(home):
@@ -43,7 +43,6 @@ def test_autonomy_config_predicates_delegate(home):
     assert AutonomyConfig.autonomy_halted() is False
     oa.pause_autonomy(str(home))
     assert AutonomyConfig.autonomy_halted() is True
-    assert AutonomyConfig.stream_seeding_paused() is True
 
 
 def test_legacy_touch_files_still_work_as_facets(home):
@@ -72,9 +71,9 @@ def test_render_resume_result_states(home, monkeypatch):
     from core.surfaces import owner_admin as oa
     res = oa.resume_autonomy_scopes(str(home))
     assert oa.render_resume_result(res, halt_hint="/pause") == "Autonomy was not paused."
-    oa.pause_autonomy(str(home), scopes=("cron", "streams"))
+    oa.pause_autonomy(str(home), scopes=("cron", "social"))
     res = oa.resume_autonomy_scopes(str(home), scopes=("cron",))
-    assert "still paused: streams" in oa.render_resume_result(res, halt_hint="/pause")
+    assert "still paused: social" in oa.render_resume_result(res, halt_hint="/pause")
     res = oa.resume_autonomy_scopes(str(home))
     assert oa.render_resume_result(res, halt_hint="/pause").startswith("▶ Autonomy RESUMED")
     monkeypatch.setenv("AUTONOMY_HALT", "true")
@@ -93,7 +92,7 @@ def test_render_results_are_seat_aware_and_honest(home, monkeypatch):
     text = oa.render_resume_result(res, halt_hint="/pause")
     assert text.startswith("⚠️ Resume NOT effective") and "full pause" in text
     oa.resume_autonomy_scopes(str(home))
-    monkeypatch.setenv("STREAM_SEEDING_PAUSE", "true")
-    res = oa.resume_autonomy_scopes(str(home), scopes=("streams",))
+    monkeypatch.setenv("TREASURY_ENTRY_PAUSE", "true")
+    res = oa.resume_autonomy_scopes(str(home), scopes=("trading",))
     text = oa.render_resume_result(res, halt_hint="/pause")
-    assert "ENVIRONMENT" in text and "STREAM_SEEDING_PAUSE" in text
+    assert "ENVIRONMENT" in text and "TREASURY_ENTRY_PAUSE" in text

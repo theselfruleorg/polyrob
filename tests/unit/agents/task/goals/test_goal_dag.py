@@ -121,14 +121,6 @@ def test_create_one_bad_dep_among_good_raises_no_goal_no_edges(board):
     assert n == 0
 
 
-def test_create_dep_on_objective_raises_no_goal_no_edges(board):
-    obj = board.create_objective(user_id="u1", title="standing objective")
-    with pytest.raises(ValueError):
-        board.create(user_id="u1", title="dependent", depends_on=[obj.id])
-    titles = {g.title for g in board.list(user_id="u1", limit=1000)}
-    assert titles == {"standing objective"}
-
-
 def test_ready_never_returns_waiting_row(board):
     dep = board.create(user_id="u1", title="prereq")
     waiting_goal = board.create(user_id="u1", title="dependent", depends_on=[dep.id])
@@ -182,17 +174,6 @@ def test_add_dependencies_unknown_id_raises_no_edge(board):
     a = board.create(user_id="u1", title="a")
     with pytest.raises(ValueError):
         board.add_dependencies(a.id, ["ghost"], user_id="u1")
-    assert board.dependencies(a.id) == []
-
-
-def test_add_dependencies_rejects_objective_kind(board):
-    # OBJ_DONE == STATUS_DONE == "done" (same literal) — without a kind guard
-    # an objective could silently "satisfy" a dependency it was never meant
-    # to. Edges are goal->goal by design.
-    a = board.create(user_id="u1", title="a")
-    obj = board.create_objective(user_id="u1", title="standing objective")
-    with pytest.raises(ValueError):
-        board.add_dependencies(a.id, [obj.id], user_id="u1")
     assert board.dependencies(a.id) == []
 
 

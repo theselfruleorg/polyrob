@@ -383,6 +383,14 @@ def test_the_lifi_query_sends_a_lowercase_holder_too():
     assert ROGUE.lower() in seen["url"]
 
 
+def _lifi_swap_data(receiver, out=BASE_WETH, min_amount=990_000):
+    """A known-facet LI.FI swap call (085 W8: an unknown facet refuses)."""
+    from core.wallet import abi, lifi_calldata as L
+    step = (LIFI_DIAMOND, LIFI_DIAMOND, BASE_USDC, out, 2_000_000, b"\x01", False)
+    return abi.encode_call("swapTokensGeneric", L._HEAD + [L._FACETS["swapTokensGeneric"]],
+                           [b"\x00" * 32, "polyrob", "", receiver, min_amount, [step]])
+
+
 def test_a_checksummed_spender_in_the_RESPONSE_is_still_accepted():
     """Lowercasing is outbound-only. What comes back is compared case-
     insensitively against the pin, which it already was."""
@@ -391,7 +399,7 @@ def test_a_checksummed_spender_in_the_RESPONSE_is_still_accepted():
         "tool": "kyberswap",
         "estimate": {"toAmount": "1000000", "toAmountMin": "990000",
                      "approvalAddress": LIFI_DIAMOND},
-        "transactionRequest": {"to": LIFI_DIAMOND, "data": "0xdeadbeef",
+        "transactionRequest": {"to": LIFI_DIAMOND, "data": _lifi_swap_data(ROGUE),
                                "value": "0x0", "chainId": 8453},
     }
     q = LifiRouteProvider(fetch=lambda url: body).quote(

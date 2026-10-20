@@ -1,5 +1,5 @@
 from pathlib import Path
-from agents.task.agent.skill_discovery import discover_skills, DiscoveredSkill
+from core.skills.scopes import discover_skills, DiscoveredSkill
 
 
 def _write(d: Path, name: str, fm: str, body: str = "# body\ncontent"):
@@ -53,12 +53,13 @@ def test_max_count_bounds_directories_visited_not_just_skills_found(tmp_path, mo
 
 
 def test_external_skill_is_catalog_visible_and_loadable(tmp_path, monkeypatch):
-    from agents.task.agent import skill_discovery, skill_manager as sm
+    from agents.task.agent import skill_manager as sm
+    from core.skills import scopes
     ext = tmp_path / ".agents" / "skills" / "widget"
     ext.mkdir(parents=True)
     (ext / "SKILL.md").write_text("---\nname: widget\ndescription: Do widgets.\n---\n# W\nBODY")
-    monkeypatch.setattr(skill_discovery, "user_external_roots", lambda: [tmp_path / ".agents" / "skills"])
-    monkeypatch.setattr(skill_discovery, "trust_project_skills_effective", lambda: False, raising=False)
+    monkeypatch.setattr(scopes, "user_external_roots", lambda: [tmp_path / ".agents" / "skills"])
+    monkeypatch.setattr(scopes, "trust_project_skills_effective", lambda: False, raising=False)
     mgr = sm.SkillManager()
     # max_skills raised past the bundled-library size: this test asserts the
     # MECHANISM (an external skill is discoverable + loadable), and the default

@@ -6,6 +6,7 @@ Provides RESTful endpoints for session management and user messaging.
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
 from pydantic import BaseModel, Field
+from core.config_policy import INTERACTIVE_MAX_STEPS
 import logging
 import os
 import time
@@ -276,7 +277,7 @@ async def send_user_message(
                     logger.info(f"📷 Collected {len(images)} image(s) for vision from {file_path}")
 
         # STEP 3: Create metadata with images (BEFORE starting session)
-        metadata = request.metadata or {}
+        metadata = {**(request.metadata or {}), "typed_text": request.text or ""}  # 085 W3: typed words only
         if image_attachments:
             metadata['image_attachments'] = image_attachments
             logger.info(f"📷 Prepared message with {len(image_attachments)} image(s) for vision")
@@ -613,7 +614,7 @@ async def send_user_message(
                     logger.info(f"📷 Collected {len(images)} image(s) for vision from {file_path} (running session)")
 
             # STEP 3: Add images to metadata and queue message
-            metadata_running = request.metadata or {}
+            metadata_running = {**(request.metadata or {}), "typed_text": request.text or ""}  # 085 W3
             if image_attachments_running:
                 metadata_running['image_attachments'] = image_attachments_running
                 logger.info(f"📷 Prepared message with {len(image_attachments_running)} image(s) for running session")
@@ -762,7 +763,6 @@ async def get_session_status(
 
         # Get internal status
         internal_status = normalize_status_value(session_info.get("status", "unknown"))
-        
         # Convert to user-facing status
         from agents.task.agent.session import get_user_status
         user_status = get_user_status(internal_status)
@@ -809,6 +809,8 @@ async def get_session_status(
             response_data["current_activity"] = get_activity(session_id)
         except Exception:
             response_data["current_activity"] = None
+        from agents.task.runtime.run_outcome import session_stop_reason  # 083 WS-1
+        response_data["stop_reason"] = session_stop_reason(agent, session_id)
 
         return SessionStatusResponse(**response_data)
         
@@ -1042,7 +1044,7 @@ def _capability_defaults(config) -> tuple:
     """Default (provider, model) advertised by /capabilities.
 
     Falls back to the provider's policy default (llm_client_registry.DEFAULT_MODELS,
-    env-overridable via POLYROB_<PROVIDER>_MODEL) — never a hardcoded literal, which
+    or the operator's DEFAULT_MODEL pin) — never a hardcoded literal, which
     is how the deprecated x-ai/grok-4.1-fast kept being advertised after the registry
     had already marked it dead (structural audit T2, 2026-07-16).
     """
@@ -1267,7 +1269,7 @@ async def create_session(
         if not is_development and not is_admin_user and not has_full_access(tier):
             raise HTTPException(
                 status_code=403,
-                detail="Beta access: Task automation requires DEN token ownership or admin-granted access. Join https://t.me/tmachinrobot for access."
+                detail="Task automation requires an access tier that includes it. Ask the operator of this instance for access."
             )
         
         from agents.task.config import TaskSessionConfig
@@ -1304,13 +1306,14 @@ async def create_session(
                 session_config.llm.use_vision = False  # Conservative default for unknown models
                 logger.warning(f"Model '{session_config.llm.model}' not in registry - defaulting to no vision")
 
-        session_config.limits.max_steps = request_body.get("max_steps", 50)
-        session_config.tools = request_body.get("tools", ["browser", "filesystem"])
+        session_config.limits.max_steps = request_body.get("max_steps", INTERACTIVE_MAX_STEPS)
+        from agents.task.tool_defaults import owner_seat_tool_ids  # 081 WS-3.1: the console = an owner seat
+        from api.tenant_tools import tenant_toolset  # 085 A6: a non-owner tenant carries no money tool
+        session_config.tools = tenant_toolset(request_body.get("tools", owner_seat_tool_ids(user_id) or ["browser", "filesystem"]), user_id)
 
         # MCP server selection — a list of tool_ids like ["mcp:anysite", "mcp:user:myserver"]
         mcp_servers = request_body.get("mcp_servers", [])
         if mcp_servers:
-            # Add 'mcp' to tools if not present and we have MCP servers selected
             if "mcp" not in session_config.tools:
                 session_config.tools.append("mcp")
             # Store requested MCP servers in tools_config for the orchestrator

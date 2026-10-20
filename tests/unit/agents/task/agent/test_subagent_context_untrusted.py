@@ -7,9 +7,13 @@ page, an email body, an MCP response. Unframed, an indirect prompt injection
 sitting in a parent result was read by the child as operator instructions —
 and the child is a fresh agent with no memory of where the text came from.
 
-The block now rides `core.security.untrusted_wrap`, AFTER the [:300] truncation
+The block now rides `core.security.untrusted_wrap`, AFTER the truncation
 (so the frame is never the thing that gets cut off). Payload shapes are reused
 from tests/unit/agents/task/agent/core/test_untrusted_wrap.py.
+
+2026-10-13 review D4: the inherited context is no longer the parent's last three
+tool results (often unrelated) but a short DATED brief of the owner's latest ask.
+The framing rules below apply to that brief unchanged.
 """
 import types
 
@@ -29,8 +33,10 @@ class _State:
 
 
 class _Parent:
+    """The text of the first result is the parent's latest ask (its task)."""
     def __init__(self, results):
         self.state = _State(results)
+        self.task = results[0].extracted_content if results else None
 
 
 def _manager(results, workspace_files=None):
@@ -93,8 +99,9 @@ def test_wrapping_happens_after_truncation():
 
     assert out.count('<untrusted_tool_result source=') == 1
     assert out.count('</untrusted_tool_result>') == 1
-    assert "A" * 300 in out
-    assert "A" * 301 not in out
+    cap = SubAgentManager.OWNER_BRIEF_MAX_CHARS
+    assert "A" * cap in out
+    assert "A" * (cap + 1) not in out
 
 
 def test_no_parent_results_is_still_empty():

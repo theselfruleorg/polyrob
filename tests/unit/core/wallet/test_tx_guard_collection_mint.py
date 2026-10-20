@@ -21,7 +21,7 @@ HOLDER = "0x2222222222222222222222222222222222222222"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 ZERO = "0x" + "0" * 40
 IDS = (5, 6, 7)
-PRICE = 42 * 10 ** 15
+PRICE = 33 * 10 ** 15
 
 
 @pytest.fixture(autouse=True)
@@ -90,15 +90,15 @@ def test_a_paid_mint_of_three_is_authorized_and_costs_value_plus_fee():
     d = _authorize(_intent(), _deltas(), price=100.0)
     assert d.allowed is True, d.reason
     # Value plus the signed gas limit, even when simulation consumed less.
-    assert d.amount_usd == pytest.approx((0.126 + 0.0003) * 100, abs=0.001)
+    assert d.amount_usd == pytest.approx((0.099 + 0.0003) * 100, abs=0.001)
 
 
 def test_the_value_counts_against_the_autonomous_ceiling():
-    # at $4000 the mint is ~$504: above the $25 default ceiling -> the owner queue, never
+    # at $4000 the mint is ~$397: above the $25 default ceiling -> the owner queue, never
     # booked as a fee-only NFT op
     d = _authorize(_intent(), _deltas())
     assert d.allowed is False and d.lane == "owner_queue", d.reason
-    assert d.amount_usd == pytest.approx((0.126 + 0.0003) * 4000, abs=0.001)
+    assert d.amount_usd == pytest.approx((0.099 + 0.0003) * 4000, abs=0.001)
 
 
 def test_a_mint_of_one_is_authorized():
@@ -126,7 +126,7 @@ def test_the_entry_pause_and_the_full_pause_hold_a_mint():
 # --- the caps bound it ----------------------------------------------------------
 
 def test_value_plus_fee_above_max_spend_refuses():
-    d = _authorize(_intent(max_spend_usd=500.0), _deltas())
+    d = _authorize(_intent(max_spend_usd=250.0), _deltas())
     assert d.allowed is False and "max_spend_usd" in d.reason
 
 

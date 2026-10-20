@@ -107,22 +107,60 @@ def _config_lines(controller, user_id) -> list:
 	return [scrub_secret_shapes("\n".join(cfg_lines))]
 
 
+async def _detail_lines(controller, user_id, ledger) -> list:
+	"""The gated half (AGENT_STATUS_TOOL): wallet, the two-statement ledger and
+	the resolved config. Each section fails soft and REPORTED."""
+	lines = []
+	# 4) wallet — the agent's own (operator-owned singleton) wallet.
+	#    CR-M07: its balances and addresses are the OWNER's facts; a
+	#    non-owner tenant's turn is told they are withheld (never hidden).
+	try:
+		from core.wallet.authority import owner_refusal
+		_refusal = owner_refusal(user_id)
+		if _refusal:
+			lines.append(f"wallet: withheld ({_refusal})")
+		else:
+			lines.extend(await _wallet_lines())
+	except Exception as e:
+		lines.append(_unavail("wallet", e))
+	# 5) the detailed two-statement ledger (never summed)
+	try:
+		if isinstance(ledger, BaseException):
+			raise ledger
+		from modules.credits.unified_ledger import format_ledger
+		lines.append(format_ledger(ledger))
+	except Exception as e:
+		lines.append(_unavail("ledger", e))
+	# 6) resolved config / prefs
+	try:
+		lines.extend(_config_lines(controller, user_id))
+	except Exception as e:
+		lines.append(_unavail("config", e))
+	return lines
+
+
 def register_agent_status_action(controller) -> None:
-	"""Register the read-only `agent_status` introspection tool (I-6), gated
+	"""Register the read-only `agent_status` introspection tool (I-6).
+
+	080 WS-5 (D5): the read-only part — the status snapshot (health, work,
+	loops/next), steps, tools, context, release notes — is registered on EVERY
+	posture. The wallet, ledger and resolved-config detail stay gated
 	AGENT_STATUS_TOOL (default false; ON under POLYROB_LOCAL)."""
 	from core.config_policy import AutonomyConfig
-	if not AutonomyConfig.agent_status_tool():
-		return
+	detail = AutonomyConfig.agent_status_tool()
 
 	class AgentStatusAction(BaseModel):
 		release_notes: str = ""
 
+	_money = ("tools, context usage, and wallet/ledger balance" if detail
+			  else "tools and context usage")
 	@controller.registry.action(
 		"Report your own runtime state: health (credit sentinel, open asks, blocked "
-		"goals, suppressed owner messages, dead loops), steps used/remaining, active "
-		"tools, context usage, and wallet/ledger balance. Read-only. Set release_notes "
-		"to 'latest' or a version ('1.2.0', 'unreleased') to read instead what shipped "
-		"in that release, from the CHANGELOG.md deployed with your code.",
+		"goals, suppressed owner messages, dead loops), what runs next, steps "
+		f"used (of the cap), active {_money}. Read-only. Set release_notes to "
+		"'unreleased' (what changed since the last release), 'latest' or a version "
+		"('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with "
+		"your code.",
 		param_model=AgentStatusAction,
 	)
 	async def agent_status(params: AgentStatusAction, execution_context=None) -> ActionResult:
@@ -139,10 +177,12 @@ def register_agent_status_action(controller) -> None:
 		#    (the ledger is awaited natively here and handed to the snapshot so
 		#    both views are built from ONE read; balances: display surface).
 		ledger = None
-		if user_id:
+		if not detail:
+			pass  # money detail gated: the snapshot below skips the money read
+		elif user_id:
 			try:
 				from modules.credits.unified_ledger import build_ledger
-				ledger = await build_ledger(user_id, include_balances=True)
+				ledger = await build_ledger(user_id, days=1, include_balances=True)
 			except Exception as e:
 				ledger = e
 		else:
@@ -157,7 +197,8 @@ def register_agent_status_action(controller) -> None:
 				build_status_snapshot, str(user_id or ""),
 				data_dir=getattr(_cfg, 'data_dir', None),
 				container=getattr(controller, 'container', None),
-				session_id=getattr(orch, 'session_id', None), ledger=ledger)
+				session_id=getattr(orch, 'session_id', None), ledger=ledger,
+				include_money=detail)
 			lines.extend(render_status_lines(snap, prefix="- "))
 		except Exception as e:
 			lines.append(_unavail("status snapshot", e))
@@ -193,31 +234,11 @@ def register_agent_status_action(controller) -> None:
 				lines.append("context_tokens: unavailable (no message manager)")
 		except Exception as e:
 			lines.append(_unavail("context_tokens", e))
-		# 4) wallet — the agent's own (operator-owned singleton) wallet.
-		#    CR-M07: its balances and addresses are the OWNER's facts; a
-		#    non-owner tenant's turn is told they are withheld (never hidden).
-		try:
-			from core.wallet.authority import owner_refusal
-			_refusal = owner_refusal(user_id)
-			if _refusal:
-				lines.append(f"wallet: withheld ({_refusal})")
-			else:
-				lines.extend(await _wallet_lines())
-		except Exception as e:
-			lines.append(_unavail("wallet", e))
-		# 5) the detailed two-statement ledger (never summed)
-		try:
-			if isinstance(ledger, BaseException):
-				raise ledger
-			from modules.credits.unified_ledger import format_ledger
-			lines.append(format_ledger(ledger))
-		except Exception as e:
-			lines.append(_unavail("ledger", e))
-		# 6) resolved config / prefs
-		try:
-			lines.extend(_config_lines(controller, user_id))
-		except Exception as e:
-			lines.append(_unavail("config", e))
+		if detail:
+			lines.extend(await _detail_lines(controller, user_id, ledger))
+		else:
+			lines.append("wallet, ledger, config: withheld on this posture "
+						 "(AGENT_STATUS_TOOL off) — say so; do not guess them")
 		# 7) capabilities — ground-truth tool availability (S1 catalog)
 		try:
 			is_leaf = getattr(execution_context, 'role', None) == 'leaf'

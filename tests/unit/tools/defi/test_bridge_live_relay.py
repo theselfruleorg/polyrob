@@ -18,8 +18,8 @@ pytestmark = pytest.mark.skipif(
     reason="Live network test; set RUN_LIVE_RELAY_TESTS=1 to run.")
 
 # Public addresses only — no secret is needed to QUOTE.
-EVM = "0xcAda546f6A6ddDE31B71aB21eF63d3EBF09Fa553"
-SOL = "BrsPwATRZcb2PWsEZba9Bh1mwcxU6M7R64nPgRneCpmL"
+EVM = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+SOL = "2cyLycfUPcu8Zhmdpzf13vQHEZcoWrRkiQGFHvJ5xveW"
 
 
 def test_the_live_route_still_parses_and_yields_a_positive_floor():

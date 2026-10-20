@@ -1,7 +1,7 @@
 """2026-08-17: telegram outbound-target normalization + bot-recipient guard.
 
-Live journal failures (2026-08-15..16): the agent sent to ``t.me/thepublicden``
-and bare ``thepublicden`` (Bad Request: chat not found — the Bot API takes
+Live journal failures (2026-08-15..16): the agent sent to ``t.me/examplegroup``
+and bare ``examplegroup`` (Bad Request: chat not found — the Bot API takes
 ``@username`` or a numeric id, never a link), and to a ``…bot`` handle
 (Forbidden: bots can't send messages to bots — structurally impossible).
 """
@@ -12,15 +12,15 @@ from core.surfaces.outbound_target import is_bot_username, normalize_surface_tar
 
 class TestNormalizeSurfaceTarget:
     def test_tme_link_becomes_handle(self):
-        assert normalize_surface_target("telegram", "t.me/thepublicden") == "@thepublicden"
-        assert normalize_surface_target("telegram", "https://t.me/thepublicden") == "@thepublicden"
-        assert normalize_surface_target("telegram", "https://www.telegram.me/thepublicden/") == "@thepublicden"
+        assert normalize_surface_target("telegram", "t.me/examplegroup") == "@examplegroup"
+        assert normalize_surface_target("telegram", "https://t.me/examplegroup") == "@examplegroup"
+        assert normalize_surface_target("telegram", "https://www.telegram.me/examplegroup/") == "@examplegroup"
 
     def test_bare_username_gets_at_prefix(self):
-        assert normalize_surface_target("telegram", "thepublicden") == "@thepublicden"
+        assert normalize_surface_target("telegram", "examplegroup") == "@examplegroup"
 
     def test_numeric_ids_and_handles_pass_through(self):
-        assert normalize_surface_target("telegram", "28436760") == "28436760"
+        assert normalize_surface_target("telegram", "100000001") == "100000001"
         assert normalize_surface_target("telegram", "-1001234567890") == "-1001234567890"
         assert normalize_surface_target("telegram", "@already") == "@already"
 
@@ -31,22 +31,22 @@ class TestNormalizeSurfaceTarget:
             "telegram", "https://t.me/joinchat/AbCdEf123").startswith("https://t.me/joinchat")
 
     def test_other_surfaces_untouched(self):
-        assert normalize_surface_target("email", "t.me/thepublicden") == "t.me/thepublicden"
+        assert normalize_surface_target("email", "t.me/examplegroup") == "t.me/examplegroup"
         assert normalize_surface_target("email", "someone@example.com") == "someone@example.com"
 
     def test_non_string_passes_through(self):
-        assert normalize_surface_target("telegram", 28436760) == 28436760
+        assert normalize_surface_target("telegram", 100000001) == 100000001
 
 
 class TestIsBotUsername:
     def test_bot_handle_detected(self):
-        assert is_bot_username("telegram", "@tmachinrobot") is True
+        assert is_bot_username("telegram", "@examplebot") is True
         assert is_bot_username("telegram", "@SomeOtherBOT") is True
 
     def test_non_bot_targets_pass(self):
-        assert is_bot_username("telegram", "@thepublicden") is False
+        assert is_bot_username("telegram", "@examplegroup") is False
         assert is_bot_username("telegram", "-1001234567890") is False
-        assert is_bot_username("telegram", "28436760") is False
+        assert is_bot_username("telegram", "100000001") is False
         # bare (un-normalized) strings are not judged — normalization runs first
         assert is_bot_username("telegram", "somebot") is False
         assert is_bot_username("email", "bots@bot") is False
@@ -78,14 +78,14 @@ class TestPerformMessageSendWiring:
         # The owner allowlisted the RAW form the agent types; the API call
         # still goes out '@'-shaped.
         result = asyncio.run(perform_message_send(
-            router=router, allowlist=self._Allowlist({"t.me/thepublicden"}),
+            router=router, allowlist=self._Allowlist({"t.me/examplegroup"}),
             owner_targets={}, user_id="rob",
-            surface="telegram", target="t.me/thepublicden", text="hi"))
+            surface="telegram", target="t.me/examplegroup", text="hi"))
         assert result["success"] is True
         assert result["tier"] == "allowlisted"
-        assert result["target"] == "t.me/thepublicden"
-        assert result["sent_as"] == "@thepublicden"
-        assert router.sent == ["@thepublicden"]
+        assert result["target"] == "t.me/examplegroup"
+        assert result["sent_as"] == "@examplegroup"
+        assert router.sent == ["@examplegroup"]
 
     def test_bot_recipient_refused_before_send(self):
         from tools.controller.message_send import perform_message_send

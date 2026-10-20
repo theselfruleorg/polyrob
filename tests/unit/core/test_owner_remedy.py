@@ -90,12 +90,27 @@ class TestRemedyTable:
                     assert R.unknown_owner_actions(text) == [], (
                         f"{blocker} names a non-existent action: {text!r}")
 
-    def test_the_over_cap_blocker_does_not_pretend_chat_can_fix_it(self):
-        """Raising a wallet ceiling from chat would let a compromised chat
-        surface raise a spend limit. It is owner-side on purpose."""
+    def test_the_over_cap_remedy_is_the_owner_approved_config_path(self):
+        """079 D3: the owner raises the per-tx cap from chat — `/config set`
+        only proposes it; it binds after the owner approves it in /pending.
+        The words are ONE text, shared with the refusal."""
+        from core.money import PER_TX_CAP_REMEDY
         r = R.BLOCKER_REMEDIES["over_cap"]
-        assert not r.telegram
-        assert r.owner_side
+        assert r.telegram == PER_TX_CAP_REMEDY
+        assert "/config set budget.wallet_per_tx_usd" in r.telegram
+        assert "/pending" in r.telegram
+        assert r.owner_side      # the daily and signer caps stay on the server
+
+    def test_the_per_tx_refusal_names_the_cap_and_its_remedy(self):
+        from core.money import PER_TX_CAP_REMEDY
+        from core.money.ledger import SpendLedger
+        d = SpendLedger(max_per_tx_usd=200.0).check(venue="relay", amount_usd=329.0,
+                                                    idempotency_key=None)
+        assert not d.allowed and d.cap_exceeded
+        assert "catastrophic" not in d.reason
+        assert "per-transaction cap $200.00" in d.reason
+        assert "binds the owner's own verbs too" in d.reason
+        assert PER_TX_CAP_REMEDY in d.reason
 
 
 class TestEscalationScrubbing:

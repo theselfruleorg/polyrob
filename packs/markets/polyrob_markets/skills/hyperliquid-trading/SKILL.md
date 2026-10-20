@@ -3,9 +3,11 @@ name: hyperliquid-trading
 description: 'GATED: place/modify/cancel Hyperliquid orders and set leverage. Owner-only, read-first, testnet-first, exposure cap + >$500 gate; references crypto-trading-safety'
 license: MIT
 metadata:
+  polyrob-when: 'Placing or cancelling Hyperliquid orders'
   polyrob-priority: '5'
   polyrob-auto-activate: 'false'
-  polyrob-triggers: '{"action_names":["hyperliquid_place_limit_order","hyperliquid_place_market_order","hyperliquid_update_leverage","hyperliquid_cancel_order","hyperliquid_approve_agent"],"keywords":["place hyperliquid order","hyperliquid trade","update leverage","approve agent","hyperliquid limit order","hyperliquid market order"],"task_patterns":["(place|buy|sell|cancel).*hyperliquid","update.*leverage","approve.*agent","hyperliquid.*(limit|market).*order"],"tool_ids":["hyperliquid"]}'
+  polyrob-triggers: '{"tool_ids":["hyperliquid"]}'
+  polyrob-requires: '["crypto-trading-safety"]'
   polyrob-version: '2'
 ---
 # Hyperliquid Trading

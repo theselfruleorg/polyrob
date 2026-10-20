@@ -12,9 +12,6 @@ pre-hooks run in registration order, the FIRST refusal answers, and a
 ORDER = (
     ("denylist", "controller", "pre", "closed"),
     ("wallet_authority", "controller", "pre", "closed"),
-    ("financial_claim", "controller", "pre", "closed"),
-    ("refusal_taint_gate", "controller", "pre", "closed"),
-    ("refusal_taint_record", "controller", "post", "open"),
     ("effect_gate", "controller", "pre", "closed"),
     ("effect_record", "controller", "post", "open"),
     ("command_guard", "controller", "pre", "closed"),
@@ -28,8 +25,7 @@ ORDER = (
 #: approval stage: the owner at an authenticated seat is the approver; no
 #: wallet-authority stage: the seat itself requires the bound owner for every
 #: non-read verb (``core.money.authority.network_verb_refusal``).
-SEAT_STAGES = ("denylist", "refusal_taint_gate", "effect_gate", "effect_record",
-               "refusal_taint_record")
+SEAT_STAGES = ("denylist", "effect_gate", "effect_record")
 
 
 def install_session_gates(controller, *, correspondent_hook, room_hook) -> None:

@@ -1,0 +1,46 @@
+{
+  "function": {
+    "description": "Bridge value between chains through Relay: Solana -> EVM, EVM -> EVM and EVM -> Solana. Origin: the native asset or the chain's pinned USDC (token_in='usdc'); destination: native or a pinned weth/usdc. CAPS, NOT TAPS: under DEFI_AUTONOMOUS_MAX_USD it runs and reports; above it the owner queue decides. A delegated sub-agent never bridges. Two-phase: the send is asserted before broadcast, and the ARRIVAL is PROVEN by measuring the destination balance — a provider saying 'success' over an unmoved balance is not believed. Not-arrived-by-deadline is in_flight, never failure: a re-sent bridge pays twice. dry_run defaults to TRUE.",
+    "name": "defi_trade_bridge",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "description": "Human amount of the ORIGIN asset (`token_in`): SOL/ETH for native, dollars for usdc.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) quotes, asserts and simulates without broadcasting.",
+          "type": "boolean"
+        },
+        "from_chain": {
+          "description": "Origin chain NAME: 'solana', or a registry name (base, robinhood, …).",
+          "type": "string"
+        },
+        "to_chain": {
+          "description": "Destination chain NAME.",
+          "type": "string"
+        },
+        "token_in": {
+          "default": "native",
+          "description": "ORIGIN asset: 'native' (default) or 'usdc' = the origin chain's PINNED USDC. On an EVM chain usdc adds an exact-amount approve to the pinned Relay depository. Any other token is refused.",
+          "type": "string"
+        },
+        "token_out": {
+          "default": "native",
+          "description": "DESTINATION asset: 'native' (default), or a token PINNED in the chain registry for the destination chain — 'weth' or 'usdc' where that chain has one. An arbitrary address is refused: every pinned address was verified on-chain, a supplied one was not. On Robinhood, native ETH is both gas AND the asset that routes straight into a position, so 'native' is usually the better answer than 'weth'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_chain",
+        "to_chain",
+        "amount"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

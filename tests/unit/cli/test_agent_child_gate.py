@@ -29,7 +29,7 @@ READ_VERBS = [
     "doctor", "version", "--help", "-V", "wallet", "wallet --json", "wallet export --help",
     "owner pair pending", "owner groups list", "config get A", "config show",
     "approvals list", "goals list", "model list", "session costs abc", "skills list",
-    "tools list", "owner memory scopes list", "rails", "service", "finance", "owner",
+    "tools list", "owner memory scopes list", "service", "finance", "owner",
     "auth list",
 ]
 

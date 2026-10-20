@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
+from core.surfaces.cards import is_go_word
+
 logger = logging.getLogger(__name__)
 
 #: The most USD of FEE a chat-launched claim authorises. A claim SENDS nothing,
@@ -54,7 +56,7 @@ async def claim_reply(user_id: Optional[str], args: List[str]) -> str:
         return USAGE
 
     execute = False
-    if tokens[-1].lower() in ("go", "execute", "confirm"):
+    if is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
     if not tokens:
@@ -84,7 +86,8 @@ async def claim_reply(user_id: Optional[str], args: List[str]) -> str:
                 "bug — do NOT retry until it is understood; assume nothing "
                 "about where the fees are.")
     if not execute:
-        body += f"\n\nAdd `go` to claim it: /claim {token} go"
+        from core.surfaces.cards import with_go_hint
+        body = with_go_hint(body, f"\n\nAdd `go` to claim it: /claim {token} go")
     return body
 
 

@@ -97,6 +97,7 @@ from core.config_policy.capability_toggles import (  # noqa: F401
     reflection_llm_enabled_default,
     resolved_memory_backend,
     run_budget_usd,
+    autonomous_run_budget_usd,
     task_personality_block_enabled,
     ticker_idle_backoff_enabled,
     ticker_idle_backoff_max_multiplier,

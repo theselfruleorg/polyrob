@@ -262,3 +262,27 @@ def test_tool_addition_announcement_is_appended_to_the_prefix():
 	         for m in after]
 	assert any("<tool-addition>\nlate_echo\nlate_ping\n</tool-addition>" in t
 	           for t in texts)
+
+
+def test_two_runs_of_one_job_share_the_prefix_through_the_catalogs():
+	"""081 WS-3.3: each cron/goal run is a NEW session, so the cross-session
+	prefix is what a provider cache can reuse. Two runs that differ only in the
+	workspace path and the per-run task text share every foundation row up to
+	and including the tool catalog."""
+	def run(n: int):
+		mm = MessageManager(
+			llm=_FakeChatModel(), task=f"Daily job. <previous-runs>run {n}</previous-runs>",
+			action_descriptions="a", system_prompt_class=SystemPrompt,
+			max_input_tokens=128000, session_id=f"cron-run-{n}", use_native_tools=True)
+		mm.set_runtime_identity("m", "p")
+		mm.set_environment_message("<environment>the same install</environment>")
+		mm.set_self_context_message("soul")
+		mm.set_skill_message("skills")
+		mm.set_tool_catalog_message("catalog")
+		mm.set_workspace_message(f"Workspace (absolute): /data/sessions/u/cron-run-{n}/workspace")
+		return serialize_messages(mm.get_messages_for_llm(consume_ephemeral=False))
+
+	a, b = run(1), run(2)
+	shared = common_prefix_len(a, b)
+	assert shared == len(a) - 2, (shared, len(a))  # all but workspace + task
+	assert "catalog" in a[shared - 1]

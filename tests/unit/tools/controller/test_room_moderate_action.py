@@ -1,7 +1,7 @@
 """The `room_moderate` action — the agent can mute/ban/delete in its rooms.
 
 Owner rail 2026-10-05: Rob told the owner "I can't ban — I have no moderation
-tool" while a spammer posted in The Public Den. The adapter existed (the owner's
+tool" while a spammer posted in The Lobby. The adapter existed (the owner's
 own /mute /ban use `room_moderator`); the agent had no seat on it.
 """
 import time
@@ -85,7 +85,7 @@ def home(tmp_path, monkeypatch):
                         lambda surface, addr: str(addr) == "1")
     from core.surfaces.group_allowlist import GroupAllowlist
     GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow(
-        "telegram", CHAT, "The Public Den")
+        "telegram", CHAT, "The Lobby")
     from core.surfaces.group_ledger import GroupLedger, LedgerRow
     ledger = GroupLedger(str(tmp_path / "surfaces.db"))
     now = time.time()
@@ -118,7 +118,7 @@ def _fn(c):
 async def test_ban_by_name_with_cleanup(home):
     bot = _Bot()
     fn, M = _fn(_Controller(home, bot))
-    res = await fn(M(room="Den", action="ban", target="mr_zain_kols",
+    res = await fn(M(room="Lobby", action="ban", target="mr_zain_kols",
                      delete_messages=True, reason="promo spam"))
     out = res.extracted_content
     assert "banned for 30d" in out, out
@@ -270,11 +270,11 @@ async def test_a_deleted_line_is_marked_and_not_deleted_twice(home):
     from core.surfaces.group_ledger import GroupLedger
     bot = _Bot()
     fn, M = _fn(_Controller(home, bot))
-    await fn(M(room="Den", action="delete", target="555"))
+    await fn(M(room="Lobby", action="delete", target="555"))
     kinds = {r.message_id: r.kind for r in GroupLedger(str(home / "surfaces.db")).tail("telegram", CHAT)}
     assert kinds["2"] == kinds["3"] == "deleted"
     bot.calls.clear()
-    out = (await fn(M(room="Den", action="delete", target="555"))).extracted_content
+    out = (await fn(M(room="Lobby", action="delete", target="555"))).extracted_content
     assert "nothing to delete" in out, out
     assert not [op for op, _ in bot.calls if op == "delete"]
 
@@ -287,7 +287,7 @@ async def test_not_found_on_delete_still_marks_the_line_handled(home):
         async def delete_message(self, **kw):
             raise RuntimeError("Bad Request: message to delete not found")
     fn, M = _fn(_Controller(home, _GoneBot()))
-    await fn(M(room="Den", action="delete", message_ids=["2"]))
+    await fn(M(room="Lobby", action="delete", message_ids=["2"]))
     kinds = {r.message_id: r.kind for r in GroupLedger(str(home / "surfaces.db")).tail("telegram", CHAT)}
     assert kinds["2"] == "deleted"
 
@@ -304,18 +304,17 @@ def test_room_read_flags_a_deleted_line():
 
 # --- CHAT-5: whose decision a moderation is ---------------------------------
 
-def _autonomous(monkeypatch, sid, job_id, task, agent_authored=False):
+def _autonomous(monkeypatch, sid, job_id, task):
     from core import autonomy_marker as am
     am.mark_autonomous(sid, cron_job_id=job_id)
-    if not agent_authored:
-        am.note_owner_job(job_id, task)
+    am.note_job(job_id, task)
     return SimpleNamespace(user_id="local", role="orchestrator", is_sub_agent=False,
                            metadata={}, session_id=sid)
 
 
 @pytest.mark.asyncio
-async def test_standing_owner_job_for_this_room_may_moderate(home, monkeypatch):
-    """The live DEN ENGAGEMENT cron: an owner-authored job naming the room."""
+async def test_standing_job_for_this_room_may_moderate(home, monkeypatch):
+    """The live DEN ENGAGEMENT cron: a standing job naming the room."""
     bot = _Bot()
     fn, M = _fn(_Controller(home, bot))
     ctx = _autonomous(monkeypatch, "cron-den-1", "job-den",
@@ -326,71 +325,25 @@ async def test_standing_owner_job_for_this_room_may_moderate(home, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_authored_or_other_room_job_may_not_moderate(home, monkeypatch):
+async def test_a_job_for_another_room_may_not_moderate(home, monkeypatch):
     bot = _Bot()
     fn, M = _fn(_Controller(home, bot))
-    ctx = _autonomous(monkeypatch, "cron-x-1", "job-agent", f"moderate {CHAT}",
-                      agent_authored=True)
-    out = (await fn(M(room=CHAT, action="ban", target="555"),
-                    execution_context=ctx)).extracted_content
-    assert "standing owner-authored job" in out and not bot.calls
     ctx = _autonomous(monkeypatch, "cron-y-1", "job-other", "moderate -100999")
     out = (await fn(M(room=CHAT, action="ban", target="555"),
                     execution_context=ctx)).extracted_content
-    assert "standing owner-authored job" in out and not bot.calls
-
-
-@pytest.mark.asyncio
-async def test_tainted_owner_turn_needs_the_owners_tap(home, monkeypatch):
-    """A member's line read through room_read must not steer a ban."""
-    bot = _Bot()
-    fn, M = _fn(_Controller(home, bot))
-    asked = []
-
-    class _Queue:
-        decides_as_owner = True
-
-        def __init__(self, answer):
-            self.answer = answer
-
-        async def request(self, name, params, ctx):
-            asked.append((name, params.get("action")))
-            return self.answer
-
-    import tools.controller.approval as approval
-    answer = {"v": False}
-    monkeypatch.setattr(approval, "get_approval_provider_or_deny",
-                        lambda name, **k: _Queue(answer["v"]))
-    ctx = SimpleNamespace(user_id="local", role="orchestrator", is_sub_agent=False,
-                          metadata={"untrusted_read": True}, session_id="owner-room-review")
-    out = (await fn(M(room=CHAT, action="ban", target="555"),
-                    execution_context=ctx)).extracted_content
-    assert "not approved" in out and not bot.calls
-    answer["v"] = True
-    out = (await fn(M(room=CHAT, action="ban", target="555"),
-                    execution_context=ctx)).extracted_content
-    assert "banned" in out
-    assert asked == [("room_moderate", "ban"), ("room_moderate", "ban")]
+    assert "standing job or goal" in out and not bot.calls
 
 
 @pytest.mark.asyncio
 async def test_standing_owner_job_may_name_the_room_by_its_title(home, monkeypatch):
-    """The owner writes "moderate The Public Den", not the chat id. The hourly
-    den-engagement run reads room text (tainted) and then bans a spammer."""
+    """The owner writes "moderate The Lobby", not the chat id. The hourly
+    den-engagement run reads room text and then bans a spammer."""
     import core.surfaces.room_label as rl
-    monkeypatch.setattr(rl, "room_name", lambda row, pol=None: "The Public Den")
+    monkeypatch.setattr(rl, "room_name", lambda row, pol=None: "The Lobby")
     bot = _Bot()
     fn, M = _fn(_Controller(home, bot))
     ctx = _autonomous(monkeypatch, "cron-den-2", "job-den-2",
-                      "Hourly: engage and moderate the public den; ban spam.")
-    ctx.metadata["untrusted_read"] = True
+                      "Hourly: engage and moderate the lobby; ban spam.")
     out = (await fn(M(room=CHAT, action="ban", target="555"),
                     execution_context=ctx)).extracted_content
     assert "banned" in out, out
-    # An agent-authored job naming the same title still may not.
-    ctx = _autonomous(monkeypatch, "cron-den-3", "job-den-3",
-                      "moderate The Public Den", agent_authored=True)
-    bot.calls.clear()
-    out = (await fn(M(room=CHAT, action="ban", target="555"),
-                    execution_context=ctx)).extracted_content
-    assert "standing owner-authored job" in out and not bot.calls

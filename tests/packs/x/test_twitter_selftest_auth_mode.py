@@ -91,7 +91,7 @@ async def test_the_probe_passes_the_mode_it_chose():
 
     async def _make_request(func, endpoint_type, **kwargs):
         calls.update(endpoint_type=endpoint_type, **kwargs)
-        return type("R", (), {"data": {"username": "tmachinrobot"}})()
+        return type("R", (), {"data": {"username": "examplebot"}})()
 
     tool._make_request = _make_request
     tool.client = type("C", (), {"get_me": lambda *a, **k: None})()

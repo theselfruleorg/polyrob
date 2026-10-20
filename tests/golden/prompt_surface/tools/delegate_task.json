@@ -1,0 +1,102 @@
+{
+  "function": {
+    "description": "Delegate work to sub-agent(s): one focused \"goal\", or 2-5 parallel \"tasks\". Expensive. Synchronous by default (blocks this turn until done). Set background=true (goal only) to run it detached and get the result as a new message later — durable across the turn but NOT across restart (use the scheduler for durable scheduled work). Set \"model\" (and optionally \"provider\") to run the sub-agent on a different model than yours — e.g. a cheaper/faster model for a simple task; omit to inherit your model. With \"tasks\", each task can set its own \"model\", falling back to the top-level \"model\" if unset. Not supported together with background=true.",
+    "name": "delegate_task",
+    "parameters": {
+      "$defs": {
+        "SubtaskAction": {
+          "additionalProperties": false,
+          "description": "Delegate a complex, independent subtask to a sub-agent.\n\n⚠️ WARNING: Sub-agents are EXPENSIVE (10-60+ API calls each).\n\nONLY use when ALL conditions are met:\n- Task is truly independent (no shared state needed)\n- Task requires 10+ steps of focused work\n- Task description is detailed (>80 characters)\n- Time savings outweigh context loss\n\nDO NOT use for simple tasks like:\n- File operations (read, write, save)\n- Single API calls or searches\n- Tasks completable in <5 steps\n\nThe sub-agent runs to completion and returns structured output including\nextracted data, files created, and usage statistics.",
+          "properties": {
+            "model": {
+              "default": null,
+              "description": "Optional model for this sub-agent (e.g. 'claude-haiku-4-5' or an OpenRouter slug). Omit to inherit the parent's model (or the delegate_task-level model when used inside 'tasks').",
+              "nullable": true,
+              "title": "Model",
+              "type": "string"
+            },
+            "profile": {
+              "default": "executor",
+              "description": "Sub-agent profile: 'executor' (default), or — when WORKERS_ENABLED is on — the id of an APPROVED worker (worker_manage action='list'); an unknown or pending worker is then refused. With WORKERS_ENABLED off, any value runs as executor.",
+              "title": "Profile",
+              "type": "string"
+            },
+            "provider": {
+              "default": null,
+              "description": "Optional provider for THIS task's 'model'; omit to auto-detect from the model name. Requires 'model' — a provider set on a task without its own 'model' is rejected (the top-level 'model' is used, so a task-level provider without a task-level model is discarded).",
+              "nullable": true,
+              "title": "Provider",
+              "type": "string"
+            },
+            "task": {
+              "description": "Detailed subtask description (at least 20 chars). Include all context the sub-agent needs.",
+              "minLength": 20,
+              "title": "Task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task"
+          ],
+          "title": "SubtaskAction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Delegate work to one or more sub-agents (the unified Reference-style surface).\n\nProvide EXACTLY ONE of:\n- ``goal``: a single focused goal handed to one sub-agent, or\n- ``tasks``: 2-5 independent subtasks run in parallel.\n\n⚠️ Sub-agents are EXPENSIVE (10-60+ API calls each). Only delegate genuinely\nindependent, multi-step work.\n\nBy default the call is SYNCHRONOUS — it blocks the current turn until the\nchild finishes. Set ``background=true`` (goal shape only) to dispatch the child\ndetached: you get a delegation_id immediately and keep working; the result\narrives as a new message when it finishes. Background delegation is durable\nACROSS THE TURN but NOT across a process restart — for long-running or scheduled\ndurable work use the scheduler (cron), not background delegation.\n\n``role``: every spawned sub-agent runs as a leaf today (it cannot delegate\nfurther); 'orchestrator' is accepted for compatibility and changes nothing.",
+      "properties": {
+        "background": {
+          "default": false,
+          "description": "If true, dispatch a single 'goal' in the BACKGROUND: return immediately with a delegation_id and keep working; the result arrives as a new message when the task finishes. Durable across the turn (NOT across restart — use the scheduler for that). Only valid with 'goal' (not 'tasks'). NOT supported together with 'model' in v1 (background delegation always inherits the parent's model).",
+          "type": "boolean"
+        },
+        "goal": {
+          "default": null,
+          "description": "Single delegated goal (at least 20 chars). Use this OR 'tasks'.",
+          "minLength": 20,
+          "nullable": true,
+          "type": "string"
+        },
+        "model": {
+          "default": null,
+          "description": "Optional model for the sub-agent (e.g. 'claude-haiku-4-5' or an OpenRouter slug). Omit to inherit the parent's model. With 'tasks', this is the fallback for any task that doesn't set its own 'model'. Not supported with background=true.",
+          "nullable": true,
+          "type": "string"
+        },
+        "profile": {
+          "default": "executor",
+          "description": "Sub-agent profile when 'goal' is used: 'executor' (default), or — when WORKERS_ENABLED is on — the id of an APPROVED worker (worker_manage action='list'); an unknown or pending worker is then refused. With WORKERS_ENABLED off, any value runs as executor.",
+          "type": "string"
+        },
+        "provider": {
+          "default": null,
+          "description": "Optional provider for the top-level 'model'; omit to auto-detect from the model name. Requires 'model' — a provider without a model is rejected (it would otherwise be silently discarded).",
+          "nullable": true,
+          "type": "string"
+        },
+        "role": {
+          "default": "leaf",
+          "description": "Accepted for compatibility: every spawned sub-agent runs as a leaf today (it cannot delegate further), so 'orchestrator' changes nothing.",
+          "enum": [
+            "leaf",
+            "orchestrator"
+          ],
+          "type": "string"
+        },
+        "tasks": {
+          "default": null,
+          "description": "2-5 independent subtasks to run in parallel. Use this OR 'goal'.",
+          "items": {
+            "$ref": "#/$defs/SubtaskAction"
+          },
+          "maxItems": 5,
+          "minItems": 2,
+          "nullable": true,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

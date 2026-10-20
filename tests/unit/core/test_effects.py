@@ -43,7 +43,7 @@ def test_explicit_rows_report_action_confidence():
 
 
 def test_money_ceiling_wins_on_a_multi_ceiling_tool():
-    # x402_pay carries writes_money + writes_network; an unlisted verb is money.
+    # x402_pay carries money + writes_network; an unlisted verb is money.
     assert classify_effect("x402_pay", "x402_pay_new_verb").effect == "money"
 
 

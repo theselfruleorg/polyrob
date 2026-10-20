@@ -143,6 +143,15 @@ def _llm_identity(llm: Any, response: Any = None) -> tuple[str, str]:
     return str(model), str(provider)
 
 
+def _aux_stamps(llm: Any) -> Optional[dict]:
+    """The last call's stamps for an aux usage row; None when there are none."""
+    try:
+        from modules.llm.prefix_stamp import read_stamps
+        return read_stamps(llm, include_context=False) or None
+    except Exception:
+        return None
+
+
 async def meter_aux_llm(*, usage_tracker, user_id: Optional[str], session_id: str,
                         agent_id: str, llm: Any, response: Any, duration_seconds: float,
                         component: str, purpose: str) -> None:
@@ -173,6 +182,14 @@ async def meter_aux_llm(*, usage_tracker, user_id: Optional[str], session_id: st
             cache_creation_1h_tokens=usage.get("cache_creation_1h_tokens") or 0,
             duration_seconds=duration_seconds, component=component, purpose=purpose, success=True,
             request_id=request_id,
+            # D-5 (2026-10-14): what the provider BILLED outranks the catalog
+            # estimate on the aux path too — it was dropped here, so every aux
+            # row stored the estimate (0 / 35 rows carried a billed figure).
+            billed_cost_usd=usage.get("billed_cost_usd"),
+            cache_discount_usd=usage.get("cache_discount_usd"),
+            # D-2/D-3: the same per-call stamps the main step records (prefix,
+            # upstream, reasoning tokens) — never the agent step's context slots.
+            metadata=_aux_stamps(llm),
         )
     except Exception as e:  # fail-open (incl. InsufficientCreditsError): never break the aux op
         logger.warning(f"aux metering skipped ({component}/{purpose}): {type(e).__name__}: {e}")

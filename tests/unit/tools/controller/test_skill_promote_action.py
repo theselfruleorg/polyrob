@@ -10,7 +10,7 @@ import agents.task.agent.service  # noqa: F401 — avoid import cycle
 import pytest
 
 from agents.task.agent.skill_manager import SkillManager
-from agents.task.agent.skill_writer import PROVENANCE_BACKGROUND
+from modules.skills.writer import PROVENANCE_BACKGROUND
 from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 

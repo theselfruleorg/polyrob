@@ -1,0 +1,31 @@
+{
+  "function": {
+    "description": "Copy a file to a new path inside the workspace (byte-for-byte; use it to back up a large file before rewriting it). Refuses to overwrite unless overwrite=true; files only, never directories.",
+    "name": "filesystem_copy_file",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for copying a file inside the workspace (2026-09-19).\n\nA byte-level copy, so a file too large to round-trip through the model's\ncontext (the 230 KB x-targets store) can still be backed up before a\nrewrite — the exact primitive goal 1a5a313bfe9f declared itself BLOCKED on.",
+      "properties": {
+        "destPath": {
+          "description": "Destination path (workspace-relative); parent dirs are created.",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "description": "Replace an existing destination. Default False = refuse.",
+          "type": "boolean"
+        },
+        "sourcePath": {
+          "description": "Existing file to copy (workspace-relative).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourcePath",
+        "destPath"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

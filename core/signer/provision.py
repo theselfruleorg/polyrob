@@ -40,6 +40,29 @@ def current_caps(env: Mapping[str, str]) -> Dict[str, float]:
         raise ProvisionError(str(exc)) from exc
 
 
+def x402_caps(env: Mapping[str, str], daily_usd: float) -> Dict[str, float]:
+    """The signer's own x402 caps (085 W4, D4) — never ``per_tx_usd``.
+
+    Per payment: ``X402_AUTONOMOUS_MAX_USD`` when the operator set it, else $5.
+    Venue daily: ``WALLET_VENUE_DAILY_CAP_X402_USD`` when set, else $25; both
+    clamped to the daily cap.
+    """
+    from core.signer.caps import DEFAULT_X402_DAILY_USD, DEFAULT_X402_PER_PAYMENT_USD
+    from core.env import parse_opt_float as _opt_number
+    from core.wallet.config import _load_per_venue_caps
+    per_payment = _opt_number(env.get("X402_AUTONOMOUS_MAX_USD"))
+    if per_payment is None or per_payment <= 0:
+        per_payment = DEFAULT_X402_PER_PAYMENT_USD
+    try:
+        venue_daily = _load_per_venue_caps(env).get("x402")
+    except ValueError as exc:
+        raise ProvisionError(str(exc)) from exc
+    if venue_daily is None:
+        venue_daily = DEFAULT_X402_DAILY_USD
+    return {"x402_per_payment_usd": min(float(per_payment), float(daily_usd)),
+            "x402_daily_usd": min(float(venue_daily), float(daily_usd))}
+
+
 def money_chains_with_pins(env: Mapping[str, str]) -> List[str]:
     from core.wallet import chains
     out = []
@@ -84,9 +107,11 @@ def build_config(env: Mapping[str, str], *, data_dir: str, agent_uids: List[int]
             row = _chains.get(name)
             if row is not None and row.usdc:
                 tokens[f"{name}:USDC"] = str(row.usdc)
+    x402 = x402_caps(env, caps["daily_usd"])
     return SignerConfig(
         per_tx_usd=caps["per_tx_usd"], daily_usd=caps["daily_usd"],
-        x402_per_payment_usd=caps["per_tx_usd"], chains=tuple(chains),
+        x402_per_payment_usd=x402["x402_per_payment_usd"],
+        x402_daily_usd=x402["x402_daily_usd"], chains=tuple(chains),
         socket=DEFAULT_SOCKET, state_dir=DEFAULT_STATE_DIR,
         client_uids=tuple(int(u) for u in agent_uids), socket_group=socket_group,
         network=network if network in ("testnet", "mainnet") else "testnet",

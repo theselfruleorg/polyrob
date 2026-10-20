@@ -62,12 +62,54 @@ def tool_disclosure_enabled(session_id: Optional[str] = None) -> bool:
     The hard lines are unchanged and live in ``tools/tool_disclosure.py``: money
     tools are NEVER loadable, delegate-blocked ids stay blocked for leaves, and
     loading registers schemas only — it grants no execution right.
+
+    An OWNER chat seat (:func:`stamp_owner_seat`, 081 WS-3.1) always pins it, with
+    no flag: it runs on the narrow ``owner`` rig, and the catalog is its way to
+    every other tool.
     """
     from core.config_policy import tool_progressive_disclosure
     if tool_progressive_disclosure():
         return True
+    from core.autonomy_marker import is_owner_seat
+    if is_owner_seat(session_id):
+        return True
     from core.config_policy.capability_toggles import autonomous_tool_disclosure
     return autonomous_tool_disclosure() and budget_class_autonomous(session_id)
+
+
+def stamp_owner_seat(orchestrator=None, *, session_id: Optional[str] = None,
+                     user_id: Optional[str] = None, public: bool = False,
+                     correspondent: bool = False) -> bool:
+    """081 WS-3.1: mark a session as an OWNER chat seat when it is the OWNER_CHAT
+    regime (not a room, not a correspondent session, not an autonomous run) AND
+    its user is this instance's owner principal — a tenant's API session is the
+    OWNER_CHAT regime too, and never a seat.
+
+    Call it BEFORE the ``SessionOrchestrator`` is built (its Controller registers
+    ``load_tool`` / ``tool_call`` in its constructor): pass the facts by keyword
+    (creation and recreation), or an orchestrator-shaped object. Fail-closed to
+    False: an unmarked session keeps the global disclosure and late-tool mode.
+    """
+    if orchestrator is None:
+        from types import SimpleNamespace
+        orchestrator = SimpleNamespace(session_id=session_id, user_id=user_id,
+                                       _public_session=bool(public),
+                                       _correspondent_session=bool(correspondent))
+    try:
+        sid = getattr(orchestrator, "session_id", None)
+        if session_regime(orchestrator=orchestrator, session_id=sid) != OWNER_CHAT:
+            return False
+        from core.instance import resolve_owner_principal
+        owner = resolve_owner_principal()
+        user_id = getattr(orchestrator, "user_id", None)
+        if not (owner and user_id and str(user_id) == str(owner)):
+            return False
+        from core.autonomy_marker import mark_owner_seat
+        mark_owner_seat(sid)
+        return True
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("owner-seat stamp skipped", exc_info=True)
+        return False
 
 
 def apply_session_output_budget(llm, session_id: Optional[str]) -> int:
@@ -123,6 +165,155 @@ def correspondent_facing(orchestrator) -> bool:
 
 
 def may_write_owner_memory(orchestrator) -> bool:
-    """Third-party sessions must never promote findings into owner recall."""
-    from core.surfaces.room_policy import is_public_session
-    return not (is_public_session(orchestrator) or correspondent_facing(orchestrator))
+    """Third-party sessions must never promote findings into owner recall.
+
+    A thin delegator over ``REGIME_POLICY[...].owner_memory`` (the ONE source;
+    the 2026-10-15 review found the two disagreeing on CHILD). It sees only an
+    orchestrator, so it cannot tell a CHILD — a writer that holds the agent
+    asks ``regime_policy(agent)`` instead."""
+    return regime_policy(orchestrator=orchestrator,
+                         session_id=getattr(orchestrator, "session_id", None)).owner_memory
+
+
+# ── Regimes (2026-10-13 memory/coherency review) ────────────────────────────
+#
+# Every coherency fix of that review behaves differently per KIND of session:
+# an owner chat lives for days and its latest owner turn wins; a cron or goal
+# run is one burst whose task IS the pinned instruction and whose own past runs
+# are the most relevant memory; a room / correspondent session must never read
+# or write owner state; a child gets a hand-off, not a conversation. Before
+# this table each site re-derived that from ``_is_sub_agent``,
+# ``correspondent_facing``, ``is_autonomous`` and ``goal_for_session`` in its
+# own order. Ask ``session_regime`` for the kind, and ``regime_policy`` for the
+# per-kind decision — add a column here, never a sixth heuristic at the site.
+
+OWNER_CHAT = "owner_chat"
+CRON = "cron"
+GOAL = "goal"
+AUTONOMOUS = "autonomous"      # planner / self-wake run: no job or goal row
+ROOM = "room"
+CORRESPONDENT = "correspondent"
+CHILD = "child"                # a delegated sub-agent
+
+REGIMES = (OWNER_CHAT, CRON, GOAL, AUTONOMOUS, ROOM, CORRESPONDENT, CHILD)
+
+
+def session_regime(agent=None, *, orchestrator=None, session_id: Optional[str] = None) -> str:
+    """The ONE answer to "what kind of session is this".
+
+    Order matters and is security-first: a third-party-facing session is ROOM /
+    CORRESPONDENT whatever else it is; a child is a CHILD even when its parent
+    is a cron run. A probe error falls to the most restrictive regime the
+    evidence allows (``correspondent_facing`` is already fail-closed).
+    """
+    if agent is not None:
+        orchestrator = orchestrator if orchestrator is not None else getattr(agent, "orchestrator", None)
+        session_id = session_id or getattr(agent, "session_id", None)
+        if getattr(agent, "_is_sub_agent", False):
+            return CHILD
+    try:
+        from core.surfaces.room_policy import is_public_session
+        if orchestrator is not None and is_public_session(orchestrator):
+            return ROOM
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("room probe failed for session %s; treating it as a ROOM "
+                       "(most restrictive)", session_id, exc_info=True)
+        return ROOM
+    if correspondent_facing(orchestrator):
+        return CORRESPONDENT
+    if not is_autonomous_session(session_id):
+        return OWNER_CHAT
+    try:
+        from core.autonomy_marker import cron_job_for_session, goal_for_session
+        if goal_for_session(session_id):
+            return GOAL
+        if cron_job_for_session(session_id):
+            return CRON
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("job/goal probe failed for session %s; regime AUTONOMOUS",
+                     session_id, exc_info=True)
+    return AUTONOMOUS
+
+
+class RegimePolicy:
+    """Per-regime decisions. Plain attributes, frozen by convention (a table row)."""
+
+    __slots__ = ("pin_initial_task", "latest_owner_turn_wins", "demote_automation_recall",
+                 "recall_own_runs_first", "owner_memory", "run_record",
+                 "child_owner_brief", "model_tier")
+
+    def __init__(self, *, pin_initial_task: bool, latest_owner_turn_wins: bool,
+                 demote_automation_recall: bool, recall_own_runs_first: bool,
+                 owner_memory: bool, run_record: bool, child_owner_brief: bool = False):
+        #: the session's first message is THE instruction (cron/goal task, child goal);
+        #: False = it is only "the first message of this chat", dated, and newer
+        #: owner turns override it.
+        self.pin_initial_task = pin_initial_task
+        #: a later owner turn revises the task and survives compaction as an instruction.
+        self.latest_owner_turn_wins = latest_owner_turn_wins
+        #: recall ranks cron/goal rows below chat rows (owner chat: automation noise).
+        self.demote_automation_recall = demote_automation_recall
+        #: recall ranks rows of THIS job / goal first (its own continuity).
+        self.recall_own_runs_first = recall_own_runs_first
+        #: may read owner docs/recall and promote findings into owner memory.
+        self.owner_memory = owner_memory
+        #: writes / reads a per-job or per-goal run record on every exit path.
+        self.run_record = run_record
+        #: WS5 D4: a delegated child gets a short dated brief of this session's
+        #: latest owner ask (third-party sessions and children: never).
+        self.child_owner_brief = child_owner_brief
+        #: the model tier (``core.runtime_config.MODEL_TIERS``); set below the table.
+        self.model_tier = "default"
+
+
+REGIME_POLICY = {
+    OWNER_CHAT: RegimePolicy(pin_initial_task=False, latest_owner_turn_wins=True,
+                             demote_automation_recall=True, recall_own_runs_first=False,
+                             owner_memory=True, run_record=False),
+    CRON: RegimePolicy(pin_initial_task=True, latest_owner_turn_wins=True,
+                       demote_automation_recall=False, recall_own_runs_first=True,
+                       owner_memory=True, run_record=True),
+    GOAL: RegimePolicy(pin_initial_task=True, latest_owner_turn_wins=True,
+                       demote_automation_recall=False, recall_own_runs_first=True,
+                       owner_memory=True, run_record=True),
+    AUTONOMOUS: RegimePolicy(pin_initial_task=True, latest_owner_turn_wins=True,
+                             demote_automation_recall=False, recall_own_runs_first=False,
+                             owner_memory=True, run_record=False),
+    ROOM: RegimePolicy(pin_initial_task=False, latest_owner_turn_wins=False,
+                       demote_automation_recall=True, recall_own_runs_first=False,
+                       owner_memory=False, run_record=False),
+    CORRESPONDENT: RegimePolicy(pin_initial_task=False, latest_owner_turn_wins=False,
+                                demote_automation_recall=True, recall_own_runs_first=False,
+                                owner_memory=False, run_record=False),
+    CHILD: RegimePolicy(pin_initial_task=True, latest_owner_turn_wins=False,
+                        demote_automation_recall=False, recall_own_runs_first=False,
+                        owner_memory=False, run_record=False),
+}
+
+
+# WS5 D4 column (kept out of the row literals so parallel column additions merge).
+for _regime in (OWNER_CHAT, CRON, GOAL, AUTONOMOUS):
+    REGIME_POLICY[_regime].child_owner_brief = True
+del _regime
+
+# Model tier column (2026-10-14 review B-8 / E-9). ``default`` = the operator's model;
+# a CRON / GOAL / AUTONOMOUS run is escalated to ``heavy`` (``HEAVY_MODEL``) by
+# ``core.money.classify.is_money_class(payload)`` inside ``core.runtime_config.model_for``;
+# a CHILD inherits its parent's LLM. Owner chat stays on ``default`` (a per-turn
+# switch re-sends ~140k uncached; a money operation hands off to a money-class run).
+for _regime in REGIMES:
+    REGIME_POLICY[_regime].model_tier = "inherit" if _regime == CHILD else "default"
+del _regime
+
+
+def regime_model_for(regime: str, payload, provider, env=None):
+    """The model for a run of *regime* — ``core.runtime_config.model_for`` at that
+    regime's ``model_tier``. ``None`` = the caller fills the provider's default
+    (or, for ``inherit``, keeps the parent's model)."""
+    from core.runtime_config import model_for
+    return model_for(payload, provider, tier=REGIME_POLICY[regime].model_tier, env=env)
+
+
+def regime_policy(agent=None, *, orchestrator=None, session_id: Optional[str] = None) -> RegimePolicy:
+    """``REGIME_POLICY[session_regime(...)]`` — the per-kind decisions for this session."""
+    return REGIME_POLICY[session_regime(agent, orchestrator=orchestrator, session_id=session_id)]

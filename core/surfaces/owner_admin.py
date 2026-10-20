@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.autonomy_control import (LEGACY_ENTRY_FILENAME, LEGACY_HALT_FILENAME,
-                                   LEGACY_STREAM_FILENAME, PAUSE_FILENAME, PauseResult,
+                                   PAUSE_FILENAME, PauseResult,
                                    PauseState, _env_scopes, legacy_names_for, state_bases,
                                    allows as _allows, pause as _pause,
                                    read_state as _read_state, resume as _resume)
@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 #: pauses, and ``resume`` clears them.
 HALT_FILENAME = LEGACY_HALT_FILENAME
 ENTRY_PAUSE_FILENAME = LEGACY_ENTRY_FILENAME
-STREAM_PAUSE_FILENAME = LEGACY_STREAM_FILENAME
 
 _halt_bases = state_bases  # back-compat alias for the seats that import it
 
@@ -103,7 +102,7 @@ def render_pause_result(res: PauseResult, *, resume_hint: str,
     if res.held:
         lines.append(str(res.held))
     if "all" in st.scopes:
-        lines.append("In-flight goal/cron runs and background delegations are being cancelled; "
+        lines.append("In-flight goal and scheduled-job runs and background delegations are being cancelled; "
                      f"{status_hint} shows the live actors.")
         lines.append(("Still on: this chat, " if chat else "Still on: ")
                      + "crash/security/credit alerts.")
@@ -160,21 +159,6 @@ def resume_entries(data_dir: Optional[str]) -> Tuple[bool, List[str]]:
 
 def entry_pause_active() -> bool:
     return not _allows("trade_entry").allowed
-
-
-def pause_stream_seeding(data_dir: Optional[str], *, reason: str = "owner stream pause") -> Tuple[bool, List[str]]:
-    """Pause NEW stream-manifest reseeds (the ``streams`` scope); live goals untouched."""
-    res = pause_autonomy(data_dir, scopes=("streams",), reason=reason)
-    return res.effective, res.written
-
-
-def resume_stream_seeding(data_dir: Optional[str]) -> Tuple[bool, List[str]]:
-    res = resume_autonomy_scopes(data_dir, scopes=("streams",))
-    return not _allows("seed_stream").allowed, res.removed
-
-
-def stream_seeding_paused_active() -> bool:
-    return not _allows("seed_stream").allowed
 
 
 def pending_correspondent_items(registry: Any, tenant: str) -> List[Dict[str, Any]]:

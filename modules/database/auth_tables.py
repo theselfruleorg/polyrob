@@ -338,17 +338,6 @@ class AuthTables:
                 CREATE INDEX IF NOT EXISTS idx_blocked_users_status ON blocked_users(is_blocked)
             ''')
 
-            # DEN Token Bonuses - Track which token IDs have been used for bonus
-            # SIMPLE: Each token ID can only grant bonus ONCE (regardless of who holds it)
-            await self.db.execute('''
-                CREATE TABLE IF NOT EXISTS den_token_bonuses (
-                    token_id TEXT NOT NULL,
-                    contract_address TEXT NOT NULL,
-                    bonus_granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (token_id, contract_address)
-                )
-            ''')
-
             # SECURITY: Create audit log table for sensitive operations
             from modules.database.audit_log import AuditLogger
             audit_logger = AuditLogger(self.db)

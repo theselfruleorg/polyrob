@@ -39,6 +39,7 @@ _REVIEW_PROMPT = (
     "you see of that work) and decide whether a "
     "DURABLE, REUSABLE procedure emerged that would help in future sessions.\n\n"
     "If yes: call skill_manage(action='create', skill_id=<short-kebab-id>, "
+    "when=<one line of <= 60 chars: when to load it>, "
     "content=<a concise SKILL.md: a '# Title' heading then when-to-use + steps>). "
     "Keep it general (no secrets, no session-specific data). Author at most ONE skill.\n"
     "If nothing is worth saving: call done() with a one-line reason. Do not do any "
@@ -235,12 +236,14 @@ class BackgroundReviewMixin:
                         self._judge_llm = aux
                 except Exception:
                     aux = None
-            # P2-10: make the reviewer's model cost VISIBLE. The cheap-aux map has no
-            # openrouter/nvidia key, so on the default OpenRouter deploy `aux` is None and
+            # P2-10: make the reviewer's model cost VISIBLE. On openrouter the cheap aux
+            # model keys on the MAIN model's family (OPENROUTER_AUX_FAMILY_MAP, review
+            # B-2: z-ai/glm-5* -> z-ai/glm-5.3-flash); a family with no row (deepseek,
+            # whose flash is already the cheap tier) and nvidia resolve to None, and then
             # this PROACTIVE loop (fires every BG_REVIEW_INTERVAL turns without any user
-            # ask) runs up to bg_review_max_steps on the FLAGSHIP main model. Log at INFO
-            # which model it will use so the cost isn't silent (add an openrouter/nvidia
-            # cheap-map entry or set AUX_MODEL_JUDGE to route it cheap).
+            # ask) runs up to bg_review_max_steps on the main model. Log at INFO which
+            # model it will use so the cost isn't silent (set AUX_MODEL_JUDGE to route
+            # it elsewhere).
             _review_llm = aux or self.llm
             if aux is None:
                 logger.info(

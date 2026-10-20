@@ -1,0 +1,30 @@
+{
+  "function": {
+    "description": "Read what has been said in a group/channel room you are in: the most recent lines from the local room ledger, newest last. Each line carries {uid=… msg=…} for room_moderate. Read-only — to reply, use message(surface='telegram', target=<chat_id>) or answer a mention in the room. Omit `room` to list your rooms.",
+    "name": "room_read",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 50,
+          "description": "How many of the most recent lines to return (1-200).",
+          "type": "integer"
+        },
+        "room": {
+          "default": null,
+          "description": "Which allowlisted room to read: the chat id, 'surface:chat_id', or a distinctive fragment of its name or of the owner's label for it. Omit to list the rooms you are in with their line counts.",
+          "nullable": true,
+          "type": "string"
+        },
+        "since_minutes": {
+          "default": null,
+          "description": "Only lines newer than this many minutes. Omit for the plain most-recent window.",
+          "nullable": true,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

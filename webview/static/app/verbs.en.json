@@ -70,7 +70,7 @@
     {
       "name": "/goal",
       "group": "work",
-      "help": "Steer one goal or a whole stream",
+      "help": "Add, show, retry, pause, or stop one goal",
       "aliases": []
     },
     {
@@ -80,15 +80,15 @@
       "aliases": []
     },
     {
-      "name": "/rail",
+      "name": "/jobs",
       "group": "work",
-      "help": "Standing work: list, create, switch, drop and grant rails",
+      "help": "Scheduled jobs: next run, last outcome, and who wrote each",
       "aliases": []
     },
     {
-      "name": "/cron",
+      "name": "/job",
       "group": "work",
-      "help": "Durable scheduled runs: list, add, edit, or cancel",
+      "help": "Add, change, pause, resume, run now, or stop one scheduled job",
       "aliases": []
     },
     {
@@ -98,9 +98,9 @@
       "aliases": []
     },
     {
-      "name": "/adopt",
+      "name": "/skills",
       "group": "work",
-      "help": "Make a job or goal Rob wrote your own, after you see what it will do",
+      "help": "The skills I can load, and what each one does",
       "aliases": []
     },
     {
@@ -136,7 +136,7 @@
     {
       "name": "/bridge",
       "group": "money",
-      "help": "Move native value from one chain to another",
+      "help": "Move value between chains: ETH/native or USDC in; native, WETH or USDC out",
       "aliases": []
     },
     {
@@ -326,6 +326,14 @@
       "aliases": []
     },
     {
+      "name": "/usage",
+      "group": "look",
+      "help": "What my AI use cost: by kind of work, job, model and day",
+      "aliases": [
+        "/cost"
+      ]
+    },
+    {
       "name": "/allow",
       "group": "set up",
       "help": "Allow me to message a target",
@@ -389,6 +397,12 @@
       "name": "/mcp",
       "group": "set up",
       "help": "MCP servers I can use: add, remove, or test",
+      "aliases": []
+    },
+    {
+      "name": "/model",
+      "group": "set up",
+      "help": "The model I run on, where that choice comes from, and how to change it",
       "aliases": []
     },
     {

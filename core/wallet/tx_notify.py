@@ -69,6 +69,8 @@ STATE_ARRIVED = "arrived"
 STATE_REVERTED = "reverted"
 STATE_FAILED = "failed"
 STATE_IN_FLIGHT = "in_flight"
+#: A bridge row recorded but never broadcast, closed by the stale-row sweep.
+STATE_NEVER_SENT = "never_sent"
 
 _ICON = {
     STATE_CONFIRMED: "✅",
@@ -76,6 +78,7 @@ _ICON = {
     STATE_REVERTED: "❌",
     STATE_FAILED: "❌",
     STATE_IN_FLIGHT: "⏳",
+    STATE_NEVER_SENT: "⚠",
 }
 
 _HEADLINE = {
@@ -84,6 +87,8 @@ _HEADLINE = {
     STATE_REVERTED: "REVERTED — the fee was spent, the value did not move",
     STATE_FAILED: "FAILED",
     STATE_IN_FLIGHT: "IN FLIGHT — not a failure. Do NOT re-send",
+    STATE_NEVER_SENT: ("NEVER SENT — no origin transaction was recorded. Check "
+                       "the provider for a deposit before any re-send"),
 }
 
 

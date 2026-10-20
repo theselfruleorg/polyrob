@@ -10,6 +10,12 @@ MAX_ROW_BYTES = 64 * 1024
 MAX_MEMORY_ROWS = 100_000
 
 
+class StorageLimitError(ValueError):
+    """The tenant's logical storage ceiling refused a write (a ``ValueError``
+    for the existing callers). Typed so the write router can tell "the store is
+    full" from any other failure and tell the owner (review 2026-10-13 D4)."""
+
+
 def _row_cap(table: str) -> int:
     return MAX_MEMORY_ROWS if table == "memories" else MAX_ROWS
 
@@ -31,7 +37,7 @@ def check_fts_insert(conn, table: str, user_id: str, contents) -> None:
         f"SELECT count(*), COALESCE(sum(length(CAST(content AS BLOB))), 0) "
         f"FROM {table} WHERE user_id=?", (user_id,)).fetchone()
     if count + len(sizes) > _row_cap(table) or size + sum(sizes) > MAX_BYTES:
-        raise ValueError("Tenant memory storage limit reached; remove old content before adding more")
+        raise StorageLimitError("Tenant memory storage limit reached; remove old content before adding more")
 
 
 def insert_finding(db_path, user_id: str, session_id: str, content: str) -> int:

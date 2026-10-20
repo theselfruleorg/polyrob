@@ -171,10 +171,15 @@ def test_the_sepolia_asset_still_resolves_to_the_testnet_usdc():
 
 
 def test_resolve_x402_settlement_rpc_beats_everything(monkeypatch):
+    """...for the configured `X402_DEFAULT_CHAIN` only (085 F2): one URL
+    cannot serve two chains."""
     monkeypatch.setenv("DEFI_EVM_RPC_BASE", "https://pinned.example/rpc")
     monkeypatch.setenv("X402_SETTLEMENT_RPC", "https://watcher.example/rpc")
     assert _resolve_scan_target("base")[0] == "https://watcher.example/rpc"
+    assert _resolve_scan_target("base-sepolia")[0] != "https://watcher.example/rpc"
+    monkeypatch.setenv("X402_DEFAULT_CHAIN", "base-sepolia")
     assert _resolve_scan_target("base-sepolia")[0] == "https://watcher.example/rpc"
+    assert _resolve_scan_target("base")[0] == "https://pinned.example/rpc"
 
 
 def test_resolve_unsupported_chain_is_none():

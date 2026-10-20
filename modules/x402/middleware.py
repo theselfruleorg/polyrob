@@ -498,6 +498,24 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                     }
                 )
 
+            # 085 x402in L1: the facilitator's "settled" is a claim; the receipt
+            # is the chain's answer (the ONE proof `/pay` uses too). Unreadable
+            # in the bounded window: the unknown-outcome path (202, no service;
+            # the attempt row keeps the tx and the settlement watcher resolves
+            # it). Mined but not paying the treasury: refused, no service.
+            from modules.x402.facilitator import prove_settlement
+            proven = await prove_settlement(
+                attempt_id, settle_response.transaction, chain=network,
+                token=asset_config.address, pay_to=config["pay_to"],
+                min_raw=amount_atomic)
+            if proven is None:
+                raise SettlementPending("Settlement is not proven on-chain yet")
+            if proven is not True:
+                return JSONResponse(status_code=402, content={
+                    "error": "Payment settlement not proven",
+                    "details": ("The settlement transaction does not pay this "
+                                "service on-chain. No service was started.")})
+
             # Payment successful! Create user and proceed (user_id resolved above)
             payment_id = attempt_id or settlement_payment_id(
                 settle_response.transaction,

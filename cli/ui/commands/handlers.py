@@ -145,15 +145,30 @@ async def _h_usage(ctx: CommandContext) -> None:
     empty for them — in that case we fall back to the llm_usage-file aggregation
     already accumulated into ``SessionState`` and say which source we show.
     """
+    # 2026-10-14 D6: the owner spend view — the SAME lines Telegram and the
+    # console print (surfaces/telegram/usage_ops.py). `/usage <days>` shows it
+    # alone; a bare `/usage` shows this chat's breakdown first, then the view.
+    from cli.ui.commands.h_owner import _admin_data_dir, _tenant
+    from surfaces.telegram.usage_ops import usage_reply
+    args = list(ctx.args or [])
+    try:
+        view = usage_reply(_tenant(ctx), _admin_data_dir(write=False), args)
+    except Exception as exc:  # an ambiguous/unreadable home must not hide this chat's usage
+        view = (f"AI cost: could not read the records ({type(exc).__name__}: "
+                f"{str(exc)[:160]}) — this is not a zero.")
+    if args:
+        ctx.emit(view, title="usage")
+        return
+
     breakdown = await _fetch_breakdown(ctx)
 
     if breakdown and breakdown.get("by_type"):
         _render_usage_breakdown(ctx, breakdown)
         _maybe_note_estimate_drift(ctx, breakdown)
-        return
-
-    # Fallback: SessionState estimate (llm_usage files).
-    _render_usage_estimate(ctx)
+    else:
+        # Fallback: SessionState estimate (llm_usage files).
+        _render_usage_estimate(ctx)
+    ctx.emit(view, title="usage")
 
 
 async def _fetch_breakdown(ctx: CommandContext) -> Optional[Dict[str, Any]]:
@@ -748,7 +763,12 @@ async def _h_memory(ctx: CommandContext) -> None:
                 return
             # 025: no `scope=` = the SHARED view — a goal's quarantined findings
             # never surface here (`/memory scopes` names them without reading them).
-            hits = await provider.search(query, user_id=ctx.user_id or "local", limit=10)
+            try:
+                hits = await provider.search(query, user_id=ctx.user_id or "local", limit=10)
+            except Exception as exc:  # an unreadable store is not an empty one
+                ctx.emit(f"Memory could not be read ({type(exc).__name__}: {exc}); "
+                         "nothing was searched.", title="memory")
+                return
             text = hits.strip() if isinstance(hits, str) else str(hits or "").strip()
             if not text:
                 from cli.ui import candy
@@ -1387,7 +1407,7 @@ def build_default_registry() -> CommandRegistry:
                          "This turn's meter: tokens, cost, context, compactions",
                          aliases=("tokens",), group="look", **help_kwargs("meter")))
     reg.register(
-        Command("usage", _h_usage, "Authoritative usage breakdown (DB / estimate)", aliases=("cost",), group="money")
+        Command("usage", _h_usage, "This chat's usage, then AI cost by kind of work, job, model and day ([days])", aliases=("cost",), group="look")
     )
     reg.register(
         Command("telemetry", _h_telemetry,
@@ -1403,7 +1423,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register(
         Command("finance", _h_finance,
                 "Balance sheet: income, spend, pending, net + runtime cost (arg: days)",
-                usage="[days]", group="money", **help_kwargs("finance"))
+                usage="[days]", group="look", **help_kwargs("finance"))
     )
     # 042b: /launch + /deploy. Their registrar lives beside them in h_token.py —
     # this file is AT its size ratchet, whose instruction is to extract rather
@@ -1510,10 +1530,10 @@ def build_default_registry() -> CommandRegistry:
     ))
     # Capability surfaces (each handler lives in its own cli/ui/commands/h_*.py
     # module so the REPL can reach subsystems the CLI groups already exposed —
-    # skills / cron / mcp / kb. Read-only; imported locally to keep registry
+    # skills / jobs / mcp / kb. Read-only; imported locally to keep registry
     # construction cheap and dependency-light.
     from cli.ui.commands.h_skills import h_skills
-    from cli.ui.commands.h_cron import h_cron
+    from cli.ui.commands.h_job import h_job, h_jobs
     from cli.ui.commands.h_mcp import h_mcp
     from cli.ui.commands.h_kb import h_kb
     from cli.ui.commands.h_avatar import h_avatar
@@ -1524,14 +1544,18 @@ def build_default_registry() -> CommandRegistry:
         usage="[query | list | info <id> | install <spec> | approve <id> | remove <id> | tap ... | search <q> | update [id]]",
         group="work",
     ))
-    from cli.ui.commands.h_cron import HELP_CRON
+    from cli.ui.commands.h_job import HELP_JOB
     reg.register(Command(
-        "cron", h_cron,
-        "Durable scheduled runs: list, add, edit, or cancel",
-        aliases=("crons",),
-        usage="[list] | add <schedule> <task…> | edit <id> <field> <value> | cancel <id>",
-        group="work",
-        help_long=HELP_CRON[0], elsewhere=HELP_CRON[1],
+        "jobs", h_jobs,
+        "Scheduled jobs: next run, last outcome, and who wrote each",
+        group="work", help_long=HELP_JOB[0], elsewhere=HELP_JOB[1],
+    ))
+    reg.register(Command(
+        "job", h_job,
+        "Add, change, pause, resume, run now, or stop one scheduled job",
+        usage="new <when> <what> | show|edit|pause|resume|run|stop <id>",
+        group="work", raw_arguments=True,
+        help_long=HELP_JOB[0], elsewhere=HELP_JOB[1],
     ))
     reg.register(Command("mcp", h_mcp, "MCP servers: list, add, remove, test", usage="[list|add <id> <https-url> [key]|remove <id>|test <id>]", group="set up"))
     reg.register(Command(

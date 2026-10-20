@@ -1,0 +1,35 @@
+{
+  "function": {
+    "description": "Raw read-only eth_call against a contract. Returns the raw hex; any decoding is best-effort and unverified. No state change.",
+    "name": "defi_data_contract_read",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "Contract address to read from (0x…). EVM chains only — there is no eth_call on solana.",
+          "type": "string"
+        },
+        "args": {
+          "description": "Arguments (currently unencoded; prefer no-arg views)",
+          "items": {},
+          "type": "array"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to read from — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "signature": {
+          "description": "Function signature, e.g. 'totalSupply()'",
+          "type": "string"
+        }
+      },
+      "required": [
+        "address",
+        "signature"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

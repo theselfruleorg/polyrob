@@ -195,22 +195,44 @@ _TRIAGE_PROMPT = (
 )
 
 
-async def smart_triage(command: str, reason: str, llm_factory: Callable) -> str:
+async def smart_triage(command: str, reason: str, llm_factory: Callable,
+                       context: Any = None) -> str:
     """``approve`` | ``deny`` | ``escalate``. Fail-safe: any fault escalates."""
     try:
         llm = await llm_factory()
         if llm is None:
             return "escalate"
         from modules.llm.messages import HumanMessage
+        import time as _time
+        started = _time.time()
         reply = await asyncio.wait_for(
             llm.ainvoke([HumanMessage(content=_TRIAGE_PROMPT.format(reason=reason, command=command))]),
             timeout=_SMART_TIMEOUT_SEC)
+        await _meter_triage(llm_factory, llm, reply, context, _time.time() - started)
         text = str(getattr(reply, "content", reply) or "").strip().upper()
         word = text.split()[0].strip(".:!*`") if text.split() else ""
         return {"APPROVE": "approve", "DENY": "deny"}.get(word, "escalate")
     except Exception:
         logger.debug("smart shell triage failed -> escalate", exc_info=True)
         return "escalate"
+
+
+async def _meter_triage(llm_factory: Callable, llm: Any, reply: Any, context: Any,
+                        duration: float) -> None:
+    """D-5 (2026-10-14): the triage call was the one unmetered LLM call. It
+    goes through the same aux path as compaction and the judge (fail-open)."""
+    try:
+        from modules.llm.aux_metering import meter_aux_llm
+        orchestrator = getattr(llm_factory, "orchestrator", None)
+        await meter_aux_llm(
+            usage_tracker=getattr(orchestrator, "usage_tracker", None),
+            user_id=getattr(context, "user_id", None),
+            session_id=getattr(context, "session_id", "") or "",
+            agent_id=getattr(context, "agent_id", "") or "",
+            llm=llm, response=reply, duration_seconds=duration,
+            component="command_guard", purpose="shell_triage")
+    except Exception:
+        logger.debug("shell triage metering skipped", exc_info=True)
 
 
 def orchestrator_llm_factory(orchestrator) -> Callable:
@@ -229,6 +251,7 @@ def orchestrator_llm_factory(orchestrator) -> Callable:
             if getattr(agent, "llm", None) is not None:
                 return agent.llm
         return None
+    _factory.orchestrator = orchestrator   # the usage tracker for _meter_triage
     return _factory
 
 
@@ -288,7 +311,7 @@ def make_command_guard_hook(*, shell_gated: bool, deny_globs: Sequence[str] = ()
             return (f"refused: this command {verdict.reason} in an unattended run; {why}. "
                     "Do it another way, or leave it for an owner turn.")
         if mode == "smart" and llm_factory is not None:
-            decision = await smart_triage(command, verdict.reason, llm_factory)
+            decision = await smart_triage(command, verdict.reason, llm_factory, context)
             if decision == "deny":
                 return (f"refused by the smart shell triage: this command {verdict.reason}. "
                         "Ask the owner if it is really needed.")

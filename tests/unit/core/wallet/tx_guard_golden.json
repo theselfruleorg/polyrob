@@ -941,7 +941,7 @@
   "deploy": null,
   "lane": "refuse",
   "position_token_id": null,
-  "reason": "refused by PolicyGate: amount $0.25 exceeds catastrophic ceiling $0.10",
+  "reason": "refused by PolicyGate: amount $0.25 exceeds the per-transaction cap $0.10 (binds the owner's own verbs too) \u2014 owner raises it: /config set budget.wallet_per_tx_usd <usd>, then approve it in /pending",
   "sim_gas_used": null,
   "simulated_token_deltas": null,
   "valuation_basis": "outflow"
@@ -1042,18 +1042,15 @@
  },
  "lifi_floor_unknown_facet": {
   "agent_id": null,
-  "allowed": true,
-  "amount_usd": 0.01,
+  "allowed": false,
+  "amount_usd": null,
   "cap_exceeded": false,
   "deploy": null,
-  "lane": "autonomous",
+  "lane": "refuse",
   "position_token_id": null,
-  "reason": "authorized",
+  "reason": "refused: the LI.FI diamond call uses selector 0x5ae401dc, which is not a known same-chain swap facet \u2014 its on-chain minimum output cannot be read, and a floor judged only on a simulation can be gamed (add the facet to core/wallet/lifi_calldata.py _FACETS if LI.FI shipped a new one)",
   "sim_gas_used": null,
-  "simulated_token_deltas": {
-   "0x4444444444444444444444444444444444444444": -1000,
-   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913": 950
-  },
+  "simulated_token_deltas": null,
   "valuation_basis": "outflow"
  },
  "liquidity_leaf_refused": {

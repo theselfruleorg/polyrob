@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import logging
 
-from core.tool_capabilities import gate_disclosure_map
+from core.tool_capabilities import TOOL_CAPABILITIES, gate_disclosure_map
+from core.config_policy.members import set_line
+from core.tool_gates import remedy_text
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +27,6 @@ logger = logging.getLogger(__name__)
 # tool's disclosure there. Its membership differs from TOOL_GATE_FLAGS on purpose
 # (see the note above gate_flag_map there).
 GATED_TOOL_REGISTRY: dict = gate_disclosure_map()
-
-
-def _set_line(name: str) -> str:
-    from core.config_policy.members import set_line
-    return set_line(name, "true")
 
 
 def _hint_enabled() -> bool:
@@ -43,12 +40,6 @@ _COMPUTE_TOOLS = {
     "code_execution": ("CODE_EXEC_ENABLED", "code_exec_enabled"),
     "shell": ("SHELL_TOOLS_ENABLED", "shell_tools_enabled"),
 }
-
-_COMPUTE_SESSION_REMEDY = (
-    "not in this session's toolset — goal/cron runs carry the compute tools only "
-    "at posture>=1 with the flag on; otherwise run it in an interactive (owner) "
-    "session or raise ONE ask")
-
 
 def _compute_limbs() -> dict:
     """Live state of every compute-gate limb (frozen-at-import posture + flags)."""
@@ -78,12 +69,14 @@ def compute_gate(tool: str) -> tuple:
         if posture < 1:
             return (f"AGENT_COMPUTE_POSTURE={posture} (needs AGENT_COMPUTE_POSTURE>=1)",
                     "disabled",
-                    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)")
+                    remedy_text("compute_posture"))
         if not limbs[limb]:
             return (f"{flag_name}=false (posture {posture} already met)",
                     "disabled",
-                    f"owner sets {_set_line(flag_name)} — raising the posture changes nothing here")
-        return (f"{flag_name}=true, posture {posture}", "loadable", _COMPUTE_SESSION_REMEDY)
+                    remedy_text("compute_flag", flag=flag_name,
+                                set_flag=set_line(flag_name, "true")))
+        return (f"{flag_name}=true, posture {posture}", "loadable",
+                remedy_text("compute_session"))
     except Exception:
         logger.debug("compute gate for %s failed (fail-open to registry)", tool, exc_info=True)
         return static
@@ -103,25 +96,51 @@ def grantable_autonomous_tools() -> list:
         return []
 
 
-def build_tool_availability_note(loaded_tool_ids) -> str:
-    """The <tool-availability> system-prompt block. '' when disabled or on any error."""
+def build_tool_availability_note(loaded_tool_ids, *, can_create_goals: bool = True,
+                                 catalog_pinned: bool = False) -> str:
+    """The <tool-availability> system-prompt block. '' when disabled or on any error.
+
+    ``can_create_goals`` False (a leaf, a room, a correspondent session) drops the
+    "Goals you create carry their OWN tools" line: that session creates no goal.
+    ``catalog_pinned`` (081 bar 2): the <tool-catalog> owns every tool's status
+    (its lines carry these gates — ``tools/tool_disclosure.py::_gate_line``), so
+    the block keeps only the goal line, or is empty."""
     if not _hint_enabled():
         return ""
+    if catalog_pinned:
+        if not can_create_goals:
+            return ""
+        try:
+            return ("<tool-availability>\nGoals you create carry their OWN tools: "
+                    + ", ".join(sorted(grantable_autonomous_tools())) + ".\n</tool-availability>")
+        except Exception:
+            return ""
     try:
         loaded = set(loaded_tool_ids or ())
         lines = ["<tool-availability>",
                  "Tools NOT in this session, with the reason and remedy — a missing tool is "
                  "NEVER a blocker you invent workarounds or excuses for: name the gap, use the "
                  "remedy, or raise ONE ask to the owner."]
+        grantable = set(grantable_autonomous_tools())
+        rows: dict = {}   # line key -> tools
         for tool, (gate, tier, remedy) in sorted(GATED_TOOL_REGISTRY.items()):
             if tool in loaded:
                 continue
             if tool in _COMPUTE_TOOLS:
                 gate, tier, remedy = compute_gate(tool)
-            lines.append(f"- {tool} [{tier}] gate: {gate} → {remedy}")
+            elif (tier == "reserved" and tool in grantable
+                  and "money" in TOOL_CAPABILITIES.get(tool, ())):
+                # The same predicate tools/tool_disclosure.py uses (081 B-1).
+                remedy = remedy_text("money_armed", tool=tool)
+            # Reserved (money) tools share one text: one line, not one per tool.
+            key = (gate, tier, remedy) if tier == "reserved" else (tool, gate, tier, remedy)
+            rows.setdefault(key, []).append(tool)
+        for (*_t, gate, tier, remedy), tools in rows.items():
+            lines.append(f"- {', '.join(tools)} [{tier}] gate: {gate} → {remedy}")
         lines.append("Reserved tools are owner-only by design; their absence never blocks "
-                     "other work. Goals you create carry their OWN tools: "
-                     + ", ".join(grantable_autonomous_tools()) + ".")
+                     "other work."
+                     + (" Goals you create carry their OWN tools: "
+                        + ", ".join(sorted(grantable)) + "." if can_create_goals else ""))
         lines.append("</tool-availability>")
         return "\n".join(lines)
     except Exception:

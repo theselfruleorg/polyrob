@@ -139,6 +139,75 @@ def test_zero_disables_the_pass(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 079 W7: a money verb's result keeps its full text for 24 h
+# ---------------------------------------------------------------------------
+
+
+def _named_pair(idx: int, name: str, content: str) -> list:
+	call_id = f"call_{name}_{idx}"
+	return [
+		AIMessage(content=f"step {idx}", tool_calls=[{"id": call_id, "name": name, "args": {}}]),
+		ToolMessage(content=content, tool_call_id=call_id),
+	]
+
+
+def _money_conversation() -> list:
+	return ([HumanMessage(content="go")]
+	        + _named_pair(0, "defi_trade_swap", f"SWAP RECEIPT\n{BIG}")
+	        + _named_pair(1, "web_fetch", f"PAGE\n{BIG}")
+	        + [AIMessage(content=f"filler {i}") for i in range(6)])
+
+
+def test_a_young_money_result_keeps_its_full_text():
+	from datetime import datetime, timedelta
+	now = datetime(2026, 10, 13, 12, 0)
+	messages = _money_conversation()
+	stamps = [(now - timedelta(hours=2)).isoformat()] * len(messages)
+	aged = age_old_tool_results(messages, keep_recent=6, timestamps=stamps, now=now)
+	assert aged[2].content == messages[2].content, "a 2h-old swap receipt was aged"
+	assert AGED_RESULT_MARKER in aged[4].content, "the non-money result must still age"
+
+
+def test_an_old_money_result_ages_like_any_other():
+	from datetime import datetime, timedelta
+	now = datetime(2026, 10, 13, 12, 0)
+	messages = _money_conversation()
+	stamps = [(now - timedelta(hours=25)).isoformat()] * len(messages)
+	aged = age_old_tool_results(messages, keep_recent=6, timestamps=stamps, now=now)
+	assert AGED_RESULT_MARKER in aged[2].content
+	assert aged[2].content.startswith("SWAP RECEIPT")
+
+
+def test_a_money_result_with_no_timestamp_counts_as_young():
+	messages = _money_conversation()
+	aged = age_old_tool_results(messages, keep_recent=6)
+	assert aged[2].content == messages[2].content
+
+
+def test_money_is_the_capability_table_not_a_list():
+	"""The predicate is the ``money`` dimension of core/tool_capabilities.py."""
+	from core.money.classify import money_action
+	from core.tool_capabilities import ids_with
+	for tool in ids_with("money"):
+		assert money_action(f"{tool}_anything")
+	assert not money_action("web_fetch")
+
+
+@pytest.mark.asyncio
+async def test_the_message_manager_passes_the_stamps(tmp_path):
+	"""Through the real MessageManager: the stamp on each ManagedMessage reaches the
+	pass, so a fresh money result survives while a fresh web_fetch is aged."""
+	mm = _mm(_NeverCalledLLM(), max_input_tokens=200_000)
+	mm._compaction_checkpoint_dir = str(tmp_path)
+	for msg in _money_conversation():
+		mm._add_message_with_tokens(msg, _internal=True)
+	assert mm.age_old_tool_results() > 0
+	contents = [m.message.content for m in mm.history.messages]
+	assert AGED_RESULT_MARKER not in contents[2]
+	assert AGED_RESULT_MARKER in contents[4]
+
+
+# ---------------------------------------------------------------------------
 # At the boundary: the cheap pass runs FIRST and can spare the expensive one
 # ---------------------------------------------------------------------------
 
@@ -206,4 +275,27 @@ async def test_the_prune_still_cuts_when_ageing_is_not_enough(tmp_path):
 		mm._add_message_with_tokens(msg, _internal=True)
 
 	mm.emergency_context_prune()
-	assert len(mm.history.messages) <= 5
+	# <= 5 conversation messages, plus (E-A1) the dated cut note and the owner's
+	# latest message carried out of the cut head.
+	assert len(mm.history.messages) <= 7
+	assert any("[HISTORY CUT]" in str(m.message.content) for m in mm.history.messages)
+
+
+def test_a_compaction_rebuild_keeps_each_message_timestamp():
+	"""Release review: the rebuild re-added the kept tail with a fresh ``now``
+	stamp, so a money receipt older than 24 h counted as young again and kept
+	its full text forever. The rebuild and the emergency prune keep the stamp."""
+	mm = _mm(_NeverCalledLLM(), max_input_tokens=200_000)
+	for i in range(6):
+		mm._add_message_with_tokens(HumanMessage(content=f"m{i}"), _internal=True)
+	old = "2020-01-01T00:00:00"
+	for m in mm.history.messages:
+		m.metadata.timestamp = old
+	tail = [m.message for m in list(mm.history.messages)[-4:]]
+	mm._rebuild_with_summary("summary", 2, tail)
+	kept = {m.message.content: m.metadata.timestamp for m in mm.history.messages}
+	assert kept["m4"] == old and kept["m5"] == old
+
+	mm.emergency_context_prune()
+	assert [m.metadata.timestamp for m in mm.history.messages
+	        if m.message.content in ("m4", "m5")] == [old, old]

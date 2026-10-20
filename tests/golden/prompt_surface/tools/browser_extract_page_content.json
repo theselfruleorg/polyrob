@@ -1,0 +1,13 @@
+{
+  "function": {
+    "description": "Extract the current page content as text.",
+    "name": "browser_extract_page_content",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for extracting content from the current page.\n\nThis action takes no parameters - it extracts content from the current page.\nThe model extends NoParamsAction to properly handle parameter-less actions.",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

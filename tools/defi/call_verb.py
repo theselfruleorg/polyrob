@@ -110,6 +110,67 @@ def intent_idempotency_key(prefix: str, *, chain: str, to: str, data: str,
             f"{int(value_wei or 0)}:n{nonce if nonce is not None else '?'}:{session}")
 
 
+#: ``transfer(address,uint256)`` / ``transferFrom(address,address,uint256)``.
+_SEL_TRANSFER = "a9059cbb"
+_SEL_TRANSFER_FROM = "23b872dd"
+
+
+def _erc20_payee(raw: bytes) -> Optional[str]:
+    """The recipient an ERC-20 ``transfer``/``transferFrom`` calldata names, or None.
+
+    The low 20 bytes of the address word: a pre-0.8 token masks dirty high bits
+    and pays exactly that address (a 0.8 token reverts), so the guard binds the
+    address the token would actually pay."""
+    sel, body = raw[:4].hex(), raw[4:]
+    word = None
+    if sel == _SEL_TRANSFER and len(body) >= 64:
+        word = body[:32]
+    elif sel == _SEL_TRANSFER_FROM and len(body) >= 96:
+        word = body[32:64]
+    if word is None:
+        return None
+    return "0x" + word[12:].hex()
+
+
+def _is_erc20_transfer(raw: bytes) -> bool:
+    return raw[:4].hex() in (_SEL_TRANSFER, _SEL_TRANSFER_FROM)
+
+
+def payout_card_context(params: dict) -> list:
+    """The owner's approval card for a payout-shaped call names who is paid
+    (085 W2): the decoded ERC-20 payee, or the call target for a native value."""
+    from core.config_policy.spend_lane import payout_shaped
+    if not payout_shaped("defi_trade_call", params):
+        return []
+    try:
+        data = str(params.get("calldata") or "").strip()
+        raw = bytes.fromhex(data[2:] if data.startswith("0x") else data)
+    except ValueError:
+        raw = b""
+    payee = _erc20_payee(raw) if _is_erc20_transfer(raw) else None
+    paid = (f"{payee} (decoded from the token transfer calldata)" if payee
+            else f"{params.get('to')} (the call target)")
+    return [f"⚠️ PAYOUT: this call moves value and declares nothing coming back. "
+            f"It pays {paid}. Check every character against what you asked for."]
+
+
+def _spend_price(chain: str, address: str):
+    from tools.defi.price_sources import spend_price
+    return spend_price(chain, address)
+
+
+def _register_card_context() -> None:
+    from tools.controller.grant_card import register_card_context
+    register_card_context("defi_trade_call", payout_card_context)
+    # The spend-grade price the core payout predicate (the controller hook's
+    # spend_exemption) values a declared inflow with (085 W2, money M-1).
+    from core.config_policy.spend_lane import register_spend_price
+    register_spend_price(_spend_price)
+
+
+_register_card_context()
+
+
 async def perform_call(tool, params, execution_context=None):
     from core.wallet import tx_guard, tx_notify
     from core.wallet.broadcast.evm import EvmRail
@@ -188,6 +249,34 @@ async def perform_call(tool, params, execution_context=None):
         except Exception as exc:
             return tool._ar(error=f"refused: receive_token is not a valid address ({exc})")
 
+    # 085 W2: classify the call shape with the ONE predicate the controller hook
+    # reads. A fair inflow (a canonical or own receive_token worth >= half the
+    # outflow at the spend-grade price) keeps the capped defi lane. Any other call
+    # that moves value can pay an arbitrary address: the guard queues it for the
+    # owner in every lane, and the spend lane keeps the tap on an owner turn too.
+    from core.config_policy.spend_lane import payout_shaped
+    payout = await asyncio.to_thread(payout_shaped, "defi_trade_call", {
+        "chain": params.chain, "value": params.value, "spend_token": spend_token,
+        "spend_max_raw": params.spend_max_raw, "receive_token": receive_token,
+        "receive_min_raw": params.receive_min_raw}, price_fn=tool._price)
+    intent_to = to_addr
+    recipient = _erc20_payee(raw)
+    on_spend_token = bool(spend_token) and spend_token.lower() == to_addr.lower()
+    if on_spend_token and _is_erc20_transfer(raw) and recipient is None:
+        return tool._ar(error=(
+            "refused: the token transfer calldata is too short to name its "
+            "recipient — an old token would pad it and pay an address nobody "
+            "wrote. Nothing was broadcast."))
+    if recipient and on_spend_token:
+        # A transfer on the declared token: bind the guard's 6b destination
+        # check to the decoded payee, not to the token contract.
+        intent_to = recipient
+    from core.wallet import address_lookalike
+    for payee in {a for a in (recipient, to_addr if payout else None) if a}:
+        poisoned = address_lookalike.poisoning_refusal(payee)
+        if poisoned:
+            return tool._ar(error=poisoned)
+
     grants = ()
     watch = ()
     if params.allow_spender:
@@ -208,6 +297,13 @@ async def perform_call(tool, params, execution_context=None):
                 "refused: that is an effectively UNLIMITED approval. An unlimited "
                 "grant outlives the call and remains a standing claim on the "
                 "wallet. Declare the exact amount this call needs."))
+        # 085 W2 (money M-1): the CR-H02 rule approve_token applies — a grant to
+        # a spender this chain does not pin needs a genuine owner turn.
+        from core.wallet import tx_guard as _txg
+        if spender.lower() not in _txg.pinned_route_spenders(params.chain):
+            refusal = tool._non_route_grant_refusal(execution_context, spender)
+            if refusal:
+                return tool._ar(error=refusal)
         grants = ((spend_token, spender, int(params.allow_max_raw)),)
     elif spend_token:
         # Measure the callee as a spender without declaring a grant: many
@@ -218,7 +314,8 @@ async def perform_call(tool, params, execution_context=None):
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     signer = wallet.operational_signer()
     gate = wallet.policy
 
@@ -234,14 +331,15 @@ async def perform_call(tool, params, execution_context=None):
     intent = tx_guard.TxIntent(
         chain=params.chain,
         token=spend_token,
-        to=to_addr,
+        to=intent_to,
         amount_raw=(int(params.spend_max_raw) if spend_token else value_wei),
         max_spend_usd=params.max_spend_usd,
         expected_allowance_grants=grants,
         watch_spenders=watch,
         idempotency_key=idem,
         inflow_token=receive_token,
-        min_inflow_raw=(int(params.receive_min_raw) or None))
+        min_inflow_raw=(int(params.receive_min_raw) or None),
+        payout_shape=payout)
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
@@ -289,9 +387,8 @@ async def perform_call(tool, params, execution_context=None):
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc))
 
         _used, _limit = tx_notify.caps_from_gate(gate)
         tool._notify_tx(execution_context, tx_notify.TxNotice(

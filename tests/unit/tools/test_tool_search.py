@@ -157,7 +157,7 @@ def test_describe_builtin_money_tool_states_gate():
     c = FakeController(services={"x402_invoice"})
     res = asyncio.run(perform_tool_describe(c, "x402_invoice"))
     body = res.extracted_content.lower()
-    assert "money" in body and "grant" in body
+    assert "money" in body and "propose_action" in body
     assert "capabilities:" in body
 
 

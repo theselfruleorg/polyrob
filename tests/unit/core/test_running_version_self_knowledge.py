@@ -42,6 +42,50 @@ def test_release_notes_returns_one_section_capped(code_root, monkeypatch):
     assert "[truncated at 20 chars]" in v.release_notes("1.1.0", max_chars=20)
 
 
+def test_release_notes_on_a_deploy_lead_with_unreleased(code_root, monkeypatch):
+    # 080 D9: a deploy of main runs what is past the last tag.
+    monkeypatch.setattr(v, "get_version", lambda: "1.1.0")
+    (code_root / "CHANGELOG.md").write_text(
+        "## [Unreleased]\n\n### Added\n- next\n\n"
+        "## [1.1.0] — 2026-10-01\n\n### Fixed\n- this\n\n"
+        "## [1.0.0] — 2026-09-01\n\n### Added\n- first\n")
+    assert "next" not in v.release_notes("latest")
+    (code_root / ".deployed_sha").write_text("abc123\n")
+    out = v.release_notes("latest")
+    assert out.startswith("## [Unreleased]") and "this" in out and "first" not in out
+    assert "this" not in v.release_notes("unreleased")
+
+
+def test_release_notes_read_the_wheel_copy(code_root):
+    # A wheel has no code-root file: core/CHANGELOG.md is the package-data copy.
+    (code_root / "core").mkdir()
+    (code_root / "core" / "CHANGELOG.md").write_text("## [Unreleased]\n\n- wheel\n")
+    assert v.changelog_path() == code_root / "core" / "CHANGELOG.md"
+    assert "wheel" in v.release_notes("unreleased")
+
+
+def test_install_lines_claim_notes_only_when_shipped(code_root):
+    from core.install_facts import install_lines
+    line = install_lines()[0]
+    assert "release_notes" not in line and "No CHANGELOG.md ships" in line
+    (code_root / "CHANGELOG.md").write_text("## [Unreleased]\n")
+    assert "release_notes" in install_lines()[0]
+
+
+def test_changelog_ships_in_the_wheel():
+    # core/CHANGELOG.md -> ../CHANGELOG.md; the core "*.md" package-data glob
+    # carries it into the wheel, and the sdist carries the symlink's target.
+    import fnmatch
+    import tomllib
+    from pathlib import Path
+    root = Path(v.__file__).resolve().parents[1]
+    link = root / "core" / "CHANGELOG.md"
+    assert link.is_symlink() and link.resolve() == (root / "CHANGELOG.md").resolve()
+    pkg_data = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]
+    assert any(fnmatch.fnmatch("CHANGELOG.md", g) for g in pkg_data.get("*", []) + pkg_data.get("core", []))
+    assert "include CHANGELOG.md" in (root / "MANIFEST.in").read_text().splitlines()
+
+
 def test_the_real_changelog_has_the_running_version():
     assert f"## [{v.get_version()}]" in v.release_notes()
 

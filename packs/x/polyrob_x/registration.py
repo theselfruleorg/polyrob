@@ -12,19 +12,6 @@ TWITTER_CREDENTIAL_GATE = (
     "the browser rail (x_browser) carries the post instead.")
 
 
-def twitter_receipt_verbs():
-    """The X verbs whose SUCCESSFUL result is a receipt of the agent's own act (a
-    tweet / message id, "ok for <user>") or the agent's own profile — never a
-    third party's text — so they do not taint the turn (``read_taint``). Derived
-    from pack.toml: every verb with an effect class (the writes) plus
-    ``twitter_whoami``. Every READ of X (timeline, mentions, DMs, search, polls)
-    still taints. Prod 2026-10-11 02:01: ``twitter_whoami`` tainted the owner's
-    own turn and his own post raised a card."""
-    from polyrob.sdk import action_ids_where
-    writes = action_ids_where(tool="twitter", effect=lambda e: e not in ("none", "inherit"))
-    return sorted(writes) + ["twitter_whoami"]
-
-
 def register_twitter_tool(force: bool = False) -> bool:
     """The descriptor and class ``tools/descriptors.py`` / ``tools/__init__.py``
     used to hold. Registered whenever tweepy imports, as before; the CLI
@@ -38,8 +25,6 @@ def register_twitter_tool(force: bool = False) -> bool:
     from tools.descriptors import ToolCategory, ToolDescriptor, register_optional_tool
     from tools.tool_disclosure import register_credential_gate
     register_credential_gate("twitter", *TWITTER_CREDENTIAL_GATE)
-    from polyrob.sdk import register_receipt_actions
-    register_receipt_actions("twitter", twitter_receipt_verbs)  # lazy: no early policy view
     return register_optional_tool(
         "twitter", TwitterTool,
         ToolDescriptor(

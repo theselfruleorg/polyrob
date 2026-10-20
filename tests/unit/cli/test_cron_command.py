@@ -1,4 +1,4 @@
-"""`polyrob cron` — owner cron management (parity G4).
+"""`polyrob job` (alias `polyrob cron`, one release) — owner job management (G4, 080 WS-2).
 
 The 2026-07-12 UI-surface review: cron jobs could not be created/cancelled from
 ANY human surface — REPL /cron, webview /autonomy and Telegram /status are all
@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 
 def _invoke(args, tmp_path, extra_env=None):
-    from cli.commands.cron import cron
+    from cli.commands.cron import job as cron
     env = {"POLYROB_DATA_DIR": str(tmp_path)}
     env.update(extra_env or {})
     return CliRunner().invoke(cron, args, env=env)
@@ -39,11 +39,51 @@ def test_schedule_bad_spec_is_a_clear_error(tmp_path):
     assert _jobs(tmp_path) == []
 
 
-def test_schedule_warns_when_cron_disabled(tmp_path):
-    res = _invoke(["schedule", "x", "30m", "--user", "u1"], tmp_path,
-                  extra_env={"CRON_ENABLED": ""})
+def test_schedule_warns_when_the_scheduler_is_off(tmp_path, monkeypatch):
+    monkeypatch.setattr("tools.cronjob_tools.cron_enabled", lambda: False)
+    res = _invoke(["schedule", "x", "30m", "--user", "u1"], tmp_path)
     assert res.exit_code == 0, res.output
-    assert "CRON_ENABLED" in res.output
+    # 080 WS-2: the ONE remedy sentence — never the ignored member line.
+    assert "scheduler is off" in res.output and "AUTONOMY_POSTURE full" in res.output
+    assert "CRON_ENABLED" not in res.output
+
+
+def test_job_new_takes_when_then_what(tmp_path):
+    res = _invoke(["new", "every monday 09:00", "summarise", "the", "week",
+                   "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    (job,) = _jobs(tmp_path, "u1")
+    assert job.schedule_spec == "every monday 09:00" and job.task == "summarise the week"
+
+
+def test_job_new_refuses_an_identical_live_job(tmp_path):
+    _invoke(["new", "30m", "|", "check", "--user", "u1"], tmp_path)
+    res = _invoke(["new", "30m", "check", "--user", "u1"], tmp_path)
+    assert res.exit_code != 0 and "already does this" in res.output
+    assert len(_jobs(tmp_path, "u1")) == 1
+
+
+def test_job_pause_resume_run_stop(tmp_path):
+    _invoke(["new", "1h", "|", "digest", "--user", "u1"], tmp_path)
+    (job,) = _jobs(tmp_path, "u1")
+    short = job.id[:8]
+    assert _invoke(["pause", short, "--user", "u1"], tmp_path).exit_code == 0
+    (row,) = _jobs(tmp_path, "u1")
+    assert row.status == "paused" and row.next_run_at is None
+    assert "paused" in _invoke(["list", "--user", "u1"], tmp_path).output
+    res = _invoke(["run", short, "--user", "u1"], tmp_path)
+    assert res.exit_code != 0 and "resume" in res.output
+    assert _invoke(["resume", short, "--user", "u1"], tmp_path).exit_code == 0
+    assert _invoke(["run", short, "--user", "u1"], tmp_path).exit_code == 0
+    res = _invoke(["stop", short, "--user", "u1"], tmp_path)
+    assert res.exit_code == 0 and "stopped" in res.output
+    (row,) = _jobs(tmp_path, "u1")
+    assert row.status == "cancelled" and row.payload["stopped"]["via"] == "cli"
+
+
+def test_polyrob_cron_is_the_one_release_alias_of_job():
+    from cli.polyrob import _LAZY_SUBCOMMANDS
+    assert _LAZY_SUBCOMMANDS["job"] == _LAZY_SUBCOMMANDS["cron"] == "cli.commands.cron:job"
 
 
 def test_list_shows_the_job(tmp_path):
@@ -192,6 +232,45 @@ def test_edit_deliver_refuses_a_target_outside_the_allowlist(tmp_path):
     assert "deliver" not in _jobs(tmp_path, "u1")[0].payload
 
 
+# --- `--tools` (intel HIGH 2026-10-16 17:50Z) -------------------------------
+# The re-created BOUNTY ANNOUNCE job had no `payload.tools`, so a posting job
+# ran with the full default rig (defi_trade, x402_pay, shell …). `--rig` names
+# only fixed rigs, and none of them carries `twitter`.
+
+def test_edit_tools_sets_an_explicit_toolset_and_keeps_the_rest(tmp_path):
+    _invoke(["schedule", "announce", "30m", "--user", "u1"], tmp_path)
+    job_id = _jobs(tmp_path, "u1")[0].id
+    _invoke(["edit", job_id, "--deliver", "telegram", "--user", "u1"], tmp_path)
+    res = _invoke(["edit", job_id, "--tools", "twitter, defi_data,filesystem,task",
+                   "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    p = _jobs(tmp_path, "u1")[0].payload
+    assert p.get("tools") == ["twitter", "defi_data", "filesystem", "task"]
+    assert p.get("deliver") == "telegram", "a tools edit never drops other payload keys"
+    res = _invoke(["edit", job_id, "--tools", "none", "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    assert "tools" not in _jobs(tmp_path, "u1")[0].payload
+
+
+def test_edit_tools_refuses_an_unknown_tool_id(tmp_path):
+    _invoke(["schedule", "announce", "30m", "--user", "u1"], tmp_path)
+    job_id = _jobs(tmp_path, "u1")[0].id
+    res = _invoke(["edit", job_id, "--tools", "twitter,teleport", "--user", "u1"], tmp_path)
+    assert res.exit_code != 0
+    assert "teleport" in res.output
+    assert "tools" not in _jobs(tmp_path, "u1")[0].payload
+
+
+def test_edit_has_no_step_budget_option(tmp_path):
+    # 083 WS-4: the step cap is the operator's (AUTONOMOUS_MAX_STEPS); a job
+    # carries no step budget of its own.
+    _invoke(["schedule", "judge", "30m", "--user", "u1"], tmp_path)
+    job_id = _jobs(tmp_path, "u1")[0].id
+    res = _invoke(["edit", job_id, "--max-steps", "40", "--user", "u1"], tmp_path)
+    assert res.exit_code != 0
+    assert "max_steps" not in _jobs(tmp_path, "u1")[0].payload
+
+
 # --- `--task-file` (intel HIGH 2026-09-21 04:25Z) ----------------------------
 # The buyback rail's task prose named a CANCELLED safety cron id and told the
 # reader to take "the most recent reading" from a 2,300-line file whose top
@@ -234,16 +313,3 @@ def test_edit_task_file_is_tenant_scoped(tmp_path):
     res = _invoke(["edit", job_id, "--task-file", str(f), "--user", "u2"], tmp_path)
     assert res.exit_code != 0
     assert _jobs(tmp_path, "u1")[0].task == "old prose"
-
-
-def test_edit_slot_cap_sets_and_clears_the_preflight(tmp_path):
-    _invoke(["schedule", "scout rail", "3h", "--user", "u1"], tmp_path)
-    job_id = _jobs(tmp_path, "u1")[0].id
-    res = _invoke(["edit", job_id, "--slot-cap", "6", "--user", "u1"], tmp_path)
-    assert res.exit_code == 0, res.output
-    assert _jobs(tmp_path, "u1")[0].payload["preflight"] == {"kind": "slot_cap", "max_open_rows": 6}
-    res = _invoke(["edit", job_id, "--slot-cap", "none", "--user", "u1"], tmp_path)
-    assert res.exit_code == 0, res.output
-    assert "preflight" not in _jobs(tmp_path, "u1")[0].payload
-    res = _invoke(["edit", job_id, "--slot-cap", "0", "--user", "u1"], tmp_path)
-    assert res.exit_code != 0 and "slot-cap" in res.output

@@ -52,7 +52,7 @@ def test_emit_memory_event_records_row(log):
 # ------------------------------------------------------------------ recall
 
 def test_prefetch_emits_memory_recall_event(log, monkeypatch):
-    async def fake_prefetch(query, *, session_id=None, user_id=None):
+    async def fake_prefetch(query, *, session_id=None, user_id=None, **_kw):
         return "Recalled: the goal DB lives at data/goals.db"
 
     monkeypatch.setattr("modules.memory.registry.memory_prefetch", fake_prefetch)
@@ -75,7 +75,7 @@ def test_prefetch_emits_memory_recall_event(log, monkeypatch):
 
 
 def test_prefetch_no_event_when_nothing_recalled(log, monkeypatch):
-    async def fake_prefetch(query, *, session_id=None, user_id=None):
+    async def fake_prefetch(query, *, session_id=None, user_id=None, **_kw):
         return ""
 
     monkeypatch.setattr("modules.memory.registry.memory_prefetch", fake_prefetch)

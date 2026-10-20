@@ -1,0 +1,36 @@
+{
+  "function": {
+    "description": "Scan a chain's pools and return a VERDICT for each — SURVIVOR / CANDIDATE / TOO_NEW / PASS / WASH / UNSCREENABLE — from the measured separators: 24h volume over liquidity, 1h volume over liquidity, transactions per unique buyer, depth and age. This reads the MARKET around a token, never the contract: run token_info for honeypot, taxes and mint authority, and token_holders for concentration, before acting on anything here.",
+    "name": "defi_data_scan",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "default": "base",
+          "description": "Chain to scan pools on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        },
+        "kind": {
+          "default": "trending",
+          "description": "'trending' (what the indexer currently ranks) or 'new' (the fresh-launch frontier). Trending is a popularity claim and popularity is purchasable; new is unproven by definition.",
+          "type": "string"
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many pools to classify.",
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_liquidity_usd": {
+          "default": 0.0,
+          "description": "Exclude pools whose reported liquidity is BELOW this. A pool whose liquidity is UNKNOWN is never excluded — unknown is not a number.",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

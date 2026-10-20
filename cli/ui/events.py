@@ -272,7 +272,10 @@ class AgentEnd:
 
     Real shape (captured live):
         data.agent_id, data.steps, data.max_steps_reached, data.success,
-        data.errors[]
+        data.errors[], data.stop_reason, data.max_steps
+
+    ``steps`` is ``AgentState.n_steps`` — the NEXT step number, so the run
+    took ``steps - 1``.
     """
 
     type: str = "agent_end"
@@ -281,7 +284,18 @@ class AgentEnd:
     max_steps_reached: bool = False
     success: bool = True
     errors: List[Any] = field(default_factory=list)
+    stop_reason: Optional[str] = None  # 083 WS-1: runtime.stop_reason value
+    max_steps: Optional[int] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def stop_line(self) -> str:
+        """083: one plain line when the turn ended for a reason other than a
+        normal finish (done, a reply wait, reply-only steps) — else ''."""
+        if self.stop_reason in (None, "", "done", "awaiting_reply", "conversational_exit"):
+            return ""
+        from agents.task.runtime.stop_reason import describe_stop_reason
+        return describe_stop_reason(self.stop_reason, max(self.steps - 1, 0), self.max_steps)
 
 
 @dataclass
@@ -503,6 +517,8 @@ def _normalize_inner(feed_dict: Dict[str, Any]) -> RenderEvent:
             max_steps_reached=bool(data.get("max_steps_reached", False)),
             success=bool(data.get("success", True)),
             errors=list(data.get("errors", []) or []),
+            stop_reason=data.get("stop_reason") or None,
+            max_steps=data.get("max_steps") or None,
             raw=feed_dict,
         )
 

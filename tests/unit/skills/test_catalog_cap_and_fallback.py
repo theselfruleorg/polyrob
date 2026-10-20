@@ -32,10 +32,10 @@ def _hermetic_home(tmp_path, monkeypatch):
     user skills under the data home. Point both at tmp so a developer's own
     skills can never change what these catalog assertions see."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    from agents.task.agent import skill_discovery, skill_store
-    monkeypatch.setattr(skill_discovery, "user_external_roots",
+    from core.skills import scopes
+    monkeypatch.setattr(scopes, "user_external_roots",
                         lambda: [tmp_path / "home" / ".claude" / "skills"])
-    monkeypatch.setattr(skill_store, "skills_data_home", lambda: tmp_path / "data")
+    monkeypatch.setattr(scopes, "skills_data_home", lambda: tmp_path / "data")
 
 
 def test_catalog_includes_priority6_tail():

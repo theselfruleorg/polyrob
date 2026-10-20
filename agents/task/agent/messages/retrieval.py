@@ -175,10 +175,22 @@ class MessageRetrievalMixin:
 	def restore_ephemeral_on_failure(self) -> None:
 		"""P2-14: re-queue ephemerals consumed for an LLM call that ultimately failed
 		(transient invoke error), so the next step re-includes them instead of losing
-		a correspondent reply / RECALL forever."""
+		a correspondent reply / RECALL forever.
+
+		Also called for a step that produced NO action (2026-10-14 review C-1): a
+		tool-free planning turn did not use the recall / ``<live-health>`` / digest
+		it was shown, so the acting step must see them again.
+
+		A per-call message (the format hint, tagged ``per_call``; the state
+		message) is NOT re-queued: the next call builds a fresh one, and a
+		re-queued copy would ride beside it twice."""
 		pending = getattr(self, '_ephemeral_pending', None)
 		if pending:
-			self._ephemeral_messages = pending + self._ephemeral_messages
+			def _per_call(m) -> bool:
+				md = getattr(m, "metadata", None) or {}
+				return bool(md.get("per_call") or md.get("state_message"))
+			keep = [m for m in pending if not _per_call(m)]
+			self._ephemeral_messages = keep + self._ephemeral_messages
 			self._ephemeral_pending = []
 
 	def get_messages_for_llm(self, consume_ephemeral: bool = True) -> List[BaseMessage]:

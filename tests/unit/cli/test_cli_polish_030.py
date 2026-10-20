@@ -236,7 +236,7 @@ def test_owner_invoices_json_error_is_json(owner_env):
 
 
 def test_cron_list_json(tmp_path):
-    from cli.commands.cron import cron
+    from cli.commands.cron import job as cron
     env = {"POLYROB_DATA_DIR": str(tmp_path)}
     r = _runner().invoke(cron, ["schedule", "check the feeds", "30m",
                                 "--user", "u1"], env=env)

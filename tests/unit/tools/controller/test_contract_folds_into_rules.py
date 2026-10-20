@@ -38,15 +38,13 @@ def _ctx(uid="rob"):
 @pytest.mark.asyncio
 async def test_contract_propose_writes_the_rules_doc(monkeypatch, tmp_path):
     monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
-    # ⚠️ unset now means ON (flipped 2026-09-21) — say "false" to mean the queue.
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _c(tmp_path)
     c._register_preferences_action()
     a = c.registry.registry.actions["preferences"]
     res = await a.function(
         a.param_model(operation="contract_propose",
-                      text="Never post to the Telegram public den."),
+                      text="Never post to the Telegram lobby."),
         execution_context=_ctx())
     root = tmp_path / "identity" / "polyrob" / "user_rob"
     assert (root / ".pending" / "owner.md").is_file(), \
@@ -59,7 +57,6 @@ async def test_contract_propose_writes_the_rules_doc(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_contract_propose_stays_pending_on_an_owner_turn(monkeypatch, tmp_path):
     monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _c(tmp_path)
     c._register_preferences_action()

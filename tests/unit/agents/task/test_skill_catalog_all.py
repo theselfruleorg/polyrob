@@ -37,5 +37,5 @@ def test_polyrob_user_guide_visible_in_catalog_with_its_description():
 
     text = sm.format_skill_catalog(catalog)
     assert 'id="polyrob-user-guide"' in text
-    # one-line description (frontmatter, agentskills.io source of truth) renders
-    assert "The map of what POLYROB is" in text
+    # the index line is the frontmatter `polyrob-when` line (081 WS-4.3)
+    assert "The owner asks what you can do, how, or why" in text

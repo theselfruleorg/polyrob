@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Your financial ledger: treasury (income / spend / net / pending — your own money) and runtime cost (what the owner pays to run you), over a trailing window. The two are never combined. Read-only, evidence-backed.",
+    "name": "x402_invoice_accounting",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "days": {
+          "default": 7,
+          "description": "Trailing window in days (default 7)",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

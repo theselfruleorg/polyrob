@@ -18,9 +18,3 @@ def test_hold_running_returns_only_this_workers_rows_to_ready(tmp_path):
     assert b.hold_running(worker="goal-dispatch-1", reason="again") == []
 
 
-def test_count_created_by_session_uses_audit_stamp(tmp_path):
-    b = GoalBoard(str(tmp_path / "goals.db"))
-    b.create(user_id="rob", title="x", payload={"created_by_session_id": "s1"})
-    b.create(user_id="rob", title="y", payload={"origin_session_id": "s1"})
-    b.create(user_id="rob", title="z", payload={"origin_session_id": "s2"})
-    assert b.count_created_by_session("s1") == 2

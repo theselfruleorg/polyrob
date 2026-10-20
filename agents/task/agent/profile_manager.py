@@ -102,8 +102,6 @@ class ProfileManager:
 				updated_config['tool_calling_method'] = tools_config['tool_calling_method']
 
 			# Apply limits configuration
-			if 'max_steps' in limits_config:
-				updated_config['_profile_max_steps'] = limits_config['max_steps']
 			if 'max_actions_per_step' in limits_config:
 				updated_config['max_actions_per_step'] = limits_config['max_actions_per_step']
 			if 'max_input_tokens' in limits_config and limits_config['max_input_tokens']:

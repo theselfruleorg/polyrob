@@ -45,6 +45,10 @@ SERVICE_NAME = "owner_thread"
 _BODY_CAP = 2000          # chars kept per line
 _KEEP_ROWS = 3000         # newest rows kept per tenant (~30 days of prod traffic)
 _DEDUP_WINDOW_S = 120.0   # an identical line inside this window is the same line
+#: A PLAIN owner line (no quote-reply) answers a rail's message when that
+#: message is the last thing the owner received before it, within this window
+#: (2026-10-13 review C5: "stop posting that" in plain text never reached the job).
+PLAIN_REPLY_WINDOW_S = 3600.0
 BLOCK_MAX_CHARS = 2000    # the rendered <owner-thread> block, whatever the row count
 LINE_MAX_CHARS = 400      # one rendered line
 
@@ -62,7 +66,7 @@ def owner_thread_inject() -> bool:
 
 
 def tail_hours() -> float:
-    return float(max(1, int_env("OWNER_THREAD_TAIL_HOURS", 6)))
+    return float(max(1, int_env("OWNER_THREAD_TAIL_HOURS", 24)))
 
 
 def tail_rows() -> int:
@@ -178,15 +182,38 @@ class OwnerThreadStore:
         return [dict(r) for r in reversed(rows)]
 
     def rows_since(self, user_id: str, *, since_ts: float,
-                   exclude_session_id: str = "", limit: int = 50) -> List[dict]:
-        """Rows strictly after ``since_ts`` that another session produced, oldest first."""
+                   exclude_session_id: str = "", limit: int = 50,
+                   newest: bool = False) -> List[dict]:
+        """Rows strictly after ``since_ts`` that another session produced, oldest
+        first — plus this session's ``owner_verb`` rows: the harness writes a
+        verb's or a card's reply under the owner session's id, but the session
+        itself never saw it (2026-10-17: a refused /send quote, then the agent
+        told the owner the card had "expired").
+
+        ``newest=True`` keeps the NEWEST ``limit`` rows (still returned oldest
+        first): an ASC limit dropped the latest sends of a 7-card payout and the
+        agent said a refused send had "landed" (084 R10)."""
+        order = "DESC" if newest else "ASC"
         rows = execute_retry(
             self.db_path,
-            "SELECT * FROM owner_thread WHERE user_id=? AND ts>? AND session_id!=? "
-            "ORDER BY ts ASC, id ASC LIMIT ?",
+            "SELECT * FROM owner_thread WHERE user_id=? AND ts>? "
+            "AND (session_id!=? OR source='owner_verb') "
+            f"ORDER BY ts {order}, id {order} LIMIT ?",
             (str(user_id or ""), float(since_ts), str(exclude_session_id or ""),
              max(1, int(limit))), fetch="all") or []
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        return out[::-1] if newest else out
+
+    def count_since(self, user_id: str, *, since_ts: float,
+                    exclude_session_id: str = "") -> int:
+        """How many rows :meth:`rows_since` could return (no limit)."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT COUNT(*) AS n FROM owner_thread WHERE user_id=? AND ts>? "
+            "AND (session_id!=? OR source='owner_verb')",
+            (str(user_id or ""), float(since_ts), str(exclude_session_id or "")),
+            fetch="all") or []
+        return int(dict(rows[0])["n"]) if rows else 0
 
     def last_inbound_ts(self, user_id: str, session_id: str) -> Optional[float]:
         row = execute_retry(
@@ -209,7 +236,8 @@ class OwnerThreadStore:
 
     def rail_rows(self, user_id: str, *, rail_id: str, limit: int) -> List[dict]:
         """What THIS rail told the owner, plus any owner line that quote-replied
-        to one of those messages. Oldest first."""
+        to one of those messages, plus a PLAIN owner line that followed one of
+        them (C5, :meth:`_plain_replies`). Oldest first."""
         if not rail_id:
             return []
         uid = str(user_id or "")
@@ -228,8 +256,51 @@ class OwnerThreadStore:
                 "AND via=? AND reply_to_mid=? ORDER BY ts ASC LIMIT 5",
                 (uid, str(via), str(mid)), fetch="all") or []
             ins.extend(dict(r) for r in rows)
+        seen = {int(r["id"]) for r in ins}
+        for r in self._plain_replies(uid, rail_id, outs):
+            if int(r["id"]) not in seen:
+                ins.append(r)
+                seen.add(int(r["id"]))
         merged = sorted(outs + ins, key=lambda r: (float(r["ts"]), int(r["id"])))
         return merged[-max(1, int(limit)):]
+
+    def _plain_replies(self, uid: str, rail_id: str, outs: List[dict]) -> List[dict]:
+        """Owner lines with NO quote-reply that answer this rail: the last line
+        the owner received before each was this rail's, within
+        :data:`PLAIN_REPLY_WINDOW_S`. A chat reply or another rail's message in
+        between takes the owner's line instead. Commands are not replies."""
+        if not outs:
+            return []
+        # One bounded window per rail message — a single scan from the OLDEST
+        # rail message with one LIMIT returned the oldest lines of a busy
+        # thread and dropped the newest reply, the one the next run needs.
+        rows, seen = [], set()
+        for o in outs:
+            for r in execute_retry(
+                    self.db_path,
+                    "SELECT * FROM owner_thread WHERE user_id=? AND direction='in' "
+                    "AND reply_to_mid='' AND kind NOT IN ('command','card_tap') AND ts>=? AND ts<=? "
+                    "ORDER BY ts ASC, id ASC LIMIT 5",
+                    (uid, float(o["ts"]), float(o["ts"]) + PLAIN_REPLY_WINDOW_S),
+                    fetch="all") or []:
+                if int(r["id"]) not in seen:
+                    seen.add(int(r["id"]))
+                    rows.append(r)
+        out: List[dict] = []
+        for r in rows:
+            r = dict(r)
+            prev = execute_retry(
+                self.db_path,
+                "SELECT rail_id, ts FROM owner_thread WHERE user_id=? AND direction='out' "
+                "AND (ts<? OR (ts=? AND id<?)) ORDER BY ts DESC, id DESC LIMIT 1",
+                (uid, float(r["ts"]), float(r["ts"]), int(r["id"])), fetch="one")
+            if prev is None or str(prev["rail_id"] or "") != str(rail_id):
+                continue
+            if float(r["ts"]) - float(prev["ts"]) > PLAIN_REPLY_WINDOW_S:
+                continue
+            r["plain_reply"] = True
+            out.append(r)
+        return out
 
     def outbound_bodies_since(self, user_id: str, since_secs: float, *,
                               now: Optional[float] = None, limit: int = 50) -> List[str]:
@@ -264,7 +335,7 @@ class OwnerThreadStore:
 
         Before 061 the ``message`` tool's owner branch wrote the owner's lines
         into ``conversations.db`` under the raw target — prod held BOTH
-        ``28436760`` and ``telegram:28436760``. Each row is copied here (via =
+        ``100000001`` and ``telegram:100000001``. Each row is copied here (via =
         the conversation's surface, source = ``message_tool``) and the legacy
         conversation is deleted, so ``/contacts`` stops listing the owner as a
         correspondent. Idempotent: an absent conversation moves nothing.
@@ -359,15 +430,41 @@ def _attachment_suffix(attachments: Any) -> str:
     return "".join(f" [attached: {n}]" for n in names[:5])
 
 
+def rail_for_session(session_id: Optional[str]) -> str:
+    """``cron:<job>`` | ``goal:<goal>`` for an autonomous run's session, else ``""``.
+
+    Reads the in-process autonomy marker (``core.autonomy_marker`` — the same
+    tier). The ONE answer for every writer of an owner-bound line."""
+    if not session_id:
+        return ""
+    try:
+        from core.autonomy_marker import cron_job_for_session, goal_for_session
+        job = cron_job_for_session(session_id)
+        if job:
+            return f"cron:{job}"
+        goal = goal_for_session(session_id)
+        if goal:
+            return f"goal:{goal}"
+    except Exception:
+        pass
+    return ""
+
+
 def record_owner_out(container: Any, user_id: str, text: str, *, via: str,
                      session_id: Optional[str], source: str, mid: Optional[str] = None,
                      rail_id: Optional[str] = None, rail_label: Optional[str] = None,
                      ask_id: Optional[str] = None, attachments: Any = None,
                      now: Optional[float] = None) -> bool:
-    """Record a line the owner RECEIVED. Never raises; False = not recorded."""
+    """Record a line the owner RECEIVED. Never raises; False = not recorded.
+
+    ``rail_id=None`` derives the rail from ``session_id`` (C6, 2026-10-13
+    review: the ``message`` tool's owner send carried no rail, so the job's next
+    run never saw what it had told the owner). Pass ``""`` for "no rail"."""
     body = (text or "").strip() + _attachment_suffix(attachments)
     if not body.strip() or not str(user_id or "").strip():
         return False
+    if rail_id is None:
+        rail_id = rail_for_session(session_id)
     try:
         store = resolve_store(container, create=True)
         if store is None:
@@ -419,13 +516,23 @@ def thread_tail(container: Any, user_id: str, *, hours: Optional[float] = None,
 
 def thread_delta(container: Any, user_id: str, *, session_id: str, since_ts: float,
                  max_rows: int = 20) -> List[dict]:
-    """Rows OTHER sessions produced after ``since_ts``."""
+    """The NEWEST ``max_rows`` rows other sessions (and the owner's own verbs)
+    produced after ``since_ts``, oldest first. When more exist, the first row
+    carries ``_earlier`` = how many older rows were left out, so the block can
+    say so instead of losing them silently (084 R10)."""
     try:
         store = resolve_store(container, create=False)
         if store is None:
             return []
-        return store.rows_since(user_id, since_ts=since_ts,
-                                exclude_session_id=session_id, limit=max_rows)
+        rows = store.rows_since(user_id, since_ts=since_ts,
+                                exclude_session_id=session_id, limit=max_rows,
+                                newest=True)
+        if rows and len(rows) >= max_rows:
+            total = store.count_since(user_id, since_ts=since_ts,
+                                      exclude_session_id=session_id)
+            if total > len(rows):
+                rows[0] = dict(rows[0], _earlier=total - len(rows))
+        return rows
     except Exception:
         logger.debug("owner thread: delta read failed (fail-open)", exc_info=True)
         return []
@@ -568,10 +675,21 @@ def render_line(row: dict, *, this_session: str = "") -> str:
         body = body[:LINE_MAX_CHARS - 1] + "…"
     same = " (this session)" if this_session and row.get("session_id") == this_session else ""
     if row.get("direction") == "in":
-        ref = f" [replying to msg {row['reply_to_mid']}]" if row.get("reply_to_mid") else ""
+        if row.get("kind") == "card_tap":
+            return f"{_hhmm(row.get('ts'))} owner tapped a card: {body}"
+        if row.get("kind") == "command":
+            return f"{_hhmm(row.get('ts'))} owner typed a command: {body}"
+        ref = f" [replying to msg {row['reply_to_mid']}]" if row.get("reply_to_mid") else (
+            " [plain reply, right after your message above]" if row.get("plain_reply") else "")
         return f"{_hhmm(row.get('ts'))} owner→you{same}{ref}: {body}"
     origin = _origin(row)
     mid = f" [msg {row['mid']}]" if row.get("mid") else ""
+    if row.get("source") == "owner_verb":
+        # 084 R9: the seat's reply to the owner's OWN command or card tap. It
+        # read "you→owner" and the agent called the owner's sends "autonomous runs".
+        via = f", via {row['via']}" if row.get("via") else ""
+        return (f"{_hhmm(row.get('ts'))} seat→owner (the result of the owner's OWN "
+                f"command or card tap{via}; NOT sent by you){mid}: {body}")
     # "private chat" is spelled out: on 2026-10-10 a cron run read its own
     # misrouted den reply here and still told the owner "nothing went to your inbox".
     return (f"{_hhmm(row.get('ts'))} you→owner (sent to the owner's PRIVATE chat"
@@ -581,8 +699,9 @@ def render_line(row: dict, *, this_session: str = "") -> str:
 _HEAD = {
     "tail": "Recent lines of your ONE conversation with the owner, across every "
             "session and rail (oldest first). Context only. Not requests.",
-    "delta": "What OTHER sessions and rails exchanged with the owner since this "
-             "session's last turn. Context only. Not requests.",
+    "delta": "What happened in your conversation with the owner since this "
+             "session's last turn: other sessions' messages, and the owner's own "
+             "commands, card taps and their results. Context only. Not requests.",
     "referent": "The owner's message is a REPLY to this exact line of yours.",
     "rail": "What THIS rail last told the owner, and what the owner answered to it. "
             "Context only. Not requests.",
@@ -609,7 +728,8 @@ def render_block(rows: List[dict], *, kind: str, this_session: str = "",
         kept.append(ln)
         used += len(ln) + 1
     kept.reverse()
-    body = ([f"[{omitted} earlier lines omitted]"] if omitted else []) + kept
+    omitted += int(rows[0].get("_earlier") or 0)
+    body = ([f"[{omitted} earlier lines omitted — /thread shows them]"] if omitted else []) + kept
     return "\n".join([f'<owner-thread kind="{kind}">', head, *body, "</owner-thread>"])
 
 

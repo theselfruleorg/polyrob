@@ -20,8 +20,8 @@ def on(monkeypatch):
 
 
 def _dag(board):
-    obj = board.create_objective(user_id=USER, title="Standing objective")
-    root = board.create(user_id=USER, title="Investigate the pricing page", parent_id=obj.id)
+    obj = None
+    root = board.create(user_id=USER, title="Investigate the pricing page")
     child = board.create(user_id=USER, title="Collect three competitor prices",
                          parent_id=root.id, force=True)
     return obj, root, child
@@ -33,10 +33,10 @@ def test_off_adds_nothing(board, monkeypatch):
     assert GM.goal_request_fields(board, root) == {}
 
 
-def test_a_dag_shares_the_root_label_and_objectives_are_not_scopes(board, on):
+def test_a_dag_shares_the_root_label(board, on):
     _obj, root, child = _dag(board)
     assert GM.root_goal(board, child).id == root.id
-    assert GM.root_goal(board, root).id == root.id  # the objective parent is not a scope
+    assert GM.root_goal(board, root).id == root.id
     want = {"memory_scope": f"goal:{root.id}", "memory_regime": "scoped"}
     assert GM.goal_request_fields(board, root) == want
     assert GM.goal_request_fields(board, child) == want

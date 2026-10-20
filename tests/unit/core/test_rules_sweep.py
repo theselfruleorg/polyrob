@@ -99,18 +99,3 @@ def test_rail_instruction_lines():
 	assert lines[-1] == "pinned skills: x-engagement"
 
 
-def test_active_rail_leg_is_swept_before_a_child_goal_exists(tmp_path):
-    import json
-    cron, goals = _dbs(tmp_path)
-    con = sqlite3.connect(goals)
-    payload = {"recurrence": {"legs": [{"title": "post", "body": "Publish public bug fix reports."}]}}
-    con.execute("INSERT INTO goals VALUES (?,?,?,?,?,?)",
-                ("rail", UID, "standing rail", "", "active", json.dumps(payload)))
-    con.execute("INSERT INTO goals VALUES (?,?,?,?,?,?)",
-                ("paused", UID, "off rail", "", "paused", json.dumps(payload)))
-    con.commit(); con.close()
-    result = sweep(RULE, user_id=UID, data_dir=str(tmp_path), instance_id="rob",
-                   cron_db=cron, goals_db=goals, skills=[])
-    assert len(result["hits"]) == 1
-    assert result["hits"][0].where == "goal rail"
-    assert "public bug fix" in result["hits"][0].line

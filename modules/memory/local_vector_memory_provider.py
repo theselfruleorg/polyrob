@@ -251,8 +251,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     # ---- write --------------------------------------------------------------
     async def sync_turn(self, user_content: str, assistant_content: str, *,
-                        session_id: str, user_id=None, scope=None) -> None:
-        # Keyword half (inherited) writes the FTS5 row + applies anon-block.
+                        session_id: str, user_id=None, scope=None):
+        # Keyword half (inherited) writes the FTS5 row + applies anon-block. Its
+        # True / False / None outcome is returned unchanged (D4: the router's
+        # memory_write event fires only on a real insert).
         inserted = await super().sync_turn(user_content, assistant_content,
                                            session_id=session_id, user_id=user_id,
                                            scope=scope)
@@ -260,14 +262,14 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             # B2 dup collapse: the keyword half refreshed an existing row's ts and
             # skipped the insert — embedding it again would grow the vector sidecar
             # with a duplicate mem_meta/mem_vec pair on every repeated finding.
-            return
+            return inserted
         if not self._vec_ok or self._anon_blocked(user_id):
-            return
+            return inserted
         # Phase 1.1: SAME composition as the keyword half (base class) so the embedded
         # vector content matches the FTS content -> RRF dedup-by-content stays consistent.
         content = self._compose_stored_content(user_content, assistant_content)
         if not content:
-            return
+            return inserted
         try:
             emb = await self._embed(content)
             await asyncio.get_event_loop().run_in_executor(
@@ -275,6 +277,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                 _scope.write_label(scope))
         except Exception as e:  # fail-open: keyword row already persisted
             logger.debug("local-vector: vector write skipped: %s", e)
+        return inserted
 
     def _vec_write(self, norm_user: str, session_id: str, content: str,
                    emb: List[float], label: str = "") -> None:
@@ -346,16 +349,19 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
-                     with_ids: bool = False, scope=None) -> str:
+                     with_ids: bool = False, scope=None, demote_automation: bool = True,
+                     prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
         if self._anon_blocked(user_id):
             return ""
         limit = self._clamp_limit(limit, self.top_k)
         norm = self._norm_user(user_id)
         # M3 parity with the base class: _keyword_rows does blocking sqlite I/O
         # (execute_retry can time.sleep-retry under WAL contention) — offload it.
+        # D3: a keyword-store read failure RAISES (never "" = "nothing matched").
         kw_rows = await self._run_blocking(
             self._keyword_rows, query, norm_user=norm, limit=limit, sort=sort,
-            before_id=before_id, scope=scope)
+            before_id=before_id, scope=scope, demote_automation=demote_automation,
+            prefer_job_id=prefer_job_id, prefer_goal_id=prefer_goal_id)
         kw_list = [r["content"] for r in kw_rows]
         # B2: date-prefix lines whose write-time stamp is known. Vector-only hits
         # aren't in the keyword row set — they render bare (fail-open).
@@ -381,11 +387,56 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: vector search skipped: %s", e)
             return "\n".join(_line(c) for c in kw_list)
+        merged, ts_map = await self._dated_merge(
+            kw_list, vec, ts_map, norm, limit, kw_rows=kw_rows,
+            demote_automation=demote_automation, prefer_job_id=prefer_job_id,
+            prefer_goal_id=prefer_goal_id)
+        return "\n".join(self._recall_line(c, ts_map.get(c), rowid_map.get(c))
+                         for c in merged)
+
+    async def _dated_merge(self, kw_list, vec, ts_map, norm, limit, *, kw_rows=None,
+                           demote_automation: bool = True, prefer_job_id: str = None,
+                           prefer_goal_id: str = None):
+        """RRF-merge, then (D11) look up the vector-only hits in the keyword
+        store: a hit renders with its write date, and a hit whose keyword row
+        was pruned or purged (a vector twin left behind) is dropped. Last, the
+        reader's group order (own runs first; cron/goal after chat for an
+        owner-chat reader) is re-applied over the fused list — RRF alone
+        does not know it."""
         merged = self._rrf_merge([kw_list, vec], limit)
-        return "\n".join(_line(c) for c in merged)
+        kw_set = set(kw_list)
+        extra = [c for c in merged if c not in kw_set]
+        if extra:
+            try:
+                alive = await self._run_blocking(self._dated_existing, norm, extra)
+            except Exception as e:  # fail-open: render them undated rather than lose recall
+                logger.debug("local-vector: vector-hit date lookup skipped: %s", e)
+                return merged, ts_map
+            ts_map = dict(ts_map)
+            ts_map.update({c: t for c, t in alive.items() if t})
+            merged = [c for c in merged if c in kw_set or c in alive]
+            extra = [c for c in merged if c not in kw_set]
+        if not (demote_automation or prefer_job_id or prefer_goal_id):
+            return merged, ts_map
+        flags = {r["content"]: (bool(r.get("own")), bool(r.get("auto")))
+                 for r in (kw_rows or [])}
+        if extra:
+            try:
+                flags.update(await self._run_blocking(
+                    self._reader_flags, norm, extra, prefer_job_id=prefer_job_id,
+                    prefer_goal_id=prefer_goal_id))
+            except Exception as e:  # fail-open: keep the fused order
+                logger.debug("local-vector: vector-hit reader flags skipped: %s", e)
+                return merged, ts_map
+
+        def _group(c):
+            own, auto = flags.get(c, (False, False))
+            return (0 if own else 1, (1 if auto else 0) if demote_automation else 0)
+        return sorted(merged, key=_group), ts_map
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None,
-                       scope=None) -> str:
+                       scope=None, demote_automation: bool = True,
+                       prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
         # Keyword half computed DIRECTLY (not via super().prefetch — that calls
         # self.search(), which polymorphically dispatches to THIS class's hybrid
         # override and would run the vector KNN + embed twice per prefetch). Same
@@ -400,7 +451,9 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         kw_rows = (
             await self._run_blocking(
                 self._keyword_rows, query, norm_user=norm, limit=self.top_k,
-                allow_browse=False, exclude_session_id=session_id, scope=scope)
+                allow_browse=False, exclude_session_id=session_id, scope=scope,
+                demote_automation=demote_automation, prefer_job_id=prefer_job_id,
+                prefer_goal_id=prefer_goal_id)
             if terms else []
         )
         kw_list = [r["content"] for r in kw_rows]
@@ -418,7 +471,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             return kw
         if not vec:
             return kw
-        merged = self._rrf_merge([kw_list, vec], self.top_k)
+        merged, ts_map = await self._dated_merge(
+            kw_list, vec, ts_map, norm, self.top_k, kw_rows=kw_rows,
+            demote_automation=demote_automation, prefer_job_id=prefer_job_id,
+            prefer_goal_id=prefer_goal_id)
         return "\n".join(self._recall_line(c, ts_map.get(c)) for c in merged)
 
     # ---- retention (B3) ------------------------------------------------------

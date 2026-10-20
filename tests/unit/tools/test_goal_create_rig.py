@@ -75,31 +75,18 @@ def test_agent_rig_past_the_ceiling_is_refused(tmp_path, _supervised, rig, leaks
     assert tool._resolve_board().list_recent(user_id="tester", limit=5) == []
 
 
-def test_full_rig_and_fitting_rig_are_accepted_and_stamped(tmp_path, _supervised):
+def test_full_rig_and_fitting_rig_are_accepted(tmp_path, _supervised):
     tool = _make_tool(tmp_path)
     titles = {"full": "draft the quarterly newsletter", "research": "survey vector databases"}
     for rig, title in titles.items():
         res = asyncio.run(tool.goal_create(GoalCreateAction(title=title, rig=rig), _Ctx()))
         assert res.error is None, res.error
-    for goal in tool._resolve_board().list_recent(user_id="tester", limit=5):
-        assert goal.payload["authored_by"] == "agent"
+    rigs = {g.payload.get("rig") for g in tool._resolve_board().list_recent(user_id="tester",
+                                                                             limit=5)}
+    assert rigs == {"full", "research"}
 
 
-def test_dispatch_intersects_a_legacy_agent_rig(_supervised):
-    """A row written BEFORE the refusal existed is narrowed at dispatch."""
-    from core.config_policy.rigs import resolve_rig_tools
-    from tools.goal_tools import allowed_self_goal_tools
-    ceiling = sorted(allowed_self_goal_tools())
-    legacy = {"rig": "money_rail", "created_by_session_id": "s1"}
-    got = resolve_rig_tools(legacy, ["x"], agent_ceiling=ceiling)
-    assert "defi_trade" not in got and "defi_data" in got
-    marked = {"rig": "ops", "authored_by": "agent"}
-    assert "cronjob" not in resolve_rig_tools(marked, ["x"], agent_ceiling=ceiling)
-
-
-def test_dispatch_honours_an_owner_set_rig(_supervised):
+def test_dispatch_uses_a_stored_rig_as_written(_supervised):
     from core.config_policy.rigs import RIGS, resolve_rig_tools
-    from tools.goal_tools import allowed_self_goal_tools
-    got = resolve_rig_tools({"rig": "money_rail", "authored_by": "owner"}, ["x"],
-                            agent_ceiling=sorted(allowed_self_goal_tools()))
+    got = resolve_rig_tools({"rig": "money_rail", "created_by_session_id": "s1"}, ["x"])
     assert got == list(RIGS["money_rail"])

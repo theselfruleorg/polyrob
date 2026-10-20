@@ -358,6 +358,20 @@ def member_env_lines(env: Optional[Mapping[str, str]] = None) -> List[str]:
     return out
 
 
+def ignored_member_health(env: Optional[Mapping[str, str]] = None) -> Optional[Tuple[str, str, str]]:
+    """The ``/status`` health item for member lines that are set directly and
+    ignored (080 WS-1), as ``(key, text, remedy)`` — or None when the env is clean."""
+    src = os.environ if env is None else env
+    direct = members_set_directly(src)
+    if not direct:
+        return None
+    n = len(direct)
+    text = (f"{n} line{'s' if n != 1 else ''} in polyrob.env "
+            f"{'are' if n != 1 else 'is'} ignored (posture members) — delete them "
+            f"or move them into {OVERRIDES_ENV}")
+    return ("member_env_lines_ignored", text, f"one line for all of them: {replacement_line(src)}")
+
+
 _WARNED = False
 
 
@@ -375,7 +389,7 @@ def warn_member_env_once(env: Optional[Mapping[str, str]] = None) -> None:
 
 __all__ = [
     "COMPUTE_POSTURE_MEMBERS", "MEMBER_FLAGS", "OVERRIDES_ENV", "OverrideProblem",
-    "bundle_default", "flag_raw", "is_member", "member_display_default", "member_env_lines", "member_flag", "member_raw",
+    "bundle_default", "ignored_member_health", "flag_raw", "is_member", "member_display_default", "member_env_lines", "member_flag", "member_raw",
     "member_source", "members_set_directly", "override_problems", "overrides",
     "parse_overrides", "replacement_line", "set_line", "setdefault_flag", "upsert_flag",
     "warn_member_env_once", "with_override",

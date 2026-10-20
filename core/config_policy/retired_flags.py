@@ -10,9 +10,13 @@ deposit addresses derive. Those REFUSE (``refuse_retired_alias``) at the read
 site that used to honour them, naming the rename. Everything else is reported
 by ``polyrob doctor`` so the owner can delete the line.
 
-Retired in 1.4 (the 1.3 "Retire after 1.4" markers).
+Retired in 1.4 (the 1.3 "Retire after 1.4" markers), and after 1.4 the
+duplicate model pickers (one way to pick the model: ``DEFAULT_PROVIDER`` +
+``DEFAULT_MODEL``, ``HEAVY_MODEL``, ``AUX_*``, a job's ``payload.model``).
+A per-provider ``POLYROB_<PROVIDER>_MODEL`` line is matched by pattern
+(:data:`RETIRED_PATTERNS`), not spelled.
 
-Moved into ``POLYROB_OVERRIDES`` (owner decision D7, 2026-10-10): the 51
+Moved into ``POLYROB_OVERRIDES`` (owner decision D7, 2026-10-10): the 50
 posture members (``core.config_policy.members.MEMBER_FLAGS``) are no longer env
 settings of their own. A direct line is ignored — never refused — and
 :func:`retired_flag_lines` names the exact replacement line
@@ -46,6 +50,10 @@ RETIRED_FLAGS: dict[str, str] = {
     "COMPACTION_AUX_MODEL": "AUX_MODEL_COMPACTION",
     "COMPACTION_PROVIDER": "AUX_PROVIDER_COMPACTION",
     "POLYROB_ENV_KEY_BACKFILL": "polyrob config migrate",
+    # one way to pick the model — the duplicate pickers
+    "CHAT_PROVIDER": "DEFAULT_PROVIDER",
+    "CHAT_MODEL": "DEFAULT_MODEL",
+    "COMPACTION_AUTO_AUX": "AUX_AUTO",
     # revert switches — the default-ON behaviour is now permanent
     "AUTONOMY_SHUTDOWN_DRAIN": "",
     "AUTONOMY_STATE_DURABLE": "",
@@ -76,6 +84,21 @@ RETIRED_FLAGS: dict[str, str] = {
     "TOOL_SCHEMA_STABLE_ORDER": "",
     "TOOL_USAGE_TELEMETRY": "",
     "TX_NOTIFY_ENABLED": "",
+    # 080 WS-6 — rails, objectives, streams and the objective planner are
+    # deleted; a recurring need is a cron job (`polyrob cron`, `/cron`)
+    "GOAL_PLANNER_ENABLED": "",
+    "GOAL_PLANNER_MIN_READY": "",
+    "GOAL_PLANNER_COOLDOWN_SEC": "",
+    "GOAL_PLANNER_GOALS_PER_RUN": "",
+    "GOAL_PLANNER_READY_CEILING": "",
+    "GOAL_PLANNER_MAX_SOCIAL": "",
+    "GOAL_EMPTY_PIPELINE_ESCALATE_AFTER": "",
+    "GOAL_PER_OBJECTIVE_CAP": "",
+    "OBJECTIVE_GOAL_BUDGET": "",
+    "STREAM_SEEDING_PAUSE": "",
+    "POLYROB_STREAMS_MANIFEST": "",
+    # 083 — the step cap is the operator's: one cap for every autonomous run
+    "GOAL_DEFAULT_MAX_STEPS": "AUTONOMOUS_MAX_STEPS",
 }
 
 #: The aliases whose silent loss changes identity, posture or money. Their old
@@ -85,6 +108,14 @@ REFUSING_ALIASES: dict[str, str] = {
     "BOT_OWNER_USER_ID": "POLYROB_OWNER_USER_ID",
     "MASTER_SEED": "PAYMENT_MASTER_SEED",
     "WEBGATE_MULTITENANT": "POLYROB_POSTURE",
+    # a silently ignored model pin would change the model every run uses
+    "CHAT_PROVIDER": "DEFAULT_PROVIDER",
+    "CHAT_MODEL": "DEFAULT_MODEL",
+}
+
+#: Retired name PATTERNS (regex -> replacement): a family no code reads.
+RETIRED_PATTERNS: dict[str, str] = {
+    r"POLYROB_[A-Z0-9_]+_MODEL": "DEFAULT_MODEL (pinned provider) or payload.model",
 }
 
 
@@ -113,7 +144,7 @@ def refuse_retired_alias(name: str, env: Optional[Mapping[str, str]] = None) -> 
     env = os.environ if env is None else env
     if _set(env, name) and not _set(env, canonical):
         raise RetiredFlagError(
-            f"{name} was retired in 1.4 and is no longer read. Rename it to "
+            f"{name} was retired and is no longer read. Rename it to "
             f"{canonical} in your env file (same value) and restart. POLYROB "
             f"refuses to start on the old name alone instead of silently "
             f"falling back to a default."
@@ -122,8 +153,13 @@ def refuse_retired_alias(name: str, env: Optional[Mapping[str, str]] = None) -> 
 
 def retired_flags_set(env: Optional[Mapping[str, str]] = None) -> list[tuple[str, str]]:
     """``[(name, replacement)]`` for every retired name *env* still sets."""
+    import re
     env = os.environ if env is None else env
-    return [(n, r) for n, r in RETIRED_FLAGS.items() if _set(env, n)]
+    out = [(n, r) for n, r in RETIRED_FLAGS.items() if _set(env, n)]
+    for rx, replacement in RETIRED_PATTERNS.items():
+        out += [(n, replacement) for n in sorted(env)
+                if re.fullmatch(rx, n) and _set(env, n)]
+    return out
 
 
 def moved_into_overrides(env: Optional[Mapping[str, str]] = None) -> list[tuple[str, str]]:
@@ -154,7 +190,7 @@ def retired_flag_lines(env: Optional[Mapping[str, str]] = None) -> list[str]:
 
 
 __all__ = [
-    "RETIRED_FLAGS", "REFUSING_ALIASES", "RetiredFlagError",
+    "RETIRED_FLAGS", "RETIRED_PATTERNS", "REFUSING_ALIASES", "RetiredFlagError",
     "moved_into_overrides", "refuse_retired_alias", "retired_flags_set",
     "retired_flag_lines",
 ]

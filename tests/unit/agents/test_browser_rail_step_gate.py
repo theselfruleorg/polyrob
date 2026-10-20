@@ -21,7 +21,7 @@ def test_unusable_rail_skips_and_warns_once(monkeypatch, caplog):
         assert a._browser_rail_usable() is False
     warns = [r for r in caplog.records if "Browser rail unavailable" in r.getMessage()]
     assert len(warns) == 1
-    assert "polyrob browser install" in warns[0].getMessage()
+    assert "install the browser service" in warns[0].getMessage()
 
 
 def test_usable_rail_observes(monkeypatch):

@@ -3,9 +3,9 @@ name: secret-handling
 description: Never embed or echo secrets; reference by env-var name, show only a fingerprint, and tell the owner to rotate a pasted secret.
 license: MIT
 metadata:
+  polyrob-when: 'A key, password or token shows up in the work'
   polyrob-priority: '4'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"keywords":["secret","api key","credentials","api token","auth token","access token","bearer token","password","private key","seed phrase"],"task_patterns":["\\b(store|save|paste|pasted|set|rotate|hide|leak|leaked|share)\\b.*\\b(tokens?|keys?|passwords?|secrets?)\\b"]}'
   polyrob-version: '2'
 ---
 # Secret Handling

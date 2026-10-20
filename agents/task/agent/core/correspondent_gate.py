@@ -78,8 +78,7 @@ def _high_impact_tools():
 # WS-2 (2026-07-16): derived from the ONE per-tool capability table
 # (core/tool_capabilities.py, `high_impact`) — classify a new tool there, not here;
 # per-entry rationale lives with the table rows. Parity-pinned by
-# tests/unit/core/test_tool_capabilities.py. The trading venues' deliberate absence is
-# now explicit in the table (`readable_while_tainted`).
+# tests/unit/core/test_tool_capabilities.py.
 from core.tool_capabilities import ids_with as _ids_with
 
 # 067 P4 prerequisite: LAZY, like _HIGH_IMPACT_NAMES (the ``__getattr__`` at the end).

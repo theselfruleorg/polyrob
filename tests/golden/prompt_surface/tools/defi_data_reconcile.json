@@ -1,0 +1,24 @@
+{
+  "function": {
+    "description": "Compare the money rail's position book (open_positions, written from landed receipts) against ACTUAL on-chain holdings and report every disagreement, loudly. Run this at the START of every trading run and before ANY public claim about positions or track record — its output is authoritative over your memory.",
+    "name": "defi_data_reconcile",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "default": null,
+          "description": "Reconcile a token-bound ERC-6551 account (its 0x address) instead of the treasury wallet. Omit for the treasury.",
+          "nullable": true,
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "description": "Chain to reconcile against — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

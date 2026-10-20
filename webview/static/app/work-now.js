@@ -1,5 +1,5 @@
 /**
- * work-now.js — Work › Now & next and Work › On a clock (043 WS-P1 / §5).
+ * work-now.js — Work › Now & next and Work › Scheduled jobs (043 WS-P1 / §5).
  *
  * Two tabs of the one Work screen, drawn client-side over three tenant-scoped
  * readers:
@@ -11,8 +11,9 @@
  *     (that array is `list_recent`, newest-first, not the dispatcher's
  *     `board.list` order — but the aside is still counted, not measured off a
  *     window).
- *   - On a clock — GET /api/webgate/cron, listed with a Cancel that posts to
- *     /api/webgate/cron/{id}/cancel (the verb Telegram's owner already uses).
+ *   - Scheduled jobs — GET /api/webgate/cron, each row with Pause / Resume /
+ *     Run now / Stop, which post to /api/webgate/cron/{id}/{verb}
+ *     (webview/job_routes.py — the same CronService verbs `/job` calls).
  *
  * Four rules it keeps, the same ones worklog.js keeps:
  *
@@ -102,8 +103,8 @@ function verbButton(label, verb, id, extra) {
 }
 
 /** One RUNNING goal: title, how long it has run, and a Stop (unless read-only).
- *  Stop is `cancel` — the decisive verb; a queued goal gets the recoverable
- *  Pause instead. */
+ *  Stop is `/goal stop` once (080) — a stream may create it again; Drop it on a
+ *  stopped goal is the "never again". */
 export function runningGoalEntry(goal, copy, nowMs, readOnly) {
   const entry = el("div", "entry is-running");
   entry.dataset.goalId = String((goal && goal.id) || "");
@@ -121,7 +122,7 @@ export function runningGoalEntry(goal, copy, nowMs, readOnly) {
            { elapsed: elapsed(since(startedAt, nowMs), copy) })));
   if (!readOnly) {
     const actions = el("div", "entry-actions");
-    actions.appendChild(verbButton(copy && copy.stop, "cancel", goal && goal.id));
+    actions.appendChild(verbButton(copy && copy.stop, "stop", goal && goal.id));
     entry.appendChild(actions);
   }
   return entry;
@@ -186,30 +187,39 @@ export function sessionEntry(row, copy, nowMs) {
   return entry;
 }
 
-//: The statuses that mean "waiting its turn". `blocked` is shown too, as a
-//: stopped entry, but it is not counted as queued.
+//: The statuses that mean "waiting its turn". `blocked` and `paused` are shown
+//: too, as stopped entries, but they are not counted as queued.
 const QUEUED = ["ready", "waiting", "triage"];
 const STATUS_WORD = {
   ready: "status_ready", waiting: "status_waiting",
-  triage: "status_triage", blocked: "status_blocked",
+  triage: "status_triage", blocked: "status_blocked", paused: "status_paused",
 };
 
-/** One QUEUED (or blocked) goal: title, its plain status, and the verb it
- *  offers. A blocked goal is stopped after repeated failures — Try again
- *  (retry) or Drop it (cancel); a genuinely queued one offers Pause. */
+/** One QUEUED, blocked or paused goal: title, its plain status, the board's
+ *  one-sentence reason (`status_reason`), and the verb it offers. A blocked
+ *  goal offers Try again (retry) or Drop it (stop forever); a goal you paused
+ *  says "paused by you" with Resume (retry); a queued one offers Pause. */
 export function queuedGoalEntry(goal, copy, readOnly) {
-  const blocked = goal && goal.status === "blocked";
-  const entry = el("div", blocked ? "entry is-stopped" : "entry");
+  const status = goal && goal.status;
+  const blocked = status === "blocked";
+  const paused = status === "paused";
+  const entry = el("div", blocked || paused ? "entry is-stopped" : "entry");
   entry.dataset.goalId = String((goal && goal.id) || "");
   entry.appendChild(el("h3", "entry-title", (goal && goal.title) || ""));
-  const word = (copy && copy[STATUS_WORD[goal && goal.status]])
-    || (goal && goal.status) || "";
+  const word = (copy && copy[STATUS_WORD[status]]) || status || "";
   entry.appendChild(el("p", "entry-body", word));
+  // The reason names a failure or the decision a queued goal waits on; a
+  // paused goal's reason only repeats "paused by you", so it is not drawn twice.
+  const reason = goal && goal.status_reason;
+  if (reason && !paused) entry.appendChild(el("p", "entry-meta", reason));
   if (!readOnly) {
     const actions = el("div", "entry-actions");
     if (blocked) {
       actions.appendChild(verbButton(copy && copy.retry, "retry", goal && goal.id));
-      actions.appendChild(verbButton(copy && copy.drop, "cancel", goal && goal.id, "btn-quiet"));
+      actions.appendChild(verbButton(copy && copy.drop, "drop", goal && goal.id, "btn-quiet"));
+    } else if (paused) {
+      actions.appendChild(verbButton(copy && copy.resume, "retry", goal && goal.id));
+      actions.appendChild(verbButton(copy && copy.drop, "drop", goal && goal.id, "btn-quiet"));
     } else {
       actions.appendChild(verbButton(copy && copy.pause, "pause", goal && goal.id, "btn-quiet"));
     }
@@ -229,6 +239,8 @@ export function nextSummary(counts, copy) {
 /**
  * Draw Now & next. `data` is the goals reader body; `runningData` the helpers.
  * Returns which answer it drew ("disabled" | "unreadable" | "rows"), for tests.
+ * "disabled" = own work is off AND the board holds nothing to list; with goals
+ * stored, the off banner is drawn ABOVE them and the answer is "rows" (080 F-5).
  */
 export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
   const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
@@ -236,12 +248,14 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
   if (ctx.running) ctx.running.replaceChildren();
   if (ctx.next) ctx.next.replaceChildren();
 
-  if (data && data.enabled === false) {
+  const off = Boolean(data && data.enabled === false);
+  if (off && !(data.error || ((data.goals || []).length))) {
     if (ctx.running) ctx.running.appendChild(noticeEntry(copy && copy.disabled));
     if (ctx.runningAside) ctx.runningAside.textContent = "";
     if (ctx.nextAside) ctx.nextAside.textContent = "";
     return "disabled";
   }
+  if (off && ctx.running) ctx.running.appendChild(noticeEntry(copy && copy.disabled));
   if (data && data.error) {
     if (ctx.running) ctx.running.appendChild(unreadableEntry(data.error, copy));
     if (ctx.runningAside) ctx.runningAside.textContent = "";
@@ -253,7 +267,7 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
   const counts = (data && data.counts) || {};
   const workers = (runningData && runningData.running) || [];
   const queued = goals.filter((g) => QUEUED.includes(g.status));
-  const blocked = goals.filter((g) => g.status === "blocked");
+  const blocked = goals.filter((g) => g.status === "blocked" || g.status === "paused");
   const live = opts.live || null;
 
   // A6: what is RUNNING comes from the live reader, which queries
@@ -286,7 +300,7 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
   sessions.forEach((row) =>
     ctx.running && ctx.running.appendChild(sessionEntry(row, copy, nowMs)));
   const total = runningGoals.length + workers.length + cronRuns.length + sessions.length;
-  if (!total && ctx.running) {
+  if (!total && !off && ctx.running) {
     ctx.running.appendChild(noticeEntry(copy && copy.empty_now));
   }
   // A helper read that failed is NAMED here, not silently dropped.
@@ -324,6 +338,19 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
   return "rows";
 }
 
+/** The next run, in the reader's local time, from the job's `next_run_at`
+ *  (ISO). `""` when the job has none (a finished one-shot) or it cannot be
+ *  read — never an invented time. */
+export function nextRunText(job, copy) {
+  const ms = job && job.next_run_at ? Date.parse(job.next_run_at) : NaN;
+  if (!Number.isFinite(ms)) return "";
+  const when = new Date(ms).toLocaleString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  return format(copy && copy.sched_next, { when });
+}
+
 /** One cron job as a `<tr>`: what it does, when, last run, and Cancel. A row
  *  that has never run says so plainly — a null last-run is "not yet run", a
  *  genuine state, not an unreadable one (the whole-store read failing is the
@@ -335,7 +362,11 @@ export function cronRow(job, copy, nowMs, readOnly) {
   what.dataset.label = (copy && copy.sched_header_what) || "";
   what.appendChild(document.createTextNode((job && job.task) || ""));
   tr.appendChild(what);
-  tr.appendChild(el("td", null, (job && job.schedule_spec) || ""));
+  const whenCell = el("td", null, (job && job.schedule_spec) || "");
+  // 080 WS-4: "Scheduled jobs" draws the next run the reader already sends.
+  const next = nextRunText(job, copy);
+  if (next) whenCell.appendChild(el("span", "why", next));
+  tr.appendChild(whenCell);
   const last = el("td");
   const lastMs = job && job.last_run_at ? Date.parse(job.last_run_at) : NaN;
   if (Number.isFinite(lastMs)) {
@@ -345,21 +376,50 @@ export function cronRow(job, copy, nowMs, readOnly) {
   } else {
     last.textContent = (copy && copy.sched_last_never) || "";
   }
+  // 080 WS-2: the last outcome the reader sends (cron.service last_outcome) —
+  // "ran …" and "never run" repeat the time above.
+  const outcome = String((job && job.last_outcome) || "");
+  if (outcome && outcome !== "never run" && !outcome.startsWith("ran ")) {
+    last.appendChild(el("span", "why", format(copy && copy.sched_outcome, { outcome })));
+  }
   tr.appendChild(last);
   const act = el("td");
   if (!readOnly) {
-    const btn = el("button", "btn btn-quiet", (copy && copy.sched_cancel) || "");
-    btn.type = "button";
-    btn.dataset.cron = "cancel";
-    btn.dataset.id = String((job && job.id) || "");
-    act.appendChild(btn);
+    const status = String((job && job.status) || "");
+    const verbs = [];
+    if (status === "paused") verbs.push("resume");
+    else if (status === "scheduled") verbs.push("pause", "run");
+    verbs.push("cancel");
+    verbs.forEach((verb) => {
+      const btn = el("button", "btn btn-quiet", (copy && copy[`sched_${verb}`]) || "");
+      btn.type = "button";
+      btn.dataset.cron = verb;
+      btn.dataset.id = String((job && job.id) || "");
+      act.appendChild(btn);
+    });
   }
   tr.appendChild(act);
   return tr;
 }
 
-/** Draw On a clock. `data` is the cron reader body. Returns the answer it drew
- *  ("disabled" | "unreadable" | "empty" | "rows"). */
+/** The sentence a job verb's answer becomes. The job routes answer pause /
+ *  resume / run with `{ok, status, scheduler_note}` and no message; cancel
+ *  answers with a message. Copy owns every word. */
+export function cronAnswer(verb, ok, body, copy) {
+  const b = body || {};
+  if (b.message) return String(b.message);
+  if (!ok) {
+    return b.status ? format(copy && copy.sched_refused, { status: b.status })
+      : ((copy && (copy.sched_unreachable || copy.unreachable)) || "");
+  }
+  const done = (copy && copy[`sched_done_${verb}`]) || "";
+  return [done, b.scheduler_note || ""].filter(Boolean).join(" ");
+}
+
+/** Draw Scheduled jobs. `data` is the cron reader body. Returns the answer it drew
+ *  ("disabled" | "unreadable" | "empty" | "rows"). With the scheduler off the
+ *  stored jobs are STILL listed, under a "nothing will run" banner (080 F-5);
+ *  "disabled" is only the off state with no job stored. */
 export function renderSchedule(ctx, data, copy, opts = {}) {
   const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
   const readOnly = Boolean(opts.readOnly);
@@ -367,9 +427,10 @@ export function renderSchedule(ctx, data, copy, opts = {}) {
   if (ctx.rows) ctx.rows.replaceChildren();
   const setTable = (hidden) => { if (ctx.table) ctx.table.hidden = hidden; };
 
-  if (data && data.enabled === false) {
+  const off = Boolean(data && data.enabled === false);
+  if (off && ctx.notice) ctx.notice.appendChild(noticeEntry(copy && copy.sched_disabled));
+  if (off && !(data.error || ((data.jobs || []).length))) {
     setTable(true);
-    if (ctx.notice) ctx.notice.appendChild(noticeEntry(copy && copy.sched_disabled));
     return "disabled";
   }
   if (data && data.error) {
@@ -469,7 +530,7 @@ async function post(url, copy) {
   }
 }
 
-function wireMutations(nowCtx, schedCtx, copy) {
+function wireMutations(nowCtx, schedCtx, copy, onJobChange) {
   const goalHandler = async (ev) => {
     const btn = ev.target.closest("button[data-verb]");
     if (!btn) return;
@@ -491,10 +552,18 @@ function wireMutations(nowCtx, schedCtx, copy) {
       const tr = btn.closest("tr");
       const buttons = tr ? tr.querySelectorAll("button") : [btn];
       buttons.forEach((b) => { b.disabled = true; });
-      const result = await post(
-        `/api/webgate/cron/${encodeURIComponent(btn.dataset.id)}/cancel`, {
-          ...copy, unreachable: copy.sched_unreachable || copy.unreachable,
-        });
+      const verb = btn.dataset.cron;
+      let result;
+      try {
+        const { ok, body } = await postJson(
+          `/api/webgate/cron/${encodeURIComponent(btn.dataset.id)}/${encodeURIComponent(verb)}`,
+          undefined);
+        const okAll = Boolean(ok && body && body.ok);
+        result = { ok: okAll, message: cronAnswer(verb, okAll, body, copy) };
+      } catch (err) {
+        console.error("[work-now] the job change did not reach the console", err);
+        result = { ok: false, message: copy.sched_unreachable || copy.unreachable || "" };
+      }
       let answer = tr && tr.querySelector(".cron-answer");
       const cell = tr && tr.lastElementChild;
       if (cell) {
@@ -505,8 +574,11 @@ function wireMutations(nowCtx, schedCtx, copy) {
         }
         answer.textContent = result.message || "";
       }
-      if (result.ok && btn) btn.remove();
-      else buttons.forEach((b) => { b.disabled = false; });
+      if (result.ok && verb === "cancel" && tr) {
+        tr.querySelectorAll("button[data-cron]").forEach((b) => b.remove());
+      } else if (result.ok && verb !== "run" && onJobChange) {
+        onJobChange();   // pause / resume change which buttons the row offers
+      } else buttons.forEach((b) => { b.disabled = false; });
     });
   }
 }
@@ -535,7 +607,7 @@ function bind() {
     rows: byId("work-schedule-rows"),
   };
 
-  wireMutations(nowCtx, schedCtx, copy);
+  wireMutations(nowCtx, schedCtx, copy, () => drawSchedule());
 
   // FE10: only the latest read draws — an older answer that lands last must
   // not overwrite a fresher one.

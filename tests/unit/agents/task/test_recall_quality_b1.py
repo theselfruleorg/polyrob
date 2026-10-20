@@ -30,9 +30,10 @@ OVERLAY = ("OWNER RULES NEWER THAN THIS JOB'S TEXT (the job was written 2026-09-
 
 
 class _Stub(MemoryPrefetchMixin):
-    def __init__(self, task, *, seed=None, turn=None, brain=None):
+    def __init__(self, task, *, seed=None, turn=None, brain=None, n_steps=1):
         self.task = task
         self._last_brain_state = brain
+        self.state = SimpleNamespace(n_steps=n_steps)
         self.orchestrator = SimpleNamespace(_recall_seed=seed)
         if turn is not None:
             self._recall_turn_text = turn
@@ -48,9 +49,37 @@ def test_cron_query_uses_the_seed_not_the_overlay():
 
 
 def test_seed_still_carries_the_brain_next_goal():
-    q = _Stub("x", seed="buyback job",
+    q = _Stub("x", seed="buyback job", n_steps=3,
               brain=SimpleNamespace(next_goal="quote the swap"))._build_recall_query()
     assert "buyback job" in q and "quote the swap" in q
+
+
+def test_d7_stale_brain_from_the_previous_run_is_ignored_at_step_one():
+    """D7 / A3: at step 1 the brain is the PREVIOUS run's ("End the turn - the
+    answer is delivered …") and polluted the query."""
+    q = _Stub("bridge status on base", n_steps=1,
+              brain=SimpleNamespace(next_goal="End the turn - the answer is delivered")
+              )._build_recall_query()
+    assert "End the turn" not in q and "bridge status" in q
+
+
+def test_d7_short_turn_falls_back_to_the_previous_subject():
+    s = _Stub("task text", turn="did the bridge to base arrive?")
+    assert "bridge" in s._build_recall_query()
+    s._recall_turn_text = "yes, do it"
+    q = s._build_recall_query()
+    assert "yes, do it" in q and "bridge" in q
+
+
+def test_d7_short_turn_without_history_falls_back_to_the_task():
+    q = _Stub("PNL buyback tranche plan", turn="ok 👍")._build_recall_query()
+    assert "PNL buyback tranche plan" in q
+
+
+def test_d7_non_latin_turn_yields_terms():
+    from modules.memory.fts_terms import informative_terms
+    assert informative_terms("Сколько стоит мост на Base?") == ["Сколько", "стоит", "мост", "Base"]
+    assert "café" in informative_terms("le café décaféiné")
 
 
 def test_no_seed_falls_back_to_task():

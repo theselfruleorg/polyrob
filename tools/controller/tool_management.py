@@ -448,6 +448,17 @@ class ToolManagementMixin:
 				self._tool_list_cache = list(self._tools.keys())
 			return self._tool_list_cache.copy()
 
+	def describe_unloaded_action(self, action_name: str) -> str:
+		"""081 WS-3.1: the ONE not-loaded refusal for *action_name* (it names the
+		owning tool and load_tool, or for money the owner grant). Exposed on the
+		Controller so the agents tier can use it without importing tools."""
+		try:
+			from tools.tool_disclosure import not_loaded_text
+			return not_loaded_text(action_name, self,
+			                       is_leaf=bool(getattr(self, "_is_sub_agent", False)))
+		except Exception:
+			return f"'{action_name}' is not a registered action"
+
 	def render_tool_catalog(self, *, is_leaf: bool = False) -> str:
 		"""S1 (dynamic tool rig): the honest <tool-catalog> block for this session.
 

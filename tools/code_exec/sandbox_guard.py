@@ -67,14 +67,19 @@ def docker_socket_unreachable_reason(backend_name: str) -> Optional[str]:
 def require_sandbox_or_none(backend_name: str) -> Optional[str]:
     """None if ``backend_name`` may execute here; else a refusal reason.
 
-    Local mode allows host execution unless ``host_execution_refusal`` refuses (the
-    key-isolation floor, or the owner's ``host_exec_under_custody=refuse``). On a
-    server the backend must advertise ``capabilities["sandbox"] is True``.
+    Local mode allows host execution unless ``model_code_host_refusal`` refuses (the
+    key-isolation floor, a wallet key in an env file this UID can read — 085 W1 —
+    or the owner's ``host_exec_under_custody=refuse``); a refused local box still
+    runs code in a sandbox backend. On a server the backend must advertise
+    ``capabilities["sandbox"] is True``.
     """
     from core.config_policy import local_mode_enabled
-    from core.security.host_execution import host_execution_refusal
-    if local_mode_enabled() and host_execution_refusal() is None:
-        return docker_socket_unreachable_reason(backend_name)
+    from core.security.host_execution import model_code_host_refusal
+    local_refusal = None
+    if local_mode_enabled():
+        local_refusal = model_code_host_refusal()
+        if local_refusal is None:
+            return docker_socket_unreachable_reason(backend_name)
     from tools.code_exec import default_registry
     try:
         backend = default_registry.create(backend_name)
@@ -86,6 +91,8 @@ def require_sandbox_or_none(backend_name: str) -> Optional[str]:
         )
     if sandboxed:
         return docker_socket_unreachable_reason(backend_name)
+    if local_refusal:
+        return f"code execution refused (backend '{backend_name}' runs on this host): {local_refusal}"
     return (
         f"code execution refused on this server: backend '{backend_name}' is not a "
         f"sandbox (capabilities.sandbox is not True). Set CODE_EXEC_BACKEND to a sandbox "
@@ -140,7 +147,7 @@ def local_host_exec_refusal(execution_context: Any) -> Optional[str]:
 def code_exec_execution_blocked_reason() -> Optional[str]:
     """None if code execution may run now; else a refusal reason.
 
-    Local mode: the host unless host execution is refused (``host_execution_refusal``). Server: refuse when CODE_EXEC_ENABLED is off, otherwise
+    Local mode: the host unless host code execution is refused (``model_code_host_refusal``). Server: refuse when CODE_EXEC_ENABLED is off, otherwise
     require a sandbox-capable backend. WHO may run code in local mode is
     :func:`local_host_exec_refusal`.
     """

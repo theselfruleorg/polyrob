@@ -124,36 +124,22 @@ def test_update_skill_rejects_traversal_id(tmp_path, monkeypatch):
     assert ei.value.status_code == 400
 
 
-# ── BUG 6: writer-derived triggers must survive an empty-triggers POST ────────
+# ── 081 Q2: a created skill is an index line, with no dead keyword triggers ──
 
-def test_create_skill_preserves_writer_triggers_when_caller_omits(tmp_path, monkeypatch):
-    """POST /api/skills with default (all-empty) triggers must NOT wipe the keyword
-    triggers that SkillWriter._upsert_rule derives from the skill id/description.
-    """
+def test_create_skill_writes_an_index_entry_without_keyword_triggers(tmp_path, monkeypatch):
     import api.skill_endpoints as se
     from agents.task.agent.skill_manager import get_skill_manager
 
     sm = get_skill_manager()
     monkeypatch.setattr(se, "get_skills_base_dir", lambda: tmp_path)
     monkeypatch.setattr(sm, "skills_dir", tmp_path)
-
     payload = se.SkillCreate(
-        id="my-research-tool",
-        name="My Research Tool",
+        id="my-research-tool", name="My Research Tool",
         description="search and summarise web articles",
-        content="# My Research Tool\n\n" + "body content here " * 10,
-        # triggers left at default (all empty lists)
-    )
+        content="# My Research Tool\n\n" + "body content here " * 10)
     asyncio.run(se.create_skill(payload, user_id="u2"))
-
-    rules = se.get_user_rules("u2")
-    entry = rules.get("my-research-tool", {})
-    triggers = entry.get("triggers", {})
-    # The writer must have derived at least one keyword from "research" or "tool".
-    keywords = triggers.get("keywords", [])
-    assert len(keywords) > 0, (
-        f"no keywords in triggers after POST with empty SkillTriggers: {entry}"
-    )
+    entry = se.get_user_rules("u2").get("my-research-tool", {})
+    assert entry.get("auto_activate") is True and "triggers" not in entry
 
 
 # ── Task 9: REST layer must discover user skills living in data-home ─────────
@@ -161,15 +147,15 @@ def test_create_skill_preserves_writer_triggers_when_caller_omits(tmp_path, monk
 # A user skill can land in data-home two ways: migrated by Task 9's
 # migrate_legacy_user_skills, or freshly authored by the agent write path
 # (SkillWriterMixin, Task 8). Either way, these tests seed the skill DIRECTLY
-# under skill_store.skills_data_home() - bypassing the REST/agent write paths
+# under scopes.skills_data_home() - bypassing the REST/agent write paths
 # entirely - to prove the REST *read/update/delete* paths discover it there,
 # not that authoring works (that's covered elsewhere).
 
 def _seed_data_home_user_skill(tmp_path, monkeypatch, user_id="u1", skill_id="my-skill"):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.agent import skill_store
+    from core.skills import scopes
 
-    skill_dir = skill_store.skills_data_home() / f"user_{user_id}" / skill_id
+    skill_dir = scopes.skills_data_home() / f"user_{user_id}" / skill_id
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# My Skill\n\nBody content here.\n")
     rules_file = skill_dir.parent / "rules.json"
@@ -228,13 +214,13 @@ def test_delete_skill_removes_user_skill_in_data_home(tmp_path, monkeypatch):
     # just the SKILL.md file into .archived/ (the containing directory itself
     # is not removed), so the active SKILL.md is gone but the archive exists.
     assert not (skill_dir / "SKILL.md").exists()
-    archived = skill_dir.parent / ".archived" / "my-skill" / "SKILL.md"
-    assert archived.exists()
+    archived = list((skill_dir.parent / ".archived" / "my-skill").glob("*-SKILL.md"))
+    assert archived
 
 
 # ── P0 minor #5: REST description must agree with the agent catalog ──────────
 #
-# get_catalog_skills/get_skills_for_session prefer the SKILL.md frontmatter
+# get_catalog_skills/get_pinned_skills prefer the SKILL.md frontmatter
 # description over rules.json (SkillManager._resolve_skill_description). The
 # REST list/get endpoints used to read rules.json directly, so a skill with a
 # newer frontmatter description than its stale rules.json entry would show two

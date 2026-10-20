@@ -1,7 +1,7 @@
 """Build the <environment> foundation block (proposal 014-C1).
 
-Tells the agent WHERE IT LIVES — instance, platform, data dir, absolute
-workspace path + persistence semantics, capability-axis levels, and which
+Tells the agent WHERE IT LIVES — instance, platform, data dir, workspace
+persistence semantics, capability-axis levels, and which
 developer executables exist on the host — so "I don't know where I am /
 whether files persist / whether node exists" is answerable in-context
 (2026-07-15 incident: a render task stalled on exactly those unknowns).
@@ -14,7 +14,9 @@ error returns None and session construction continues without the block).
 Content is per-session-STABLE: built once at session construction and pinned
 as a foundation message (``MessageManager.set_environment_message``), NOT in
 the system prompt, so prompt caching is untouched (same PR13 rationale as
-skills/self-context/runtime-identity).
+skills/self-context/runtime-identity). The absolute workspace path is
+per-SESSION, so it is its own message after the catalogs
+(``build_workspace_note``, 081 WS-3.3).
 
 Secret hygiene: emits only paths, level names, and a ``shutil.which`` probe of
 executable NAMES — never an env VALUE; the rendered block still passes through
@@ -46,6 +48,21 @@ def _enabled() -> bool:
     return bool(local_mode_enabled() or full_autonomy_enabled())
 
 
+def build_workspace_note(session_id: str, user_id: Optional[str]) -> Optional[str]:
+    """081 WS-3.3: the session's workspace path — the one per-session line of
+    the environment, pinned AFTER the catalogs (``FOUNDATION_LAYERS``) so the
+    ``<environment>`` block is the same for every session on the install.
+    None when the environment block is off. Never raises."""
+    try:
+        if not _enabled():
+            return None
+        from agents.task.path import pm
+        workspace = str(pm().get_workspace_dir(pm().clean_session_id(session_id), user_id))
+        return f"<session-workspace>\nWorkspace (absolute): {workspace}\n</session-workspace>"
+    except Exception:
+        return None
+
+
 def build_environment_context(session_id: str, user_id: Optional[str],
                               tool_ids=None) -> Optional[str]:
     """Return the rendered <environment> block, or None (disabled / server / error)."""
@@ -54,10 +71,8 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             return None
         from core.config_policy import (autonomy_enabled, autonomy_mode_display,
                                            autonomy_posture, compute_posture)
-        from agents.task.path import pm
         from core.instance import resolve_instance_id
 
-        workspace = str(pm().get_workspace_dir(pm().clean_session_id(session_id), user_id))
         from core.runtime_paths import data_dir_or_home
         data_dir = data_dir_or_home(os.getenv("POLYROB_DATA_DIR"))
         shared = bool(os.getenv("POLYROB_PROJECT_DIR"))
@@ -72,7 +87,6 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             f"Instance: {resolve_instance_id()} | Platform: "
             f"{platform.system()} {platform.release()}",
             f"Data dir: {data_dir}",
-            f"Workspace (absolute): {workspace}",
             persistence,
             # 018 P4: autonomy_mode_display() is the CLAMPED truth — raw
             # autonomy_mode() could tell the agent 'autonomous' while the
@@ -88,7 +102,7 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             f"Host executables visible to enabled exec tools: {_host_capabilities()}.",
             "For live status (steps/tools/context/budget/health) call agent_status. "
             "A <live-health> note at the start of each turn carries the same health "
-            "facts the owner's /status shows — trust it over anything remembered.",
+            "facts the owner's /status shows.",
             "</environment>",
         ]
         # 062: how this install was made, and what it cannot do. Without these
@@ -100,11 +114,17 @@ def build_environment_context(session_id: str, user_id: Optional[str],
         except Exception:
             pass
 
-        from core.config_policy.policy import run_budget_usd
+        from core.config_policy.policy import autonomous_run_budget_usd, run_budget_usd
         _budget = run_budget_usd()
         if _budget > 0:
             lines.insert(-2, f"Run budget: RUN_BUDGET_USD=${_budget:.2f} session provider-spend "
                              "ceiling — the run halts at the cap (value at session start).")
+        # 083 WS-3: install-wide (the block is the same for every session).
+        _run_cap = autonomous_run_budget_usd()
+        if _run_cap > 0:
+            lines.insert(-2, f"Autonomous run budget: AUTONOMOUS_RUN_BUDGET_USD=${_run_cap:.2f} "
+                             "provider spend per cron/goal run, sub-agents included — the "
+                             "run halts at the cap.")
         if tool_ids:
             # Positive tool list (018 P4): <tool-availability> enumerates only
             # ABSENT tools; the loaded set previously cost an agent_status call.

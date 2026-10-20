@@ -126,7 +126,7 @@ def register_avatar_action(controller) -> None:
     @controller.registry.action(
         "Your avatar: the one image slot that is your face (console, chat, "
         "on-chain registration; the X/Telegram profile photos follow it only when "
-        "the owner runs `polyrob avatar push`). Reads whether it is set and "
+        "the owner pushes it there). Reads whether it is set and "
         "where it came from. With attach=true it also places the image in your "
         "workspace so you can send it with message(media_paths=[...]). With "
         "set_from it replaces the image — only when the owner asks.",

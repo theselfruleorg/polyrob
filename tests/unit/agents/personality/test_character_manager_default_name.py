@@ -22,8 +22,8 @@ def _mgr(value=None):
 
 
 def test_the_env_wins_like_the_persona_resolver(monkeypatch):
-    monkeypatch.setenv("PERSONALITY_DEFAULT_CHARACTER", "dangerob")
-    assert _mgr("other")._default_character_name() == "dangerob"
+    monkeypatch.setenv("PERSONALITY_DEFAULT_CHARACTER", "exampleagent")
+    assert _mgr("other")._default_character_name() == "exampleagent"
 
 
 def test_the_config_then_the_packaged_default(monkeypatch):
@@ -33,8 +33,8 @@ def test_the_config_then_the_packaged_default(monkeypatch):
 
 
 def test_get_default_character_loads_the_env_named_file(monkeypatch, tmp_path):
-    (tmp_path / "dangerob.character.json").write_text("{}")
-    monkeypatch.setenv("PERSONALITY_DEFAULT_CHARACTER", "dangerob")
+    (tmp_path / "exampleagent.character.json").write_text("{}")
+    monkeypatch.setenv("PERSONALITY_DEFAULT_CHARACTER", "exampleagent")
     m = _mgr("other")
     m.characters_dir = tmp_path
     seen = []
@@ -44,4 +44,4 @@ def test_get_default_character_loads_the_env_named_file(monkeypatch, tmp_path):
         return object()
     m._load_character = _load
     assert asyncio.run(m.get_default_character()) is not None
-    assert seen and seen[0].name == "dangerob.character.json"
+    assert seen and seen[0].name == "exampleagent.character.json"

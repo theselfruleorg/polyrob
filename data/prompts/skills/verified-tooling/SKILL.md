@@ -3,9 +3,10 @@ name: verified-tooling
 description: 'How to build a small read-only analysis tool you can trust and re-run: one tool one question, pure and read-only, UNKNOWN is never zero, tests alongside, a real run recorded in a smoke log, and cross-checked totals'
 license: MIT
 metadata:
+  polyrob-when: 'Building a small read-only analysis tool to re-run'
   polyrob-priority: '3'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["coding_create_file","coding_run_tests","code_execution_run_code"],"keywords":["build a tool","small tool","analysis script","analysis tool","parser","ledger summary","pnl curve","watchlist diff","report tool","re-run the analysis","verify the tool"],"task_patterns":["(build|write|make).*(tool|script).*(report|summar|analy|parse)","(re-?run|repeat).*(analysis|report)"],"tool_ids":["coding","code_execution"]}'
+  polyrob-triggers: '{"tool_ids":["coding","code_execution"]}'
   polyrob-version: '2'
 ---
 # Verified Tooling — small tools you can trust twice

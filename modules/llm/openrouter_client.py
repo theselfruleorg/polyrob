@@ -408,7 +408,7 @@ class OpenRouterClient(LLMClient):
         self.api_key = openrouter_config.get('api_key')
         # Default to the registry's SSOT default (P0.7: was a stale hardcoded
         # literal that had drifted from DEFAULT_MODELS['openrouter']). Honors the
-        # POLYROB_OPENROUTER_MODEL env override via get_default_model().
+        # operator's DEFAULT_MODEL pin via get_default_model().
         self.model_type = openrouter_config.get('model') or get_default_model('openrouter')
 
         # OpenRouter-specific headers for app attribution
@@ -632,9 +632,10 @@ class OpenRouterClient(LLMClient):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        tool_choice: Optional[str] = None,
         **kwargs
     ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Optional[int]]]:
-        """Generate response with tool calling support.
+        """Generate response with tool calling support (B-3 tool_choice: openrouter_routing).
 
         Args:
             messages: List of messages
@@ -692,6 +693,7 @@ class OpenRouterClient(LLMClient):
             # P1-3: mark the stable system prefix cacheable for breakpoint-style models
             # (Anthropic/Gemini via OpenRouter). No-op unless prompt caching is on.
             from modules.llm.cache_hints import apply_openrouter_cache_control
+            from modules.llm.openrouter_routing import tool_choice_for, create_with_tool_choice_fallback
             formatted_messages = apply_openrouter_cache_control(formatted_messages, self.model_type)
 
             request_params = {
@@ -720,13 +722,13 @@ class OpenRouterClient(LLMClient):
                     from modules.llm.cache_hints import apply_openrouter_tools_cache_control
                     tools = apply_openrouter_tools_cache_control(tools, self.model_type)
                     request_params['tools'] = tools
-                    request_params['tool_choice'] = 'auto'
+                    request_params['tool_choice'] = tool_choice_for(self, tools, tool_choice)
 
             self.logger.info(f"[_generate_with_tools] Starting API request: model={self.model_type}, tools={len(tools) if tools else 0}, messages={len(formatted_messages)}")
 
             apply_request_extras(request_params, self, max_tokens_value)
             api_start = time.time()
-            response = await inference_sdk(self).chat.completions.create(**request_params)
+            response = await create_with_tool_choice_fallback(self, inference_sdk(self), request_params)
             api_duration = time.time() - api_start
 
             self.last_response = response

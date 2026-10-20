@@ -623,3 +623,16 @@ def test_normalize_agent_end_is_typed():
     assert ev.steps == 2
     assert ev.success is True
     assert ev.max_steps_reached is False
+    assert ev.stop_reason is None and ev.stop_line == ""
+
+
+def test_normalize_agent_end_carries_the_stop_reason():
+    """083: the feed's stop_reason/max_steps ride the typed event."""
+    from cli.ui.events import AgentEnd
+
+    ev = normalize({"type": "agent_end", "data": {
+        "agent_id": "a", "steps": 5, "success": False,
+        "stop_reason": "failures", "max_steps": 20}})
+    assert isinstance(ev, AgentEnd)
+    assert ev.stop_reason == "failures" and ev.max_steps == 20
+    assert ev.stop_line == "stopped after too many consecutive failed steps (4/20)"

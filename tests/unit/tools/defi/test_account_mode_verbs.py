@@ -332,7 +332,7 @@ def test_portfolio_reads_the_account(env, monkeypatch):
     seen = []
     tool = DefiDataTool(holder=env["signer"].address,
                         index_fn=lambda holder, chain: seen.append(holder) or {})
-    monkeypatch.setattr(DefiDataTool, "_gas_lines", lambda self, h, c: [])
+    monkeypatch.setattr(DefiDataTool, "_gas_lines", lambda self, h, c, **k: [])
     res = tool._portfolio_sync(PortfolioParams(chain="base", nft=str(ID)))
     assert res.error is None, res.error
     assert seen == [ACCOUNT] and f"holdings for {ACCOUNT}" in res.extracted_content

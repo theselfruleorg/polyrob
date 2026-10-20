@@ -116,8 +116,10 @@ def _resolve_scan_target(chain: str):
     comes from the PENDING INVOICE's own asset row, and the chain's RPC and
     chain id come from `core/wallet/chains.py`, which already pins both.
 
-    Precedence for the URL is unchanged: ``X402_SETTLEMENT_RPC`` (any chain) >
-    the chain's pinned RPC > the chain row's public fallback.
+    Precedence for the URL: ``X402_SETTLEMENT_RPC`` > the chain's pinned RPC >
+    the chain row's public fallback. ⚠️ ``X402_SETTLEMENT_RPC`` is ONE URL, so it
+    applies ONLY to ``X402_DEFAULT_CHAIN`` (085 F2). Applied to every chain, an
+    invoice on another chain was scanned on the pinned chain's RPC.
 
     ⚠️ ``base-sepolia`` keeps its OWN branch. The money chain registry
     deliberately carries only chains verified for TRADING, so it has no testnet
@@ -126,8 +128,13 @@ def _resolve_scan_target(chain: str):
     """
     import os
     from modules.x402.artifact import _BASE_SEPOLIA_CHAIN_ID, _is_sepolia_chain
-    override = os.getenv("X402_SETTLEMENT_RPC", "").strip()
+    from modules.x402.x402_integration import x402_network
     chain = (chain or "").strip().lower()
+    default_chain = x402_network().strip().lower()
+    override = ""
+    if chain == default_chain or (_is_sepolia_chain(chain)
+                                  and _is_sepolia_chain(default_chain)):
+        override = os.getenv("X402_SETTLEMENT_RPC", "").strip()
     if _is_sepolia_chain(chain):
         return (override or _SEPOLIA_RPC_DEFAULT, _BASE_SEPOLIA_CHAIN_ID)
     from core.wallet import chains as _chains
@@ -204,6 +211,32 @@ async def pending_scan_groups(treasury: str, *, db=None):
 
 #: CR-L25: at most this many `getTransaction` reads per Solana invoice per tick.
 _SVM_FETCH_CAP = 25
+#: 085 F1: an invoice whose deadline falls within this many seconds gets ONE
+#: uncapped pass before the expiry sweep may flip it.
+_SVM_FINAL_PASS_MARGIN_SEC = 300
+#: Pages (of 1000 signatures) the uncapped pass walks before it gives up.
+_SVM_FINAL_PASS_PAGES = 50
+#: Clock skew allowed between the invoice row's `created_at` and a block time.
+_SVM_CREATED_SKEW_SEC = 120
+#: How long after expiry a late Solana payment is still looked for (F1 notice).
+_SVM_LATE_WINDOW_SEC = 48 * 3600
+
+
+def _created_epoch(row) -> Optional[float]:
+    """The invoice row's `created_at` (SQLite `datetime('now')`, UTC) as epoch
+    seconds, minus the skew allowance; None when it cannot be read."""
+    import datetime as _dt
+    raw = row.get("created_at") if hasattr(row, "get") else None
+    if raw in (None, ""):
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            return float(raw) - _SVM_CREATED_SKEW_SEC
+        text = str(raw).strip().replace("T", " ").split(".")[0].rstrip("Z")
+        when = _dt.datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        return when.replace(tzinfo=_dt.timezone.utc).timestamp() - _SVM_CREATED_SKEW_SEC
+    except (TypeError, ValueError):
+        return None
 
 
 def solana_settle_enabled() -> bool:
@@ -218,18 +251,65 @@ def solana_settle_enabled() -> bool:
     if not member_flag("X402_SETTLE_ONCHAIN_DETECT"):
         return False
     return bool_env("X402_SOLANA_SETTLE", False)
+def _lookalike_warning(sender) -> str:
+    """Name the paid address an unmatched sender imitates (address poisoning).
+
+    2026-10-14 01:33Z: dust from 0x1932fd…6d03 — a look-alike of a bounty
+    winner paid nine minutes earlier — reached the owner as a plain unmatched
+    payment. Sends to it are refused already; this tells the owner why it came.
+    Fail-open: unreadable history adds nothing to a notice that must still go.
+    """
+    try:
+        from core.wallet import address_lookalike
+        real = address_lookalike.lookalike_of(
+            sender, address_lookalike.paid_counterparties())
+    except Exception:
+        return ""
+    if not real:
+        return ""
+    return (f"\n⚠️ Likely address poisoning: the sender imitates {real}, an address "
+            f"you paid recently. Never copy a payee from wallet history.")
+
+
 def _scan_max_span() -> int:
     """Bounded per-tick block-range cap (`X402_SETTLEMENT_SCAN_MAX_SPAN`,
     default 5000) — a tick never scans more than this many blocks even after
     a long gap, so a resumed watcher can't issue one giant `eth_getLogs`."""
     from core.env import int_env
     return max(1, int_env("X402_SETTLEMENT_SCAN_MAX_SPAN", 5000))
-def _scan_confirmations() -> int:
-    """Confirmations buffer (`X402_SETTLEMENT_CONFIRMATIONS`, default 2) —
-    blocks within this many of the chain head are never scanned yet (a
-    just-mined block can still reorg out)."""
+#: x402in L3: the finality depth per chain when `X402_SETTLEMENT_CONFIRMATIONS`
+#: is NOT set. The L2 rollups (sequencer-ordered) keep the old default of 2;
+#: Ethereum L1 waits for its usual 12; Polygon PoS reorgs deeper and waits 64.
+#: An unlisted chain gets :data:`_DEFAULT_CONFIRMATIONS`.
+_CHAIN_CONFIRMATIONS = {
+    "ethereum": 12,
+    "polygon": 64,
+    "base": 2,
+    "base-sepolia": 2,
+    "optimism": 2,
+    "arbitrum": 2,
+    "robinhood": 2,
+    "robinhood-testnet": 2,
+}
+_DEFAULT_CONFIRMATIONS = 2
+
+
+def _scan_confirmations(chain: Optional[str] = None) -> int:
+    """Confirmations buffer — blocks within this many of the chain head are
+    never scanned yet (a just-mined block can still reorg out).
+
+    `X402_SETTLEMENT_CONFIRMATIONS`, when set, is the depth for EVERY chain (its
+    meaning is unchanged). Unset, each chain takes its own finality depth from
+    :data:`_CHAIN_CONFIRMATIONS` (085 x402in L3)."""
+    import os
     from core.env import int_env
-    return max(0, int_env("X402_SETTLEMENT_CONFIRMATIONS", 2))
+    if os.getenv("X402_SETTLEMENT_CONFIRMATIONS", "").strip():
+        return max(0, int_env("X402_SETTLEMENT_CONFIRMATIONS", _DEFAULT_CONFIRMATIONS))
+    from modules.x402.artifact import _is_sepolia_chain
+    name = (chain or "").strip().lower()
+    if name and _is_sepolia_chain(name):
+        name = "base-sepolia"
+    return _CHAIN_CONFIRMATIONS.get(name, _DEFAULT_CONFIRMATIONS)
 
 
 class SettlementScanMixin:
@@ -246,13 +326,17 @@ class SettlementScanMixin:
         payment is never seen (the payer then gets an "expired" notice). One
         `eth_chainId` per RPC URL closes that off.
 
-        Verified once per (watcher, url) — cached, so this costs one extra call
-        at startup, not one per tick. An unverifiable RPC returns False (skip
-        the tick, hold the cursor) rather than being trusted."""
+        Verified once per (watcher, url, expected chain id) — cached, so this
+        costs one extra call at startup, not one per tick. ⚠️ The key carries the
+        EXPECTED chain id (085 F2): keyed on the URL alone, the first chain that
+        passed made the same URL pass for every other chain id. An unverifiable
+        RPC returns False (skip the tick, hold the cursor) rather than being
+        trusted."""
         cache = getattr(self, "_verified_rpc_urls", None)
         if cache is None:
             cache = self._verified_rpc_urls = {}
-        cached = cache.get(rpc_url)
+        key = (rpc_url, int(expected_chain_id))
+        cached = cache.get(key)
         if cached is not None:
             return cached
 
@@ -268,7 +352,7 @@ class SettlementScanMixin:
             return False
 
         if actual != expected_chain_id:
-            cache[rpc_url] = False
+            cache[key] = False
             logger.error(
                 "x402 on-chain detection DISABLED: RPC %s serves chain id %s but "
                 "X402_DEFAULT_CHAIN=%r expects %s. Scanning it would read the "
@@ -277,7 +361,7 @@ class SettlementScanMixin:
                 _redact_rpc(rpc_url), actual, chain, expected_chain_id)
             return False
 
-        cache[rpc_url] = True
+        cache[key] = True
         return True
     async def _scan_onchain(self) -> tuple:
         """Scan the treasury for new transfers of every OWED asset and
@@ -380,7 +464,7 @@ class SettlementScanMixin:
         if head is None:
             return
         await invoicing.advance_scan_checkpoint(
-            key, max(0, head - _scan_confirmations()), db=self._db)
+            key, max(0, head - _scan_confirmations(chain)), db=self._db)
 
     async def _scan_one_asset(self, treasury, treasury_key, chain,
                               asset_address, decimals, asset_id) -> tuple:
@@ -439,7 +523,7 @@ class SettlementScanMixin:
             return 0, 0
 
         key = scan_key(treasury_key, chain, token_addr)
-        safe_head = head - _scan_confirmations()
+        safe_head = head - _scan_confirmations(chain)
         last = await invoicing.get_scan_checkpoint(key, db=self._db)
         if last is None:
             # First run for THIS asset: seed near the head and scan NOTHING this
@@ -555,12 +639,23 @@ class SettlementScanMixin:
                   AND json_extract(metadata, '$.chain_family') = 'svm'""",
             ("solana",))
 
+        import time as _time
+        now_ts = _time.time()
         for row in (pending or []):
             row = dict(row)
             request_id = str(row.get("id") or "")
             if not request_id:
                 continue
             reference = solana_settlement.reference_for_invoice(request_id)
+            # 085 F1: walk the reference from the invoice's creation FORWARD, so
+            # spam sent after the real payment sits behind it. An invoice about
+            # to expire gets one UNCAPPED pass first; only a complete one lets
+            # the expiry sweep flip it (`invoicing.expire_stale_requests`).
+            since = _created_epoch(row)
+            try:
+                final_pass = int(row.get("deadline") or 0) < now_ts + _SVM_FINAL_PASS_MARGIN_SEC
+            except (TypeError, ValueError):
+                final_pass = False
             # CR-M19: the pass verifies USDC only, so it may settle only an
             # invoice denominated in THAT mint, for the invoice's OWN raw
             # amount. A non-USDC SPL invoice is refused here (it would never
@@ -585,8 +680,17 @@ class SettlementScanMixin:
                 continue
             claimed = False
             fetched = 0
+            complete = False
+            unread = False
             try:
-                for signature in solana_settlement.scan_reference(reference, rpc=_rpc):
+                # Off the event loop: the final pass walks every page and reads
+                # every unjudged signature (spam included), so it can be long.
+                signatures = await asyncio.to_thread(
+                    solana_settlement.scan_reference,
+                    reference, rpc=_rpc, since=since, oldest_first=True,
+                    max_pages=_SVM_FINAL_PASS_PAGES if final_pass else 5,
+                    strict=final_pass)
+                for signature in signatures:
                     # CR-L25: a signature already found not to pay this invoice
                     # is never fetched again, and fetches are capped per
                     # invoice per tick — spam on the reference cannot hide a
@@ -597,12 +701,13 @@ class SettlementScanMixin:
                     if await invoicing.transaction_hash_already_settled(
                             signature, db=self._db):
                         continue
-                    if fetched >= _SVM_FETCH_CAP:
+                    if fetched >= _SVM_FETCH_CAP and not final_pass:
                         break
                     fetched += 1
-                    tx = _rpc("getTransaction",
-                              [signature, {"encoding": "jsonParsed",
-                                           "maxSupportedTransactionVersion": 0}])
+                    tx = await asyncio.to_thread(
+                        _rpc, "getTransaction",
+                        [signature, {"encoding": "jsonParsed",
+                                     "maxSupportedTransactionVersion": 0}])
                     credited = solana_settlement.settlement_for(
                         tx, treasury=treasury, mint=mint, expected_raw=expected_raw)
                     if credited is None:
@@ -610,6 +715,10 @@ class SettlementScanMixin:
                             if len(_svm_seen) > 50000:
                                 _svm_seen.clear()
                             _svm_seen.add((request_id, signature))
+                        else:
+                            # Not judged: an unreadable signature could be the
+                            # payment, so this pass is not complete.
+                            unread = True
                         unmatched += 1
                         continue
                     if not await invoicing.claim_for_settlement(request_id, db=self._db):
@@ -623,6 +732,22 @@ class SettlementScanMixin:
                         logger.info("solana settle: invoice %s settled by %s",
                                     request_id, signature)
                     break
+                else:
+                    complete = True
+                try:
+                    past_deadline = int(row.get("deadline") or 0) <= now_ts
+                except (TypeError, ValueError):
+                    past_deadline = False
+                if final_pass and complete and not unread and past_deadline:
+                    # Every signature since creation was judged and none paid
+                    # this invoice: the expiry sweep may now flip it. Stamped
+                    # only once the deadline has passed, so the pass covers
+                    # every payment that could still count.
+                    await database.execute(
+                        "UPDATE x402_payment_requests SET metadata = json_set("
+                        "COALESCE(metadata, '{}'), '$.svm_final_pass', ?) "
+                        "WHERE id = ? AND status = 'pending'",
+                        (int(now_ts), request_id))
             except Exception as exc:
                 logger.warning("solana settle: invoice %s failed (%s)", request_id, exc)
             finally:
@@ -633,7 +758,67 @@ class SettlementScanMixin:
                         await invoicing.revert_settlement_claim(request_id, db=self._db)
                     except Exception:
                         pass
+        try:
+            unmatched += await self._svm_late_payments(
+                database, treasury=treasury, mint=mint, rpc=_rpc, now_ts=now_ts)
+        except Exception as exc:
+            logger.warning("solana settle: late-payment pass failed (%s)", exc)
         return settled, unmatched
+
+    async def _svm_late_payments(self, database, *, treasury: str, mint: str,
+                                 rpc, now_ts: float) -> int:
+        """085 F1: a Solana payment that lands AFTER its invoice expired is never
+        settled (the pass reads only `pending` rows) — but the owner must hear
+        that money arrived. One `payment_unmatched` notice per expired invoice,
+        then the row is stamped so it is not told twice."""
+        from modules.x402 import invoicing, solana_settlement
+        rows = await database.fetch_all(
+            """SELECT * FROM x402_payment_requests
+                WHERE status = 'expired' AND chain = ? AND deadline > ?
+                  AND json_extract(metadata, '$.chain_family') = 'svm'
+                  AND json_extract(metadata, '$.svm_late_notified') IS NULL""",
+            ("solana", int(now_ts - _SVM_LATE_WINDOW_SEC)))
+        seen = self._svm_seen_signatures
+        told = 0
+        for row in (rows or []):
+            row = dict(row)
+            request_id = str(row.get("id") or "")
+            if not request_id:
+                continue
+            reference = solana_settlement.reference_for_invoice(request_id)
+            fetched = 0
+            signatures = await asyncio.to_thread(
+                solana_settlement.scan_reference, reference, rpc=rpc,
+                since=_created_epoch(row), oldest_first=True)
+            for signature in signatures:
+                if (request_id, signature) in seen:
+                    continue
+                if await invoicing.transaction_hash_already_settled(
+                        signature, db=self._db):
+                    continue
+                if fetched >= _SVM_FETCH_CAP:
+                    break
+                fetched += 1
+                tx = await asyncio.to_thread(rpc, "getTransaction", [signature, {
+                    "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
+                credited = solana_settlement.credited_amount(
+                    tx, treasury=treasury, mint=mint)
+                if tx is not None:
+                    seen.add((request_id, signature))
+                if not credited:
+                    continue
+                await database.execute(
+                    "UPDATE x402_payment_requests SET metadata = json_set("
+                    "COALESCE(metadata, '{}'), '$.svm_late_notified', ?) WHERE id = ?",
+                    (signature, request_id))
+                await self._notify_unmatched({
+                    "tx_hash": signature, "from": f"the payer of expired invoice "
+                                                  f"{request_id}",
+                    "amount_usd": round(int(credited) / 10 ** 6, 6),
+                    "block": None, "request_id": request_id}, treasury)
+                told += 1
+                break
+        return told
     async def _settle_or_flag(self, transfers: list, treasury: str,
                                chain: str = "", *, asset_address=None,
                                decimals: int = 6) -> tuple:
@@ -725,6 +910,10 @@ class SettlementScanMixin:
                         # paid offer sits pending forever with the money
                         # already received.
                         kinds=tuple(invoicing.PAYABLE_KINDS), db=self._db)
+                if not match and await self._settle_held_by_transfer(
+                        transfer, treasury, asset_address, raw):
+                    settled += 1
+                    continue
                 if not match:
                     # Our own bridge's destination leg: sent by the provider's
                     # solver, so neither the own-address nor the router check
@@ -919,7 +1108,7 @@ class SettlementScanMixin:
             f"Unmatched on-chain payment: {amt_str} from {transfer.get('from')} "
             f"landed in the treasury (tx {transfer.get('tx_hash')}) but matched NO "
             f"pending invoice. Nothing was auto-settled; please reconcile."
-            + self._open_room_offer_hint()),
+            + _lookalike_warning(transfer.get("from")) + self._open_room_offer_hint()),
             source="payment_unmatched")
 
     def _open_room_offer_hint(self) -> str:
@@ -975,18 +1164,8 @@ class SettlementScanMixin:
                     and re.fullmatch(r"0x[0-9a-fA-F]{64}", nonce)
                     and re.fullmatch(r"0x[0-9a-fA-F]{40}", asset)):
                 continue
-            target = _resolve_scan_target(chain)
-            if target is None:
-                continue
-            rpc_url, expected_chain_id = target
-            call = self._rpc_call
+            call = await self._held_call(chain)
             if call is None:
-                from core.wallet.onchain import _rpc
-
-                def call(method, params, _url=rpc_url):
-                    return _rpc(_url, method, params)
-            if not await self._verify_scan_network(call, expected_chain_id,
-                                                   rpc_url, chain):
                 continue
             data = ("0xe94a0102" + payer[2:].lower().rjust(64, "0")
                     + nonce[2:].lower())
@@ -1000,6 +1179,14 @@ class SettlementScanMixin:
                                exc_info=True)
                 continue
             if used:
+                # 085 x402in L1: `/pay` held it because the receipt did not
+                # prove the payment in time. The recorded facilitator tx is
+                # read again; a Transfer of the asset to the treasury for the
+                # full amount completes the invoice (the settled-notify path
+                # then wakes the session). Anything else stays with the owner.
+                if await self._complete_held_by_receipt(row, meta, auth, asset,
+                                                        chain, call):
+                    continue
                 logger.warning("x402 held settlement %s: the authorization WAS "
                                "used on-chain; owner reconciliation required",
                                row.get("id"))
@@ -1010,7 +1197,102 @@ class SettlementScanMixin:
                             "amount_usd": row.get("amount_usd"),
                             "user_id": meta.get("tenant_id") or row.get("user_id") or "",
                             "session_id": meta.get("session_id") or ""})
+        # 085 x402in L1: a machine payment the middleware answered 202 (its
+        # receipt was unreadable in the request window) completes once the
+        # recorded facilitator tx's receipt pays — as refund_due, because no
+        # service was started (`settlement_holds.complete_held`).
+        for row in await settlement_holds.held_machine_payments(db=self._db):
+            meta = invoicing._row_metadata(row)
+            auth = meta.get("authorization") or {}
+            asset = str(auth.get("asset") or "")
+            chain = str(auth.get("network") or row.get("chain") or "")
+            if not re.fullmatch(r"0x[0-9a-fA-F]{40}", asset):
+                continue
+            call = await self._held_call(chain)
+            if call is not None:
+                await self._complete_held_by_receipt(row, meta, auth, asset,
+                                                     chain, call)
         return out
+
+    async def _held_call(self, chain: str):
+        """A JSON-RPC ``call`` on ``chain``'s pinned scan RPC whose chain id
+        is verified, or None."""
+        target = _resolve_scan_target(chain)
+        if target is None:
+            return None
+        rpc_url, expected_chain_id = target
+        call = self._rpc_call
+        if call is None:
+            from core.wallet.onchain import _rpc
+
+            def call(method, params, _url=rpc_url):
+                return _rpc(_url, method, params)
+        if not await self._verify_scan_network(call, expected_chain_id,
+                                               rpc_url, chain):
+            return None
+        return call
+
+    async def _complete_held_by_receipt(self, row, meta, auth, asset, chain,
+                                        call) -> bool:
+        """Complete a held row (a `/pay` invoice or a machine payment) whose
+        recorded facilitator tx now proves the payment on the verified RPC.
+        True when it completed."""
+        from modules.x402 import settlement_holds
+        from modules.x402.facilitator import receipt_pays
+        tx = str(meta.get("facilitator_tx") or "")
+        if not re.fullmatch(r"0x[0-9a-fA-F]{64}", tx):
+            return False
+        try:
+            min_raw = int(str(auth.get("amount") or row.get("amount") or ""))
+        except ValueError:
+            return False
+        try:
+            proven = await asyncio.to_thread(
+                receipt_pays, tx, chain=chain, token=asset,
+                pay_to=row.get("recipient"), min_raw=min_raw, call=call,
+                attempts=1)
+        except Exception:
+            logger.warning("x402 held settlement %s: receipt read failed",
+                           row.get("id"), exc_info=True)
+            return False
+        if proven is not True:
+            return False
+        if await settlement_holds.complete_held(row, tx, db=self._db,
+                container=getattr(getattr(self, "task_agent", None), "container", None)):
+            logger.info("x402 held settlement %s: completed by the receipt of %s",
+                        row.get("id"), tx)
+            return True
+        return False
+
+    async def _settle_held_by_transfer(self, transfer: dict, treasury: str,
+                                       asset_address, raw) -> bool:
+        """085 x402in L1: the transfer IS a held row's recorded facilitator
+        transaction paying the treasury (a `/pay` invoice or a machine
+        payment) — complete that row instead of reporting the money as
+        unmatched."""
+        from modules.x402 import invoicing, settlement_holds
+        tx_hash = transfer.get("tx_hash")
+        if not tx_hash or raw is None or asset_address is None:
+            return False
+        held = await settlement_holds.held_by_facilitator_tx(tx_hash, db=self._db)
+        if not held:
+            return False
+        auth = invoicing._row_metadata(held).get("authorization") or {}
+        try:
+            owed = int(str(auth.get("amount") or held.get("amount") or ""))
+        except ValueError:
+            return False
+        if (str(held.get("recipient") or "").lower() != str(treasury or "").lower()
+                or str(auth.get("asset") or "").lower() != str(asset_address).lower()
+                or int(raw) < owed):
+            return False
+        if not await settlement_holds.complete_held(held, tx_hash, db=self._db,
+                container=getattr(getattr(self, "task_agent", None), "container", None)):
+            return False
+        await self._stamp_settlement_source(held["id"], transfer)
+        logger.info("settlement watcher: held invoice %s completed by its "
+                    "facilitator tx %s", held["id"], tx_hash)
+        return True
 
     async def _sweep_stale_settling(self) -> int:
         """Age alone never releases a submitted payment; chain proof may."""

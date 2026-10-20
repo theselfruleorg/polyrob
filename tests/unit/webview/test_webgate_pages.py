@@ -135,14 +135,16 @@ def test_goals_endpoint_calls_goalboard_list_recent(monkeypatch):
     assert listed["asks_status"] == "open"
 
 
-def test_goals_endpoint_disabled_flag(monkeypatch):
+def test_goals_endpoint_disabled_flag_still_reads_the_board(monkeypatch):
+    """080 F-5: the stored goals are listed with the dispatcher off; a read
+    fault is still named, never a confident empty board."""
     client, pages = _router_client()
     monkeypatch.setattr(pages.AutonomyConfig, "goals_enabled", staticmethod(lambda: False))
-    # Must NOT touch GoalBoard when disabled.
-    monkeypatch.setattr(pages, "GoalBoard", _boom("GoalBoard touched while GOALS disabled"))
+    monkeypatch.setattr(pages, "GoalBoard", _boom("goals.db locked"))
     r = client.get("/api/webgate/goals")
     assert r.status_code == 200
-    assert r.json() == {"enabled": False, "goals": []}
+    body = r.json()
+    assert body["enabled"] is False and body["goals"] == [] and body["error"]
 
 
 # --------------------------------------------------------------------------- #
@@ -174,13 +176,24 @@ def test_cron_endpoint_calls_cronservice_list(monkeypatch):
     assert seen["user_id"]
 
 
-def test_cron_endpoint_disabled_flag(monkeypatch):
+def test_cron_endpoint_disabled_flag_still_lists_the_jobs(monkeypatch):
+    """080 F-5: "I put it on the clock." then "Nothing runs on a clock here."
+    hid the job just created. The jobs are listed, flagged off."""
     client, pages = _router_client()
     monkeypatch.setattr(pages, "_cron_enabled", lambda: False)
-    monkeypatch.setattr(pages, "CronService", _boom("CronService touched while CRON disabled"))
+    from cron.jobs import CronJob
+
+    class FakeService:
+        def list_jobs(self, user_id=None):
+            return [CronJob(id="c1", task="Console digest", schedule_spec="every day 08:00",
+                            user_id=user_id or "rob", next_run_at=None)]
+
+    monkeypatch.setattr(pages, "CronJobStore", lambda path: ("store", path))
+    monkeypatch.setattr(pages, "CronService", lambda store: FakeService())
     r = client.get("/api/webgate/cron")
     assert r.status_code == 200
-    assert r.json() == {"enabled": False, "jobs": []}
+    body = r.json()
+    assert body["enabled"] is False and body["jobs"][0]["task"] == "Console digest"
 
 
 # --------------------------------------------------------------------------- #

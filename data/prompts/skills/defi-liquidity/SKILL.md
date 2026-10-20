@@ -3,9 +3,10 @@ name: defi-liquidity
 description: 'Uniswap v3 liquidity positions with the lp verbs: reading positions, pricing a deposit, adding, removing and collecting, the fee unit, and why a Pons graduation pool is different.'
 license: MIT
 metadata:
+  polyrob-when: 'Uniswap v3 liquidity: add, remove, collect fees'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":["defi_trade_lp_add","defi_trade_lp_remove","defi_trade_lp_collect","defi_data_lp_positions","defi_data_lp_pool_info","defi_data_lp_quote"],"keywords":["liquidity pool","lp position","provide liquidity","add liquidity","remove liquidity","collect lp fees","uniswap v3 position"],"task_patterns":["\\b(add|remove|provide|withdraw)\\b.*\\bliquidity\\b"],"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '2'
 ---
 # DeFi Liquidity — Uniswap v3 positions

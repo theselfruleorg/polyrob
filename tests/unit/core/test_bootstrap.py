@@ -16,31 +16,19 @@ def test_load_env_is_importable():
     assert callable(load_env)
 
 
-def test_load_env_loads_dotenv(tmp_path, monkeypatch):
-    """load_env loads the correct .env file based on env parameter."""
-    env_file = tmp_path / ".env.test"
-    env_file.write_text("BOOTSTRAP_TEST_VAR=hello_from_test\n")
-
-    monkeypatch.setenv("ENV", "test")
-
-    from polyrob.app.bootstrap import load_env
-    load_env(env="test", config_dir=str(tmp_path))
-
-    assert os.environ.get("BOOTSTRAP_TEST_VAR") == "hello_from_test"
-
-
-def test_load_env_local_overrides_env(tmp_path, monkeypatch):
-    """config/.env.{env}.local overrides config/.env.{env}."""
-    env_file = tmp_path / ".env.test"
-    env_file.write_text("LAYER_TEST_VAR=from_env\n")
-
-    local_file = tmp_path / ".env.test.local"
-    local_file.write_text("LAYER_TEST_VAR=from_local\n")
+def test_load_env_never_reads_config_env_files(tmp_path, monkeypatch):
+    """080 WS-1: the server ladder (config/.env.* with override=True, which beat
+    systemd's EnvironmentFile) is deleted — every entry point reads one ladder."""
+    (tmp_path / ".env.test").write_text("BOOTSTRAP_TEST_VAR=hello_from_test\n")
+    (tmp_path / ".env.test.local").write_text("LAYER_TEST_VAR=from_local\n")
+    monkeypatch.setenv("LAYER_TEST_VAR", "from_systemd")
+    monkeypatch.delenv("BOOTSTRAP_TEST_VAR", raising=False)
 
     from polyrob.app.bootstrap import load_env
     load_env(env="test", config_dir=str(tmp_path))
 
-    assert os.environ.get("LAYER_TEST_VAR") == "from_local"
+    assert os.environ.get("BOOTSTRAP_TEST_VAR") is None
+    assert os.environ.get("LAYER_TEST_VAR") == "from_systemd"
 
 
 def test_load_env_local_skips_an_unreadable_project_candidate(tmp_path, monkeypatch):
@@ -67,5 +55,5 @@ def test_load_env_local_skips_an_unreadable_project_candidate(tmp_path, monkeypa
         return real_exists(self, *a, **k)
 
     monkeypatch.setattr(Path, "exists", boom)
-    load_env(env="test", local_mode=True, config_dir=str(tmp_path / "nocfg"))   # must not raise
+    load_env(env="test", config_dir=str(tmp_path / "nocfg"))   # must not raise
     assert os.environ.get("BOOTSTRAP_T_UNREADABLE") == "from_home"            # the ladder continued

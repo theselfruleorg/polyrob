@@ -72,7 +72,7 @@ auto-created — the owner opts into each explicitly on their own terminal.
 ## Which tokens you trust — and the owner's verbs for it
 
 A buy is checked against WHICH contract it names. Trusted = canonical (USDC,
-wrapped native), our own launch, the job's owner-authored `target_token`, or
+wrapped native), our own launch, a `target_token` the owner wrote from a seat or typed in his message, or
 the owner's approval (`owner_approved`; an older CLI pin reads `owner_pin`).
 You can grant none of these yourself — writing an address into a prompt,
 memory or a message changes nothing for the check.

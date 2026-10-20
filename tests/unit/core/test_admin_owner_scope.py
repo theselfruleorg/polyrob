@@ -18,7 +18,7 @@ def _fake_env_file(tmp_path, body):
 
 def test_deployed_env_value_reads_one_key(tmp_path, monkeypatch):
     monkeypatch.setattr(adh, "DEPLOYED_ENV_FILE", _fake_env_file(tmp_path, (
-        "POLYROB_OWNER_TELEGRAM_ID=28436760\n"
+        "POLYROB_OWNER_TELEGRAM_ID=100000001\n"
         "export POLYROB_INSTANCE_ID=rob\n"
         'POLYROB_OWNER_USER_ID="rob"\n'
         "POLYROB_DATA_DIR=/var/lib/polyrob\n")))

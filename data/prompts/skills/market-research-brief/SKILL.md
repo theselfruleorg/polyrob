@@ -3,9 +3,10 @@ name: market-research-brief
 description: Produce a structured market brief with size, key players, trends, and strategic opportunities
 license: MIT
 metadata:
+  polyrob-when: 'A market brief: size, players, trends, openings'
   polyrob-priority: '6'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["market research","market brief","market analysis","market size","competitive landscape","tam","market opportunity","industry analysis"],"task_patterns":["market.*research","market.*brief","market.*analysis","competitive.*landscape","tam.*analysis","industry.*analysis","market.*size"],"tool_ids":["web_fetch","perplexity","anysite"]}'
+  polyrob-triggers: '{"tool_ids":["web_fetch","perplexity","anysite"]}'
   polyrob-version: '1'
 ---
 # Market Research Brief

@@ -153,6 +153,48 @@ def _rebuild_message(live: Any, content: str, origin: Optional[str], is_system: 
 	return HumanMessage(content=content, origin=origin or MessageOrigin.USER)
 
 
+def _unit_contents(source, layers) -> List[str]:
+	"""The rendered strings of one replay unit (a layer or a layer group).
+
+	*source* is a callable ``layer -> value`` (a message, a tuple of messages, a
+	persisted string, a persisted list, or None)."""
+	out: List[str] = []
+	for layer in layers:
+		value = source(layer)
+		if value is None:
+			continue
+		items = value if isinstance(value, (list, tuple)) else [value]
+		for item in items:
+			text = item if isinstance(item, str) else _content_of(item)
+			if text:
+				out.append(text)
+	return out
+
+
+def _stale_refresh_units(manager: Any, valid: Dict[str, Any]) -> set:
+	"""2026-10-13 review A2 — the ``refresh_on_reload`` units whose FRESH render
+	differs from the persisted bytes. Those keep the fresh render: an owner rule
+	approved since the save, a deployed system-prompt fix, a newly approved skill
+	and the live ``<environment>`` must reach the resumed chat. A unit with no
+	fresh render (not built yet) replays as before; a byte-identical unit replays
+	(no-op, the cache survives)."""
+	units: Dict[str, List[Any]] = {}
+	for layer in FOUNDATION_LAYERS:
+		if layer.refresh_on_reload:
+			units.setdefault(layer.group or layer.key, []).append(layer)
+	stale = set()
+	for unit, layers in units.items():
+		if not all(layer_visible(manager, layer) for layer in layers):
+			continue
+		fresh = _unit_contents(lambda l: getattr(manager, l.attr, None), layers)
+		if not fresh:
+			continue
+		persisted = _unit_contents(lambda l: valid.get(l.key), layers)
+		if fresh != persisted:
+			stale.add(unit)
+	return stale
+
+
 def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> bool:
 	"""Replace the freshly built foundation with the persisted one.
 
@@ -187,8 +229,11 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 		layer.group for layer in FOUNDATION_LAYERS
 		if layer.group and valid.get(layer.key) is not None
 	}
+	refreshed = _stale_refresh_units(manager, valid)
 	for layer in FOUNDATION_LAYERS:
 		key, attr, tokens_attr, origin = layer.key, layer.attr, layer.tokens_attr, layer.origin
+		if (layer.group or layer.key) in refreshed:
+			continue  # A2: the fresh render differs — it stands (rules, prompt, skills)
 		if not layer_visible(manager, layer):
 			planned.append((attr, tokens_attr, None))
 			continue
@@ -237,6 +282,9 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 	# unchanged catalog is the no-op it should be.
 
 	manager._foundation_tool_names = list(valid.get("tool_names") or []) or None
+	if refreshed:
+		log.info("foundation layers re-rendered on reload (changed since the save): %s "
+		         "— prefix cache will miss once", ", ".join(sorted(refreshed)))
 	log.info(
 		"📂 Replayed the persisted foundation (%d slots, %d tool names): the prompt "
 		"prefix survives the restart",

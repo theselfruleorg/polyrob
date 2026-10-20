@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import logging
-from modules.credits.pricing import pricing, WELCOME_BONUS, DEN_SIGNUP_ALLOWANCE
+from modules.credits.pricing import pricing, WELCOME_BONUS
 
 logger = logging.getLogger(__name__)
 
@@ -419,12 +419,10 @@ async def get_pricing():
         "tier_allowances": {
             "free": {
                 "welcome_bonus": WELCOME_BONUS,
-                "signup_allowance": 0,
                 "requires_den_token": False
             },
             "holder": {
                 "welcome_bonus": WELCOME_BONUS,
-                "signup_allowance_per_token": DEN_SIGNUP_ALLOWANCE,
                 "requires_den_token": True,
                 "den_tokens_required": "1+"
             }

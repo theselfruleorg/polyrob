@@ -45,9 +45,9 @@ def register_dynamic_tool_actions(controller) -> None:
       Safe for leaves; logic in ``tools/tool_search.py``.
     """
     @controller.registry.action(
-        "Load a [loadable] tool from the <tool-catalog> into this session — its "
-        "actions become available from the next step. Gated tools return the "
-        "reason and the remedy channel instead of loading.",
+        "Load a [loadable] tool from the <tool-catalog> into this session; the "
+        "result says how to call its actions. A gated tool returns the reason and "
+        "the remedy instead of loading. It never loads a money tool.",
         param_model=LoadToolAction,
     )
     async def load_tool(params: LoadToolAction, execution_context=None):

@@ -6,8 +6,6 @@
 - P1.6: writing AUTONOMY_MODE=autonomous evaluates the single-owner clamp NOW
   and names the missing prerequisite (the runtime's one-time WARN is invisible
   at the console's default ERROR level).
-- P1.5: a remote surface (webview) is told when the serving process reads the
-  server env ladder, so the .polyrob write applies to CLI runs only.
 """
 import pytest
 
@@ -77,16 +75,6 @@ def test_clamp_echo_effective_when_owner_bound(monkeypatch):
     notes = post_write_notes("AUTONOMY_MODE", "autonomous", "project")
     assert any("autonomous (effective)" in n for n in notes)
     assert not any("CLAMP" in n for n in notes)
-
-
-def test_remote_surface_server_ladder_note():
-    notes = post_write_notes("GOALS_ENABLED", "true", "project", surface="console")
-    assert any("CLI runs only" in n for n in notes)
-
-
-def test_local_surface_has_no_server_note(monkeypatch):
-    notes = post_write_notes("GOALS_ENABLED", "true", "project", surface="local")
-    assert not any("CLI runs only" in n for n in notes)
 
 
 def test_set_value_refuses_a_project_write():

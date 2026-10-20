@@ -3,9 +3,10 @@ name: lead-research
 description: Find and qualify sales leads using LinkedIn and public data sources, producing a prioritized contact list
 license: MIT
 metadata:
+  polyrob-when: 'Finding and qualifying sales leads'
   polyrob-priority: '6'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["find leads","prospect list","lead research","find contacts","qualify leads","outbound list","build lead list","sales prospects"],"task_patterns":["find.*leads","prospect.*list","lead.*research","build.*contact.*list","qualify.*leads","outbound.*campaign","sales.*prospect"],"tool_ids":["anysite"]}'
+  polyrob-triggers: '{"tool_ids":["anysite"]}'
   polyrob-version: '1'
 ---
 # Lead Research

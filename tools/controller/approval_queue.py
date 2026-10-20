@@ -289,8 +289,10 @@ def all_pending(*, user_id: str, home_dir: Any, instance_id: str,
     # 066 P2 (D5): requests above polyrob-signer's hard cap. Only when a signer
     # is in play; decided by the SAME decider below, as root on the box.
     try:
-        from core.signer import MODE_LOCAL, signer_mode
-        if signer_mode() != MODE_LOCAL:
+        # 085 W8: after the cut-over the mode lives in agent-signer.env, so the
+        # root CLI (no WALLET_SIGNER in its shell) reads it from the deployment.
+        from core.signer import MODE_LOCAL, agent_signer_mode
+        if agent_signer_mode() != MODE_LOCAL:
             from core.signer.approvals import pending_items
             items += pending_items()
     except Exception:
@@ -423,7 +425,9 @@ def needs_individual_decision(item: Dict[str, Any]) -> Optional[str]:
     exactly what a forwarded or injected ``/approve all`` would exploit."""
     kind = str(item.get("kind") or "")
     if kind == "signer_approval":
-        return "a money ask above the signer's hard cap"
+        # 085 W8 (signer L-4): only the by-id verb shows the signer's review first.
+        return ("a money ask above the signer's hard cap; review and grant it with "
+                f"`sudo polyrob owner promote signer_approval {item.get('id')}`")
     if kind == TOKEN_IDENTITY_ASK_KIND:
         return "a decision about which token is real"
     if kind == TOOL_APPROVAL_ASK_KIND:
@@ -588,7 +592,7 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
     # W10 (043): resume-on-grant wakes the session that asked. The wake MUST
     # re-enter through the session's OWNING process — `deliver_self_wake` refuses
     # a remote session by design. So: same process (a live `task_agent`) -> wake
-    # in-process now; a DIFFERENT process (prod Rob #1: the console decides, the
+    # in-process now; a DIFFERENT process (a split-service install: the console decides, the
     # agent owns the session) -> write a DURABLE wake row the owning process's
     # autonomy tick drains. Either way the ask row already flipped above (d).
     if approved and row is not None:

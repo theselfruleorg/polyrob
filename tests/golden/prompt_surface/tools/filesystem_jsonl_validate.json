@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Validate a JSON-lines file (read-only): line count, valid count, first bad lines, and duplicate values of <key> if given.",
+    "name": "filesystem_jsonl_validate",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "056 WS2: read-only — line count, valid count, first bad lines, and (with\n`key`) duplicate values of that field.",
+      "properties": {
+        "filePath": {
+          "type": "string"
+        },
+        "key": {
+          "default": null,
+          "description": "Optional field to check for duplicates, e.g. 'id'.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "filePath"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

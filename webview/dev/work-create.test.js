@@ -26,7 +26,7 @@ for (const kind of ['goals', 'cron']) it(`creates ${kind} through existing write
 it('omits a blank control instead of sending an empty value', () => {
   const form = document.createElement('form');
   form.innerHTML = '<textarea name="title">Ship it</textarea><textarea name="body"></textarea>'
-    + '<input name="priority" value=""><input name="max_steps" value="">';
+    + '<input name="priority" value="">';
   const body = payloadFrom(form);
   expect(body).toEqual({ title: 'Ship it' });
 });
@@ -34,10 +34,10 @@ it('omits a blank control instead of sending an empty value', () => {
 it('types a goal payload: numbers are numbers, tools is a list of names', () => {
   const form = document.createElement('form');
   form.innerHTML = '<textarea name="title">Ship it</textarea><textarea name="body">the detail</textarea>'
-    + '<input name="priority" value="7"><input name="max_steps" value="24">'
+    + '<input name="priority" value="7">'
     + '<textarea name="tools">web_search\nfilesystem\n</textarea>';
   expect(payloadFrom(form)).toEqual({
-    title: 'Ship it', body: 'the detail', priority: 7, max_steps: 24,
+    title: 'Ship it', body: 'the detail', priority: 7,
     tools: ['web_search', 'filesystem'],
   });
 });

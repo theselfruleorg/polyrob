@@ -102,10 +102,10 @@ The console is a control plane, not only a monitor. Unless it is read-only, you 
 ### Owner verbs in the chat box
 
 A leading `/verb` is routed through the same owner-verb plane every other seat uses,
-not sent to the model as prose. Every Telegram verb works — 66 of the 70 rows in
-the verb table (`/gates`, `/memory`, `/meter` and `/workers` are REPL-only) — for
+not sent to the model as prose. Every Telegram verb works — every row of the verb table
+but the terminal-only ones (`/gates`, `/memory`, `/doctor`, `/exit` and the rest) — for
 example `/pause`, `/resume`, `/halt`, `/restart`, `/update`, `/status`, `/why`, `/inbox`, `/pending`,
-`/approve`, `/reject`, `/asks`, `/goals`, `/cron`, `/book`, `/wallet`, `/send`,
+`/approve`, `/reject`, `/asks`, `/goals`, `/jobs`, `/job`, `/book`, `/wallet`, `/send`,
 `/writeoff`, `/unquarantine`, `/invoices`, `/settle`, `/trade`, `/bridge`,
 `/launch`, `/deploy`, `/apps`, `/mcp`, `/kb`, `/files`, `/groups`, `/mute`,
 `/prefs`, `/config`, `/recap`, `/thread` and `/missed`. `/help` lists them.

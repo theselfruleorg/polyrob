@@ -95,7 +95,7 @@ def map_model(openai_model: str) -> tuple[str, str]:
         if low.startswith(prefix):
             return provider, s
     # Server path: no ~/.polyrob/cli.json read (cli_store_default=None) — honor the
-    # operator provider pin (CHAT_PROVIDER/DEFAULT_PROVIDER), else the env-resolved
+    # operator provider pin (DEFAULT_PROVIDER), else the env-resolved
     # first-keyed provider.
     from core.runtime_config import resolve_default_provider
     provider, _ = resolve_default_provider()

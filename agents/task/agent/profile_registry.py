@@ -100,7 +100,6 @@ def create_default_profiles() -> Dict[str, AgentProfileModel]:
             "tool_calling_method": "auto"
         },
         limits={
-            "max_steps": 50,
             "max_actions_per_step": 10,
             "max_input_tokens": None,
             "max_failures": 3

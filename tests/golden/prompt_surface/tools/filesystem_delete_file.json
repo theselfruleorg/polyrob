@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Delete a file",
+    "name": "filesystem_delete_file",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for deleting a file",
+      "properties": {
+        "filePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filePath"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

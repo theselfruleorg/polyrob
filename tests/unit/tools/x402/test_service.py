@@ -75,7 +75,7 @@ async def test_fetch_rejects_over_catastrophic_ceiling():
     # wallet ceiling is 10.0; ask price 50 but cap high → PolicyGate blocks
     tool = _tool(FakeX402Client(price_usd=50.0, pay_to="0xR", paid_body="X"))
     res = await tool.x402_fetch(FetchParams(url="http://paid", max_amount_usd=100.0))
-    assert res.error is not None and "ceiling" in res.error.lower()
+    assert res.error is not None and "per-transaction cap" in res.error.lower()
 
 
 @pytest.mark.asyncio
@@ -105,7 +105,7 @@ async def test_wallet_status_reports_addresses_not_keys():
 async def test_disabled_wallet_errors_cleanly():
     tool = X402PayTool(wallet=None, client=FakeX402Client(price_usd=0.1, pay_to="0xR", paid_body="X"))
     res = await tool.x402_fetch(FetchParams(url="http://paid", max_amount_usd=1.0))
-    assert res.error is not None and "not enabled" in res.error.lower()
+    assert res.error is not None and "agent_wallet_enabled" in res.error.lower()
 
 
 # --- G-10: idempotency key stable across quote-availability changes ---------

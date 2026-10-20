@@ -172,6 +172,8 @@ class TwitterGetDMsAction(BaseModel):
     max_results: int = Field(20, ge=1, le=100, description="Max DM events to fetch.")
     pagination_token: Optional[str] = Field(
         None, description="X next_token/previous_token from an earlier DM read.")
+    since: Optional[str] = Field(None, description="List only: the ISO `watermark` of your "
+                                 "last sweep; returns only threads with a newer last_event_at.")
     rail: Literal["auto", "chat", "legacy"] = Field(
         "auto", description="DM protocol. auto/chat read encrypted X Chat, where X "
                             "delivers DMs now. legacy (/2/dm_events) is OBSOLETE: X "
@@ -1616,7 +1618,7 @@ class TwitterTool(BaseTool):
                     f"guard, TWITTER_POST_COOLDOWN_SEC). retry_after_sec={retry_after}. "
                     f"If this text reports something NEW (an executed transaction, a "
                     f"fact not yet posted): do NOT drop it — defer it with "
-                    f"cronjob_schedule(schedule_spec='{once_at}' (one-shot ISO — never a bare duration, that repeats), task='Post to X "
+                    f"cronjob_schedule(schedule='{once_at}' (one-shot ISO — never a bare duration, that repeats), task='Post to X "
                     f"exactly this text: <your text>') and say so in your result. If it "
                     f"repeats what was just posted (this run is a re-fire of a goal that "
                     f"already posted), skip it."
@@ -1681,8 +1683,8 @@ class TwitterTool(BaseTool):
 
     def _genuine_owner_turn(self, execution_context) -> bool:
         """True for a turn the OWNER is driving: not a sub-agent/leaf, not an
-        autonomous/forged/room re-entry, not tainted by third-party text it
-        read, and the owner tenant. ``None`` context = owner-direct / CLI /
+        autonomous/forged/room re-entry, no correspondent's message in the
+        session, and the owner tenant. ``None`` context = owner-direct / CLI /
         programmatic call (the same convention as :meth:`_pause_block`).
         Fail-closed: any probe fault is NOT an owner turn."""
         if execution_context is None:
@@ -1701,12 +1703,11 @@ class TwitterTool(BaseTool):
             return False
 
     def _owner_standing_run(self, execution_context) -> bool:
-        """True for the MAIN run of an OWNER-authored standing cron job (the
-        daily promo post, the buyback notice): its author is the owner, so its
-        post is the owner's decision. Not a sub-agent/leaf, not a room or
-        forged re-entry, not tainted by third-party text it read, the owner
-        tenant, and the job is recorded as owner-authored by the cron runner
-        (an agent-authored job is never recorded). Fail-closed."""
+        """True for the MAIN run of a standing cron job or goal (the daily promo
+        post, the buyback notice): its post is the owner's standing decision.
+        Not a sub-agent/leaf, not a room or forged re-entry, no correspondent's
+        message in the session, the owner tenant, and the run is recorded by
+        the cron runner or the goal dispatcher. Fail-closed."""
         if execution_context is None:
             return False
         try:
@@ -1720,8 +1721,8 @@ class TwitterTool(BaseTool):
                 return False
             if forged_kind(execution_context) or is_room_turn(execution_context):
                 return False
-            from core.autonomy_marker import owner_job_task_for_session
-            if not owner_job_task_for_session(getattr(execution_context, "session_id", None)):
+            from core.autonomy_marker import job_task_for_session
+            if not job_task_for_session(getattr(execution_context, "session_id", None)):
                 return False
             return is_owner_tenant(execution_context)
         except Exception:
@@ -1754,7 +1755,8 @@ class TwitterTool(BaseTool):
         - A genuine OWNER turn: asking the agent to post IS the owner's
           decision. It is allowed; with ``TWITTER_REQUIRE_APPROVAL`` on and a
           human provider configured, the owner is asked once more.
-        - Any other turn (autonomous, forged, room, tainted, non-owner) needs a
+        - A standing cron job or goal run posts as its text says.
+        - Any other turn (forged, room, correspondent-tainted, non-owner) needs a
           REAL owner approval whatever ``TWITTER_REQUIRE_APPROVAL`` or
           ``APPROVAL_PROVIDER`` say: an automatic provider (``auto``,
           ``auto_notify``) is replaced by the durable owner queue, which asks
@@ -1764,8 +1766,8 @@ class TwitterTool(BaseTool):
         # on THIS action is the approval; its one-shot grant is already consumed.
         if _OWNER_APPROVED_ACTION.get() == action_name:
             return None
-        # An owner-authored standing cron job (untainted) posts as the owner
-        # wrote it; an agent-authored, room, tainted or delegated run does not.
+        # A standing cron job or goal posts as written; a room, a
+        # correspondent-tainted or a delegated run does not.
         owner_turn = (self._genuine_owner_turn(execution_context)
                       or self._owner_standing_run(execution_context))
         if owner_turn and not self._require_approval():
@@ -1837,7 +1839,9 @@ class TwitterTool(BaseTool):
         pause_block = self._pause_block(action_name, execution_context)
         if pause_block:
             return self.create_action_result(error=pause_block, include_in_memory=True)
-        cooldown_block = await self._social_cooldown_block(action_name, execution_context)
+        from polyrob_x.post_spacing import spacing_refusal
+        cooldown_block = (spacing_refusal(action_name, execution_context)
+                          or await self._social_cooldown_block(action_name, execution_context))
         if cooldown_block:
             return self.create_action_result(error=cooldown_block, include_in_memory=True)
         gate = await self._approval_gate(action_name, params, execution_context)
@@ -2431,18 +2435,18 @@ class TwitterTool(BaseTool):
             from polyrob_x.handle_ids import remember_handles
             remember_handles((raw.get("includes") or {}).get("users"))
             meta = dict(raw.get("meta") or {})
+            from polyrob_x.dm_watermark import dm_list_since
+            convs, watermark, dropped = dm_list_since(raw.get("data") or [], params.since)
             payload = {
                 "source": "x_chat_api",
-                "rail": "chat",
-                "scope": "account",
-                "conversations": list(raw.get("data") or []),
+                "rail": "chat", "scope": "account",
+                "conversations": convs, "watermark": watermark, "older_than_since": dropped,
                 "users": list((raw.get("includes") or {}).get("users") or []),
                 "next_token": meta.get("next_token"),
                 "has_more": meta.get("has_more"),
                 "has_message_requests": meta.get("has_message_requests"),
-                "note": (
-                    "This lists the encrypted Chat inbox. Pass participant "
-                    "or conversation_id to fetch and decrypt its messages."),
+                "note": ("The Chat inbox, newest first. Read only threads newer than your last "
+                         "sweep (since=<watermark>); participant/conversation_id decrypts one."),
             }
         return self._ok("🐦 X Chat read:\n" + json.dumps(
             payload, indent=2, cls=DateTimeEncoder))

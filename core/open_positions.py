@@ -1,16 +1,9 @@
 """The rail-written open-position store (043 A35) — core tier.
 
-`core/position_ledger.py` PARSES the agent-authored markdown ledger (symbol /
-address / qty); it is pure, regex-only, no I/O. What it cannot answer is *what a
-position cost*: the ledger has no entry column, so the Money Book's "Entry" (cost
-basis) and "Since entry" (signed USD profit/loss) read `—` with a reason. This
-module is the missing writer: every value-moving swap the money rail records
+The ONE position book. Every value-moving swap the money rail records
 (``core/wallet/policy.py::PolicyGate.record``) also writes/updates an open
-position here, so the book finally has a truthful cost basis to compute P&L from.
-
-Why a second store and not `position_ledger.py`: that module's contract is
-"pure — no I/O", and the status snapshot leans on it staying cheap and pure.
-A sqlite writer belongs beside it, not inside it.
+position here, so the book has a truthful size and cost basis to compute P&L
+from, and ``defi_data.reconcile`` compares it with the chain.
 
 Contract, mirroring the bridge/goal stores in this tier:
 - WAL + jittered retry via ``core/sqlite_util`` (concurrent readers + one writer).
@@ -57,11 +50,15 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from core.position_ledger import _norm
-
 logger = logging.getLogger(__name__)
 
 _DB_NAME = "open_positions.db"
+
+
+def _norm(address: str) -> str:
+    """Comparison key: EVM hex is case-insensitive, base58 is case-SENSITIVE."""
+    a = (address or "").strip()
+    return a.lower() if a.startswith("0x") or a.startswith("0X") else a
 
 _TABLE = """
 CREATE TABLE IF NOT EXISTS open_positions (
@@ -635,11 +632,8 @@ def entries_for(user_id: str, *, data_dir: Optional[str] = None,
     ``account`` defaults to the treasury, so the Money Book reads exactly what it
     read before 050; a token-bound account's book is asked for by its address.
 
-    What the Money Book joins its ledger positions against (the ledger has no
-    chain column, so the address is the honest join key). Read-only, fail-open
-    to ``{}`` — an unreadable store degrades the "Entry"/"Since entry" columns to
-    "no entry recorded", never breaks the book read; the primary verdict/worth
-    columns are unaffected.
+    Read-only, fail-open to ``{}`` (``strict=True`` raises instead) — the spend
+    path's identity gate reads it.
     """
     uid = str(user_id or "").strip()
     if not uid:

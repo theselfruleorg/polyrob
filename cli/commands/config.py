@@ -21,8 +21,8 @@ so a credential never lands in shell history or ``ps`` output.
   3. KEY documented in the flags catalog (``core.prefs.catalog_lookup``) ->
      env file, but only after the VALUE is checked against the documented
      default's shape (boolish for ON/OFF, numeric for a backtick number).
-     (``DEFAULT_MODEL``/``DEFAULT_PROVIDER``/``CHAT_MODEL``/``CHAT_PROVIDER``
-     — real, actively-read legacy env vars — got proper catalog rows in the
+     (``DEFAULT_MODEL``/``DEFAULT_PROVIDER`` — the operator model pin — got
+     proper catalog rows in the
      owner-UX P1 T10 sweep, so they route here now; there is no longer a
      separate uncataloged-allowlist step.)
   4. otherwise -> hard-reject with ``click.ClickException`` — with a
@@ -496,12 +496,9 @@ def show_cmd(user_id, home_dir_opt):
 #: unit file instead), and the CLI only keeps them as the LOWEST layers for
 #: back-compat. CLI keys belong in ~/.polyrob/.env — `polyrob config migrate`.
 _TIER_NOTES = {
+    "instance": "the instance file every process reads — managed by `polyrob config set`",
     "home": "managed by `polyrob config set`",
     "legacy-home": "legacy home (read-only transition fallback)",
-    "root": "legacy server-mode tier (lowest precedence)",
-    "config-env": ("legacy server-mode tier (non-systemd server deploys only); "
-                   "CLI keys belong in ~/.polyrob/.env — `polyrob config migrate`"),
-    "config-env-local": "legacy server-mode tier (local override)",
 }
 
 
@@ -510,23 +507,20 @@ def path_cmd():
     """List the env files that configure this process (highest precedence first).
 
     Derived from the ONE candidate/precedence SSOT
-    (``core.paths.env_file_candidates``). The two .polyrob files are always
-    shown; a legacy tier (root .env, config/.env.*) is listed only when the
-    file actually exists. A relic config/.env.* file the RESOLVED env does not
-    read is called out too — the classic "why is my key ignored" trap.
+    (``core.paths.env_file_candidates``). The instance/home file is always
+    shown; the legacy home only when it exists. A relic config/.env.* file is
+    called out too — nothing reads it any more (080 WS-1), the classic "why is
+    my key ignored" trap.
     """
-    import os
-
     from core.paths import env_file_candidates
 
-    resolved = os.environ.get("CONFIG_ENV") or os.environ.get("ENV") or "development"
     display = {"home": "global"}
     click.echo("(process env wins over every file)")
     listed = set()
-    for cand in env_file_candidates(resolved, local_mode=True):
+    for cand in env_file_candidates():
         exists = cand.path.exists()
         listed.add(str(cand.path))
-        if cand.tier != "home" and not exists:
+        if cand.tier not in ("instance", "home") and not exists:
             continue  # absent legacy tiers are noise
         label = display.get(cand.tier, cand.tier)
         note = _TIER_NOTES.get(cand.tier, "")
@@ -536,7 +530,7 @@ def path_cmd():
                   Path("config") / ".env.development"):
         if str(relic) not in listed and relic.exists():
             click.echo(
-                f"note: {relic} exists but is NOT read (resolved env: {resolved}) — "
+                f"note: {relic} exists but is NOT read — "
                 "legacy server file; `polyrob config migrate` copies its keys "
                 "to ~/.polyrob/.env")
 
@@ -676,7 +670,7 @@ def list_cmd(group_filter, changed, user_id, home_dir_opt, as_json):
 @click.option("--json", "as_json", is_flag=True, default=False,
               help="Machine-readable output")
 def search_cmd(text, user_id, home_dir_opt, as_json):
-    """Fuzzy name+description search across prefs and the ~490 env flags."""
+    """Fuzzy name+description search across prefs and the env-flag catalog."""
     from core import config_service
     tenant = _resolved_tenant(user_id)
     home_dir = home_dir_opt or _default_home_dir()

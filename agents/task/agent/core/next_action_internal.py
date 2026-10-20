@@ -129,19 +129,23 @@ from agents.task.agent.core.metering_failure_log import metering_failure_limiter
 # usage_tracker.record_llm_usage's request_id dedup.
 from modules.llm.aux_metering import extract_stable_request_id
 
+# 2026-10-14 review E-2/E-3/E-7/E-8/D-1: call-quality causes, name repair, regime.
+from agents.task.agent.core import call_quality as cq
+
 
 
 
 
 def _prefix_stamps(agent) -> dict:
-	"""The last call's prefix identity (`prefix_sha`/`tools_sha`, stamped by the
-	OpenRouter request path) for the usage record — {} on a provider that does
-	not stamp, never a failure (metadata must not break billing)."""
+	"""The usage-record metadata: the last call's prefix identity (`prefix_sha`/
+	`tools_sha`, stamped by the OpenRouter request path) plus the session
+	`regime` (review D-1) — never a failure (metadata must not break billing)."""
 	try:
 		from modules.llm.prefix_stamp import read_stamps
-		return read_stamps(getattr(agent, "llm", None))
+		stamps = read_stamps(getattr(agent, "llm", None))
 	except Exception:
-		return {}
+		stamps = {}
+	return cq.with_regime(stamps, agent)
 
 
 class NextActionInternalMixin:
@@ -171,16 +175,16 @@ class NextActionInternalMixin:
 				parts.append(f"'{name}' exists but its arguments failed validation"
 				             + (f": {reason[:300]}" if reason else ""))
 			else:
-				parts.append(f"'{name}' is not a registered action")
+				parts.append(self.controller.describe_unloaded_action(name) if hasattr(self.controller, "describe_unloaded_action") else f"'{name}' is not a registered action")  # 081 WS-3.1
 		return "; ".join(parts) or "no tool call could be converted"
 
 	def _push_rejected_tool_calls_feedback(self, detail: str) -> None:
 		"""Let the model self-correct next step instead of repeating the call blind."""
 		try:
-			self.message_manager.push_ephemeral_message(HumanMessage(content=(
-				"⚠️ Your tool call was rejected before execution and did NOT run:\n"
-				f"{detail}\n\n"
-				"Fix the arguments (or pick an action that exists) and call again.")))
+			note = HumanMessage(content=("⚠️ Your tool call was rejected before execution and did NOT run:\n"
+				f"{detail}\n\nFix the arguments (or pick an action that exists) and call again."))
+			note.metadata = {"per_call": True}  # answers ONE call: a C-1 restore must not stack it
+			self.message_manager.push_ephemeral_message(note)
 		except Exception:
 			self.logger.debug("rejected-tool-call feedback not pushed", exc_info=True)
 
@@ -646,6 +650,7 @@ class NextActionInternalMixin:
 		# Clear any previous normalized tool calls (but use tracker for IDs)
 		if hasattr(self, '_current_normalized_tool_calls'):
 			delattr(self, '_current_normalized_tool_calls')
+		cq.set_call_issue(self, None)  # E-3: this call's tool-free cause, if any
 
 		# Cut messages before LLM call only if we're really close to the limit
 		estimated_usage = self.message_manager.get_estimated_context_usage()
@@ -683,6 +688,7 @@ Your response MUST be valid JSON with this exact structure:
 CRITICAL: For "done" action use {{"done": {{"text": "message"}}}} - NOT "message" field!
 Use double quotes only. Max {self.max_actions_per_step} actions."""
 			)
+			formatting_message.metadata = {"per_call": True}  # C-1: never re-queued
 
 			# Check if hint would fit within token limits using safety check
 			safety = self.message_manager.check_token_safety([formatting_message])
@@ -700,6 +706,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 			# family-note design deliberately gives it none, so the per-step nag was
 			# one wasted uncached message per step there.
 			native_tools_hint = HumanMessage(content=NATIVE_TOOLS_BRAIN_HINT)
+			native_tools_hint.metadata = {"per_call": True}  # C-1: never re-queued
 			# Use the new ephemeral message API
 			self.message_manager.push_ephemeral_message(native_tools_hint)
 			format_hint_added = True
@@ -753,6 +760,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 		}
 		
 		retry_count = 0
+		empty_retry_left = 1  # E-8: one in-call retry of a truly empty completion
 		last_error = None
 		last_error_type = None  # FIXED: Track error type for better retry logic
 		start_time = time.time()
@@ -902,6 +910,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 									# This provides consistent interface across all providers
 									# Stream if supported and callbacks registered
 									chunk_count = 0  # Track streaming chunks for telemetry
+									cq.stamp_step_context(self)  # D-7: context slots onto the usage record
 									if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
 										response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
 									else:
@@ -1020,6 +1029,19 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 											except Exception as e:
 												self.logger.debug(f"Failed to capture LLM telemetry: {e}")
 
+									# E-8: a truly empty completion (no text, no tool call) re-issues the
+									# SAME call once here instead of costing a whole agent step.
+									if empty_retry_left and cq.is_truly_empty(response):
+										empty_retry_left = 0
+										cq.emit_call_quality(self, cq.EMPTY, in_call_retry=True)
+										self.logger.warning("Empty completion (no text, no tool call) — re-issuing the same call once")
+										llm_start = time.time()
+										if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
+											response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
+										else:
+											response = await asyncio.wait_for(self.llm.ainvoke(current_messages, tools=tools), timeout=timeout_seconds)
+										await self._bill_llm_response(response, time.time() - llm_start, _native_provider, purpose="next_action_empty_retry")
+
 									# Emit streaming telemetry if streaming was used
 									if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks() and chunk_count > 0:
 										if self.telemetry_manager:
@@ -1040,21 +1062,9 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 											except Exception as e:
 												self.logger.debug(f"Failed to emit streaming telemetry: {e}")
 
-									# Debug: Log detailed response information
-									if hasattr(response, 'tool_calls'):
-										self.logger.debug(f"Tool calls in response: {len(response.tool_calls) if response.tool_calls else 0}")
-										if response.tool_calls:
-											for tc in response.tool_calls[:3]:  # Log first 3
-												self.logger.debug(f"  Tool call: {tc.function.name if hasattr(tc, 'function') else tc}")
-									if hasattr(response, 'content'):
-										# Handle both string and list content formats
-										content_for_preview = response.content if response.content else "None"
-										if isinstance(content_for_preview, list):
-											content_preview = str(content_for_preview)[:200]
-										else:
-											content_preview = str(content_for_preview)[:200]
-										self.logger.debug(f"Response content preview: {content_preview}...")
-									
+									self.logger.debug(
+										f"Tool calls in response: {len(getattr(response, 'tool_calls', None) or [])}; "
+										f"content preview: {str(getattr(response, 'content', None) or 'None')[:200]}...")
 									# Store the raw response for later token extraction
 									raw_tool_response = response
 
@@ -1062,6 +1072,13 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 									actions = []
 									normalized_tool_calls = []
 
+									# E-2 (owner D3): in an autonomous run that has acted, a text-only
+									# reply IS the final report — it becomes done(text=...).
+									_final = cq.prose_final_report(self, response)
+									if _final:
+										response.tool_calls = [_final]
+									elif not getattr(response, 'tool_calls', None):
+										cq.set_call_issue(self, cq.EMPTY if cq.is_truly_empty(response) else cq.TEXT_ONLY)
 									# Check if response contains tool calls
 									if hasattr(response, 'tool_calls') and response.tool_calls:
 										self.logger.info(f"[NATIVE_TOOLS] Received {len(response.tool_calls)} tool_calls from LLM")
@@ -1079,6 +1096,8 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 												for tc in response.tool_calls
 											]
 											self.logger.info(f"Normalized {len(response.tool_calls)} tool_calls via ToolCallBuilder")
+											# E-7: repair near-miss names (same registry/permission path after).
+											cq.repair_tool_call_names(self, normalized_tool_calls)
 
 											# STEP 2: Register with tracker FIRST (before MessageManager)
 											if self.tool_call_tracker and normalized_tool_calls:
@@ -1090,6 +1109,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 
 											# STEP 3: Convert to actions using Controller's high-level API
 											actions = self.controller.tool_calls_to_actions(normalized_tool_calls)
+											cq.note_rejected_calls(self, normalized_tool_calls, actions)
 											self.logger.info(f"Converted {len(normalized_tool_calls)} tool_calls -> {len(actions)} actions via Controller")
 
 											# Extract tool call IDs for debugging
@@ -1138,32 +1158,11 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 									action_tool_call_ids = []  # P0-2: parallel to action_list; re-stamped onto parsed.action
 
 									if actions:
-										# COMPLEX SITUATION: We need BOTH behaviors!
-										# 1. Validator needs ActionModel instances (to call .model_dump())
-										# 2. AgentOutput creation needs dicts (Pydantic type validation)
-										#
-										# SOLUTION: Keep instances in actions list, convert to dicts for AgentOutput
-										# The validator will use model_output.action (which has instances)
-										#
-										# But wait - we're creating AgentOutput here with action_list
-										# And validator validates model_output.action
-										# These are the SAME thing!
-										#
-										# The issue: AgentOutput type annotation is list[ActionModel] (base class)
-										# But we're passing list[ActionModel_toolname] (subclasses)
-										# Pydantic rejects subclasses in strict mode!
-										#
-										# REAL FIX: Convert to dicts for AgentOutput, validator will handle them
-										#
-										# P0-2: model_dump(exclude_unset=True) DROPS the `_tool_call_id`
-										# PrivateAttr that tool_calls_to_actions stamped onto each instance
-										# (PrivateAttrs are not serialized). AgentOutput then re-validates the
-										# dicts into FRESH instances with _tool_call_id=None — so downstream
-										# execution.py always read None, `_pair_results_to_calls.have_ids` was
-										# ALWAYS False, and result↔call pairing silently fell to POSITION every
-										# step (misattributing results whenever the executor skips a failed-
-										# validation action, MCP throttling reorders, or is_done breaks mid-list).
-										# Capture the ids here and re-stamp them onto parsed.action below.
+										# AgentOutput needs dicts (a list of ActionModel SUBCLASSES fails its
+										# list[ActionModel] validation), so each action is dumped to a dict.
+										# P0-2: model_dump drops the `_tool_call_id` PrivateAttr, so the ids
+										# are captured here and re-stamped onto parsed.action below — else
+										# result<->call pairing silently falls back to list POSITION.
 										action_tool_call_ids = []
 										for action in actions:
 											action_tool_call_ids.append(getattr(action, '_tool_call_id', None))
@@ -1546,6 +1545,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 					# default" actually re-raised and was reclassified as a parse error
 					# (dead graceful-degradation path). Build a VALID brain instead.
 					parsed = self._safe_default_output(memory="Previous LLM response could not be parsed after retries.", reasoning="parse_failed: Failed to parse LLM response after retries")
+					cq.set_call_issue(self, cq.PARSE_FAILURE)
 					# Add parse failure telemetry
 					if hasattr(self, 'session_data'):
 						if 'parse_failures' not in self.session_data:

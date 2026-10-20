@@ -276,11 +276,9 @@ async def test_sub_agent_refuses_set(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_contract_propose_quarantines_for_background_author(monkeypatch, tmp_path):
-    # 035 P1-7: contract_propose writes the RULES doc (owner.md) now, and
-    # activation is governed by the ONE rule — OWNER_RULES_IMMEDIATE + a genuine
-    # owner turn — not by a per-doc review flag. CONTRACT_DOC_REQUIRE_REVIEW no
-    # longer decides a write.
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
+    # 035 P1-7: contract_propose writes the RULES doc (owner.md) now. A
+    # model-written rule is a draft on every turn (`_rules_immediate` is False);
+    # CONTRACT_DOC_REQUIRE_REVIEW no longer decides a write.
     action = _register(monkeypatch, tmp_path)
 
     # Model-written rules require review even in a genuine owner turn.
@@ -292,7 +290,7 @@ async def test_contract_propose_quarantines_for_background_author(monkeypatch, t
     assert "NOT YET IN EFFECT" in genuine_res.extracted_content
     assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
 
-    # Forged (self-wake) turn: STILL quarantined, even with immediacy ON.
+    # Forged (self-wake) turn: quarantined too.
     forged_res = await action.function(
         action.param_model(operation="contract_propose",
                           text="Always double-check math before answering."),
@@ -305,12 +303,8 @@ async def test_contract_propose_quarantines_for_background_author(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_contract_propose_default_review_on_quarantines_genuine_turn_too(monkeypatch, tmp_path):
-    # Default (OWNER_RULES_IMMEDIATE unset -> False): even a genuine owner turn
-    # quarantines pending review, so the polarity flip stays opt-in for one
-    # release (035 §6).
-    # ⚠️ unset now means ON (flipped 2026-09-21) — say "false" to mean the queue.
-    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "false")
+async def test_contract_propose_quarantines_genuine_turn_too(monkeypatch, tmp_path):
+    # A genuine owner turn queues the draft in .pending/; the owner confirms it.
     action = _register(monkeypatch, tmp_path)
     res = await action.function(
         action.param_model(operation="contract_propose", text="Keep replies concise."),

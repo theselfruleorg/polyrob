@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Apply a unified-diff patch to one file: each hunk applies where its context matches nearest its @@ line (exact, then whitespace-tolerant); fails loudly if the context matches nowhere or ambiguously",
+    "name": "coding_apply_patch",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "description": "Path to the file to patch (relative to the workspace, or absolute within it)",
+          "type": "string"
+        },
+        "patch": {
+          "description": "Unified diff for this one file (@@ hunks). Context/removed lines must match exactly.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path",
+        "patch"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

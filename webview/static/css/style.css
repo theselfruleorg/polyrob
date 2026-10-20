@@ -3235,9 +3235,6 @@ pre a.content-url,
     text-decoration: none;
 }
 
-.footer-link[href="https://theselfrule.org"]:hover {
-    color: var(--color-accent-yellow);
-}
 
 .footer-separator {
     color: var(--color-text-secondary);

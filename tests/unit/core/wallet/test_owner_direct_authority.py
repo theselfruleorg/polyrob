@@ -32,6 +32,15 @@ AMOUNT = 10 ** 18  # 1 ETH = $2,000, far above the $25 default ceiling
 
 
 @pytest.fixture(autouse=True)
+def _regime_allows_unattended_money(monkeypatch):
+    """These tests isolate the guard's lanes; the money regime itself is
+    tested in tests/unit/core/test_money_regime_e2e.py."""
+    import importlib
+    money_regime = importlib.import_module("core.config_policy.money_regime")
+    monkeypatch.setattr(money_regime, "unattended_money_allowed", lambda: True)
+
+
+@pytest.fixture(autouse=True)
 def _owner(monkeypatch):
     monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: OWNER)
     # The autonomous lane exists only when armed; these tests exercise it.
@@ -168,7 +177,7 @@ def test_the_ceiling_still_binds_no_context():
 def test_the_hard_caps_still_bind_the_owner():
     d = _authorize(_ctx(), gate=_gate(max_per_tx_usd=1000.0))
     assert d.allowed is False
-    assert "ceiling" in d.reason.lower()
+    assert "per-transaction cap" in d.reason.lower()
 
 
 def test_the_daily_cap_still_binds_the_owner():

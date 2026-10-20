@@ -28,8 +28,7 @@ from core.surfaces.act import InboundResult  # canonical envelope (R-4) — was 
 from core.surfaces.dispatcher import RouteDecision, route_inbound
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 from core.surfaces.media import Media
-# OS5: the ONE machine-mail classifier, below both the surface (never answer it)
-# and the agent's ``email_read_machine_mail`` (show it).
+# OS5: the ONE machine-mail classifier — the surface never answers such mail.
 from tools.email_providers.mime import is_auto_generated  # noqa: F401
 from tools.email_providers.mime import sender_address
 

@@ -17,7 +17,6 @@ import functools
 import json
 import logging
 import os
-import re
 import time
 from typing import Optional
 
@@ -35,7 +34,8 @@ from modules.memory.recall_consolidation import RecallConsolidationMixin
 from modules.memory.sqlite_kb_store import KbStoreMixin
 from modules.memory.sqlite_episodes_store import EpisodeStoreMixin
 from modules.memory.sqlite_scope_store import ScopeStoreMixin
-from modules.memory import scope as _scope, write_filter as _wf  # B2: write noise filter
+from modules.memory.sqlite_recall import KeywordRecallMixin
+from modules.memory import scope as _scope
 
 
 def _require_user_id() -> bool:
@@ -46,8 +46,9 @@ def _require_user_id() -> bool:
     return bool_env("MEMORY_REQUIRE_USER_ID", True)
 
 
-class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMixin,
-                           RecallConsolidationMixin, ScopeStoreMixin, MemoryProvider):
+class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMixin,
+                           EpisodeStoreMixin, RecallConsolidationMixin, ScopeStoreMixin,
+                           MemoryProvider):
     """Turn store + FTS5 recall core; curated notes, KB, episodes and recall
     consolidation are mixins sharing this class's connection helpers and guards."""
 
@@ -170,7 +171,7 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         consistent across the two halves). The D8 cap is applied HERE for the same
         reason — a truncated FTS row must match its embedded twin byte-for-byte."""
         u, a = strip_turn_fences(user_content, assistant_content)  # 070 W1.5: no fence is stored
-        content = ("" if not (a := _wf.clean(a)) else a.strip() if cls._store_answer_only()
+        content = ("" if not (a or "").strip() else a.strip() if cls._store_answer_only()
                    else f"User: {u}\nAssistant: {a}".strip())
         from core.secret_scrub import scrub_secret_shapes
         content = scrub_secret_shapes(content)
@@ -242,30 +243,10 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
             logger.debug("mem provenance stamp skipped: %s", e)
         return True
 
-    @staticmethod
-    def _clamp_limit(limit, default: int) -> int:
-        """Clamp a caller-supplied result count to [1, 20]; bad input => default."""
-        try:
-            limit = int(limit)
-        except (TypeError, ValueError):
-            limit = default
-        return max(1, min(20, limit))
-
-    @staticmethod
-    def _query_terms(query: str) -> list:
-        """Significant (>=3-char) tokens from a free-text query — the ONE tokenizer
-        for every FTS5 recall path (base provider + the vector subclass)."""
-        return re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")
-
-    @staticmethod
-    def _fts_match(terms: list) -> str:
-        """Quoted (injection-safe) FTS5 OR-query over <=12 informative terms (B1, fts_terms)."""
-        from modules.memory.fts_terms import select_terms
-        return " OR ".join(f'"{t}"' for t in select_terms(terms))
-
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
-                     with_ids: bool = False, scope=None) -> str:
+                     with_ids: bool = False, scope=None, demote_automation: bool = True,
+                     prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
         """Tenant-scoped recall (UP-09). Two shapes inferred from args:
 
         - **discover** (`query` has terms): FTS5 MATCH over a sanitized OR-query,
@@ -284,6 +265,8 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         format byte-identical for direct callers that don't request it.
 
         Returns newline-joined "- {content}" snippets, or "" on no results / refusal.
+        A READ FAILURE RAISES (D3, review 2026-10-13): "" means "nothing matched",
+        never "the store could not be read" — every caller names the failure.
         """
         if self._anon_blocked(user_id):
             return ""
@@ -293,147 +276,16 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
             rows = await self._run_blocking(
                 self._keyword_rows,
                 query, norm_user=self._norm_user(user_id), limit=limit, sort=sort,
-                before_id=before_id, scope=scope)
+                before_id=before_id, scope=scope, demote_automation=demote_automation,
+                prefer_job_id=prefer_job_id, prefer_goal_id=prefer_goal_id)
         except Exception as e:
             logger.warning("sqlite memory search failed: %s", e)
-            return ""
+            raise
         return self._format_recall_rows(rows, with_ids=with_ids)
 
-    def _keyword_rows(self, query: str, *, norm_user: str, limit: int,
-                      sort: str = None, allow_browse: bool = True,
-                      exclude_session_id: str = None, before_id: int = None,
-                      scope=None) -> list:
-        """FTS5 recall -> ranked list of ``{"content", "ts", "rowid"}`` dicts (no
-        formatting). ``ts`` comes from the B2 provenance sidecar (None for legacy
-        rows). Discover when `query` has >=3-char terms; otherwise browse
-        most-recent (unless allow_browse=False -> []).
-
-        P2-1: when `exclude_session_id` is set (the automatic prefetch passes the
-        CURRENT session), rows written by that session are excluded — otherwise recall
-        re-injects the session's OWN just-written findings (already in context via the
-        H-MEM tail) as 'untrusted external' memory, wasting tokens and top-k slots.
-
-        T2.6: `before_id` (rowid cursor) is applied as a plain `rowid < ?` WHERE
-        filter regardless of `sort` — for sort="newest" that's exactly "strictly
-        older, same order" (honest forward pagination); for the default rank order
-        it narrows the MATCH candidates BEFORE ranking (keeps rank order) — this
-        is LOSSY, not just reordered: a match that ranks between the returned page
-        and the cursor, but below either, is permanently excluded from every
-        subsequent page (proven: a rank-ordered page1 of ids [2, 4] then
-        before_id=2 can never again surface an id like 3 or 5 that ranked between
-        them). This is exactly why the agent-facing action (T2.6 review fix) only
-        advertises the before_id hint for sort="newest" — the one lossless mode.
-        For sort="oldest" the filter runs the SAME direction as the ORDER BY
-        (ascending), so it is NOT forward-pagination in that mode either — no
-        extra cleverness is applied to make it one (see plan T2.6: "adapt
-        honestly for other sorts").
-
-        T2.6 automation-source demotion: on the default rank-ordered (no explicit
-        `sort`) MATCH branch, a row whose session has a completed 'cron'/'goal'
-        episode for the SAME tenant (`modules/memory/episodic.py::finalize_episode`)
-        sorts AFTER every interactive ('chat'/no-episode) row, rank preserved
-        within each group. This is the only reliable existing source-of-origin
-        signal — `memories` rows carry no kind/source column, and cron/goal
-        sessions use the SAME `create_session` id scheme as chat (no naming
-        convention to key off). Episodes only exist when EPISODIC_MEMORY_ENABLED
-        is on (default off outside POLYROB_LOCAL/autonomous posture); with the
-        ledger empty this EXISTS subquery is always false, i.e. a no-op — never
-        applied to sort="newest"/"oldest" (an explicit time-order request is
-        honored as asked) or to browse (no MATCH -> no `rank` to blend with).
-
-        Provenance is fetched in a SECOND query by rowid (not a JOIN) — FTS5 MATCH
-        does not compose reliably with JOIN/aliasing, and rank ordering must stay
-        exactly as before.
-        """
-        terms = self._query_terms(query)
-        _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
-        _excl_arg = (exclude_session_id,) if exclude_session_id else ()
-        _before_sql = " AND m.rowid < ?" if before_id is not None else ""
-        _before_arg = (before_id,) if before_id is not None else ()
-        # 025: the scope predicate rides the cursor slot on all three shapes.
-        _sc_sql, _sc_arg = _scope.read_predicate(scope, norm_user)
-        _before_sql, _before_arg = _before_sql + _sc_sql, _before_arg + _sc_arg
-        if terms:
-            match = self._fts_match(terms)
-            if sort in ("newest", "oldest"):
-                order = "m.rowid DESC" if sort == "newest" else "m.rowid ASC"
-            else:
-                order = (
-                    "(EXISTS (SELECT 1 FROM episodes e WHERE e.session_id = "
-                    "m.session_id AND e.user_id = m.user_id "
-                    "AND e.kind IN ('cron','goal'))) ASC, rank ASC"
-                )
-            rows = execute_retry(
-                self.db_path,
-                f"SELECT m.rowid AS rowid, m.content AS content FROM memories m "
-                f"WHERE memories MATCH ? AND m.user_id = ?{_excl_sql}{_before_sql} "
-                f"ORDER BY {order} LIMIT ?",
-                (match, norm_user) + _excl_arg + _before_arg + (limit,),
-                fetch="all",
-            )
-        elif allow_browse:
-            order = "m.rowid ASC" if sort == "oldest" else "m.rowid DESC"
-            rows = execute_retry(
-                self.db_path,
-                f"SELECT m.rowid AS rowid, m.content AS content FROM memories m "
-                f"WHERE m.user_id = ?{_excl_sql}{_before_sql} "
-                f"ORDER BY {order} LIMIT ?",
-                (norm_user,) + _excl_arg + _before_arg + (limit,),
-                fetch="all",
-            )
-        else:
-            return []
-        rows = rows or []
-        ts_by_rowid = {}
-        if rows:
-            try:
-                ids = [r["rowid"] for r in rows]
-                marks = ",".join("?" for _ in ids)
-                prows = execute_retry(
-                    self.db_path,
-                    f"SELECT mem_rowid, ts FROM mem_provenance WHERE mem_rowid IN ({marks})",
-                    tuple(ids), fetch="all")
-                ts_by_rowid = {p["mem_rowid"]: p["ts"] for p in (prows or [])}
-            except Exception as e:  # provenance is additive — recall must not break
-                logger.debug("mem provenance lookup skipped: %s", e)
-        return [{"content": r["content"], "ts": ts_by_rowid.get(r["rowid"]),
-                 "rowid": r["rowid"]} for r in rows]
-
-    def _keyword_contents(self, query: str, *, norm_user: str, limit: int,
-                          sort: str = None, allow_browse: bool = True,
-                          exclude_session_id: str = None, scope=None) -> list:
-        """Bare content strings (subclass RRF contract — the hybrid vector provider
-        merges ranked lists keyed by content). Delegates to `_keyword_rows`."""
-        return [r["content"] for r in self._keyword_rows(
-            query, norm_user=norm_user, limit=limit, sort=sort,
-            allow_browse=allow_browse, exclude_session_id=exclude_session_id, scope=scope)]
-
-    @staticmethod
-    def _recall_line(content: str, ts=None, rowid=None) -> str:
-        """One recall bullet; date-prefixed when the write-time stamp is known (B2).
-        T2.6: an ``(id N)`` suffix when `rowid` is given (opt-in, session_search
-        pagination) — omitted (legacy shape, byte-identical) when `rowid` is None."""
-        if ts:
-            try:
-                day = time.strftime("%Y-%m-%d", time.localtime(int(ts)))
-                line = f"- [{day}] {content}"
-            except Exception:
-                line = f"- {content}"
-        else:
-            line = f"- {content}"
-        if rowid is not None:
-            line = f"{line} (id {rowid})"
-        return line
-
-    @classmethod
-    def _format_recall_rows(cls, rows, *, with_ids: bool = False) -> str:
-        return "\n".join(
-            cls._recall_line(r["content"], r.get("ts"), r.get("rowid") if with_ids else None)
-            for r in rows
-        )
-
     async def prefetch(self, query: str, *, session_id: str, user_id=None,
-                       scope=None) -> str:
+                       scope=None, demote_automation: bool = True,
+                       prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
         # Rank-ordered, top_k, "" on anon-block or no significant terms (NO browse-on-
         # empty — automatic prefetch must not inject recent rows when the query is empty).
         # P2-1: calls _keyword_contents DIRECTLY (not search()) so it can exclude the
@@ -446,10 +298,12 @@ class SqliteMemoryProvider(CuratedNotesStoreMixin, KbStoreMixin, EpisodeStoreMix
         try:
             rows = await self._run_blocking(
                 self._keyword_rows, query, norm_user=self._norm_user(user_id),
-                limit=self.top_k, exclude_session_id=session_id, scope=scope)
+                limit=self.top_k, exclude_session_id=session_id, scope=scope,
+                demote_automation=demote_automation, prefer_job_id=prefer_job_id,
+                prefer_goal_id=prefer_goal_id)
         except Exception as e:
             logger.warning("sqlite memory prefetch failed: %s", e)
-            return ""
+            raise  # D3: an unreadable store is not an empty one
         return self._format_recall_rows(rows)
 
     # ---- notes substrate (C1, 2026-07-11) ------------------------------------

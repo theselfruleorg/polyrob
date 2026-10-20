@@ -207,7 +207,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # matched byte-exact); only the actual send uses the normalized form.
     send_target = normalize_surface_target(surface, target)
     # C8 (2026-09-15): a target of the wrong SHAPE for its surface can never be
-    # delivered. Prod marked `telegram / rob@theselfrule.org` dead after handing
+    # delivered. Prod marked `telegram / rob@example.org` dead after handing
     # an email address to the Bot API. Refuse with the surface that WOULD work,
     # before the send is spent and the address is durably marked dead.
     wrong_shape = wrong_surface_target_reason(surface, send_target)
@@ -467,7 +467,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # 061: the owner's line goes to the ONE owner thread, not the correspondent
     # store. An interactive session's send was already recorded by the turn
     # latch above (`mark_reply_published`); an autonomous one is recorded here.
-    # The legacy owner rows (`28436760` AND `telegram:28436760`) are adopted
+    # The legacy owner rows (`100000001` AND `telegram:100000001`) are adopted
     # into the thread once, so `/contacts` stops listing the owner.
     elif ok and tier == "owner" and container is not None:
         try:

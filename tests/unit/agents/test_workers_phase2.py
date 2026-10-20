@@ -35,19 +35,21 @@ def _owner_worker(store, wid="researcher", **kw):
 # --- store: provenance, approval, spec --------------------------------------------
 
 def test_owner_write_is_approved_and_marked_owner(store):
-    _owner_worker(store, tools=["web_fetch", "filesystem"], model="m1", max_steps=12,
+    _owner_worker(store, tools=["web_fetch", "filesystem"], model="m1",
                   instructions="Cite primary sources.")
     spec = resolve_worker("researcher", UID)
     assert spec.owner_authored
     assert spec.tool_ids == ["web_fetch", "filesystem"]
-    assert spec.model == "m1" and spec.max_steps == 12
+    assert spec.model == "m1"
+    # 083 WS-4: a worker pins no step budget — the cap is AUTONOMOUS_MAX_STEPS.
+    assert not hasattr(spec, "max_steps")
     assert spec.instructions == "Cite primary sources."
 
 
 def test_unpinned_defaults_do_not_apply(store):
     _owner_worker(store)
     spec = resolve_worker("researcher", UID)
-    assert spec.model == "" and spec.max_steps is None and spec.tool_ids is None
+    assert spec.model == "" and spec.tool_ids is None
 
 
 def test_agent_proposal_is_pending_until_the_owner_approves(store):
@@ -255,14 +257,17 @@ def test_cli_new_list_show_approve_remove(store, tmp_path, monkeypatch):
     monkeypatch.setattr(ADH, "admin_owner_principal", lambda: UID)
     r = CliRunner()
     out = r.invoke(workers, ["new", "researcher", "--description", "Reads sources.",
-                             "--tools", "web_fetch,filesystem", "--max-steps", "9"])
+                             "--tools", "web_fetch,filesystem"])
     assert out.exit_code == 0, out.output
     out = r.invoke(workers, ["list", "--json"])
     data = json.loads(out.output)
-    assert data["approved"][0]["id"] == "researcher" and data["approved"][0]["max_steps"] == 9
+    assert data["approved"][0]["id"] == "researcher"
+    assert "max_steps" not in data["approved"][0]
     assert "Reads sources." in r.invoke(workers, ["show", "researcher"]).output
-    out = r.invoke(workers, ["edit", "researcher", "--max-steps", "20"])
-    assert resolve_worker("researcher", UID).max_steps == 20
+    out = r.invoke(workers, ["edit", "researcher", "--model", "m2"])
+    assert out.exit_code == 0, out.output
+    assert resolve_worker("researcher", UID).model == "m2"
+    assert r.invoke(workers, ["edit", "researcher", "--max-steps", "20"]).exit_code != 0
     assert resolve_worker("researcher", UID).tool_ids == ["web_fetch", "filesystem"]
     store.save_profile(build_worker_profile("draft", description="d"), user_id=UID,
                        created_by=PROVENANCE_BACKGROUND)

@@ -53,14 +53,6 @@ def test_cron_mirrors_goal_default(monkeypatch):
     assert default_cron_tools() == default_goal_tools()
 
 
-def test_planner_gets_web_fetch_under_autonomous(monkeypatch):
-    _enable_full(monkeypatch)
-    from agents.task.goals import planner
-    assert "web_fetch" in planner.planner_session_tools()
-    monkeypatch.delenv("AUTONOMY_MODE", raising=False)
-    assert planner.planner_session_tools() == list(planner.PLANNER_TOOLS)
-
-
 def test_valid_tool_ids_covers_autonomous_set():
     from agents.task.agent.skill_manager import VALID_TOOL_IDS
     missing = set(constants.AUTONOMOUS_MODE_TOOLS) - VALID_TOOL_IDS

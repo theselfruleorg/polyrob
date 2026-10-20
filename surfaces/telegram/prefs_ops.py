@@ -110,9 +110,11 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
         # control plane, where seeing every writable key is the point.
         return _prefs_reply(user_id, data_dir, instance_id, full=True)
     sub = args[0].lower()
+    if sub in ("get", "explain"):
+        return _config_read(user_id, sub, args[1:])
     if sub != "set":
-        return ("Usage: /config [list] | /config set <key> <value>\n"
-                "See /prefs for the full read-only listing.")
+        return ("Usage: /config [list] | /config get <key> | /config explain <key> | "
+                "/config set <key> <value>\nSee /prefs for the full read-only listing.")
     rest = args[1:]
     if len(rest) < 2:
         return "Usage: /config set <key> <value>"
@@ -142,3 +144,113 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
     # are the part of the answer the owner cannot see any other way.
     notes = "".join(f"\n{n}" for n in (getattr(res, "notes", None) or ()))
     return f"✅ Set {key} = {value}{applies}.{notes}"
+
+
+def _config_read(user_id: str, sub: str, rest: list) -> str:
+    """`/config get <key>` and `/config explain <key>` (080 D8) — the value and
+    where it comes from, through the ONE describer (``core.config_service``)
+    the REPL and ``polyrob config`` read. ``explain`` adds every rung of the
+    provenance chain, highest first. Secrets arrive masked."""
+    if not rest:
+        return f"Usage: /config {sub} <key>"
+    key = rest[0]
+    from core import config_service
+    from core.runtime_paths import prefs_home_dir
+    try:
+        fn = config_service.explain if sub == "explain" else config_service.describe
+        info = fn(key, user_id=user_id, home_dir=prefs_home_dir())
+    except KeyError:
+        return config_service.unknown_key_message(key)
+    except Exception as exc:  # noqa: BLE001 — an unread setting is not a value
+        return f"I could not read {key} ({type(exc).__name__}: {str(exc)[:120]})."
+    lines = [f"{key} = {info.effective} ({info.source})",
+             f"applies: {info.applies}"]
+    if info.enforcement == "advisory":
+        lines.append("advisory: it steers my prompt only; nothing enforces it")
+    if info.description:
+        lines.append(info.description)
+    if sub == "explain" and info.chain:
+        lines.append("Where it comes from (highest wins):")
+        lines += [f"  {s.origin}: {s.value}" for s in info.chain]
+    return "\n".join(lines)
+
+
+#: The settings that pin the model, highest first (``core.runtime_config``).
+_MODEL_KEYS = ("DEFAULT_MODEL", "DEFAULT_PROVIDER")
+
+
+def _effective_model() -> tuple:
+    """``(provider, model)`` a new run uses — the resolver every autonomous run
+    and chat session reads, never a second ladder."""
+    from core.runtime_config import resolve_default_provider
+    provider, model = resolve_default_provider()[:2]
+    if not model and provider:
+        from modules.llm.llm_client_registry import get_default_model
+        model = get_default_model(provider)
+    return provider, model
+
+
+def model_reply(user_id: str, args: list) -> str:
+    """`/model` (080 D8): the model I run on and where that choice comes from;
+    `/model <provider>/<model>` (or `<provider> <model>`) pins a new one.
+
+    A write goes through ``core.config_service.set_value`` (``surface=
+    "telegram"``) for each half of the pin and prints ITS message — the oracle
+    owns which keys a chat seat may write and whether a higher setting shadows
+    the one written; this seat never re-derives that.
+    """
+    from core import config_service
+    words = [str(a) for a in (args or []) if str(a).strip()]
+    if not words:
+        try:
+            provider, model = _effective_model()
+        except Exception as exc:  # noqa: BLE001
+            return f"I could not resolve the model ({type(exc).__name__}: {str(exc)[:120]})."
+        lines = [f"Model: {provider or '?'}/{model or '?'}"]
+        pinned = []
+        for key in _MODEL_KEYS:
+            try:
+                info = config_service.describe(key)
+            except Exception:  # noqa: BLE001 — one unread rung must not hide the rest
+                pinned.append(f"  {key}: could not read")
+                continue
+            if info.effective not in (None, ""):
+                pinned.append(f"  {key} = {info.effective} ({info.source})")
+        if pinned:
+            lines.append("Pinned by:")
+            lines += pinned
+        else:
+            lines.append("Nothing pins it: this is the provider's own default.")
+        lines.append("Change it: /model <provider>/<model>")
+        return "\n".join(lines)
+    if len(words) == 1 and "/" in words[0]:
+        provider, model = words[0].split("/", 1)
+    elif len(words) == 2:
+        provider, model = words
+    else:
+        return "Usage: /model — or /model <provider>/<model>"
+    from modules.llm.profiles import get_profile
+    if get_profile(provider) is None:
+        return f"❌ Unknown provider '{provider}'. Nothing was written."
+    from core.runtime_paths import prefs_home_dir
+    pin = (("DEFAULT_PROVIDER", provider), ("DEFAULT_MODEL", model))
+    # The two keys are ONE pin: a higher layer that pins only DEFAULT_MODEL
+    # would let the provider half land alone, pairing the new provider with a
+    # model of another provider. Check both halves before writing either.
+    for key, value in pin:
+        refusal = config_service.shadowed_write_refusal(key, value)
+        if refusal:
+            return f"❌ {refusal}"
+    out = []
+    for key, value in pin:
+        try:
+            res = config_service.set_value(key, value, user_id=user_id,
+                                           home_dir=prefs_home_dir(), surface="telegram")
+        except Exception as exc:  # noqa: BLE001 — the oracle promises not to
+            logger.warning("telegram /model set failed", exc_info=True)
+            out.append(f"❌ {key}: {type(exc).__name__} — nothing was written.")
+            break
+        out.append(("✅ " if res.ok else "❌ ") + str(res.message))
+        if not res.ok:
+            break
+    return "\n".join(out)

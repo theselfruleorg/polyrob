@@ -129,7 +129,7 @@ class MintParams(BaseModel):
     to: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
         "Recipient. Omit (default) = this instance's treasury, the only recipient accepted: the "
         "guard must see every minted token arrive in the paying wallet."))
-    qty: int = Field(1, ge=1, le=10, description="How many to mint in one call (1..10); the price is qty × 0.042 ETH.")
+    qty: int = Field(1, ge=1, le=10, description="How many to mint in one call (1..10); the price is qty × 0.033 ETH.")
     min_pnl_out: int = Field(0, ge=0, description=(
         "Least PNL (raw token units) each new account must receive from the mint's buy, "
         "else the mint reverts. 0 = never revert on price (the contract still caps impact at 3%)."))
@@ -339,7 +339,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
 
     @BaseTool.action(
         "Mint 1-10 tokens of a pinned collection to this instance's treasury (the treasury then "
-        "owns them and their accounts) at the collection's price (0.042 ETH each). ALWAYS "
+        "owns them and their accounts) at the collection's price (0.033 ETH each). ALWAYS "
         "owner-approved.",
         param_model=MintParams)
     async def agent_nft_collection_mint(self, params: MintParams, execution_context=None):

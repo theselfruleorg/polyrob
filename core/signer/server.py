@@ -258,6 +258,13 @@ class SignerService:
         """``(intent, tx, decision, grant_row)`` or :class:`_Refuse`."""
         protocol.check_keys(body, required=("intent", "tx"))
         intent = protocol.intent_from_wire(body["intent"])
+        # 085 W2: ``payout_shape`` is the AGENT's own classification. A compromised
+        # agent clears it, so honoring it here adds a root grant to every honest
+        # payout and no security: the signer's caps and ceiling govern a payout
+        # exactly as a plain transfer of the same value. (``value_ack`` stays.)
+        if intent.payout_shape:
+            import dataclasses
+            intent = dataclasses.replace(intent, payout_shape=False)
         tx = protocol.tx_from_wire(body["tx"])
         row = self._chain_row(intent.chain)
         if int(tx["chainId"]) != int(row.chain_id):
@@ -471,30 +478,81 @@ class SignerService:
         if not (nonce.startswith("0x") and len(nonce) == 66):
             raise protocol.ProtocolError("nonce must be a 32-byte 0x hex string")
         usd = round(value / 10 ** 6, 6)
-        if usd > self.config.x402_per_payment_usd:
-            raise _Refuse(protocol.APPROVAL_REQUIRED, (
-                f"x402 payment ${usd:.2f} is above the signer's per-payment cap "
-                f"${self.config.x402_per_payment_usd:.2f}"), amount_usd=usd)
         key = "x402:" + nonce.lower()
-        verdict = self.gate.check(venue="x402", amount_usd=usd, idempotency_key=key)
-        if not verdict.allowed:
-            self.store.log_decision(op="x402.authorize", digest=key, allowed=False,
-                                    code=protocol.GUARD_REFUSED, reason=verdict.reason,
-                                    peer_uid=peer_uid, amount_usd=usd)
-            raise _Refuse(protocol.GUARD_REFUSED, f"refused by the signer's gate: {verdict.reason}",
-                          amount_usd=usd)
+        grant = self._x402_cap_lane(domain, message, value=value, usd=usd, key=key,
+                                    chain=row.name, peer_uid=peer_uid)
         msg = dict(message, value=value, validAfter=valid_after, validBefore=valid_before,
                    nonce=bytes.fromhex(nonce[2:]))
         signed = signer.account.sign_typed_data(
             domain_data=dict(domain), message_types=self._types_without_domain(types),
             message_data=msg)
         sig = bytes(signed.signature).hex()
+        # Spend the one-use grant BEFORE the signature leaves or is booked.
+        if grant is not None and not self.store.consume_grant(grant["id"]):
+            raise _Refuse(protocol.APPROVAL_REQUIRED,
+                          f"signer approval {grant['id']} is no longer live; nothing was signed",
+                          amount_usd=usd)
         self.gate.record(venue="x402", action="signer_x402_authorize", amount_usd=usd,
                          counterparty=str(message["to"]), idempotency_key=key,
                          result_ref=key, chain=row.name)
         self.store.log_decision(op="x402.authorize", digest=key, allowed=True, peer_uid=peer_uid,
                                 amount_usd=usd, ref=str(message["to"]))
         return {"signature": "0x" + sig, "amount_usd": usd}
+
+    def _x402_cap_lane(self, domain, message, *, value: int, usd: float, key: str,
+                       chain: str, peer_uid):
+        """085 W4 (S-1): the hard caps of an EIP-3009 authorization.
+
+        ``None`` = within the per-payment cap and the gate (x402 venue daily cap
+        included). Above a cap, the same root-only grant ``evm.send`` uses: a live
+        grant for this exact payment returns its row; else an approval opens and
+        the request is refused with its id. Any other gate refusal refuses.
+        """
+        reason = None
+        if usd > self.config.x402_per_payment_usd:
+            reason = (f"x402 payment ${usd:.2f} is above the signer's per-payment cap "
+                      f"${self.config.x402_per_payment_usd:.2f}")
+        else:
+            verdict = self.gate.check(venue="x402", amount_usd=usd, idempotency_key=key)
+            if verdict.allowed:
+                return None
+            if not getattr(verdict, "cap_exceeded", False):
+                self.store.log_decision(op="x402.authorize", digest=key, allowed=False,
+                                        code=protocol.GUARD_REFUSED, reason=verdict.reason,
+                                        peer_uid=peer_uid, amount_usd=usd)
+                raise _Refuse(protocol.GUARD_REFUSED,
+                              f"refused by the signer's gate: {verdict.reason}", amount_usd=usd)
+            reason = verdict.reason
+        from core.signer.review import x402_digest, x402_review
+        payer, payee = str(message["from"]), str(message["to"])
+        digest = x402_digest(chain_id=int(domain["chainId"]),
+                             contract=str(domain["verifyingContract"]),
+                             payer=payer, payee=payee, value=value)
+        existing = self.store.find_approval(digest)
+        if (existing is not None and existing["state"] == "granted"
+                and usd <= float(existing["amount_usd"]) * _GRANT_SLACK):
+            from core.wallet.policy import PolicyGate
+            granted_gate = PolicyGate(max_per_tx_usd=max(usd, self.config.per_tx_usd),
+                                      audit_sink=self.gate._audit, daily_cap_usd=None)
+            verdict = granted_gate.check(venue="x402", amount_usd=usd, idempotency_key=key)
+            if not verdict.allowed:
+                raise _Refuse(protocol.GUARD_REFUSED,
+                              f"refused by the signer's gate: {verdict.reason}", amount_usd=usd)
+            return existing
+        summary = x402_review(chain=chain, contract=str(domain["verifyingContract"]),
+                              payer=payer, payee=payee, value=value, usd=usd,
+                              reason=reason, digest=digest)
+        row_ = self.store.open_approval(digest=digest, op="x402.authorize", chain=chain,
+                                        amount_usd=usd, summary=summary,
+                                        ttl_sec=self.config.approval_ttl_sec)
+        self.store.log_decision(op="x402.authorize", digest=digest, allowed=False,
+                                code=protocol.APPROVAL_REQUIRED, reason=reason,
+                                peer_uid=peer_uid, amount_usd=usd, ref=row_["id"])
+        raise _Refuse(protocol.APPROVAL_REQUIRED, (
+            f"{reason}; it requires independent signer approval. The owner approves it ON "
+            f"THE BOX: `sudo polyrob owner promote signer_approval {row_['id']}`, then the "
+            f"same payment is retried. Nothing was signed."),
+            amount_usd=usd, approval_id=row_["id"])
 
     # -- 066 P3: Hyperliquid orders ------------------------------------------
 

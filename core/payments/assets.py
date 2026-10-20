@@ -351,7 +351,27 @@ def verify_on_chain(chain: str, address: str, *, rpc_call) -> Tuple[int, str]:
     return decimals, symbol
 
 
+#: Symbols a token may CLAIM to look like a dollar (085 M-2). Display only: the
+#: peg is decided by the pinned table, ``core.wallet.chains.is_usd_pegged``.
+_STABLE_LOOKING_SYMBOLS = ("USDC", "USDT", "DAI", "PYUSD", "USDG", "USDS")
+
+
+def unpinned_stable_note(chain: str, address: Optional[str], symbol: Optional[str]) -> str:
+    """``""``, or a newline plus the 085 M-2 warning when the contract calls
+    itself a stablecoin but its address is not pinned (``asset add --verify``)."""
+    if (symbol or "").strip().upper() not in _STABLE_LOOKING_SYMBOLS:
+        return ""
+    from core.wallet.chains import is_usd_pegged
+    if is_usd_pegged(chain, address):
+        return ""
+    return (f"\n⚠️ {address} reports symbol {symbol!r}, but it is not a pinned "
+            f"stablecoin on {chain}. Anyone can name a token {symbol!r}. It is "
+            f"NOT priced at $1: invoices in it need a live quote, --min-amount "
+            f"and --liquidity-floor. Check the address before you accept it.")
+
+
 __all__ = ["AssetStore", "BUILTIN_ASSETS", "DEFAULT_ASSET_ID", "PaymentAsset",
            "RAILS", "TESTNET_EXEMPT_ASSET_IDS", "all_assets", "get", "known_ids",
-           "resolve", "solana_default_asset_id", "store_path", "verify_on_chain",
+           "resolve", "solana_default_asset_id", "store_path", "unpinned_stable_note",
+           "verify_on_chain",
            "vocabulary"]

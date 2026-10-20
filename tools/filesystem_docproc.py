@@ -34,7 +34,7 @@ class DocProcessingMixin:
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             # Basic processing
@@ -267,7 +267,7 @@ class DocProcessingMixin:
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ServiceError(f"{self.name} service is not enabled")
+            raise ServiceError(self._off_text())
 
         try:
             text = params.text

@@ -188,6 +188,52 @@ def resolve_data_home() -> Path:
     return resolve_runtime_paths(local=True).data_home
 
 
+#: ``polyrob update`` snapshots (``cli/update/snapshot.py``) live in
+#: ``<data home>/snapshots/<name>/``; the copied env files sit in its ``config/``.
+UPDATE_SNAPSHOTS_DIRNAME = "snapshots"
+UPDATE_SNAPSHOT_CONFIG_SUBDIR = "config"
+
+
+def update_snapshots_root(data_home: Optional[Path] = None) -> Path:
+    """The ONE location of the ``polyrob update`` snapshots."""
+    return Path(data_home if data_home is not None else resolve_data_home()) / UPDATE_SNAPSHOTS_DIRNAME
+
+
+def update_snapshot_config_files(root: Optional[Path] = None) -> list:
+    """Every config file a snapshot copied (``<root>/<name>/config/*``), or []
+    when there is none or the root cannot be listed. The ONE reader the custody
+    file gap (085 W1) uses; it never opens a file."""
+    try:
+        base = Path(root) if root is not None else update_snapshots_root()
+        return sorted(f for f in base.glob(f"*/{UPDATE_SNAPSHOT_CONFIG_SUBDIR}/*") if f.is_file())
+    except (OSError, ValueError):
+        return []
+
+
+def instance_env_path() -> Optional[Path]:
+    """The ONE env file of a DEPLOYED instance: ``<deployed data home>/.env`` (080 WS-1).
+
+    Every process of one instance — the agent, the console, the email and
+    gateway units (each with its own ``$HOME``) and a root CLI on the box —
+    resolves the same file, through the same rule ``cli._admin_home.
+    admin_data_dir`` uses (``core.admin_data_home.resolve_admin_data_home``):
+    ``POLYROB_DATA_DIR`` wins, else the home the deployment's env file declares.
+
+    ``None`` when nothing is deployed on this box (a plain local CLI keeps
+    ``$POLYROB_HOME/.env``) or when the deployed home cannot be read. Never raises.
+    """
+    try:
+        from core.admin_data_home import _deployment_evidence, resolve_admin_data_home
+        if not _deployment_evidence():
+            return None
+        res = resolve_admin_data_home()
+    except Exception:
+        return None
+    if res.ambiguous or not res.path:
+        return None
+    return Path(res.path).resolve() / ".env"
+
+
 # The PathManager's legacy default. Since T10 (2026-07-16) a bare PathManager()
 # delegates HERE (the RC-1 landmine — its constructor reading DATA_ROOT only —
 # is closed); this constant remains the both-envs-unset terminal fallback.
@@ -383,6 +429,13 @@ def store_db_path(name: str, data_dir: Optional[str] = None) -> str:
     if not is_registered(name):
         raise KeyError(f"{name} is not in core.db_manifest.DB_REGISTRY")
     return os.path.join(data_dir_or_home(data_dir), name)
+
+
+def bot_db_default_path(data_dir: str) -> str:
+    """The default relational db, ``<data_dir>/database/bot.db`` (``DB_PATH``
+    unset). ``modules.database.database_manager.resolve_bot_db_path`` owns the
+    full rule (the env override and the legacy refusal)."""
+    return os.path.join(data_dir, "database", "bot.db")
 
 
 def goals_db_path(data_dir: Optional[str] = None) -> str:

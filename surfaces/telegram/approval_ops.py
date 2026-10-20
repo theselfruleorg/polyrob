@@ -110,9 +110,11 @@ async def pending_verb(c) -> str:
     only the first of the three sources; see `approval_queue.all_pending`."""
     from core import self_evolution
     pending = _pending_set(c.user_id, c.data_dir, c.instance_id, c.board)
+    rest = _elsewhere(c, "pending")
     if not pending.items:
-        return (pending.degraded_line() or "No pending proposals.")
-    lines = [f"{len(pending.items)} pending proposal(s):"]
+        return "\n".join(x for x in (pending.degraded_line() or "No pending approvals.",
+                                       rest) if x)
+    lines = [f"{len(pending.items)} pending approval(s):"]
     for it in pending.items:
         preview = (it.get("preview") or "").strip()
         if len(preview) > 160:
@@ -123,7 +125,22 @@ async def pending_verb(c) -> str:
     lines.append("Everything at once: /approve_all")
     if pending.degraded_line():
         lines.append(pending.degraded_line())
+    if rest:
+        lines.append(rest)
     return "\n".join(lines)
+
+
+def _elsewhere(c, view_name: str) -> str:
+    """080 WS-3: ``/pending`` and ``/asks`` are views of the one Inbox — say
+    what else waits there. Fail-open to nothing (the view itself is honest)."""
+    try:
+        from core.surfaces.inbox_render import elsewhere_line
+        from surfaces.inbox_sources import build_inbox
+        return elsewhere_line(build_inbox(c.user_id, data_dir=c.data_dir,
+                                          instance_id=c.instance_id), view_name)
+    except Exception:
+        logger.debug("inbox elsewhere line skipped", exc_info=True)
+        return ""
 
 
 async def decide_verb(c) -> str:
@@ -206,6 +223,14 @@ async def decide_verb(c) -> str:
                 approve=approve, user_id=user_id, data_dir=data_dir,
                 instance_id=instance_id, board=board)
             return msg if ok else f"Failed: {msg}"
+        _done = self_evolution.last_decision_for_alias(target, user_id=user_id)
+        if _done is not None:
+            import datetime as _dt
+            _when = _dt.datetime.fromtimestamp(
+                float(_done["ts"] or 0), _dt.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+            _verb = "approved" if _done["action"] == "promote" else "rejected"
+            return (f"Already {_verb} at {_when} — {_done['kind']}:{_done['item_id']}."
+                    " Nothing left to do; see /pending for what is still waiting.")
         return (f"No pending proposal '{target}' — see /pending."
                 + (f"\n{pending.degraded_line()}" if pending.degraded_line() else ""))
     ok, msg = await _decide_pending_item(
@@ -222,8 +247,9 @@ async def asks_verb(c) -> str:
     from core.goal_vocab import has_own_surface
     rows = [a for a in c.board.asks(user_id=c.user_id, status=ASK_OPEN)
             if not has_own_surface(a.payload or {})]
+    rest = _elsewhere(c, "asks")
     if not rows:
-        return "No open asks — nothing is blocked on you."
+        return "\n".join(x for x in ("No open asks — nothing is blocked on you.", rest) if x)
     lines = [f"{len(rows)} open ask(s):"]
     for a in rows:
         blocks = (a.payload or {}).get("blocks_goal_ids", [])
@@ -233,6 +259,8 @@ async def asks_verb(c) -> str:
             lines.append(f"   {a.body[:160]}")
     lines.append("Fulfilled one? /fulfill <id> unblocks its goals — add "
                  "your answer after the id and the run is told what you said.")
+    if rest:
+        lines.append(rest)
     return "\n".join(lines)
 
 

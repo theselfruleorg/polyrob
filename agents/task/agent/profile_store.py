@@ -13,14 +13,14 @@ module is the completed store:
    ``.archived/`` lane BESIDE it (db_manifest-style path SSOT:
    :func:`profiles_data_home`). Data-home (not the code tree) survives a
    ``polyrob update`` code-swap, and the ``user_{uid}/`` scope means no
-   cross-tenant leak. Mirrors ``agents/task/agent/skill_store.py``'s data-home
+   cross-tenant leak. Mirrors ``core/skills/scopes.py``'s data-home
    resolution and ``core/self_context_writer.py``'s ``user_{uid}/`` +
    ``.pending/`` + ``.archived/`` layout.
 2. **Scanned body AND description SEPARATELY, fail-CLOSED** — a worker's
    description is injected verbatim into a ``<worker-catalog>`` foundation
    message (043 §6 Discovery) for every future session, so it is an
    injection-persistence vector "exactly like the body" (mirrors
-   ``skill_writer.py:152-177``). BOTH are threat-scanned; a flagged body OR
+   ``modules/skills/writer.py``). BOTH are threat-scanned; a flagged body OR
    description, a RAISING scan, OR an unavailable scanner all force the write
    into ``.pending/`` (quarantine, not publish) — the mitigation is quarantine,
    not framing (``untrusted_wrap`` cannot reach a schema field).
@@ -28,7 +28,7 @@ module is the completed store:
    non-user author (``PROVENANCE_BACKGROUND``) can NEVER auto-activate a worker;
    its write is quarantined and :meth:`ProfileStore.get_approved` refuses a
    pending profile, so it can never be dispatched. Origin detection is the
-   caller's job (it passes ``created_by``), exactly as ``skill_writer`` does.
+   caller's job (it passes ``created_by``), exactly as ``modules.skills.writer`` does.
 4. **Atomic** — temp-file + ``os.replace`` (a crash never leaves a half-written
    profile). **Archive-never-delete** — an overwritten/removed profile is moved
    to ``.archived/`` (recoverable).
@@ -453,29 +453,22 @@ def worker_dispatch_refusal(profile_id: Optional[str],
 
 # --- phase 2: what a dispatch applies, and what the parent model reads --------
 
-#: The most steps a worker file may pin (the delegate verb's own ceiling is 50;
-#: a worker is a narrower thing, never a wider one).
-MAX_WORKER_STEPS = 50
-
-
 class WorkerSpec:
     """The dispatch-time config of ONE approved worker (041 phase 2).
 
-    Only what the owner PINNED applies: ``AgentProfileModel`` fills ``llm`` and
-    ``limits`` with defaults, so a pin is marked (``llm.pinned`` /
-    ``limits.pinned``) by the writers (``polyrob workers new|edit``,
+    Only what the owner PINNED applies: ``AgentProfileModel`` fills ``llm``
+    with defaults, so a pin is marked (``llm.pinned``) by the writers (``polyrob workers new|edit``,
     ``worker_manage``). ``tool_ids`` is ``None`` for "inherit the parent's set";
     the delegation seam intersects it with the parent's tools minus
     ``DELEGATE_BLOCKED`` either way — a worker can never widen its parent.
     """
 
     __slots__ = ("id", "name", "description", "instructions", "model", "provider",
-                 "max_steps", "tool_ids", "authored_by")
+                 "tool_ids", "authored_by")
 
     def __init__(self, model: AgentProfileModel):
         prompt = model.prompt or {}
         llm = model.llm or {}
-        limits = model.limits or {}
         tools = model.tools or {}
         self.id = model.id
         self.name = model.name
@@ -485,12 +478,8 @@ class WorkerSpec:
         pinned_llm = bool(llm.get("pinned"))
         self.model = str(llm.get("model") or "") if pinned_llm else ""
         self.provider = str(llm.get("provider") or "") if pinned_llm else ""
-        steps = limits.get("max_steps") if limits.get("pinned") else None
-        try:
-            self.max_steps = (max(1, min(int(steps), MAX_WORKER_STEPS))
-                              if steps is not None else None)
-        except (TypeError, ValueError):
-            self.max_steps = None
+        # 083 WS-4: a stored ``limits.max_steps`` pin is inert — a worker's run
+        # stops at the operator's AUTONOMOUS_MAX_STEPS like every delegation.
         raw = tools.get("tool_ids")
         self.tool_ids = ([str(t) for t in raw if str(t).strip()]
                          if isinstance(raw, (list, tuple)) else None)
@@ -502,8 +491,7 @@ class WorkerSpec:
 
 def build_worker_profile(worker_id: str, *, description: str, instructions: str = "",
                          tools: Optional[List[str]] = None, model: str = "",
-                         provider: str = "", max_steps: Optional[int] = None,
-                         name: str = "") -> Dict:
+                         provider: str = "", name: str = "") -> Dict:
     """The ONE shape a worker file is written in (CLI, REPL and the agent action
     all build through here, so the pin markers cannot drift)."""
     data: Dict = {"id": worker_id, "name": name or worker_id,
@@ -519,10 +507,6 @@ def build_worker_profile(worker_id: str, *, description: str, instructions: str 
         if provider:
             llm["provider"] = provider
         data["llm"] = llm
-    if max_steps is not None:
-        data["limits"] = {"max_steps": max(1, min(int(max_steps), MAX_WORKER_STEPS)),
-                          "max_actions_per_step": 10, "max_input_tokens": None,
-                          "max_failures": 3, "pinned": True}
     return data
 
 

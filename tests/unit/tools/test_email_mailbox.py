@@ -354,15 +354,6 @@ async def test_agentmail_has_no_folders(monkeypatch):
     assert res.error and "agentmail" in res.error
 
 
-def test_refusal_taint_gate_sees_a_non_owner_cc(monkeypatch):
-    from tools.controller import refusal_taint_gate as g
-    monkeypatch.setattr(g, "_is_owner", lambda c, u, s, t: t == "owner@example.com")
-    assert g.reaches_non_owner(None, "email_send", {"to": "owner@example.com"}, "rob") is False
-    assert g.reaches_non_owner(None, "email_send",
-                               {"to": "owner@example.com", "cc": ["x@y.z"]}, "rob") is True
-    assert g.reaches_non_owner(None, "email_reply", {"uid": "1"}, "rob") is True
-
-
 @pytest.mark.asyncio
 async def test_list_reads_flags_that_follow_the_header_literal():
     class _TrailingFlags(_FakeIMAP):

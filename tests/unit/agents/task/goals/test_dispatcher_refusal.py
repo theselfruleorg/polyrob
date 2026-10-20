@@ -76,6 +76,39 @@ def test_budget_halt_refusal_records_greppable_marker():
         "a budget halt must never be labeled a provider outage: %s" % error)
 
 
+def test_budget_halt_read_from_the_typed_stop_reason():
+    """083 WS-1: the run's stop reason, not a string test, marks a budget halt —
+    a status that lost the marker text is still a budget halt."""
+
+    class _BudgetAgent:
+        async def create_session(self, *, user_id, request):
+            return {"id": "s-b2"}
+
+        async def run_session(self, user_id, session_id):
+            return "Session failed: Unknown error"
+
+        def get_orchestrator(self, session_id):
+            class _A:
+                _is_sub_agent = False
+                _last_result = []
+
+                class state:
+                    stop_reason = "run_budget"
+                    max_steps = 30
+
+            class _O:
+                agents = {"main": _A()}
+
+            return _O()
+
+        deliver_self_wake = None
+
+    board = _FakeBoard()
+    disp = GoalDispatcher(board, _BudgetAgent())
+    asyncio.run(disp._run_goal(Goal(id="g-b2", user_id="u1", title="budget goal")))
+    assert board.failures and board.failures[0][1].startswith("run_budget_exhausted:")
+
+
 def test_genuine_result_is_recorded_as_success():
     """Sanity: a real result string still goes to record_success (regression guard)."""
 

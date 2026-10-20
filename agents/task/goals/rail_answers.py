@@ -1,23 +1,27 @@
 """061 WS-3 — the owner's answer rides the RAIL that asked.
 
-A goal's answer already travels via ``payload.owner_unblocked`` (rendered by
-``goals/context.py``). A CRON job has no goal row, so an ask it raised carried
-its answer nowhere: the exit rail asked "A or B?", the owner answered, and the
-next tick never heard it. An ask raised by ``owner_ask`` stamps
-``payload.rail_id`` (``cron:<job_id>`` | ``goal:<goal_id>``); this renders the
-decided asks for a rail ONCE (``payload.consumed_by_run``) so the next run of
-that rail reads the answer and no later run repeats it.
+A GOAL's answer travels on its own row: ``decide_ask`` appends every decision
+on an ask about the goal (its ``blocks_goal_ids`` or its ``goal:<id>`` rail) to
+``payload.owner_answers``, whatever the goal's status, and
+``goals/context.py`` renders them on every later run (2026-10-13 review
+B1–B3). A CRON job has no goal row, so an ask it raised carried its answer
+nowhere: the exit rail asked "A or B?", the owner answered, and the next tick
+never heard it. An ask raised by ``owner_ask`` stamps ``payload.rail_id``
+(``cron:<job_id>`` | ``goal:<goal_id>``); :func:`peek_rail_answers` renders the
+decided asks of a cron rail and :func:`mark_rail_answers_consumed` stamps
+``payload.consumed_by_run`` only AFTER a run that completed (B4) — a run that
+failed, was refused or was cut leaves the answer for the next one.
 """
 from __future__ import annotations
 
 import json
 import logging
 import time
-from typing import Any, List
+from typing import Any, List, Tuple
 
 import re
 
-from core.goal_vocab import ASK_FULFILLED, ASK_REJECTED
+from core.goal_vocab import ASK_FULFILLED, ASK_REJECTED, LIVE_STATUSES
 from core.sqlite_util import execute_retry
 
 logger = logging.getLogger(__name__)
@@ -113,10 +117,24 @@ def decision_note(board: Any, ask_id: str, unblocked: int) -> str:
             return f"Scheduled job {job} reads your {word} on its next run ({due:%Y-%m-%d %H:%M})."
         except Exception:
             return f"Scheduled job {job} reads your {word} on its next run ({nxt})."
-    if rail.startswith("goal:"):
-        return f"Goal {rail.split(':', 1)[1]} reads your {word} on its next run."
-    if p.get("blocks_goal_ids"):
-        return "No blocked goal was waiting on it."
+    from agents.task.goals.board_types import _ask_goal_keys
+    goal_ids = sorted(_ask_goal_keys(p.get("blocks_goal_ids") or [], p))
+    if goal_ids:
+        # 2026-10-13 review B1: say what is TRUE — a goal that is done, failed
+        # or stopped has no next run to read the answer.
+        live, ended = [], []
+        for gid in goal_ids:
+            try:
+                g = board.get(gid)
+            except Exception:
+                g = None
+            status = str(getattr(g, "status", "") or "")
+            (live if status in LIVE_STATUSES else ended).append((gid, status))
+        if live:
+            names = ", ".join(gid for gid, _s in live)
+            return f"Goal {names} reads your {word} on its next run."
+        gid, status = ended[0]
+        return f"Goal {gid} is {status or 'gone'}; no run will read your {word}."
     return f"No run is waiting on this ask; your {word} is kept on the ask."
 
 
@@ -148,35 +166,80 @@ def pending_rail_answers(board: Any, user_id: str, rail_id: str) -> List[Any]:
     return sorted(out, key=lambda a: float(a.completed_at or a.created_at or 0))
 
 
-def consume_rail_answers(board: Any, user_id: str, rail_id: str, *,
-                         run_id: str = "") -> str:
-    """Render the OWNER ANSWERED / OWNER DECLINED block for this rail's next run
-    and mark those asks consumed. Empty string when there is nothing. Fail-open."""
-    try:
-        asks = pending_rail_answers(board, user_id, rail_id)
-    except Exception:
-        logger.debug("rail answers: read failed (fail-open)", exc_info=True)
+def render_decisions(records: List[dict], header: str) -> str:
+    """The OWNER DECISIONS block — ONE renderer for the cron rail and the goal
+    row. ``records``: ``{question, decision ("approved"|"rejected"), answer,
+    answer_via, ask_id}``. Empty string for no records."""
+    if not records:
         return ""
-    if not asks:
-        return ""
-    lines = ["OWNER DECISIONS on what you asked earlier (read these before anything else):"]
-    for a in asks:
-        p = dict(a.payload or {})
-        answer = str(p.get("answer") or "").strip()
-        via = str(p.get("answer_via") or "owner seat")
-        lines.append(f"- you asked: {a.title[:300]}")
-        if a.status == ASK_FULFILLED:
+    lines = [header]
+    for r in records:
+        answer = str(r.get("answer") or "").strip()
+        approved = r.get("decision") != "rejected"
+        lines.append(f"- you asked: {str(r.get('question') or '')[:300]}")
+        if approved:
             lines.append("  decision: APPROVED" + ("" if answer else " (no text)"))
         else:
             lines.append("  decision: DECLINED — do not re-ask; proceed with the conservative reading.")
         if answer:
-            lines.append(render_owner_answer(answer, ask_id=str(a.id)[:12], via=via,
-                                             limit=1000 if a.status == ASK_FULFILLED else 500))
+            lines.append(render_owner_answer(answer, ask_id=str(r.get("ask_id") or "")[:12],
+                                             via=str(r.get("answer_via") or "owner seat"),
+                                             limit=1000 if approved else 500))
+    lines.append("Act on the decision now; do not raise the same ask again.")
+    return "\n".join(lines)
+
+
+_RAIL_HEADER = "OWNER DECISIONS on what you asked earlier (read these before anything else):"
+
+
+def _ask_record(a: Any) -> dict:
+    p = dict(a.payload or {})
+    return {"question": a.title, "ask_id": a.id,
+            "decision": "approved" if a.status == ASK_FULFILLED else "rejected",
+            "answer": p.get("answer") or "", "answer_via": p.get("answer_via") or ""}
+
+
+def peek_rail_answers(board: Any, user_id: str, rail_id: str) -> Tuple[str, List[str]]:
+    """``(block, ask_ids)`` for this rail's next run, WITHOUT consuming them.
+    The caller marks them with :func:`mark_rail_answers_consumed` once the run
+    completed. ``("", [])`` when there is nothing. Fail-open."""
+    try:
+        asks = pending_rail_answers(board, user_id, rail_id)
+    except Exception:
+        logger.debug("rail answers: read failed (fail-open)", exc_info=True)
+        return "", []
+    if not asks:
+        return "", []
+    return (render_decisions([_ask_record(a) for a in asks], _RAIL_HEADER),
+            [str(a.id) for a in asks])
+
+
+def mark_rail_answers_consumed(board: Any, ask_ids: List[str], *, run_id: str = "") -> int:
+    """Stamp ``payload.consumed_by_run`` on these asks (the ones a COMPLETED run
+    read). Returns how many were stamped. Fail-open per ask."""
+    n = 0
+    for ask_id in ask_ids or []:
         try:
+            a = board.get(ask_id)
+            if a is None:
+                continue
+            p = dict(a.payload or {})
+            if p.get("consumed_by_run"):
+                continue
             p["consumed_by_run"] = run_id or str(time.time())
             execute_retry(board.db_path, "UPDATE goals SET payload=? WHERE id=?",
                           (json.dumps(p), a.id))
+            n += 1
         except Exception:
-            logger.debug("rail answers: consume stamp failed for %s", a.id, exc_info=True)
-    lines.append("Act on the decision now; do not raise the same ask again.")
-    return "\n".join(lines)
+            logger.debug("rail answers: consume stamp failed for %s", ask_id, exc_info=True)
+    return n
+
+
+def consume_rail_answers(board: Any, user_id: str, rail_id: str, *,
+                         run_id: str = "") -> str:
+    """Peek and consume at once — for a caller with no notion of a completed
+    run. A cron run uses :func:`peek_rail_answers` + :func:`mark_rail_answers_consumed`."""
+    block, ids = peek_rail_answers(board, user_id, rail_id)
+    if ids:
+        mark_rail_answers_consumed(board, ids, run_id=run_id)
+    return block

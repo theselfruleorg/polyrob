@@ -33,9 +33,9 @@ async def provider_balance_usd() -> Optional[float]:
     Only OpenRouter exposes one today (GET /api/v1/credits). Every other
     provider returns None — that is a supported, expected outcome, not an error.
     """
-    # CHAT_PROVIDER pins the actually-active provider (task_agent_lite.py,
-    # cli/config_store.py) — it must win over a stale DEFAULT_PROVIDER, or
-    # this probe could show a real-but-wrong provider's balance (a lie).
+    # The operator pin names the actually-active provider — it must win over
+    # the first-keyed guess, or this probe could show a real-but-wrong
+    # provider's balance (a lie).
     from core.runtime_config import operator_provider_pin
     from modules.llm.profiles import canonicalize_provider
     provider = (canonicalize_provider(operator_provider_pin()) or "").lower()

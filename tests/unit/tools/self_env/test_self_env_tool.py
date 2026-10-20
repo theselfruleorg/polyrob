@@ -277,6 +277,7 @@ async def test_restart_service_writes_the_drained_restart_request(monkeypatch, t
     home = tmp_path / "data"
     monkeypatch.setenv("POLYROB_DATA_DIR", str(home))
     monkeypatch.setenv("INVOCATION_ID", "unit")
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)  # a pytest shell is a .scope
     lc.record_boot(data_home=home)
     t = _tool(tmp_path)
     res = await t.self_env_restart_service(RestartParams(reason="new MCP server"),

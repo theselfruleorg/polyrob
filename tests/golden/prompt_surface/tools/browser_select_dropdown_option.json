@@ -1,0 +1,29 @@
+{
+  "function": {
+    "description": "Select a dropdown option by its text value.",
+    "name": "browser_select_dropdown_option",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for inputting text into an element.",
+      "properties": {
+        "elementIndex": {
+          "type": "integer"
+        },
+        "inputText": {
+          "type": "string"
+        },
+        "xPath": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "elementIndex",
+        "inputText"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

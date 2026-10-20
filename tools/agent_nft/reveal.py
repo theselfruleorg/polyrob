@@ -209,7 +209,8 @@ async def run(tool, params, execution_context):
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED). Nothing was broadcast.")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT + ". Nothing was broadcast.")
     signer = wallet.operational_signer()
     gate = wallet.policy
     data = R.encode_reveal(ids)

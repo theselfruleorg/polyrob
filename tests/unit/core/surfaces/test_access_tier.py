@@ -139,7 +139,7 @@ def test_aliased_telegram_owner_is_owner_tier(workdir):
     """
     c = _Container(workdir)
     env = {"POLYROB_OWNER_USER_ID": "rob"}
-    ident = _identity("rob", raw="28436760", surface="telegram")
+    ident = _identity("rob", raw="100000001", surface="telegram")
     assert resolve_access_tier(c, ident, env=env) == AccessTier.OWNER
 
 

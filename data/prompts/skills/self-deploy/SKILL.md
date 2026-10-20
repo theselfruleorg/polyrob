@@ -3,9 +3,9 @@ name: self-deploy
 description: 'How to bring a fresh instance of yourself online: assess what is already configured (model, wallet, funding, email, X, autonomy grants), provision what you can yourself (own inbox, X account, standing work), ask the owner only for what needs a human (API keys, funding, a CAPTCHA), and report one honest readiness table before you start operating'
 license: MIT
 metadata:
+  polyrob-when: 'Bringing a new instance of yourself online'
   polyrob-priority: '1'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["set yourself up","set up yourself","initialise yourself","initialize yourself","self deploy","self-deploy","bootstrap","onboarding","are you ready","readiness","fresh instance","new instance","first run","provision your","create your x account","your own email","fund you","funding address"],"task_patterns":["(set|setting) (your|its)?self up","(initiali[sz]e|bootstrap|provision) (yourself|the (agent|instance))","(are you|is (it|everything)) (ready|configured|set up)","readiness (check|table|report)","what (do you|does it) (need|still need) (from me|to (start|run|operate))"],"tool_ids":[]}'
   polyrob-version: '1'
 ---
 # Self-deploy — bring yourself online
@@ -41,7 +41,7 @@ Run these and keep the raw lines; they are the evidence for the table.
 | Identity (email, X API, avatar, ERC-8004) | the `identity` lines of `agent_status` (or ask the owner for his `/status` on a chat seat) | `email:` ready or `none → remedy`; `x:` `api configured @handle` / `PARTIAL — missing …` / `no api keys` |
 | Which tools you actually hold | the `<tool-catalog>` in your context | `loaded` / `loadable` / `gated:<reason> + remedy`. A `gated` money tool is an OWNER decision — never a thing to work around |
 | Wallet addresses, both families | `x402_wallet_status` | the EVM address and the SEPARATE Solana address. Read them from the tool; never from memory |
-| On-chain balances per chain | `defi_data.portfolio(chain=…)` for each money chain you will use | the `gas (…)` row: a number, `UNKNOWN` (read failed) or `EMPTY` (a real zero) — three different facts |
+| On-chain balances per chain | `defi_data.portfolio(chain=…)` for each money chain you will use | the native-coin row (`ETH …`, `SOL …`): a number, `UNKNOWN` (read failed) or `EMPTY` (a real zero) — three different facts |
 | X browser session | `x_login_check` (only if `x_browser` is loaded — the owner chose that rail) | logged in as @handle, or no session |
 | X API rail | `twitter_whoami` (if `twitter` is loaded) | the authenticated handle, or "missing credentials" |
 | Standing work | `goal_list` / `cronjob_list` (if loaded) | an EMPTY board on a fresh instance is expected, not a stall |
@@ -91,7 +91,7 @@ signup, and the owner needs it to know who is writing.
 told you what your mission is. Create the objective(s) with `goal_create`
 (whether a goal you write yourself may carry a money tool is the owner's
 money regime; the owner grants money tools with `/trade`, or
-`/cron add … tools=defi_trade`). Arm any monitor loop with
+`/job new … tools=defi_trade`). Arm any monitor loop with
 `cronjob_schedule`. Never seed work
 the owner did not name.
 

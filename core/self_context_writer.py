@@ -60,10 +60,31 @@ class SelfContextWriteResult:
         self.errors = errors or []
         self.pending = pending
         self.path = path
+        # promote only: active lines the draft retired / lines it lacked that
+        # stay active (``doc_claims.rebase_draft``).
+        self.retired: List[str] = []
+        self.kept: List[str] = []
 
     def __repr__(self) -> str:
         state = "pending" if self.pending else ("ok" if self.ok else "rejected")
         return f"<SelfContextWriteResult {state} errors={self.errors}>"
+
+
+def describe_rebase(retired: List[str], kept: List[str], *, heads: int = 3) -> str:
+    """One owner-facing line naming what a promote retires / keeps, or ""."""
+    from core.doc_claims import strip_stamp
+
+    def _names(lines: List[str]) -> str:
+        shown = "; ".join(strip_stamp(l).strip().lstrip("- ")[:60] for l in lines[:heads])
+        return shown + ("; …" if len(lines) > heads else "")
+
+    parts = []
+    if retired:
+        parts.append(f"retires {len(retired)} active rule(s): {_names(retired)}")
+    if kept:
+        parts.append(f"keeps {len(kept)} active rule(s) the draft lacks "
+                     f"(added after it): {_names(kept)}")
+    return " · ".join(parts)
 
 
 class SelfContextWriter:
@@ -95,6 +116,31 @@ class SelfContextWriter:
 
     def _pending_file(self, uid: str) -> Path:
         return self._root(uid) / ".pending" / _SELF_DOC_NAME
+
+    def _base_file(self, uid: str) -> Path:
+        """The active doc as it was when the pending draft was STARTED — the base
+        promote rebases the draft against (``doc_claims.rebase_draft``)."""
+        pf = self._pending_file(uid)
+        return pf.with_name(pf.name + ".base")
+
+    def _drop_base(self, uid: str) -> None:
+        try:
+            os.remove(str(self._base_file(uid)))
+        except OSError:
+            pass
+
+    def _rebase(self, uid: str, draft: str):
+        """``(merged, retired, kept)`` for promoting ``draft`` now. A draft with no
+        recorded base (queued before the base was kept) rebases on the current
+        active doc: the draft wins, as before, but what it retires is named."""
+        from core.doc_claims import rebase_draft
+        current = self.read_active(uid)
+        bf = self._base_file(uid)
+        try:
+            base = bf.read_text(encoding="utf-8") if bf.is_file() else current
+        except OSError:
+            base = current
+        return rebase_draft(base, draft, current)
 
     @staticmethod
     def _require_user(user_id: Optional[str]) -> Optional[str]:
@@ -158,6 +204,41 @@ class SelfContextWriter:
 
     # --- provenance (057 WS-D) ----------------------------------------------
 
+    #: An agent write may retire at most this many active rules at once.
+    MAX_AGENT_RETIRE = 3
+
+    def _structure_guard(self, uid: str, body: str, *, created_by: str,
+                         pending: Optional[bool]) -> Optional[SelfContextWriteResult]:
+        """Refuse a write whose STRUCTURE would silently retire live rules.
+
+        Prod 2026-10-15 (04:55 draft, 08:06 write): an agent revision put the
+        ``## Superseded`` heading above live rules; the writer then recorded 27
+        current owner rules as retired and the agent read only 16. A second
+        heading, or an agent write that drops more than ``MAX_AGENT_RETIRE``
+        active rules, is refused — the owner's own writes are not limited.
+        """
+        from core.doc_claims import SUPERSEDED_HEADING, active_rule_lines, strip_stamp
+        if sum(1 for l in body.splitlines() if l.strip() == SUPERSEDED_HEADING) > 1:
+            return SelfContextWriteResult(False, errors=[
+                f"the doc has more than one '{SUPERSEDED_HEADING}' heading — keep one, "
+                f"at the end; everything above it is the live rules"])
+        if created_by == PROVENANCE_USER:
+            return None
+        try:
+            old = self._provenance_baseline(
+                uid, quarantine=self._resolve_pending(created_by, pending))
+            keep = {strip_stamp(l).strip() for l in active_rule_lines(body)}
+            gone = [l for l in active_rule_lines(old) if strip_stamp(l).strip() not in keep]
+        except Exception:
+            return None
+        if len(gone) > self.MAX_AGENT_RETIRE:
+            heads = "; ".join(strip_stamp(l).strip()[:50] for l in gone[:5])
+            return SelfContextWriteResult(False, errors=[
+                f"this write would retire {len(gone)} active rules at once ({heads}…). "
+                f"Nothing was written. Use patch to change one rule, or keep the other "
+                f"rules above the '{SUPERSEDED_HEADING}' heading"])
+        return None
+
     def _provenance_baseline(self, uid: str, *, quarantine: bool) -> str:
         """The body a write is being diffed AGAINST.
 
@@ -180,31 +261,16 @@ class SelfContextWriter:
     def _apply_provenance(self, uid: str, body: str, *, pending: Optional[bool],
                           created_by: str, source: Optional[str],
                           observed_at: Optional[str]):
-        """Run the claim guard, then stamp. Returns the new body, or a rejection
-        ``SelfContextWriteResult`` when the guard trips. Fail-open on an internal
-        fault: provenance is metadata, and a broken stamper must never be able to
-        block a legitimate identity write."""
-        try:
-            from core.doc_claims import (claim_provenance_required,
-                                         find_unsourced_claims,
-                                         stamp_changed_lines,
-                                         unsourced_claim_error)
-        except Exception:
+        """Stamp the new/changed lines when a ``source`` is given; else the body
+        as written. Never refuses a write. Fail-open on an internal fault:
+        provenance is metadata, and a broken stamper must never be able to block
+        a legitimate identity write."""
+        if not (source or "").strip():
             return body
         try:
-            if not (source or "").strip() and not claim_provenance_required():
-                return body
+            from core.doc_claims import stamp_changed_lines
             quarantine = self._resolve_pending(created_by, pending)
             old = self._provenance_baseline(uid, quarantine=quarantine)
-            if claim_provenance_required():
-                unsourced = find_unsourced_claims(old, body, source)
-                if unsourced:
-                    logger.info("%s write refused (unsourced claim): %s",
-                                self._LOG_LABEL, uid)
-                    return SelfContextWriteResult(
-                        False, errors=[unsourced_claim_error(unsourced)])
-            if not (source or "").strip():
-                return body
             return stamp_changed_lines(old, body, source, observed_at)
         except Exception as e:
             logger.debug("%s provenance skipped (fail-open): %s", self._LOG_LABEL, e)
@@ -249,16 +315,15 @@ class SelfContextWriter:
         part of the body and therefore counts toward the char cap — the cap check
         below runs on the STAMPED text, so an over-cap refusal is honest about
         what will actually be written.
-
-        The claim guard (``DOC_CLAIM_PROVENANCE_REQUIRED``, default OFF) refuses a
-        new/changed line that makes a durable claim with no ``source``. It is a
-        FORMAT check, not a truth check.
         """
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused (tenant scope)"])
 
         body = content or ""
+        refused = self._structure_guard(uid, body, created_by=created_by, pending=pending)
+        if refused is not None:
+            return refused
         prov = self._apply_provenance(uid, body, pending=pending,
                                       created_by=created_by, source=source,
                                       observed_at=observed_at)
@@ -285,6 +350,9 @@ class SelfContextWriter:
         try:
             if not quarantine:
                 self._archive_existing(uid)
+            elif not target.is_file():
+                # A new draft starts: keep the active doc it is drafted against.
+                self._atomic_write(self._base_file(uid), self.read_active(uid))
             self._atomic_write(target, body)
             logger.info("%s %s written (%s)", self._LOG_LABEL, uid,
                         "pending" if quarantine else "active")
@@ -375,10 +443,21 @@ class SelfContextWriter:
         preview = body.strip().replace("\n", " ")
         if len(preview) > 280:
             preview = preview[:277] + "…"
+        retired: List[str] = []
+        kept: List[str] = []
+        try:
+            _merged, retired, kept = self._rebase(uid, body)
+        except Exception:
+            pass
+        effect = describe_rebase(retired, kept)
+        if effect:
+            preview = f"{effect} | {preview}"
         return {
             "kind": self._DOC_KIND,
             "user_id": uid,
             "preview": preview,
+            "retires": retired,
+            "keeps": kept,
             "chars": len(body),
             "path": str(pending_f),
         }
@@ -411,6 +490,7 @@ class SelfContextWriter:
         try:
             self._archive_pending(uid, pending_f)
             os.remove(str(pending_f))
+            self._drop_base(uid)
             return True
         except OSError:
             logger.debug("%s %s: superseded draft not removed", self._LOG_LABEL, uid)
@@ -459,6 +539,7 @@ class SelfContextWriter:
         try:
             self._archive_pending(uid, pending_f)
             os.remove(str(pending_f))
+            self._drop_base(uid)
             logger.info("%s %s pending draft rejected (archived)", self._LOG_LABEL, uid)
             return SelfContextWriteResult(True, path=str(pending_f))
         except Exception as e:
@@ -478,17 +559,27 @@ class SelfContextWriter:
             content = pending_f.read_text(encoding="utf-8")
         except Exception as e:
             return SelfContextWriteResult(False, errors=[f"read failed: {e}"])
+        # Rebase: apply the draft's CHANGE to the active doc as it is NOW, so a
+        # live line the draft never saw stays live and a line retired since stays
+        # retired; what the promote retires is named on the result.
+        retired: List[str] = []
+        kept: List[str] = []
+        try:
+            content, retired, kept = self._rebase(uid, content)
+        except Exception as e:
+            logger.warning("%s %s: rebase skipped: %s", self._LOG_LABEL, uid, e)
         # Promotion is owner-initiated → user provenance, not pending. The
         # owner's approval IS the provenance for any line the draft left bare
-        # (stamped lines keep their own stamp) — without a source= here the 057
-        # claim guard refused every sourced draft on promote (2026-09-20 07:23Z).
+        # (stamped lines keep their own stamp).
         res = self.propose(content, user_id=uid, created_by=PROVENANCE_USER, pending=False,
                            source="owner approved")
         if res.ok and not res.pending:
+            res.retired, res.kept = retired, kept
             try:
                 os.remove(str(pending_f))
             except OSError:
                 pass
+            self._drop_base(uid)
         return res
 
     # --- internals -----------------------------------------------------------
@@ -560,6 +651,8 @@ class SelfContextWriter:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
+            # mkstemp is 0600; the doc is shared with the polyrob-data group.
+            os.chmod(tmp, 0o660)
             os.replace(tmp, str(path))
         finally:
             if os.path.exists(tmp):
@@ -571,6 +664,7 @@ class SelfContextWriter:
 
 __all__ = [
     "SelfContextWriter",
+    "describe_rebase",
     "SelfContextWriteResult",
     "PROVENANCE_USER",
     "PROVENANCE_AGENT",

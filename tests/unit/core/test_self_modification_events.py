@@ -60,7 +60,8 @@ def test_skill_manage_create_emits_event(log, monkeypatch, tmp_path):
     action = c.registry.registry.actions["skill_manage"]
     ctx = types.SimpleNamespace(user_id="u1", session_id="s1",
                                 is_sub_agent=True, role="leaf", metadata={})
-    params = action.param_model(action="create", skill_id="draft-skill", content=body)
+    params = action.param_model(action="create", skill_id="draft-skill",
+                                    when="When a draft skill is needed", content=body)
     res = asyncio.new_event_loop().run_until_complete(
         action.function(params, execution_context=ctx))
     assert res.error is None
@@ -99,7 +100,7 @@ def test_curator_archive_emits_event(log, monkeypatch):
 
     archived = []
     sm = types.SimpleNamespace(
-        delete_skill=lambda skill_id, user_id, absorbed_into=None: archived.append(skill_id) or True,
+        delete_skill=lambda skill_id, user_id, absorbed_into=None, **_kw: archived.append(skill_id) or True,
         _find_skill_file=lambda user_id, skill_id: None,
     )
     usage = types.SimpleNamespace(

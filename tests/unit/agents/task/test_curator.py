@@ -19,7 +19,7 @@ class _FakeSM:
     def __init__(self):
         self.archived = []
 
-    def delete_skill(self, skill_id, *, user_id, absorbed_into=None):
+    def delete_skill(self, skill_id, *, user_id, absorbed_into=None, **_kw):
         self.archived.append((user_id, skill_id))
         return True
 

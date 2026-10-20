@@ -335,7 +335,8 @@ def _resolve_endpoint(chain: str, tool) -> tuple:
 
     wallet = tool._get_wallet()
     if wallet is None:
-        raise ValueError("agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        raise ValueError(WALLET_OFF_TEXT)
 
     name = (chain or "").strip().lower()
     if name == "solana":
@@ -697,6 +698,22 @@ async def perform_bridge(tool, params, execution_context=None):
             "endpoint cannot authorize moving funds — set DEFI_SOLANA_RPC. "
             "Dry runs are unaffected.\n  RESULT: NOT SENT."))
 
+    # L-6: a row recorded but never broadcast (a crash in between) must not
+    # block this balance forever. Closed here too, not only by the watcher,
+    # because the watcher can be switched off.
+    _closed: list = []
+    try:
+        await _asyncio.to_thread(bridge_guard.close_stale_unsent,
+                                 status=getattr(provider, "status", None),
+                                 closed=_closed)
+    except Exception:
+        logger.warning("bridge: stale-row sweep failed", exc_info=True)
+    if _closed:
+        from core.wallet.bridge_watcher import never_sent_notice
+        for _row in _closed:
+            await _notify(tool, execution_context, never_sent_notice(_row),
+                          settled=True)
+
     # CR-L12: phase 2 proves an arrival by a balance RISE, which cannot say
     # whose rise it is. Two open bridges into the same (chain, recipient,
     # asset) would each claim the other's funds, so a second one waits.
@@ -769,9 +786,12 @@ async def perform_bridge(tool, params, execution_context=None):
             # approving is "move THIS much of THIS asset from here to there, to
             # MY address"; the price is re-asserted at execution by the arrival
             # floor, the simulation and every cap.
+            # bridge L-3: `token_in` is part of the intent — a grant for
+            # "N USDC base->X" must not also redeem "N native base->X".
             grant_key={"from_chain": params.from_chain, "to_chain": params.to_chain,
-                       "amount": float(params.amount), "token_out": dest_label,
-                       "recipient": recipient},
+                       "amount": float(params.amount),
+                       "token_in": origin_token or "native",
+                       "token_out": dest_label, "recipient": recipient},
             execution_context=execution_context)
         if not approved:
             return tool._ar(content=header + (
@@ -812,9 +832,32 @@ async def perform_bridge(tool, params, execution_context=None):
                 return tool._ar(error="Another bridge into this balance is still pending; nothing was sent")
         except Exception:
             return tool._ar(error="Cannot verify pending bridges; nothing was sent")
-        bid = bridge_guard.record_pending(
-            user_id=str(getattr(execution_context, "user_id", "") or "owner"),
-            quote=quote, amount_usd=amount_usd, balance_before=balance_before)
+        # B-2: the baseline is re-read HERE, inside the reservation and just
+        # before broadcast. The first read can be minutes old (the owner ask
+        # polls), and any unrelated inflow in between would read as arrival.
+        balance_before = await _asyncio.to_thread(measure, recipient, dest_name)
+        if balance_before is None:
+            return tool._ar(content=header + (
+                f"  guard: REFUSED — could not re-read {recipient} on {dest_name} "
+                f"just before sending, so the arrival has no baseline.\n"
+                f"  RESULT: NOT SENT."))
+        # B-3: a plain INSERT. A request id the provider has already used for
+        # another recorded bridge raises here, and the bridge is refused BEFORE
+        # broadcast instead of overwriting (and losing) the earlier row.
+        try:
+            bid = bridge_guard.record_pending(
+                user_id=str(getattr(execution_context, "user_id", "") or "owner"),
+                quote=quote, amount_usd=amount_usd, balance_before=balance_before)
+        except Exception as exc:
+            import sqlite3 as _sqlite3
+            why = ("the provider returned request id "
+                   f"{quote.request_id} for a bridge that is already recorded"
+                   if isinstance(exc, _sqlite3.IntegrityError)
+                   else f"the bridge store could not be written ({exc})")
+            return tool._ar(content=header + (
+                f"  guard: REFUSED — {why}. A bridge that cannot be recorded "
+                f"before broadcast is one we do not send.\n"
+                f"  RESULT: NOT SENT — nothing was broadcast."))
         # M10 (security analysis 2026-09-23): the PolicyGate check INSIDE the
         # reserve, on BOTH origins. The SVM path used to record without ever
         # checking (no kill-switch, per-tx ceiling, daily cap, replay or
@@ -881,8 +924,11 @@ async def perform_bridge(tool, params, execution_context=None):
                 bridge_guard.settle(bid, state=(bridge_guard.STATE_IN_FLIGHT if _unknown
                                                 else bridge_guard.STATE_FAILED),
                                     detail=broadcast_failure_text(exc))
-                return tool._ar(error=broadcast_failure_text(exc),
-                    error_kind=broadcast_error_kind(exc))
+                return tool._ar(error=broadcast_failure_text(exc))
+        # Stamp the origin tx now, not after phase 2: a crash during the wait
+        # must not leave a `pending` row with no tx (the L-6 sweep would close
+        # a real bridge as never sent).
+        bridge_guard.mark_sent(bid, signature)
         # Checked above (M10) and recorded here, so every OTHER money verb
         # counts this spend against its caps.
         try:
@@ -984,6 +1030,8 @@ async def perform_bridge(tool, params, execution_context=None):
             f"  RESULT: unproven. bridge id {bid}"))
     header += "  origin  : confirmed on-chain\n"
 
+    # B-1: the delivering tx must not predate this bridge's record.
+    _created_at = bridge_guard.created_at_of(bid)
     # Phase 2, off the event loop: it polls with blocking sleeps and a stalled
     # loop would freeze every other session's turn.
     outcome = await _asyncio.to_thread(
@@ -991,8 +1039,10 @@ async def perform_bridge(tool, params, execution_context=None):
         provider=provider, request_id=quote.request_id, recipient=recipient,
         chain_name=dest_name, min_out_raw=quote.min_out_raw,
         balance_before=balance_before, read_balance=measure,
-        prove=bridge_guard.arrival_prover(quote.request_id, recipient,
-                                          quote.currency_out, dest_name))
+        prove=bridge_guard.arrival_prover(
+            quote.request_id, recipient, quote.currency_out, dest_name,
+            bridge_id=bid, dest_chain_id=dest_id, created_at=_created_at,
+            min_out_raw=int(quote.min_out_raw)))
 
     bridge_guard.settle(bid, state=outcome.state, detail=outcome.detail,
                         tx_ref=signature, balance_after=outcome.balance_after)

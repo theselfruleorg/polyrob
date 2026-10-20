@@ -34,11 +34,61 @@ _MEM_ENTRY = re.compile(r"\n(?=- )")                 # "- [day] content" bullets
 _KB_ENTRY = re.compile(r"\n(?=\[[^\]\n]+ #\d+\] )")  # "[source #idx] content"
 
 
-def _budget(text: str, splitter, cap: int, seen: Optional[set]) -> str:
+_ENTRY_HEAD = re.compile(r"^(?:- (?:\[\d{4}-\d{2}-\d{2}\] )?|\[[^\]\n]+ #\d+\] )")
+
+
+_UNVERIFIED_MARK = "[unverified] "
+
+
+def _clip_entry(entry: str, cap: int, terms: Optional[list]) -> str:
+    """Clip one long entry to ``cap`` chars AROUND the part that matched.
+
+    D10 (review 2026-10-13): a long multi-finding row wins the OR/bm25 rank
+    because it matches many terms, and the old head-only clip then cut the
+    sentence that matched. Keep the entry's head marker (``- [date] `` /
+    ``[source #i] ``) and show the window with the most query terms."""
+    if len(entry) <= cap:
+        return entry
+    m = _ENTRY_HEAD.match(entry)
+    head = m.group(0) if m else ""
+    body = entry[len(head):]
+    room = max(cap - len(head) - 2, 1)
+    start = 0
+    words = [t.lower() for t in (terms or []) if t]
+    if words:
+        low = body.lower()
+        hits = sorted(i for w in words for i in _find_all(low, w))
+        best, best_n = 0, 0
+        for h in hits:
+            s0 = max(0, h - room // 5)
+            n = len({w for w in words if w in low[s0:s0 + room]})
+            if n > best_n:
+                best, best_n = s0, n
+        start = best
+    window = body[start:start + room]
+    # D6: a finding's "[unverified] " marker leads its LINE; a window that
+    # starts inside that line must keep it, or a guess reads as a fact.
+    line_start = body.rfind("\n", 0, start) + 1 if start > 0 else 0
+    if start > line_start and body.startswith(_UNVERIFIED_MARK, line_start):
+        window = _UNVERIFIED_MARK + window[:max(room - len(_UNVERIFIED_MARK), 1)]
+    return (head + ("…" if start > 0 else "") + window
+            + ("…" if start + room < len(body) else ""))
+
+
+def _find_all(hay: str, needle: str, limit: int = 20):
+    i, n = hay.find(needle), 0
+    while i != -1 and n < limit:
+        yield i
+        i, n = hay.find(needle, i + 1), n + 1
+
+
+def _budget(text: str, splitter, cap: int, seen: Optional[set],
+            terms: Optional[list] = None) -> str:
     """Clip each entry, drop entries ``seen`` already holds, stop at ``cap``.
 
     ``seen`` (the run's injected entries) is updated with what is kept, so a
-    later cadence step never re-injects a line the run already got."""
+    later cadence step never re-injects a line the run already got. ``terms``
+    (the query's informative terms) centre the clip on the matched part."""
     out, used = [], 0
     for entry in splitter.split(text):
         entry = entry.strip()
@@ -48,7 +98,7 @@ def _budget(text: str, splitter, cap: int, seen: Optional[set]) -> str:
         if seen is not None and key in seen:
             continue
         if len(entry) > RECALL_ENTRY_MAX_CHARS:
-            entry = entry[:RECALL_ENTRY_MAX_CHARS - 1] + "…"
+            entry = _clip_entry(entry, RECALL_ENTRY_MAX_CHARS, terms)
         if out and used + len(entry) + 1 > cap:
             break
         if not out and len(entry) > cap:
@@ -60,9 +110,144 @@ def _budget(text: str, splitter, cap: int, seen: Optional[set]) -> str:
     return "\n".join(out)
 
 
+#: D3 / E-A9: the one-line RECALL note when the store could not be read.
+RECALL_READ_ERROR_NOTE = (
+    "Memory recall is unavailable this turn ({error_class}) — the store could not "
+    "be read. Do not state that something was never recorded or never happened; "
+    "say that memory could not be checked.")
+#: D5: owner-saved console notes injected with recall (owner-memory regimes only).
+OWNER_NOTES_MAX = 10
+OWNER_NOTES_MAX_CHARS = 2000
+
+
+def memory_read_error(exc: BaseException, what: str = "Memory") -> str:
+    """The agent-facing text for a recall READ failure (D3 / D14): names the
+    error class and forbids the "never recorded" reading. Mirrors the KB branch
+    of ``session_search`` ("…failed; nothing was searched")."""
+    err = getattr(exc, "error_class", None) or type(exc).__name__
+    return (f"{what} could not be read ({err}); nothing was searched. Do not state that "
+            "something was never recorded or is empty — say memory could not be checked.")
+
+
+def recall_reader(agent=None, *, orchestrator=None, session_id: Optional[str] = None,
+                  is_sub_agent: bool = False) -> dict:
+    """The reader description the recall routers forward to the provider.
+
+    From the session regime (``agents.task.session_class``): an owner chat
+    demotes cron/goal rows; a cron / goal run does not, and names its own job /
+    goal so its past runs rank first (review D2 / A7). ``modules`` cannot ask
+    for the regime itself (layering), so the agents tier passes plain values.
+    Fail-open to {} (the provider's legacy default)."""
+    try:
+        from agents.task.session_class import CHILD, REGIME_POLICY, session_regime
+        regime = CHILD if is_sub_agent else session_regime(
+            agent, orchestrator=orchestrator, session_id=session_id)
+        pol = REGIME_POLICY[regime]
+        reader = {"demote_automation": bool(pol.demote_automation_recall)}
+        sid = session_id or getattr(agent, "session_id", None)
+        if pol.recall_own_runs_first and sid:
+            from core.autonomy_marker import cron_job_for_session, goal_for_session
+            reader["prefer_job_id"] = cron_job_for_session(sid)
+            reader["prefer_goal_id"] = goal_for_session(sid)
+        return reader
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("recall reader unresolved: %s", e)
+        return {}
+
+
+async def _owner_notes(user_id: Optional[str], seen: Optional[set]) -> str:
+    """D5 (review 2026-10-13): the notes the owner saved from the console
+    ("I saved that to my notes.") had no path into the agent's context — only
+    the default-OFF ``memory`` tool read ``curated_memory``. Return the active
+    owner-authored notes (``created_by='user'``), dated, bounded; '' on none or
+    error. Owner-authored, so not framed as untrusted data."""
+    try:
+        from modules.memory.registry import get_memory_registry
+        provider = get_memory_registry().active()
+        if provider is None or not hasattr(provider, "note_list"):
+            return ""
+        rows = await provider.note_list(user_id, status="active", limit=50)
+    except Exception as e:
+        logger.debug("owner notes skipped: %s", e)
+        return ""
+    import time as _time
+    out, used = [], 0
+    for n in rows or []:
+        if (n.get("created_by") or "") != "user":
+            continue
+        body = " ".join(str(n.get("content") or "").split())
+        if not body:
+            continue
+        title = str(n.get("title") or "").strip()
+        ts = n.get("updated_ts") or n.get("created_ts")
+        day = ""
+        try:
+            day = f"[{_time.strftime('%Y-%m-%d', _time.localtime(int(ts)))}] " if ts else ""
+        except Exception:
+            day = ""
+        line = f"- {day}{title + ': ' if title else ''}{body}"
+        key = " ".join(line.split())
+        if seen is not None and key in seen:
+            continue
+        if len(line) > RECALL_ENTRY_MAX_CHARS:
+            line = line[:RECALL_ENTRY_MAX_CHARS - 1] + "…"
+        if out and used + len(line) + 1 > OWNER_NOTES_MAX_CHARS:
+            break
+        out.append(line)
+        used += len(line) + 1
+        if seen is not None:
+            seen.add(key)
+        if len(out) >= OWNER_NOTES_MAX:
+            break
+    return "\n".join(out)
+
+
+_KB_HEAD = re.compile(r"^\[([^\]\n]+) #(\d+)\] ", re.M)
+
+
+async def _date_kb_snapshots(text: str, *, user_id: Optional[str], collection: str) -> str:
+    """A8 (review 2026-10-13): a KB chunk is a COPY of a file as of its ingest;
+    prefetch served a 10-02 copy of a ledger rewritten daily as if current.
+    Tag each ``[source #i]`` with its snapshot date, and say so when the source
+    is a file on disk modified after that snapshot. Fail-open: text unchanged."""
+    try:
+        from modules.memory.registry import kb_list_sources
+        rows = await kb_list_sources(user_id=user_id, collection=collection)
+    except Exception:
+        return text
+    import os
+    from datetime import datetime
+    when = {}
+    for r in rows or []:
+        src, created = r.get("source_path"), str(r.get("created_at") or "")
+        if not src or not created:
+            continue
+        try:
+            ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        changed = False
+        try:
+            changed = os.path.isabs(src) and os.path.getmtime(src) > ts + 1
+        except OSError:
+            changed = False
+        when[src] = (created[:10], changed)
+
+    def _tag(m):
+        src, idx = m.group(1), m.group(2)
+        if src not in when:
+            return m.group(0)
+        day, changed = when[src]
+        note = f"snapshot {day}" + ("; the live file changed since — read the file" if changed else "")
+        return f"[{src} #{idx}, {note}] "
+    return _KB_HEAD.sub(_tag, text)
+
+
 async def build_prefetch_message(query: str, *, session_id: str,
                                  user_id: Optional[str] = None,
-                                 seen: Optional[set] = None) -> Optional[BaseMessage]:
+                                 seen: Optional[set] = None,
+                                 reader: Optional[dict] = None,
+                                 owner_notes: bool = False) -> Optional[BaseMessage]:
     """Prefetch memory for ``query`` and wrap it as a MEMORY control message.
 
     Returns None when there is nothing to inject (Null provider, empty recall, or any
@@ -76,16 +261,28 @@ async def build_prefetch_message(query: str, *, session_id: str,
     """
     if not query or not query.strip():
         return None
+    read_error = None
     try:
-        from modules.memory.registry import memory_prefetch
-
-        recalled = await memory_prefetch(query, session_id=session_id, user_id=user_id)
+        from modules.memory.registry import MemoryReadError, memory_prefetch
+        try:
+            recalled = await memory_prefetch(query, session_id=session_id, user_id=user_id,
+                                             raise_errors=True, **(reader or {}))
+        except MemoryReadError as e:
+            # D3 / E-A9: an unreadable store is not an empty one — say so.
+            read_error = e.error_class
+            recalled = ""
     except Exception as e:  # registry/provider failure must never break the step
         logger.debug("memory prefetch skipped: %s", e)
-        return None
+        read_error = type(e).__name__
+        recalled = ""
 
+    try:
+        from modules.memory.fts_terms import informative_terms
+        terms = informative_terms(query)
+    except Exception:
+        terms = None
     recalled = _budget((recalled or "").strip(), _MEM_ENTRY,
-                       RECALL_MEMORY_MAX_CHARS, seen)
+                       RECALL_MEMORY_MAX_CHARS, seen, terms)
 
     # T4-02: keep the RAW recall for the observability preview — the event must
     # show what was recalled, not the untrusted-wrap envelope around it.
@@ -121,8 +318,10 @@ async def build_prefetch_message(query: str, *, session_id: str,
                 kb_result = await kb_search(query, user_id=user_id, collection=_kb_collection,
                                             limit=RECALL_KB_LIMIT)
                 kb_result = _budget((kb_result or "").strip(), _KB_ENTRY,
-                                    RECALL_KB_MAX_CHARS, seen)
+                                    RECALL_KB_MAX_CHARS, seen, terms)
                 if kb_result:
+                    kb_result = await _date_kb_snapshots(
+                        kb_result, user_id=user_id, collection=_kb_collection)
                     kb_recalled = kb_result
                     raw_kb = kb_recalled
                     try:
@@ -138,13 +337,21 @@ async def build_prefetch_message(query: str, *, session_id: str,
         logger.debug("kb_auto_prefetch flag check skipped: %s", e)
     # --------------------------------------------------------------------------
 
-    # Combine: sections when both present; single section when only one; None if neither.
-    if recalled and kb_recalled:
-        combined = f"## Recalled from memory\n\n{recalled}\n\n## Recalled from knowledge base\n\n{kb_recalled}"
-    elif recalled:
-        combined = recalled
-    elif kb_recalled:
-        combined = kb_recalled
+    notes = await _owner_notes(user_id, seen) if owner_notes else ""
+
+    # Combine: sections when two or more are present; a single section bare;
+    # None if nothing (and no read error to report).
+    sections = [(h, b) for h, b in (("Notes the owner saved", notes),
+                                    ("Recalled from memory", recalled),
+                                    ("Recalled from knowledge base", kb_recalled)) if b]
+    if read_error:
+        note = RECALL_READ_ERROR_NOTE.format(error_class=read_error)
+        combined = "\n\n".join([note] + [f"## {h}\n\n{b}" for h, b in sections])
+    elif len(sections) > 1:
+        combined = "\n\n".join(f"## {h}\n\n{b}" for h, b in sections)
+    elif sections:
+        h, b = sections[0]
+        combined = f"## {h}\n\n{b}" if h == "Notes the owner saved" else b
     else:
         return None
 
@@ -156,11 +363,12 @@ async def build_prefetch_message(query: str, *, session_id: str,
         from agents.task.telemetry.memory_events import emit_memory_event, scrubbed_preview
         _scope = ("cross_session+kb" if (raw_recalled and raw_kb)
                   else ("kb" if raw_kb else "cross_session"))
-        _raw = "\n".join(p for p in (raw_recalled, raw_kb) if p)
+        _raw = "\n".join(p for p in (notes, raw_recalled, raw_kb) if p)
+        _extra = {"read_error": read_error} if read_error else {}
         _event_attrs = emit_memory_event(
             "memory_recall", user_id=user_id or "", session_id=session_id,
             source="prefetch", scope=_scope, content=_raw,
-            query=scrubbed_preview(query))
+            query=scrubbed_preview(query), **_extra)
     except Exception as e:
         logger.debug("memory recall event skipped: %s", e)
 
@@ -175,6 +383,15 @@ async def build_prefetch_message(query: str, *, session_id: str,
         except Exception:
             pass
     return msg
+
+
+def _owner_memory(agent) -> bool:
+    """The regime's ``owner_memory`` column (fail-closed to False)."""
+    try:
+        from agents.task.session_class import regime_policy
+        return bool(regime_policy(agent).owner_memory)
+    except Exception:
+        return False
 
 
 class MemoryPrefetchMixin:
@@ -199,7 +416,30 @@ class MemoryPrefetchMixin:
         task = (getattr(self, "_recall_turn_text", None)
                 or getattr(getattr(self, "orchestrator", None), "_recall_seed", None)
                 or getattr(self, "task", "") or "")
+        # D7 (review 2026-10-13): a short or low-information turn ("yes, do it",
+        # "ok", "👍") gave a one-word or empty query exactly when the owner
+        # confirmed an action whose context lives in memory. With fewer than two
+        # informative terms, carry the previous informative subject (or the
+        # task) along with it.
         try:
+            from modules.memory.fts_terms import informative_terms
+            if len(informative_terms(task)) >= 2:
+                self._last_recall_subject = task
+            else:
+                prev = (getattr(self, "_last_recall_subject", None)
+                        or getattr(getattr(self, "orchestrator", None), "_recall_seed", None)
+                        or getattr(self, "task", "") or "")
+                if prev and prev != task:
+                    task = f"{task} {prev}".strip()
+        except Exception:
+            pass
+        try:
+            # D7: at the FIRST step of a run the brain state is the PREVIOUS
+            # run's — its next_goal is usually end-of-turn boilerplate ("End the
+            # turn - the answer is delivered …", review A3) and polluted the
+            # query. Only a brain from THIS run enriches it.
+            if getattr(getattr(self, "state", None), "n_steps", 0) <= 1:
+                return task
             # Real attribute set in next_action_internal.py:646; field name is
             # next_goal (AgentBrain, views.py:39).  The old names (state.current_brain,
             # _last_brain, .next) were all wrong → brain was always None → permanent
@@ -261,6 +501,8 @@ class MemoryPrefetchMixin:
                 session_id=self.session_id,
                 user_id=getattr(self, "user_id", None),
                 seen=self._recall_seen,
+                reader=recall_reader(self),
+                owner_notes=_owner_memory(self),
             )
             if msg is not None:
                 self.message_manager.push_ephemeral_message(msg)
@@ -351,7 +593,9 @@ class MemoryPrefetchMixin:
             if not is_autonomous(self.session_id):
                 return  # chat sessions use _maybe_inject_episodic_digest instead
             from agents.task.agent.core.episodic_digest import build_mission_continuity
-            msg = await build_mission_continuity(user_id=getattr(self, "user_id", None))
+            _cfg = getattr(getattr(self, "container", None), "config", None)
+            msg = await build_mission_continuity(user_id=getattr(self, "user_id", None),
+                                                 data_dir=getattr(_cfg, "data_dir", None))
             if msg is not None:
                 self.message_manager.push_ephemeral_message(msg)
                 self.logger.debug("Injected autonomous continuity bridge")
@@ -410,8 +654,11 @@ class MemoryPrefetchMixin:
                 return
 
             from core.surfaces.continuity import build_bridge_message
+            # E-C4: owner wording + longer bridge + open errand for the owner chat.
+            from agents.task.session_class import OWNER_CHAT, session_regime
             msg = await build_bridge_message(
-                user_id=getattr(self, "user_id", None), thread_key=thread_key)
+                user_id=getattr(self, "user_id", None), thread_key=thread_key,
+                owner=session_regime(self) == OWNER_CHAT)
             if msg is not None:
                 self.message_manager.push_ephemeral_message(msg)
                 self.logger.debug("Injected continuity bridge message")

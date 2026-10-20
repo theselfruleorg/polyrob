@@ -108,11 +108,14 @@ def read_failure(root: Path, digest: str, feature: str) -> Optional[dict]:
 # --- the environment the pip child sees --------------------------------------- #
 
 def child_env() -> Dict[str, str]:
-    """A minimal env: PATH/locale/proxy only. No ``PIP_*`` (``--isolated`` also
-    ignores them), no key, no seed — ``build_child_env``'s rule, core-side."""
+    """A minimal env: PATH/locale/proxy/CA bundle only. No ``PIP_*`` index or
+    config knob (``--isolated`` also ignores them), no key, no seed —
+    ``build_child_env``'s rule, core-side. The CA variables are paths: a box
+    behind a TLS-inspecting proxy needs them for any download (085 reval)."""
     from core.app_service.env_scan import SECRET_KEY_RE
     keep = ("PATH", "LANG", "LC_ALL", "TMPDIR", "HTTPS_PROXY", "https_proxy",
-            "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE")
+            "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE",
+            "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT")
     env = {k: os.environ[k] for k in keep if k in os.environ and not SECRET_KEY_RE.search(k)}
     env.setdefault("PATH", "/usr/bin:/bin")
     env["PYTHONNOUSERSITE"] = "1"

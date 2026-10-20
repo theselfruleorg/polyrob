@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Delete a file within the workspace",
+    "name": "coding_delete_file",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "description": "Path to delete (relative to the workspace)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

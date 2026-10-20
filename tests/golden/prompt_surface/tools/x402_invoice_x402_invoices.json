@@ -1,0 +1,19 @@
+{
+  "function": {
+    "description": "List your x402 payment requests (invoices) and their status",
+    "name": "x402_invoice_x402_invoices",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "default": null,
+          "description": "Filter: pending|settling|completed|settled_no_tx|expired|refund_due (default all; refund_due = a settled payment we owe back)",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

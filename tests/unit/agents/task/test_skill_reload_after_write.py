@@ -60,7 +60,7 @@ def test_skill_manage_busts_the_cache_on_every_successful_write():
     """The wiring, not the helper: the call site must exist in skill_manage."""
     import inspect
 
-    from tools.controller import action_registration as ar
-    src = inspect.getsource(ar.ActionRegistrationMixin._register_skill_manage_action)
-    # create/patch share a call, delete has its own; model promotion is refused.
-    assert src.count("forget_activated_skill(self, params.skill_id)") == 2
+    from tools.controller import skill_manage as sm
+    src = inspect.getsource(sm.run_skill_manage)
+    # every saving action shares a call, delete has its own; model promotion is refused.
+    assert src.count("forget_activated_skill(controller, params.skill_id)") == 2

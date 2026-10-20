@@ -120,14 +120,11 @@ DEFAULT_MODELS = {
 def get_default_model(provider: str) -> str:
     """Get the default model for a provider.
 
-    The operator's model pin (``CHAT_MODEL``/``DEFAULT_MODEL``) wins for the PINNED
-    provider (``core.runtime_config.operator_model_for``) — chat, cron, goals, the
-    planner and the clients all read the default here, so one setting reaches every
-    run. Otherwise a per-provider env override ``POLYROB_<PROVIDER>_MODEL`` wins when set — so a
-    deploy (esp. the headless ``polyrob telegram`` path, which otherwise has no
-    model knob) can pin/swap the model with just an env change + restart, no code
-    change or redeploy. Unset → the hardcoded ``DEFAULT_MODELS`` policy default
-    (byte-identical). Example: ``POLYROB_OPENROUTER_MODEL=x-ai/grok-4.3``.
+    The operator's model pin (``DEFAULT_MODEL``) wins for the PINNED provider
+    (``core.runtime_config.operator_model_for``) — chat, cron, goals, the planner
+    and the clients all read the default here, so one setting reaches every run.
+    Another provider gets its ``providers.yaml`` ``default_model:``, else the
+    ``DEFAULT_MODELS`` policy default; a job picks its own with ``payload.model``.
 
     Args:
         provider: Provider name
@@ -135,7 +132,6 @@ def get_default_model(provider: str) -> str:
     Returns:
         Default model name for the provider
     """
-    import os
     try:
         from core.runtime_config import operator_model_for
         pinned = operator_model_for(provider)
@@ -143,12 +139,6 @@ def get_default_model(provider: str) -> str:
         pinned = None
     if pinned:
         return pinned
-    # Hyphenated provider names (zai-coding) map to underscores — a POSIX env
-    # name can't contain '-' (UX assessment 2026-08-07, Q11).
-    env_name = f"POLYROB_{provider.upper().replace('-', '_')}_MODEL"
-    override = os.environ.get(env_name)
-    if override and override.strip():
-        return override.strip()
     # Proposal 024: a ProviderSpec may declare its own default (providers.yaml
     # ``default_model:`` — a new provider like ollama, or an explicit owner
     # override of a built-in). Built-in specs carry default_model=None, so with

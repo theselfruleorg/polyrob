@@ -11,18 +11,59 @@ from core.runtime_paths import correspondents_db_path
 import os
 from typing import Any, Dict, List
 
+from core import goal_vocab as _gv
 from core.status_types import (  # noqa: F401
     ASK_KIND_TOKEN_IDENTITY, HealthItem, SEVERITY_CRIT, SEVERITY_WARN, Section,
-    _ASK_OPEN, _KIND_ASK, _KIND_GOAL, _KIND_OBJECTIVE, _K_GOAL_RUN, _OBJ_ACTIVE,
+    _ASK_OPEN, _KIND_ASK, _KIND_GOAL, _K_GOAL_RUN,
     _ST_BLOCKED, _ST_READY, _ST_RUNNING, _ST_WAITING, _TOOL_APPROVAL_ASK_KIND, _age,
     _flag_command, _payload, _tele_rows, has_own_surface, snapshot_rows as _rows,
 )
 
 
-def _objective_budget(payload: Dict[str, Any]) -> int:
-    """``GoalBoard.objective_budget``'s rule — the ONE copy in core.goal_vocab."""
-    from core.goal_vocab import objective_goal_budget
-    return objective_goal_budget(payload)
+#: The board's own marker for a provider-exhausted failure
+#: (``agents.task.goals.dispatcher.LLM_EXHAUSTED_MARKER``; core may not import it).
+_LLM_EXHAUSTED = "llm_provider_exhausted"
+
+
+def _block_reason(b: Dict[str, Any]) -> tuple:
+    """``(kind, why, remedy)`` for one blocked goal, in owner words (080 WS-4).
+    The error the board stored is the WHY; the kind says who can fix it."""
+    err = str(b.get("error") or "").strip()
+    gid = b["id"]
+    low = err.lower()
+    if low.startswith("agent declared blocked"):
+        need = err.split(":", 1)[1].strip() if ":" in err else ""
+        return ("it needs something from you", need or "it did not say what",
+                f"give it what it needs, then /goal retry {gid} — or /goal stop {gid}")
+    if low.startswith(_LLM_EXHAUSTED):
+        return ("no model provider could run it", err[:160],
+                f"fix the provider key or credit, then /goal retry {gid}")
+    if low.startswith("reclaimed"):
+        return ("its run crashed", err[:160], f"/goal retry {gid} — or /goal stop {gid}")
+    fails = f"failed {b['failures']}/{b['max_retries']} times"
+    return (fails, err[:160] or "no error was recorded",
+            f"/goal retry {gid} after the cause is fixed, or /goal stop {gid}")
+
+
+def _open_goals_and_stops(sec: Section, user_id: str, goals_db: str, now: float) -> None:
+    """``sec.data["open_goals"]`` (every live goal, board order) and
+    ``sec.data["stops"]`` (what the owner switched OFF, every scope) for the
+    agent's ``<operations>`` block. A stop store that cannot be read is named in
+    ``stops_reason`` — never read as "nothing is off"."""
+    live = tuple(getattr(_gv, "LIVE_STATUS_ORDER", ()))
+    marks = ",".join("?" for _ in live)
+    rows = _rows(goals_db, f"SELECT id, title, status FROM goals WHERE kind=? AND user_id=? "
+                           f"AND status IN ({marks}) ORDER BY priority DESC, created_at",
+                 (_KIND_GOAL, user_id) + live)
+    sec.data["open_goals"] = [{"id": r["id"], "title": r["title"] or "",
+                               "status": r["status"]} for r in rows]
+    try:
+        from core import goal_suppressions as _gs
+        sec.data["stops"] = [{"scope": s.scope, "label": s.label, "since": s.created_at}
+                             for s in _gs.active(goals_db, user_id=user_id, now=now)]
+    except Exception as e:
+        sec.data["stops"] = None
+        sec.data["stops_reason"] = f"{type(e).__name__}: {str(e)[:120]}"
 
 
 def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Section:
@@ -53,24 +94,13 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
                                         "AND user_id=? ORDER BY created_at",
                               (_KIND_GOAL, _ST_BLOCKED, user_id))]
     sec.data["blocked"] = blocked
-    objectives = []
-    for r in _rows(goals_db, "SELECT id, title, payload FROM goals WHERE kind=? AND status=? "
-                             "AND user_id=? ORDER BY priority DESC, created_at",
-                   (_KIND_OBJECTIVE, _OBJ_ACTIVE, user_id)):
-        p = _payload(r)
-        budget = _objective_budget(p)
-        live = int(_rows(goals_db, "SELECT COUNT(*) AS n FROM goals WHERE kind=? AND user_id=? "
-                                   "AND parent_id=? AND status NOT IN ('cancelled','dropped')",
-                         (_KIND_GOAL, user_id, r["id"]))[0]["n"])
-        objectives.append({"id": r["id"], "title": r["title"], "budget": budget,
-                           "live": live, "stream": bool(p.get("stream_id")),
-                           "exhausted": bool(budget and live >= budget)})
-    sec.data["objectives"] = objectives
-    exhausted = [o for o in objectives if o["exhausted"]]
-    line = (f"{ready} ready, {running} running, {blocked_n} blocked, {waiting} waiting · "
-            f"{len(objectives)} objective(s) active")
-    if exhausted:
-        line += f" ({len(exhausted)} at lifetime goal budget)"
+    _open_goals_and_stops(sec, user_id, goals_db, now)
+    line =f"{ready} ready, {running} running, {blocked_n} blocked, {waiting} waiting"
+    # 080 WS-4: an owner-paused goal is the owner's choice, not a health problem:
+    # it is counted here and never raised as "fix the cause".
+    paused_n = counts.get(getattr(_gv, "STATUS_PAUSED", "paused"), 0)
+    if paused_n:
+        line += f" · {paused_n} paused by you (/goal retry <id> to resume)"
     sec.lines.append(line)
     if tele.available:
         runs = _tele_rows(tele, _K_GOAL_RUN)
@@ -112,7 +142,7 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
                          f"re-reads the world from scratch",
                     remedy=(_flag_command("GOAL_RESUME_SAME_SESSION")
                             + " and " + _flag_command("GOAL_YIELD_GRACE_SEC", "90")
-                            + "; mark read-only rails `polyrob cron edit <id> --no-preempts`")))
+                            + "; mark read-only jobs `polyrob job edit <id> --no-preempts`")))
     else:
         sec.lines.append(f"24h goal-run counts unavailable ({tele.reason})")
     for a in asks:
@@ -123,16 +153,11 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
             text=f"open ask ({age} old{blocks}): {a['title'][:110]}",
             remedy=f"/asks · /fulfill {a['id']} once done"))
     for b in blocked:
+        kind, why, remedy = _block_reason(b)
         sec.health.append(HealthItem(
             key=f"blocked:{b['id']}", severity=SEVERITY_WARN,
-            text=f"goal BLOCKED ({b['failures']}/{b['max_retries']} failures): {b['title'][:100]}",
-            remedy=f"/goal retry {b['id']} after the cause is fixed, or /goal cancel {b['id']}"))
-    for o in exhausted:
-        sec.health.append(HealthItem(
-            key=f"objective_budget:{o['id']}", severity=SEVERITY_WARN,
-            text=f"objective at lifetime goal budget ({o['live']}/{o['budget']}) — the planner "
-                 f"can open no more work on it: {o['title'][:80]}",
-            remedy=f"/goal objective drop {o['id']} if finished, or raise its goal_budget"))
+            text=f"goal BLOCKED — {kind}: {b['title'][:100]}" + (f" — {why}" if why else ""),
+            remedy=remedy))
     return sec
 
 

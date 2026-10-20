@@ -181,6 +181,53 @@ def default_session_tools() -> list[str]:
     return list(_profile("default:session"))
 
 
+def owner_seat_tools() -> list[str]:
+    """081 WS-3.1 — the EAGER toolset of an owner chat seat (Telegram DM, the
+    console, the API on the owner's own identity).
+
+    The ``owner`` rig (``core.config_policy.rigs``), plus — under effective
+    full autonomy — every MONEY tool the owner's grant holds
+    (``autonomous_mode_tools()``, which folds in the armed ``DEFI_AGENT_AUTONOMY``
+    rail): ``load_tool`` never loads a money tool, so a granted one must be eager.
+    Every other tool (the X rails, email, browser, coding, compute, ``defi_data``
+    …) is listed in the ``<tool-catalog>`` and is one ``load_tool`` away — an
+    owner seat always has the catalog (``agents.task.session_class``).
+
+    Before 081 this was the WHOLE grant, eagerly: ~194 tool schemas, 53K of a
+    90K first call on prod. The same shape a cron job runs on.
+    """
+    from core.config_policy.rigs import rig_tools
+    ids = list(rig_tools("owner") or [])
+    if _full_autonomy():
+        from agents.task.constants import autonomous_mode_tools
+        from core.tool_capabilities import TOOL_CAPABILITIES
+        ids += [t for t in autonomous_mode_tools()
+                if "money" in TOOL_CAPABILITIES.get(t, ()) and t not in ids]
+    return ids
+
+
+def owner_seat_tool_ids(user_id) -> "list[str] | None":
+    """:func:`owner_seat_tools` when *user_id* is THIS instance's owner principal,
+    else None (the caller keeps its own default — a tenant or a stranger is never
+    given the owner's grant). ``INTERACTIVE_TOOL_IDS`` overrides the set."""
+    from core.instance import resolve_owner_principal
+    owner = resolve_owner_principal()
+    if not (owner and user_id and str(user_id) == str(owner)):
+        return None
+    raw = os.getenv("INTERACTIVE_TOOL_IDS")
+    if raw is not None:
+        return [t.strip() for t in raw.split(",") if t.strip()] or ["filesystem", "task"]
+    return owner_seat_tools()
+
+
+def correspondent_session_tools() -> list[str]:
+    """The toolset of a correspondent session (``conversation_resume``): a third
+    party's text drives it and the capability gate denies every high-impact tool
+    while it is correspondent-facing, so it is not given the ambient grant whose
+    schemas it could only be refused (081: was ~75 actions)."""
+    return list(_profile("default:correspondent"))
+
+
 def cli_default_tools() -> list[str]:
     """Default for the lightweight CLI container.
 

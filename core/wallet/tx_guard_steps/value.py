@@ -19,6 +19,68 @@ from core.wallet.tx_guard import Decision
 from core.wallet.tx_guard_steps.context import GuardContext
 
 
+#: The marker the send rails and the /send seat key the extra confirmation on.
+UNVERIFIED_MARK = "VALUE NOT VERIFIED"
+
+
+def _spend_price(px, chain: Optional[str] = None) -> Optional[float]:
+    """A unit price the caps may multiply by, or None (085 W5, txguard LEAD-4).
+
+    Exactly 0.0 (or a negative value) is "no price", the same as None: a zero
+    price would value an outflow or a grant at $0 and clear every cap. The
+    unpriced branches then decide (exit valuation, owner queue, refusal). A
+    non-finite price passes through to the "not finite" refusal below.
+
+    The one true $0 is a ``valueless`` chain row (a testnet, C13): there
+    ``tx_guard._valueless_price_fn`` prices the native coin and its wrapped form
+    at exactly 0.0 on purpose, so *chain* keeps that zero.
+    """
+    if px is None:
+        return None
+    try:
+        px = float(px)
+    except (TypeError, ValueError):
+        return None
+    if px == 0 and chain:
+        from core.wallet import chains as _chains
+        row = _chains.get(chain)
+        if row is not None and row.valueless:
+            return 0.0
+    if px <= 0:
+        return None
+    return px
+
+
+def _unverified_send(c: GuardContext, price_token: str, what: str):
+    """A plain send with no spend-grade price (2026-10-17). A wallet sends any
+    token it holds — USDG on its one pool, the agent's own launch — so the guard
+    does not refuse it for the price. It asks for the owner's extra confirmation
+    instead (``value_ack``) and marks the send owner-only (step 9). Valued at the
+    weaker exit price when there is one, else charged the autonomous ceiling plus
+    a cent: an unvalued send never reads as free (the S3 unvalued-grant rule).
+
+    Returns ``(unit_price, amount_usd, basis, refusal)``."""
+    if not c.intent.value_ack:
+        return None, None, None, Decision(False, (
+            f"refused: {UNVERIFIED_MARK} — {what} has no spend-grade price (a thin "
+            f"or single-pool market, or no price at all), so the caps cannot "
+            f"measure it. A wallet can still send it: the owner quotes it and "
+            f"confirms the extra 'send anyway' step (`/send … anyway`). An "
+            f"autonomous run cannot."))
+    c.owner_only = True
+    px = None
+    if c.fallback_price_fn:
+        try:
+            px = c.fallback_price_fn(c.intent.chain, price_token)
+        except Exception:
+            px = None
+    if px is not None and math.isfinite(px) and px > 0:
+        return float(px), None, "low_confidence", None
+    charge = (_tg.autonomous_max_usd(*_tg.ceiling_scope(c.execution_context))
+              + _tg._UNVALUED_GRANT_EPSILON_USD)
+    return None, charge, "unpriced", None
+
+
 def step_7_price(c: GuardContext) -> Optional[Decision]:
     """7. Price the risk."""
     intent = c.intent
@@ -46,7 +108,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
                 f"mint price cannot be priced — and an unpriced spend booked at $0.00 would "
                 f"widen every other cap by its own size"))
         try:
-            unit_price = price_fn(intent.chain, _proxy) if price_fn else None
+            unit_price = _spend_price(
+                price_fn(intent.chain, _proxy) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
         if unit_price is None:
@@ -83,7 +146,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
                 f"so {_what} cannot be priced — and an unpriced spend "
                 f"booked at $0.00 would widen every other cap by its own size"))
         try:
-            unit_price = price_fn(intent.chain, _proxy) if price_fn else None
+            unit_price = _spend_price(
+                price_fn(intent.chain, _proxy) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
         if unit_price is None:
@@ -114,7 +178,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
             return refusal
     elif intent.token:
         try:
-            unit_price = price_fn(intent.chain, intent.token) if price_fn else None
+            unit_price = _spend_price(
+                price_fn(intent.chain, intent.token) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
         if unit_price is None:
@@ -129,7 +194,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
                 and outflow_raw <= intent.held_balance_raw)
             if exit_bounded and fallback_price_fn:
                 try:
-                    unit_price = fallback_price_fn(intent.chain, intent.token)
+                    unit_price = _spend_price(
+                        fallback_price_fn(intent.chain, intent.token), intent.chain)
                 except Exception:
                     unit_price = None
                 if unit_price is not None:
@@ -178,6 +244,12 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
                             "by any source; caps run against the measured receipt",
                             intent.chain, intent.token, intent.inflow_token,
                             amount_usd)
+            if unit_price is None and amount_usd is None and intent.is_transfer:
+                unit_price, amount_usd, basis, refusal = _unverified_send(
+                    c, intent.token, "this token")
+                if refusal is not None:
+                    return refusal
+                valuation_basis = basis
             if unit_price is None and amount_usd is None:
                 return Decision(False, _tg._unpriceable_reason(
                     "the outflow", exit_bounded=exit_bounded,
@@ -204,7 +276,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
                 f"so a deployment's fee cannot be priced — and an unpriced spend "
                 f"booked at $0.00 would widen every other cap by its own size"))
         try:
-            unit_price = price_fn(intent.chain, _proxy) if price_fn else None
+            unit_price = _spend_price(
+                price_fn(intent.chain, _proxy) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
         if unit_price is None:
@@ -232,15 +305,23 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
                 f"native outflow cannot be priced — and an unpriced outflow booked at "
                 f"$0.00 would widen every other cap by its own size"))
         try:
-            unit_price = price_fn(intent.chain, _proxy) if price_fn else None
+            unit_price = _spend_price(
+                price_fn(intent.chain, _proxy) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
-        if unit_price is None:
+        if unit_price is None and intent.is_transfer:
+            unit_price, amount_usd, basis, refusal = _unverified_send(
+                c, _proxy, "the native coin")
+            if refusal is not None:
+                return refusal
+            valuation_basis = basis
+        if unit_price is None and amount_usd is None:
             return Decision(False, _tg._unpriceable_reason(
                 "the native outflow", exit_bounded=False,
                 had_fallback=fallback_price_fn is not None))
-        _decimals = int(getattr(_row, "native_decimals", 18) or 18)
-        amount_usd = (outflow_raw / (10 ** _decimals)) * unit_price
+        if unit_price is not None:
+            _decimals = int(getattr(_row, "native_decimals", 18) or 18)
+            amount_usd = (outflow_raw / (10 ** _decimals)) * unit_price
 
     # A DECLARED grant is priced whatever shape the transaction is (S4,
     # 2026-09-14). The loop above only ran under `is_allowance_op`, so
@@ -278,6 +359,10 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
         if fee_wei:
             try:
                 native_price = price_fn(intent.chain, row.wrapped_native) if row and price_fn else None
+                if (native_price is None and intent.is_transfer and intent.value_ack
+                        and row and fallback_price_fn):
+                    # The owner's "send anyway" covers the fee's price too.
+                    native_price = fallback_price_fn(intent.chain, row.wrapped_native)
                 if (native_price is None or not math.isfinite(native_price) or native_price < 0
                         or (native_price == 0 and not row.valueless)):
                     raise ValueError("missing native price")
@@ -353,6 +438,27 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
     # simulated value to it). An owner grant for THIS call is the tap this lane
     # exists to collect; before 2026-09-26 the grant was consumed and this step
     # re-queued the call: "NOT SENT".
+    if getattr(c.intent, "payout_shape", False):
+        # 085 W2: a payout to an address nobody pinned is the owner's call, in
+        # every lane, whatever its value (the `defi_trade_transfer` rule).
+        c.owner_only = True
+        if not owner_direct and not owner_granted:
+            return Decision(False, (
+                f"owner approval required: PAYOUT — this call moves value to "
+                f"{c.intent.to or 'a new contract'} and declares nothing coming back, "
+                f"so only the owner can send it"),
+                lane="owner_queue", amount_usd=amount_usd,
+                sim_gas_used=deltas.gas_used, deploy=deploy_facts,
+                agent_id=registered_agent_id, position_token_id=position_token_id)
+    if c.owner_only and not owner_direct and not owner_granted:
+        # A send the owner confirmed with "send anyway" (no spend-grade price):
+        # never the autonomous lane, whatever its estimate.
+        return Decision(False, (
+            f"owner approval required: {UNVERIFIED_MARK} — this send has no "
+            f"spend-grade price, so only the owner can send it"),
+            lane="owner_queue", amount_usd=amount_usd,
+            sim_gas_used=deltas.gas_used, deploy=deploy_facts,
+            agent_id=registered_agent_id, position_token_id=position_token_id)
     _ceiling = _tg.autonomous_max_usd(*_tg.ceiling_scope(execution_context))
     if amount_usd > _ceiling and not owner_direct and not owner_granted:
         return Decision(False, (

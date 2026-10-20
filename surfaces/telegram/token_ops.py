@@ -24,6 +24,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
+from core.surfaces.cards import is_go_word
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +38,8 @@ def _render(result, *, retry_hint: Optional[str]) -> str:
                 "— do NOT retry until it is understood; assume nothing about "
                 "what happened.")
     if retry_hint:
-        body += f"\n\nAdd `go` to execute: {retry_hint}"
+        from core.surfaces.cards import with_go_hint
+        body = with_go_hint(body, f"\n\nAdd `go` to execute: {retry_hint}")
     return body
 
 
@@ -52,6 +55,23 @@ def _positive(raw: str) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _exact_positive(raw: str):
+    """085 W7: a token SUPPLY parses exactly (Decimal), never through float."""
+    from core.wallet.token_template import TokenTemplateError, to_exact_supply
+    try:
+        value = to_exact_supply(raw)
+    except TokenTemplateError:
+        return None
+    return value if value > 0 else None
+
+
+def _supply_text(supply) -> str:
+    """The exact supply for a retry hint — `{:g}` turned 1234567 into
+    1.23457e+06, and the retry minted 1234570."""
+    from core.wallet.token_template import format_supply
+    return format_supply(supply)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +101,7 @@ async def launch_reply(user_id: Optional[str], args: List[str]) -> str:
 
     tokens = list(args)
     execute = False
-    if tokens and tokens[-1].lower() in ("go", "execute", "confirm"):
+    if tokens and is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
 
@@ -181,7 +201,7 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
 
     tokens = list(args)
     execute = False
-    if tokens and tokens[-1].lower() in ("go", "execute", "confirm"):
+    if tokens and is_go_word(tokens[-1]):
         execute = True
         tokens.pop()
 
@@ -236,7 +256,7 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
     if len(tokens) < 2:
         return "Give me a symbol and a supply: /deploy <SYMBOL> <supply> <name…>"
     symbol = tokens[0]
-    supply = _positive(tokens[1])
+    supply = _exact_positive(tokens[1])
     if supply is None:
         return f"The supply must be a positive number, got {tokens[1]!r}."
     name = " ".join(tokens[2:]) or symbol
@@ -271,7 +291,7 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
             logger.warning("solana deploy verb failed", exc_info=True)
             return f"The deploy did not run: {exc}"
         hint = None if execute else (
-            f"/deploy {symbol} {supply:g} {name} on solana"
+            f"/deploy {symbol} {_supply_text(supply)} {name} on solana"
             + (f" decimals {decimals}" if decimals is not None else "")
             + (f" uri {uri}" if uri else "") + " go")
         return _render(result, retry_hint=hint)
@@ -289,7 +309,7 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
         return f"The deploy did not run: {exc}"
 
     hint = None if execute else (
-        f"/deploy {symbol} {supply:g} {name}"
+        f"/deploy {symbol} {_supply_text(supply)} {name}"
         + (f" on {chain}" if chain != "base" else "")
         + (f" decimals {decimals}" if decimals is not None else "")
         + (f" vanity {vanity}" if vanity else "")

@@ -8,9 +8,13 @@ objects.
 """
 from agents.task.tool_defaults import default_session_tools
 from core.optional_extras import missing_extra_hint
+from core.config_policy import INTERACTIVE_MAX_STEPS
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Union, List
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def task_unavailable_message(reason: Optional[str]) -> str:
@@ -60,7 +64,7 @@ class SessionRequest:
     model: Optional[str] = None
     provider: Optional[str] = None
     tools: List[str] = None
-    max_steps: int = 50
+    max_steps: int = INTERACTIVE_MAX_STEPS
     temperature: float = 0.0
     use_vision: bool = True
     session_config: Optional[Dict[str, Any]] = None
@@ -91,7 +95,7 @@ class SessionRequest:
 def _resolve_chat_runtime(env=None):
     """Resolve (provider, model) for chat_once via the shared core resolver (Seam 2).
 
-    Precedence: CHAT_PROVIDER/CHAT_MODEL or DEFAULT_PROVIDER/DEFAULT_MODEL pin >
+    Precedence: DEFAULT_PROVIDER/DEFAULT_MODEL pin >
     the historical openai/gpt-5 default (used only if an OpenAI key is present) >
     first keyed provider (canonical order) > openai/gpt-5 last resort. The model is
     always filled to match the resolved provider, so a first-keyed/anthropic-pinned
@@ -117,6 +121,65 @@ def _resolve_chat_runtime(env=None):
     if not model:
         model = get_default_model(provider)
     return provider, model
+
+
+def operator_pin_stamp(provider, model, env=None):
+    """The operator pin pair ``{"provider", "model"}`` when a session is created ON it,
+    else ``None`` (an explicit per-session model). Stored as ``operator_pin`` in the
+    session record so a recreate can tell "it ran on the pin" from "it chose a model"
+    (2026-10-14 review B-4). Fail-open to ``None``."""
+    try:
+        pin_provider, pin_model = _resolve_chat_runtime(env)
+        from core.runtime_config import canonicalize_provider as _canon
+        if (provider and model and _canon(provider) == _canon(pin_provider)
+                and model == pin_model):
+            return {"provider": pin_provider, "model": pin_model}
+    except Exception:
+        logger.debug("operator pin stamp failed", exc_info=True)
+    return None
+
+
+def refresh_pinned_model(session_info, env=None):
+    """``(provider, model)`` to rebuild a RECREATED session on, or ``None`` = keep the
+    stored model (2026-10-14 review B-4).
+
+    A live owner chat lives for days and is rebuilt from its stored model after every
+    restart, so a model deploy never reached it. Re-resolve when the stored model WAS
+    the operator pin and the pin has moved since:
+
+    * a stamped record (``operator_pin``, written at creation): re-resolve only when the
+      stored pair equals the stamp — an explicit per-session model is kept;
+    * a record from before the stamp: only an OWNER CHAT (``chat_session_key`` or
+      ``creator == "owner"``) whose stored provider is still the pinned provider.
+
+    A credit-dead stored provider is handled separately (``resolve_session_runtime``).
+    """
+    try:
+        info = session_info or {}
+        req, cfg = info.get("request") or {}, info.get("config") or {}
+        provider = req.get("provider") or cfg.get("provider")
+        model = req.get("model") or cfg.get("model")
+        if not provider or not model:
+            return None
+        from core.runtime_config import canonicalize_provider as _canon
+        pin_provider, pin_model = _resolve_chat_runtime(env)
+        if not pin_model or (_canon(provider) == _canon(pin_provider) and model == pin_model):
+            return None
+        stamp = info.get("operator_pin")
+        if isinstance(stamp, dict):
+            if not (stamp.get("model") == model
+                    and _canon(stamp.get("provider")) == _canon(provider)):
+                return None
+        elif "operator_pin" in info:
+            return None  # stamped None at creation = an explicit model
+        elif not (info.get("chat_session_key") or str(info.get("creator") or "") == "owner"):
+            return None
+        elif _canon(provider) != _canon(pin_provider):
+            return None
+        return pin_provider, pin_model
+    except Exception:
+        logger.debug("pinned-model refresh failed; keeping the stored model", exc_info=True)
+        return None
 
 
 def room_session_source(session_source) -> bool:
@@ -192,6 +255,7 @@ def build_session_metadata(session_request, *, effective_tool_ids, public_sessio
         'billing_limited': credit_billed or is_billed(),
         'effective_tools': list(effective_tool_ids or []),
         'public_session': bool(public_session),
+        'operator_pin': operator_pin_stamp(session_request.provider, session_request.model),
         'created_at': _dt.now().isoformat(),
         'status': 'created',
         'orchestrator_ready': True,

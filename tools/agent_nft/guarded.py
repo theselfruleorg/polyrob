@@ -43,7 +43,8 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
 
     wallet = tool._get_wallet()
     if wallet is None:
-        return tool._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet.config import WALLET_OFF_TEXT
+        return tool._ar(error=WALLET_OFF_TEXT)
     signer = wallet.operational_signer()
     gate = wallet.policy
     chain = intent.chain
@@ -95,9 +96,8 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:  # noqa: BLE001
-            from core.wallet.broadcast.evm import broadcast_error_kind, broadcast_failure_text
-            return tool._ar(error=broadcast_failure_text(exc),
-                error_kind=broadcast_error_kind(exc))
+            from core.wallet.broadcast.evm import broadcast_failure_text
+            return tool._ar(error=broadcast_failure_text(exc))
         rec = dict(venue="defi", action=f"agent_nft_{verb}", amount_usd=decision.amount_usd or 0.0,
                    counterparty=counterparty or inner_to, idempotency_key=idem, result_ref=tx_hash,
                    chain=chain,

@@ -6,11 +6,14 @@ FIXED window; it knows nothing about how long THIS goal takes. Prod 2026-09-19
 started a 14-step goal three minutes before the hourly rail and bought a
 guaranteed yield — the goal lost its run, the rail waited anyway.
 
-The estimate is the goal's OWN measured history: the p95 of
-``duration_sec / steps`` over its prior ``goal_run`` terminal events, times its
-step budget, clamped by ``GOAL_MAX_RUN_SECONDS``. With no history the flagged
-fallback (``GOAL_PREFLIGHT_STEP_SEC``, default 45 s) is used and SAID to be a
-fallback — an unmeasured goal is not a fast goal.
+The estimate is the goal's OWN measured history: the p95 of ``duration_sec``
+over its prior ``goal_run`` terminal events, clamped by ``GOAL_MAX_RUN_SECONDS``.
+083 WS-4: it is no longer ``step budget x p95 step`` — the step cap is the
+operator's safety stop (``AUTONOMOUS_MAX_STEPS``, 150), not a task size, and
+``150 x step`` would defer every goal near a rail. With no history the flagged
+fallback (``GOAL_PREFLIGHT_STEP_SEC``, default 45 s) times a typical run of
+:data:`UNMEASURED_RUN_STEPS` steps is used and SAID to be a fallback — an
+unmeasured goal is not a fast goal.
 
 Every function here is READ-ONLY and fail-open: an unreadable telemetry db or
 cron store must never stop dispatch, only stop this extra refusal.
@@ -33,6 +36,11 @@ _TERMINAL = ("done", "failed")
 _HISTORY_WINDOW_SEC = 14 * 24 * 3600
 _HISTORY_MAX_RUNS = 20
 
+#: Steps a typical goal run takes, for the UNMEASURED fallback only (the old
+#: per-goal default budget). Never a cap: the run itself stops at
+#: ``AUTONOMOUS_MAX_STEPS``.
+UNMEASURED_RUN_STEPS = 30
+
 
 def p95(values: List[float]) -> Optional[float]:
     """Nearest-rank p95 of *values*, or None for an empty list.
@@ -47,12 +55,12 @@ def p95(values: List[float]) -> Optional[float]:
     return vals[idx]
 
 
-def measured_step_seconds(goal_id: str, *, data_dir: Optional[str] = None,
-                          now_ts: Optional[float] = None) -> Optional[float]:
-    """p95 seconds-per-step for THIS goal's prior runs, or None when unmeasured.
+def measured_run_seconds(goal_id: str, *, data_dir: Optional[str] = None,
+                         now_ts: Optional[float] = None) -> Optional[float]:
+    """p95 wall-clock seconds of THIS goal's prior runs, or None when unmeasured.
 
     Reads the durable event log; a run whose event carries no ``duration_sec``
-    or no ``steps`` contributes nothing (it is not counted as fast)."""
+    contributes nothing (it is not counted as fast)."""
     try:
         from core.event_log import open_event_log
         log = open_event_log(data_dir)
@@ -63,7 +71,7 @@ def measured_step_seconds(goal_id: str, *, data_dir: Optional[str] = None,
     except Exception:
         logger.debug("preflight history read skipped", exc_info=True)
         return None
-    per_step: List[float] = []
+    runs: List[float] = []
     for r in rows:
         attrs: Dict[str, Any] = r.get("attrs") or {}
         if attrs.get("goal_id") != goal_id:
@@ -72,29 +80,27 @@ def measured_step_seconds(goal_id: str, *, data_dir: Optional[str] = None,
             continue
         try:
             dur = float(attrs.get("duration_sec") or 0)
-            steps = int(attrs.get("steps") or 0)
         except (TypeError, ValueError):
             continue
-        if dur <= 0 or steps <= 0:
+        if dur <= 0:
             continue
-        per_step.append(dur / steps)
-        if len(per_step) >= _HISTORY_MAX_RUNS:
+        runs.append(dur)
+        if len(runs) >= _HISTORY_MAX_RUNS:
             break
-    return p95(per_step)
+    return p95(runs)
 
 
-def expected_run_seconds(goal_id: str, max_steps: int, *,
+def expected_run_seconds(goal_id: str, *,
                          fallback_step_sec: int, max_run_sec: int,
                          data_dir: Optional[str] = None) -> Tuple[float, bool]:
     """``(seconds, measured)`` this goal is expected to need.
 
-    ``measured`` is False when the fallback step time was used, so a caller can
-    say which it is instead of presenting a guess as a measurement."""
-    step = measured_step_seconds(goal_id, data_dir=data_dir)
-    measured = step is not None
-    if step is None:
-        step = float(max(1, int(fallback_step_sec)))
-    est = float(max(1, int(max_steps))) * step
+    ``measured`` is False when the fallback was used, so a caller can say which
+    it is instead of presenting a guess as a measurement."""
+    est = measured_run_seconds(goal_id, data_dir=data_dir)
+    measured = est is not None
+    if est is None:
+        est = float(max(1, int(fallback_step_sec))) * UNMEASURED_RUN_STEPS
     if max_run_sec > 0:
         est = min(est, float(max_run_sec))
     return est, measured
@@ -131,7 +137,7 @@ def next_preempting_rail(data_dir: str, now: datetime) -> Optional[Tuple[str, da
     return None
 
 
-def crossing_rail(goal_id: str, max_steps: int, *, data_dir: str, now: datetime,
+def crossing_rail(goal_id: str, *, data_dir: str, now: datetime,
                   fallback_step_sec: int, max_run_sec: int) -> Optional[str]:
     """The job id this goal would run INTO, or None.
 
@@ -143,7 +149,7 @@ def crossing_rail(goal_id: str, max_steps: int, *, data_dir: str, now: datetime,
             return None
         job_id, when = rail
         est, _measured = expected_run_seconds(
-            goal_id, max_steps, fallback_step_sec=fallback_step_sec,
+            goal_id, fallback_step_sec=fallback_step_sec,
             max_run_sec=max_run_sec, data_dir=data_dir)
         headroom = (when - now).total_seconds()
         return job_id if est > headroom else None

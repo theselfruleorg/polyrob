@@ -1,5 +1,5 @@
 """Status section: ``loops`` — the pause record, the live actors, cron and its
-rail ledger, and loop liveness. Split per concern (W9): ``_loops_section`` is
+job ledger, the **Next** list (080 WS-4), and loop liveness. Split per concern (W9): ``_loops_section`` is
 a short driver over one helper per part.
 
 Moved out of ``core/status_snapshot.py`` (W9, 2026-10-10 structural review)
@@ -114,6 +114,7 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
     _live_actor_lines(sec, user_id, cron_db, goals_db)
     _rail_verdict_lines(sec)
     jobs = _cron_job_lines(sec, user_id, cron_db)
+    _next_lines(sec, user_id, jobs, goals_db, data_dir)
     if tele.available:
         _cron_rail_lines(sec, tele, jobs)
         # 056 WS4/WS9: an external rail the deploy cannot use is a HEALTH fact, not a
@@ -236,7 +237,8 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
     # it inside the section rather than making the whole section unreadable.
     try:
         jobs = _rows(cron_db, "SELECT id, task, enabled, status, next_run_at, last_run_at, "
-                              "payload FROM cron_jobs WHERE user_id=?", (user_id,))
+                              "schedule_spec, payload FROM cron_jobs WHERE user_id=?",
+                     (user_id,))
     except Exception as e:
         sec.data["cron_reason"] = f"{type(e).__name__}: {str(e)[:120]}"
         sec.lines.append(f"cron: unavailable ({sec.data['cron_reason']})")
@@ -246,6 +248,12 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
         upcoming = sorted(j["next_run_at"] for j in enabled if j.get("next_run_at"))
         sec.data.update({"cron_total": len(jobs), "cron_enabled": len(enabled),
                          "next_cron": upcoming[0] if upcoming else None})
+        # The live job list for the agent's <operations> block (render_operations_block).
+        sec.data["jobs"] = [
+            {"id": str(j.get("id") or ""), "name": _job_name(j),
+             "schedule": str(j.get("schedule_spec") or ""),
+             "next_run_at": j.get("next_run_at"), "status": str(j.get("status") or "")}
+            for j in sorted(enabled, key=lambda j: str(j.get("next_run_at") or "~"))]
         line = f"cron: {len(enabled)} enabled / {len(jobs) - len(enabled)} disabled"
         if upcoming:
             line += f"; next {upcoming[0][:16]}"
@@ -253,9 +261,136 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
     return jobs
 
 
+#: How many upcoming runs the Next list names (080 WS-4).
+NEXT_DEFAULT = 5
+
+
+def autonomy_idle_reason() -> Optional[str]:
+    """``"autonomy is off"`` when neither the scheduler nor the goal loop is on,
+    else ``None``. The ONE reader the headline (``status_render``) and the Next
+    list share, so a seat never says RUNNING over loops that are off. A gate
+    that cannot be read is named, never read as on."""
+    from core.config_policy import AutonomyConfig
+    try:
+        cron_on = bool(AutonomyConfig.cron_enabled())
+        goals_on = bool(AutonomyConfig.goals_enabled())
+    except Exception as e:
+        return f"autonomy state unreadable ({type(e).__name__})"
+    if not cron_on and not goals_on:
+        return "autonomy is off"
+    return None
+
+
+def _job_name(job: Dict[str, Any]) -> str:
+    try:
+        p = json.loads(job.get("payload") or "{}") or {}
+    except Exception as e:
+        p = {"name": f"(payload unreadable: {type(e).__name__})"}
+    name = (p.get("name") if isinstance(p, dict) else None) or ""
+    if not name:
+        lines = str(job.get("task") or "").strip().splitlines()
+        name = lines[0] if lines else str(job.get("id") or "?")
+    name = str(name).strip()
+    return name if len(name) <= 48 else name[:47] + "…"
+
+
+def next_runs(user_id: str, jobs: List[Dict[str, Any]], cron_reason: Optional[str],
+              goals_db: Optional[str], *, n: int = NEXT_DEFAULT,
+              data_dir: Optional[str] = None) -> Dict[str, Any]:
+    """The next *n* runs BY NAME: enabled cron jobs by ``next_run_at`` and the
+    ready-goal queue in dispatch order (priority, then age — the board's own
+    ``idx_goals_ready`` order). ``none`` is ONE sentence when nothing will run
+    (paused / autonomy off / scheduler off / nothing queued); ``unreadable``
+    names a store that did not answer — never read as "nothing queued"."""
+    from core.autonomy_control import read_state
+    from core.config_policy import AutonomyConfig
+    out: Dict[str, Any] = {"items": [], "none": None, "notes": [], "unreadable": [],
+                           "more": 0}
+    st = read_state(data_dir)
+    if st.paused and "all" in st.scopes:
+        out["none"] = "nothing will run: paused (everything)"
+        return out
+    idle = autonomy_idle_reason()
+    if idle:
+        out["none"] = f"nothing will run: {idle}"
+        return out
+    cron_on = bool(AutonomyConfig.cron_enabled())
+    goals_on = bool(AutonomyConfig.goals_enabled())
+    cands: List[tuple] = []
+    enabled = [j for j in (jobs or []) if int(j.get("enabled") or 0)]
+    if cron_reason:
+        out["unreadable"].append(f"jobs: {cron_reason}")
+    elif cron_on:
+        for j in enabled:
+            when = j.get("next_run_at")
+            if when:
+                cands.append((str(when)[:16], "job", _job_name(j), str(when)))
+    elif enabled:
+        out["notes"].append(f"scheduler is off: {len(enabled)} enabled job(s) will not run")
+    if goals_on:
+        try:
+            rows = _rows(goals_db or "", "SELECT id, title FROM goals WHERE kind='goal' "
+                                         "AND status='ready' AND user_id=? "
+                                         "ORDER BY priority DESC, created_at", (user_id,))
+        except FileNotFoundError:
+            rows = []  # a fresh install has no board: nothing is queued
+        except Exception as e:
+            rows = []
+            out["unreadable"].append(f"goals: {type(e).__name__}: {str(e)[:80]}")
+        for i, r in enumerate(rows):
+            # A ready goal runs when the goal loop is next free: it sorts before
+            # any timed job ("" < any ISO stamp), in the board's own order.
+            cands.append(("", "goal", str(r.get("title") or r.get("id") or "?")[:48], i))
+    if st.paused:
+        out["notes"].append(f"paused: {', '.join(st.scopes)}")
+    cands.sort(key=lambda c: (c[0], c[3] if c[1] == "goal" else 0))
+    out["items"] = [{"kind": k, "name": name, "when": (when if k == "job" else None)}
+                    for when, k, name, _ in cands[:max(1, n)]]
+    out["more"] = max(0, len(cands) - max(1, n))
+    if not out["items"] and not out["unreadable"]:
+        out["none"] = ("nothing will run: scheduler is off" if not cron_on and enabled
+                       else "nothing will run: no enabled job and no ready goal")
+    return out
+
+
+def next_line(nxt: Dict[str, Any]) -> str:
+    """The ONE render of the Next list (status, console, digest, agent_status)."""
+    if nxt.get("none") and not nxt.get("unreadable"):
+        line = f"next: {nxt['none']}"
+    else:
+        bits = []
+        for it in nxt.get("items") or []:
+            if it["kind"] == "job":
+                bits.append(f"{it['name']} (job, {str(it['when'])[:16].replace('T', ' ')} UTC)")
+            else:
+                bits.append(f"{it['name']} (goal, when the goal loop is free)")
+        line = "next: " + ("; ".join(bits) if bits else "unknown")
+        if nxt.get("more"):
+            line += f"; +{nxt['more']} more"
+    for u in nxt.get("unreadable") or []:
+        line += f" · could not read {u}"
+    for note in nxt.get("notes") or []:
+        line += f" · {note}"
+    return line
+
+
+def _next_lines(sec: Section, user_id: str, jobs: List[Dict[str, Any]],
+                goals_db: Optional[str], data_dir: Optional[str]) -> None:
+    """``sec.data["next"]`` and its one line (080 WS-4)."""
+    try:
+        nxt = next_runs(user_id, jobs, sec.data.get("cron_reason"), goals_db,
+                        data_dir=data_dir)
+    except Exception as e:
+        nxt = {"items": [], "none": None, "notes": [], "more": 0,
+               "unreadable": [f"next runs: {type(e).__name__}: {str(e)[:80]}"]}
+    sec.data["next"] = nxt
+    sec.lines.append(next_line(nxt))
+
+
 def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) -> None:
-    """The window's cron runs: counts, the per-rail ledger, its cost, and the
-    cut / cut-repeat health items."""
+    """The window's cron runs: counts, the per-job ledger, its cost, and the
+    cut / cut-repeat health items. A cron job is a "job" on every line the owner
+    reads (080 WS-4); the ``rails*`` data keys stay for the existing readers."""
     cron_runs = _tele_rows(tele, _K_CRON_RUN)
     by = {}
     for r in cron_runs:
@@ -269,8 +404,11 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
     # failed / cut_by_cap / cut_by_restart / held / deferred / skipped) and a
     # health item when a rail was cut. A `started` with no terminal event is
     # rendered as such ("started HH:MM, no end recorded"), never as done.
-    _terminal = {"done", "failed", "cut_by_cap", "cut_by_restart", "held", "deferred",
-                 "skipped", "provider_rerouted"}
+    # "partial" / "blocked" (2026-10-13 review C-03/C-11): a run that stopped
+    # before done() after real work, or that declared BLOCKED, is a terminal
+    # outcome of its own — never folded into done or failed.
+    _terminal = {"done", "failed", "partial", "blocked", "cut_by_cap", "cut_by_restart",
+                 "held", "deferred", "skipped", "provider_rerouted"}
     rails: Dict[str, Dict[str, Any]] = {}
     for r in cron_runs:  # newest-first
         a = r.get("attrs") or {}
@@ -341,17 +479,17 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
             if last.get("duration_s") is not None:
                 bits.append(f"{int(float(last['duration_s']) // 60)}m")
             bits.extend(_rail_cost_bits(spend_by_job.get(str(j.get("id") or ""))))
-            sec.lines.append("rail " + " · ".join(bits))
+            sec.lines.append("job " + " · ".join(bits))
             if last["outcome"] in ("cut_by_cap", "cut_by_restart"):
                 cut.append(f"{name} {last['outcome']} at {_hhmm(last['ts'])}")
         elif ls is not None:
-            sec.lines.append(f"rail {name}: started {_hhmm(ls)}, no end recorded")
+            sec.lines.append(f"job {name}: started {_hhmm(ls)}, no end recorded")
     if cut:
         sec.health.append(HealthItem(
             key="rail_cut", severity=SEVERITY_WARN,
-            text="rail run cut: " + "; ".join(cut[:4]),
-            remedy="cut_by_cap → widen `polyrob cron edit <id> --max-duration`; "
-                   "cut_by_restart → deploy only on an idle box (no cron/goal/turn)"))
+            text="job run cut: " + "; ".join(cut[:4]),
+            remedy="cut_by_cap → widen `polyrob job edit <id> --max-duration`; "
+                   "cut_by_restart → deploy only on an idle box (no scheduled job, goal or turn)"))
     repeats = []
     for j in (jobs if "cron_reason" not in sec.data else []):
         jid = str(j.get("id") or "")
@@ -364,8 +502,8 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
         sec.data["rail_cut_repeat"] = repeats
         sec.health.append(HealthItem(
             key="rail_cut_repeat", severity=SEVERITY_WARN,
-            text="rail cap too small: " + "; ".join(repeats[:4]),
-            remedy="raise `polyrob cron edit <id> --max-duration` above the longest completed "
+            text="job time limit too small: " + "; ".join(repeats[:4]),
+            remedy="raise `polyrob job edit <id> --max-duration` above the longest completed "
                    "run, or narrow the job's rig (`--rig money_rail`) so its steps are shorter"))
 
 

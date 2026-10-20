@@ -371,16 +371,16 @@ def _constraint_args(specs: Tuple[str, ...]) -> Tuple[List[str], Optional[str]]:
 
 
 def _installer_env() -> Dict[str, str]:
-    """CR-M09: the pip child's env — the host env minus every secret-NAMED var.
+    """CR-M09 + 085 W1 (custody L-1): the pip child's env is the ALLOWLIST of
+    ``core.lazy_installer.child_env`` — PATH, locale, proxies, ``SSL_CERT_FILE``.
 
-    ``tools/code_exec/env_policy.build_child_env`` is the SSOT, but ``core`` may
-    not import ``tools``; the name rule is the core-side mirror in
-    ``core.app_service.env_scan.SECRET_KEY_RE``. pip keeps its own knobs
-    (``PIP_*``, proxies, ``VIRTUAL_ENV``); an ``*_API_KEY`` or the wallet seed
-    never reaches a build backend.
+    A denylist of secret-NAMED vars let a keyed ``*_RPC_URL``, an encryption key
+    or a passphrase reach a build backend; an allowlist cannot miss a name. The
+    install is hashed, wheel-only and runs ``sys.executable -I -m pip``, so pip
+    needs no ``PIP_*`` knob or ``VIRTUAL_ENV`` from the host env.
     """
-    from core.app_service.env_scan import SECRET_KEY_RE
-    return {k: v for k, v in os.environ.items() if not SECRET_KEY_RE.search(k)}
+    from core.lazy_installer import child_env
+    return child_env()
 
 
 def _run_installer(cmd: List[str], **kw) -> subprocess.CompletedProcess:

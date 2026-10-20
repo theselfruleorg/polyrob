@@ -391,3 +391,42 @@ def test_with_done_record_only_when_shown():
     assert with_done_record("body", "rec", True) == "body\n\nRecord: rec"
     assert with_done_record("", "rec", True) == "Record: rec"
     assert with_done_record("body", "", True) == "body"
+
+
+# ---------------------------------------------------------------------------
+# 083 WS-1: the typed stop reason rides the envelope (both branches)
+# ---------------------------------------------------------------------------
+
+def test_build_run_outcome_carries_stop_reason_and_max_steps():
+    from agents.task.runtime.run_outcome import build_run_outcome
+    agent = _Agent([_Step([_Action("read_file")], [ActionResult(extracted_content="x")])],
+                   n_steps=30)
+    agent.state.stop_reason, agent.state.max_steps = "max_steps", 30
+    o = asyncio.run(build_run_outcome(_FakeTaskAgent(_Orch({"main": agent})), "s1",
+                                      "Session completed successfully"))
+    assert (o.stop_reason, o.max_steps) == ("max_steps", 30)
+    o.steps = 30
+    assert o.stop_description == "stopped at the step limit (30/30)"
+
+
+def test_build_run_outcome_refusal_branch_carries_stop_reason():
+    """A RUN_BUDGET_USD halt is a refusal; its stop reason must still arrive."""
+    from agents.task.runtime.run_outcome import build_run_outcome
+    agent = _Agent([], n_steps=4)
+    agent.state.stop_reason, agent.state.max_steps = "run_budget", 30
+    o = asyncio.run(build_run_outcome(_FakeTaskAgent(_Orch({"main": agent})), "s1",
+                                      "Session failed: run_budget_exhausted: x"))
+    assert o.refusal is True
+    assert (o.stop_reason, o.max_steps) == ("run_budget", 30)
+
+
+def test_build_run_outcome_stop_reason_ignores_sub_agents_and_non_strings():
+    from agents.task.runtime.run_outcome import build_run_outcome
+    sub = _Agent([], is_sub=True)
+    sub.state.stop_reason, sub.state.max_steps = "max_steps", 10
+    main = _Agent([])
+    main.state.stop_reason, main.state.max_steps = object(), True
+    o = asyncio.run(build_run_outcome(_FakeTaskAgent(_Orch({"s": sub, "m": main})), "s1",
+                                      "Session completed successfully"))
+    assert (o.stop_reason, o.max_steps) == (None, None)
+    assert o.stop_description.startswith("stop reason unknown")

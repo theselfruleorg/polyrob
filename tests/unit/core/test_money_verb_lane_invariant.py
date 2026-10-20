@@ -262,9 +262,8 @@ def test_venue_order_verbs_are_on_the_lane(runtime_names):
     tags both `money`) and their place-order verbs ARE covered by the general
     spend-lane test above via `_money_verbs`. This test pins the two place-order
     verbs per venue by exact literal name as a defense-in-depth check independent
-    of that general derivation — venues are also tagged `readable_while_tainted`
-    (not `high_impact`) so their read verbs stay available to a correspondent-
-    tainted session. Place-order verbs must sit on the payment-approval lane.
+    of that general derivation — venues are not tagged `high_impact`, so their
+    read verbs stay available to a correspondent-tainted session. Place-order verbs must sit on the payment-approval lane.
     A rename or an action-set change to either venue tool then
     fails here by exact verb name, not just via the broader derivation."""
     from core.config_policy import PAYMENT_APPROVAL_TOOLS

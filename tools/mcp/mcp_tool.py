@@ -21,6 +21,13 @@ from .views import (
 )
 
 
+def _mcp_off_text() -> str:
+    """The refusal when MCP is off; the remedy is the capability row's own."""
+    from core.tool_capabilities import row_field
+    return ("MCP is off on this instance (MCP_ENABLED is off or no server is "
+            "configured); " + row_field("mcp", "gate").disclosure("mcp")[2])
+
+
 @dataclass
 class UserServersLoadResult:
     """Result of loading user MCP servers (FIX #8)."""
@@ -389,6 +396,14 @@ class MCPTool(BaseTool):
 
         return unloaded_count
 
+    def is_money_server(self, server_name: str) -> bool:
+        """True when the owner marked this GLOBAL server ``"money": true`` (085 A5).
+
+        Only the operator's config can set it; a tenant's own servers never do."""
+        servers = getattr(getattr(self, "mcp_config", None), "servers", None) or {}
+        cfg = servers.get(server_name) if isinstance(servers, dict) else None
+        return bool(getattr(cfg, "money", False) is True)
+
     def get_global_server_names(self) -> List[str]:
         """Get list of global (platform) MCP server names.
 
@@ -418,7 +433,18 @@ class MCPTool(BaseTool):
         if not self._enabled:
             return MCPExecutionResult(
                 success=False,
-                error="MCP service is disabled"
+                error=_mcp_off_text()
+            )
+
+        # 085 A5: a money server's tools run only through their direct action
+        # (`{server}_{tool}`), the name the money gates classify. This generic
+        # wrapper would carry them past those gates under one non-money name.
+        if self.is_money_server(params.server_name):
+            return MCPExecutionResult(
+                success=False,
+                error=(f"refused: '{params.server_name}' is a money server — call its "
+                       f"direct action '{params.server_name}_{params.tool_name}' so the "
+                       "owner's money gates apply"),
             )
 
         return await self._execute_validated(
@@ -767,7 +793,7 @@ class MCPTool(BaseTool):
         await self.ensure_initialized()
         
         if not self._enabled:
-            raise ToolError("MCP service is disabled")
+            raise ToolError(_mcp_off_text())
         
         try:
             # Apply rate limiting
@@ -978,7 +1004,7 @@ class MCPTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ToolError("MCP service is disabled")
+            raise ToolError(_mcp_off_text())
 
         try:
             server_info = await self.server_manager.get_server_info(params.server_name)
@@ -1002,7 +1028,7 @@ class MCPTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            return {"success": False, "error": "MCP service is disabled"}
+            return {"success": False, "error": _mcp_off_text()}
 
         try:
             success = await self.server_manager.connect_server(params.server_name)
@@ -1026,7 +1052,7 @@ class MCPTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            return {"success": False, "error": "MCP service is disabled"}
+            return {"success": False, "error": _mcp_off_text()}
 
         try:
             success = await self.server_manager.disconnect_server(params.server_name)
@@ -1050,7 +1076,7 @@ class MCPTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            return {"success": False, "error": "MCP service is disabled"}
+            return {"success": False, "error": _mcp_off_text()}
 
         try:
             # Disconnect and reconnect
@@ -1077,7 +1103,7 @@ class MCPTool(BaseTool):
         await self.ensure_initialized()
 
         if not self._enabled:
-            raise ToolError("MCP service is disabled")
+            raise ToolError(_mcp_off_text())
 
         try:
             server_info = await self.server_manager.get_server_info(params.server_name)
@@ -1173,7 +1199,7 @@ class MCPTool(BaseTool):
         # touch servers in its own allowlist (mutating a subscription reaches the
         # server's live connection).
         if not self._enabled:
-            raise ToolError("MCP service is disabled")
+            raise ToolError(_mcp_off_text())
         if self.requested_servers and params.server_name not in self.requested_servers:
             raise ToolError(
                 f"Server '{params.server_name}' is not enabled for this session. "
@@ -1203,7 +1229,7 @@ class MCPTool(BaseTool):
         # C5: same tenant guard as subscribe_resource — a session must not be able to
         # tear down a subscription on a server outside its allowlist.
         if not self._enabled:
-            raise ToolError("MCP service is disabled")
+            raise ToolError(_mcp_off_text())
         if self.requested_servers and params.server_name not in self.requested_servers:
             raise ToolError(
                 f"Server '{params.server_name}' is not enabled for this session. "
@@ -1318,6 +1344,16 @@ class MCPTool(BaseTool):
                 f"Expected format: {{server}}_{{toolname}}. "
                 f"Available servers: {list(all_tools.keys())}"
             )
+
+        # 085 A5: the prefix parse above can route a flat name another server
+        # registered (`a_b` + `c` vs `a` + `b_c`) to a money server. A money
+        # server's tool runs only under a name the money gates classify.
+        if self.is_money_server(server_name):
+            from core.money.classify import money_action
+            if not money_action(action_name):
+                raise ToolError(
+                    f"refused: '{action_name}' resolves to the money server "
+                    f"'{server_name}' but is not one of its gated actions")
 
         self.logger.info(
             f"🔧 Executing MCP tool: {tool_name} on server {server_name}"

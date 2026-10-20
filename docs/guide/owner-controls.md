@@ -1,7 +1,7 @@
 # Owner controls: stop, pause, resume
 
-POLYROB runs autonomous work on its own — goal dispatch, the planner, stream
-seeding, cron ticks, self-wake re-entries, social posting. This page is how you
+POLYROB runs autonomous work on its own — goal dispatch, cron ticks, self-wake
+re-entries, social posting. This page is how you
 stop it, and how you know it stopped.
 
 ## Stop everything
@@ -26,7 +26,7 @@ path needs a working model; `/pause` does not. On the box:
 polyrob autonomy pause
 ```
 
-What stops within seconds: goal dispatch and the planner, stream seeding, cron
+What stops within seconds: goal dispatch, cron
 ticks (the daily digest too), self-wake re-entries, correspondent replies
 re-running a session, the curator and background review, the settlement watcher,
 lifecycle pings and escalations. In-flight work is cancelled: a running goal
@@ -40,16 +40,16 @@ alerts.
 
 ```
 /pause trading                # no NEW positions; exits still run
-/pause background             # no stream reseeds, no planner, no cron ticks
+/pause background             # no cron ticks
 /pause deploying for 6h       # auto-resumes after six hours
 /pause for 2d                 # everything, for two days
 ```
 
 Five plain words cover most of it: `everything` (= `all`), `trading`,
-`background` (streams + planner + cron), `messages` (lifecycle pings and
+`background` (cron), `messages` (lifecycle pings and
 escalations) and `deploying` (the durable app service — no new deploys, and live
 app containers are stopped until resume). A raw scope still works for anything a
-plain word does not cover: `all`, `trading`, `streams`, `planner`, `cron`,
+plain word does not cover: `all`, `trading`, `cron`,
 `social`, `oversight`, `pings`, `apps`. An unrecognized word refuses — it never
 silently widens to "everything". Durations are `90m`, `6h`, `2d`. The CLI form
 is `polyrob autonomy pause trading --for 6h`.
@@ -63,8 +63,6 @@ result. Nothing acts on the sentence before the agent reads it.
 ```bash
 polyrob owner pause-entries    # refuse NEW treasury positions; exits still run
 polyrob owner resume-entries
-polyrob owner pause-streams    # refuse NEW stream-manifest reseeds
-polyrob owner resume-streams
 polyrob owner halt             # alias of `polyrob autonomy pause`
 polyrob owner resume           # alias of `polyrob autonomy resume`
 ```
@@ -78,7 +76,7 @@ polyrob autonomy resume
 ```
 
 The reply is the verified state: `▶ Autonomy RESUMED.` or
-`▶ Resumed; still paused: streams.` A sentence such as "resume the buyback" is
+`▶ Resumed; still paused: cron.` A sentence such as "resume the buyback" is
 chat for the agent, never a switch.
 
 ## Pause versus off
@@ -105,8 +103,8 @@ One file: `<data>/AUTONOMY_PAUSE.json`, written atomically to every data base
 the runtime probes. Every process — the Telegram daemon, the email daemon, the
 console, the timers, the on-box scripts — reads it. A restart starts the loops
 armed and idle, and a resume needs no restart. An unreadable record is treated
-as a pause of everything (fail-closed). The older `touch <data>/AUTONOMY_HALT`,
-`TREASURY_ENTRY_PAUSE` and `STREAM_SEEDING_PAUSE` files still work as facets of
+as a pause of everything (fail-closed). The older `touch <data>/AUTONOMY_HALT` and
+`TREASURY_ENTRY_PAUSE` files still work as facets of
 it, and `/resume` clears them. A pause set in the environment
 (`AUTONOMY_HALT=true`) needs an env edit and a restart, and the reply tells you
 so.
@@ -201,9 +199,9 @@ The **daily digest** is the roll-up for everything above. Turning it on
 job has to run it:
 
 ```bash
-polyrob cron digest "every day 08:00"    # schedule it (again = move it)
-polyrob cron digest                      # show what is scheduled
-polyrob cron digest --off                # cancel it
+polyrob job digest "every day 08:00"     # schedule it (again = move it)
+polyrob job digest                       # show what is scheduled
+polyrob job digest --off                 # cancel it
 ```
 
 It costs nothing to run: the message is composed from the ledger, the event log
@@ -239,10 +237,13 @@ markets, positions and health factors to read, and no ability to spend.
 
 The agent quarantines what it learns. A new skill, an identity note, an owner
 rule, a queued spend approval, a new contact — none of it takes effect until you
-decide. One queue holds all of them.
+decide. One list holds everything that waits on you: `/inbox` reads these
+approvals, open asks, decisions waiting for a tap, and signer approvals. `/pending`, `/asks` and `/cards` show parts of the same
+list.
 
 ```
-/pending                   # everything waiting, each item with its own tap
+/inbox                     # everything waiting on you, blocking first
+/pending                   # the approvals in it, each item with its own tap
 /approve                   # one item waiting? decide it. several? pick from the list
 /approve_all               # the whole queue at once
 /reject_all
@@ -289,29 +290,6 @@ When the agent asks a question with lettered options (`A) … or B) …`), the
 Telegram notice carries one answer button per option. A button sends
 `/fulfill_<id>_<letter>`; that is the same as `/fulfill <id>` with the option's
 own text as your answer. A button only answers the ask the notice is about.
-
-### Making the agent's work your own
-
-A cron job or goal records who wrote it. Work you create from a seat (`/cron
-add`, `polyrob cron schedule`, the console) is **owner-authored**; work the agent
-schedules for itself is **agent-authored**. So is work created in your own turn
-after the agent had read third-party content in that turn — a page, a post, a
-mail, a tool result — and the agent tells you so when it creates it.
-Agent-authored work runs under agent limits: the agent's tool ceiling, and no X
-post, room moderation, money rig or write job without your approval on each run.
-
-```
-/adopt                     # the agent-authored jobs and goals
-/adopt <id>                # one of them in full, then an action card to confirm
-```
-
-`/adopt <id>` shows the whole task, the schedule, rig, tools, target, delivery and
-every payload key, and each pinned skill with a content digest. Confirm on the
-card makes it yours; a row that changed after you saw it is refused. Adoption
-drops money tools from the row (grant those yourself) and never trusts the row's
-buy target. If a pinned skill changes later, the row runs as the agent's again
-until you adopt it again. `/adopt` works on Telegram, in the REPL and in the
-console, never in a group, and the agent can only propose it.
 
 ## Apps
 
@@ -380,7 +358,10 @@ send or swap from pickers (chain, a token I trust, a recent recipient) and answe
 the same card. The agent uses cards too: `propose_action` puts a
 money verb to you whose only button gets the real quote (the agent never writes a
 confirm), and `present_choice` asks you to pick one of a few options and waits for
-the tap. `/cards` lists what is open.
+the tap. `/cards` lists what is open. When you have made every decision Rob
+raised in a chat, Rob continues by itself: it gets each outcome (sent, failed,
+dismissed, expired) and reports back, without you telling it. It still cannot
+spend on that turn — a next payment comes to you as a new decision.
 
 A token-identity question ("which PNL is real?") arrives in `/pending` with a
 *trust it* and a *not trusted* tap per contract — see

@@ -10,7 +10,7 @@ from agents.task.agent.core.user_ingress import UserIngressMixin
 def test_agent_composes_user_ingress_mixin():
     from agents.task.agent.service import Agent
     assert issubclass(Agent, UserIngressMixin)
-    for m in ("receive_user_message", "_drain_user_messages", "request_approval",
+    for m in ("receive_user_message", "_drain_user_messages",
               "record_approval_decision", "_check_todo_completion", "_emit_todo_status"):
         assert getattr(Agent, m).__qualname__.startswith("UserIngressMixin")
 
@@ -37,10 +37,8 @@ async def test_receive_user_message_queues_via_hitl():
     assert queued == [("hello", "comment", {})]
 
 
-@pytest.mark.asyncio
-async def test_request_approval_auto_approves():
-    h = _Host()
-    assert await h.request_approval("because", "checkpoint") is True
+def test_the_deprecated_request_approval_shim_is_gone():
+    assert not hasattr(UserIngressMixin, "request_approval")
 
 
 @pytest.mark.asyncio

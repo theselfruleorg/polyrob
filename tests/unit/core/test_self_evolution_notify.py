@@ -35,7 +35,7 @@ def test_revised_draft_needs_notification(tmp_path):
     assert se.pending_needs_notification(first, state) is False, \
         "an unchanged draft must NOT re-notify (019 anti-spam intent preserved)"
 
-    _pending(tmp_path, "NO-DEN Rule: STOP ALL posting to the Telegram public den.")
+    _pending(tmp_path, "NO-DEN Rule: STOP ALL posting to the Telegram lobby.")
     revised = _items(tmp_path)
     assert [i["id"] for i in revised] == [i["id"] for i in first], \
         "single-slot kind: the kind:id set is unchanged by a revision"
@@ -75,7 +75,7 @@ def test_legacy_fingerprint_file_is_retired_not_trusted(tmp_path):
     root = se._tier_root("alice", tmp_path, DEFAULT_INSTANCE_ID)
     root.mkdir(parents=True, exist_ok=True)
     (root / se._LEGACY_FINGERPRINT_FILE).write_text("32db30bfd9b31eb4")
-    _pending(tmp_path, "NO-DEN Rule: STOP ALL posting to the Telegram public den.")
+    _pending(tmp_path, "NO-DEN Rule: STOP ALL posting to the Telegram lobby.")
     items = _items(tmp_path)
     state = se.load_notified_state("alice", home_dir=tmp_path,
                                    instance_id=DEFAULT_INSTANCE_ID)
@@ -87,53 +87,6 @@ def test_suppressed_outcome_is_not_delivery():
     assert "capped" not in se._NOTIFIED_OUTCOMES
     assert "quiet_held" not in se._NOTIFIED_OUTCOMES
     assert "sent" in se._NOTIFIED_OUTCOMES
-
-
-# --- P0-5: a pending rule that contradicts an active one -------------------
-
-def test_detect_conflicts_finds_the_den_case():
-    active = ("# Rob — Publishing Policy\n"
-              "- X posting: quality over volume. Telegram den = public-facing content only.\n")
-    pending = ("## NO-DEN Rule (owner directive) — HIGHEST PRIORITY\n"
-               "- STOP ALL posting to the Telegram public den, effective immediately.\n")
-    conflicts = se.detect_conflicts(pending, active)
-    assert conflicts, "the den prohibition contradicts the active licence"
-    assert any("den" in c.lower() for c in conflicts)
-
-
-def test_detect_conflicts_quiet_when_no_overlap():
-    active = "- Daily digest: what I did, earned, spent.\n"
-    pending = "- STOP ALL posting to the Telegram public den.\n"
-    assert se.detect_conflicts(pending, active) == []
-
-
-def test_detect_conflicts_ignores_agreeing_prohibitions():
-    active = "- Never post to the Telegram public den.\n"
-    pending = "- STOP ALL posting to the Telegram public den.\n"
-    assert se.detect_conflicts(pending, active) == [], \
-        "two prohibitions about the same thing agree; that is not a conflict"
-
-
-def test_detect_conflicts_handles_empty():
-    assert se.detect_conflicts("", "anything") == []
-    assert se.detect_conflicts("STOP posting to the den", "") == []
-
-
-def test_list_pending_surfaces_conflicts(tmp_path):
-    SelfContextWriter(tmp_path, instance_id=DEFAULT_INSTANCE_ID).propose(
-        "Telegram den = public-facing content only. Promote in the public den.",
-        user_id="alice", created_by="owner", pending=False)
-    _pending(tmp_path, "NO-DEN Rule: STOP ALL posting to the Telegram public den.")
-    item = next(i for i in _items(tmp_path) if i["kind"] == "self_context")
-    assert item.get("conflicts"), "list_pending must expose the contradiction"
-
-
-def test_notification_names_the_conflict(tmp_path):
-    items = [{"kind": "self_context", "id": "rob", "preview": "NO-DEN Rule …",
-              "chars": 40, "path": "/x",
-              "conflicts": ["active doc says: Telegram den = public-facing content only"]}]
-    msg = se.build_pending_notification(items)
-    assert "conflict" in msg.lower()
 
 
 # --- P0-2: the approval prompt is not lifecycle chatter --------------------

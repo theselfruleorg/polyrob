@@ -35,12 +35,15 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 from core.security.host_execution import wallet_custody_enabled
+from core.tool_gates import remedy_text
 
 PROBE_TTL_SEC = 60.0
 PROBE_TIMEOUT_SEC = 2.0
 
-INSTALL_REMEDY = "ask the owner to run `polyrob browser install`"
-SERVICE_REMEDY = "ask the owner to check `polyrob-browser.service` (`polyrob browser status`)"
+# The remedy names the OWNER's action, never a command (the system prompt bans
+# polyrob command lines; the user guide skill holds them). Text: core.tool_gates.
+INSTALL_REMEDY = remedy_text("browser_install")
+SERVICE_REMEDY = remedy_text("browser_service")
 
 
 @dataclass(frozen=True)

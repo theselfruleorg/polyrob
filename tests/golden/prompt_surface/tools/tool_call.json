@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Call an action that is NOT in your tool list because it was loaded after this session started (load_tool, an MCP connect). Give the exact action name and its parameters as `arguments`; run tool_describe(<tool id>) first for the shape. The call runs through the same permission, approval and money gates a direct call runs through.",
+    "name": "tool_call",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "additionalProperties": true,
+          "description": "The target action's own parameters as a JSON object. Run tool_describe first if you are unsure of the shape.",
+          "properties": {},
+          "type": "object"
+        },
+        "name": {
+          "description": "Exact action name to call, as shown by tool_describe / tool_search (e.g. 'code_execution_run_code')",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -31,6 +31,17 @@ QTY_SOURCE_WORDS = {
     "": "size source not recorded (row written before 071)",
 }
 
+#: 2026-10-14 review C-7: a position worth less than this is DUST. An exit run
+#: spent 1.14M tokens trying to sell $0.005 (gas costs more) and messaged the
+#: owner about it; the exits skill skips dust and never escalates it.
+DUST_USD = 1.0
+
+
+def is_dust(value_usd: Optional[float]) -> bool:
+    """A KNOWN value under :data:`DUST_USD`. An unknown value is never dust."""
+    return value_usd is not None and value_usd < DUST_USD
+
+
 STATUS_WORDS = {"open": "open", "quarantined": "QUARANTINED look-alike",
                 "written_off": "WRITTEN OFF by the owner"}
 
@@ -179,6 +190,9 @@ def render(rows: List[PositionFigures], closed: List[dict], *,
                      else f"price {_usd(r.price_usd)} per token (confidence "
                           f"{r.price_confidence or 'unknown'})")
             out.append(f"    {basis} · {price} · value {_usd(r.value_usd)}")
+            if is_dust(r.value_usd):
+                out.append(f"    DUST: worth under {_usd(DUST_USD)} — below the exit floor. "
+                           "Do not sell it (gas costs more) and do not report it to the owner.")
             if r.unrealized_usd is not None:
                 unreal = f"unrealized {_signed_usd(r.unrealized_usd)} ({_pct(r.unrealized_pct)})"
             elif r.basis_usd is None:
@@ -210,6 +224,10 @@ def render(rows: List[PositionFigures], closed: List[dict], *,
         out += ["", f"total value {_usd(total)} over {len(priced)} priced position(s)"
                 + (f"; {len(rows) - len(priced)} unpriced, NOT included"
                    if len(priced) < len(rows) else "")]
+        dust = [r for r in rows if is_dust(r.value_usd)]
+        if dust:
+            out.append(f"{len(dust)} DUST position(s) under {_usd(DUST_USD)}: "
+                       + ", ".join(r.symbol for r in dust) + " — skip them on an exit check")
         if known_basis:
             out.append(f"total unrealized {_signed_usd(sum(r.unrealized_usd for r in known_basis))}"
                        f" over {len(known_basis)} position(s) with a known basis and price"
@@ -224,102 +242,14 @@ def render(rows: List[PositionFigures], closed: List[dict], *,
     return "\n".join(out)
 
 
-def _ledger_chain(address: str, chain: Optional[str]) -> Tuple[Optional[str], bool]:
-    """``(chain to price on, in scope)`` for a ledger row. The ledger has NO
-    chain column: a base58 address can only be Solana; an EVM address is priced
-    only on the chain the caller asked for (and labelled as assumed)."""
-    evm = address.startswith(("0x", "0X"))
-    if chain:
-        return (chain, (chain != "solana") == evm)
-    return (None if evm else "solana", True)
-
-
-def ledger_only(ledger_read: Callable[[], Tuple[Optional[list], Optional[str]]],
-                store_entries, price_fn: Callable[[str, str], object], *,
-                chain: Optional[str]) -> Tuple[List[dict], str, bool]:
-    """Holdings the position LEDGER lists open that have NO rail-store row on
-    ANY chain (bought before the store existed, e.g. JUGGERNAUT/HOOKR).
-
-    Returns ``(rows, state, readable)``. READ-ONLY: nothing is written to either
-    store and no high-water mark is observed (never a backfill). Basis is
-    ALWAYS unknown: the ledger's "Entry USD" cell is model-typed and unverified,
-    so it never becomes a cost basis or a P&L here. ``ledger_read()`` returns
-    ``(rows, None)``, ``(None, None)`` for no ledger, or ``(_, error)``."""
-    from core.position_ledger import _norm
-    try:
-        rows, err = ledger_read()
-    except Exception as exc:  # unreadable is not empty
-        rows, err = None, f"{type(exc).__name__}: {exc}"
-    if err:
-        return [], f"could not read ({err})", False
-    if rows is None:
-        return [], "no position ledger found — holdings outside the rail book are not checked", True
-    held = {_norm(e.address) for e in store_entries or []}
-    out: List[dict] = []
-    for r in rows:
-        if not r.is_open or _norm(r.address) in held:
-            continue
-        pchain, in_scope = _ledger_chain(r.address, chain)
-        if not in_scope:
-            continue
-        info = None
-        if pchain:
-            try:
-                info = price_fn(pchain, r.address)
-            except Exception:
-                info = None
-        price = _finite(getattr(info, "price_usd", None)) if info is not None else None
-        conf = getattr(info, "confidence", None) if info is not None else None
-        if price is not None and (price <= 0 or conf == "disputed"):
-            price = None
-        qty = _finite(r.qty) if r.qty is not None else None
-        out.append(dict(
-            source="ledger_only", symbol=str(r.symbol or "?"), address=r.address,
-            chain=pchain, chain_assumed=bool(pchain and r.address.startswith(("0x", "0X"))),
-            qty=qty, basis_usd=None, unrealized_usd=None, price_usd=price,
-            price_confidence=conf, value_usd=(qty * price if qty is not None
-                                              and price is not None else None)))
-    return out, f"read — {len(out)} open holding(s) with no rail-book row", True
-
-
-def _render_ledger_only(rows: List[dict], state: str, readable: bool) -> List[str]:
-    if not readable:
-        return ["", f"⚠ position ledger: {state}. Holdings bought outside the rail "
-                    "book are UNKNOWN — this list may be incomplete; do NOT read it "
-                    "as the whole book."]
-    if not rows:
-        return [] if state.startswith("read") else ["", f"position ledger: {state}."]
-    out = ["", "LEDGER-ONLY — open in the position ledger, NO rail-book row "
-               "(bought before the rail book existed). Basis unknown: no P&L, no "
-               "high-water. Not in the totals above."]
-    for r in rows:
-        if r["chain"] is None:
-            where = "chain not recorded in the ledger — pass chain=… to price it"
-        elif r["chain_assumed"]:
-            where = f"on {r['chain']} as asked (the ledger records no chain)"
-        else:
-            where = f"on {r['chain']}"
-        qty = "size unreadable in the ledger" if r["qty"] is None else \
-            f"qty {_qty(r['qty'])} (ledger figure, not measured)"
-        price = ("price unknown" if r["price_usd"] is None else
-                 f"price {_usd(r['price_usd'])} per token (confidence "
-                 f"{r['price_confidence'] or 'unknown'})")
-        out.append(f"  {r['symbol']} {r['address']} — {where}")
-        out.append(f"    {qty} · basis unknown · {price} · value {_usd(r['value_usd'])}")
-        out.append("    unrealized unknown (basis unknown)")
-    return out
-
-
 def build(entries, realized, price_fn: Callable[[str, str], object], *,
           chain: Optional[str],
           observe_fn: Optional[Callable[[object, float], Optional[float]]] = None,
-          ledger: Optional[Tuple[List[dict], str, bool]] = None,
           ) -> Tuple[str, dict]:
     """Price every position, do the sums, render. Returns ``(text, metadata)``.
 
     ``observe_fn(entry, price)`` raises the stored high-water mark and returns
-    it; it is only called with a HIGH-confidence price. ``ledger`` is the
-    ``ledger_only(...)`` result, rendered as its own section."""
+    it; it is only called with a HIGH-confidence price."""
     rmap = {(r.chain, r.address): r for r in realized or []}
     rows: List[PositionFigures] = []
     for e in entries or []:
@@ -345,12 +275,6 @@ def build(entries, realized, price_fn: Callable[[str, str], object], *,
                    sold_qty=r.sold_qty)
               for r in realized or [] if (r.chain, r.address) not in open_keys]
     text = render(rows, closed, chain=chain)
-    meta = {"positions": [asdict(r) for r in rows], "closed": closed,
-            "cost_method": "average_cost"}
-    if ledger is not None:
-        l_rows, l_state, l_ok = ledger
-        lines = _render_ledger_only(l_rows, l_state, l_ok)
-        if lines:
-            text += "\n" + "\n".join(lines)
-        meta.update(ledger_only=l_rows, ledger_state=l_state, ledger_readable=l_ok)
+    meta = {"positions": [{**asdict(r), "dust": is_dust(r.value_usd)} for r in rows],
+            "closed": closed, "cost_method": "average_cost", "dust_usd": DUST_USD}
     return text, meta

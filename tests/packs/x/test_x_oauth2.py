@@ -27,7 +27,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.delenv("TWITTER_OAUTH2_REFRESH_TOKEN", raising=False)
     monkeypatch.setenv("TWITTER_OAUTH2_CLIENT_ID", "cid123")
     monkeypatch.delenv("TWITTER_OAUTH2_CLIENT_SECRET", raising=False)
-    monkeypatch.setattr(xo, "_instance_key", lambda: "dangerob")
+    monkeypatch.setattr(xo, "_instance_key", lambda: "exampleagent")
     return xo.XOAuth2Store(tmp_path / "x.json")
 
 
@@ -365,7 +365,7 @@ _CHILD = r'''
 import os, sys, time, json
 import httpx
 from polyrob_x import x_oauth2 as xo
-xo._instance_key = lambda: "dangerob"
+xo._instance_key = lambda: "exampleagent"
 counter = sys.argv[2]
 
 def handler(request):

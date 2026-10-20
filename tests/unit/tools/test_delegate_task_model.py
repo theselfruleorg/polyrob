@@ -84,10 +84,6 @@ def _delegate_fn(c: Controller):
     return c.registry.registry.actions["delegate_task"].function
 
 
-def _subtask_fn(c: Controller):
-    return c.registry.registry.actions["subtask"].function
-
-
 def _ctx(role="orchestrator", is_sub=False):
     return ActionExecutionContext(agent_id="main", is_sub_agent=is_sub, role=role)
 
@@ -361,20 +357,3 @@ async def test_goal_provider_with_model_still_ok(monkeypatch):
     assert parent.calls[0]["cfg"] == {"model": "glm-4.6", "provider": "openrouter"}
 
 
-# --- legacy shims: must not crash now that SubtaskAction carries model/provider -
-
-@pytest.mark.asyncio
-async def test_legacy_subtask_with_model_field_does_not_crash(monkeypatch):
-    """v1: the deprecated singular `subtask` verb doesn't need to honor `model` —
-    it just must not crash now that SubtaskAction has the field."""
-    parent = _FakeParentAgent()
-    c = _controller(monkeypatch, parent_agent=parent)
-    c._register_subtask_action()
-
-    res = await _subtask_fn(c)(
-        SubtaskAction(task="a sufficiently long delegated subtask description",
-                      model="claude-haiku-4-5"),
-        execution_context=_ctx(),
-    )
-    assert res.error is None
-    assert c._fake_mgr.run_subtask_calls

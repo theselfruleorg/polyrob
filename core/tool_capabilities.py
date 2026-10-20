@@ -8,12 +8,13 @@ ORTHOGONAL — a single "dangerous" bit cannot express the live polarities
 stay allowed while correspondent-tainted but their trade VERBS gate; x402_pay is
 fully blocked):
 
-- ``money``            — can move money (spend or receivables). Safety invariant.
+- ``money``            — can move money (spend or receivables). Safety invariant;
+                          also the MONEY effect ceiling.
 - ``high_impact``      — the WHOLE tool_id is denied while a session is
                           correspondent-tainted (correspondent_gate Layer 2).
 - ``delegate_blocked`` — a delegated leaf child never gets this tool_id
                           (default set; ``DELEGATE_BLOCKED_TOOLS`` env still overrides).
-- ``exec``             — executes code/commands (docs/telemetry dimension).
+- ``exec``             — executes code/commands; also the CODE effect ceiling.
 - ``shared_identity``  — acts AS the instance (its X account, mailbox, GitHub/HF
                           credentials, public URLs, MCP servers, durable autonomous
                           work). Loaded for the OWNER tenant only
@@ -21,14 +22,12 @@ fully blocked):
                           non-owner tenant (A2A/API caller) never gets it.
 - ``writes_*``         — the EXTERNAL EFFECT ceiling (033): which class of outward
                           write the tool is CAPABLE of (social / comms / public /
-                          money / code / self / network). A telemetry + pause
+                          self / network; ``money`` and ``exec`` are the money
+                          and code ceilings). A telemetry + pause
                           dimension, not a taint gate. ``core/effects.py`` refines
                           it per action; an unlisted verb on a write-capable tool
                           is assumed to WRITE. ``web_fetch`` and ``perplexity``
                           carry none on purpose: both are read egress.
-- ``readable_while_tainted`` — documents the DELIBERATE absence of ``high_impact``
-                          on a money venue whose read verbs stay allowed (the trade
-                          verbs gate by NAME in correspondent_gate's Tier-B sets).
 
 Per-tool POLICY FIELDS (067 P1) ride on the same rows as attributes of
 :class:`ToolRow` (a frozenset subclass, so the capability set is unchanged):
@@ -137,7 +136,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="KB_ENABLED",
                       tier="disabled",
                       label="KB_ENABLED",
-                      remedy="owner sets POLYROB_OVERRIDES=KB_ENABLED=true")),
+                      remedy="set_flag")),
     "alchemy": ToolRow(cli="incompatible"),            # read-only chain data
     "collabland": ToolRow(cli="incompatible"),
     # Read-only token sight (proposal 023 T0+T1). No signer, no broadcast, so
@@ -152,7 +151,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         untrusted_output=True, cli="static",
         gate=ToolGate(tier="loadable",
                       label="session tool_ids",
-                      remedy="request tool_ids=['browser']")),
+                      remedy="load_tool")),
     "web_fetch": ToolRow({"high_impact"},  # outbound fetch (SSRF / exfil)
         untrusted_output=True, cli="static"),
     # send_email — outbound comms
@@ -160,16 +159,16 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         untrusted_output=True, cli="static",
         gate=ToolGate(tier="disabled",
                       label="SMTP/IMAP credentials + outbound policy",
-                      remedy="owner configures email creds; sends follow outbound.policy")),
+                      remedy="email_credentials")),
     # twitter / x_browser: rows in the x pack's pack.toml (067 P3b).
     # 042: token launchpads. MONEY (it signs a spend), high_impact, and
     # delegate_blocked -- a delegated leaf that can launch a token and seed it
     # with the treasury has escaped every bound its parent was operating under.
-    "launchpad": frozenset({"money", "high_impact", "delegate_blocked", "writes_money"}),
+    "launchpad": frozenset({"money", "high_impact", "delegate_blocked"}),
     # 042: the injected dapp wallet. MONEY because `dapp_connect` authorizes
     # spending -- the transaction itself happens inside a browser callback the
     # Controller never sees, so the CONNECT is the gated act.
-    "dapp_browser": frozenset({"money", "high_impact", "delegate_blocked", "writes_money"}),
+    "dapp_browser": frozenset({"money", "high_impact", "delegate_blocked"}),
     # anysite / perplexity: rows in the discovery pack's pack.toml (067 P3a).
     # -- autonomous work ------------------------------------------------------
     "goal": ToolRow({"high_impact", "shared_identity"},  # durable autonomous work (leaf MAY read)
@@ -177,39 +176,37 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="GOALS_ENABLED",
                       tier="disabled",
                       label="GOALS_ENABLED",
-                      remedy="owner sets POLYROB_OVERRIDES=GOALS_ENABLED=true")),
+                      remedy="set_flag")),
     "cronjob": ToolRow({"high_impact", "delegate_blocked", "shared_identity"},
         cli="optional", cli_registrar="tools.cronjob_tools:register_cronjob_tool",
         gate=ToolGate(flag="CRON_ENABLED",
                       tier="disabled",
                       label="CRON_ENABLED (AUTONOMY_POSTURE>=full)",
-                      remedy=("owner raises AUTONOMY_POSTURE or sets "
-                              "POLYROB_OVERRIDES=CRON_ENABLED=true"))),
+                      remedy="cron_posture")),
     # -- code / exec / self-modification --------------------------------------
-    "code_execution": ToolRow({"high_impact", "delegate_blocked", "exec", "writes_code"},
+    "code_execution": ToolRow({"high_impact", "delegate_blocked", "exec"},
         cli="optional", cli_registrar="tools.code_exec:register_code_exec_tool",
         gate=ToolGate(flag="CODE_EXEC_ENABLED",
                       tier="disabled",
                       label="CODE_EXEC_ENABLED / AGENT_COMPUTE_POSTURE>=1",
-                      remedy=("owner raises AGENT_COMPUTE_POSTURE "
-                              "(host axis; not part of AUTONOMY_MODE)"))),
-    "coding": ToolRow({"high_impact", "delegate_blocked", "exec", "writes_code"},
+                      remedy="compute_posture")),
+    "coding": ToolRow({"high_impact", "delegate_blocked", "exec"},
         cli="optional", cli_registrar="tools.coding:register_coding_tool",
         gate=ToolGate(flag="CODING_TOOLS_ENABLED",
                       tier="disabled",
                       label="CODING_TOOLS_ENABLED",
-                      remedy="owner sets POLYROB_OVERRIDES=CODING_TOOLS_ENABLED=true")),
-    "shell": ToolRow({"high_impact", "delegate_blocked", "exec", "writes_code"},
+                      remedy="set_flag")),
+    "shell": ToolRow({"high_impact", "delegate_blocked", "exec"},
         cli="optional", cli_registrar="tools.shell:register_shell_tools",
         gate=ToolGate(flag="SHELL_TOOLS_ENABLED",
                       tier="disabled",
                       label="AGENT_COMPUTE_POSTURE>=1",
-                      remedy="owner raises AGENT_COMPUTE_POSTURE")),
-    "process": ToolRow({"high_impact", "delegate_blocked", "exec", "writes_code"},
+                      remedy="compute_posture")),
+    "process": ToolRow({"high_impact", "delegate_blocked", "exec"},
         cli="optional", cli_registrar="tools.shell:register_shell_tools",
         gate=ToolGate(flag="SHELL_TOOLS_ENABLED")),
     "self_env": ToolRow({"high_impact", "delegate_blocked", "exec",
-                           "writes_code", "writes_self"},
+                           "writes_self"},
         cli="optional", cli_registrar="tools.self_env:register_self_env_tool",
         gate=ToolGate(flag="SELF_ENV_ENABLED")),
     "git": ToolRow({"high_impact", "delegate_blocked", "writes_public"},
@@ -224,8 +221,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         gate=ToolGate(flag="MCP_ENABLED",
                       tier="disabled",
                       label="MCP_ENABLED + config/mcp_config.json",
-                      remedy=("owner sets POLYROB_OVERRIDES=MCP_ENABLED=true and "
-                              "configures servers"))),
+                      remedy="mcp_servers")),
     "hf_deploy": ToolRow({"high_impact", "delegate_blocked", "shared_identity", "writes_public"},
         cli="optional", cli_registrar="tools.hf_deploy:register_hf_deploy_tool",
         gate=ToolGate(flag="HF_DEPLOY_ENABLED")),
@@ -247,30 +243,27 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # denied while correspondent-tainted and never a delegated leaf's to use.
     "worker_manage": frozenset({"high_impact", "delegate_blocked"}),
     # -- money ---------------------------------------------------------------
-    "x402_pay": ToolRow({"money", "high_impact", "delegate_blocked",
-                           "writes_money", "writes_network"},
+    "x402_pay": ToolRow({"money", "high_impact", "delegate_blocked", "writes_network"},
         untrusted_output=True, cli="optional", cli_registrar="tools.x402:register_x402_tool",
         gate=ToolGate(tier="reserved",
-                      label="money-SPEND",
-                      remedy=("owner-only, explicitly enabled, never autonomous; "
-                              "raise an ask if truly needed"))),
-    "x402_invoice": ToolRow({"money", "high_impact", "delegate_blocked", "writes_money"},
+                      label="money",
+                      remedy="money")),
+    "x402_invoice": ToolRow({"money", "high_impact", "delegate_blocked"},
         cli="optional", cli_registrar="tools.x402:register_x402_invoice_tool",
         gate=ToolGate(flag="X402_INVOICE_ENABLED",
                       tier="disabled",
                       label="X402_INVOICE_ENABLED",
-                      remedy=("owner sets POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true "
-                              "(auto-ON in autonomous mode)"))),
+                      remedy="x402_invoice")),
     # On-chain money verbs (proposal 023 T3). Every call routes through
     # core/wallet/tx_guard.py; `money` also makes it explicit-grant-only, so the
     # agent can never self-serve it via load_tool.
-    "defi_trade": ToolRow({"money", "high_impact", "delegate_blocked", "writes_money"},
+    "defi_trade": ToolRow({"money", "high_impact", "delegate_blocked"},
         gate=ToolGate(flag="DEFI_TRADE_ENABLED")),
     # 050/069: agent NFTs (an ERC-6551 token-bound account of an NFT the treasury owns). Its package
     # verbs live in the optional agent-NFT package (AGENT_NFT_PACKAGE_MODULES) and register via register_optional_tool, which
     # refuses an unclassified tool — so the row lands in core BEFORE the package.
     # Every write goes through tx_guard with `via_account`.
-    "agent_nft": frozenset({"money", "high_impact", "delegate_blocked", "writes_money"}),
+    "agent_nft": frozenset({"money", "high_impact", "delegate_blocked"}),
     # Trading venues (hyperliquid, polymarket and their *_data read tools): the
     # markets pack classifies them in its pack.toml (067 P4).
 }
@@ -363,8 +356,6 @@ def ids_where(name: str, value=True) -> FrozenSet[str]:
 #       report does not);
 #   both: knowledge, goal, cronjob, code_execution, coding, shell, x_browser, mcp,
 #       x402_invoice.
-# Known wording debt, kept verbatim: the reserved remedies say "never autonomous",
-# which contradicts the x402 micro lane and DEFI_AGENT_AUTONOMY.
 
 
 def gate_flag_map() -> Dict[str, str]:
@@ -379,7 +370,7 @@ def gate_disclosure_map() -> Dict[str, tuple]:
     """``tool_id -> (label, tier, remedy)`` for every disclosed gate
     (``agents.task.agent.core.tool_availability.GATED_TOOL_REGISTRY``)."""
     _note_view(lambda _t, row: getattr(row, "gate", None) is not None and bool(row.gate.tier))
-    return {t: row_field(t, "gate").disclosure() for t in TOOL_CAPABILITIES
+    return {t: row_field(t, "gate").disclosure(t) for t in TOOL_CAPABILITIES
             if row_field(t, "gate") is not None and row_field(t, "gate").tier}
 
 
@@ -387,12 +378,11 @@ def gate_disclosure_map() -> Dict[str, tuple]:
 #: effect class; the action name refines it there.
 EFFECT_CAPABILITIES: FrozenSet[str] = frozenset({
     "writes_social", "writes_comms", "writes_public",
-    "writes_money", "writes_code", "writes_self", "writes_network",
+    "money", "exec", "writes_self", "writes_network",
 })
 
 KNOWN_CAPABILITIES: FrozenSet[str] = frozenset({
-    "money", "high_impact", "delegate_blocked", "exec", "readable_while_tainted",
-    "shared_identity",
+    "money", "high_impact", "delegate_blocked", "exec", "shared_identity",
 }) | EFFECT_CAPABILITIES
 
 
@@ -532,8 +522,8 @@ def medium_risk_tool_ids() -> FrozenSet[str]:
 
 
 def lacks_effect_ceiling(tool_id: str) -> bool:
-    """033: a tool that can move money, execute code, or holds an external-write
-    catalog permission, yet carries no ``writes_*`` token. Such a tool would be
+    """033: a tool that holds an external-write catalog permission, yet carries
+    no effect token (``writes_*``, ``money``, ``exec``). Such a tool would be
     invisible to the effect recorder and the pause gate; the registration guard
     (``tools/descriptors.py::register_optional_tool``) refuses it."""
     tid = CATALOG_ALIASES.get(tool_id, tool_id)

@@ -49,20 +49,12 @@ class BaseTool(BaseComponent):
         self.logger.debug(f"- Container: {'Present' if container else 'None'}")
         
     def _ar(self, *, content: Optional[str] = None, error: Optional[str] = None,
-            metadata: Optional[Dict[str, Any]] = None,
-            error_kind: Optional[str] = None):
+            metadata: Optional[Dict[str, Any]] = None):
         """One ``ActionResult`` shape for every tool: an error result when
         *error* is given, else content (+ optional metadata). Six money/data
-        tools carried this four-liner each.
-
-        ``error_kind`` — set ONLY by the line that built *error*, from what it
-        knows (``core.security.refusal_taint.PRECONDITION`` for an unmet
-        precondition or a market error); never derived from the error text."""
+        tools carried this four-liner each."""
         from agents.task.loop_types.controller_types import ActionResult
         if error is not None:
-            if error_kind:
-                from core.security.refusal_taint import ERROR_KIND_KEY
-                return ActionResult(error=error, metadata={ERROR_KIND_KEY: str(error_kind)})
             return ActionResult(error=error)
         if metadata is not None:
             return ActionResult(extracted_content=content, metadata=metadata)
@@ -316,6 +308,12 @@ class BaseTool(BaseComponent):
     def enabled(self) -> bool:
         """Check if service is enabled."""
         return self._enabled
+
+    def _off_text(self) -> str:
+        """The refusal when this tool did not start (``enabled`` is False)."""
+        return (f"the {self.name} tool is off: it did not start on this instance (a "
+                "required service is missing or its setup failed); the owner runs "
+                "`polyrob doctor` to see why")
     
     @enabled.setter
     def enabled(self, value: bool):

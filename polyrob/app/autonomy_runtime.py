@@ -148,8 +148,12 @@ def _build_wake_drain_ticker(task_agent, data_dir):
         db_path = os.path.join(data_dir, "wakes.db") if data_dir else None
         return get_wake_queue(db_path)
 
+    from polyrob.app import card_wake
+    card_wake.register()
+
     async def _tick():
         try:
+            card_wake.maybe_sweep()
             owner = f"pid:{os.getpid()}"
             queue = _queue()
             for row in queue.claim_pending(owner):
@@ -177,7 +181,9 @@ def _build_wake_drain_ticker(task_agent, data_dir):
                     logger.debug("wake drain: deliver raised for %s (fail-open)",
                                  row.session_id, exc_info=True)
                     ok = False
-                if ok:
+                if ok is None:      # 084: busy with a live owner turn — wait, no attempt
+                    queue.release(row.id)
+                elif ok:
                     queue.mark_delivered(row.id)
                 else:
                     queue.fail(row.id)
@@ -339,13 +345,6 @@ def _build_goal_ticker(task_agent, data_dir):
     except Exception:
         logger.debug("cold-start goal sweep skipped", exc_info=True)
     return build_goal_ticker(task_agent, data_dir=data_dir)
-
-
-def _build_rails_ticker(data_dir):
-    """036: rails seed standing work from the board, in-process (pause-first,
-    idle-gated). Via the dispatcher module — no new core -> agents edge."""
-    from agents.task.goals.dispatcher import build_rails_ticker
-    return build_rails_ticker(data_dir=data_dir)
 
 
 def _requeue_on_boot(board) -> int:
@@ -1194,10 +1193,6 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("goals", _build_goal_ticker(task_agent, data_dir))
         except Exception as e:
             logger.warning("Could not start goal dispatcher: %s", e)
-        try:
-            handles._add("rails", _build_rails_ticker(data_dir))
-        except Exception as e:
-            logger.warning("Could not start the rails ticker: %s", e)
     # 056 WS5 (D1): let a due MONEY cron job pre-empt a running board goal. The
     # scheduler owns the trigger, the dispatcher owns the cancel+requeue; this is
     # the one place both are in hand. Fail-open: no hook = never yield.

@@ -130,7 +130,7 @@ async def test_wallet_holdings_reads_a_third_party_solana_wallet(no_wallet):
     assert "raw units" not in text
     assert "Token-2022: transferHook" in text
     assert "coverage: complete" in text
-    assert "1.250000000 SOL" in text
+    assert "SOL (gas + buying power) 1.250000000" in text
     # third-party wording, not "you"
     assert "holdings you bought" not in text
 
@@ -170,7 +170,7 @@ async def test_wallet_holdings_reads_an_evm_wallet(no_wallet):
     text = res.extracted_content or ""
     assert not res.error, res.error
     assert f"holdings for {EVM_WALLET} (chain base)" in text
-    assert "0.500000 ETH" in text
+    assert "  ETH 0.500000 (unpriced — not counted in the total)" in text
 
 
 @pytest.mark.asyncio
@@ -342,7 +342,8 @@ async def test_every_balance_read_failed_is_an_unknown_total_never_zero(no_walle
                         native_fn=lambda h, c: 0.5)
     res = await tool.wallet_holdings(WalletHoldingsParams(address=EVM_WALLET, chain="base"))
     text = res.extracted_content or ""
-    assert "total: UNKNOWN — 2 of 2 balance reads failed" in text
+    assert "total incl. native: UNKNOWN" in text
+    assert "  tokens: UNKNOWN — 2 of 2 balance reads failed" in text
     assert "$0.00" not in text
     # A failed read of an unpinned candidate is COUNTED, not listed by address.
     assert junk[0] not in text and "2 other scanned contract(s)" in text

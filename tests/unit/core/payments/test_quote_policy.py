@@ -9,7 +9,7 @@ ASSET = PaymentAsset(asset_id="rob", chain="robinhood", address="0x" + "bb" * 20
                      min_amount_raw=10 ** 18, liquidity_floor_usd=2500.0,
                      verified_at=1.0, source="operator")
 USDC = PaymentAsset(asset_id="usdc-base", chain="base",
-                    address="0x" + "aa" * 20, decimals=6, symbol="USDC",
+                    address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals=6, symbol="USDC",
                     rail="facilitator")
 
 
@@ -107,7 +107,7 @@ def test_the_floor_is_enforced_for_a_STABLE_asset_too():
     """An operator can put a minimum on USDC as well — the floor is a property
     of the asset row, not of the quoting path."""
     floored = PaymentAsset(asset_id="usdc-base", chain="base",
-                           address="0x" + "aa" * 20, decimals=6, symbol="USDC",
+                           address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals=6, symbol="USDC",
                            min_amount_raw=5_000_000)
     with pytest.raises(QuoteRefused, match="floor"):
         size_amount_raw(1.0, floored, None)

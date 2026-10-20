@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Load a [loadable] tool from the <tool-catalog> into this session; the result says how to call its actions. A gated tool returns the reason and the remedy instead of loading. It never loads a money tool.",
+    "name": "load_tool",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "tool_id": {
+          "description": "Tool id from <tool-catalog> to load into this session",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

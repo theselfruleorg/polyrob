@@ -3,9 +3,9 @@ name: task-planning
 description: Decompose a fuzzy goal into a verifiable plan and decide when to delegate
 license: MIT
 metadata:
+  polyrob-when: 'A fuzzy goal needs a plan, or work to delegate'
   polyrob-priority: '4'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["make a plan","plan this","break down","how should i approach","roadmap","decompose","milestones","step-by-step plan"],"task_patterns":["\\b(make|write|draft|create) (a |an |the )?plan\\b","\\bplan (out|this|the|my|our)\\b","\\bbreak\\b.*\\bdown\\b.*\\b(task|goal|project|work)\\b","how (should|do) (i|we) approach","what (are the )?steps"],"tool_ids":[]}'
   polyrob-version: '2'
 ---
 # Task Planning

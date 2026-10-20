@@ -7,13 +7,14 @@ rendering consumer over ONE shared core — and any future recap surface
 (Telegram/email digest, webview, ...) can reuse the exact same assembly logic
 instead of re-implementing it.
 
-Every source (episodes / durable event log / authored skills / unified
-ledger) is read through a fail-open seam function, mirroring the discipline
-already established in ``h_journey.py``: a missing provider, a disabled flag,
-or a backend error never raises — that section is simply empty. The ONE
-exception is the time-window string itself: a malformed (non-empty) window
-raises a clear ``ValueError`` rather than silently degrading to "all time" —
-telling the caller beats guessing.
+Every source (episodes / done goals / durable event log / authored skills /
+unified ledger) is read through a module-level seam that RAISES on a failed
+read; ``build_recap`` turns each failure into one ``unreadable`` entry that
+names the source and the reason (080 WS-4) — "could not read" never renders as
+"nothing to report". An ABSENT source (event log disabled, no board yet) is
+empty, not a failure. The ONE other exception is the time-window string
+itself: a malformed (non-empty) window raises a clear ``ValueError`` rather
+than silently degrading to "all time" — telling the caller beats guessing.
 
 Paths are explicit, not reached for via a CLI-layer singleton: callers pass
 ``data_home`` (whatever data root/config they already resolved) rather than
@@ -87,56 +88,86 @@ def _parse_window(label: str) -> Optional[float]:
     return seconds
 
 
+#: The entry kind of a source that could not be read (080 WS-4).
+KIND_UNREADABLE = "unreadable"
+#: The entry kind of a goal the board marked done in the window.
+KIND_GOAL_DONE = "goal_done"
+
+
 def _episodes(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
     """Episodes for the tenant (what I did). Seam kept for test monkeypatching;
-    the read lives on the shared layer (core/activity_evidence.py, T8)."""
-    from core.activity_evidence import recent_episodes
-    return recent_episodes(user_id, since_ts)
+    the read lives on the shared layer (core/activity_evidence.py, T8). Raises."""
+    from core.activity_evidence import recent_episodes_strict
+    return recent_episodes_strict(user_id, since_ts)
+
+
+def _done_goals(user_id: str, since_ts: Optional[float],
+                data_home: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Goals the board marked done in the window (what I did, from the board —
+    not only the memory episodes). No board yet = nothing done; a board that
+    exists and fails to read raises."""
+    import os
+    from core.runtime_paths import goals_db_path
+    from core.status_snapshot import _rows
+    db = goals_db_path(data_home)
+    if not os.path.exists(db):
+        return []
+    return _rows(db, "SELECT id, title, completed_at FROM goals WHERE kind='goal' "
+                     "AND status='done' AND user_id=? AND COALESCE(completed_at, 0) >= ? "
+                     "ORDER BY completed_at DESC LIMIT 50",
+                 (str(user_id), float(since_ts or 0)))
 
 
 def _events(user_id: str, since_ts: Optional[float],
             data_home: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Durable event-log rows for the tenant (changed/earned). Fail-open.
+    """Durable event-log rows for the tenant (changed/earned). Raises on a
+    failed read; a disabled or absent log is empty.
 
     Takes an explicit ``data_home`` so a caller with its own resolved data
     root never needs the ``get_event_log()`` singleton/env-var resolution —
     that fallback only kicks in when no home is given (library/legacy use).
     """
-    try:
-        from core.event_log import event_log_enabled, open_event_log
-        if not event_log_enabled():
-            return []
-        # The ONE resolution every other reader uses (override, then a file
-        # under *data_home*, then the sidecar) — and a read never CREATES the
-        # db in whatever home it resolved.
-        log = open_event_log(data_home)
-        if log is None:
-            return []
-        return log.query(user_id=user_id, since_ts=since_ts, limit=200) or []
-    except Exception:
+    from core.event_log import event_log_enabled, open_event_log
+    if not event_log_enabled():
         return []
+    # The ONE resolution every other reader uses (override, then a file
+    # under *data_home*, then the sidecar) — and a read never CREATES the
+    # db in whatever home it resolved.
+    log = open_event_log(data_home)
+    if log is None:
+        return []
+    return log.query(user_id=user_id, since_ts=since_ts, limit=200) or []
 
 
 def _authored(user_id: str, data_home: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Authored skills + reuse counts for the tenant (learned). Fail-open."""
-    try:
-        from modules.skills.skill_usage import get_skill_usage_store
-        return get_skill_usage_store(data_home).list_authored(user_id=user_id) or []
-    except Exception:
-        return []
+    """Authored skills + reuse counts for the tenant (learned). Raises."""
+    from modules.skills.skill_usage import get_skill_usage_store
+    return get_skill_usage_store(data_home).list_authored(user_id=user_id) or []
 
 
 def _ledger(user_id: str, days: int) -> Dict[str, Any]:
-    """Unified ledger rollup for the tenant (earned/spent). Fail-open to ``{}``.
+    """Unified ledger rollup for the tenant (earned/spent). Raises on a failed
+    read (``build_recap`` names it).
 
     ``{}`` (or an all-zero rollup) means "nothing to show" — build_recap emits
-    NO ledger entry in that case, so a broken/absent data layer is never
-    rendered as an honest-looking $0.00 (H14b). Partial degradation (some legs
-    read, some absent) is annotated onto the entry via
-    ``ledger_availability_note``.
+    NO ledger entry in that case, so an empty data layer is never rendered as
+    an honest-looking $0.00 (H14b). Partial degradation (some legs read, some
+    absent) is annotated onto the entry via ``ledger_availability_note``.
     """
-    from core.activity_evidence import ledger_rollup
-    return ledger_rollup(user_id, days)
+    from core.activity_evidence import ledger_rollup_strict
+    return ledger_rollup_strict(user_id, days)
+
+
+def _guard(source: str, failures: List["RecapEntry"], now: float, fn, *args):
+    """Run one seam; a failure becomes ONE named ``unreadable`` entry."""
+    try:
+        return fn(*args)
+    except Exception as e:
+        failures.append(RecapEntry(
+            ts=now, kind=KIND_UNREADABLE,
+            text=(f"{source}: could not read ({type(e).__name__}: {str(e)[:120]}) — "
+                  f"this is not the same as nothing")))
+        return None
 
 
 def build_recap(user_id: str, data_home: Optional[str] = None,
@@ -153,8 +184,9 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
     now = time.time()
 
     entries: List[RecapEntry] = []
+    failures: List[RecapEntry] = []
 
-    for e in _episodes(user_id, since_ts):
+    for e in _guard("episodes", failures, now, _episodes, user_id, since_ts) or []:
         spend = float(e.get("spend_usd") or 0.0)
         task = (e.get("task") or "").strip().replace("\n", " ")[:80]
         spend_suffix = f" ${spend:.2f}" if spend else ""
@@ -165,7 +197,12 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
             ts=float(e.get("ts") or now), kind="episode", text=text,
             amount=spend or None))
 
-    for ev in _events(user_id, since_ts, data_home):
+    for g in _guard("goal board", failures, now, _done_goals, user_id, since_ts,
+                    data_home) or []:
+        entries.append(RecapEntry(ts=float(g.get("completed_at") or now), kind=KIND_GOAL_DONE,
+                                  text=f"goal done: {str(g.get('title') or g.get('id'))[:100]}"))
+
+    for ev in _guard("event log", failures, now, _events, user_id, since_ts, data_home) or []:
         attrs = ev.get("attrs") or {}
         raw_kind = ev.get("kind") or "event"
         if raw_kind == "self_modification":
@@ -184,7 +221,7 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
             text = raw_kind
         entries.append(RecapEntry(ts=float(ev.get("ts") or now), kind=raw_kind, text=text))
 
-    for s in _authored(user_id, data_home):
+    for s in _guard("authored skills", failures, now, _authored, user_id, data_home) or []:
         sid = s.get("skill_id") or "?"
         loads = s.get("load_count") if s.get("load_count") is not None else s.get("loads", 0)
         by = s.get("created_by") or ""
@@ -192,7 +229,7 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
         text = f"{sid}{by_suffix} (used {loads}x)"
         entries.append(RecapEntry(ts=float(s.get("created_at") or now), kind="skill", text=text))
 
-    ledger = _ledger(user_id, days)
+    ledger = _guard("ledger", failures, now, _ledger, user_id, days)
     if ledger:
         # Two ledgers that must NEVER be summed: treasury is the agent's own
         # USDC (income/spend/net), runtime is the owner's LLM/API bill (no
@@ -228,12 +265,13 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
                 note = ledger_availability_note(ledger)
                 if note:
                     text += f" ⚠ {note}"
-            except Exception:
-                pass
+            except Exception as e:
+                text += f" ⚠ ledger availability unknown ({type(e).__name__})"
             entries.append(RecapEntry(ts=now, kind="ledger", text=text, amount=net))
 
     entries.sort(key=lambda r: r.ts, reverse=True)
-    return entries
+    # A source that could not be read leads: it qualifies every line below it.
+    return failures + entries
 
 
 def format_recap_markdown(entries: List[RecapEntry], window: str,

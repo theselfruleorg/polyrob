@@ -1,7 +1,7 @@
 """``get_fallback_chat_model`` must try the (operator-pinned) PRIMARY client
 before walking the generic ``FALLBACK_HIERARCHY``.
 
-Live-prod evidence (2026-08-14, Rob #1): the box served on the operator-pinned
+Live-prod evidence (2026-08-14): the box served on the operator-pinned
 ``zai-coding`` subscription seat (``DEFAULT_PROVIDER=zai-coding``), which is
 deliberately ``fallback_eligible=False`` so the generic hierarchy never lists
 it. A persisted session that requested the keyless ``openai`` provider walked

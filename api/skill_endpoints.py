@@ -5,8 +5,6 @@ Users can create custom skills that get loaded alongside system skills.
 User skills are stored in: data/prompts/skills/user_{user_id}/
 """
 
-import json
-import shutil
 import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -23,10 +21,9 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 # =============================================================================
 
 class SkillTriggers(BaseModel):
-    """Triggers that activate a skill."""
-    tool_ids: List[str] = Field(default_factory=list, description="Tool IDs that trigger this skill")
-    keywords: List[str] = Field(default_factory=list, description="Keywords in task that trigger this skill")
-    task_patterns: List[str] = Field(default_factory=list, description="Regex patterns to match task")
+    """The skill's gate (081 Q2: no keyword matcher; the index line is the SKILL.md
+    ``metadata.polyrob-when``)."""
+    tool_ids: List[str] = Field(default_factory=list, description="Tool IDs the skill needs")
 
 
 class SkillCreate(BaseModel):
@@ -85,7 +82,7 @@ def get_user_skills_dir(user_id: str) -> Path:
     used to hardcode ``get_skills_base_dir()`` (the installed package tree),
     which split-brained from ``SkillManager``/``SkillWriterMixin`` the moment
     Task 8 moved THEIR user-scope reads/writes to data-home
-    (``skill_store.skills_data_home()``) - post-``polyrob update``,
+    (``core.skills.scopes.skills_data_home()``) - post-``polyrob update``,
     ``GET /api/skills`` would show a phantom-empty user list, ``PUT``/
     ``DELETE`` would false-404, and the ``POST`` 409 conflict-precheck would
     go blind.
@@ -98,7 +95,7 @@ def get_user_skills_dir(user_id: str) -> Path:
     pre-existing test-only single-root override contract
     (``SkillManager(skills_dir=...)`` / ``sm.skills_dir = ...``) that several
     tests in this module rely on. In production (no override) that resolver
-    returns exactly ``skill_store.skills_data_home()``.
+    returns exactly ``core.skills.scopes.skills_data_home()``.
     """
     from agents.task.agent.skill_manager import get_skill_manager
 
@@ -109,27 +106,19 @@ def get_user_skills_dir(user_id: str) -> Path:
 
 
 def get_user_rules(user_id: str) -> Dict[str, Any]:
-    """Load user's skill rules."""
-    user_dir = get_user_skills_dir(user_id)
-    rules_file = user_dir / "rules.json"
-    
-    if rules_file.exists():
-        try:
-            with open(rules_file) as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load user rules for {user_id}: {e}")
-    
-    return {}
+    """The tenant's skill rules, through the skill manager's one reader."""
+    from agents.task.agent.skill_manager import get_skill_manager
+    return get_skill_manager()._load_user_rules(user_id)[0]
 
 
 def save_user_rules(user_id: str, rules: Dict[str, Any]) -> None:
-    """Save user's skill rules."""
-    user_dir = get_user_skills_dir(user_id)
-    rules_file = user_dir / "rules.json"
-    
-    with open(rules_file, "w") as f:
-        json.dump(rules, f, indent=2)
+    """Save the tenant's skill rules through the skill manager's one atomic writer."""
+    from agents.task.agent.skill_manager import get_skill_manager
+    sm = get_skill_manager()
+    uid = sm._require_user(user_id)
+    if uid is None:
+        raise ValueError("unsafe or empty user_id refused (tenant scope)")
+    sm._save_user_rules(uid, rules)
 
 
 def get_current_user(request: Request) -> str:
@@ -236,7 +225,7 @@ async def create_skill(skill: SkillCreate, user_id: str = Depends(get_current_us
         raise HTTPException(409, f"Skill '{skill.id}' conflicts with a system skill")
     
     # Route the write through the scanned, atomic SkillWriter choke-point (T5).
-    from agents.task.agent.skill_writer import PROVENANCE_USER
+    from modules.skills.writer import PROVENANCE_USER
     res = sm.create_skill(
         skill.id, skill.content, user_id=user_id,
         description=skill.description, created_by=PROVENANCE_USER, pending=False,
@@ -253,14 +242,9 @@ async def create_skill(skill: SkillCreate, user_id: str = Depends(get_current_us
         "priority": skill.priority,
         "auto_activate": True,
     }
-    # BUG 6 fix: only overwrite writer-derived keyword triggers when the caller
-    # supplied at least one non-empty trigger list.  An all-empty SkillTriggers
-    # (the default) would otherwise discard the keywords _upsert_rule derived
-    # from the skill id/description, leaving the skill auto_activate=True but
-    # unmatchable by get_skills_for_session.
-    caller_triggers = skill.triggers.model_dump()
-    if any(v for v in caller_triggers.values()):
-        updates["triggers"] = caller_triggers
+    # Only ``tool_ids`` is read (the money/gated domain); none given = no gate.
+    if skill.triggers.tool_ids:
+        updates["triggers"] = {"tool_ids": list(skill.triggers.tool_ids)}
     entry.update(updates)
     rules[skill.id] = entry
     save_user_rules(user_id, rules)
@@ -345,7 +329,7 @@ async def update_skill(
     # Update content if provided — route through the scanned writer (T5).
     if update.content is not None:
         from agents.task.agent.skill_manager import get_skill_manager
-        from agents.task.agent.skill_writer import PROVENANCE_USER
+        from modules.skills.writer import PROVENANCE_USER
         res = get_skill_manager().create_skill(
             skill_id, update.content, user_id=user_id,
             description=(update.description or get_user_rules(user_id).get(skill_id, {}).get("description", "")),
@@ -391,7 +375,7 @@ async def delete_skill(skill_id: str, user_id: str = Depends(get_current_user)):
         raise HTTPException(404, f"Skill '{skill_id}' not found")
 
     # Route deletion through the archiving writer (recoverable; no raw rmtree).
-    from agents.task.agent.skill_writer import PROVENANCE_USER
+    from modules.skills.writer import PROVENANCE_USER
     ok = sm.delete_skill(skill_id, user_id=user_id, created_by=PROVENANCE_USER)
     if not ok:
         raise HTTPException(404, f"Skill '{skill_id}' not found or could not be deleted")
@@ -426,7 +410,7 @@ async def fork_skill(skill_id: str, user_id: str = Depends(get_current_user)):
     resolved_description = sm._resolve_skill_description(skill_id, rules)
 
     # Route through the scanned writer (T5).
-    from agents.task.agent.skill_writer import PROVENANCE_USER
+    from modules.skills.writer import PROVENANCE_USER
     res = sm.create_skill(
         new_id, content, user_id=user_id,
         description=resolved_description,

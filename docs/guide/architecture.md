@@ -48,10 +48,11 @@ POLYROB assembles each request the same way twice in a row, on purpose.
 job, a goal and a chat session holding the same tools send identical bytes. The
 requested tool set does not shrink and re-grow when a credential check flaps.
 The first eight messages (system prompt, runtime identity, environment, SOUL,
-project context, the initial task, the skill catalog, the tool catalog) are a
+project context, the skill catalog, the tool catalog, the initial task) are a
 pinned *foundation*: written once, never repaired, never evicted, and a later
 change to the tool catalog arrives as a short note at the end rather than a
-rewrite in place.
+rewrite in place. The rows that differ per chat come last, so two runs of one
+scheduled job share every row before them.
 
 **Tools loaded mid-session.** `load_tool` adds a tool's actions to the schema
 list; on most providers that is the one prefix change POLYROB still accepts,
@@ -157,7 +158,7 @@ The memory flow within a session:
 2. After each step, new findings are **synced** to the store.
 3. The agent can also **search** memory explicitly with the `session_search` action.
 
-An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short summary of each completed run (chat, goal, or cron job), so a new session can pick up with a brief "what happened last time" instead of starting cold. It belongs to the autonomy group: off unless `POLYROB_LOCAL` and `AUTONOMY_ENABLED` are both on, or an `AUTONOMY_POSTURE` moves its default.
+An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short summary of each completed run (chat, goal, or cron job), so a new session can pick up with a brief "what happened last time" instead of starting cold. It belongs to the autonomy group: off unless `POLYROB_LOCAL` and `AUTONOMY_ENABLED` are both on, or an `AUTONOMY_POSTURE` moves its default. A scheduled job and a goal keep their own run record (the outcome, what the run sent, did and signed) whatever this flag says: the next run of the same job or goal reads it as `<previous-runs>`. `MEMORY_BACKEND=none` still keeps no record.
 
 ---
 
@@ -230,19 +231,15 @@ how to stop it are in [configuration.md](configuration.md#6-the-autonomy-dial) a
 
 The agent manages its own scheduled runs with the `cronjob` tool: schedule,
 list, show, edit and cancel. An edit patches the job in place rather than
-re-writing it, and a job you scheduled can only be edited on your own turn —
-see [cli.md](cli.md#polyrob-cron--scheduled-runs).
+re-writing it —
+see [cli.md](cli.md#polyrob-job--scheduled-jobs).
 
-**Who wrote it.** Every cron job and goal carries an `authored_by` stamp. Every
-owner path (`polyrob cron schedule`, `/cron add`, the console, `/groups service`)
-stamps `owner`; the agent's own tools stamp `agent`, and so does an owner turn that
-had already read outside text (a web page, mail, a room). Standing owner authority —
-the toolset as written, an X post or room moderation without a per-run tap, a write
-verb — reads only a positive `owner` stamp. `/adopt <id>` shows you an
-agent-authored job or goal in full (task, schedule, tools, target, pinned skills)
-and makes it yours on one confirm; a pinned skill edited after that turns it back
-into the agent's until you adopt it again. Rows from before the stamp existed are
-stamped once with `python -m cron.stamp_authorship` (run it with `--dry-run` first).
+**What standing work may do.** Every cron job and goal carries the same standing
+authority: when it runs, its toolset is used as written, it may post on X without a
+per-run tap, and it may moderate a room its text names. When it is created, a turn
+of yours may ask for any rig; an autonomous run may ask only for tools inside the
+agent's self-goal ceiling, and only your turn may put a write verb on a job. Under
+the `supervised` money regime no goal or cron run moves funds unattended.
 
 ---
 

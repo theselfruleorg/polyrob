@@ -1,0 +1,21 @@
+{
+  "function": {
+    "description": "Mark a todo item as complete",
+    "name": "task_todo_complete",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Mark a todo item as complete by ID or text pattern",
+      "properties": {
+        "pattern": {
+          "description": "Todo ID (e.g., '1') or text pattern to match (e.g., 'Navigate to OpenAI')",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

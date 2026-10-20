@@ -6,7 +6,7 @@ concept. The vault-export implementation (``run_export``) still lives here and
 prints a one-line deprecation notice before delegating. Remove the alias one
 release after 2026-08-27.
 
-Thin Click wrapper over ``core.knowledge_export.build_vault``. Bootstrap follows
+Thin Click wrapper over ``agents.task.knowledge_export.build_vault``. Bootstrap follows
 ``cli/commands/kb.py``: wire the active memory provider (with the embedder when
 available) so notes/episodes come from the same memory.db the agent uses.
 Export-only: the DBs stay the SSOT; the vault is a projection.
@@ -23,7 +23,7 @@ def _bootstrap() -> None:
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
-    load_env(local_mode=True)
+    load_env()
     os.environ.setdefault("POLYROB_LOCAL", "1")
 
 
@@ -77,7 +77,7 @@ def run_export(out_dir: str, since, user: str) -> None:
             if since_ts is None:
                 click.echo(click.style(f"could not parse --since {since!r}", fg="red"))
                 raise SystemExit(2)
-        from core.knowledge_export import build_vault
+        from agents.task.knowledge_export import build_vault
         return await build_vault(out_dir, user_id=user, data_dir=data_dir,
                                  provider=provider, since_ts=since_ts)
 

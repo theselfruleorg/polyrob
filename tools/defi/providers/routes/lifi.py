@@ -165,22 +165,25 @@ class LifiRouteProvider:
             return None
 
         # WAL-7: the minimum that BINDS is the one inside the calldata, not the
-        # JSON beside it. For a known facet, read it from the bytes (and refuse a
-        # receiver that is not us); `best_route` then holds it to our floor. An
-        # unknown facet keeps the JSON value and the guard's measured floor.
+        # JSON beside it. Read it from the bytes (and refuse a receiver that is
+        # not us); `best_route` then holds it to our floor. 085 W8 LEAD-1: an
+        # unknown facet is refused here too — the guard would refuse it (its
+        # on-chain minimum cannot be read), so another venue gets the trade.
         from core.wallet import lifi_calldata
-        amount_out_min = _int(estimate.get("toAmountMin"))
         try:
             decoded = lifi_calldata.decode(calldata)
         except ValueError as exc:
             logger.error("lifi: %s — REFUSED", exc)
             return None
-        if decoded is not None:
-            if decoded.receiver != holder.lower():
-                logger.error("lifi: calldata pays %s, not the holder — REFUSED",
-                             decoded.receiver)
-                return None
-            amount_out_min = decoded.min_amount
+        if decoded is None:
+            logger.error("lifi: %s — REFUSED",
+                         lifi_calldata.unknown_selector_refusal(calldata))
+            return None
+        if decoded.receiver != holder.lower():
+            logger.error("lifi: calldata pays %s, not the holder — REFUSED",
+                         decoded.receiver)
+            return None
+        amount_out_min = decoded.min_amount
 
         tool = body.get("tool") or "unknown"
         return RouteQuote(

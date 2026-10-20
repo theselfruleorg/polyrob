@@ -1,123 +1,34 @@
 """
 Skill Manager - Loads and matches skills for each session.
 
-Skills are context-aware prompt extensions that get loaded into a session's
-system prompt based on:
-1. Which tools are loaded for the session (tool_ids)
-2. Keywords in the task description
-3. Available actions
+A session's PINNED skills (a job's or goal's ``payload.skills``, a session
+config's ``skills``, the persona seeds) and their ``requires`` load at session
+start; every other skill is one line of the short skill index, and the model
+loads it with ``load_skill`` (081 Q2).
 
-SYSTEM (builtin) skills are stored in the shipped package tree:
-data/prompts/skills/ (see skill_store.builtin_scope()). Per-tenant
-user_<uid> skills are stored under DATA-HOME (skill_store.skills_data_home(),
-Task 8) so they survive a `polyrob update` code-swap, not under this package
-tree — see SkillManager._user_dirs_root().
+Where skills live and which one wins is ``core.skills.scopes`` (one ``resolve``);
+the system rule index and the gate predicates are ``core.skills.catalog``; the
+writer is ``modules.skills.writer``. This module keeps session matching and
+prompt delivery.
 """
 
-import json
-import re
 import logging
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Any, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from agents.task.agent.skill_frontmatter import parse_frontmatter
-from agents.task.agent import skill_store
+from core.skills import catalog, scopes
+from core.skills.catalog import VALID_TOOL_IDS  # noqa: F401 — the vocabulary, imported by callers
+from core.skills.frontmatter import (  # noqa: F401 — limits imported by callers
+    MAX_SKILL_FILE_CHARS, MAX_SKILL_INJECT_CHARS, MIN_SKILL_CONTENT_CHARS,
+    SOFT_INJECT_WARN_CHARS, SkillValidationResult, parse_frontmatter,
+    validate_skill_content_length,
+)
+from core.skills import frontmatter as _frontmatter
+from core.skills.frontmatter import when_line as _when_of
 
 logger = logging.getLogger(__name__)
-
-# Validation constants
-# Task 7: split the single flat char cap into two thresholds. The old
-# MAX_SKILL_CONTENT_CHARS=12000 was a HARD reject in validate_skill_content (the
-# gate used by SkillWriterMixin.create_skill and by import/validation paths),
-# which silently rejected spec-valid agentskills.io skills well within the
-# ~5000-token injected-body recommendation - e.g. the real anthropics/skills
-# `docx` skill (20084 chars) and `skill-creator` (33168 chars) both bust the old
-# 12000 cap, so the import path could not ingest most real-world skills.
-MAX_SKILL_FILE_CHARS = 40000      # on-disk ceiling (DoS guard) - was implicitly 12000
-MAX_SKILL_INJECT_CHARS = 20000    # ~5000 tok recommended injected-body size (agentskills.io)
-SOFT_INJECT_WARN_CHARS = MAX_SKILL_INJECT_CHARS  # warn-only threshold at injection time
-MAX_SKILL_CONTENT_CHARS = MAX_SKILL_FILE_CHARS   # back-compat alias (no code imports this as of 2026-07 grep)
-MIN_SKILL_CONTENT_CHARS = 50     # Minimum meaningful content
-MAX_SKILL_ID_LENGTH = 50
-# DERIVED from the WS-2 capability table (was a third hand-list that went stale on
-# optional/posture tools — T5). Every registrable tool must have a capability row
-# (register_optional_tool refuses otherwise), so the table's keys ARE the registrable
-# vocabulary; `tool_manage` is the one aspirational id (gated everywhere, not yet
-# registrable). Registry parity stays belt-and-braces guarded by
-# tests/unit/agents/task/test_valid_tool_ids_parity.py.
-from core.tool_capabilities import classified_ids as _classified_ids
-
-# `worker_manage` (041) is a controller ACTION with a capability row, not a container tool.
-VALID_TOOL_IDS = set(_classified_ids()) - {'tool_manage', 'worker_manage'}
-
-
-def validate_skill_content_length(body: str) -> Tuple[bool, str]:
-    """Pure length check for a skill body (Task 7).
-
-    Encodes the ONE hard-reject window: [MIN_SKILL_CONTENT_CHARS, MAX_SKILL_FILE_CHARS].
-    A body between MAX_SKILL_INJECT_CHARS and MAX_SKILL_FILE_CHARS is ACCEPTED here -
-    it may still land on disk / be read via a skill resource - callers that inject the
-    body into the prompt should separately warn (not reject) past MAX_SKILL_INJECT_CHARS;
-    see the warning emitted in format_skills_for_prompt().
-    """
-    n = len(body)
-    if n < MIN_SKILL_CONTENT_CHARS:
-        return False, f"too short ({n}<{MIN_SKILL_CONTENT_CHARS})"
-    if n > MAX_SKILL_FILE_CHARS:
-        return False, f"too large ({n}>{MAX_SKILL_FILE_CHARS})"
-    return True, ""
-
-
-def parse_skill_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
-    """Split an optional leading YAML frontmatter block from a skill body (P1-1).
-
-    Supports the agentskills.io / clawhub open standard where a SKILL.md opens with::
-
-        ---
-        name: my-skill
-        description: ...
-        ---
-        # Heading ...
-
-    Returns ``(frontmatter_dict, body)``. With no frontmatter, returns ``({}, content)``.
-    Parsing is intentionally dependency-free (simple ``key: value`` lines) so it never
-    pulls in a YAML lib; unparseable lines are skipped, not fatal.
-    """
-    if not content:
-        return {}, content or ""
-    text = content.lstrip('﻿')  # tolerate a leading BOM
-    if not text.startswith('---'):
-        return {}, content
-    lines = text.splitlines()
-    # first line is the opening '---'; find the closing fence
-    for i in range(1, len(lines)):
-        if lines[i].strip() == '---':
-            fm: Dict[str, str] = {}
-            for raw in lines[1:i]:
-                if ':' in raw:
-                    k, _, v = raw.partition(':')
-                    key = k.strip()
-                    if key:
-                        fm[key] = v.strip().strip('"').strip("'")
-            body = '\n'.join(lines[i + 1:]).lstrip('\n')
-            return fm, body
-    return {}, content  # no closing fence -> treat as plain content
-
-
-def strip_skill_frontmatter(content: str) -> str:
-    """Return the skill body with any leading YAML frontmatter removed (P1-1)."""
-    return parse_skill_frontmatter(content)[1]
-
-
-@dataclass
-class SkillValidationResult:
-    """Result of skill validation."""
-    skill_id: str
-    is_valid: bool
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -132,45 +43,41 @@ class MatchedSkill:
     # Task 14: provenance for externally-discovered (agentskills.io ecosystem) skills —
     # "" for builtin/user, "user"/"project" for ~/.agents/skills etc. Purely informational.
     source: str = ""
+    #: 081 WS-4.3: the frontmatter ``metadata.polyrob-when`` line (<= 60 chars) the
+    #: index shows; "" when the skill has none (the description is the fallback).
+    when: str = ""
 
     def __getitem__(self, key: str):
         """Dict-style access (``m["id"]``) alongside normal attribute access, so
         catalog consumers can treat every entry uniformly regardless of whether
-        it originated from rules.json or from external skill discovery."""
+        it originated from the rule index or from external skill discovery."""
         if key == "id":
             return self.skill_id
         return getattr(self, key)
 
 
-@dataclass
-class SkillContext:
-    """Context for skill matching - represents a session's configuration."""
-    tool_ids: List[str] = field(default_factory=list)
-    task: str = ""
-    available_actions: List[str] = field(default_factory=list)
+from modules.skills.writer import SkillWriterMixin
 
 
-from agents.task.agent.skill_writer import SkillWriterMixin
+def catalog_line(skill: Any, *, load_first: bool = False) -> str:
+    """ONE index entry: ``- id="<id>" — [LOAD FIRST — ]<when>``. The ``when`` line
+    (081 WS-4.3, <= 60 chars) says when to use the skill; a skill without one
+    shows the first line of its description, cut at 160 characters."""
+    desc = (getattr(skill, "when", "") or "").strip()
+    if not desc:
+        desc = (getattr(skill, "description", "") or skill.skill_id.replace("-", " ")).strip()
+        desc = desc.splitlines()[0][:160] if desc else skill.skill_id
+    mark = "LOAD FIRST — " if load_first else ""
+    return f'- id="{skill.skill_id}" — {mark}{desc}'
 
 
 class SkillManager(SkillWriterMixin):
     """
     Manages skill loading and matching for sessions.
     
-    Each session calls get_skills_for_session() during initialization.
-    The returned skills are embedded into the system prompt.
-    
-    Usage:
-        skill_manager = SkillManager()
-        
-        # During session initialization:
-        matched_skills = skill_manager.get_skills_for_session(
-            tool_ids=['browser', 'mcp'],
-            task="research LinkedIn profiles and create report"
-        )
-        
-        # Format for prompt embedding:
-        skill_content = skill_manager.format_skills_for_prompt(matched_skills)
+    A session calls :meth:`get_pinned_skills` (its pins) and
+    :meth:`get_catalog_skills` (the index) at construction, then
+    :meth:`split_progressive` / :meth:`format_progressive` render the skill message.
     """
     
     def __init__(self, skills_dir: Optional[Path] = None):
@@ -179,12 +86,12 @@ class SkillManager(SkillWriterMixin):
         Args:
             skills_dir: Path to the BUILTIN (system) skills directory. Defaults
                 to the shipped package's ``data/prompts/skills/`` (Task 8:
-                ``skill_store.builtin_scope().root``). Per-tenant
+                ``core.skills.scopes.builtin_scope().root``). Per-tenant
                 ``user_<uid>`` reads/writes do NOT use this by default — see
                 ``_user_dirs_root()``, which routes them to the writable
                 data-home scope instead so they survive a ``polyrob update``
                 code-swap. Passing this explicitly (as several existing tests
-                do, to isolate BOTH builtin rules.json AND user writes under
+                do, to isolate BOTH builtin skills AND user writes under
                 one tmp root) also redirects user dirs here, preserving that
                 pre-existing single-root override contract.
         """
@@ -192,7 +99,7 @@ class SkillManager(SkillWriterMixin):
         # TRUE builtin default — whether via this constructor arg or a later
         # direct `.skills_dir =` mutation (both patterns are used by the
         # existing test suite for single-root isolation).
-        self._builtin_default_dir = skill_store.builtin_scope().root
+        self._builtin_default_dir = scopes.builtin_scope().root
         if skills_dir:
             self.skills_dir = Path(skills_dir)
         else:
@@ -211,20 +118,14 @@ class SkillManager(SkillWriterMixin):
         # Task 14: lazy, once-per-instance cache of externally-discovered
         # (~/.agents/skills, ~/.claude/skills, ...) skills. None = not yet computed;
         # recomputed on next access after reload_rules() invalidates it.
-        self._external_index: Optional[Dict[str, "skill_discovery.DiscoveredSkill"]] = None
+        self._external_index: Optional[Dict[str, scopes.DiscoveredSkill]] = None
 
         # Task 9: one-time migration of any pre-Task-8 code-tree user_<uid>/
-        # skills into data-home, so an existing deployment doesn't strand them
-        # the moment this class starts reading user skills from data-home
-        # instead of the package tree (see skill_store.py's migration section
-        # docstring). ALWAYS targets the REAL package builtin tree
-        # (self._builtin_default_dir), never a test's skills_dir override -
-        # migration is about where legacy skills physically shipped, not
-        # wherever a given SkillManager instance has been redirected to.
-        # Guarded: fail-open (never blocks construction), and the migration
-        # itself is idempotent/locked/resumable (see migrate_legacy_user_skills).
+        # skills into data-home. ALWAYS the REAL package tree, never a test's
+        # skills_dir override. Fail-open, idempotent, locked, resumable.
         try:
-            _moved = skill_store.migrate_legacy_user_skills(self._builtin_default_dir)
+            from modules.skills.migration import migrate_legacy_user_skills
+            _moved = migrate_legacy_user_skills(self._builtin_default_dir)
             if _moved:
                 logger.info("migrated %d legacy user skill(s) into data-home", _moved)
         except Exception:
@@ -233,110 +134,22 @@ class SkillManager(SkillWriterMixin):
         logger.debug(f"SkillManager initialized with skills_dir: {self.skills_dir}")
 
     def _load_external_skills(self) -> Dict[str, Any]:
-        """Discover + precedence-dedupe external (agentskills.io ecosystem) skills.
-
-        Project roots (higher precedence) are consulted ONLY when
-        ``skill_discovery.trust_project_skills_effective()`` says so (Task 15 —
-        that function does not exist yet, so this is guarded and inert until
-        then); user roots (``~/.agents/skills``, ``~/.claude/skills``) are
-        always consulted. Cached once per instance; call ``reload_rules()`` to
-        force a re-scan.
-        """
-        if self._external_index is not None:
-            return self._external_index
-        from . import skill_discovery
-        # Task 16: builtin ids are PROTECTED — an external (ecosystem) skill can
-        # never enter the index under a builtin's name, no matter its scope, so
-        # it can never shadow the builtin body nor appear in its place in the
-        # catalog. Fail-open: if this lookup errors, treat as "no protected ids"
-        # rather than blocking external discovery.
-        try:
-            protected_ids = set(skill_store.builtin_skill_ids())
-        except Exception:
-            logger.debug("builtin-id lookup skipped (non-fatal)", exc_info=True)
-            protected_ids = set()
-        index: Dict[str, Any] = {}
-        self._index_pack_skills(index, protected_ids, skill_discovery)
-        roots = []
-        try:
-            if skill_discovery.trust_project_skills_effective():
-                roots += [("project", r) for r in skill_discovery.project_external_roots()]
-        except Exception:
-            logger.debug("project-skill discovery skipped", exc_info=True)
-        roots += [("user", r) for r in skill_discovery.user_external_roots()]
-        for scope, root in roots:                              # project-first => higher precedence
-            for ds in skill_discovery.discover_skills(root, scope):
-                if ds.skill_id in protected_ids:
-                    logger.warning("skill collision: %r in %s shadowed by protected builtin id %r",
-                                   ds.skill_id, ds.path, ds.skill_id)
-                    continue
-                if ds.skill_id in index:
-                    logger.warning("skill collision: %r in %s shadowed by higher-precedence %s",
-                                   ds.skill_id, ds.path, index[ds.skill_id].path)
-                    continue
-                index[ds.skill_id] = ds
-        self._external_index = index
-        return index
-
-    @staticmethod
-    def _index_pack_skills(index: Dict[str, Any], protected_ids: set, skill_discovery) -> None:
-        """067 P2: loaded packs' skills, ahead of every external root (precedence
-        user > builtin > pack > external). A pack skill whose id is taken (a
-        protected builtin, or an earlier pack) is indexed as ``<pack>:<skill>``."""
-        import dataclasses
-        try:
-            scopes = skill_store.pack_scopes()
-        except Exception:
-            logger.warning("pack skill scopes unavailable", exc_info=True)
-            return
-        for scope in scopes:
-            pack_id = scope.name.split(":", 1)[1]
-            for ds in skill_discovery.discover_skills(scope.root, scope.name):
-                if ds.skill_id in protected_ids or ds.skill_id in index:
-                    new_id = f"{pack_id}:{ds.skill_id}"
-                    logger.info("pack skill %r from %s indexed as %r (id already taken)",
-                                ds.skill_id, scope.name, new_id)
-                    ds = dataclasses.replace(ds, skill_id=new_id)
-                index[ds.skill_id] = ds
+        """Pack, project and user-external skills (``core.skills.scopes.external_index``),
+        cached once per instance; ``reload_rules()`` forces a re-scan."""
+        if self._external_index is None:
+            self._external_index = scopes.external_index()
+        return self._external_index
 
     def _ensure_rules_loaded(self) -> None:
-        """Load skill rules from rules.json if not already loaded."""
+        """Build the system rule index once (``core.skills.catalog.build_index``)."""
         if self._rules_loaded:
             return
-        
-        rules_file = self.skills_dir / "rules.json"
-        if rules_file.exists():
-            try:
-                with open(rules_file, 'r') as f:
-                    self.skill_rules = json.load(f)
-                logger.info(f"Loaded {len(self.skill_rules)} skill rules from {rules_file}")
-            except Exception as e:
-                logger.error(f"Failed to load skill rules: {e}")
-                self.skill_rules = {}
-        else:
-            logger.warning(f"No skill rules file found at {rules_file}")
-            self.skill_rules = {}
-
-        # 067 P3: a loaded pack's skills ship their rules next to them
-        # (``<pack>/skills/rules.json``) and join the builtin rule set here, so a
-        # pack skill auto-activates exactly like the builtin it used to be.
-        try:
-            self._merge_pack_rules()
-        except Exception:  # pragma: no cover - a pack must never block the rules
-            logger.warning("pack skill rules skipped", exc_info=True)
-
-        # P0-2: drift guard. A rule with auto_activate but no on-disk SKILL.md body is a
-        # SILENT failure (matches, then drops with only a WARNING). Prune such orphans
-        # from the in-memory rules so they can never burn match work or mislead the
-        # catalog. Fail-open — a content gap must never block boot.
-        try:
-            self._prune_bodiless_rules()
-        except Exception as e:  # pragma: no cover - defensive
-            logger.debug(f"orphan-rule prune skipped (non-fatal): {e}")
-
+        self.skill_rules, self._pack_rule_ids = catalog.build_index(
+            self.skills_dir,
+            with_packs=Path(self.skills_dir) == Path(self._builtin_default_dir),
+            get_external=self._load_external_skills)
         # Task 4: fail-open boot warning for strict agentskills.io frontmatter
-        # compliance. Observability only — a non-compliant skill (or the check
-        # itself erroring) must NEVER block startup.
+        # compliance. Observability only — never blocks startup.
         try:
             bad = self.validate_all_authored()
             if bad:
@@ -344,63 +157,8 @@ class SkillManager(SkillWriterMixin):
                                len(bad), ", ".join(sorted(bad)))
         except Exception:
             logger.debug("skill compliance check skipped", exc_info=True)
-
         self._rules_loaded = True
 
-    def _merge_pack_rules(self) -> None:
-        """Add each loaded pack's ``skills/rules.json`` rows (067 P3) under the id
-        the pack skill is indexed as (``<pack>:<id>`` on a collision). Only for the
-        builtin rule set (a manager pointed at another directory is a test or a
-        tenant sandbox); a row never overrides an existing one."""
-        self._pack_rule_ids = set()
-        if Path(self.skills_dir) != Path(self._builtin_default_dir):
-            return
-        scopes = skill_store.pack_scopes()
-        if not scopes:
-            return
-        index = self._load_external_skills()
-        for scope in scopes:
-            rules_file = Path(scope.root) / "rules.json"
-            if not rules_file.is_file():
-                continue
-            rows = json.loads(rules_file.read_text(encoding="utf-8"))
-            if not isinstance(rows, dict):
-                logger.warning("pack rules %s: not an object — skipped", rules_file)
-                continue
-            pack_id = scope.name.split(":", 1)[1]
-            for sid, rule in rows.items():
-                indexed = sid if getattr(index.get(sid), "scope", None) == scope.name \
-                    else f"{pack_id}:{sid}"
-                ds = index.get(indexed)
-                if ds is None or ds.scope != scope.name or not isinstance(rule, dict):
-                    continue  # no body shipped in this pack
-                if indexed in self.skill_rules:
-                    continue
-                self.skill_rules[indexed] = rule
-                self._pack_rule_ids.add(indexed)
-
-    def _prune_bodiless_rules(self) -> None:
-        """Drop any auto_activate system rule whose SKILL.md body is missing."""
-        pack_ids = getattr(self, "_pack_rule_ids", set())
-        orphans = [
-            sid for sid, rules in self.skill_rules.items()
-            if rules.get("auto_activate", True)
-            and sid not in pack_ids
-            and not (self.skills_dir / sid / "SKILL.md").exists()
-        ]
-        if not orphans:
-            return
-        try:
-            from core.config_policy import local_mode_enabled
-            severe = local_mode_enabled()
-        except Exception:
-            severe = False
-        msg = (f"Skill rules reference {len(orphans)} auto_activate id(s) with no "
-               f"SKILL.md body — pruning so they can't silent-drop: {orphans}")
-        (logger.error if severe else logger.warning)(msg)
-        for sid in orphans:
-            self.skill_rules.pop(sid, None)
-    
     def reserved_skill_ids(self) -> Set[str]:
         """Ids a USER skill may never take: every shipped builtin skill, every
         loaded pack skill, and every system rule id (review 2026-09-29 D1).
@@ -415,19 +173,19 @@ class SkillManager(SkillWriterMixin):
         ids: Set[str] = set(getattr(self, "skill_rules", None) or {})
         ids |= set(getattr(self, "_pack_rule_ids", None) or ())
         try:
-            ids |= set(skill_store.builtin_skill_ids())
+            ids |= set(scopes.builtin_skill_ids())
         except Exception:
             logger.debug("builtin-id lookup skipped", exc_info=True)
         try:
             if Path(self.skills_dir) != Path(self._builtin_default_dir):
-                ids |= set(skill_store.builtin_skill_ids(skill_store.SkillScope(
+                ids |= set(scopes.builtin_skill_ids(scopes.SkillScope(
                     name="builtin", root=Path(self.skills_dir),
                     writable=False, trusted=True)))
         except Exception:
             logger.debug("custom builtin-id lookup skipped", exc_info=True)
         try:
-            for scope in skill_store.pack_scopes():
-                ids |= set(skill_store.builtin_skill_ids(scope))
+            for scope in scopes.pack_scopes():
+                ids |= set(scopes.builtin_skill_ids(scope))
         except Exception:
             logger.debug("pack-id lookup skipped", exc_info=True)
         return ids
@@ -445,7 +203,7 @@ class SkillManager(SkillWriterMixin):
 
         * D10: a non-dict rules file or a non-dict entry is skipped with a
           warning. One malformed row used to raise ``AttributeError`` inside
-          ``get_skills_for_session`` and the session silently got NO skills.
+          the session's skill read and the session silently got NO skills.
         * D1: a user rule under a SYSTEM id (a legacy shadow written before the
           writer refused builtin ids) may only DISABLE the system skill
           (``auto_activate: false``). It never replaces the system triggers,
@@ -472,66 +230,26 @@ class SkillManager(SkillWriterMixin):
             all_rules[sid] = rule
         return all_rules
 
-    @staticmethod
-    def _money_tool_gate_ok(triggers: dict, session_tool_ids) -> bool:
-        """False when a money playbook's session cannot reach its domain.
+    #: The money-domain gate (``core.skills.catalog.money_tool_gate_ok``).
+    _money_tool_gate_ok = staticmethod(catalog.money_tool_gate_ok)
 
-        The session must hold a declared tool that is either a MONEY tool
-        (``defi_trade``) or a pure read tool of the domain (``defi_data`` — no
-        ``high_impact`` capability; a session that can look at a market still
-        benefits from the screens). A declared ACTION tool that moves no funds —
-        ``cronjob`` on ``dca``/``exits`` — does not count: a cron-only session
-        cannot execute a DCA buy, so the doctrine stays out (review 2026-09-29
-        D2; the old ``set(declared) & set(session)`` let ``cronjob`` open it).
-
-        Reads ``core.tool_capabilities`` rather than a hardcoded list, so a new
-        money tool is covered the day it is classified. Fail-OPEN: if the
-        capability table cannot be read, surface the skill as before — losing a
-        playbook is worse than showing one too often.
-        """
-        declared = list((triggers or {}).get("tool_ids") or [])
-        if not declared:
-            return True
-        try:
-            from core.tool_capabilities import ids_with
-            money = ids_with("money")
-            acting = ids_with("high_impact")
-        except Exception:
-            return True
-        if not any(t in money for t in declared):
-            return True
-        reach = {t for t in declared if t in money or t not in acting}
-        return bool(reach & set(session_tool_ids or []))
-
-    #: D7: the task characters trigger keywords and patterns are matched on.
-    MAX_TRIGGER_TASK_CHARS = 4000
-
-    #: 068 A1: the most prerequisite skills one session may pull in beyond
-    #: ``max_skills``. Bounded because every injected body costs prompt.
+    #: 068 A1: the most prerequisite skills one session may pull in beyond the
+    #: pins. Bounded because every injected body costs prompt.
     MAX_PREREQUISITES = 2
 
     def _with_prerequisites(self, result: List["MatchedSkill"], all_rules: dict,
                             tool_ids, user_id) -> List["MatchedSkill"]:
-        """Append the ``requires`` skills of every loaded skill, once each.
+        """Append the ``requires`` skills of every pinned skill, once each.
 
-        A rule may declare ``"requires": [skill_id, ...]`` in rules.json. The
+        A rule may declare ``polyrob-requires: '["<id>", ...]'`` in its frontmatter. The
         2026-09-25 wrong-token buy ran with the memecoin playbook loaded and the
-        identity procedure absent: "buy PNL" matched the playbook, and nothing
-        pulled in the step that says "resolve the address first". A prerequisite
-        loads even when the cap cut it, but only when its own money-tool gate
-        passes for this session, and at most ``MAX_PREREQUISITES`` are added.
+        identity procedure absent. A prerequisite loads only when its own money-tool
+        gate passes for this session, and at most ``MAX_PREREQUISITES`` are added.
 
-        Semantics (068 N5):
-
-        * ``result`` is the FINAL loaded set — trigger matches AND seeded skills —
-          so a seeded skill's ``requires`` apply exactly like a matched one's.
-        * ``all_rules`` is the effective rule set (system rules with the user's
-          overrides applied). A prerequisite whose effective rule says
-          ``auto_activate: false`` is NOT pulled in: a user who disabled a skill
-          disabled it, and ``requires`` never re-enables it. A skill the user
-          SEEDS explicitly is still loaded — seeding is explicit intent.
-        * One pass, no recursion: a prerequisite's own ``requires`` are not
-          expanded. Bounded by ``MAX_PREREQUISITES``.
+        * A prerequisite whose effective rule says ``auto_activate: false`` is NOT
+          pulled in: ``requires`` never re-enables a disabled skill. A skill the
+          rail PINS explicitly is still loaded — a pin is explicit intent.
+        * One pass, no recursion: a prerequisite's own ``requires`` are not expanded.
         """
         present = {m.skill_id for m in result}
         extra: List[MatchedSkill] = []
@@ -554,275 +272,68 @@ class SkillManager(SkillWriterMixin):
                 content = self._load_skill_content(req, user_id=user_id)
                 if not content:
                     continue
-                extra.append(MatchedSkill(
-                    skill_id=req,
-                    priority=req_rule.get("priority", 5),
-                    match_reasons=[f"requires:{m.skill_id}"],
-                    content=content,
-                    description=self._resolve_skill_description(req, req_rule, user_id=user_id),
-                    trigger_type="prerequisite",
-                ))
+                extra.append(self._entry(req, req_rule, content, user_id,
+                                         reason=f"requires:{m.skill_id}",
+                                         trigger_type="prerequisite"))
                 present.add(req)
         return result + extra
 
-    def get_skills_for_session(
-        self,
-        tool_ids: Optional[List[str]] = None,
-        task: str = "",
-        available_actions: Optional[List[str]] = None,
-        max_skills: int = 2,  # Reduced from 5 to prevent prompt bloat
-        user_id: Optional[str] = None,
-        seeded_skill_ids: Optional[List[str]] = None,
-    ) -> List[MatchedSkill]:
-        """
-        Get skills that match the session's configuration.
-        
-        This is the main entry point - call during session initialization.
-        
-        Args:
-            tool_ids: List of tools loaded for this session (e.g., ['browser', 'mcp'])
-            task: The task description for this session
-            available_actions: List of available action names
-            max_skills: Maximum number of skills to return
-            user_id: Optional user ID to include user's custom skills
-            
-        Returns:
-            List of MatchedSkill objects sorted by priority
-        """
+    def _effective_rules(self, user_id: Optional[str]) -> dict:
+        """The system rules with the tenant's rules merged over them."""
         self._ensure_rules_loaded()
-        
-        tool_ids = tool_ids or []
-        available_actions = available_actions or []
-        # D7: triggers read the task's head only. The patterns are regexes with
-        # `.*` between two alternations — quadratic on a 46 KB pasted task
-        # (8.8 s, synchronous at construction). What a task is ABOUT is in its
-        # first few thousand characters.
-        task = (task or "")[:self.MAX_TRIGGER_TASK_CHARS]
-        task_lower = task.lower()
-
-        # Combine system + user rules
         all_rules = dict(self.skill_rules)
-        user_skills_dir = None
-
         if user_id:
-            user_rules, user_skills_dir = self._load_user_rules(user_id)
+            user_rules, _ = self._load_user_rules(user_id)
             self._merge_user_rules(all_rules, user_rules, user_id)
-        
-        matches = []
-        
-        for skill_id, rules in all_rules.items():
-            if not rules.get("auto_activate", True):
-                continue
+        return all_rules
 
-            triggers = rules.get("triggers", {})
+    def _entry(self, skill_id: str, rule: dict, content: str, user_id: Optional[str], *,
+               reason: str, trigger_type: str, priority: Optional[int] = None) -> "MatchedSkill":
+        return MatchedSkill(
+            skill_id=skill_id,
+            priority=rule.get("priority", 5) if priority is None else priority,
+            match_reasons=[reason],
+            content=content,
+            description=self._resolve_skill_description(skill_id, rule, user_id=user_id),
+            trigger_type=trigger_type,
+            when=self._resolve_skill_when(skill_id, user_id=user_id),
+        )
 
-            # A playbook for MOVING FUNDS is not surfaced to a session that
-            # cannot move funds. Measured on prod 2026-09-12: with `defi_trade`
-            # absent from the toolset, "buy a token" still pinned 517 lines of
-            # execution doctrine — a sizing ladder, screens and exit rules for a
-            # rail the agent structurally could not reach. Reading an execution
-            # playbook you cannot execute is the setup for telling the owner a
-            # shipped capability does not exist.
-            #
-            # Deliberately narrow: only a skill DECLARING a money tool is gated,
-            # and a declared money tool or pure read tool (not an action tool
-            # like `cronjob`) satisfies it — so a read-only `defi_data` session
-            # still gets the screens. It stays in the trigger path (rather than
-            # `auto_activate: false`) so a GRANTED run gets the doctrine
-            # delivered: eager bodies, or, under progressive disclosure,
-            # `split_progressive` pins what fits EAGER_INJECT_BUDGET_CHARS
-            # (prerequisites first) and marks the rest LOAD FIRST in the catalog
-            # (review 2026-09-29 D5 — "PINNED" used to be false under defaults).
-            if not self._money_tool_gate_ok(triggers, tool_ids):
-                continue
+    def get_pinned_skills(
+        self,
+        seeded_skill_ids: Optional[List[str]] = None,
+        tool_ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+    ) -> List[MatchedSkill]:
+        """The skills a session loads at START: its PINS, then their prerequisites.
 
-            # Collect matches by type
-            tool_matches = []
-            keyword_matches = []
-            pattern_matches = []
-            action_matches = []
+        081 Q2 (owner, 2026-10-15): only a pinned skill loads at session start — a
+        cron job's or goal's ``payload.skills``, ``TaskSessionConfig.skills`` and
+        the persona seeds. Every other session (owner chat, room, correspondent, a
+        goal or cron run with no pin) gets the short skill index and chooses with
+        ``load_skill``. There is no keyword matcher: it auto-loaded 705 skills for
+        42 explicit loads and pinned the user guide on any "why" or "help".
 
-            # Check tool ID matching
-            trigger_tool_ids = triggers.get("tool_ids", [])
-            for tool_id in trigger_tool_ids:
-                if tool_id in tool_ids:
-                    tool_matches.append(f"tool:{tool_id}")
-
-            # Check keyword matching in task. P2-19: WORD-BOUNDARY match, not a raw
-            # substring — a short keyword like "sell"/"buy"/"trade"/"plan"/"fix" used
-            # to fire on "counselling"/"busy"/"airplane"/"prefix" substrings, and a
-            # priority-1 false positive could evict a genuinely relevant skill under the
-            # max_skills cap. re.escape handles punctuation; a multi-word keyword is
-            # matched as a phrase bounded at each end.
-            keywords = triggers.get("keywords", [])
-            for kw in keywords:
-                kw_l = (kw or "").lower().strip()
-                if not kw_l:
-                    continue
-                # P2-19 (Fusion follow-up): `\b` only asserts a boundary NEXT TO a word
-                # char, so a keyword that starts or ends with a non-word char ("c++",
-                # ".net") gets NO boundary there and `\b<kw>\b` never matches — a silent
-                # false-negative the re.error fallback (zero matches, not an error) can't
-                # catch. Anchor `\b` conditionally: only at an end whose adjacent keyword
-                # char is a word char. So "sell" -> `\bsell\b` (fixes the "counselling"
-                # false positive) but "c++" -> `\bc\+\+` (still matches "use c++ here").
-                def _wordish(ch: str) -> bool:
-                    return ch.isalnum() or ch == "_"
-                left = r"\b" if _wordish(kw_l[0]) else ""
-                right = r"\b" if _wordish(kw_l[-1]) else ""
-                try:
-                    if re.search(left + re.escape(kw_l) + right, task_lower):
-                        keyword_matches.append(f"keyword:{kw}")
-                except re.error:
-                    # Degenerate keyword -> fall back to substring (never crash matching)
-                    if kw_l in task_lower:
-                        keyword_matches.append(f"keyword:{kw}")
-
-            # Check action name matching
-            action_names = triggers.get("action_names", [])
-            for action in action_names:
-                if action in available_actions:
-                    action_matches.append(f"action:{action}")
-
-            # Check task pattern matching (regex)
-            task_patterns = triggers.get("task_patterns", [])
-            for pattern in task_patterns:
-                try:
-                    if re.search(pattern, task, re.IGNORECASE):
-                        pattern_matches.append(f"pattern:{pattern}")
-                except re.error:
-                    pass  # Invalid regex, skip
-
-            # CRITICAL: Determine if skill should load based on RELEVANCE to task
-            # - Keyword or pattern match = task is relevant → LOAD
-            # - Tool match ONLY (no keyword/pattern) = tool present but task not relevant → SKIP
-            # - Tool match + keyword/pattern = strongly relevant → LOAD
-            has_task_relevance = bool(keyword_matches or pattern_matches)
-            has_tool_match = bool(tool_matches)
-
-            # Only load if task is actually relevant (keyword/pattern match required)
-            # Exception: if skill has no tool_ids defined, action match alone can trigger
-            trigger_tool_ids_defined = bool(triggers.get("tool_ids", []))
-
-            should_load = False
-            if has_task_relevance:
-                # Task mentions relevant keywords/patterns - load this skill
-                should_load = True
-            elif not trigger_tool_ids_defined and action_matches:
-                # Skill doesn't require specific tools and has matching actions
-                should_load = True
-            # Note: tool_match alone is NOT enough - prevents loading person-analyzer
-            # just because MCP is present when task is about presentations
-
-            if should_load:
-                match_reasons = tool_matches + keyword_matches + pattern_matches + action_matches
-                content = self._load_skill_content(skill_id, user_id=user_id)
-                if content:
-                    # Determine primary trigger type
-                    trigger_type = "auto"
-                    if any(r.startswith("tool:") for r in match_reasons):
-                        trigger_type = "tool"
-                    elif any(r.startswith("keyword:") for r in match_reasons):
-                        trigger_type = "keyword"
-                    elif any(r.startswith("action:") for r in match_reasons):
-                        trigger_type = "action"
-                    elif any(r.startswith("pattern:") for r in match_reasons):
-                        trigger_type = "pattern"
-                    
-                    matches.append(MatchedSkill(
-                        skill_id=skill_id,
-                        priority=rules.get("priority", 5),
-                        match_reasons=match_reasons,
-                        content=content,
-                        description=self._resolve_skill_description(skill_id, rules, user_id=user_id),
-                        trigger_type=trigger_type
-                    ))
-        
-        # Sort by priority (lower = higher priority), then by number of matches
-        matches.sort(key=lambda m: (m.priority, -len(m.match_reasons)))
-        
-        # 068 N4: a procedure that another MATCHED skill ``requires`` does not
-        # compete for a capped slot with the skill the task asked for — it is
-        # appended by `_with_prerequisites` below. "Buy ETH every week" used to
-        # load the memecoin doctrine + token-identity and cut `dca`, the one
-        # skill the owner requested. A prerequisite the task names directly
-        # (and no matched skill requires) keeps its normal rank.
-        #
-        # 068 R3-5: a prerequisite is demoted ONLY when a parent that requires
-        # it is itself SELECTED (survives the cap) and so will pull it back in.
-        # Computing the demotion from every match let a parent that was later
-        # cut still evict its prerequisite — identity vanished although the
-        # doctrine requiring it never loaded. Fixed point over the selection,
-        # bounded (each pass is a pure function of the previous selection).
-        def _requires_of(ids):
-            return {req for sid in ids
-                    for req in ((all_rules.get(sid) or {}).get("requires") or [])
-                    if isinstance(req, str) and req != sid}
-
-        covered = _requires_of(m.skill_id for m in matches)
-        result = []
-        converged = False
-        for _ in range(4):
-            primary = [m for m in matches if m.skill_id not in covered]
-            secondary = [m for m in matches if m.skill_id in covered]
-            result = (primary + secondary)[:max_skills]
-            selected_parents = {m.skill_id for m in result}
-            next_covered = _requires_of(selected_parents) - selected_parents
-            if next_covered == covered:
-                converged = True
-                break
-            covered = next_covered
-        if not converged:
-            # 068 R4-3: a dependency graph that does not settle in the bound
-            # falls back to plain priority order — no demotion at all — so a
-            # high-priority prerequisite can never vanish because the passes
-            # oscillated between parents that do not survive the cap.
-            result = matches[:max_skills]
-
-        # Force-include preset-seeded skills regardless of trigger match.
-        # Seeds bypass max_skills truncation (they are explicit user intent).
-        if seeded_skill_ids:
-            present = {m.skill_id for m in result}
-            for sid in seeded_skill_ids:
-                if sid in present:
-                    continue  # already in result (via trigger match) → dedup
-                rules = all_rules.get(sid)
-                if not rules:
-                    continue  # unknown id → skip (fail-open)
-                content = self._load_skill_content(sid, user_id=user_id)
-                if not content:
-                    continue  # no SKILL.md → skip (fail-open)
-                result.append(MatchedSkill(
-                    skill_id=sid,
-                    priority=rules.get("priority", 99),
-                    match_reasons=["seeded:preset"],
-                    content=content,
-                    description=self._resolve_skill_description(sid, rules, user_id=user_id),
-                    trigger_type="seeded",
-                ))
-
-        # 068 A1/N5: every loaded skill — matched or seeded — pulls in the
-        # procedures it assumes.
-        result = self._with_prerequisites(result, all_rules, tool_ids, user_id)
-
+        An unknown id or an id with no SKILL.md is skipped (the caller names a
+        missing rail pin). A pin is explicit intent, so it loads even when its
+        rule is gated.
+        """
+        if not seeded_skill_ids:
+            return []
+        all_rules = self._effective_rules(user_id)
+        result: List[MatchedSkill] = []
+        for sid in dict.fromkeys(seeded_skill_ids):
+            rule = all_rules.get(sid)
+            if not rule:
+                continue  # unknown id → skip (fail-open)
+            content = self._load_skill_content(sid, user_id=user_id)
+            if not content:
+                continue  # no SKILL.md → skip (fail-open)
+            result.append(self._entry(sid, rule, content, user_id, reason="seeded:preset",
+                                      trigger_type="seeded", priority=rule.get("priority", 99)))
+        result = self._with_prerequisites(result, all_rules, tool_ids or [], user_id)
         if result:
-            logger.info(
-                f"Matched {len(result)} skills for session: "
-                f"{[m.skill_id for m in result]}"
-            )
-        elif task_lower.strip():
-            # P2-1b: a non-trivial task that trigger-matched nothing is a SILENT recall
-            # miss. Make it observable. (With catalog-include-all default-ON the agent can
-            # still discover these via load_skill, but the trigger miss itself is signal.)
-            available = sorted(
-                sid for sid, r in all_rules.items() if r.get("auto_activate", True)
-            )
-            if available:
-                logger.info(
-                    "no skills matched the task; %d available but un-surfaced by triggers: %s",
-                    len(available), available,
-                )
-
+            logger.info(f"Pinned {len(result)} skills for session: {[m.skill_id for m in result]}")
         return result
 
     #: D8: catalog rank of an external (ecosystem) skill — after builtin (1-5)
@@ -837,8 +348,7 @@ class SkillManager(SkillWriterMixin):
     ) -> List["MatchedSkill"]:
         """Return auto-activatable skills as catalog entries (S-1, true progressive disclosure).
 
-        Unlike :meth:`get_skills_for_session` (which trigger-matches against the task),
-        this exposes every available skill so the agent can DISCOVER and ``load_skill``
+        This exposes every available skill so the agent can DISCOVER and ``load_skill``
         any of them on demand — fixing the gap where a session that matched zero
         triggers got an empty catalog and could load nothing. Bodies are preloaded so
         ``load_skill`` serves without a disk re-read. Sorted by priority, capped.
@@ -850,45 +360,27 @@ class SkillManager(SkillWriterMixin):
         it (see :meth:`may_load_skill`), so the gate is real, not advisory.
 
         067 P0.1: in a SESSION context (*tool_ids* given) an auto-activatable money
-        playbook (e.g. ``treasury-trading``) passes the same money-tool gate as the
-        trigger path (:meth:`_money_tool_gate_ok`) — otherwise the catalog listed a
-        playbook the trigger path had just withheld. ``tool_ids=None`` is a listing
+        playbook (e.g. ``treasury-trading``) passes the money-tool gate
+        (:meth:`_money_tool_gate_ok`). ``tool_ids=None`` is a listing
         view (console, export, ``/skills``), not a session, and lists it.
         """
-        self._ensure_rules_loaded()
-        all_rules = dict(self.skill_rules)
-        if user_id:
-            user_rules, _ = self._load_user_rules(user_id)
-            self._merge_user_rules(all_rules, user_rules, user_id)
+        all_rules = self._effective_rules(user_id)
 
-        session_tool_ids = set(tool_ids or [])
-        catalog = []
+        entries = []
         # 067 P4: ids a gate below withheld. A pack skill (e.g. the markets pack's
         # polymarket-trading) is ALSO discovered as an external skill, so the append
         # further down must not put a withheld one back.
         withheld = set()
         for skill_id, rules in all_rules.items():
-            if not rules.get("auto_activate", True):
-                # P1-1: surface a gated skill only when its required tools are loaded.
-                gate_tool_ids = set(rules.get("triggers", {}).get("tool_ids", []))
-                if not (gate_tool_ids and gate_tool_ids.issubset(session_tool_ids)):
-                    withheld.add(skill_id)
-                    continue
-            elif tool_ids is not None and not self._money_tool_gate_ok(
-                    rules.get("triggers", {}), session_tool_ids):
+            # P1-1 gated + 067 P0.1 money gate: the ONE predicate load_skill uses.
+            if not catalog.gate_allows(rules, tool_ids, listing=True):
                 withheld.add(skill_id)
                 continue
             content = self._load_skill_content(skill_id, user_id=user_id)
             if not content:
                 continue
-            catalog.append(MatchedSkill(
-                skill_id=skill_id,
-                priority=rules.get("priority", 5),
-                match_reasons=["catalog"],
-                content=content,
-                description=self._resolve_skill_description(skill_id, rules, user_id=user_id),
-                trigger_type="catalog",
-            ))
+            entries.append(self._entry(skill_id, rules, content, user_id,
+                                       reason="catalog", trigger_type="catalog"))
 
         # Task 14: append externally-discovered (agentskills.io ecosystem) skills that
         # aren't already covered by a builtin/user rule of the same id.
@@ -897,9 +389,14 @@ class SkillManager(SkillWriterMixin):
         # scan the description AND body, and skip any that trips the injection scan
         # (fail-OPEN if the scanner is unavailable, fail-CLOSED if it raises), matching
         # the writer's P3-1 stance that a catalog description is an injection vector.
-        existing_ids = {m.skill_id for m in catalog}
+        existing_ids = {m.skill_id for m in entries}
         for ext_id, ds in self._load_external_skills().items():
             if ext_id in existing_ids or ext_id in withheld:
+                continue
+            # The catalog lists only what load_skill serves: an id that a
+            # tenant skill shares with a project/user-external one is refused.
+            served = self._resolve(ext_id, user_id)
+            if served is None or served.external is not ds:
                 continue
             ext_desc = ds.meta.get("description", "")
             # A pack skill is trusted shipped content (scan-exempt like builtin).
@@ -910,7 +407,7 @@ class SkillManager(SkillWriterMixin):
             # AFTER every builtin (1-5) and agent-authored (6) skill, so a laptop
             # with dozens of third-party skills cannot crowd the library out of
             # the capped catalog. A pack skill with no rule keeps the builtin band.
-            catalog.append(MatchedSkill(
+            entries.append(MatchedSkill(
                 skill_id=ext_id,
                 priority=5 if ds.scope.startswith("pack:") else self.EXTERNAL_SKILL_PRIORITY,
                 match_reasons=["catalog"],
@@ -918,11 +415,12 @@ class SkillManager(SkillWriterMixin):
                 description=ext_desc,
                 trigger_type="catalog",
                 source=ds.scope,
+                when=_when_of(ds.meta),
             ))
             existing_ids.add(ext_id)
 
-        catalog.sort(key=lambda m: (m.priority, m.skill_id))
-        return catalog[:max_skills]
+        entries.sort(key=lambda m: (m.priority, m.skill_id))
+        return entries[:max_skills]
 
     @staticmethod
     def _external_content_suspicious(skill_id: str, description: str, body: str,
@@ -962,7 +460,7 @@ class SkillManager(SkillWriterMixin):
         """Root under which per-tenant ``user_<uid>`` skill directories live (Task 8).
 
         Defaults to the WRITABLE data-home user scope
-        (``skill_store.skills_data_home()``) so a create/patch/delete survives
+        (``core.skills.scopes.skills_data_home()``) so a create/patch/delete survives
         a ``polyrob update`` code-tree swap — the installed package tree
         (``self.skills_dir``'s default) is replaced wholesale on update, but
         data-home is not.
@@ -978,89 +476,52 @@ class SkillManager(SkillWriterMixin):
         """
         if self.skills_dir != self._builtin_default_dir:
             return self.skills_dir
-        return skill_store.skills_data_home()
+        return scopes.skills_data_home()
+
+    def _resolve(self, skill_id: str, user_id: Optional[str] = None):
+        """``core.skills.scopes.resolve`` over THIS manager's roots (a test or a
+        sandbox may redirect ``skills_dir``, and with it the tenant root)."""
+        uid = self._require_user(user_id) if user_id else None
+        return scopes.resolve(skill_id, uid, builtin_root=Path(self.skills_dir),
+                              users_root=self._user_dirs_root(),
+                              external=self._load_external_skills())
 
     def resolve_skill_dir(self, skill_id: str, user_id: Optional[str] = None) -> Optional[Path]:
-        """Resolve a skill's on-disk directory for read-only resource access (Task 17).
-
-        Precedence: builtin (``skills_dir/<skill_id>``, if it has a
-        ``SKILL.md`` — matches ``_load_skill_content``'s lookup, so a
-        ``SkillManager(skills_dir=custom)`` test-isolation override resolves
-        consistently here too) > per-tenant user dir
-        (``_user_dirs_root()/user_<uid>/<skill_id>``, if it exists) >
-        externally-discovered (``~/.agents/skills``, ``~/.claude/skills``,
-        ...) skill's ``.path``. Returns ``None`` if the skill can't be located on disk
-        (e.g. an in-memory-only / test-injected skill) — fail-open, never raises.
-
-        Guards against path escape up front: a falsy/empty, multi-segment
-        (contains ``/`` or ``\\``), parent-traversing (``..``), or
-        whitespace-padded ``skill_id`` returns ``None`` immediately. This is
-        deliberately looser than ``validate_skill_id`` — it must still accept
-        legit lenient external ids (digit-leading, unicode, e.g.
-        ``3d-modeling``), just refuse anything that could escape the
-        directory join below.
-
-        Reused by Task 18 (list/read wiring) — do not duplicate this lookup elsewhere.
-        """
-        if (
-            not skill_id
-            or "/" in skill_id
-            or "\\" in skill_id
-            or ".." in skill_id
-            or skill_id != skill_id.strip()
-        ):
-            return None
+        """A skill's on-disk directory for read-only resource access (Task 17), by
+        the ONE precedence order (:meth:`_resolve`). ``None`` when it is not on
+        disk or the id could escape the directory join. A tenant directory must
+        also pass the confined read (no symlink out of the tenant root)."""
         try:
-            # Use self.skills_dir (not self._builtin_default_dir) so a
-            # SkillManager(skills_dir=custom) test-isolation override is
-            # honored here too, matching _load_skill_content's lookup.
-            builtin_dir = self.skills_dir / skill_id
-            if (builtin_dir / "SKILL.md").exists():
-                return builtin_dir
-        except OSError:
-            pass
-        if user_id:
-            try:
-                user_dir = self._user_root(user_id) / skill_id
-                self._read_skill_text(user_dir / "SKILL.md")
-                return user_dir
-            except (OSError, ValueError):
-                pass
-        try:
-            ext = self._load_external_skills().get(skill_id)
-            if ext is not None:
-                return ext.path
+            res = self._resolve(skill_id, user_id)
         except Exception:
-            logger.debug("resolve_skill_dir: external skill lookup failed for %s", skill_id, exc_info=True)
-        return None
+            logger.debug("resolve_skill_dir: lookup failed for %s", skill_id, exc_info=True)
+            return None
+        if res is None:
+            return None
+        if res.scope == "user":
+            try:
+                self._read_skill_text(res.path / "SKILL.md")
+            except (OSError, ValueError):
+                return None
+        return res.path
 
     def _load_user_rules(self, user_id: str) -> tuple:
-        """Load user's custom skill rules.
-
-        Args:
-            user_id: User identifier
-
-        Returns:
-            Tuple of (rules dict, user skills directory Path)
-        """
-        if self._require_user(user_id) is None:
+        """``(rules, user_dir)`` — the tolerant view over the ONE parser
+        (:meth:`_load_user_rules_raw`): an unreadable or non-object file is
+        logged and loads as no rules, so one bad file never stops a session."""
+        uid = self._require_user(user_id)
+        if uid is None:
             return {}, None
-        user_dir = self._user_root(user_id)
-        rules_file = user_dir / "rules.json"
-        
-        if rules_file.exists():
-            try:
-                rules = json.loads(self._read_skill_text(rules_file, max_bytes=1_048_576))
-                if not isinstance(rules, dict):
-                    logger.warning("user skill rules for %s are not an object — ignored",
-                                   user_id)
-                    return {}, user_dir
-                logger.debug(f"Loaded {len(rules)} user skill rules for {user_id}")
-                return rules, user_dir
-            except Exception as e:
-                logger.warning(f"Failed to load user rules for {user_id}: {e}")
-        
-        return {}, user_dir
+        user_dir = self._user_root(uid)
+        try:
+            rules = self._load_user_rules_raw(uid)
+        except Exception as e:
+            logger.warning("Failed to load user rules for %s: %s", user_id, e)
+            return {}, user_dir
+        if not isinstance(rules, dict):
+            logger.warning("user skill rules for %s are not an object — ignored", user_id)
+            return {}, user_dir
+        return rules, user_dir
 
     def get_skill_rule(self, skill_id: str, user_id: Optional[str] = None) -> Optional[dict]:
         """Return the effective rule dict for a skill_id, or None.
@@ -1080,141 +541,62 @@ class SkillManager(SkillWriterMixin):
         self, skill_id: str, tool_ids: Optional[List[str]] = None,
         user_id: Optional[str] = None,
     ) -> bool:
-        """Gate for on-demand loading (P1-1).
-
-        An ``auto_activate: false`` skill (e.g. the money/trading playbooks) is a GATED
-        skill: it may be loaded ONLY when the session has loaded its required tools
-        (``triggers.tool_ids`` all present). Otherwise the gate would only hide the
-        skill from the catalog while the load_skill disk fallback served the full
-        playbook to any model that guessed the id. An unknown id / any auto_activate
-        skill is loadable (True) — the fallback's own tenant/path guards still apply.
-
-        067 P0.1: an auto_activate money playbook is loadable only when it passes
-        :meth:`_money_tool_gate_ok` — the same gate the trigger path and the
-        session catalog apply, so listing and loading agree.
-        """
-        rule = self.get_skill_rule(skill_id, user_id=user_id)
-        if rule is None:
-            return True  # unknown to rules.json — not a gated skill; other guards apply
-        if rule.get("auto_activate", True):
-            return self._money_tool_gate_ok(rule.get("triggers", {}), tool_ids or [])
-        gate_tool_ids = set(rule.get("triggers", {}).get("tool_ids", []))
-        return bool(gate_tool_ids and gate_tool_ids.issubset(set(tool_ids or [])))
+        """Gate for on-demand loading (P1-1, 067 P0.1): the same predicate the
+        session catalog applies (``core.skills.catalog.gate_allows``), so listing
+        and loading agree. An unknown id is loadable; other guards apply."""
+        return catalog.gate_allows(self.get_skill_rule(skill_id, user_id=user_id), tool_ids)
 
     def _load_skill_content(self, skill_id: str, user_id: Optional[str] = None) -> str:
-        """Load skill markdown content from disk, stripped of any YAML frontmatter.
+        """The skill's body, frontmatter stripped, by the ONE precedence order
+        (``core.skills.scopes.resolve``: builtin > user > pack > project >
+        user-external). ``""`` when nothing serves the id.
 
-        SKILL.md may open with an agentskills.io-style frontmatter block
-        (``---\\nname: ...\\n---``). That block is metadata for tooling, not
-        instructions for the LLM, so it is parsed off here — the single source
-        point — and cached separately (see ``_get_skill_meta``); only the
-        frontmatter-free body is cached/returned. Every consumer of the returned
-        content (format_skills_for_prompt, build_load_skill_result,
-        validate_skill_content's content_len/estimated_tokens) therefore sees a
-        clean body without having to strip anything itself.
-
-        Args:
-            skill_id: The skill identifier (directory name)
-            user_id: Optional user ID to check user skills first
-
-        Returns:
-            Skill content as string (frontmatter stripped), or empty string if not found
+        The frontmatter is metadata for tooling, not instructions for the LLM: it is
+        parsed off here, the single source point, and cached separately
+        (:meth:`_get_skill_meta`). A tenant skill with a recorded revision is
+        hash-verified on EVERY load (another worker may have changed it), and is
+        refused when its revision metadata cannot be read.
         """
         if (not skill_id or "/" in skill_id or "\\" in skill_id or ".." in skill_id
                 or skill_id != skill_id.strip()):
             return ""
         if user_id is not None and self._require_user(user_id) is None:
             return ""
-        # Create cache key that includes user context
         cache_key = f"{user_id}:{skill_id}" if user_id else skill_id
-
-        # D9: ONE precedence order, shared with ``resolve_skill_dir``:
-        # builtin (``skills_dir``) > per-tenant user > external. It used to be
-        # user-first here and builtin-first there, so a shadowed id served the
-        # user's body next to the builtin's references/. The writer refuses a
-        # builtin id (D1), so a user skill under one is a legacy leftover.
-        skill_file = self.skills_dir / skill_id / "SKILL.md"
-        if skill_file.exists():
-            if cache_key in self.skill_cache:
+        res = self._resolve(skill_id, user_id)
+        if res is None:
+            if cache_key in self.skill_cache:  # an in-memory (test-injected) skill
+                return self.skill_cache[cache_key]
+            logger.warning(f"Skill file not found: {self.skills_dir / skill_id / 'SKILL.md'}")
+            return ""
+        if res.external is not None:
+            meta, body = res.external.meta, res.external.body
+        else:
+            expected = None
+            if res.scope == "user":
+                try:
+                    expected = self._expected_content_hash(user_id, skill_id)
+                except Exception:
+                    logger.warning("refusing user skill %s: could not read revision metadata", skill_id)
+                    return ""
+            if cache_key in self.skill_cache and expected is None:
                 return self.skill_cache[cache_key]
             try:
-                raw = skill_file.read_text(encoding='utf-8')
-                meta, body = parse_frontmatter(raw)
-                self.skill_meta_cache[cache_key] = meta
-                body = self._note_allowed_tools(cache_key, skill_id, meta, body)
-                self.skill_cache[cache_key] = body
-                logger.debug(f"Loaded skill content for '{skill_id}' ({len(body)} chars)")
-                return body
+                skill_file = res.path / "SKILL.md"
+                raw = (self._read_skill_text(skill_file) if res.scope == "user"
+                       else skill_file.read_text(encoding='utf-8'))
             except Exception as e:
                 logger.error(f"Failed to load skill content for '{skill_id}': {e}")
-
-        # Versioned user skills are hash-verified below before every load. Do
-        # not serve an old process-local cache after another worker atomically
-        # changes SKILL.md/rules.json; legacy skills retain the original cache
-        # behaviour until their next write backfills a revision.
-        expected_content_hash = None
-        if user_id:
-            try:
-                # Do not use _load_user_rules here: that compatibility helper
-                # deliberately turns a malformed rules file into {}. For a
-                # versioned instruction source, treating broken metadata as
-                # "no hash" would silently disable the integrity check.
-                rules_file = self._user_root(user_id) / "rules.json"
-                if rules_file.exists():
-                    user_rules = json.loads(self._read_skill_text(rules_file, max_bytes=1_048_576))
-                    if not isinstance(user_rules, dict):
-                        raise ValueError("user rules must be an object")
-                else:
-                    user_rules = {}
-                rule = user_rules.get(skill_id, {})
-                if isinstance(rule, dict):
-                    expected_content_hash = rule.get("content_sha256")
-                if expected_content_hash is not None and (
-                        not isinstance(expected_content_hash, str)
-                        or not re.fullmatch(r"[0-9a-f]{64}", expected_content_hash)):
-                    logger.warning("refusing malformed revision metadata for user skill %s", skill_id)
-                    return ""
-            except Exception:
-                # A versioned skill must not load when its verification metadata
-                # cannot be read. Legacy user skills preserve the old fail-open
-                # rules behaviour because they contain no revision field.
-                logger.warning("refusing user skill %s: could not read revision metadata", skill_id)
                 return ""
-        if cache_key in self.skill_cache and expected_content_hash is None:
-            return self.skill_cache[cache_key]
-
-        # Then the tenant's own skills
-        if user_id:
-            user_skill_file = self._user_root(user_id) / skill_id / "SKILL.md"
-            if user_skill_file.exists():
-                try:
-                    raw = self._read_skill_text(user_skill_file)
-                    if expected_content_hash is not None:
-                        actual = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-                        if actual != expected_content_hash:
-                            logger.warning("refusing mismatched user skill body for '%s'", skill_id)
-                            return ""
-                    meta, body = parse_frontmatter(raw)
-                    self.skill_meta_cache[cache_key] = meta
-                    body = self._note_allowed_tools(cache_key, skill_id, meta, body)
-                    self.skill_cache[cache_key] = body
-                    logger.debug(f"Loaded user skill content for '{skill_id}' ({len(body)} chars)")
-                    return body
-                except Exception as e:
-                    logger.error(f"Failed to load user skill content for '{skill_id}': {e}")
-
-        # Task 14: external (~/.agents/skills, ~/.claude/skills, ...) lookup — LAST,
-        # so builtin/user skills always take precedence over ecosystem ones.
-        ext = self._load_external_skills().get(skill_id)
-        if ext is not None:
-            self.skill_meta_cache[cache_key] = ext.meta
-            body = self._note_allowed_tools(cache_key, skill_id, ext.meta, ext.body)
-            self.skill_cache[cache_key] = body
-            logger.debug(f"Loaded external ({ext.scope}) skill content for '{skill_id}' ({len(body)} chars)")
-            return body
-
-        logger.warning(f"Skill file not found: {skill_file}")
-        return ""
+            if expected is not None and hashlib.sha256(raw.encode("utf-8")).hexdigest() != expected:
+                logger.warning("refusing mismatched user skill body for '%s'", skill_id)
+                return ""
+            meta, body = parse_frontmatter(raw)
+        self.skill_meta_cache[cache_key] = meta
+        body = self._note_allowed_tools(cache_key, skill_id, meta, body)
+        self.skill_cache[cache_key] = body
+        logger.debug(f"Loaded {res.scope} skill content for '{skill_id}' ({len(body)} chars)")
+        return body
 
     def _note_allowed_tools(self, cache_key: str, skill_id: str, meta: Dict[str, Any],
                             body: str) -> str:
@@ -1241,32 +623,21 @@ class SkillManager(SkillWriterMixin):
                                     user_id: Optional[str] = None) -> str:
         """Resolve the catalog-facing description for a skill.
 
-        The SKILL.md frontmatter ``description`` is the agentskills.io-compliant
-        source of truth and is preferred when present (non-empty); the rules.json
-        ``description`` is the fallback (pre-frontmatter behavior, and the only
-        option for skills / callers with no parsed frontmatter). Callers MUST call
-        ``_load_skill_content(skill_id, user_id=user_id)`` first so the frontmatter
-        cache is populated. This does not affect gating — auto_activate/priority/
-        triggers keep reading from ``rules`` untouched.
+        The SKILL.md frontmatter ``description`` is the source of truth; the
+        rule's ``description`` is the fallback (a tenant skill whose body has no
+        frontmatter keeps the one its writer recorded). Callers MUST call
+        ``_load_skill_content(skill_id, user_id=user_id)`` first so the
+        frontmatter cache is populated.
         """
         meta = self._get_skill_meta(skill_id, user_id=user_id)
         return meta.get("description") or rules.get("description", "")
+
+    def _resolve_skill_when(self, skill_id: str, user_id: Optional[str] = None) -> str:
+        """The index line (``metadata.polyrob-when``) from the cached frontmatter."""
+        return _when_of(self._get_skill_meta(skill_id, user_id=user_id))
     
-    def format_skills_for_prompt(
-        self,
-        matched_skills: List[MatchedSkill],
-        include_metadata: bool = True
-    ) -> str:
-        """
-        Format matched skills for embedding into system prompt with XML tags.
-
-        Args:
-            matched_skills: List of MatchedSkill objects
-            include_metadata: Whether to include match reasons
-
-        Returns:
-            Formatted string with XML-tagged skills ready for prompt embedding
-        """
+    def format_skills_for_prompt(self, matched_skills: List[MatchedSkill]) -> str:
+        """The pinned skill bodies, each in a ``<skill id=...>`` tag, in one ``<skills>`` block."""
         if not matched_skills:
             return ""
 
@@ -1290,15 +661,6 @@ class SkillManager(SkillWriterMixin):
                     skill.skill_id, len(skill.content), SOFT_INJECT_WARN_CHARS,
                 )
             sections.append(f'<skill id="{skill.skill_id}">')
-
-            if include_metadata and skill.match_reasons:
-                # Group match reasons by type
-                keyword_matches = [r for r in skill.match_reasons if r.startswith("keyword:")]
-
-                if keyword_matches:
-                    sections.append(f"⚡ Relevant to: {', '.join(r.split(':')[1] for r in keyword_matches[:3])}")
-                sections.append("")
-
             sections.append(skill.content)
             sections.append("</skill>")
             sections.append("")
@@ -1308,15 +670,11 @@ class SkillManager(SkillWriterMixin):
     
     def format_skill_catalog(self, matched_skills: List[MatchedSkill],
                              load_first: Optional[Set[str]] = None) -> str:
-        """Format matched skills as a compact catalog (S-1 progressive disclosure).
+        """The short skill index (081 Q2): one line per skill, id + when to use it.
 
-        Lists only id + one-line description per skill (~20-30 tok each) instead of
-        the full bodies. The agent loads a skill's full instructions on demand via
-        the load_skill(skill_id) tool. Returns "" when nothing matched.
-
-        ``load_first`` (D5): ids that matched THIS task but did not fit the eager
-        budget. They are listed first with a ``LOAD FIRST`` mark, so the one
-        instruction to load them is visible without reading their body.
+        The model loads a body with ``load_skill``. ``load_first`` (D5): ids this
+        run PINNED that did not fit the eager budget; they are listed first with a
+        ``LOAD FIRST`` mark. Returns "" when there is no skill.
         """
         if not matched_skills:
             return ""
@@ -1324,46 +682,35 @@ class SkillManager(SkillWriterMixin):
 
         lines = [
             "<skill-catalog>",
-            f"{len(matched_skills)} skill(s) are available for this task. Each is a "
-            "detailed workflow you should follow when relevant.",
-            "Call load_skill(skill_id=\"<id>\") to load a skill's FULL instructions "
-            "BEFORE doing the work it covers. Load only what the current step needs.",
+            'Before you act, call load_skill(skill_id="<id>") for the skill whose line fits the task.',
         ]
         if load_first:
-            lines.append("Entries marked LOAD FIRST matched this task: load each one "
-                         "before you act on the task.")
+            lines.append("Entries marked LOAD FIRST are pinned to this run: load each one "
+                         "before you act.")
         lines.append("")
         ordered = ([s for s in matched_skills if s.skill_id in load_first]
                    + [s for s in matched_skills if s.skill_id not in load_first])
         for skill in ordered:
-            desc = (skill.description or skill.skill_id.replace("-", " ")).strip()
-            # Keep each line short — one sentence of description at most.
-            desc = desc.splitlines()[0][:160] if desc else skill.skill_id
-            mark = "LOAD FIRST — " if skill.skill_id in load_first else ""
-            lines.append(f'- id="{skill.skill_id}" — {mark}{desc}')
+            lines.append(catalog_line(skill, load_first=skill.skill_id in load_first))
         lines.append("</skill-catalog>")
         return "\n".join(lines)
 
-    #: D5: under progressive disclosure, the most body characters eager-injected
-    #: for the skills that MATCHED the session (prerequisites first). ~5k tokens.
+    #: D5: the most body characters eager-injected for the skills the session
+    #: PINNED (prerequisites first). ~5k tokens.
     #: A skill that does not fit is marked LOAD FIRST in the catalog instead.
     EAGER_INJECT_BUDGET_CHARS = MAX_SKILL_INJECT_CHARS
 
-    #: pinning order under the budget: safety prerequisites, then rail/persona
-    #: seeds, then trigger matches (already in priority order).
+    #: pinning order under the budget: safety prerequisites, then rail/persona seeds.
     _EAGER_ORDER = {"prerequisite": 0, "seeded": 1}
 
     def split_progressive(self, session_matched: List[MatchedSkill],
                           budget: Optional[int] = None
                           ) -> Tuple[List[MatchedSkill], Set[str]]:
-        """Split the session's MATCHED skills into (eager, load_first) — D5.
+        """Split the session's PINNED skills into (eager, load_first) — D5.
 
-        Under the defaults (progressive disclosure ON, catalog include-all ON)
-        a trigger match, a rail seed and a ``requires`` prerequisite used to
-        only reorder the catalog: nothing reached the model unless it chose to
-        call ``load_skill``. Now every matched body that fits the budget is
-        pinned in full, prerequisites first; the rest are catalog entries
-        marked LOAD FIRST. Bounded: at most ``budget`` characters of bodies.
+        Every pinned body that fits the budget is in the skill message in full,
+        prerequisites first; the rest are index entries marked LOAD FIRST.
+        Bounded: at most ``budget`` characters of bodies.
         """
         remaining = self.EAGER_INJECT_BUDGET_CHARS if budget is None else int(budget)
         ordered = sorted(
@@ -1414,134 +761,16 @@ class SkillManager(SkillWriterMixin):
         logger.info("Skill rules reloaded")
 
     def validate_skill_id(self, skill_id: str) -> Tuple[bool, List[str]]:
-        """Validate skill ID format.
-
-        Args:
-            skill_id: The skill identifier to validate
-
-        Returns:
-            Tuple of (is_valid, list of error messages)
-        """
-        errors = []
-
-        if not skill_id:
-            errors.append("Skill ID cannot be empty")
-            return False, errors
-
-        if len(skill_id) > MAX_SKILL_ID_LENGTH:
-            errors.append(f"Skill ID exceeds max length of {MAX_SKILL_ID_LENGTH}")
-
-        if not re.match(r'^[a-z][a-z0-9-]*$', skill_id):
-            errors.append("Skill ID must be lowercase, start with letter, contain only letters, numbers, hyphens")
-
-        if '--' in skill_id:
-            errors.append("Skill ID cannot contain consecutive hyphens")
-
-        if skill_id.endswith('-'):
-            errors.append("Skill ID cannot end with hyphen")
-
-        return len(errors) == 0, errors
+        """``core.skills.frontmatter.validate_skill_id``."""
+        return _frontmatter.validate_skill_id(skill_id)
 
     def validate_skill_rules(self, skill_id: str, rules: dict) -> SkillValidationResult:
-        """Validate a skill's rules configuration.
-
-        Args:
-            skill_id: The skill identifier
-            rules: The rules dict from rules.json
-
-        Returns:
-            SkillValidationResult with validation details
-        """
-        errors = []
-        warnings = []
-
-        # Validate skill ID
-        id_valid, id_errors = self.validate_skill_id(skill_id)
-        errors.extend(id_errors)
-
-        # Validate triggers
-        triggers = rules.get("triggers", {})
-
-        # Validate tool_ids
-        tool_ids = triggers.get("tool_ids", [])
-        for tool_id in tool_ids:
-            if tool_id not in VALID_TOOL_IDS:
-                warnings.append(f"Unknown tool_id '{tool_id}' - may not trigger correctly")
-
-        # Validate task_patterns (regex)
-        task_patterns = triggers.get("task_patterns", [])
-        for pattern in task_patterns:
-            try:
-                re.compile(pattern)
-            except re.error as e:
-                errors.append(f"Invalid regex pattern '{pattern}': {e}")
-
-        # Validate priority
-        priority = rules.get("priority", 5)
-        if not isinstance(priority, int) or priority < 1 or priority > 10:
-            warnings.append(f"Priority should be 1-10, got {priority}")
-
-        # Check for empty triggers
-        if not tool_ids and not triggers.get("keywords") and not triggers.get("action_names") and not task_patterns:
-            warnings.append("No triggers defined - skill will never activate")
-
-        return SkillValidationResult(
-            skill_id=skill_id,
-            is_valid=len(errors) == 0,
-            errors=errors,
-            warnings=warnings
-        )
+        """``core.skills.catalog.validate_rule``."""
+        return catalog.validate_rule(skill_id, rules)
 
     def validate_skill_content(self, skill_id: str, content: str) -> SkillValidationResult:
-        """Validate skill content.
-
-        Args:
-            skill_id: The skill identifier
-            content: The skill markdown content
-
-        Returns:
-            SkillValidationResult with validation details
-        """
-        errors = []
-        warnings = []
-
-        # Check content exists
-        if not content or not content.strip():
-            errors.append("Skill content is empty")
-            return SkillValidationResult(skill_id=skill_id, is_valid=False, errors=errors)
-
-        content_len = len(content)
-
-        # Check minimum length (warning only - MIN_SKILL_CONTENT_CHARS behavior unchanged
-        # by Task 7; short content still loads, it's just noted).
-        if content_len < MIN_SKILL_CONTENT_CHARS:
-            warnings.append(f"Skill content very short ({content_len} chars) - may not be useful")
-
-        # Check maximum length against the on-disk ceiling (Task 7: split cap).
-        # Short content is already handled above as a warning (not a reject), so the
-        # only way this pure helper can still fail here is the "too large" branch.
-        length_ok, _length_msg = validate_skill_content_length(content)
-        if not length_ok and content_len > MAX_SKILL_FILE_CHARS:
-            errors.append(f"Skill content too large ({content_len} chars, max {MAX_SKILL_FILE_CHARS}) - will bloat prompts")
-
-        # Check for markdown structure. Accept an optional YAML frontmatter block
-        # (--- ... ---) at the top for interop with the agentskills.io / clawhub
-        # open skill standard (P1-1); the heading may follow the frontmatter.
-        body = strip_skill_frontmatter(content).strip()
-        if not body.startswith('#'):
-            warnings.append("Skill should start with a markdown heading")
-
-        # Estimate token count (rough: 4 chars per token)
-        estimated_tokens = content_len // 4
-        if estimated_tokens > 2000:
-            warnings.append(f"Skill uses ~{estimated_tokens} tokens - consider trimming")
-
-        return SkillValidationResult(
-            skill_id=skill_id,
-            is_valid=len(errors) == 0,
-            errors=errors,
-            warnings=warnings
-        )
+        """``core.skills.frontmatter.validate_skill_content``."""
+        return _frontmatter.validate_skill_content(skill_id, content)
 
     def validate_skill(self, skill_id: str, user_id: Optional[str] = None) -> SkillValidationResult:
         """Validate a complete skill (rules + content).
@@ -1570,7 +799,7 @@ class SkillManager(SkillWriterMixin):
             return SkillValidationResult(
                 skill_id=skill_id,
                 is_valid=False,
-                errors=[f"Skill '{skill_id}' not found in rules.json"]
+                errors=[f"Skill '{skill_id}' has no rule"]
             )
 
         # Validate rules
@@ -1612,13 +841,13 @@ class SkillManager(SkillWriterMixin):
     def validate_all_authored(self) -> Dict[str, list]:
         """Strict agentskills.io frontmatter compliance across the shipped skill library.
 
-        Runs :func:`skill_validation.validate_authored` (the strict, "would this
+        Runs :func:`core.skills.frontmatter.validate_authored` (the strict, "would this
         pass the upstream skills-ref reference validator" check) against every
         authored skill's parsed frontmatter. Returns only the skills that have at
         least one issue — a compliant skill is simply absent from the result — so
         an empty dict means the whole library is clean.
         """
-        from .skill_validation import validate_authored
+        from core.skills.frontmatter import validate_authored
         out: Dict[str, list] = {}
         for name, md in self._iter_authored_skill_dirs():
             meta, _ = parse_frontmatter(md.read_text(encoding="utf-8"))
@@ -1642,7 +871,7 @@ class SkillManager(SkillWriterMixin):
         skill could ship a forged ``metadata: {polyrob-created-by: user}`` block
         to claim trusted ("user") origin and slip past the leaf/background ->
         ``.pending`` quarantine gate (see ``_resolve_pending``/``_NON_USER_AUTHORS``
-        in ``skill_writer.py``). ``skill_writer.py`` doesn't even import a
+        in ``modules/skills/writer.py``). The writer doesn't even import a
         frontmatter parser, so this can't regress silently — see
         ``tests/unit/agents/task/test_skill_provenance_local.py``.
 

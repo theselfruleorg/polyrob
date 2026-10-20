@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from core.exceptions import TierError, UserNotFoundError
 
 # Import credit constants from single source of truth
-from modules.credits.pricing import DEN_SIGNUP_ALLOWANCE
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +15,14 @@ class TierManager:
     """Manage user tiers based on NFT ownership."""
 
     # Tier quotas (SIMPLIFIED: holder = 1+ DEN tokens)
-    # Credits: optional welcome grant + 2000 DEN Sign Up Allowance per token
+    # Credits: optional welcome grant
     TIER_LIMITS = {
         "holder": {
-            "signup_allowance_per_token": DEN_SIGNUP_ALLOWANCE,  # $20 USD one-time per token ID
             "max_concurrent_sessions": 10,
-            "max_steps": 50,
             "allowed_models": ["gpt-5", "claude-sonnet-4-5", "gemini-2.5-flash", "deepseek-chat"]
         },
         "admin": {
-            "signup_allowance_per_token": 0,  # Admins don't need allowance
             "max_concurrent_sessions": 100,
-            "max_steps": 500,
             "allowed_models": "*"  # All models
         }
     }
@@ -98,7 +93,7 @@ class TierManager:
         """Get quota limits for user's tier.
 
         For free tier, returns minimal limits (info only - access blocked at feature level).
-        Credits: optional welcome grant + 2000 DEN Sign Up Allowance per token.
+        Credits: optional welcome grant.
         """
 
         tier = await self.get_user_tier(user_id)
@@ -106,9 +101,7 @@ class TierManager:
         # Free tier gets minimal limits (shown in UI but features are blocked)
         if tier == 'free':
             return {
-                "signup_allowance_per_token": 0,
                 "max_concurrent_sessions": 0,
-                "max_steps": 0,
                 "allowed_models": []
             }
 
@@ -149,9 +142,7 @@ class TierManager:
         # Get limits - use get_tier_limits logic for consistency
         if tier == 'free':
             limits = {
-                "signup_allowance_per_token": 0,
                 "max_concurrent_sessions": 0,
-                "max_steps": 0,
                 "allowed_models": []
             }
         elif tier in ('x402', 'free_access'):

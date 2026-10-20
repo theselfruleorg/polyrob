@@ -51,22 +51,16 @@ def _owner_turn_text(agent) -> Optional[str]:
 	"""AGT-4: what the owner actually typed for the current turn, or None.
 
 	The drain (``user_ingress._update_forged_turn_marker``) sets
-	``orchestrator._owner_turn_text`` on every batch (None for a forged one).
-	Before any batch has drained, the turn is the session's opening task. This is
-	TEXT, not authority: the owner/forged/tenant gates still decide who may act."""
+	``orchestrator._owner_turn_text`` on every batch (empty for an all-forged one;
+	a mixed batch keeps the owner's genuine lines — C10). Before any batch has
+	drained, ``create_session`` seeded it from the opening message's typed text
+	(``""`` for a forwarded one). 085 W3: there is NO fallback to ``agent.task`` —
+	the task can be a forwarded body or a document, never the owner's own words.
+	This is TEXT, not authority: the owner/forged/tenant gates still decide who
+	may act."""
 	orch = getattr(agent, "orchestrator", None)
-	if orch is not None and hasattr(orch, "_owner_turn_text"):
-		text = orch._owner_turn_text
-	else:
-		text = getattr(agent, "task", None)
+	text = getattr(orch, "_owner_turn_text", None) if orch is not None else None
 	return text if isinstance(text, str) and text.strip() else None
-
-
-def _orch_read_tainted(orchestrator) -> bool:
-	"""AGT-1: this turn has read third-party text — tool output, a forwarded
-	body, or a correspondent's message (the correspondent taint)."""
-	from core.security.taints import orchestrator_read_or_correspondent
-	return orchestrator_read_or_correspondent(orchestrator)
 
 
 def _orch_correspondent_tainted(orchestrator) -> bool:
@@ -108,12 +102,23 @@ class StepExecutionMixin:
 			# steps" escalation, and ALLOWED_REASONING_TURNS degenerated from "one
 			# planning turn per run" into "one per two empty responses ever".
 			self._empty_action_counter = 0
+			# E-2: a text-only reply may be an autonomous run's final report only
+			# once the run has acted (a prose opening is a plan, not a report).
+			self._acted_this_run = True
 			return True
 
 		# --- model produced no usable actions -------------------------------------
 		# Inject corrective guidance.
 		self._empty_action_counter += 1
-		self.logger.warning(f"Empty action response {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT}")
+		# 2026-10-14 review E-3: five different failures used to share this one
+		# line. Name the cause (recorded by the LLM call) and emit one durable
+		# model_call_quality row for it.
+		from agents.task.agent.core import call_quality
+		cause = call_quality.take_call_issue(self)
+		self.logger.warning(
+			f"Empty action response {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT} "
+			f"(cause: {cause})")
+		call_quality.emit_call_quality(self, cause)
 
 		# D1-a (seed resolution): tolerate a bounded number of tool-free "planning"
 		# turns. Instead of treating the very first empty response as an error,
@@ -246,11 +251,11 @@ class StepExecutionMixin:
 			          # AGT-4: the owner's own words for this turn (the drained
 			          # genuine batch, else the session's opening task).
 			          "owner_text": _owner_turn_text(self),
-			          # AGT-1: the turn has read third-party content.
-			          "untrusted_read": _orch_read_tainted(self.orchestrator),
-			          # W5: the correspondent taint on its own key, so a reader
-			          # of the read taint (an owner setting) keeps it apart.
-			          "correspondent_tainted": _orch_correspondent_tainted(self.orchestrator)},
+			          # WS-A: a correspondent's message is in this session.
+			          "correspondent_tainted": _orch_correspondent_tainted(self.orchestrator),
+			          # D-9 (2026-10-14 review): the model that chose the call, so
+			          # tool_invoked rows can be split by model.
+			          "model": getattr(getattr(self, "llm", None), "model_name", None)},
 		)
 		return execution_context
 

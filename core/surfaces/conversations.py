@@ -41,8 +41,8 @@ def _norm_addr(address: str) -> str:
     ``core.surfaces.address_key.canonical_addr``.
 
     2026-09-15 prod review, C8: lowercasing alone left one channel stored as
-    THREE conversations — ``thepublicden``, ``@thepublicden`` and
-    ``t.me/thepublicden`` — so "have we spoken" and the owner-resend cooldown
+    THREE conversations — ``examplegroup``, ``@examplegroup`` and
+    ``t.me/examplegroup`` — so "have we spoken" and the owner-resend cooldown
     (which reads this store by address) each saw a third of the history.
     Normalizing HERE rather than at the call sites is what makes reads and
     writes agree, including for rows written before this.
@@ -114,8 +114,8 @@ class ConversationStore:
         """Collapse rows written before :func:`_norm_addr` normalized spellings.
 
         2026-09-15 round-2 review. The normalizer stops NEW splits, but a live
-        install already holds ``thepublicden``, ``@thepublicden`` and
-        ``t.me/thepublicden`` as three conversations with three histories — and
+        install already holds ``examplegroup``, ``@examplegroup`` and
+        ``t.me/examplegroup`` as three conversations with three histories — and
         the owner-resend cooldown reads this store BY ADDRESS, so it sees a
         third of what was said. A fix that only helps fresh installs leaves the
         box it was written for exactly as broken.

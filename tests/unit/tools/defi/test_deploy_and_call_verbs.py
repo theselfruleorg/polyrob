@@ -194,7 +194,7 @@ async def test_a_name_built_to_be_misread_is_refused_before_any_rpc():
     res = await tool.deploy_token(DeployTokenParams(
         chain="base", name="hides​itself", symbol="A", supply=1,
         max_spend_usd=1.0))
-    assert "zero-width" in (res.error or "")
+    assert "U+200B" in (res.error or "")
     assert _Rail.last is None
 
 

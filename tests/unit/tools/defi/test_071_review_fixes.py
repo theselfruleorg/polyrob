@@ -17,7 +17,7 @@ def _held(**kw):
 
 
 def _verdict(holding):
-    return rec.diff([], [holding], rail=[]).verdict
+    return rec.diff([], [holding]).verdict
 
 
 # -- reconcile: "unpriced" is no longer one bucket ---------------------------

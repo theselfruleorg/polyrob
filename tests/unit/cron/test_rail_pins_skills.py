@@ -3,7 +3,7 @@
 Prod 2026-09-21 (session 9d3067e0): the daily-X cron run keyword-matched
 ['self-deploy', 'polyrob-user-guide'] — neither about posting — while
 `rh-reporting` and `x-engagement` stayed unloaded. `payload.skills` now reaches
-SkillManager.get_skills_for_session(seeded_skill_ids=…) through the session
+SkillManager.get_pinned_skills(seeded_skill_ids=…) through the session
 request; absent, the run is byte-identical to today's keyword matching.
 """
 import logging
@@ -100,17 +100,14 @@ def test_construction_merges_rail_and_config_skills_and_reports_misses(monkeypat
 	assert events[0][1]["attrs"]["missing"] == ["nope"]
 
 
-def test_the_seed_seam_loads_a_pinned_skill_no_keyword_matches():
-	"""The SkillManager seam the rail rides: a seed loads even when the task
-	text matches nothing about it."""
+def test_the_seed_seam_loads_a_pinned_skill():
+	"""The SkillManager seam the rail rides: a pin loads whatever the task says."""
 	from agents.task.agent.skill_manager import get_skill_manager
 	sm = get_skill_manager()
 	ids = sm.get_skill_ids()
 	assert ids, "no skills shipped?"
 	target = ids[-1]
-	got = sm.get_skills_for_session(tool_ids=[], task="zzqx unrelated words",
-	                                available_actions=[], user_id=None,
-	                                seeded_skill_ids=[target])
+	got = sm.get_pinned_skills(seeded_skill_ids=[target], tool_ids=[], user_id=None)
 	assert target in [m.skill_id for m in got]
 
 

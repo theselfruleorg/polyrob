@@ -89,7 +89,7 @@ async def test_reference_preparation_reaches_persistent_conversation(monkeypatch
     monkeypatch.setattr("cli.ui.input_policy.prepare_text", lambda text: "expanded file")
     convo = SimpleNamespace(respond=AsyncMock(return_value="ok"))
     await run_turn(convo, "@file", None)
-    convo.respond.assert_awaited_once_with("expanded file")
+    convo.respond.assert_awaited_once_with("expanded file", typed_text="@file")
 
 
 def test_root_options_reach_explicit_chat(monkeypatch):

@@ -36,7 +36,13 @@ def render_journey(*, user_id: str, since_label: str = "24h",
     except ValueError as e:
         return f"journey — {scope}\n\n(invalid window: {e})"
 
-    episodes = [e for e in entries if e.kind == "episode"]
+    # 080 WS-4: "Did" reads the board's done goals AND the memory episodes; a
+    # source that could not be read is NAMED in its section, never "(none)".
+    episodes = [e for e in entries if e.kind in ("episode", recap.KIND_GOAL_DONE)]
+    unreadable = [e.text for e in entries if e.kind == recap.KIND_UNREADABLE]
+
+    def _failed(*sources: str) -> List[str]:
+        return [t for t in unreadable if t.split(":", 1)[0] in sources]
     authored = [e for e in entries if e.kind == "skill"]
     changes = [e for e in entries if e.kind == "self_modification"]
     ledger_entry = next((e for e in entries if e.kind == "ledger"), None)
@@ -49,14 +55,18 @@ def render_journey(*, user_id: str, since_label: str = "24h",
     refunds = [e for e in entries if e.kind == PAYMENT_REFUND_DUE]
 
     lines: List[str] = [f"journey — {scope}"]
+    for t in unreadable:
+        lines.append(f"{candy.GUTTER}⚠ {t}")
 
     # Did — episodes
     lines.append("")
     lines.append(candy.section("Did"))
     if episodes:
         lines.extend(candy.bullet(e.text) for e in episodes[:20])
-    else:
-        lines.append(f"{candy.GUTTER}(no episodes recorded)")
+    if _failed("episodes", "goal board"):
+        lines.append(f"{candy.GUTTER}(could not read everything it did — see ⚠ above)")
+    elif not episodes:
+        lines.append(f"{candy.GUTTER}(no done goals, no episodes recorded)")
 
     # Income — ledger rollup. H14b: when there's no ledger entry (build_recap
     # skips an all-zero rollup so the /recap empty-state works), render an honest
@@ -68,7 +78,8 @@ def render_journey(*, user_id: str, since_label: str = "24h",
     # line rather than a different vocabulary.
     lines.append("")
     lines.append(ledger_entry.text if ledger_entry else
-                 "Income: no money activity recorded yet")
+                 ("Income: could not read the ledger — see ⚠ above" if _failed("ledger")
+                  else "Income: no money activity recorded yet"))
     if refunds:
         lines.append(f"{candy.GUTTER}⚠ {len(refunds)} refund owed in this window "
                      f"— `polyrob owner invoices --status refund_due`")
@@ -78,6 +89,8 @@ def render_journey(*, user_id: str, since_label: str = "24h",
     lines.append(candy.section("Learned"))
     if authored:
         lines.extend(candy.bullet(s.text) for s in authored[:20])
+    elif _failed("authored skills"):
+        lines.append(f"{candy.GUTTER}(could not read the authored skills — see ⚠ above)")
     else:
         lines.append(f"{candy.GUTTER}(no authored skills)")
 
@@ -86,6 +99,8 @@ def render_journey(*, user_id: str, since_label: str = "24h",
     lines.append(candy.section("Changed"))
     if changes:
         lines.extend(candy.bullet(c.text) for c in changes[:20])
+    elif _failed("event log"):
+        lines.append(f"{candy.GUTTER}(could not read the event log — see ⚠ above)")
     else:
         lines.append(f"{candy.GUTTER}(no self-modifications)")
 

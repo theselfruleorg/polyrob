@@ -152,8 +152,8 @@ class Deltas:
     logs: Tuple[dict, ...] = ()
     #: 050 §7.3 — only when ``simulate(sender=…)`` measured a SIGNER that is not
     #: the holder (an agent NFT: the owner's treasury key signs, the token-bound account holds).
-    #: ``sender_native_delta`` is the signer's native change (the simulation does
-    #: not charge gas); ``sender_moved`` names every log whose INDEXED topics mention
+    #: ``sender_native_delta`` is the signer's native change (the gas it is
+    #: charged in the simulation is added back, 085 W8); ``sender_moved`` names every log whose INDEXED topics mention
     #: the signer — a transfer from or to it, an approval by or to it, an NFT to it.
     #: Measured for the record only: 069 v4 retired the "operator wallet must not move"
     #: rule (the signer OWNS the NFT, so the account paying it is the owner's own money).
@@ -163,6 +163,9 @@ class Deltas:
     #: A delta cannot say "nothing is left standing" when an allowance existed before; the
     #: approve-spend-reset batch asserts this is exactly 0. Empty = not measured.
     allowance_after: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    #: 085 W2 — the native change of each address in ``simulate(watch_native=…)``
+    #: (an endowed deploy's new contract). Empty = not measured.
+    watched_native_deltas: Dict[str, int] = field(default_factory=dict)
 
     @property
     def grants_allowance(self) -> bool:
@@ -201,10 +204,46 @@ def _native_balance(rpc, holder) -> Optional[int]:
     return onchain._hex_int(rpc("eth_getBalance", [holder, "latest"]))
 
 
+# -- 085 W8 txguard LEAD-1: a simulation that reads like an execution ---------
+#: The bundle's balance/allowance reads run FROM this synthetic address (no code,
+#: no key; its balance is set by a state override) so that, with validation on,
+#: the reads pay their own gas and never touch the holder's native balance.
+_SIM_READER = "0x0000000000000000000000000000000000005151"
+#: Gas limit of each read (Multicall3.getEthBalance / balanceOf / allowance).
+_READ_GAS = 300_000
+#: Gas limit of the transaction when it carries none (capped by the block).
+_DEFAULT_TX_GAS = 15_000_000
+
+
+@dataclass(frozen=True)
+class _FeeContext:
+    base_fee: int
+    gas_limit: int
+    payer_balance: int
+
+
+def _fee_context(rpc: Callable, payer: str) -> _FeeContext:
+    """The latest block's base fee and gas limit, and the payer's balance.
+
+    Raises on any unknown value: a simulation that cannot be priced like the
+    execution is a simulation a contract can tell apart from it.
+    """
+    block = rpc("eth_getBlockByNumber", ["latest", False])
+    if not isinstance(block, dict):
+        raise ValueError("no latest block")
+    base_fee = onchain._hex_int(block.get("baseFeePerGas"))
+    gas_limit = onchain._hex_int(block.get("gasLimit"))
+    balance = _native_balance(rpc, payer)
+    if base_fee is None or gas_limit is None or balance is None:
+        raise ValueError("the latest base fee, gas limit or payer balance is unknown")
+    return _FeeContext(base_fee=base_fee, gas_limit=gas_limit, payer_balance=balance)
+
+
 def simulate(tx: dict, *, holder: str, chain: str,
              tokens: List[str], spenders: List[str],
              rpc: Optional[Callable] = None,
-             sender: Optional[str] = None) -> Deltas:
+             sender: Optional[str] = None,
+             watch_native: Tuple[str, ...] = ()) -> Deltas:
     """Simulate *tx* and return the observed deltas for *holder*.
 
     ⚠️ Uses ``eth_simulateV1``, NOT a sequence of ``eth_call``s. This is the
@@ -229,9 +268,29 @@ def simulate(tx: dict, *, holder: str, chain: str,
     ``from`` the sender, the holder reads are unchanged, and the sender's own
     native balance and every event naming it are measured on top
     (``Deltas.sender_native_delta`` / ``sender_moved``).
+
+    ``watch_native`` (085 W2): more addresses whose native balance is measured
+    before and after (``Deltas.watched_native_deltas``) — the address an endowed
+    CREATE lands at, so a constructor that forwards its endowment is visible.
+
+    085 W8 LEAD-1: the bundle runs with ``validation: true``, a real ``gas`` and
+    ``maxFeePerGas`` (the tip is 0, see below), and
+    ``blockOverrides.baseFeePerGas`` = the latest block's, so ``block.basefee``
+    and ``tx.gasprice`` are not 0 (the cheap "am I simulated?" tests). The reads run from :data:`_SIM_READER`; the
+    payer's balance is raised by exactly the gas headroom (a state override), so a
+    wallet that can pay its transaction is never refused for the simulated gas;
+    and the gas the payer is charged (``gasUsed`` x the effective price) is added
+    back, so every native delta still measures the transaction's value movement only.
     """
     rpc = rpc or _default_rpc_for(chain)
     split = bool(sender) and str(sender).lower() != str(holder).lower()
+    payer = str(sender if split else holder)
+    try:
+        fees = _fee_context(rpc, payer)
+    except Exception as exc:
+        return Deltas(ok=False, error=(
+            f"simulation unavailable: the latest base fee could not be read ({exc}) "
+            f"— refusing rather than simulating with a zero base fee a contract can detect"))
 
     reads: List[dict] = []
     layout: List[tuple] = []
@@ -257,16 +316,51 @@ def simulate(tx: dict, *, holder: str, chain: str,
                       "data": _SEL_GET_ETH_BALANCE + _pad_addr(sender)})
         layout.append(("sender_native", None))
 
-    the_tx = {"from": sender if split else holder, "to": tx.get("to"),
+    for w in watch_native or ():
+        reads.append({"from": holder, "to": MULTICALL3,
+                      "data": _SEL_GET_ETH_BALANCE + _pad_addr(w)})
+        layout.append(("watch_native", str(w).lower()))
+
+    # The simulated tip is 0, whatever the transaction carries: an ArbOS chain
+    # (robinhood) does not charge a tip, so adding back gasUsed x (base + tip)
+    # showed a native INFLOW of gasUsed x tip (2e13 wei on a swap, above the dust
+    # bound) and refused every ERC-20 swap there. At tip 0 the charge is
+    # gasUsed x base fee on every family (live-checked: ethereum, base, optimism,
+    # arbitrum, robinhood), and block.basefee / tx.gasprice are still not 0.
+    priority = 0
+    max_fee = max(int(tx.get("maxFeePerGas") or 0), 2 * fees.base_fee)
+    price = fees.base_fee                     # the effective gas price (<= max_fee)
+    read_budget = _READ_GAS * 2 * len(reads)
+    # ⚠️ A built transaction's ``gas`` is a PLACEHOLDER (EvmBroadcaster's fixed
+    # 120k); ``size_gas`` sizes the real limit from THIS simulation's gasUsed.
+    # Simulating at the placeholder ran every aggregator swap out of gas
+    # ("execution reverted", data 0x) and refused it, so the simulated limit is
+    # never below the block-capped default; a larger given limit is kept.
+    tx_gas = max(int(tx.get("gas") or 0),
+                 min(_DEFAULT_TX_GAS, max(0, fees.gas_limit - read_budget)))
+    fee_fields = {"maxFeePerGas": hex(max_fee),
+                  "maxPriorityFeePerGas": hex(priority)}
+    for r in reads:
+        r.update({"from": _SIM_READER, "gas": hex(_READ_GAS), **fee_fields})
+
+    the_tx = {"from": payer, "to": tx.get("to"),
               "data": tx.get("data", "0x"),
-              "value": hex(int(tx.get("value", 0) or 0))}
+              "value": hex(int(tx.get("value", 0) or 0)),
+              "gas": hex(tx_gas), **fee_fields}
     calls = reads + [the_tx] + reads
     tx_index = len(reads)
+    overrides = {
+        _SIM_READER: {"balance": hex(max_fee * read_budget + 10 ** 18)},
+        payer: {"balance": hex(fees.payer_balance + max_fee * tx_gas)},
+    }
 
     try:
         result = rpc("eth_simulateV1", [
-            {"blockStateCalls": [{"calls": calls}],
-             "validation": False, "traceTransfers": False}, "latest"])
+            {"blockStateCalls": [{
+                "blockOverrides": {"baseFeePerGas": hex(fees.base_fee)},
+                "stateOverrides": overrides,
+                "calls": calls}],
+             "validation": True, "traceTransfers": False}, "latest"])
     except Exception as exc:
         return Deltas(ok=False, error=(
             f"simulation unavailable ({exc}) — refusing rather than proceeding "
@@ -319,15 +413,30 @@ def simulate(tx: dict, *, holder: str, chain: str,
             "simulation produced an unknown balance/allowance — refusing rather "
             "than treating unknown as zero"))
 
+    # The gas the payer was charged is not value the transaction moved: add it back.
+    gas_used = onchain._hex_int(tx_entry.get("gasUsed"))
+    if price and gas_used is None:
+        return Deltas(ok=False, error=(
+            "simulation reported no gasUsed for the transaction — the gas charge "
+            "cannot be told apart from a native outflow, refusing"))
+    gas_charge = (gas_used or 0) * price
+    payer_key = payer.lower()
+
     native_delta = 0
     sender_native_delta = 0
     token_deltas: Dict[str, int] = {}
     allowance_deltas: Dict[Tuple[str, str], int] = {}
     allowance_after: Dict[Tuple[str, str], int] = {}
+    watched: Dict[str, int] = {}
     for i, (kind, key) in enumerate(layout):
         delta = after[i] - before[i]
+        if (kind == "native" and not split) or kind == "sender_native" or \
+                (kind == "watch_native" and key == payer_key):
+            delta += gas_charge
         if kind == "native":
             native_delta = delta
+        elif kind == "watch_native":
+            watched[key] = delta
         elif kind == "sender_native":
             sender_native_delta = delta
         elif kind == "token":
@@ -347,7 +456,7 @@ def simulate(tx: dict, *, holder: str, chain: str,
                   holder_nft_approvals=events.nft_approvals,
                   holder_permit2_grants=events.permit2_grants,
                   holder_6909_approvals=events.approvals_6909,
-                  gas_used=onchain._hex_int(tx_entry.get("gasUsed")),
+                  gas_used=gas_used,
                   return_data=tx_entry.get("returnData"),
                   logs=tuple(raw_logs),
                   event_topics=tuple((str(log.get("address", "")).lower(),
@@ -355,7 +464,8 @@ def simulate(tx: dict, *, holder: str, chain: str,
                                      for log in raw_logs if log.get("topics")),
                   sender_native_delta=sender_native_delta,
                   sender_moved=sender_moved,
-                  allowance_after=allowance_after)
+                  allowance_after=allowance_after,
+                  watched_native_deltas=watched)
 
 
 def _sender_movements(raw_logs, sender: str) -> Tuple[str, ...]:

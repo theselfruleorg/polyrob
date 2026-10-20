@@ -1,0 +1,13 @@
+{
+  "function": {
+    "description": "List all todos in the current task",
+    "name": "task_todo_list",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "List all todos in the current session",
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Show one goal's detail + recent events.",
+    "name": "goal_show",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "goal_id": {
+          "description": "The goal id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

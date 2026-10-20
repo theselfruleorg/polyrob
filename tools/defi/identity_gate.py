@@ -24,7 +24,7 @@ BOUGHT (``token_out``); a sell into a canonical or pinned asset is never touched
 W0 — trust has four sources, none the agent can grant itself: ``canonical``,
 ``owner_pin``, ``own_launch`` (this instance launched/deployed it —
 ``core.wallet.token_provenance``, probed on-chain here on a miss) and the run's
-OWNER-authored ``target_token`` (``buy_target.owner_target_matches``). When a
+owner-typed ``target_token`` (``buy_target.owner_target_matches``). When a
 TRUSTED ``token_out`` collides with an UNTRUSTED tracked claimant, the claimant
 is QUARANTINED (``core.open_positions``: it keeps its cost basis, it is no
 longer a symbol claim) and the buy proceeds — a look-alike can no longer block
@@ -50,8 +50,9 @@ logger = logging.getLogger(__name__)
 
 #: The largest ticket (USD) an autonomous buy of an unverified token may carry
 #: when no independent price agrees with the route. The treasury skill's Tier A
-#: ticket; owner pins and an AGREES route check both lift it.
-UNVERIFIED_UNCHECKED_MAX_USD = 5.0
+#: ticket; owner pins and an AGREES route check both lift it. The ONE copy lives
+#: in ``core.money.limits`` (the agent's live spend-limits block reads it too).
+from core.money.limits import UNVERIFIED_UNCHECKED_MAX_USD  # noqa: E402
 
 _PIN_REMEDY = ("A contract counts as the real one only when it is trusted: this "
                "instance launched or deployed it, the owner wrote it into this "
@@ -176,7 +177,7 @@ def _trust_source(id_out, *, chain: str, token_out: str, execution_context) -> s
 
 def trusted_buy(id_out, *, chain: str, token_out: str, execution_context) -> bool:
     """True when ``token_out`` is trusted for this buy (owner pin, own launch,
-    the run's owner-authored target, or a verified identity) and the owner has
+    the run's owner-typed target, or a verified identity) and the owner has
     not marked it NOT trusted. The swap's route check then may use the weaker,
     liquidity-backed exit-grade price for it (DEFI-6 keeps an independent
     check; the trust only selects the price grade). Fails closed to False."""

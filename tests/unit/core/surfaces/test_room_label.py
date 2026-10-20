@@ -25,7 +25,7 @@ def _row(**kw):
 
 def test_name_comes_from_chat_policy_only():
     row = _row(note="the den, ask before posting")
-    assert room_name(row, _Pol("The Public Den")) == "The Public Den"
+    assert room_name(row, _Pol("The Lobby")) == "The Lobby"
     # no chat.name -> the address, which is always true; NEVER the note
     assert room_name(row, _Pol("")) == "telegram:-100123"
     assert room_name(row, None) == "telegram:-100123"

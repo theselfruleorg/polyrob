@@ -191,8 +191,8 @@ def is_auto_generated(msg: dict) -> bool:
     ``Precedence: bulk|junk|list|auto_reply``, ``X-Autoreply`` and
     ``X-Autorespond``; and a bounce from ``MAILER-DAEMON``/``postmaster``.
     Answering one starts an agent <-> auto-responder loop. The ONE classifier:
-    the email surface refuses to answer these, and ``email_read_machine_mail``
-    returns them to the agent (work order 0009).
+    the email surface refuses to answer these (work order 0009); the agent
+    reads them with ``email_list`` / ``email_read``.
     """
     headers = {str(k).lower(): str(v or "").strip().lower()
                for k, v in (msg.get("headers") or {}).items()}

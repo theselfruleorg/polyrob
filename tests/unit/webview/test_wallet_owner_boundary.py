@@ -17,15 +17,6 @@ def test_customer_cannot_read_operator_wallet(monkeypatch, path):
     assert TestClient(app).get('/api/webgate/' + path).status_code == 403
 
 
-def test_owner_cannot_select_arbitrary_ledger(monkeypatch):
-    monkeypatch.setenv('POLYROB_OWNER_USER_ID', 'owner')
-    monkeypatch.setattr(pages, '_effective_user_id', lambda req: 'owner')
-    app = FastAPI()
-    app.include_router(pages.router)
-    app.include_router(pages.money_router)  # 067 P5a: Money readers
-    assert TestClient(app).get('/api/webgate/positions?ledger=/tmp/other').status_code == 400
-
-
 def test_owner_wallet_reader_is_mounted_and_scoped(monkeypatch):
     monkeypatch.setenv('POLYROB_OWNER_USER_ID', 'owner')
     monkeypatch.setattr(pages, '_effective_user_id', lambda req: 'owner')

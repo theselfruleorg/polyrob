@@ -1,19 +1,18 @@
 """Address poisoning: refuse a payee that only LOOKS like one we already paid.
 
-Prod 2026-10-04 17:46: right after the owner's payments to
-0x45Dd976d6E2f4557f2dfcD78FB75Bb19DCC32DC0 and 0x759a0D75fF97673D1242B9ad7421480626F70C82,
-dust arrived from 0x45d4dccbe859ed59ba3a46de6eb3ec214f7c2dc0 and
-0x759a4f75a99cbaeccd43a3c860cbefd828130c82 — vanity addresses with the same head
-and tail, planted in the history so the next payment gets copied to them.
+Prod 2026-10-04 17:46: right after the owner's payments to two payees, dust
+arrived from vanity addresses with the same head and tail, planted in the
+history so the next payment gets copied to them. The fixtures below have the
+same shape (3 head chars, 4 tail chars) and are not real addresses.
 """
 import json
 
 from core.wallet import address_lookalike as al
 
-PAID_A = "0x45Dd976d6E2f4557f2dfcD78FB75Bb19DCC32DC0"
-PAID_B = "0x759a0D75fF97673D1242B9ad7421480626F70C82"
-FAKE_A = "0x45d4dccbe859ed59ba3a46de6eb3ec214f7c2dc0"
-FAKE_B = "0x759a4f75a99cbaeccd43a3c860cbefd828130c82"
+PAID_A = "0xAbc1111111111111111111111111111111112DC0"
+PAID_B = "0x7590222222222222222222222222222222220c82"
+FAKE_A = "0xabc9999999999999999999999999999999992dc0"
+FAKE_B = "0x7598888888888888888888888888888888880c82"
 
 
 def test_the_prod_pairs_are_lookalikes():

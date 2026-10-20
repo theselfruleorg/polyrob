@@ -33,7 +33,7 @@ def test_compute_posture_members_match_the_table():
 def test_member_set_is_the_table():
     from core.config_policy.members import MEMBER_FLAGS
     assert set(DERIVED_FROM) == set(MEMBER_FLAGS)
-    assert len(MEMBER_FLAGS) == 51
+    assert len(MEMBER_FLAGS) == 50
 
 
 def test_no_member_is_a_catalog_row():

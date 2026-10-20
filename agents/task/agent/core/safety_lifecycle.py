@@ -25,29 +25,9 @@ class SafetyLifecycleMixin:
             return True
         return False
 
-    def _check_context_overflow(self) -> bool:
-        """Check if context exceeds threshold and trigger emergency prune.
-
-        SIMPLIFIED (Dec 2025): Uses CONTEXT_OVERFLOW_THRESHOLD from config (default 90%).
-        Let context grow naturally, only prune when necessary.
-
-        Returns:
-            True if pruning was triggered, False otherwise
-        """
-        if not hasattr(self, 'message_manager') or not self.message_manager:
-            return False
-
-        from agents.task.robust_parse_config import RobustParseConfig
-
-        usage_pct = self.message_manager.get_context_usage_percent()
-        threshold = RobustParseConfig.CONTEXT_OVERFLOW_THRESHOLD * 100  # Convert to percentage
-
-        if usage_pct >= threshold:
-            self.logger.info(f"📦 Context at {usage_pct:.1f}% (threshold: {threshold:.0f}%) - emergency prune")
-            self.message_manager.emergency_context_prune()
-            return True
-
-        return False
+    # (_check_context_overflow removed 2026-10-13, coherency review E-A1: a 90 %
+    #  prune that ran before every step, OUTSIDE the 85/95 ladder in step.py, and
+    #  cut to 3 messages with no summary. The ladder is the ONE compaction policy.)
 
     async def _check_for_stall(self) -> bool:
         """Check if the agent is stalled and not making progress.
@@ -223,6 +203,9 @@ class SafetyLifecycleMixin:
         # and an empty response in a previous conversational turn still counted toward
         # this turn's escalation.
         self._empty_action_counter = 0
+        # Per-run as well: a prose reply ends an autonomous run as its report only
+        # once THIS run acted (call_quality E-2).
+        self._acted_this_run = False
 
         # Reset loop detection state
         self.state.reset_loop_detection()

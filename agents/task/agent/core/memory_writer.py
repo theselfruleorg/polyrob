@@ -203,7 +203,6 @@ class MemoryWriterMixin:
 		brain_state: Dict[str, Any],
 		actions: List[Dict[str, Any]],
 		results: List[Any],
-		step_info: Optional[Any] = None
 	) -> None:
 		"""Save step to hierarchical memory with brain state memory field.
 
@@ -215,7 +214,6 @@ class MemoryWriterMixin:
 			brain_state: Brain state from LLM (contains 'memory', 'phase', etc.)
 			actions: Actions taken this step
 			results: Action results
-			step_info: Optional AgentStepInfo with max_steps
 		"""
 		if not self.task_context_manager or not self.session_id:
 			self.logger.debug("H-MEM unavailable: task_context_manager or session_id missing")
@@ -272,35 +270,22 @@ class MemoryWriterMixin:
 			else:
 				finding = None
 
-			# Fallback: If memory field empty OR still the early-exit placeholder
-			# brain (CO-F4 — "Synthesis pending..." must never land in H-MEM as a
-			# real finding), try action results (secondary source).
-			if not finding or len(finding) < 10 or finding.startswith("Synthesis pending"):
-				self.logger.debug(f"Brain state memory empty at step {step_number}, using action results")
-				result_finding = self._extract_finding_from_results(results)
-				if result_finding:
-					finding = result_finding
-				else:
-					# P2-3: do NOT fall back to next_goal. next_goal is an IMPERATIVE
-					# ("Click the search button"), not a finding, and writing it made junk
-					# a permanent recallable cross-session memory row. A step with no real
-					# finding writes no finding — the step is still recorded via add_step;
-					# only the H-MEM finding is skipped.
-					finding = None
+			# A step whose brain gave no real memory writes no finding (the step
+			# is still recorded via add_step). Neither next_goal (an imperative)
+			# nor a raw tool result is a finding (P2-3, 2026-10-14).
+			if not finding or len(finding) < 10:
+				finding = None
 
-			# A finding written while a tool call failed (this step's results,
-			# or the previous step's — the brain's memory summarises the results
-			# it last saw) is a claim the run could not verify. Prod 2026-10-03:
-			# one "File not found" became seven cross-session rows saying the
-			# file "never existed". Mark it so recall treats it as a guess.
+			# The brain's memory of step N is written BEFORE step N's actions run —
+			# it summarises the results it last saw (step N-1's). A finding written
+			# while that step's tool call failed is a claim the run could not
+			# verify (prod 2026-10-03: one "File not found" became seven rows
+			# saying the file "never existed"). Mark it so recall treats it as a guess.
 			step_failed = _results_failed(results)
-			if finding and (step_failed or getattr(self, '_prev_step_failed', False)):
+			if finding and getattr(self, '_prev_step_failed', False):
 				if not finding.startswith(UNVERIFIED_PREFIX):
 					finding = UNVERIFIED_PREFIX + finding
 			self._prev_step_failed = step_failed
-
-			# Get total_steps from step_info if available
-			total_steps = step_info.max_steps if step_info and hasattr(step_info, 'max_steps') else None
 
 			# Add to hierarchical memory.
 			# HIGH-3: offload off the event loop — add_step_memory is synchronous and, when
@@ -314,7 +299,6 @@ class MemoryWriterMixin:
 				brain_state=brain_state,
 				action_summary=action_summary,
 				finding=finding,  # Now uses brain_state.memory!
-				total_steps=total_steps
 			)
 
 			if success:
@@ -345,63 +329,89 @@ class MemoryWriterMixin:
 			else:
 				self.logger.warning(f"⚠️  H-MEM save returned False for step {step_number}")
 
-			# Periodically save to disk (every 10 steps).
-			# Offloaded for the same reason add_step_memory above is (HIGH-3):
-			# save_session -> HierarchicalMemory.save is a synchronous mkdir + open +
-			# json.dump of the session's whole H-MEM state. Run inline it froze the
-			# shared event loop — every concurrent session in the process — for the
-			# duration of that write, every 10 steps of every active session.
-			if step_number % 10 == 0:
+		except Exception as e:
+			self.logger.error(f"Failed to save step to hierarchical memory: {e}", exc_info=True)
+
+		# P7: hand the session's queued reflection summaries (LLM-consolidated) to
+		# the cross-session store. Raw per-step findings stay in H-MEM (2026-10-14).
+		# No-op unless a provider is registered; isolated + fail-open.
+		try:
+			from modules.memory.registry import memory_sync_turn
+			from agents.task.session_class import regime_policy
+			task_str = getattr(self, 'task', '') or ''
+			promoted = []
+			# 044 T4: never write a public room's content into tenant cross-session
+			# recall — a stranger's message must not become the owner's future memory.
+			# The regime's `owner_memory` column is the ONE answer. A CHILD shares its
+			# parent's session queue and does not drain it: the parent's own drain
+			# (its next step, or the close drain) writes those findings under the
+			# PARENT's regime, so nothing is lost and a child never writes owner memory.
+			owner_ok = regime_policy(self).owner_memory
+			if owner_ok and self.task_context_manager and self.session_id:
+				promoted = self.task_context_manager.drain_promoted_findings(self.session_id)
+			if promoted and owner_ok:
+				content = "\n".join(promoted)
+				status = await memory_sync_turn(task_str, content,
+				                                session_id=self.session_id, user_id=self.user_id)
+				# T4-02: sync_turn curates the agent's own FUTURE recall — previously a
+				# self-evolution channel with zero audit. Record a first-class
+				# memory_write event (durable log → /telemetry + /activity) and mirror
+				# it to the live session feed. Fail-open.
+				# D4 (review 2026-10-13): ONLY for a real insert — a refused (storage
+				# cap), failed, filtered or duplicate write stored nothing new.
+				from modules.memory.registry import SYNC_FAILED, SYNC_INSERTED, SYNC_REFUSED_CAP
+				if status in (SYNC_FAILED, SYNC_REFUSED_CAP):
+					# Not stored: give the findings back so a later drain retries them
+					# (the drain already marked them emitted, and the mark is persisted).
+					self.task_context_manager.release_unsent_findings(
+						self.session_id, promoted, self.user_id)
+					self.logger.warning(f"cross-session write not stored ({status}); "
+					                    f"{len(promoted)} finding(s) kept for a retry")
+				elif status != SYNC_INSERTED:
+					self.logger.debug(f"cross-session write not stored: {status}")
+				else:
+					await self._emit_memory_write(content, promoted, step_number)
+		except Exception as e:
+			self.logger.debug(f"memory_sync_turn skipped (backend hiccup): {e}")
+
+		# Periodically save to disk (every 10 steps) — AFTER the drain above, so
+		# the saved emitted set (D1) covers what this step handed cross-session.
+		# Offloaded for the same reason add_step_memory above is (HIGH-3):
+		# save_session -> HierarchicalMemory.save is a synchronous mkdir + open +
+		# json.dump of the session's whole H-MEM state. Run inline it froze the
+		# shared event loop — every concurrent session in the process — for the
+		# duration of that write, every 10 steps of every active session.
+		if step_number % 10 == 0 and self.task_context_manager and self.session_id:
+			try:
 				await asyncio.to_thread(
 					self.task_context_manager.save_session,
 					self.session_id, self.user_id,
 				)
 				self.logger.info(f"💾 Persisted H-MEM to disk (step {step_number})")
+			except Exception as e:
+				self.logger.error(f"Failed to persist H-MEM: {e}", exc_info=True)
 
-		except Exception as e:
-			self.logger.error(f"Failed to save step to hierarchical memory: {e}", exc_info=True)
-
-		# P7: also route the completed step through the active MemoryProvider.
-		# Cross-session store ingests H-MEM's curated/deduped findings (drain returns
-		# only findings new since the last call), NOT the raw per-step brain memory.
-		# No-op unless an external provider is registered; isolated + fail-open.
+	async def _emit_memory_write(self, content: str, promoted: List[str], step_number: int) -> None:
+		"""Record the memory_write event (durable log → /telemetry + /activity) and
+		mirror it to the live session feed. Fail-open."""
 		try:
-			from modules.memory.registry import memory_sync_turn
-			from agents.task.session_class import may_write_owner_memory
-			task_str = getattr(self, 'task', '') or ''
-			promoted = []
-			if self.task_context_manager and self.session_id:
-				promoted = self.task_context_manager.drain_promoted_findings(self.session_id)
-			# 044 T4: never write a public room's content into tenant cross-session
-			# recall — a stranger's message must not become the owner's future memory.
-			if promoted and may_write_owner_memory(getattr(self, "orchestrator", None)):
-				content = "\n".join(promoted)
-				await memory_sync_turn(task_str, content,
-				                       session_id=self.session_id, user_id=self.user_id)
-				# T4-02: sync_turn curates the agent's own FUTURE recall — previously a
-				# self-evolution channel with zero audit. Record a first-class
-				# memory_write event (durable log → /telemetry + /activity) and mirror
-				# it to the live session feed. Fail-open.
+			from agents.task.telemetry.memory_events import emit_memory_event
+			from modules.memory.scope import session_scope, telemetry_attrs
+			ev_attrs = emit_memory_event("memory_write", user_id=self.user_id or "",
+			                             session_id=self.session_id, source="sync_turn",
+			                             scope="cross_session", content=content,
+			                             count=len(promoted), step=step_number,
+			                             unverified=sum(1 for f in promoted
+			                                            if f.startswith(UNVERIFIED_PREFIX)),
+			                             **telemetry_attrs(session_scope(self.session_id)))
+			if ev_attrs and getattr(self, "orchestrator", None) is not None:
 				try:
-					from agents.task.telemetry.memory_events import emit_memory_event
-					from modules.memory.scope import session_scope, telemetry_attrs
-					ev_attrs = emit_memory_event("memory_write", user_id=self.user_id or "",
-					                             session_id=self.session_id, source="sync_turn",
-					                             scope="cross_session", content=content,
-					                             count=len(promoted), step=step_number,
-					                             unverified=sum(1 for f in promoted
-					                                            if f.startswith(UNVERIFIED_PREFIX)),
-					                             **telemetry_attrs(session_scope(self.session_id)))
-					if ev_attrs and getattr(self, "orchestrator", None) is not None:
-						try:
-							await self.orchestrator.add_to_feed(
-								getattr(self, "agent_id", "agent"), "memory_write", dict(ev_attrs))
-						except Exception as feed_err:
-							self.logger.debug(f"memory write feed mirror skipped: {feed_err}")
-				except Exception as ev_err:
-					self.logger.debug(f"memory write event skipped: {ev_err}")
-		except Exception as e:
-			self.logger.debug(f"memory_sync_turn skipped (backend hiccup): {e}")
+					await self.orchestrator.add_to_feed(
+						getattr(self, "agent_id", "agent"), "memory_write", dict(ev_attrs))
+				except Exception as feed_err:
+					self.logger.debug(f"memory write feed mirror skipped: {feed_err}")
+		except Exception as ev_err:
+			self.logger.debug(f"memory write event skipped: {ev_err}")
 
 	def _build_action_summary(self, actions: List[Dict[str, Any]]) -> str:
 		"""Build human-readable action summary.
@@ -426,29 +436,3 @@ class MemoryWriterMixin:
 				summaries.append(action_type)
 
 		return f"Executed: {', '.join(summaries)}"
-
-	def _extract_finding_from_results(self, results: List[Any]) -> Optional[str]:
-		"""Extract key finding from action results.
-
-		Args:
-			results: Action results
-
-		Returns:
-			Finding string or None
-		"""
-		if not results:
-			return None
-
-		# Look for significant results
-		for result in results:
-			# Handle ActionResult objects
-			if hasattr(result, 'error') and result.error:
-				return f"Error: {result.error[:100]}"
-
-			# Check for extracted data
-			if hasattr(result, 'extracted_content') and result.extracted_content:
-				if len(result.extracted_content) > 100:
-					return f"Found: {result.extracted_content[:200]}..."
-
-		return None
-

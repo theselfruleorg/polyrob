@@ -16,7 +16,7 @@ def test_model_validates_without_surface_and_target():
 
 
 def test_omitted_target_means_owner_on_primary_surface():
-	assert resolve_message_defaults(None, None, {"telegram": "28436760", "email": "o@x"}) \
+	assert resolve_message_defaults(None, None, {"telegram": "100000001", "email": "o@x"}) \
 		== ("telegram", "owner")
 
 

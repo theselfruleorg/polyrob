@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 # Module-level Agent import (no cycle: service does not import orchestrator, and
 # service is loaded before this module during orchestrator import).
 from agents.task.agent.service import Agent
+from core.config_policy import INTERACTIVE_MAX_STEPS
 from core.exceptions import LLMError, LLMPermanentError, LLMProviderExhaustedError
 
 
@@ -312,7 +313,7 @@ class SessionExecutionMixin:
                     continue
 
                 agent = self.agents[agent_id]
-                max_steps = max_steps_per_agent.get(agent_id, 50)
+                max_steps = max_steps_per_agent.get(agent_id, INTERACTIVE_MAX_STEPS)
 
                 self.logger.info(f"Running agent {agent_id} with max {max_steps} steps")
 

@@ -31,8 +31,6 @@ REPO_ROOT = CORE_DIR.parent
 # (core-relative-path, imported-agents-module). May only SHRINK.
 # `agents.task.constants` is deliberately ABSENT — WS-1 killed that edge.
 ALLOWLISTED_CORE_TO_AGENTS_EDGES = frozenset({
-    ('core/knowledge_export.py', 'agents.task.agent.skill_manager'),
-    ('core/knowledge_export.py', 'agents.task.goals.board'),
     ('core/self_evolution.py', 'agents.task.agent.skill_manager'),
     # 044 T5: the room gate resolves high-impact-call policy from the SAME
     # correspondent-gate classification the taint gate uses (one policy, not
@@ -208,7 +206,7 @@ def _imported_modules(rel: str, module: str):
 
 # A "pkg.module:attr" string reference — a registry row that importlib resolves
 # at runtime (core/tool_capabilities.py registrars, core/money_verbs.py,
-# core/standing_verbs.py, core/surfaces/catalog.py). The dependency is real, only
+# core/surfaces/catalog.py). The dependency is real, only
 # deferred, so it is scanned like an import.
 _STRING_REF_RE = re.compile(
     r"""["']((?:core|utils|modules|agents|tools|cron|migrations|api|cli|surfaces|webview"""
@@ -245,7 +243,6 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/config.py', 'modules.llm.profiles'),
     ('core/config.py', 'tools.mcp.config'),
     ('core/instance.py', 'modules.memory.task.threat_scan'),
-    ('core/knowledge_export.py', 'modules.skills.skill_usage'),
     ('core/prefs.py', 'modules.memory.task.threat_scan'),
     ('core/recap.py', 'modules.credits.unified_ledger'),
     ('core/recap.py', 'modules.skills.skill_usage'),
@@ -280,8 +277,6 @@ ALLOWLISTED_UPWARD_STRING_REFS = frozenset({
     ('core/money_verbs.py', 'surfaces.telegram.holdings_ops'),
     ('core/money_verbs.py', 'surfaces.telegram.send_ops'),
     ('core/money_verbs.py', 'surfaces.telegram.swap_ops'),
-    ('core/standing_verbs.py', 'cli.ui.commands.h_adopt'),
-    ('core/standing_verbs.py', 'surfaces.telegram.adopt_ops'),
     ('core/surfaces/catalog.py', 'cli.commands.discord'),
     ('core/surfaces/catalog.py', 'cli.commands.email'),
     ('core/surfaces/catalog.py', 'cli.commands.signal'),
@@ -385,7 +380,9 @@ def test_upward_string_refs_only_shrink():
 # the W9 god-file splits (core/status_*.py and tools/defi data_* modules joined it).
 # +1 (W5): tools/controller/policy_chain.py, the hook chain split out of
 # tools/controller/service.py (a module already inside the component).
-LARGEST_CROSS_PACKAGE_SCC_CEILING = 200
+# 081 WS-4.1: -> 143 when the skill catalog moved to core/skills and the writer
+# to modules/skills (tools and core no longer import agents-tier skill modules).
+LARGEST_CROSS_PACKAGE_SCC_CEILING = 143
 _SCC_TIGHTNESS_SLACK = 10
 
 

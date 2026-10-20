@@ -1,0 +1,54 @@
+{
+  "function": {
+    "description": "Refine your evolving SELF context — YOUR OWN durable notes: lessons learned, conventions you follow, what worked and what did not. action='read' returns the current text; action='update' replaces it (≤12000 chars — consolidate, don't sprawl); action='patch' edits by exact-string replace; Draft activation requires owner review through /pending. On any turn an update/patch is queued for review. This is NOT your core identity/boundaries (those are operator-owned). Pass source= (where it came from: 'measured', 'owner said', 'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line is written with its provenance; that stamp counts toward the char cap.",
+    "name": "self_context_manage",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "update",
+            "patch",
+            "read",
+            "promote"
+          ],
+          "type": "string"
+        },
+        "content": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "new_string": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "observed_at": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "old_string": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "replace_all": {
+          "default": false,
+          "type": "boolean"
+        },
+        "source": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}
