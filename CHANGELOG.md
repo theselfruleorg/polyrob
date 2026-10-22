@@ -10,6 +10,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+### Fixed
+
+- `polyrob update` no longer cancels when GitHub's releases API briefly answers with an empty list: the list is
+  retried, each empty reply is logged, and the boot-time apply falls back to the version the owner confirmed.
+
 ## [1.6.0] — 2026-10-20
 
 ### Added

@@ -104,6 +104,7 @@ def test_check_json_is_pure_and_carries_error(monkeypatch):
     monkeypatch.setattr(up, "detect_install",
                         lambda *a, **k: InstallContext("git", Path("/x"), Path("/x"), "t"))
     monkeypatch.setattr(up, "_http_get", lambda url, timeout=6.0: "[]")
+    monkeypatch.setattr("cli.update.versions._EMPTY_LIST_RETRY_WAITS", ())
     monkeypatch.setattr("cli.update.versions.installed_version", lambda: "0.4.2")
     res = CliRunner().invoke(update_cmd, ["--check", "--json"])
     data = json.loads(res.output)  # pure JSON, no leaked log lines
@@ -464,3 +465,57 @@ def test_manual_steps_name_the_installed_extras(monkeypatch):
     monkeypatch.setattr("cli.update.extras.installed_extras", lambda repo: [])
     assert "pip install -U polyrob " in up._manual_steps_for(PIP)
     assert '--extras ""' in up._manual_steps_for(EDITABLE_GIT)
+
+
+# --- the boot-time apply keeps the version the owner confirmed ------------------
+
+def _patch_boot_apply(monkeypatch, *, release_body):
+    """apply_for_boot with a git install whose release check answers ``release_body``;
+    returns the list the built runners' ``target_ref`` values are appended to."""
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from cli.update.engine import ApplyResult
+
+    _patch(monkeypatch, method="git", current="0.4.2", latest="0.5.0")
+    monkeypatch.setattr(up, "_http_get", lambda url, timeout=6.0: release_body)
+    monkeypatch.setattr("cli.update.versions._EMPTY_LIST_RETRY_WAITS", ())
+    refs = []
+
+    def _runners(ctx, **kw):
+        refs.append(kw.get("target_ref"))
+        return SimpleNamespace(state={})
+
+    monkeypatch.setattr(up, "build_runners", _runners)
+    monkeypatch.setattr(up, "resolve_update_context",
+                        lambda: SimpleNamespace(db_paths=[], snapshots_root=None))
+    monkeypatch.setattr(up, "active_use_reasons", lambda _p: [])
+    monkeypatch.setattr(up, "update_lock", lambda _r: nullcontext())
+    monkeypatch.setattr(up, "apply_update", lambda **kw: ApplyResult(True, None, None, None, False))
+    return refs
+
+
+def test_boot_apply_uses_the_confirmed_target_when_the_list_comes_back_empty(monkeypatch):
+    refs = _patch_boot_apply(monkeypatch, release_body="[]")
+    res = up.apply_for_boot("stable", target_version="v0.5.0")
+    assert res["ok"] and res["to_version"] == "v0.5.0"
+    assert refs == ["v0.5.0"]
+
+
+def test_boot_apply_without_a_target_still_stops_on_an_empty_list(monkeypatch):
+    refs = _patch_boot_apply(monkeypatch, release_body="[]")
+    res = up.apply_for_boot("stable")
+    assert not res["ok"] and res["failed_step"] == "check" and not refs
+
+
+def test_boot_apply_ignores_a_target_that_is_not_newer(monkeypatch):
+    refs = _patch_boot_apply(monkeypatch, release_body="[]")
+    res = up.apply_for_boot("stable", target_version="v0.4.2")
+    assert not res["ok"] and res["failed_step"] == "check" and not refs
+
+
+def test_boot_apply_prefers_a_good_check_over_the_stored_target(monkeypatch):
+    body = json.dumps([{"tag_name": "v0.6.0"}, {"tag_name": "v0.5.0"}])
+    refs = _patch_boot_apply(monkeypatch, release_body=body)
+    res = up.apply_for_boot("stable", target_version="v0.5.0")
+    assert res["ok"] and refs == ["v0.6.0"]

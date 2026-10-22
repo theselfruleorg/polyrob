@@ -7,6 +7,7 @@ safety net. Other install methods get honest per-method manual instructions.
 """
 from __future__ import annotations
 
+import dataclasses
 import json as _json
 import os
 import sys
@@ -28,7 +29,7 @@ from cli.update.runners import build_runners
 from cli.update.snapshot import (
     latest_complete, list_snapshots, restore_snapshot,
 )
-from cli.update.versions import resolve_status
+from cli.update.versions import compare, parse_semver, resolve_status
 
 # Exit codes (CI-friendly): 0 up-to-date, 10 update available, 1 error.
 EXIT_UP_TO_DATE = 0
@@ -347,7 +348,7 @@ def _target_ref(channel: str, status) -> Optional[str]:
     return status.latest if channel != "git" else None
 
 
-def apply_for_boot(channel: str = "stable") -> dict:
+def apply_for_boot(channel: str = "stable", target_version: str = "") -> dict:
     """077: the update a ``/update`` (or ``update --apply`` against a running
     service) asked for, applied by the agent process's BOOT step — the old
     process has drained and exited, the new one has not built anything yet, so
@@ -356,9 +357,18 @@ def apply_for_boot(channel: str = "stable") -> dict:
     The same plan → runners → ``apply_update`` as ``--apply``; no waiting and no
     prompt (the owner confirmed the card). The result is a plain dict the boot
     step stores on the request and the "back online" message reads. Never
-    raises."""
+    raises.
+
+    ``target_version`` is the release the request was confirmed for. When this
+    boot's release check fails or comes back empty, that target is applied
+    instead of cancelling (if it is a newer semver; the tag checkout still
+    proves it exists)."""
     try:
         ctx, status, git_state = _plan(channel)
+        if ((status.error is not None or status.latest is None) and channel != "git"
+                and parse_semver(target_version) is not None
+                and compare(target_version, status.current) > 0):
+            status = dataclasses.replace(status, latest=target_version, error=None)
         if status.error is not None or status.latest is None:
             return {"ok": False, "failed_step": "check", "error": status.human_note,
                     "rolled_back": True, "from_version": status.current}

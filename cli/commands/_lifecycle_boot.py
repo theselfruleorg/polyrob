@@ -117,8 +117,12 @@ def boot_step(command: str, *, data_home: Optional[Path] = None,
                              update_result={"in_progress": True, "old_sha": sha or "",
                                             "old_branch": branch or "HEAD",
                                             "started_at": _time.time()})
+        # The version the owner confirmed: the boot's own release check may come
+        # back empty (a transient GitHub reply) and must not cancel it.
+        target = getattr(req, "target_version", "") or ""
         res = _apply_shielded(
-            apply, req.channel or "stable",
+            (lambda ch: apply(ch, target_version=target)) if target else apply,
+            req.channel or "stable",
             lambda r: lc.set_request_state(lc.STATE_EXITING, data_home=data_home,
                                            update_result=r))
         if res.get("ok"):

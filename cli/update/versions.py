@@ -7,8 +7,10 @@ fetches are injected so the logic is unit-testable offline.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional, Tuple
 
@@ -25,6 +27,13 @@ def _version(text: str) -> Optional[Version]:
 # without a code change (§2.2 — the repo name is not hardcoded to a soon-gone value).
 _DEFAULT_REPO = "theselfruleorg/polyrob"
 _DEFAULT_PYPI = "polyrob"
+
+logger = logging.getLogger(__name__)
+
+# GitHub's releases API intermittently answers 200 with a bare ``[]`` for a repo that
+# has releases (seen ~1 reply in 6 for a few minutes at a time). A repo's release list
+# never legitimately goes to zero, so an empty reply is retried after these waits.
+_EMPTY_LIST_RETRY_WAITS = (1.0, 2.0)
 
 
 def parse_semver(text: str) -> Optional[Tuple[int, int, int]]:
@@ -72,6 +81,7 @@ class UpdateStatus:
     channel: str
     error: Optional[str] = None       # None | offline | not_found | no_releases | http_error | parse_error
     source_ref: str = ""              # the repo/package that was queried
+    empty_replies: int = 0            # GitHub release lists that came back as a bare []
 
     @property
     def update_available(self) -> bool:
@@ -91,6 +101,9 @@ class UpdateStatus:
             return (f"could not find {ref} — the repository/package may be private, "
                     "renamed, or not published yet")
         if self.error == "no_releases":
+            if self.empty_replies:
+                return (f"no releases published yet for {ref} (GitHub's release list "
+                        f"came back empty {self.empty_replies} time(s) in a row)")
             return f"no releases published yet for {ref}"
         if self.error in ("http_error", "parse_error"):
             return f"could not read the release list for {ref} ({self.error})"
@@ -174,12 +187,28 @@ def pypi_versions(fetch: Callable[[str], str], package: str = "polyrob") -> List
 
 def github_tag_versions(fetch: Callable[[str], str],
                        repo: str = "theselfruleorg/polyrob", *,
-                       include_prerelease: bool = False) -> List[str]:
-    """Release tag names from the GitHub Releases API."""
-    body = fetch(f"https://api.github.com/repos/{repo}/releases")
-    data = json.loads(body)
-    if not isinstance(data, list):
-        raise ValueError("expected a GitHub release list")
+                       include_prerelease: bool = False,
+                       sleep: Callable[[float], None] = time.sleep) -> List[str]:
+    """Release tag names from the GitHub Releases API. An empty list is retried
+    (``_EMPTY_LIST_RETRY_WAITS``) and each one logged, so a transient empty reply
+    neither aborts an update nor passes silently as "no releases"."""
+    url = f"https://api.github.com/repos/{repo}/releases"
+    waits = list(_EMPTY_LIST_RETRY_WAITS)
+    attempt = 0
+    while True:
+        attempt += 1
+        body = fetch(url)
+        data = json.loads(body)
+        if not isinstance(data, list):
+            raise ValueError("expected a GitHub release list")
+        if data:
+            break
+        logger.debug("GitHub returned an empty release list for %s (attempt %d of %d, "
+                       "%d bytes: %r)", repo, attempt, len(_EMPTY_LIST_RETRY_WAITS) + 1,
+                       len(body), body[:200])
+        if not waits:
+            break
+        sleep(waits.pop(0))
     return [rel.get("tag_name", "") for rel in data
             if isinstance(rel, dict) and not rel.get("draft")
             and (include_prerelease or not rel.get("prerelease"))]
@@ -193,6 +222,7 @@ def resolve_status(
     current: Optional[str] = None,
     repo: Optional[str] = None,
     package: Optional[str] = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> UpdateStatus:
     """Compute current-vs-latest. ``source`` = 'pypi' | 'github'. Fail-soft, but the
     failure is *classified* (offline / not_found / no_releases / …) so the caller can
@@ -205,9 +235,17 @@ def resolve_status(
 
     latest: Optional[str] = None
     error: Optional[str] = None
+    empties = [0]
+
+    def _counting_fetch(url: str) -> str:
+        body = fetch(url)
+        empties[0] = empties[0] + 1 if body.strip() == "[]" else 0
+        return body
+
     try:
         raw = (pypi_versions(fetch, package) if source == "pypi"
-               else github_tag_versions(fetch, repo, include_prerelease=include_pre))
+               else github_tag_versions(_counting_fetch, repo,
+                                         include_prerelease=include_pre, sleep=sleep))
         latest = select_latest(raw, include_prerelease=include_pre)
         if latest is None:
             error = "no_releases"
@@ -215,4 +253,5 @@ def resolve_status(
         latest = None
         error = _classify_fetch_error(exc)
     return UpdateStatus(current=cur, latest=latest, channel=channel,
-                        error=error, source_ref=ref)
+                        error=error, source_ref=ref,
+                        empty_replies=empties[0] if error == "no_releases" else 0)
