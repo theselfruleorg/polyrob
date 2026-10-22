@@ -10,6 +10,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+### Fixed
+
+- `update --apply` through a running service and `/update` no longer fail with "no automated apply for a systemd
+  install" on a git checkout run by a systemd unit (a `systemctl --user` service): the checkout is detected as git.
+
 ## [1.6.0] — 2026-10-20
 
 ### Added

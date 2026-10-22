@@ -30,6 +30,20 @@ def test_systemd_via_invocation_id_or_opt_path():
     assert _classify(package_dir=Path("/opt/polyrob")).method == SYSTEMD
 
 
+def test_a_git_checkout_run_by_a_systemd_unit_is_still_a_git_install():
+    # systemd sets INVOCATION_ID for every unit, user units included. An editable
+    # checkout run by `systemctl --user` must classify as it does from a shell, or
+    # the boot-time apply of `update --apply` / `/update` reports "no automated apply".
+    env = {"INVOCATION_ID": "abc"}
+    assert _classify(env=env, git_root=Path("/repo"), editable_flag=True).method == EDITABLE_GIT
+    assert _classify(env=env, git_root=Path("/repo"), editable_flag=False).method == GIT
+
+
+def test_opt_polyrob_stays_systemd_even_with_a_git_checkout():
+    assert _classify(package_dir=Path("/opt/polyrob"), env={"INVOCATION_ID": "abc"},
+                     git_root=Path("/opt/polyrob"), editable_flag=True).method == SYSTEMD
+
+
 def test_editable_git_vs_plain_git():
     assert _classify(git_root=Path("/repo"), editable_flag=True).method == EDITABLE_GIT
     assert _classify(git_root=Path("/repo"), editable_flag=False).method == GIT

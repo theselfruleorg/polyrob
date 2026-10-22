@@ -130,7 +130,10 @@ def classify_install(
                               "container detected; update by rebuilding the image")
 
     under_opt = package_dir.is_relative_to(Path("/opt/polyrob"))
-    if env.get("INVOCATION_ID") or under_opt:
+    # INVOCATION_ID only says "a systemd unit runs this", user units included: a
+    # git checkout run by `systemctl --user` is still that checkout, and must
+    # classify the same as from a shell (else the boot-time apply finds no runner).
+    if under_opt or (env.get("INVOCATION_ID") and git_root is None):
         return InstallContext(SYSTEMD, package_dir, git_root,
                               "systemd/server install")
 
