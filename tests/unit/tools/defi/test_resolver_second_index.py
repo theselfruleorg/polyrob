@@ -135,11 +135,11 @@ async def test_empty_from_both_says_both_were_asked():
 @pytest.mark.asyncio
 async def test_exact_symbol_matches_rank_first_and_the_list_is_capped():
     deep_other = _cand("0x" + "a" * 40, 9e8, symbol="TRX-USDT")
-    exact = _cand("0x" + "b" * 40, 1e3, symbol="pnl")
+    exact = _cand("0x" + "b" * 40, 1e3, symbol="tkn")
     rest = [_cand("0x" + f"{i:040x}", 1e6 - i, symbol=f"X{i}") for i in range(12)]
     tool = DefiDataTool(search_fn=lambda s: [deep_other, exact] + rest,
                         search2_fn=lambda s: [])
-    res = await tool.token_resolve(ResolveParams(symbol="PNL"))
+    res = await tool.token_resolve(ResolveParams(symbol="TKN"))
     out = _text(res)
     rows = [ln for ln in out.splitlines() if ln.startswith("  0x")]
     assert rows[0].strip().startswith(exact.address), "the exact match leads"

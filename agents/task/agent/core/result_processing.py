@@ -336,7 +336,8 @@ class ResultProcessingMixin:
 				self.message_manager.add_tool_call_pair_atomic(
 					ai_content=ai_content,
 					tool_calls=tool_calls_to_pass,
-					tool_responses=tool_responses
+					tool_responses=tool_responses,
+					reasoning_content=getattr(self, '_current_reasoning_content', None),
 				)
 				self.logger.info(f"[ATOMIC] ✅ Added AIMessage + {len(tool_responses)} ToolMessages atomically")
 

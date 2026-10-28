@@ -1,9 +1,26 @@
 # Packs
 
-A **pack** is an optional extension that adds tools, skills, CLI commands or a
-chat surface to POLYROB. It is an entry point in the `polyrob.packs` group with a
-`pack.toml` manifest that declares what it contributes. Core never imports a pack
-by name.
+A **pack** is an optional extension that adds tools, skills, CLI commands, a
+chat surface, owner verbs, routes or an execution backend to POLYROB. It is an
+entry point in the `polyrob.packs` group with a `pack.toml` manifest that declares
+what it contributes. Core never imports a pack by name.
+
+The manifest is data: core reads it without importing the pack, then loads the
+pack's code. Its `capabilities` line declares the kinds of thing the pack does —
+`tools`, `money`, `high_impact`, `exec`, `egress`, `api_routes`, `surface`,
+`console_routes` and `owner_verbs`. The list must match what the pack carries: a
+mismatch either way refuses the pack. Only a first-party pack may connect a new chat
+app. The other contributions:
+
+- **Skills** — a `skills/` directory; its skills appear with the `pack:<id>` scope
+  (see [skills.md](skills.md)).
+- **API routes** — mounted under `/api/packs/<pack id>` on `polyrob serve`.
+- **Console routes** — mounted under the same prefix on the console. They are
+  owner-only; a first-party pack may list exact public `GET` paths in
+  `[console] public_paths` (the `x` pack's OAuth callback is the one today).
+- **Owner verbs** — slash verbs such as the `x` pack's `/x`, served on every
+  owner seat.
+- **CLI commands** — named in `[cli] commands`.
 
 There are two tiers:
 

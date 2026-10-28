@@ -10,8 +10,8 @@ from cron.jobs import CronJob, CronJobStore
 from cron.schedule import ScheduleError
 from cron.service import CronService
 
-PNL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-SPEC = {"verb": "defi_data.pool_metrics", "params": {"token": PNL}}
+TKN = "0x5555555555555555555555555555555555555555"
+SPEC = {"verb": "defi_data.pool_metrics", "params": {"chain": "robinhood", "token": TKN}}
 
 
 # -- pause windows -----------------------------------------------------------
@@ -51,7 +51,10 @@ def test_a_stored_window_that_no_longer_parses_holds_the_job():
 #: may not run them: wallet reconnaissance). A read job is scheduled only by the
 #: owner or the agent (cronjob is correspondent- and room-blocked), so the
 #: audience gate has nobody to stop here.
-_AUDIENCE_GATED_ONLY = {"defi_data.wallet_holdings"}
+_AUDIENCE_GATED_ONLY = {"defi_data.wallet_holdings",
+                        # 086 W3: the mandate jobs' prechecks (one named book row; the
+                        # public pools + the mandate's room for one more entry).
+                        "defi_data.position_mark", "defi_data.discovery_count"}
 
 
 def test_only_allowlisted_reads_on_non_money_tools():
@@ -116,7 +119,7 @@ def delivered(monkeypatch):
 
 
 def _job(payload):
-    return CronJob(id="j1", task="monitor the PNL pool", schedule_spec="30m", user_id="rob",
+    return CronJob(id="j1", task="monitor the TKN pool", schedule_spec="30m", user_id="rob",
                    next_run_at=None, payload=payload, max_duration_seconds=180)
 
 
@@ -124,7 +127,7 @@ def _job(payload):
 async def test_read_job_runs_the_verb_and_stays_quiet_without_an_alert(delivered):
     ok, why = await R.run_read_job(None, _job({"read_verb": SPEC}), tool_factory=_Tool)
     assert ok and why == "read_verb" and not delivered
-    assert _Tool.calls[0].token == PNL
+    assert _Tool.calls[0].token == TKN
 
 
 @pytest.mark.asyncio
@@ -206,16 +209,16 @@ def test_schedule_normalizes_and_refuses(tmp_path):
     assert stored.payload["pause_windows"] == [[100.0, 200.0]]
     assert stored.payload["read_verb"]["deliver_on"] == "alert"
     with pytest.raises(ScheduleError, match="end after"):
-        svc.schedule(task="buyback rail", schedule_spec="6h", user_id="rob",
+        svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="rob",
                      payload={"pause_windows": [[5, 1]]})
     with pytest.raises(ScheduleError, match="not a deterministic read verb"):
-        svc.schedule(task="buyback rail", schedule_spec="6h", user_id="rob",
+        svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="rob",
                      payload={"read_verb": {"verb": "defi_trade.swap"}})
 
 
 def test_edit_sets_and_clears_a_window(tmp_path):
     svc, store = _svc(tmp_path)
-    job = svc.schedule(task="buyback rail", schedule_spec="6h", user_id="rob")
+    job = svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="rob")
     assert svc.edit(job.id, user_id="rob",
                     payload_updates={"pause_windows": ["2026-10-01T11:00:00Z",
                                                        "2026-10-03T12:00:00Z"]}) == ["pause_windows"]
@@ -237,7 +240,7 @@ def test_the_public_defi_reads_are_allowlisted_and_own_wallet_reads_are_not():
 
 def test_alert_spec_validates():
     spec = R.validate_read_verb({"verb": "defi_data.price",
-                                 "params": {"chain": "base", "address": PNL},
+                                 "params": {"chain": "base", "address": TKN},
                                  "alert": {"field": "usd", "below": "0.5"}})
     assert spec["alert"] == {"field": "usd", "below": 0.5}
     for bad in ({"below": 1}, {"field": "usd"}, {"field": "usd", "above": "x"}, "usd"):
@@ -261,7 +264,7 @@ async def test_a_threshold_hit_makes_the_job_deliver():
         async def price(self, params, *a):
             return SimpleNamespace(error=None, extracted_content="price text",
                                    metadata={"usd": 0.2})
-    spec = {"verb": "defi_data.price", "params": {"chain": "base", "address": PNL},
+    spec = {"verb": "defi_data.price", "params": {"chain": "base", "address": TKN},
             "alert": {"field": "usd", "below": 0.5}}
     ok, text = await R.call_read_verb(spec, tool_factory=_P)
     assert ok and text.startswith("ALERT: usd")

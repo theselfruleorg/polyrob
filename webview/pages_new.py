@@ -1025,24 +1025,21 @@ def _skills_section(user_id: str) -> dict:
             "usage_error": usage_error}
 
 
-def _mcp_section() -> dict:
-    """Configured MCP servers (user/project ``mcp.json``, the file-first SSOT).
-    ``on`` is whether the MCP subsystem is enabled on this deploy; a server is
-    LISTED even when MCP is off, so the owner can see what is configured."""
+def _mcp_container():
+    from tools.gate_effective import _container
+    return _container()
+
+
+def _mcp_section(user_id: str = "", tenant: tuple = None) -> dict:
+    """The MCP servers the agent can use and the tool's EFFECTIVE state
+    (``tools/mcp/inventory.py``): the tenant's ``/mcp add`` rows (``tenant`` =
+    ``(rows, error)``, read async by the route), the operator's servers, and a
+    named note when the operator file is not readable from this process."""
     try:
-        from tools.mcp.config import load_local_mcp_servers
-        servers = load_local_mcp_servers()
+        from tools.mcp.inventory import mcp_inventory
+        return mcp_inventory(tenant, _mcp_container(), detail=_mcp_detail)
     except Exception as exc:
-        return {"items": [], "error": _reason(exc),
-                "enabled": False}
-    from polyrob.app.bootstrap import _cli_extra_gate
-    enabled = _cli_extra_gate("mcp")
-    items = []
-    for name, cfg in (servers or {}).items():
-        detail = _mcp_detail(cfg) if isinstance(cfg, dict) else None
-        items.append({"id": name, "kind": "mcp", "what": detail,
-                      "on": enabled, "source": "mcp", "last_used": None})
-    return {"items": items, "error": None, "enabled": enabled}
+        return {"items": [], "error": _reason(exc), "enabled": False}
 
 
 def _mcp_detail(cfg: dict):
@@ -1106,7 +1103,8 @@ def _profiles_section() -> dict:
             "unreadable_rows": unreadable_rows}
 
 
-def _capabilities_body(user_id: str, *, owner: bool = True) -> dict:
+def _capabilities_body(user_id: str, *, owner: bool = True,
+                       mcp_tenant: tuple = None) -> dict:
     """Skills + tools + MCP + helpers as one capability answer for *user_id*.
     Each section is independently guarded, so one unreadable source degrades to
     its own named error and never blanks the others.
@@ -1118,7 +1116,7 @@ def _capabilities_body(user_id: str, *, owner: bool = True) -> dict:
     return {
         "tools": _tools_section(),
         "skills": _skills_section(str(user_id)),
-        "mcp": _mcp_section() if owner else dict(withheld, enabled=False),
+        "mcp": _mcp_section(str(user_id), mcp_tenant) if owner else dict(withheld, enabled=False),
         "helpers": _profiles_section() if owner else dict(withheld),
     }
 
@@ -1129,8 +1127,15 @@ async def api_capabilities(request: Request):
     both UIs; ``_effective_user_id`` resolves (and 403s) OUTSIDE the reader."""
     from webview.pages import _effective_user_id
     user_id = _effective_user_id(request)
-    return JSONResponse(_capabilities_body(
-        str(user_id), owner=webgate.is_owner_console()))
+    owner = webgate.is_owner_console()
+    tenant = None
+    if owner:
+        try:
+            from tools.mcp.user_servers import tenant_server_rows
+            tenant = await tenant_server_rows(str(user_id), _mcp_container())
+        except Exception as exc:
+            tenant = (None, _reason(exc))
+    return JSONResponse(_capabilities_body(str(user_id), owner=owner, mcp_tenant=tenant))
 
 
 async def _memory_search_body(user_id: str, query: str, limit: int) -> dict:
@@ -1460,6 +1465,11 @@ async def api_goal_create(request: Request):
                                   and all(isinstance(x, str) for x in tools)):
         return JSONResponse({"ok": False, "message": t("work.create.tools_shape")},
                             status_code=400)
+    depends_on = body.get("depends_on")   # goal ids; the board refuses a foreign one
+    if depends_on is not None and not (isinstance(depends_on, list)
+                                       and all(isinstance(x, str) for x in depends_on)):
+        return JSONResponse({"ok": False, "message": t("work.create.depends_shape")},
+                            status_code=400)
     try:
         goal = create_goal(
             _webgate_goal_board(), user_id=user_id, title=title,
@@ -1467,6 +1477,7 @@ async def api_goal_create(request: Request):
             priority=_as_priority(body.get("priority")),
             tools=tools,
             acceptance=(str(body["acceptance"]) if body.get("acceptance") else None),
+            depends_on=depends_on or None,
             # 083 WS-4: no step budget — the run's cap is the operator's
             # AUTONOMOUS_MAX_STEPS; a posted ``max_steps`` is ignored.
         )

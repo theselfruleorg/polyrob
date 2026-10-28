@@ -1214,12 +1214,16 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         from tools.defi.call_verb import perform_call
         return await perform_call(self, params, execution_context)
 
-    def _solana_turn_gate(self, execution_context, *, exit_shaped_fn):
+    def _solana_turn_gate(self, execution_context, *, exit_shaped_fn, mandate_entry=None):
         """tx_guard steps 1-2, mirrored for the SVM path (which has no EVM
         transaction to route through ``tx_guard.authorize``).
 
         Returns ``(refusal | None, autonomous_origin, monitor_exit)``. Fails
         CLOSED on every probe error, exactly like the EVM guard.
+
+        086 W2: a swap passes ``mandate_entry={"token": mint, "usd": cost}`` so a
+        mandate run's non-exit buy meets the kernel's mandate step (a send or a
+        bridge passes nothing and is never mandate-gated).
         """
         from core.wallet.authority import turn_refusal
         principal_error = turn_refusal(execution_context)
@@ -1280,6 +1284,22 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             return (None, False, False)
         if tx_guard._autonomous_turn_allowed(execution_context, self,
                                              _is_autonomous_goal_turn):
+            if mandate_entry is not None:
+                try:
+                    is_entry = not bool(exit_shaped_fn())
+                except Exception:
+                    is_entry = True
+                if is_entry:
+                    from core.money.authorize import SpendIntent, authorize_spend
+                    verdict = authorize_spend(
+                        SpendIntent(principal=False, leaf=False, pause=False, mandate=True,
+                                    entry=True, chain="solana",
+                                    token=mandate_entry.get("token"),
+                                    usd=mandate_entry.get("usd")),
+                        execution_context, forged_fn=_is_forged_or_autonomous_turn,
+                        autonomous_ok_fn=_is_autonomous_goal_turn, tool_self=self)
+                    if verdict.refused:
+                        return (verdict.reason, False, False)
             return (None, True, False)
         try:
             exit_shaped = bool(exit_shaped_fn())

@@ -130,7 +130,7 @@
     {
       "name": "/trade",
       "group": "money",
-      "help": "Start a run that carries the money verb",
+      "help": "Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop",
       "aliases": []
     },
     {
@@ -268,7 +268,7 @@
     {
       "name": "/update",
       "group": "control",
-      "help": "Update me to the latest release, then report back",
+      "help": "Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet)",
       "aliases": []
     },
     {

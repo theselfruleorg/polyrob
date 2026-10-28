@@ -26,7 +26,7 @@ from tools.defi.providers.univ3 import SwapQuote
 from tools.defi.trade_tool import DefiTradeTool, SwapParams
 
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-TOK = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+TOK = "0x3535353535353535353535353535353535353535"
 ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481"
 _REAL_OWNER_CONFIRMS = buy_screen.owner_confirms
 

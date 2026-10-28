@@ -13,6 +13,8 @@ def _hermetic_top_cost(monkeypatch):
     """The 2026-10-14 D6 top-cost seam reads the home's ledger; keep it out."""
     monkeypatch.setattr(digest, "_top_cost", lambda uid, data_dir, days:
                         "Top AI cost: scheduled job EXIT $0.40 (40%) of $1.00")
+    # 086 W6: the Trading section reads the home's trading stores; keep it out.
+    monkeypatch.setattr(digest, "_trading_lines", lambda uid, data_dir: [])
 
 
 def _split_ledger(**over):

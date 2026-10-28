@@ -206,3 +206,51 @@ def test_set_stop_first_writer_wins_and_never_raises():
 def test_done_stop_reason():
     assert done_stop_reason([ActionResult(is_done=True)]) is StopReason.DONE
     assert done_stop_reason(None) is StopReason.DONE
+
+
+def test_reply_delivered_note_only_on_first_reply_only_step_of_a_live_chat_turn():
+    from agents.task.agent.core.conversational_exit import (
+        REPLY_DELIVERED_NOTE, should_note_reply_delivered)
+
+    assert should_note_reply_delivered(1, False) is True
+    assert should_note_reply_delivered(0, False) is False
+    assert should_note_reply_delivered(2, False) is False  # the exit has already fired
+    assert should_note_reply_delivered(1, True) is False   # sub-agent
+    assert should_note_reply_delivered(1, False, is_autonomous=True) is False
+    # It forbids nothing: it tells the model the state of the turn.
+    assert "delivered" in REPLY_DELIVERED_NOTE and "do that work now" in REPLY_DELIVERED_NOTE
+
+
+def test_a_step_of_only_retry_wall_refusals_is_a_failed_step():
+    from types import SimpleNamespace
+    from agents.task.agent.core.conversational_exit import is_retry_wall_only_step
+
+    wall = SimpleNamespace(error="⚠️ Maximum retries (5) exceeded for defi_data_wallet_holdings.")
+    ok = SimpleNamespace(error=None)
+    other = SimpleNamespace(error="HTTP 500")
+    assert is_retry_wall_only_step([wall]) is True
+    assert is_retry_wall_only_step([wall, wall]) is True
+    assert is_retry_wall_only_step([wall, ok]) is False   # real work happened
+    assert is_retry_wall_only_step([wall, other]) is False
+    assert is_retry_wall_only_step([]) is False
+
+
+def test_retry_wall_is_recognised_by_its_flag_not_only_its_wording():
+    from types import SimpleNamespace
+    from agents.task.agent.core.conversational_exit import is_retry_wall_only_step
+
+    flagged = SimpleNamespace(error="reworded refusal", metadata={"retry_wall": True})
+    assert is_retry_wall_only_step([flagged]) is True
+
+
+def test_retry_key_ignores_omitted_vs_none_vs_padding():
+    from tools.controller.execution import ExecutionMixin
+
+    key = ExecutionMixin._get_operation_key
+    holder = object.__new__(ExecutionMixin)
+    a = key(holder, "defi_data_wallet_holdings", {"address": "0xabc"})
+    b = key(holder, "defi_data_wallet_holdings", {"address": "0xabc", "chain": None})
+    c = key(holder, "defi_data_wallet_holdings", {"address": " 0xabc "})
+    d = key(holder, "defi_data_wallet_holdings", {"address": "0xabc", "chain": "robinhood"})
+    assert a == b == c
+    assert a != d  # a different call is a different call

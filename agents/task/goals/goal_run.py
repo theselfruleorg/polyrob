@@ -260,6 +260,8 @@ class GoalRunMixin:
             # W0: a target the owner typed is trust for this run.
             from core.wallet.buy_target import with_authorship
             request["money_target"] = with_authorship(_target, payload)
+        if payload.get("mandate"):
+            request["mandate"] = str(payload["mandate"])  # 086 W2: the kernel's mandate step
         if _resume_note:
             # The note is CONSUMED at the end of this phase (B13), after every
             # gate that can still stop the run without running it.
@@ -776,7 +778,8 @@ class GoalRunMixin:
                          user_id=goal.user_id, rail_id=f"goal:{goal.id}",
                          task=getattr(goal, "title", None), outcome=outcome,
                          reason=reason, error=error, run=run, summary=summary,
-                         goal_id=goal.id, meta={"source": "goal", **(meta or {})})
+                         goal_id=goal.id, meta={"source": "goal", **(meta or {})},
+                         mandate=(getattr(goal, "payload", None) or {}).get("mandate"))
 
     def _own_pre_sid(self, ctx: _GoalRunCtx) -> Optional[str]:
         """The pre-generated session id when the run really took it (the marker

@@ -5,7 +5,7 @@
 import os
 from pathlib import Path
 import logging
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict
 from pydantic import Field, field_validator, model_validator, PrivateAttr, BaseModel
 from pydantic_settings import (
     BaseSettings,
@@ -415,7 +415,7 @@ class ServerConfig(AgentConfig):
     _is_initialized: bool = PrivateAttr(default=False)
 
 
-    @field_validator('openai_api_key', 'anthropic_api_key', 'alchemy_api_key')
+    @field_validator('openai_api_key', 'anthropic_api_key')
     def validate_api_keys(cls, v: Optional[str], info) -> Optional[str]:
         """Validate API keys."""
         if v is None:
@@ -463,6 +463,12 @@ class ServerConfig(AgentConfig):
             return
 
         from tools.mcp.config import get_default_mcp_config, MCPConfig, load_local_mcp_servers
+
+        # An explicit MCP_ENABLED=false (POLYROB_OVERRIDES) wins over every
+        # enable signal below, the operator's own server file included.
+        from core.config_policy.members import member_raw
+        if member_raw("MCP_ENABLED") == "false":
+            return
 
         # File-first local overlay (single-user mode). When present these enable MCP
         # even if MCP_ENABLED is unset, and override base servers on name clash.
@@ -674,21 +680,6 @@ class ServerConfig(AgentConfig):
         # Only return values that are actually set
         return {k: v for k, v in twitter_config.items() if v and v.strip()}
 
-    # Collab.Land Configuration
-    collabland_api_key: str = Field("", alias='COLLABLAND_API_KEY')
-    collabland_api_url: str = Field("https://api.collab.land", alias='COLLABLAND_API_URL')
-    collabland_rules: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Update with full credentials
-    collabland_id: str = Field("", alias='COLLABLAND_ID') 
-    collabland_secret: str = Field("", alias='COLLABLAND_SECRET')
-    
-    # Alchemy API Configuration
-    alchemy_api_key: str = Field("", alias='ALCHEMY_API_KEY')
-    alchemy_api_url: str = Field("https://eth-mainnet.g.alchemy.com", alias='ALCHEMY_API_URL')
-    
-    # Den token configuration
-    den_token_contract_address: str = Field("", alias='DEN_TOKEN_CONTRACT_ADDRESS')
 
     # ============================================
     # AUTHENTICATION & CREDIT SYSTEM (FREE - No Privy!)

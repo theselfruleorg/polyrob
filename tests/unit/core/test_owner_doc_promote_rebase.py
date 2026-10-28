@@ -2,7 +2,7 @@
 
 Prod 2026-10-15: a draft of owner.md would have moved ~60 live rules (stops
 included) under '## Superseded' on approval — promote activated the whole
-pending body. Prod 2026-10-10: a stale 'BUYBACKS RESUMED … 4def3260d811' line,
+pending body. Prod 2026-10-10: a stale 'REBUYS RESUMED … 0a1b2c3d4e5f' line,
 already retired, came back live through a promoted draft. Promote now rebases
 on the active doc it was drafted against (`.pending/owner.md.base`).
 """
@@ -81,7 +81,7 @@ def test_many_retirements_are_named_with_count(tmp_path):
 def test_line_retired_since_the_draft_stays_retired(tmp_path):
     """The 10-10 case: a stale line the draft only carried does not come back."""
     w = OwnerDocWriter(tmp_path)
-    stale = "BUYBACKS RESUMED: job 4def3260d811 runs hourly."
+    stale = "REBUYS RESUMED: job 0a1b2c3d4e5f runs hourly."
     base = ["Owner timezone: UTC+7.", stale]
     assert w.propose(_doc(base), user_id=UID, created_by="user", pending=False).ok
     assert w.propose(_doc(base + ["Owner prefers short replies."]),

@@ -52,7 +52,7 @@ async def test_storage_cap_records_one_verdict_a_day(prov, verdicts, monkeypatch
     assert await R.memory_sync_turn("q", "First finding about the treasury.",
                                     session_id="s", user_id="u") == R.SYNC_INSERTED
     for i in range(3):
-        got = await R.memory_sync_turn("q", f"Owner correction number {i} about buybacks.",
+        got = await R.memory_sync_turn("q", f"Owner correction number {i} about rebuys.",
                                        session_id="s", user_id="u")
         assert got == R.SYNC_REFUSED_CAP
     assert len(verdicts["record"]) == 1
@@ -101,10 +101,10 @@ async def test_store_full_again_after_a_clear_is_recorded_at_once(prov, verdicts
     import modules.memory.storage_limits as sl
     monkeypatch.setattr(sl, "MAX_MEMORY_ROWS", 1)
     await R.memory_sync_turn("q", "First finding about the treasury.", session_id="s", user_id="u")
-    assert await R.memory_sync_turn("q", "Second finding about buybacks.",
+    assert await R.memory_sync_turn("q", "Second finding about rebuys.",
                                     session_id="s", user_id="u") == R.SYNC_REFUSED_CAP
     monkeypatch.setattr(sl, "MAX_MEMORY_ROWS", 2)
-    assert await R.memory_sync_turn("q", "Second finding about buybacks.",
+    assert await R.memory_sync_turn("q", "Second finding about rebuys.",
                                     session_id="s", user_id="u") == R.SYNC_INSERTED
     assert await R.memory_sync_turn("q", "Third finding about the den bounty.",
                                     session_id="s", user_id="u") == R.SYNC_REFUSED_CAP

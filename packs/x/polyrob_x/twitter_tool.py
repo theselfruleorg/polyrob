@@ -23,6 +23,7 @@ _OWNER_APPROVED_ACTION: "contextvars.ContextVar[Optional[str]]" = contextvars.Co
     "x_owner_approved_action", default=None)
 from core.exceptions import APIError, ConfigurationError, AuthenticationError, RateLimitError, ToolError, ServiceError
 from core.credential_verdicts import TWITTER_API_TTL_SEC
+from polyrob_x.metrics import with_repost_row, with_repost_total
 import os
 
 # Read-side param models (067 P3b: moved here from tools/controller/views.py
@@ -717,7 +718,7 @@ class TwitterTool(BaseTool):
                 "author_id": tweet_data.author_id,
                 "created_at": tweet_data.created_at.isoformat() if hasattr(tweet_data, 'created_at') else None,
                 "conversation_id": getattr(tweet_data, 'conversation_id', None),
-                "public_metrics": getattr(tweet_data, 'public_metrics', {})
+                "public_metrics": with_repost_total(getattr(tweet_data, 'public_metrics', {}))
             }
             
             # Add referenced tweets if available
@@ -796,7 +797,7 @@ class TwitterTool(BaseTool):
                         'text': tweet.text,
                         'created_at': tweet.created_at.isoformat()
                         if getattr(tweet, 'created_at', None) else None,
-                        'metrics': getattr(tweet, 'public_metrics', {})
+                        'metrics': with_repost_total(getattr(tweet, 'public_metrics', {}))
                     }
                     for tweet in list(response.data)[:max_results]
                 ]
@@ -1173,8 +1174,7 @@ class TwitterTool(BaseTool):
             if not response or not response.data:
                 return {}
                 
-            # Convert list of tweets to dict keyed by ID
-            return {str(tweet.id): tweet.data for tweet in response.data}
+            return {str(tweet.id): with_repost_row(tweet.data) for tweet in response.data}
             
         except Exception as e:
             self.logger.error(f"Unexpected error fetching tweets batch: {str(e)}")
@@ -1396,7 +1396,7 @@ class TwitterTool(BaseTool):
                         'id': tweet.id,
                         'text': tweet.text,
                         'created_at': tweet.created_at.isoformat() if hasattr(tweet, 'created_at') else None,
-                        'metrics': tweet.public_metrics,
+                        'metrics': with_repost_total(tweet.public_metrics),
                         'author': {
                             'id': author.id,
                             'username': author.username,
@@ -1501,7 +1501,7 @@ class TwitterTool(BaseTool):
                     'id': tweet.id,
                     'text': tweet.text,
                     'created_at': tweet.created_at.isoformat(),
-                    'metrics': tweet.public_metrics,
+                    'metrics': with_repost_total(tweet.public_metrics),
                     'entities': tweet.entities
                 })
                 
@@ -1704,7 +1704,7 @@ class TwitterTool(BaseTool):
 
     def _owner_standing_run(self, execution_context) -> bool:
         """True for the MAIN run of a standing cron job or goal (the daily promo
-        post, the buyback notice): its post is the owner's standing decision.
+        post, a recurring trade notice): its post is the owner's standing decision.
         Not a sub-agent/leaf, not a room or forged re-entry, no correspondent's
         message in the session, the owner tenant, and the run is recorded by
         the cron runner or the goal dispatcher. Fail-closed."""
@@ -1798,7 +1798,7 @@ class TwitterTool(BaseTool):
             # The controller cuts every `twitter` action at its tool timeout (60s
             # default); a longer wait here is killed first and the run sees a bare
             # timeout, not the "waiting for the owner's approval" result below
-            # (prod 2026-10-09 00:03, buyback 4def3260d811 retried the post).
+            # (prod 2026-10-09 00:03, a recurring swap job retried the post).
             from agents.task.constants import TimeoutConfig
             budget = float(TimeoutConfig.get_tool_timeout("twitter"))
             timeout = min(timeout, budget - min(10.0, budget / 4))
@@ -1808,7 +1808,7 @@ class TwitterTool(BaseTool):
                 # An autonomous run ASKS and WAITS for the tap here: a post's
                 # grant is keyed on its text, which the next run writes afresh,
                 # so "the next run redeems it" never happens for X (prod
-                # 2026-10-08 12:05, buyback 4def3260d811).
+                # 2026-10-08 12:05, a recurring swap job).
                 request = provider.request(action_name, pdict, execution_context,
                                            wait_in_goal_run=True)
             else:
@@ -2347,11 +2347,11 @@ class TwitterTool(BaseTool):
             if not me_id:
                 return self._err("Could not resolve authenticated user id")
             resp = await self._make_request(func=self.client.get_users_mentions, endpoint_type="tweets",
-                                            id=me_id, max_results=params.max_results,
-                                            tweet_fields=["created_at", "text", "author_id"])
-            items = []
-            if resp and getattr(resp, "data", None):
-                items = [{"id": str(t.id), "text": t.text} for t in resp.data]
+                                            id=me_id, max_results=params.max_results, user_fields=["username"],
+                                            tweet_fields=["created_at", "text", "author_id"], expansions=["author_id"])
+            users = {str(u.id): u.username for u in ((getattr(resp, "includes", None) or {}).get("users") or [])}
+            items = [{"id": str(t.id), "text": t.text, "author_id": str(t.author_id) if t.author_id else None,
+                      "author_username": users.get(str(t.author_id))} for t in (getattr(resp, "data", None) or [])]
             return self._ok(f"🐦 Mentions:\n{json.dumps(items, indent=2)}")
         except Exception as e:
             return self._err(f"Error getting mentions: {e}")
@@ -2795,7 +2795,7 @@ async def send_approved(tool_name: str, params: dict, task_agent=None):
     run_approved_outbound`` consumed the one-shot grant first). The pause, the
     cooldown and the hourly write budget still apply; only the approval gate is
     passed, because this IS the owner's approval. The job that asked is never
-    re-run (prod 2026-10-08: that re-ran a buyback's swap to redeem one post)."""
+    re-run (prod 2026-10-08: that re-ran a swap job's swap to redeem one post)."""
     model = globals()[_LATE_MODELS[tool_name]]
     from polyrob.sdk import delivery_config_and_container
     config, container = delivery_config_and_container(task_agent)

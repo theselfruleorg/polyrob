@@ -66,6 +66,7 @@ STRINGS = {
     "status.section.approvals": "approvals",
     "status.section.loops": "background loops",
     "status.section.tools": "abilities",
+    "status.section.harness": "which abilities are blocked",
     "status.section.knowledge": "memory and documents",
     "status.section.delivery": "messages to you",
     "status.section.posture": "permissions",

@@ -159,7 +159,9 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/dev", "control", "Message the dev and ops loop directly", room_refused=True),
     # 077: confirmed by a card; the restart drains first and reports back here.
     Verb("/restart", "control", "Restart me once my current work is done", room_refused=True),
-    Verb("/update", "control", "Update me to the latest release, then report back",
+    # 093 D6: `/update now` lets the operator's waiting deploy skip the owner-quiet window.
+    Verb("/update", "control", "Update me to the latest release, then report back "
+         "(/update now: a waiting deploy stops waiting for your chat to go quiet)",
          room_refused=True),
     # remember
     Verb("/recap", "remember", "The same as /journey"),

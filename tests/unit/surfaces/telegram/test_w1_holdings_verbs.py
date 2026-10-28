@@ -11,8 +11,8 @@ import pytest
 from core import open_positions as op
 from core.wallet import token_pins
 
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
+FAKE = "0x3535353535353535353535353535353535353535"
+REAL = "0x5555555555555555555555555555555555555555"
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +21,7 @@ def _stores(tmp_path, monkeypatch):
     pins = str(tmp_path / "wallet" / "token_pins.db")
     monkeypatch.setattr(token_pins, "token_pins_db_path", lambda data_home=None: pins)
     op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
-                                           symbol="PNL", qty=1000.0, cost_usd=134.54),
+                                           symbol="TKN", qty=1000.0, cost_usd=134.54),
                    db_path=str(tmp_path / "open_positions.db"))
     return tmp_path
 
@@ -61,10 +61,10 @@ def test_wallet_tokens_and_trust_ride_the_wallet_verb(_stores, monkeypatch):
     monkeypatch.setattr("core.wallet.authority.owner_refusal", lambda uid: None)
     text = owner_ops.wallet_reply(["tokens"], user_id="rob", data_dir=str(_stores))
     assert "Tokens I trust" in text
-    text = owner_ops.wallet_reply(["trust", "robinhood", REAL, "PNL"], user_id="rob",
+    text = owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN"], user_id="rob",
                                   data_dir=str(_stores))
     assert "Confirm" in text and token_pins.all_pins() == []
-    owner_ops.wallet_reply(["trust", "robinhood", REAL, "PNL", "go"], user_id="rob",
+    owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN", "go"], user_id="rob",
                            data_dir=str(_stores))
     assert token_pins.owner_pin("robinhood", REAL)["source"] == "owner_approved"
 

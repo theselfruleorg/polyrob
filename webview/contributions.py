@@ -25,7 +25,8 @@ DESTINATIONS: Tuple[str, ...] = ("new", "inbox", "work", "money", "agent")
 #: as the wallet pack takes the Money readers over.
 _IN_TREE: Tuple[str, ...] = ("webview.pages", "webview.pages_new", "webview.tokens_routes",
                              "webview.cards_routes", "webview.feed_routes",
-                             "webview.workspace_routes", "webview.job_routes")
+                             "webview.workspace_routes", "webview.job_routes",
+                             "webview.goal_board_routes")
 
 _ROUTERS: List[Tuple[str, Any, str]] = []      # (destination, router, source)
 

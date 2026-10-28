@@ -1,6 +1,6 @@
 /**
  * Admin User Detail JavaScript
- * Handles loading user details, token verification, credits, and blocking
+ * Handles loading user details, credits, and blocking
  */
 
 (function() {
@@ -165,65 +165,6 @@
         }
     }
 
-    // Verify token
-    async function verifyToken() {
-        const btn = document.getElementById('btn-verify-token');
-        btn.disabled = true;
-        btn.textContent = 'Verifying...';
-
-        try {
-            const result = await apiCall(`/admin/users/${userId}/verify-token`, {
-                method: 'POST'
-            });
-
-            // Update token status display
-            const container = document.getElementById('token-status');
-            const icon = document.getElementById('token-icon');
-            const count = document.getElementById('token-count');
-            const verified = document.getElementById('token-verified');
-            const tokenIds = document.getElementById('token-ids');
-
-            if (result.new_count > 0) {
-                container.classList.add('has-token');
-                container.classList.remove('no-token');
-                icon.textContent = '✓';
-                count.textContent = `${result.new_count} Access Token(s)`;
-            } else {
-                container.classList.remove('has-token');
-                container.classList.add('no-token');
-                icon.textContent = '✗';
-                count.textContent = 'No Access Tokens';
-            }
-
-            verified.textContent = `Last verified: ${formatDateTime(result.verified_at)}`;
-
-            if (result.token_ids && result.token_ids.length > 0) {
-                tokenIds.textContent = `Token IDs: ${result.token_ids.join(', ')}`;
-            } else {
-                tokenIds.textContent = '';
-            }
-
-            // Show result message
-            let message = `Token verification complete.\n`;
-            message += `Previous: ${result.previous_count} -> New: ${result.new_count}\n`;
-            if (result.tier_changed) {
-                message += `Tier changed: ${result.previous_tier} -> ${result.new_tier}\n`;
-            }
-            alert(message);
-
-            // Reload data
-            loadUserDetails();
-            loadCredits();
-
-        } catch (error) {
-            console.error('Token verification failed:', error);
-            alert('Token verification failed: ' + error.message);
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Verify Token';
-        }
-    }
-
     // Save role
     async function saveRole() {
         const newRole = document.getElementById('select-role').value;
@@ -361,7 +302,6 @@
 
     // Setup event listeners
     function setupEventListeners() {
-        document.getElementById('btn-verify-token').addEventListener('click', verifyToken);
         document.getElementById('btn-save-role').addEventListener('click', saveRole);
         document.getElementById('btn-save-tier').addEventListener('click', saveTier);
         document.getElementById('btn-add-credits').addEventListener('click', addCredits);

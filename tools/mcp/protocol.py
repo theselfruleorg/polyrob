@@ -917,7 +917,14 @@ class MCPSSETransport(MCPTransport):
 
 
 class MCPHTTPTransport(MCPTransport):
-    """HTTP JSON-RPC transport for MCP (request-response, no streaming)."""
+    """HTTP JSON-RPC transport for MCP: one POST per message (093 B1).
+
+    Every POST carries ``Accept: application/json, text/event-stream`` and the
+    reply is read as plain JSON OR as an SSE-framed stream
+    (``tools/mcp/http_reply.py``), so a spec-current (2025-03-26+) Streamable
+    HTTP server answers instead of refusing with 406. The ``mcp-session-id``
+    the server sets on ``initialize`` is echoed on every later POST.
+    """
 
     def __init__(
         self,
@@ -935,305 +942,90 @@ class MCPHTTPTransport(MCPTransport):
         self.validate_ssrf = validate_ssrf  # SSRF: pin+validate at connect (user servers)
         self.session: Optional[aiohttp.ClientSession] = None
         self._message_queue: asyncio.Queue = asyncio.Queue()
-        self._response_futures: Dict[str, asyncio.Future] = {}
+        self._session_id: Optional[str] = None  # set by the server on initialize
 
     async def connect(self) -> None:
-        """Connect HTTP session."""
+        """Open the HTTP session (no request is sent until the first message)."""
         try:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
             # SECURITY (SSRF/DNS rebinding): validate + pin resolved IP at connect time.
-            connector = _validate_and_pin_connector(self.url, allow_http=self.allow_http, ssl=True, validate_ssrf=self.validate_ssrf)
-
-            self.session = aiohttp.ClientSession(
-                headers=self.headers,
-                timeout=timeout,
-                connector=connector
-            )
-            
-            self.logger.info(f"✅ HTTP JSON-RPC transport ready: {self.url}")
-            
+            connector = _validate_and_pin_connector(self.url, allow_http=self.allow_http, ssl=True, limit=10, validate_ssrf=self.validate_ssrf)
+            self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+            self.logger.info(f"✅ {self.__class__.__name__} ready: {self.url}")
         except Exception as e:
             await self.close()
             raise MCPConnectionError(f"Failed to initialize HTTP transport: {e}")
-    
+
     async def send_message(self, message: MCPMessage) -> None:
-        """Send message via HTTP POST and queue response."""
+        """POST one message; queue the matching JSON-RPC response for a request."""
+        from tools.mcp.http_reply import ACCEPT, http_failure_text, is_notification, read_rpc_reply, rpc_payload
         if not self.session:
             raise MCPConnectionError("HTTP transport not connected")
-        
+        payload = rpc_payload(message)
+        expects_reply = isinstance(message, MCPRequest)
+        label = payload.get('method', 'response')
+
+        # SECURITY: don't follow redirects (would bypass the pinned connector).
+        async def _attempt() -> None:
+            headers = {**self.headers, 'Content-Type': 'application/json', 'Accept': ACCEPT}
+            if self._session_id:
+                headers['mcp-session-id'] = self._session_id
+            async with self.session.post(self.url, json=payload, headers=headers,
+                                         allow_redirects=False) as response:
+                self._session_id = response.headers.get('mcp-session-id', self._session_id)
+                if response.status == 401:
+                    raise _MCPUnauthorized(MCPProtocolError(
+                        http_failure_text(401, await response.text())))
+                if response.status not in (200, 202, 204):
+                    failure = http_failure_text(response.status, await response.text())
+                    if is_notification(message):
+                        # A refused notification (e.g. `initialized`) does not end the session.
+                        self.logger.warning(f"MCP notification {label} refused: {failure}")
+                        return
+                    raise MCPProtocolError(failure)
+                if not expects_reply:
+                    return
+                reply = await read_rpc_reply(response, message.id)
+                if reply is None:
+                    raise MCPProtocolError(
+                        f"HTTP {response.status}: no JSON-RPC response to {label} in the reply")
+                await self._message_queue.put(MCPResponse(
+                    id=reply.get("id"), result=reply.get("result"), error=reply.get("error")))
+
+        self.logger.debug(f"📤 HTTP POST {label}")
         try:
-            # Convert message to dict
-            message_dict = {
-                "jsonrpc": message.jsonrpc,
-                "id": message.id
-            }
-            
-            if isinstance(message, MCPRequest):
-                message_dict["method"] = message.method
-                if message.params:
-                    message_dict["params"] = message.params
-            
-            self.logger.debug(f"📤 HTTP POST {message_dict.get('method', 'response')}")
-
-            # Send via POST and get immediate response
-            # SECURITY: don't follow redirects (would bypass the pinned connector).
-            async def _attempt() -> None:
-                async with self.session.post(
-                    self.url,
-                    json=message_dict,
-                    headers={**self.headers, 'Content-Type': 'application/json'},
-                    allow_redirects=False
-                ) as response:
-                    if response.status == 401:
-                        response_text = await response.text()
-                        raise _MCPUnauthorized(MCPProtocolError(
-                            f"HTTP failed, status: 401, body: {response_text[:100]}"
-                        ))
-                    if response.status not in (200, 202):
-                        response_text = await response.text()
-                        self.logger.error(
-                            f"HTTP failed - Status: {response.status}, Body: {response_text[:200]}"
-                        )
-                        raise MCPProtocolError(
-                            f"HTTP failed, status: {response.status}, body: {response_text[:100]}"
-                        )
-
-                    # Parse and queue response
-                    response_data = await response.json()
-                    response_msg = MCPResponse(
-                        id=response_data.get("id"),
-                        result=response_data.get("result"),
-                        error=response_data.get("error")
-                    )
-
-                    # Queue the response for receive_message to pick up
-                    await self._message_queue.put(response_msg)
-                    self.logger.debug(f"📥 HTTP response queued")
-
             await self._send_with_auth_retry(_attempt)
-
+        except MCPProtocolError:
+            raise
         except aiohttp.ClientError as e:
-            self.logger.error(f"Network error in HTTP transport: {e}")
             raise MCPProtocolError(f"Network error: {e}")
         except Exception as e:
-            self.logger.error(f"Failed HTTP request: {e}", exc_info=True)
-            raise MCPProtocolError(f"Failed HTTP request: {e}")
-    
+            raise MCPProtocolError(f"HTTP request failed: {type(e).__name__}: {e}")
+
     async def receive_message(self, timeout: Optional[float] = None) -> Optional[MCPMessage]:
         """Receive message from queue."""
         receive_timeout = timeout if timeout is not None else self.timeout
         try:
-            return await asyncio.wait_for(
-                self._message_queue.get(),
-                timeout=receive_timeout
-            )
+            return await asyncio.wait_for(self._message_queue.get(), timeout=receive_timeout)
         except asyncio.TimeoutError:
             return None
-    
+
     async def close(self) -> None:
         """Close HTTP transport."""
         await super().close()
-        
         if self.session:
             await self.session.close()
             self.session = None
-        
-        self.logger.info("Closed MCP HTTP transport")
+        self.logger.info(f"Closed {self.__class__.__name__}")
 
 
-class MCPStreamableHTTPTransport(MCPTransport):
+class MCPStreamableHTTPTransport(MCPHTTPTransport):
+    """Streamable HTTP transport (spec 2025-03-26+): POST, reply as JSON or SSE.
+
+    Since 093 B1 the plain HTTP transport speaks this wire too (the ``Accept``
+    header, SSE-framed replies, ``mcp-session-id``); this name stays so a stored
+    ``streamable_http`` server type keeps its own transport class.
     """
-    Streamable HTTP transport for MCP (POST with SSE responses).
-    
-    This transport type is used by servers like mcp.anysite.io/mcp that:
-    - Accept POST requests with JSON-RPC body
-    - Return responses as SSE-formatted streams (event: message, data: {...})
-    - Require session ID management via mcp-session-id header
-    - Require Accept: application/json, text/event-stream header
-    """
-
-    def __init__(
-        self,
-        url: str,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: int = 180,
-        allow_http: bool = False,  # SSRF: only relax HTTPS for local dev
-        validate_ssrf: bool = False,  # SSRF: pin+validate at connect (user servers)
-        on_auth_refresh: Optional[Callable[[], Awaitable[Optional[str]]]] = None,  # T2.4: 401-retry-once
-    ):
-        super().__init__(timeout, on_auth_refresh=on_auth_refresh)
-        self.url = url
-        self.headers = headers or {}
-        self.allow_http = allow_http
-        self.validate_ssrf = validate_ssrf
-        self.session: Optional[aiohttp.ClientSession] = None
-        self._message_queue: asyncio.Queue = asyncio.Queue()
-        self._session_id: Optional[str] = None  # MCP session ID for stateful connections
-
-    async def connect(self) -> None:
-        """Initialize HTTP session for streamable transport."""
-        try:
-            timeout = aiohttp.ClientTimeout(
-                total=self.timeout,
-                connect=30
-            )
-            # SECURITY (SSRF/DNS rebinding): validate + pin resolved IP at connect time.
-            connector = _validate_and_pin_connector(self.url, allow_http=self.allow_http, ssl=True, limit=10, validate_ssrf=self.validate_ssrf)
-
-            # Base headers (session ID will be added per-request after initialization)
-            base_headers = {
-                **self.headers,
-                'Accept': 'application/json, text/event-stream',
-                'Content-Type': 'application/json'
-            }
-            
-            self.session = aiohttp.ClientSession(
-                headers=base_headers,
-                timeout=timeout,
-                connector=connector
-            )
-            
-            self.logger.info(f"✅ Streamable HTTP transport ready: {self.url}")
-            
-        except Exception as e:
-            await self.close()
-            raise MCPConnectionError(f"Failed to initialize Streamable HTTP transport: {e}")
-    
-    async def send_message(self, message: MCPMessage) -> None:
-        """Send message via POST and read SSE-formatted response."""
-        if not self.session:
-            raise MCPConnectionError("Streamable HTTP transport not connected")
-        
-        try:
-            # Convert message to dict based on type
-            message_dict = {"jsonrpc": message.jsonrpc}
-            
-            # Build request headers - include session ID if we have one
-            request_headers = {}
-            if self._session_id:
-                request_headers['mcp-session-id'] = self._session_id
-            
-            if isinstance(message, MCPRequest):
-                message_dict["id"] = message.id
-                message_dict["method"] = message.method
-                if message.params:
-                    message_dict["params"] = message.params
-            elif isinstance(message, MCPNotification):
-                # Notifications don't have id field
-                message_dict["method"] = message.method
-                if message.params:
-                    message_dict["params"] = message.params
-                # Skip sending response wait for notifications
-                self.logger.debug(f"📤 Streamable notification: {message.method}")
-                async with self.session.post(self.url, json=message_dict, headers=request_headers, allow_redirects=False) as response:
-                    # Capture session ID from response if present
-                    if 'mcp-session-id' in response.headers:
-                        self._session_id = response.headers['mcp-session-id']
-                        self.logger.debug(f"📋 Session ID updated: {self._session_id[:20]}...")
-                    if response.status not in (200, 202, 204):
-                        response_text = await response.text()
-                        self.logger.warning(f"Notification response: {response.status}, {response_text[:100]}")
-                return  # No response expected for notifications
-            elif isinstance(message, MCPResponse):
-                message_dict["id"] = message.id
-                if message.result is not None:
-                    message_dict["result"] = message.result
-                if message.error is not None:
-                    message_dict["error"] = message.error
-            
-            self.logger.debug(f"📤 Streamable POST {message_dict.get('method', 'response')}")
-
-            # Send POST and read SSE response
-            # SECURITY: don't follow redirects (would bypass the pinned connector).
-            async def _attempt() -> None:
-                attempt_headers = dict(request_headers)
-                if self._session_id:
-                    attempt_headers['mcp-session-id'] = self._session_id
-                async with self.session.post(self.url, json=message_dict, headers=attempt_headers, allow_redirects=False) as response:
-                    # Capture session ID from response headers (servers send it on initialize)
-                    if 'mcp-session-id' in response.headers:
-                        self._session_id = response.headers['mcp-session-id']
-                        self.logger.info(f"📋 MCP Session ID captured: {self._session_id[:20]}...")
-
-                    if response.status == 401:
-                        response_text = await response.text()
-                        self.logger.error(
-                            f"Streamable HTTP failed - Status: 401, Body: {response_text[:200]}"
-                        )
-                        raise _MCPUnauthorized(MCPProtocolError(
-                            f"Streamable HTTP failed, status: 401"
-                        ))
-                    if response.status not in (200, 202):
-                        response_text = await response.text()
-                        self.logger.error(
-                            f"Streamable HTTP failed - Status: {response.status}, Body: {response_text[:200]}"
-                        )
-                        raise MCPProtocolError(
-                            f"Streamable HTTP failed, status: {response.status}"
-                        )
-
-                    # Read response as SSE stream
-                    content_type = response.headers.get('Content-Type', '')
-
-                    if 'text/event-stream' in content_type:
-                        # Parse SSE response - may have multiple events
-                        async for line in response.content:
-                            line_str = line.decode('utf-8').strip()
-
-                            if line_str.startswith('data: '):
-                                data = line_str[6:]  # Remove 'data: ' prefix
-                                try:
-                                    response_data = json.loads(data)
-                                    response_msg = MCPResponse(
-                                        id=response_data.get("id"),
-                                        result=response_data.get("result"),
-                                        error=response_data.get("error")
-                                    )
-                                    await self._message_queue.put(response_msg)
-                                    self.logger.debug(f"📥 Streamable response queued")
-                                    break  # Got our response
-                                except json.JSONDecodeError as e:
-                                    self.logger.warning(f"Invalid JSON in SSE data: {e}")
-                    else:
-                        # Plain JSON response
-                        response_data = await response.json()
-                        response_msg = MCPResponse(
-                            id=response_data.get("id"),
-                            result=response_data.get("result"),
-                            error=response_data.get("error")
-                        )
-                        await self._message_queue.put(response_msg)
-                        self.logger.debug(f"📥 HTTP response queued")
-
-            await self._send_with_auth_retry(_attempt)
-
-        except aiohttp.ClientError as e:
-            self.logger.error(f"Network error in Streamable HTTP transport: {e}")
-            raise MCPProtocolError(f"Network error: {e}")
-        except Exception as e:
-            self.logger.error(f"Failed Streamable HTTP request: {e}", exc_info=True)
-            raise MCPProtocolError(f"Failed Streamable HTTP request: {e}")
-    
-    async def receive_message(self, timeout: Optional[float] = None) -> Optional[MCPMessage]:
-        """Receive message from queue."""
-        receive_timeout = timeout if timeout is not None else self.timeout
-        try:
-            return await asyncio.wait_for(
-                self._message_queue.get(),
-                timeout=receive_timeout
-            )
-        except asyncio.TimeoutError:
-            return None
-    
-    async def close(self) -> None:
-        """Close Streamable HTTP transport."""
-        await super().close()
-        
-        if self.session:
-            await self.session.close()
-            self.session = None
-        
-        self.logger.info("Closed MCP Streamable HTTP transport")
 
 
 class MCPClient:
@@ -1295,7 +1087,7 @@ class MCPClient:
                 
             # Send initialized notification
             initialized_notification = MCPNotification(
-                method="initialized"
+                method="notifications/initialized"
             )
             await self.transport.send_message(initialized_notification)
             

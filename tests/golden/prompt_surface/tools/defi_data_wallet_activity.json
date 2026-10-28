@@ -24,7 +24,8 @@
         }
       },
       "required": [
-        "address"
+        "address",
+        "chain"
       ],
       "type": "object"
     }

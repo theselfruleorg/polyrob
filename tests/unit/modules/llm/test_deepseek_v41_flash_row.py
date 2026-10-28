@@ -45,11 +45,13 @@ def test_capabilities_context_and_vision():
 
 
 def test_aliases_resolve():
-    for alias in ("deepseek-v4.1-flash", "or-deepseek-v4.1-flash", "deepseek-4.1-flash"):
-        assert get_model_config(alias).name == SLUG
+    assert get_model_config("or-deepseek-v4.1-flash").name == SLUG
+    # A bare name is DeepSeek's own API (native since 2026-10-27), not this row.
+    for bare in ("deepseek-v4.1-flash", "deepseek-4.1-flash"):
+        assert get_model_config(bare).provider == ModelProvider.DEEPSEEK
 
 
 def test_v4_flash_row_untouched():
     # Adding 4.1 must not steal the older row's name or its established alias.
     assert get_model_config("deepseek/deepseek-v4-flash").name == "deepseek/deepseek-v4-flash"
-    assert get_model_config("deepseek-flash").name == "deepseek/deepseek-v4-flash"
+    assert get_model_config("deepseek-flash").name == "deepseek-flash"

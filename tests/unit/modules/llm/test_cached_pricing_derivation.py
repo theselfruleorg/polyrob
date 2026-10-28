@@ -11,9 +11,9 @@ def test_anthropic_cached_price_derived_at_10pct():
 
 
 def test_explicit_cached_price_is_preserved():
-    """DeepSeek sets 0.028 explicitly (model_registry.py:722) — must not be overwritten."""
-    m = get_model_config("deepseek-chat")
-    assert m.pricing.cached_input_price == 0.028
+    """DeepSeek sets its cache-hit price explicitly — must not be overwritten."""
+    m = get_model_config("deepseek-flash")
+    assert m.pricing.cached_input_price == 0.003
 
 
 def test_derivation_only_fills_none_and_matches_multiplier():

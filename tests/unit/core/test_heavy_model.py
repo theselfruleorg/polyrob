@@ -69,7 +69,7 @@ async def test_a_money_job_runs_on_the_heavy_model_and_its_own_pin_wins(monkeypa
 # --- 2026-10-14 review B-1 / B-8: one money predicate, one resolver -------------------
 
 @pytest.mark.parametrize("payload", [
-    {"rig": "money_rail"},                       # the live EXIT CHECK / PNL BUYBACK shape
+    {"rig": "money_rail"},                       # the live EXIT CHECK / TKN REBUY shape
     '{"rig": "money_rail"}',
     {"tools": ["message", "defi_trade"]},
     {"tools": ["mcp:x402_pay"]},

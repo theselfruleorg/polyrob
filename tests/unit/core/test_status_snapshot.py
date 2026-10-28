@@ -180,7 +180,7 @@ def test_every_section_is_always_present(degraded):
     assert tuple(snap.sections) == SECTION_ORDER
     rendered = "\n".join(render_status_lines(snap))
     for title in ("Session:", "Providers:", "Goals:", "Approvals:", "Loops:",
-                  "Delivery:", "Posture:", "Money:"):
+                  "Tool gates:", "Delivery:", "Posture:", "Money:"):
         assert title in rendered, title
 
 

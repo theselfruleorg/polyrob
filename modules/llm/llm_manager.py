@@ -104,7 +104,6 @@ class LLMManager(InventoryMixin, BaseComponent):
         self._initialization_attempts = {}  # Track initialization attempts
         
         # Fallback hierarchy — derived from the ProviderSpec registry (024 seam 10).
-        # NOTE: deepseek_client DISABLED - use OpenRouter's DeepSeek instead
         self.FALLBACK_HIERARCHY = self._build_fallback_hierarchy()
 
     @staticmethod
@@ -179,8 +178,6 @@ class LLMManager(InventoryMixin, BaseComponent):
             # source of truth in profiles (ProviderProfile.initializable) — the same
             # oracle the CLI's should_warn_no_key / resolver / env-backfill read, so
             # "you have a usable key" and "what I'll try to init" can never drift.
-            # deepseek is initializable=False (direct client disabled — tool calling
-            # broken; use OpenRouter's deepseek/deepseek-chat).
             from modules.llm.profiles import PROFILES
             clients_to_try = [p.name for p in PROFILES.values() if p.initializable]
             initialized_clients = []
@@ -275,8 +272,7 @@ class LLMManager(InventoryMixin, BaseComponent):
             
             if not self.clients:
                 # Actionable onboarding hint: the common cause is no provider API key
-                # in the environment (the direct deepseek client is intentionally
-                # disabled, so DEEPSEEK_API_KEY alone is not enough to bootstrap).
+                # in the environment.
                 # Reuse the single canonical no-key message (defined in the neutral
                 # profiles module — modules/ never imports cli/).
                 from modules.llm.profiles import no_key_message

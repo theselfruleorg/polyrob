@@ -1,11 +1,15 @@
 {
   "function": {
-    "description": "Report your own runtime state: health (credit sentinel, open asks, blocked goals, suppressed owner messages, dead loops), what runs next, steps used (of the cap), active tools, context usage, and wallet/ledger balance. Read-only. Set release_notes to 'unreleased' (what changed since the last release), 'latest' or a version ('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with your code.",
+    "description": "Report your own runtime state: health (credit sentinel, open asks, blocked goals, suppressed owner messages, dead loops), what runs next, steps used (of the cap), active tools, context usage, and wallet/ledger balance. Read-only. Set release_notes to 'unreleased' (what changed since the last release), 'latest' or a version ('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with your code. Set tool to a tool id to read why that tool is missing: its status, remedy, who can fix it and when the fix applies.",
     "name": "agent_status",
     "parameters": {
       "additionalProperties": false,
       "properties": {
         "release_notes": {
+          "default": "",
+          "type": "string"
+        },
+        "tool": {
           "default": "",
           "type": "string"
         }

@@ -85,6 +85,12 @@ class ShellTool(BaseTool):
         from core.config_policy import compute_posture_allows_safe
         return compute_posture_allows_safe(execution_context, 1)
 
+    def availability_gap(self):
+        """``("backend-unavailable", remedy)`` when the sandbox the shell runs in
+        cannot start for this process, else None (093 A3; cached probe)."""
+        from tools.code_exec.backend_probe import shell_backend_gap
+        return shell_backend_gap()
+
     def _state_for(self, session_id: str, executor=None) -> ShellState:
         kind = getattr(executor, "kind", "docker")
         key = (session_id, kind)

@@ -107,12 +107,11 @@ AVAILABLE_MODELS = _LazyAvailableModels()
 # NOTE: These are intentionally not derived from model_registry since defaults
 # are a business/policy decision, not a capability question.
 # Update manually when default model preferences change.
-# NOTE: deepseek direct client DISABLED (Dec 2025) - use OpenRouter instead
 DEFAULT_MODELS = {
     'anthropic': 'claude-sonnet-4-5',
     'openai': 'gpt-5',
     'gemini': 'gemini-2.5-flash',
-    'deepseek': 'deepseek-chat',
+    'deepseek': 'deepseek-flash',  # V4.1 Flash, 1M ctx, thinking on by default
     'openrouter': 'z-ai/glm-5.2',  # Z.AI GLM flagship (1M ctx); was x-ai/grok-4.3
     'nvidia': 'moonshotai/kimi-k2.6',  # free hosted NIM inference
 }

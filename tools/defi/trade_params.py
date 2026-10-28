@@ -59,7 +59,7 @@ def _chain_field_description(verb: str) -> str:
 
 
 class TransferParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("send"))
+    chain: ChainName = Field(..., description=_chain_field_description("send"))
     token: str = Field(..., description=(
         "CONTRACT ADDRESS of the token to send (0x…), or 'native' to send the "
         "chain's gas asset itself (ETH on ethereum/base/arbitrum/robinhood, POL "
@@ -81,7 +81,7 @@ class TransferParams(BaseModel):
 
 
 class ApproveParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("approve on"))
+    chain: ChainName = Field(..., description=_chain_field_description("approve on"))
     token: str = Field(..., description="CONTRACT ADDRESS of the token to approve (0x…)")
     spender: str = Field(..., description="Address being granted the allowance (0x…)")
     amount: float = Field(..., gt=0, description=(
@@ -98,7 +98,7 @@ class ApproveParams(BaseModel):
 
 
 class RevokeParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("revoke on"))
+    chain: ChainName = Field(..., description=_chain_field_description("revoke on"))
     token: str = Field(..., description="CONTRACT ADDRESS of the token (0x…)")
     spender: str = Field(..., description="Address whose allowance is set to ZERO (0x…)")
     dry_run: bool = Field(True, description="TRUE simulates only. Set false to sign.")
@@ -125,7 +125,7 @@ class NftTransferParams(BaseModel):
 
 
 class RegisterAgentParams(BaseModel):
-    chain: ChainName = Field(default="base",
+    chain: ChainName = Field(...,
                        description="Chain whose ERC-8004 Identity Registry to "
                                    "register on. Pinned; unsupported chains refuse.")
     max_spend_usd: float = Field(default=25.0, gt=0,
@@ -135,7 +135,7 @@ class RegisterAgentParams(BaseModel):
 
 
 class SetAgentUriParams(BaseModel):
-    chain: ChainName = Field(default="base")
+    chain: ChainName = Field(..., description=_chain_field_description("update the agent URI on"))
     agent_id: int = Field(..., ge=0, description="Your existing agentId (tokenId).")
     max_spend_usd: float = Field(default=10.0, gt=0)
     dry_run: bool = True
@@ -152,7 +152,7 @@ class NftRevokeParams(BaseModel):
 
 
 class WrapParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("wrap native on"))
+    chain: ChainName = Field(..., description=_chain_field_description("wrap native on"))
     amount: float = Field(..., gt=0, description=(
         "Human amount of NATIVE to wrap (e.g. 0.0012 ETH -> 0.0012 WETH)."))
     max_spend_usd: float = Field(..., gt=0, description=(
@@ -164,7 +164,7 @@ class WrapParams(BaseModel):
 
 
 class UnwrapParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("unwrap on"))
+    chain: ChainName = Field(..., description=_chain_field_description("unwrap on"))
     amount: float = Field(..., gt=0, description=(
         "Human amount of WRAPPED native to turn back into gas "
         "(e.g. 0.0012 WETH -> 0.0012 ETH)."))
@@ -176,8 +176,37 @@ class UnwrapParams(BaseModel):
         "broadcasting. Set false to actually unwrap."))
 
 
+def _close_reason(value):
+    from core.position_plans import normalize_close_reason
+    return normalize_close_reason(value)
+
+
+#: 086 W6: why a SELL closes (stored on the realized row). Empty = not said.
+CloseReason = Annotated[Optional[str], BeforeValidator(_close_reason)]
+_CLOSE_REASON_DESC = (
+    "SELL only: why this closes the position — stop_loss | take_profit | trailing | "
+    "time_stop | owner | retired | dust | orphan | manual | breaker:<name>. "
+    "Leave empty on a buy.")
+
+
+class TradePlan(BaseModel):
+    """086 W6: the plan an entry states before it quotes (072 D8)."""
+    thesis: str = Field(..., min_length=3, max_length=600,
+                        description="Why this token, now — one or two sentences.")
+    confidence: float = Field(..., ge=0, le=1, description="0..1, your honest confidence.")
+    invalidation: str = Field(..., min_length=3, max_length=400,
+                              description="What, if seen, proves the thesis wrong.")
+    preset: str = Field(..., min_length=2, max_length=40,
+                        description="The mandate preset this entry follows (memecoin | majors).")
+
+
+_PLAN_DESC = ("Your entry plan {thesis, confidence, invalidation, preset}. REQUIRED for "
+              "a buy inside a trading-mandate run (refused without it); the exit runs "
+              "follow it. Omit on a sell.")
+
+
 class SwapParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("swap on"))
+    chain: ChainName = Field(..., description=_chain_field_description("swap on"))
     token_in: str = Field(..., description=(
         "CONTRACT ADDRESS of the token you are selling (0x…), or the literal "
         "'native' to spend the chain's gas asset (ETH/SOL/etc) directly. A "
@@ -201,6 +230,8 @@ class SwapParams(BaseModel):
         "to actually trade."))
     account: Optional[str] = Field(None, description=_ACCOUNT_DESC)
     nft: Optional[str] = Field(None, description=_NFT_DESC)
+    plan: Optional[TradePlan] = Field(None, description=_PLAN_DESC)
+    close_reason: CloseReason = Field(None, description=_CLOSE_REASON_DESC)
 
 
 class SolanaSwapParams(BaseModel):
@@ -217,10 +248,12 @@ class SolanaSwapParams(BaseModel):
         "looser route is refused, not rewritten."))
     dry_run: bool = Field(True, description=(
         "TRUE (default) simulates and asserts without broadcasting."))
+    plan: Optional[TradePlan] = Field(None, description=_PLAN_DESC)
+    close_reason: CloseReason = Field(None, description=_CLOSE_REASON_DESC)
 
 
 class DeployTokenParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("deploy on"))
+    chain: ChainName = Field(..., description=_chain_field_description("deploy on"))
     name: str = Field(..., description=(
         "Token name, e.g. 'Rob Coin'. Max 64 characters, printable ASCII only."))
     symbol: str = Field(..., description=(
@@ -250,7 +283,7 @@ class DeployTokenParams(BaseModel):
 
 
 class DeployContractParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("deploy on"))
+    chain: ChainName = Field(..., description=_chain_field_description("deploy on"))
     bytecode: str = Field(..., description=(
         "COMPILED creation bytecode (init code), 0x-prefixed hex. NOT Solidity "
         "source — nothing here compiles. To mint an ordinary fixed-supply token, "
@@ -306,7 +339,7 @@ class SolanaDeployTokenParams(BaseModel):
 
 
 class LpAddParams(BaseModel):
-    chain: ChainName = "robinhood"
+    chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position on"))
     protocol: str = Field("v3", description=(
         "'v3', or 'v4' for a new FULL-RANGE position on a Pons graduated pool "
         "(token_a/token_b = 'native' + the Pons token; needs an ERC-20 allowance "
@@ -336,7 +369,7 @@ class LpAddParams(BaseModel):
 
 
 class LpCollectParams(BaseModel):
-    chain: ChainName = "robinhood"
+    chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position on"))
     protocol: str = Field("v3", description="'v3' only.")
     token_id: int = Field(..., ge=0, description="Your position NFT id.")
     max_spend_usd: float = Field(5.0, gt=0, allow_inf_nan=False, description="Maximum gas fee in USD.")
@@ -351,7 +384,7 @@ class LpRemoveParams(LpCollectParams):
 
 
 class CallParams(BaseModel):
-    chain: ChainName = Field("base", description=_chain_field_description("call on"))
+    chain: ChainName = Field(..., description=_chain_field_description("call on"))
     to: str = Field(..., description="CONTRACT ADDRESS being called (0x…)")
     calldata: str = Field(..., description=(
         "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the "

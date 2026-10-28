@@ -669,7 +669,7 @@ def build_pending_notification(items: List[dict]) -> Optional[str]:
 #                        ``capped`` was in ``_NOTIFIED_OUTCOMES``, so the set was
 #                        recorded as notified.
 #   from that second on   every revision of those 4 slots hashed identically, so
-#                        the owner's four "stop posting to the den" directives
+#                        the owner's four "stop posting to the group room" directives
 #                        (09-08 15:28/16:16/16:33, 09-09 16:19) returned before
 #                        attempting delivery. The lock clears only on a
 #                        promote/reject, which needs the owner to know, which

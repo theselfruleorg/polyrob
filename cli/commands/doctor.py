@@ -603,7 +603,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
             # Only when the reason line ISN'T already saying it — with a key
             # present, `st.reason` carries this same remedy and printing both
             # reads like two different problems.
-            note = " (not directly initializable — use OPENROUTER_API_KEY + deepseek/deepseek-chat)"
+            note = " (not directly initializable — no client for its transport)"
         if prof.subscription and st.present:
             # A flat-rate tag on a provider you haven't configured is noise;
             # on one you HAVE, it explains why its cost shows as $0.
@@ -781,6 +781,11 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # Sourced from the passed-in `env` dict, not os.environ, to keep
     # doctor_report pure/testable.
     lines.append(f"memory backend: {resolve_memory_backend(env, rob_local)}")
+    try:  # 093 A3: which exec backends start for THIS process (the remedy names it)
+        from tools.code_exec.backend_probe import doctor_backend_line
+        lines.append(doctor_backend_line(env))
+    except Exception as e:
+        lines.append(f"code-exec backends: unknown ({type(e).__name__})")
 
     # Wallet posture (setup section, part 1): off / on / MISCONFIGURED.
     from core.env import bool_from

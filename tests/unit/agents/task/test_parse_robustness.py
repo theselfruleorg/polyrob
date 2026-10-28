@@ -151,8 +151,6 @@ class TestToolCallingMethods:
             'ChatOpenAI',
             'ChatAnthropic',
             'ChatGoogleGenerativeAI',
-            'ChatDeepSeek',
-            'DeepSeekChatAdapter',
             'UnknownProvider',
         ]
         for provider in providers:

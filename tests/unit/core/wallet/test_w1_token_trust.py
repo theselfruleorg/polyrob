@@ -17,8 +17,8 @@ from core.wallet import token_pins
 from core.wallet import token_provenance as tp
 from core.wallet import token_trust as tt
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def _stores(tmp_path, monkeypatch):
     book = str(tmp_path / "open_positions.db")
     monkeypatch.setattr(op, "open_positions_db_path", lambda data_dir=None: book)
     op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
-                                           symbol="PNL", qty=33_700_000.0,
+                                           symbol="TKN", qty=33_700_000.0,
                                            cost_usd=134.54))
     yield pins
     tp._reset_for_tests()
@@ -44,7 +44,7 @@ def _owner():
 
 
 def test_trust_writes_an_owner_approved_binding():
-    ok, msg = tt.trust(_owner(), "robinhood", REAL, "PNL")
+    ok, msg = tt.trust(_owner(), "robinhood", REAL, "TKN")
     assert ok, msg
     row = token_pins.owner_pin("robinhood", REAL)
     assert row["source"] == token_pins.SOURCE_OWNER_APPROVED
@@ -52,10 +52,10 @@ def test_trust_writes_an_owner_approved_binding():
 
 
 def test_identity_reads_the_approved_source(monkeypatch, tmp_path):
-    tt.trust(_owner(), "robinhood", REAL, "PNL")
+    tt.trust(_owner(), "robinhood", REAL, "TKN")
     from core.wallet import tokens
-    ident = tokens.TokenIdentity(chain="robinhood", address=REAL, symbol="PNL",
-                                 name="Rob Track Record", decimals=18, verified=False,
+    ident = tokens.TokenIdentity(chain="robinhood", address=REAL, symbol="TKN",
+                                 name="Owner Token", decimals=18, verified=False,
                                  metadata_changed=False, source="frozen")
     monkeypatch.setattr(tokens, "_identity_unpinned", lambda *a, **k: ident)
     got = tokens.get_token_identity("robinhood", REAL)
@@ -70,7 +70,7 @@ def test_identity_reads_the_approved_source(monkeypatch, tmp_path):
                           metadata={"turn_kind": "self_wake"}),
 ])
 def test_no_writer_accepts_anything_but_an_owner_turn(ctx):
-    for fn in (lambda: tt.trust(ctx, "robinhood", REAL, "PNL"),
+    for fn in (lambda: tt.trust(ctx, "robinhood", REAL, "TKN"),
                lambda: tt.untrust(ctx, "robinhood", FAKE),
                lambda: tt.write_off(ctx, "robinhood", FAKE, execute=True),
                lambda: tt.unquarantine(ctx, "robinhood", FAKE, execute=True)):
@@ -86,7 +86,7 @@ def test_untrust_records_rejection_quarantines_and_the_gate_refuses():
     assert token_pins.rejection("robinhood", FAKE) is not None
     assert op.get_position("rob", "robinhood", FAKE).status == "quarantined"
     from tools.defi.identity_gate import buy_identity_refusal
-    ident = types.SimpleNamespace(symbol="PNL", name="Pissin N Lying", verified=False,
+    ident = types.SimpleNamespace(symbol="TKN", name="Lookalike Token", verified=False,
                                   source="frozen")
     ctx = types.SimpleNamespace(user_id="rob", metadata={}, role="orchestrator",
                                 is_sub_agent=False)
@@ -97,8 +97,8 @@ def test_untrust_records_rejection_quarantines_and_the_gate_refuses():
 
 
 def test_trust_clears_a_rejection_and_untrust_drops_a_pin():
-    tt.untrust(_owner(), "robinhood", FAKE, symbol="PNL")
-    tt.trust(_owner(), "robinhood", FAKE, "PNL")
+    tt.untrust(_owner(), "robinhood", FAKE, symbol="TKN")
+    tt.trust(_owner(), "robinhood", FAKE, "TKN")
     assert token_pins.rejection("robinhood", FAKE) is None
     tt.untrust(_owner(), "robinhood", FAKE)
     assert token_pins.owner_pin("robinhood", FAKE) is None
@@ -144,7 +144,7 @@ def test_a_pre_w1_pin_store_reads_owner_pin(tmp_path, _stores):
     conn.execute("CREATE TABLE token_pins (chain TEXT NOT NULL, address TEXT NOT NULL, "
                  "symbol TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', pinned_ts REAL "
                  "NOT NULL, PRIMARY KEY (chain, address))")
-    conn.execute("INSERT INTO token_pins VALUES ('robinhood', ?, 'PNL', '', 1.0)", (REAL,))
+    conn.execute("INSERT INTO token_pins VALUES ('robinhood', ?, 'TKN', '', 1.0)", (REAL,))
     conn.commit()
     conn.close()
     assert token_pins.owner_pin("robinhood", REAL)["source"] == "owner_pin"
@@ -154,9 +154,9 @@ def test_a_pre_w1_pin_store_reads_owner_pin(tmp_path, _stores):
 
 
 def test_wallet_tokens_reply_needs_go_to_write():
-    text = tt.tokens_reply("rob", ["trust", "robinhood", REAL, "PNL"])
+    text = tt.tokens_reply("rob", ["trust", "robinhood", REAL, "TKN"])
     assert "Confirm" in text and token_pins.all_pins() == []
-    text = tt.tokens_reply("rob", ["trust", "robinhood", REAL, "PNL", "go"])
+    text = tt.tokens_reply("rob", ["trust", "robinhood", REAL, "TKN", "go"])
     assert "Trusted" in text
     assert "Tokens I trust" in tt.tokens_reply("rob", ["tokens"])
 

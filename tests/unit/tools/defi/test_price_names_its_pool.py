@@ -1,6 +1,6 @@
 """A price must say WHICH pool it came from.
 
-⚠️ The defect, proven in production on 2026-09-23: the SAFETY rail reported PNL
+⚠️ The defect, proven in production on 2026-09-23: the SAFETY rail reported TKN
 liquidity as **$4,133** at 04:21Z and **$17,887** at 08:21Z with no flag and no
 explanation. Neither pool had moved — measured directly, the traded ``1%`` pool
 held $4,103 (−86.3%, $54k daily volume) and the reserve-top pool held $17,860

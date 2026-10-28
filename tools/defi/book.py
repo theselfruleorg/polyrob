@@ -292,8 +292,12 @@ async def read_book(user_id: str, data_dir: str, *,
     positions: List[Any] = []
     book_error: Optional[str] = None
     try:
-        from core.open_positions import open_positions_db_path, positions_for
-        positions = positions_for(user_id, db_path=open_positions_db_path(data_dir))
+        from core import open_positions as _op
+        # 086 W0: the owner's book lists the written-off and dust rows too
+        # (each waits on, or records, an owner decision); a retired row is closed.
+        positions = _op.positions_for(
+            user_id, db_path=_op.open_positions_db_path(data_dir),
+            statuses=tuple(s for s in _op.STATUSES if s != _op.STATUS_RETIRED))
     except Exception as exc:
         book_error = (f"the position book (open_positions.db) could not be read "
                       f"({type(exc).__name__}) — this is NOT an empty book")

@@ -64,6 +64,12 @@ class ProcessTool(BaseTool):
         from core.config_policy import compute_posture_allows_safe
         return compute_posture_allows_safe(execution_context, 1)
 
+    def availability_gap(self):
+        """The shell's gap (093 A3): a job runs in the shell's sandbox, so a
+        sandbox that cannot start leaves nothing to manage."""
+        from tools.code_exec.backend_probe import shell_backend_gap
+        return shell_backend_gap()
+
     def _deny(self) -> ActionResult:
         return ActionResult(error=(
             "process is not available for this session: it requires the sandbox-dev "

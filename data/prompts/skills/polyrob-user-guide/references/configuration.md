@@ -152,7 +152,7 @@ for code anchors and complete prose.
 
 - SUB_AGENTS_ENABLED — default: **ON** ('true'; BotConfig field also True) — Enable `delegate_task` / sub-agent delegation.
 - SUBAGENT_LEAST_PRIVILEGE — default: ON ('true') — Give a delegated child a narrowed dedicated controller/toolset.
-- DELEGATE_BLOCKED_TOOLS — default: {agent_nft, app_service, code_execution, coding, cronjob, dapp_browser, defi_trade, git, github, hf_deploy, launchpad, mcp, process, publish, self_env, shell, tool_manage, worker_manage, x402_invoice, x402_pay} plus the enabled packs' rows (hyperliquid, polymarket, x_browser) — Container tool_ids dropped from a delegated child.
+- DELEGATE_BLOCKED_TOOLS — default: {agent_nft, app_service, code_execution, coding, cronjob, dapp_browser, defi_trade, git, github, hf_deploy, http_request, launchpad, mcp, process, publish, self_env, shell, tool_manage, wallet_sign, worker_manage, x402_invoice, x402_pay} plus the enabled packs' rows (hyperliquid, polymarket, twitter, x_browser) — Container tool_ids dropped from a delegated child.
 - MAX_SUB_AGENT_DEPTH — default: 1 — Delegation depth backstop.
 - MAX_CONCURRENT_SUB_AGENTS — default: 3 — Max concurrent sub-agents.
 - MAX_ASYNC_SUB_AGENTS — default: 2 (clamped ≤ concurrent) — Background/async delegation slots.
@@ -518,13 +518,7 @@ for code anchors and complete prose.
 - DEFI_EVM_RPC_BASE — default: https://mainnet.base.org — Operator-pinnable JSON-RPC endpoint for Base, used by every on-chain read (`core/wallet/onchain.py`, `defi_data`, the x…
 - DEFI_EVM_RPC_<CHAIN> — default: per-chain public endpoint — The same pin for every OTHER chain in `core/wallet/chains.py`: `DEFI_EVM_RPC_ETHEREUM`, `DEFI_EVM_RPC_ARBITRUM`, `DEFI_…
 - ALCHEMY_API_KEY — default: unset (secret, masked) — Alchemy API key: unlocks the Alchemy per-chain RPC fallback for on-chain reads (`rpc_url_for_chain`, when no `DEFI_EVM_…
-- ALCHEMY_API_URL — default: https://eth-mainnet.g.alchemy.com — Alchemy base URL for the `alchemy` tool.
-- DEN_TOKEN_CONTRACT_ADDRESS — default: '' — Default token contract for the token-gating and balance checks.
 - SEPOLIA_RPC_URL — default: unset — Sepolia testnet RPC for deposit monitoring and payments.
-- COLLABLAND_API_KEY — default: '' — **SECRET, masked** — Collab.Land API key for the `collabland` token-gating tool.
-- COLLABLAND_API_URL — default: https://api.collab.land — Collab.Land endpoint.
-- COLLABLAND_ID — default: '' — Collab.Land client id.
-- COLLABLAND_SECRET — default: '' — **SECRET, masked** — Collab.Land client secret.
 - DEFI_SOLANA_RPC — default: https://api.mainnet-beta.solana.com — Operator-pinnable Solana JSON-RPC, used by `defi_data.portfolio` on the `solana` chain (native SOL + SPL enumeration).
 - DEFI_AGENT_AUTONOMY — default: OFF — Owner directive 2026-09-12 — adds the on-chain rail (`defi_data`, `defi_trade`, and `launchpad` + `dapp_browser`) to th…
 - DEFI_BRIDGE_ENABLED — default: OFF — arms `defi_trade.bridge`, the cross-chain move, through **Relay.link** (chosen because LI.FI's own answer for Solana ->…

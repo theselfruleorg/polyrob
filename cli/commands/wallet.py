@@ -1212,7 +1212,7 @@ def _echo_result(result, *, what: str):
 @click.argument("symbol")
 @click.argument("supply", type=to_exact_supply)   # 085 W7: Decimal, never float
 @click.argument("name", nargs=-1, required=True)
-@click.option("--chain", default="base", show_default=True)
+@click.option("--chain", required=True)
 @click.option("--decimals", type=int, default=None,
               help="Decimal places. Default 18 on an EVM chain (the ERC-20 "
                    "norm), 9 on Solana (SOL's own). Solana's ceiling is 9.")
@@ -1470,7 +1470,7 @@ def wallet_nft():
 
 
 @wallet_nft.command("list")
-@click.option("--chain", default="base", show_default=True)
+@click.option("--chain", required=True)
 @click.option("--address", default=None,
               help="Address to inspect (default: this agent's own wallet).")
 def wallet_nft_list(chain, address):
@@ -1487,7 +1487,7 @@ def wallet_nft_list(chain, address):
 @wallet_nft.command("info")
 @click.argument("contract")
 @click.argument("token_id", type=int)
-@click.option("--chain", default="base", show_default=True)
+@click.option("--chain", required=True)
 def wallet_nft_info(contract, token_id, chain):
     """Owner, metadata and approvals for ONE token."""
     import asyncio
@@ -1504,7 +1504,7 @@ def wallet_nft_info(contract, token_id, chain):
 @click.argument("contract")
 @click.argument("token_id", type=int)
 @click.argument("to")
-@click.option("--chain", default="base", show_default=True)
+@click.option("--chain", required=True)
 @click.option("--standard", type=click.Choice(["erc721", "erc1155"]),
               default="erc721", show_default=True,
               help="Say which — guessing encodes a call the contract may misread.")
@@ -1548,7 +1548,7 @@ def wallet_nft_transfer(contract, token_id, to, chain, standard, amount,
 @wallet_nft.command("revoke")
 @click.argument("contract")
 @click.argument("operator")
-@click.option("--chain", default="base", show_default=True)
+@click.option("--chain", required=True)
 @click.option("--max-usd", type=float, default=5.0, show_default=True)
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this simulates and reports.")

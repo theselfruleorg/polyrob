@@ -57,7 +57,7 @@ class PriceInfo:
     priced_liquidity_usd: Optional[float] = None
     #: The pool the PRICE came from. Two reports of one token that name
     #: different addresses are reports of different venues — which is how the
-    #: 2026-09-23 PNL confusion should have been caught, and was not: the same
+    #: 2026-09-23 pool confusion should have been caught, and was not: the same
     #: rail read $4,133 then $17,887 with nothing saying it had changed pool.
     #: None when the provider did not say; never guessed.
     priced_pool_address: Optional[str] = None
@@ -103,6 +103,10 @@ class HolderRow:
     is_contract: Optional[bool] = None
     is_locked: Optional[bool] = None
     tag: Optional[str] = None
+    #: 086 W9: an LP row that is a concentrated-liquidity POSITION (GoPlus
+    #: sends ``NFT_list``). GoPlus's ``is_locked`` does not see every NFT
+    #: locker, so an "unlocked" position is unknown, not a measured pull risk.
+    is_nft_position: Optional[bool] = None
 
 
 @dataclass(frozen=True)

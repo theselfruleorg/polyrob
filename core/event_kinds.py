@@ -151,6 +151,11 @@ TOKEN_QUARANTINED = "token_quarantined"
 TOKEN_TRUSTED = "token_trusted"
 TOKEN_UNTRUSTED = "token_untrusted"
 POSITION_WRITTEN_OFF = "position_written_off"
+#: 086 W1: a book row opened / ended (``core/position_events.py``'s telemetry
+#: listener). attrs: kind, chain, account, address, symbol, qty, usd, reason, ts —
+#: ``position_closed`` covers closed · written_off · retired · dust (attrs.kind).
+POSITION_OPENED = "position_opened"
+POSITION_CLOSED = "position_closed"
 PAYMENT_SETTLING_REVERTED = "payment_settling_reverted"
 PAYMENT_FEEDBACK_AUTHORIZED = "payment_feedback_authorized"
 

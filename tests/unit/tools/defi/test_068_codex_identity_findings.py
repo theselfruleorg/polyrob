@@ -20,8 +20,8 @@ from tools.defi.identity_gate import buy_identity_refusal
 
 BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 BASE_WETH = "0x4200000000000000000000000000000000000006"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
+FAKE = "0x3535353535353535353535353535353535353535"
+REAL = "0x5555555555555555555555555555555555555555"
 SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL_USDC_CASE = SOL_USDC[:-1] + "V"   # another valid 32-byte key
 
@@ -58,9 +58,9 @@ def _corrupt(path):
 
 
 def test_b1_unreadable_pin_store_refuses_the_codex_scenario(pins, no_positions):
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     _corrupt(pins)
-    why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident("PNL"),
+    why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident("TKN"),
                                max_spend_usd=100.0, route_verdict="AGREES",
                                execution_context=_ctx())
     assert why and "could not be read" in why
@@ -96,7 +96,7 @@ def test_b1_unreadable_position_store_refuses(pins, monkeypatch):
         assert kw.get("strict") is True
         raise RuntimeError("database disk image is malformed")
     monkeypatch.setattr(op, "entries_for", boom)
-    why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident("PNL"),
+    why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident("TKN"),
                                max_spend_usd=1.0, route_verdict="AGREES",
                                execution_context=_ctx())
     assert why and "could not be read" in why
@@ -122,13 +122,13 @@ def test_b2_fake_usdc_is_refused_whatever_the_chain_case(pins, no_positions, cha
 
 
 def test_b2_owner_pin_and_tracked_positions_fold_the_chain(pins, monkeypatch):
-    token_pins.pin(" RobinHood ", REAL, "PNL")
-    assert token_pins.pinned_addresses_for_symbol("ROBINHOOD", "pnl") == [REAL]
+    token_pins.pin(" RobinHood ", REAL, "TKN")
+    assert token_pins.pinned_addresses_for_symbol("ROBINHOOD", "tkn") == [REAL]
     import core.open_positions as op
-    held = SimpleNamespace(chain="robinhood", address=REAL, symbol="PNL")
+    held = SimpleNamespace(chain="robinhood", address=REAL, symbol="TKN")
     monkeypatch.setattr(op, "entries_for", lambda uid, **kw: {REAL.lower(): held})
     token_pins.unpin("robinhood", REAL)
-    why = buy_identity_refusal(chain="ROBINHOOD", token_out=FAKE, id_out=_ident("PNL"),
+    why = buy_identity_refusal(chain="ROBINHOOD", token_out=FAKE, id_out=_ident("TKN"),
                                max_spend_usd=1.0, route_verdict="AGREES",
                                execution_context=_ctx())
     assert why and "two contracts" in why
@@ -160,7 +160,7 @@ def test_b3_solana_pin_does_not_match_a_case_variant(pins):
 
 
 def test_b3_evm_pin_still_matches_any_case(pins):
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     assert token_pins.owner_pin("robinhood", REAL.lower()) is not None
 
 

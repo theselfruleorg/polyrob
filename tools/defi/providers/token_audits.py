@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 JUPITER_TOKENS_URL = "https://lite-api.jup.ag/tokens/v2/search?query={mint}"
 RUGCHECK_URL = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
+#: The FULL report — the summary has no insider graph (086 W9: bundled supply).
+RUGCHECK_FULL_URL = "https://api.rugcheck.xyz/v1/tokens/{mint}/report"
 HONEYPOT_URL = "https://api.honeypot.is/v2/IsHoneypot?address={address}&chainID={chain_id}"
 
 #: The chains Honeypot.is simulates that this registry also carries. Every
@@ -148,6 +150,43 @@ def parse_rugcheck(payload: Any) -> RugCheckReport:
                           lp_locked_pct=_num(payload.get("lpLockedPct")))
 
 
+@dataclass(frozen=True)
+class InsiderReport:
+    """RugCheck's insider graph: wallet networks that funded or transferred to
+    each other, and how much of the supply they hold NOW. A signal about
+    ADDRESSES, not people. ``networks_pct`` is None when the graph did not run
+    or the supply is unreadable — unknown, never 0."""
+    graph_detected: Optional[int]
+    networks: int = 0
+    networks_pct: Optional[float] = None     # PERCENT of supply
+
+
+def parse_rugcheck_insiders(payload: Any) -> InsiderReport:
+    if not isinstance(payload, dict):
+        raise ValueError("unexpected RugCheck payload")
+    detected = payload.get("graphInsidersDetected")
+    detected = int(detected) if isinstance(detected, (int, float)) and not isinstance(detected, bool) else None
+    nets = payload.get("insiderNetworks")
+    token = payload.get("token") if isinstance(payload.get("token"), dict) else {}
+    supply = _num(token.get("supply"))
+    if detected is None:
+        return InsiderReport(graph_detected=None)
+    if not nets:
+        # The graph RAN and found no network: a measured zero.
+        return InsiderReport(graph_detected=detected, networks=0,
+                             networks_pct=0.0 if detected == 0 else None)
+    if not isinstance(nets, list) or not supply or supply <= 0:
+        return InsiderReport(graph_detected=detected)
+    held = 0.0
+    for n in nets:
+        amt = _num(n.get("currentHolding")) if isinstance(n, dict) else None
+        if amt is None:
+            return InsiderReport(graph_detected=detected, networks=len(nets))
+        held += max(amt, 0.0)
+    return InsiderReport(graph_detected=detected, networks=len(nets),
+                         networks_pct=min(held / supply * 100.0, 100.0))
+
+
 # --------------------------------------------------------------------------
 # Honeypot.is
 # --------------------------------------------------------------------------
@@ -220,6 +259,13 @@ def rugcheck_report(mint: str) -> RugCheckReport:
     if status != 200:
         raise SourceUnavailable(f"HTTP {status}")
     return parse_rugcheck(body)
+
+
+def rugcheck_insiders(mint: str) -> InsiderReport:
+    status, body = _get(RUGCHECK_FULL_URL.format(mint=quote(mint, safe="")))
+    if status != 200:
+        raise SourceUnavailable(f"HTTP {status}")
+    return parse_rugcheck_insiders(body)
 
 
 def honeypot_sim(chain: str, address: str) -> HoneypotSim:

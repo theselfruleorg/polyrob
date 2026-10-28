@@ -32,7 +32,7 @@ def run(action, values, execute=False, yes=False):
 
 
 @lp_cmd.command('positions')
-@click.option('--chain', default='robinhood')
+@click.option('--chain', required=True)
 def positions(chain):
     """Every Uniswap v3 position this wallet holds on CHAIN (read-only)."""
     run('positions', dict(chain=chain))
@@ -40,7 +40,7 @@ def positions(chain):
 
 @lp_cmd.command('pool')
 @click.argument('pool')
-@click.option('--chain', default='robinhood')
+@click.option('--chain', required=True)
 def pool(pool, chain):
     """One pool's price, liquidity, fee tier and tick range (read-only)."""
     run('pool', dict(pool=pool, chain=chain))
@@ -50,7 +50,7 @@ def deposit_options(fn):
     for decorator in reversed([
         click.argument('token_a'), click.argument('token_b'),
         click.argument('amount_a', type=float), click.argument('amount_b', type=float),
-        click.option('--chain', default='robinhood'), click.option('--fee', default=3000, type=int),
+        click.option('--chain', required=True), click.option('--fee', default=3000, type=int),
         click.option('--range', 'range_', default='full'), click.option('--initial-price', type=float),
     ]):
         fn = decorator(fn)
@@ -90,7 +90,7 @@ def add(token_a, token_b, amount_a, amount_b, chain, fee, range_, initial_price,
 
 @lp_cmd.command('remove')
 @click.argument('token_id', type=int)
-@click.option('--chain', default='robinhood')
+@click.option('--chain', required=True)
 @click.option('--liquidity-pct', default=100, type=int)
 @click.option('--slippage-bps', default=100, type=int)
 @click.option('--burn', is_flag=True)
@@ -108,7 +108,7 @@ def remove(token_id, chain, liquidity_pct, slippage_bps, burn, max_usd, execute,
 
 @lp_cmd.command('collect')
 @click.argument('token_id', type=int)
-@click.option('--chain', default='robinhood')
+@click.option('--chain', required=True)
 @click.option('--max-usd', default=5.0, type=float)
 @click.option('--execute', is_flag=True)
 @click.option('--yes', is_flag=True)

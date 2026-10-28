@@ -10,6 +10,8 @@ published ``public_identity.json``) and signs NOTHING itself:
   the x402 SDK's ``EthAccountSigner`` calls exactly as it calls a LocalAccount;
 * Hyperliquid order signing (066 P3) goes through
   :meth:`RemoteAccount.sign_hl_l1_action`;
+* a class-A login/challenge text (090) goes through ``sign_classified`` →
+  ``sign.classified``, which re-classifies it in the signer;
 * everything else a LocalAccount could do — sign an arbitrary message, typed
   data, a raw transaction, hand out the private key — raises
   :class:`~core.wallet.agent_wallet.WalletSigningUnavailable`, naming why.
@@ -175,6 +177,10 @@ class RemoteEvmSigner:
     def sign_typed_data(self, domain, types, message):
         raise WalletSigningUnavailable(_refusal("sign typed data"))
 
+    def sign_classified(self, req, verdict):
+        """090: a class-A login/challenge text — ``sign.classified`` re-classifies it."""
+        return _sign_classified(self._client, self._address, self._verified_fn, req)
+
     def sign_transaction(self, tx):
         raise WalletSigningUnavailable(_refusal("sign a transaction without sending it"))
 
@@ -195,11 +201,53 @@ class RemoteEvmSigner:
         return f"<RemoteEvmSigner {self._venue} {self._address} (key in polyrob-signer)>"
 
 
+def _sign_classified(client, address: str, verified_fn, req) -> str:
+    """The signer signs a class-A text it classified itself; the address must be ours."""
+    if not verified_fn():
+        raise WalletSigningUnavailable(
+            "the remote signer is not VERIFIED in this process — refusing to sign")
+    from core.wallet.addresses import same_address
+    result = client.call("sign.classified", req.to_wire())
+    if not same_address(str(result.get("address") or ""), address):
+        raise WalletSigningUnavailable(
+            f"the signer signed with {result.get('address')}, not {address}")
+    signature = str(result["signature"])
+    if not _signature_matches(req, signature, address):
+        raise WalletSigningUnavailable("the signer's signature does not verify for this text")
+    return signature
+
+
+def _signature_matches(req, signature: str, address: str) -> bool:
+    """The returned signature is over THIS text by THIS address."""
+    data = req.payload.encode("utf-8")
+    try:
+        if req.scheme == "solana_message":
+            from solders.pubkey import Pubkey
+            from solders.signature import Signature
+            return Signature.from_string(signature).verify(Pubkey.from_string(address), data)
+        from eth_account import Account
+        from eth_account.messages import encode_defunct
+        from core.wallet.addresses import same_address
+        return same_address(Account.recover_message(encode_defunct(data), signature=signature),
+                            address)
+    except Exception:  # noqa: BLE001 — an unverifiable signature is not returned
+        return False
+
+
 class RemoteSolanaSigner(PublicOnlySigner):
+    def sign_classified(self, req, verdict):
+        """090: a class-A text (Sign-In With Solana, a challenge) — the one Solana
+        signature the signer serves."""
+        client = getattr(self, "_client", None)
+        if client is None:
+            from core.signer.client import SignerClient
+            client = SignerClient()
+        return _sign_classified(client, self.address, remote_verified, req)
+
     def _refusal(self, what: str) -> str:
-        return (f"cannot {what} for svm — WALLET_SIGNER=remote and the signer does not "
-                f"serve Solana signing yet (066 P2 residual). The address {self.address} "
-                f"is correct; set WALLET_SIGNER=local to trade on Solana.")
+        return (f"cannot {what} for svm — WALLET_SIGNER=remote and the signer serves no "
+                f"Solana signing but a class-A login text (066 P2 residual). The address "
+                f"{self.address} is correct; set WALLET_SIGNER=local to trade on Solana.")
 
 
 class RemoteWallet(PublicOnlyWallet):
@@ -235,7 +283,9 @@ class RemoteWallet(PublicOnlyWallet):
         if int(account) != 0 or not self._identity.get("solana"):
             raise WalletSigningUnavailable(
                 "WALLET_SIGNER=remote: only the agent's own Solana address (account 0) is known here")
-        return RemoteSolanaSigner(str(self._identity["solana"]), venue="account0", family="svm")
+        signer = RemoteSolanaSigner(str(self._identity["solana"]), venue="account0", family="svm")
+        signer._client = self._client
+        return signer
 
 
 def _record_matches(identity: Dict[str, Any], record: Optional[Dict[str, Any]]) -> Optional[str]:

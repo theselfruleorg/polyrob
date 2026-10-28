@@ -111,6 +111,7 @@ TOOL_MODULES = {
     "hf_deploy": "tools.hf_deploy.tool", "app_service": "tools.app_service.tool",
     "mcp": "tools.mcp.mcp_tool", "anysite": "polyrob_discovery.anysite.tool",
     "shell": "tools.shell.tool", "process": "tools.shell.process_tool",
+    "http_request": "tools.http_request.tool",
     "code_execution": "tools.code_exec.tool", "coding": "tools.coding.tool",
     "self_env": "tools.self_env.tool", "x402_pay": "tools.x402.service",
     "x402_invoice": "tools.x402.invoice_tool", "defi_trade": "tools.defi.trade_tool",
@@ -118,6 +119,7 @@ TOOL_MODULES = {
     "polymarket": "polyrob_markets.polymarket.service",
     "launchpad": "tools.launchpad.tool", "dapp_browser": "tools.dapp_browser.tool",
     "browser": "tools.browser.browser", "agent_nft": "tools.agent_nft.tool",
+    "wallet_sign": "tools.wallet_sign.tool",
 }
 
 

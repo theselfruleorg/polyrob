@@ -9,9 +9,9 @@ guard (``core.wallet.tx_guard``) is the one authorizer.
 The PoolKey is never taken from the caller. It is derived from the Pons
 factory's own ``launched_token`` record (``lp_reads.pons_pool_key``): native
 ``address(0)`` when the record's ``pairToken`` is the native pair. Measured on
-2026-09-29: the PNL record gives ``keccak(abi.encode(key)) ==
+2026-09-29: one launched token's record gives ``keccak(abi.encode(key)) ==
 0x43b7…1e94``, the pool the collection's mint contract buys from —
-GeckoTerminal's "PNL/WETH" label is a display name, not the PoolKey.
+GeckoTerminal's "TOKEN/WETH" label is a display name, not the PoolKey.
 """
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple

@@ -1,18 +1,21 @@
 ---
 name: exits
-description: 'Declare the exit at entry: stop loss, take profit, time limit and trailing stop, run by a scheduled check because the on-chain rail has no native stop, limit or trigger orders; the DEFI_MONITOR_EXITS lane and the exit clamp.'
+description: 'The exit doctrine: the triple barrier (stop, target, time) and the trailing stop from the mandate preset, confirmed with the exit quote; unknown prices cannot fire a price barrier; typed close reasons; dust; the DEFI_MONITOR_EXITS lane and the exit clamp. Code arms and cancels each exit job.'
 license: MIT
 metadata:
   polyrob-when: 'Setting a stop loss, take profit or time exit'
   polyrob-priority: '2'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data","cronjob"]}'
-  polyrob-version: '6'
+  polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
+  polyrob-version: '7'
 ---
 # Exits — decide the way out before the way in
 
 Every entry declares its exit at the same moment: a stop, a target, and a time
-limit. A position with no declared exit is not ready to be opened.
+limit. A position with no declared exit is not ready to be opened. Inside a
+trading mandate the declaration is the preset's exit (`trading-mandate`) plus
+the entry's `plan`; code arms one exit job per open position and cancels it
+when the position closes.
 
 ## What exists today, and what does not
 
@@ -26,11 +29,12 @@ is the owner's order (see `hyperliquid-trading`).
 
 What does exist:
 
-- **A scheduled check (on-chain rail only):** `cronjob_schedule(task=…,
-  schedule=…, rig="money_rail", skills=["exits"])` — a recurring run that reads
-  the price and sells when a rule fires. Put the address, the rule and the
-  numbers in the task text. That run holds no `cronjob` tool, so it cannot
-  cancel its own schedule (step 5).
+- **The mandate's exit job (on-chain rail only):** code arms one recurring job
+  per open position of a trading mandate. Its `$0` precheck reads
+  `defi_data.position_mark` and wakes a model run only when a barrier is near
+  or crossed, the time stop is due, or the price cannot be read. Code cancels
+  the job when the position closes, is retired or turns to dust. Never schedule
+  an exit job, a cancel job or a "check my positions" job yourself.
 - **The exit lane:** with `DEFI_MONITOR_EXITS` on, a monitor run may execute an
   EXIT-shaped trade — selling a held token, within the held balance, into the
   chain's quote asset — that other autonomous turns may not. The quote asset is
@@ -44,25 +48,23 @@ What does exist:
 
 ## The triple barrier — set all three at entry
 
-| Barrier | Default for a major | Default for a long-tail token |
-|---|---|---|
-| Stop loss | −8 to −10% | −30 to −50% (or the whole ticket, by size) |
-| Take profit | +15 to +25%, or scale out | sell the cost basis at 2–3x |
-| Time limit | 7–30 days | 24–72 hours without the thesis confirming |
+A stop loss, a take profit (or a scale-out), and a time limit — and, once in
+profit, a trailing stop that replaces the fixed stop. The numbers live in the
+mandate's preset (`memecoin` or `majors`), never in this skill or in a job's
+text: `position_mark` computes the barrier from them. The preset's rules hold
+at load time: a stop sits below entry, no tier takes profit at break-even (a
+break-even lock still pays fees), and a trail arms only above entry. You may
+TIGHTEN a stop; you never move it wider than at entry.
 
-A trailing stop (for example 10–15% below the high, after +10%) replaces the
-fixed stop once it is in profit. Write the barrier PERCENTAGES into the
-ledger's exit column (see `position-journal`).
-
-**Check a barrier with `defi_data.positions`, not with your own arithmetic.**
-For each position it gives `unrealized_pct` (against the average-cost basis)
-for the stop and the target, and `high_water_usd` with `from_high_pct` for the
-trailing stop. Compare those figures with the barrier as written. Do not
-compute a percentage, a high-water mark or a USD figure yourself. If the verb
-says `unknown` (basis unknown, or no price), the barrier cannot fire on that
-figure: say so, and use the time limit or the exit quote instead. The
-high-water mark only counts prices a `positions` read saw with high
-confidence, so read `positions` on every scheduled check.
+**Check a barrier with `defi_data.position_mark`, not with your own
+arithmetic.** For one position it gives `barrier` (`none` · `near` · `crossed`
+· `unknown`), `barrier_reason` (`stop_loss`, `take_profit`, `trailing`,
+`time_stop`, or why it is unknown: `price_unreadable`, `basis_unknown`,
+`<barrier>_unverified`), and `unrealized_pct` / `from_high_pct` on a
+spend-grade price. `defi_data.positions` gives the same figures for the whole
+book. Do not compute a percentage, a high-water mark or a USD figure yourself.
+If the figure is `unknown` (basis unknown, or no price), the barrier cannot
+fire on that figure: say so, and use the time limit or the exit quote instead.
 
 LOW, disputed or unknown prices cannot fire a price barrier. `positions`
 withholds stop/target percentages and distance from the high on those grades.
@@ -75,25 +77,26 @@ time limit and an owner's direct sell instruction remain separate reasons to exi
 ## The procedure
 
 1. **At entry:** quote the exit route (`pre-trade-check`, step 4). If there is
-   no route back, do not enter.
-2. **Schedule the check** with `cronjob_schedule`, pinned to this skill, with
-   the address and the three barriers in the task text. Give it a `$0`
-   `precheck` so a quiet tick costs nothing: `{"verb": "defi_data.price",
-   "params": {"chain": …, "address": …}, "alert": {"field": …, "below": <stop
-   price>, "above": <target price>}, "move_pct": 5, "field": …,
-   "max_quiet_hours": 24}`. The model then runs only when a price bound is
-   crossed, the price moved, or a day passed (for the time limit).
-3. **When a barrier fires:** read `defi_data.positions` (or `defi_data.price`
-   or `ohlcv` for the market), and confirm it with the exit quote itself
-   (`swap_quote` for the sell) — what you would actually receive. `price` comes from the deepest priced pool and `ohlcv`
-   from one named pool: both are pool data, not an independent oracle, and a
-   seeded pool can move them. Then `trade-execution` for the sell, then
-   `post-trade-verify`.
-4. **Stops are market exits.** Do not wait for a better price after a stop fires.
-5. **End the schedule when the position is closed.** The closing run reports
-   "position closed — cancel job <id>" to the owner; you cancel it
-   (`cronjob_cancel`) from a session that holds `cronjob`, never by leaving the
-   job to fire on an empty position.
+   no route back, do not enter. Inside a mandate the buy carries its `plan`
+   (thesis, confidence, invalidation, preset); the exit runs follow it.
+2. **On an exit run** (the job's task names ONE position by chain, account
+   and address): read `defi_data.position_mark` for it. Follow the stored
+   plan: an invalidation that happened is a reason to exit before a barrier.
+3. **When a barrier fires:** confirm it with the exit quote itself
+   (`swap_quote` for the sell) — what you would actually receive. `price` comes
+   from the deepest priced pool and `ohlcv` from one named pool: both are pool
+   data, not an independent oracle, and a seeded pool can move them. Re-screen
+   the token with `token_info` (dev wallets selling, a holder cluster
+   splitting). Then `trade-execution` for the sell, then `post-trade-verify`.
+4. **Say why it closes:** pass `close_reason` on the sell — `stop_loss`,
+   `take_profit`, `trailing`, `time_stop`, `owner` (the owner asked), `manual`
+   (your judgment on the plan), or `breaker:<name>`. Code records `retired`,
+   `dust` and `orphan` itself. The reason reaches the realized row and
+   `/trade status`.
+5. **Stops are market exits.** Do not wait for a better price after a stop
+   fires. Act in the SAME run you see it; a postponed exit is not a rule.
+6. **The job ends by itself.** When the book row closes, code cancels the exit
+   job. You never cancel it and never leave a note asking someone to.
 
 ## Dust — skip it, never escalate it
 
@@ -107,7 +110,8 @@ position with an UNKNOWN value is not dust — treat it by the rules above.
 ## Never
 
 - Average down, or move a stop further away because you like the story.
-- Leave a position without a schedule that can close it.
+- Build an exit job by hand. If `/trade status` shows a position
+  `UNPROTECTED`, the lifecycle pass arms it; tell the owner what you saw.
 
 ## If a tool is missing
 
@@ -119,4 +123,5 @@ measure anything — say so and stop. Never work around a missing verb with a ra
 
 ## Related
 
-`pre-trade-check`, `trade-execution`, `position-journal`, `sizing-and-risk`.
+`trading-mandate`, `pre-trade-check`, `trade-execution`, `position-journal`,
+`sizing-and-risk`.

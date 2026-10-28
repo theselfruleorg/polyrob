@@ -42,6 +42,13 @@ it('types a goal payload: numbers are numbers, tools is a list of names', () => 
   });
 });
 
+it('sends the goals a new goal waits for as a list of ids', () => {
+  const form = document.createElement('form');
+  form.innerHTML = '<textarea name="title">Recap</textarea>'
+    + '<textarea name="depends_on">g-1\n g-2 \n\n</textarea>';
+  expect(payloadFrom(form)).toEqual({ title: 'Recap', depends_on: ['g-1', 'g-2'] });
+});
+
 it('sends a non-numeric number field as nothing rather than as text', () => {
   const form = document.createElement('form');
   form.innerHTML = '<input name="priority" value="soon">';

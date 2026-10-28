@@ -1,9 +1,10 @@
 {#
-  Work — one screen, four tabs (043 §5, phase 3).
+  Work — one screen, five tabs (043 §5, phase 3; Goals 2026-10-27).
 
-  The four tabs show live work, schedules, apps/artifacts, and classified activity.
+  The five tabs show live work, the goal board, schedules, apps/artifacts, and
+  classified activity.
 
-  The tabs are panes in this one page, not four routes: work-now.js reveals the
+  The tabs are panes in this one page, not five routes: work-now.js reveals the
   pane whose `data-pane` matches the active tab and hides the rest, so /work
   answers with the whole screen and the switch is client-side. Every word comes
   from webview/copy/en.py — no inline script on any 043 template
@@ -20,6 +21,7 @@
       </div>
       <nav class="subnav" aria-label="{{ t('work.title') }}">
         <a href="#now" data-tab="now" aria-current="page">{{ t('work.tab.now') }}</a>
+        <a href="#goals" data-tab="goals">{{ t('work.tab.goals') }}</a>
         <a href="#schedule" data-tab="schedule">{{ t('work.tab.schedule') }}</a>
         <a href="#apps" data-tab="apps">{{ t('work.tab.apps') }}</a>
         <a href="#log" data-tab="log">{{ t('work.tab.log') }}</a>
@@ -28,26 +30,6 @@
       {# Now & next — running goals + background helpers, and what is queued.
          Drawn by work-now.js from /api/webgate/goals + /api/webgate/running. #}
       <div data-pane="now">
-        {% if not read_only %}
-        <details class="section">
-          <summary>{{ t('work.create.goal_label') }}</summary>
-          {# A44: the goal writer accepts a body, a priority and a tool grant;
-             this form used to submit a title and nothing else. Every field is
-             optional but the title; an empty one is simply not sent. There is
-             no step-budget field: the cap is the operator's
-             AUTONOMOUS_MAX_STEPS (083). #}
-          <form class="setting-control" data-create="goals" data-unreachable="{{ t('work.create.unreachable') }}">
-            <label>{{ t('work.create.title_label') }}<textarea name="title" required></textarea></label>
-            <label>{{ t('work.create.body_label') }}<textarea name="body"></textarea></label>
-            <label>{{ t('work.create.priority_label') }}<input name="priority" type="number" step="1"></label>
-            <p class="why">{{ t('work.create.priority_hint') }}</p>
-            <label>{{ t('work.create.tools_label') }}<textarea name="tools"></textarea></label>
-            <p class="why">{{ t('work.create.tools_hint') }}</p>
-            <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
-            <p class="why" role="status"></p>
-          </form>
-        </details>
-        {% endif %}
 
         <div class="section">
           <div class="section-head">
@@ -63,6 +45,60 @@
           </div>
           <div class="ledger" id="work-now-next"></div>
         </div>
+      </div>
+
+      {# Goals — the goal board (2026-10-27): one lane per live status in
+         core.goal_vocab.LIVE_STATUS_ORDER, the open decisions first, the
+         finished goals folded away. Drawn by work-goals.js from
+         /api/webgate/goals/board; a card opens #goal-detail from
+         /api/webgate/goals/{id}/detail. Every action is an existing verb. #}
+      <div data-pane="goals" hidden>
+        {% if not read_only %}
+        <details class="section">
+          <summary>{{ t('work.create.goal_label') }}</summary>
+          {# A44: the goal writer accepts a body, a priority and a tool grant;
+             this form used to submit a title and nothing else. Every field is
+             optional but the title; an empty one is simply not sent. There is
+             no step-budget field: the cap is the operator's
+             AUTONOMOUS_MAX_STEPS (083). #}
+          <form class="setting-control" data-create="goals" data-unreachable="{{ t('work.create.unreachable') }}">
+            <label>{{ t('work.create.title_label') }}<textarea name="title" required></textarea></label>
+            <label>{{ t('work.create.body_label') }}<textarea name="body"></textarea></label>
+            <label>{{ t('work.create.priority_label') }}<input name="priority" type="number" step="1"></label>
+            <p class="why">{{ t('work.create.priority_hint') }}</p>
+            <label>{{ t('work.create.tools_label') }}<textarea name="tools"></textarea></label>
+            <p class="why">{{ t('work.create.tools_hint') }}</p>
+            <label>{{ t('work.create.depends_label') }}<textarea name="depends_on"></textarea></label>
+            <p class="why">{{ t('work.create.depends_hint') }}</p>
+            <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
+            <p class="why" role="status"></p>
+          </form>
+        </details>
+        {% endif %}
+
+        <div class="board-bar" id="work-goals-bar">
+          <label>{{ t('work.board.filter_text') }}<input type="search" name="q" autocomplete="off"></label>
+          <label>{{ t('work.board.filter_kind') }}
+            <select name="kind">
+              <option value="">{{ t('work.board.filter_all') }}</option>
+              <option value="goal">{{ t('work.board.kind_goal') }}</option>
+              <option value="ask">{{ t('work.board.kind_ask') }}</option>
+            </select></label>
+          <label>{{ t('work.board.filter_source') }}
+            <select name="source">
+              <option value="">{{ t('work.board.filter_all') }}</option>
+              <option value="owner">{{ t('work.board.origin_owner') }}</option>
+              <option value="granted">{{ t('work.board.origin_granted_any') }}</option>
+              <option value="asked">{{ t('work.board.origin_asked') }}</option>
+              <option value="self">{{ t('work.board.origin_self') }}</option>
+              <option value="legacy">{{ t('work.board.origin_legacy') }}</option>
+            </select></label>
+          <label class="board-check"><input type="checkbox" name="finished"> {{ t('work.board.filter_finished') }}</label>
+          <span class="board-fresh" id="work-goals-fresh" role="status"></span>
+        </div>
+        <div class="ledger" id="work-goals-notice"></div>
+        <div class="board" id="work-goals-board"></div>
+        <div class="section" id="work-goals-finished" hidden></div>
       </div>
 
       {# Scheduled jobs — listed with Pause / Resume / Run now / Stop. Drawn by
@@ -147,6 +183,124 @@
       </div>
 
     </div>
+
+    {# The goal detail (Work › Goals). A native <dialog>, as the Chats overlay
+       is: the platform brings the focus trap, the backdrop and Escape. #}
+    <dialog id="goal-detail" class="goal-detail" aria-labelledby="goal-detail-title"
+            style="background:var(--surface-1);color:var(--ink);border:1px solid var(--rule);border-radius:var(--radius);max-width:min(720px,94vw);width:100%">
+      <div class="page">
+        <div class="detail-head">
+          <h2 class="page-title" id="goal-detail-title"></h2>
+          <button class="btn btn-quiet" type="button" id="goal-detail-close">{{ t('work.board.d_close') }}</button>
+        </div>
+        <div id="goal-detail-body"></div>
+      </div>
+    </dialog>
+
+    {# The words work-goals.js renders. Shared verbs reuse the Now & next keys,
+       so a button reads the same on both tabs. #}
+    <div id="work-goals-copy" hidden
+         data-read_only="{{ 1 if read_only else 0 }}"
+         data-loading="{{ t('work.board.loading') }}"
+         data-empty="{{ t('work.board.empty') }}"
+         data-col_ask="{{ t('work.board.col_ask') }}"
+         data-col_triage="{{ t('work.board.col_triage') }}"
+         data-col_waiting="{{ t('work.board.col_waiting') }}"
+         data-col_ready="{{ t('work.board.col_ready') }}"
+         data-col_running="{{ t('work.board.col_running') }}"
+         data-col_blocked="{{ t('work.board.col_blocked') }}"
+         data-col_paused="{{ t('work.board.col_paused') }}"
+         data-col_empty="{{ t('work.board.col_empty') }}"
+         data-finished_title="{{ t('work.board.finished_title') }}"
+         data-finished_summary="{{ t('work.board.finished_summary') }}"
+         data-finished_none="{{ t('work.board.finished_none') }}"
+         data-show_more="{{ t('work.board.show_more') }}"
+         data-kind_goal="{{ t('work.board.kind_goal') }}"
+         data-kind_ask="{{ t('work.board.kind_ask') }}"
+         data-origin_owner="{{ t('work.board.origin_owner') }}"
+         data-origin_granted="{{ t('work.board.origin_granted') }}"
+         data-origin_granted_any="{{ t('work.board.origin_granted_any') }}"
+         data-origin_asked="{{ t('work.board.origin_asked') }}"
+         data-origin_self="{{ t('work.board.origin_self') }}"
+         data-origin_legacy="{{ t('work.board.origin_legacy') }}"
+         data-added="{{ t('work.board.added') }}"
+         data-changed="{{ t('work.board.changed') }}"
+         data-cost="{{ t('work.board.cost') }}"
+         data-cost_no_limit="{{ t('work.board.cost_no_limit') }}"
+         data-cost_none="{{ t('work.board.cost_none') }}"
+         data-waits_on="{{ t('work.board.waits_on') }}"
+         data-waited_on_by="{{ t('work.board.waited_on_by') }}"
+         data-held_by="{{ t('work.board.held_by') }}"
+         data-holds_one="{{ t('work.board.holds_one') }}"
+         data-holds="{{ t('work.board.holds') }}"
+         data-sub_goals="{{ t('work.board.sub_goals') }}"
+         data-unknown_goal="{{ t('work.board.unknown_goal') }}"
+         data-failures="{{ t('work.board.failures') }}"
+         data-filtered_none="{{ t('work.board.filtered_none') }}"
+         data-updated="{{ t('work.board.updated') }}"
+         data-stale="{{ t('work.board.stale') }}"
+         data-part_unreadable="{{ t('work.board.part_unreadable') }}"
+         data-truncated="{{ t('work.board.truncated') }}"
+         data-d_loading="{{ t('work.board.d_loading') }}"
+         data-d_unreadable="{{ t('work.board.d_unreadable') }}"
+         data-d_close="{{ t('work.board.d_close') }}"
+         data-d_what="{{ t('work.board.d_what') }}"
+         data-d_done_when="{{ t('work.board.d_done_when') }}"
+         data-d_checks="{{ t('work.board.d_checks') }}"
+         data-d_result="{{ t('work.board.d_result') }}"
+         data-d_failure="{{ t('work.board.d_failure') }}"
+         data-d_tries="{{ t('work.board.d_tries') }}"
+         data-d_waits_on="{{ t('work.board.d_waits_on') }}"
+         data-d_waited_on_by="{{ t('work.board.d_waited_on_by') }}"
+         data-d_sub_goals="{{ t('work.board.d_sub_goals') }}"
+         data-d_parent="{{ t('work.board.d_parent') }}"
+         data-d_decision="{{ t('work.board.d_decision') }}"
+         data-d_decide_inbox="{{ t('work.board.d_decide_inbox') }}"
+         data-d_runs="{{ t('work.board.d_runs') }}"
+         data-d_runs_none="{{ t('work.board.d_runs_none') }}"
+         data-d_run_steps="{{ t('work.board.d_run_steps') }}"
+         data-d_files="{{ t('work.board.d_files') }}"
+         data-d_files_none="{{ t('work.board.d_files_none') }}"
+         data-d_files_unreadable="{{ t('work.board.d_files_unreadable') }}"
+         data-d_history="{{ t('work.board.d_history') }}"
+         data-d_history_none="{{ t('work.board.d_history_none') }}"
+         data-d_limits="{{ t('work.board.d_limits') }}"
+         data-event_created="{{ t('work.board.event.created') }}"
+         data-event_claimed="{{ t('work.board.event.claimed') }}"
+         data-event_succeeded="{{ t('work.board.event.succeeded') }}"
+         data-event_failed="{{ t('work.board.event.failed') }}"
+         data-event_gave_up="{{ t('work.board.event.gave_up') }}"
+         data-event_cancelled="{{ t('work.board.event.cancelled') }}"
+         data-event_deferred="{{ t('work.board.event.deferred') }}"
+         data-event_yielded="{{ t('work.board.event.yielded') }}"
+         data-event_edited="{{ t('work.board.event.edited') }}"
+         data-event_unblocked="{{ t('work.board.event.unblocked') }}"
+         data-event_unblocked_by_ask="{{ t('work.board.event.unblocked_by_ask') }}"
+         data-event_held_by_ask="{{ t('work.board.event.held_by_ask') }}"
+         data-event_waiting_on_deps="{{ t('work.board.event.waiting_on_deps') }}"
+         data-event_deps_satisfied="{{ t('work.board.event.deps_satisfied') }}"
+         data-event_deps_added="{{ t('work.board.event.deps_added') }}"
+         data-event_dep_failed="{{ t('work.board.event.dep_failed') }}"
+         data-event_requeued_on_boot="{{ t('work.board.event.requeued_on_boot') }}"
+         data-event_stale_completion="{{ t('work.board.event.stale_completion') }}"
+         data-disabled="{{ t('work.now.disabled') }}"
+         data-unreadable="{{ t('work.now.unreadable') }}"
+         data-unreadable_why="{{ t('work.now.unreadable_why') }}"
+         data-stop="{{ t('work.now.stop') }}"
+         data-pause="{{ t('work.now.pause') }}"
+         data-drop="{{ t('work.now.drop') }}"
+         data-retry="{{ t('work.now.retry') }}"
+         data-resume="{{ t('work.now.resume') }}"
+         data-open_chat="{{ t('work.now.open_chat') }}"
+         data-unreachable="{{ t('work.now.unreachable') }}"
+         data-secs="{{ t('work.now.secs') }}"
+         data-mins="{{ t('work.now.mins') }}"
+         data-hours="{{ t('work.now.hours') }}"
+         data-days="{{ t('work.now.days') }}"
+         data-yes="{{ t('inbox.action.approve') }}"
+         data-no="{{ t('inbox.action.reject') }}"
+         data-answer_label="{{ t('inbox.answer_label') }}"
+         data-answer_placeholder="{{ t('inbox.answer_placeholder') }}"></div>
 
     {# The words the Log stream is read into (unchanged). data-classes is
        core.activity_class.CLIENT_CLASSES, server-rendered so the chips can never
@@ -283,6 +437,7 @@
 
     <script src="/static/app/worklog.js" type="module"></script>
     <script src="/static/app/work-now.js" type="module"></script>
+    <script src="/static/app/work-goals.js" type="module"></script>
     <script src="/static/app/work-apps.js" type="module"></script>
     <script src="/static/app/work-create.js" type="module"></script>
 {% endblock %}

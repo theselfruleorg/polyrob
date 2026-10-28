@@ -71,7 +71,7 @@ def test_gate_sets_reference_real_tool_ids():
         "code_execution", "git", "goal", "cronjob", "knowledge",
         "x402_pay", "x402_invoice", "defi_trade", "publish", "x_browser",
         "worker_manage",  # 041: a gated controller action with a capability row
-        "app_service", "launchpad", "dapp_browser", "agent_nft",
+        "app_service", "launchpad", "dapp_browser", "agent_nft", "wallet_sign",
     }
     named = set(DELEGATE_BLOCKED_TOOLS) | set(MONEY_TOOLS) | set(HIGH_IMPACT_TOOL_IDS)
     unknown = named - registry_vocab - _ASPIRATIONAL_IDS

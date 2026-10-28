@@ -233,7 +233,9 @@ class HoldingsReadsMixin:
                 return None, None, (
                     f"{raw} is an EVM address, and the same address holds different "
                     f"things on each EVM chain. Call again with chain= one of: "
-                    f"{', '.join(evm)}.")
+                    f"{', '.join(evm)} - for example "
+                    f"wallet_holdings(address='{raw}', chain='{evm[0]}'). "
+                    f"Repeating this call without chain fails the same way.")
             chain = "solana"
         address, err = self._validate(chain, raw)
         return address, chain, err

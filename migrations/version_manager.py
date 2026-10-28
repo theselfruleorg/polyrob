@@ -15,7 +15,7 @@ _VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 _MIGRATION_RE = re.compile(r"v(\d+)_(\d+)_(\d+)_")
 # Used only if the versions/ dir can't be read. Must equal the newest shipped
 # migration (pinned by tests/unit/migrations/test_fallback_schema_version.py).
-_FALLBACK_SCHEMA_VERSION = "1.10.0"
+_FALLBACK_SCHEMA_VERSION = "1.11.0"
 
 
 def migration_version_from_filename(path: Path) -> Optional[str]:

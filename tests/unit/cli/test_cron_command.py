@@ -272,7 +272,7 @@ def test_edit_has_no_step_budget_option(tmp_path):
 
 
 # --- `--task-file` (intel HIGH 2026-09-21 04:25Z) ----------------------------
-# The buyback rail's task prose named a CANCELLED safety cron id and told the
+# The rebuy rail's task prose named a CANCELLED safety cron id and told the
 # reader to take "the most recent reading" from a 2,300-line file whose top
 # table had stopped growing — two silent skips against a stale reference. The
 # only way to fix prose was cancel + re-schedule (losing last_run_at and every

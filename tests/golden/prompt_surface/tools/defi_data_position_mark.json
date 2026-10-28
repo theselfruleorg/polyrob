@@ -1,0 +1,36 @@
+{
+  "function": {
+    "description": "Mark ONE position of this agent's own book: size, cost, value, unrealized % and distance from the high (on a spend-grade price only), hours open, and whether its exit barriers (from the trading mandate's preset) are near or crossed. Built for an exit job's $0 precheck. Reveals own funds — owner-only.",
+    "name": "defi_data_position_mark",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "description": "The holder of the book row: '' = the treasury wallet, else the token-bound account address",
+          "type": "string"
+        },
+        "address": {
+          "description": "The token contract / mint address of the book row",
+          "type": "string"
+        },
+        "chain": {
+          "description": "The chain of the book row (base, robinhood, solana, …)",
+          "type": "string"
+        },
+        "mandate": {
+          "default": null,
+          "description": "The trading mandate id whose exit preset sets the barriers. A scheduled job's own payload.mandate wins.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chain",
+        "account",
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -104,7 +104,7 @@ def test_the_wallet_package_import_registers_every_kind():
         before = h.registered()
         import core.wallet
         print(before, h.registered())
-    """) == ("() ('cap_resolver', 'position_book', 'spend_ledger', "
+    """) == ("() ('cap_resolver', 'position_book', 'position_reader', 'spend_ledger', "
              "'submission_journal', 'treasury_balance')")
 
 
@@ -115,7 +115,7 @@ def test_phase_one_registers_the_in_core_rails_at_process_entry():
         from core.packs.loader import register_policies
         register_policies()
         print(len(h.registered()))
-    """) == "5"
+    """) == "7"
 
 
 def test_the_kernel_alone_refuses_without_a_journal():

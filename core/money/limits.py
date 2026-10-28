@@ -4,7 +4,7 @@ Prod 2026-10-10..13 (review 2026-10-13 C-01/B5): five homes held five numbers â€
 an identity doc's "$10/tx, $20/day", the per-transaction cap ($200, PolicyGate),
 the no-ask ceiling ($300 pref), the unchecked-route ticket ($5) and the wallet
 prefs â€” and the agent rebuilt "the cap" from memory and prose. In 61 seconds it
-named four different causes for one refusal; a buyback declared the doc's $10
+named four different causes for one refusal; a scheduled buy declared the doc's $10
 and was refused.
 
 This module renders the limits the guard enforces, READ THROUGH THE GUARD'S OWN

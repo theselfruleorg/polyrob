@@ -197,6 +197,19 @@ class SignerStore:
             db.execute("DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions "
                        "ORDER BY ts DESC LIMIT -1 OFFSET ?)", (_DECISIONS_KEPT,))
 
+    def signed_since(self, op: str, since: float) -> int:
+        """How many requests of *op* were SIGNED (``ref='signed'``) since *since*."""
+        with self._db() as db:
+            row = db.execute("SELECT COUNT(*) FROM decisions WHERE op=? AND allowed=1 AND "
+                             "ref='signed' AND ts>=?", (op, since)).fetchone()
+        return int(row[0])
+
+    def digest_signed(self, op: str, digest: str) -> bool:
+        with self._db() as db:
+            row = db.execute("SELECT 1 FROM decisions WHERE op=? AND allowed=1 AND "
+                             "ref='signed' AND digest=?", (op, digest)).fetchone()
+        return row is not None
+
     def recent_decisions(self, limit: int = 50) -> List[Dict[str, Any]]:
         with self._db() as db:
             rows = db.execute("SELECT * FROM decisions ORDER BY ts DESC LIMIT ?",

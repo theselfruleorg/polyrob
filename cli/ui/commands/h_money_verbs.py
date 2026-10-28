@@ -9,9 +9,10 @@ pattern: a registrar beside its handlers, out of the size-ratcheted
 
 ⚠️ REACH, never policy (043 global constraint). These verbs change no money
 gate: ``tx_guard``, the per-transaction ceiling, the autonomous-vs-owner-queue
-lane, and the 031 pause all still apply inside ``owner_ops``. ``/trade`` and
-``/bridge`` QUOTE unless the owner adds ``go``; a spend above the autonomous
-ceiling still waits in ``/pending``.
+lane, and the 031 pause all still apply inside ``owner_ops``. ``/bridge``
+QUOTES unless the owner adds ``go``; a spend above the autonomous ceiling still
+waits in ``/pending``. ``/trade`` (``surfaces.telegram.trade_ops``) writes
+nothing before its card's Confirm.
 
 The data-home + tenant resolution reuses ``h_owner``'s canonical helpers — the
 same home ``/config`` and ``/pending`` read — so a ``-P`` profile's wallet is
@@ -46,13 +47,15 @@ async def h_wallet(ctx) -> None:
 
 
 async def h_trade(ctx) -> None:
-    """Seed a run that carries the money verb — the owner asking IS the grant."""
-    from surfaces.telegram import owner_ops
-    ctx.emit(
-        await _awaited(owner_ops.trade_reply(
-            _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []))),
-        title="trade",
-    )
+    """The trading mandate (086 W5) — the same ``trade_ops`` the phone runs."""
+    import asyncio
+
+    from core.surfaces.command_reply import reply_text
+    from surfaces.telegram import trade_ops
+    reply = await asyncio.to_thread(trade_ops.trade_reply, _tenant(ctx),
+                                    _admin_data_dir(write=True), list(ctx.args or []),
+                                    via="cli")
+    ctx.emit(reply_text(reply), title="trade")
 
 
 async def h_bridge(ctx) -> None:
@@ -93,14 +96,20 @@ HELP_WALLET = (
 )
 
 HELP_TRADE = (
-    "  Seed a run that actually carries the money verb. Everything the agent\n"
-    "  writes for ITSELF has money stripped — correctly — so 'bridge my SOL'\n"
-    "  produced a goal that could never execute. Your asking, from this seat,\n"
-    "  IS the authorization a self-written goal cannot express.\n"
+    "  Trading: ONE decision holds the whole programme — the allocation, the\n"
+    "  networks, the preset, the ticket size, how many open at once, and the\n"
+    "  preset's exit and loss-stop numbers. Confirm starts it with its scheduled\n"
+    "  jobs: a hunt (a $0 check wakes Rob only with a candidate and space for\n"
+    "  an entry), an exit watch per open holding (started and ended by code),\n"
+    "  and a daily review.\n"
     "\n"
-    "  Nothing here widens a cap. Every spend is still bounded by the\n"
-    "  per-transaction ceiling; above the autonomous ceiling it waits in\n"
-    "  /inbox until you /approve <id> it.",
+    "    /trade start 150 solana,robinhood memecoin   the decision (nothing written yet)\n"
+    "    /trade status          allocation, holdings, P&L, exit coverage, LLM cost\n"
+    "    /trade pause           new entries off; exits keep running (/trade resume)\n"
+    "    /trade stop            final; a decision offers 'close all'\n"
+    "    /trade release         clear a latched loss stop\n"
+    "\n"
+    "  Nothing here raises a limit: the wallet's limits bind every trade.",
     "`/trade` on Telegram.",
 )
 
@@ -137,8 +146,8 @@ def register(reg, Command) -> None:
     ))
     reg.register(Command(
         "trade", h_trade,
-        "Seed a run that carries the money verb (your asking is the grant)",
-        usage="<what to do>", group="money", raw_arguments=True,
+        "Trading: start it with one decision, see it, pause, resume, stop, release",
+        usage="start|status|pause|resume|stop|release …", group="money",
         help_long=HELP_TRADE[0], elsewhere=HELP_TRADE[1],
     ))
     reg.register(Command(

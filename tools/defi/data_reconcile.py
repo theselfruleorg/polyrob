@@ -161,8 +161,12 @@ class ReconcileReadsMixin:
             return None, "not consulted (no tenant on this call)"
         try:
             from core import open_positions
+            # 086 W0: a written-off or dust row still explains a holding; a
+            # retired row was closed on proof that nothing is held.
             entries = open_positions.positions_for(
-                uid, chain=chain, account=(account or "").lower())
+                uid, chain=chain, account=(account or "").lower(),
+                statuses=tuple(s for s in open_positions.STATUSES
+                               if s != open_positions.STATUS_RETIRED))
         except Exception as exc:
             return None, (f"UNREADABLE ({type(exc).__name__}) — not compared; "
                           f"this is NOT an empty rail book")
@@ -185,7 +189,7 @@ class ReconcileReadsMixin:
         holdings = []
         # 2026-10-03: priced one token at a time, an 80-token treasury (mostly
         # airdropped dust, each GeckoTerminal call a 429 + 2 s retry) passed the
-        # 60 s action budget on every call and the gate STOPPED every buyback.
+        # 60 s action budget on every call and the gate STOPPED every scheduled buy.
         # The holdings loop's batch prefetch prices the dust; a book or pinned
         # token is still asked of its primary source.
         pinned = _pinned_addresses(chain)
@@ -265,6 +269,7 @@ class ReconcileReadsMixin:
         # family (not checked here)" and rendered a CLEAN verdict over an
         # unreconciled book — a false all-clear, the worst possible output here.
         report = rec.diff(rail or [], holdings, quote_addresses=quote_addresses,
+                          major_addresses=[row.wrapped_native] if row and row.wrapped_native else [],
                           evm_chain=(row is None or row.family == "evm"), chain=chain)
         return self._ar(content=rec.render(
             report, chain=chain, holder=holder, coverage=coverage,

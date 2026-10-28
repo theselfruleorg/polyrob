@@ -55,7 +55,6 @@ def test_agent_config_has_no_server_fields():
         'eip8004_enabled',
         'twitter_api_key',
         'gmail_email',
-        'alchemy_api_key',
     ]
     leaked = [f for f in server_only if hasattr(ac, f)]
     assert not leaked, f"AgentConfig leaks server-scope fields: {leaked}"

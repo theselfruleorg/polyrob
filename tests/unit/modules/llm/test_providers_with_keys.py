@@ -48,7 +48,7 @@ def test_openrouter_is_preferred_default_when_key_present():
 
 def test_multikey_fallback_order_changed_vs_legacy():
     # deepseek+openrouter: PROFILES order picks openrouter first (legacy _KEY_TO_PROVIDER
-    # picked deepseek). Intended: deepseek direct client is disabled.
+    # picked deepseek). Intended: deepseek is last, so it wins only as the sole key.
     assert providers_with_keys(
         {"DEEPSEEK_API_KEY": "x", "OPENROUTER_API_KEY": "y"}
     )[0] == "openrouter"
@@ -64,12 +64,11 @@ def test_blank_value_is_not_present():
 
 # --- initializable oracle (the gating SSOT) ------------------------------------
 
-def test_non_initializable_set_is_deepseek_plus_clientless_transports():
+def test_non_initializable_set_is_clientless_transports_only():
     """`initializable=False` means "a credential alone cannot bootstrap this".
 
-    Two causes, and both must hold: deepseek (direct client disabled — broken
-    tool calling) and any row whose transport has NO client, which is derived
-    rather than hand-set. Without the derived arm, `openai-codex` (transport
+    The one cause: a row whose transport has NO client, which is derived
+    rather than hand-set. Without it, `openai-codex` (transport
     RESPONSES, no generic client) was reported USABLE by the gating oracles,
     auto-selected by the resolver, and then died in create_llm_client with
     "Unknown LLM client type".
@@ -80,21 +79,19 @@ def test_non_initializable_set_is_deepseek_plus_clientless_transports():
         get_specs,
     )
     non_init = [s for s in get_specs() if not s.initializable]
-    assert get_spec("deepseek") in non_init
+    assert get_spec("deepseek") not in non_init
     for spec in non_init:
-        if spec.name == "deepseek":
-            continue
         assert spec.client_class_name is None, spec.name
         assert generic_client_class_name(spec.transport) is None, spec.name
 
-def test_initializable_excludes_deepseek_only():
-    assert initializable_providers_with_keys({"DEEPSEEK_API_KEY": "v"}) == []
+def test_initializable_includes_deepseek_only():
+    assert initializable_providers_with_keys({"DEEPSEEK_API_KEY": "v"}) == ["deepseek"]
 
 
-def test_initializable_keeps_real_provider_but_drops_deepseek():
+def test_initializable_keeps_both_in_preference_order():
     assert initializable_providers_with_keys(
         {"OPENROUTER_API_KEY": "y", "DEEPSEEK_API_KEY": "x"}
-    ) == ["openrouter"]
+    ) == ["openrouter", "deepseek"]
 
 
 def test_raw_oracle_still_includes_deepseek_for_display():
@@ -107,15 +104,12 @@ def test_initializable_client_set_covers_legacy_hardcoded_list():
     # from the historical hardcoded ['anthropic','openai','gemini','openrouter','nvidia'].
     # Superset, not equality: 024 T0's subscription rows are initializable too (a
     # key alone bootstraps them via the generic transport clients). The invariant
-    # that matters is that no legacy client silently drops out, and that deepseek
-    # — whose direct client has broken tool calling — never sneaks back in.
+    # that matters is that no legacy client silently drops out.
     derived = [p.name for p in PROFILES.values() if p.initializable]
-    assert {"anthropic", "openai", "gemini", "openrouter", "nvidia"} <= set(derived)
-    assert "deepseek" not in derived
+    assert {"anthropic", "openai", "gemini", "openrouter", "nvidia", "deepseek"} <= set(derived)
 
 
-def test_no_key_message_steers_deepseek_via_openrouter():
+def test_no_key_message_names_the_keys_and_the_wizard():
     msg = no_key_message()
-    assert "deepseek/deepseek-chat" in msg
-    assert "OPENROUTER_API_KEY" in msg
+    assert "OPENROUTER_API_KEY" in msg and "DEEPSEEK_API_KEY" in msg
     assert "polyrob init" in msg

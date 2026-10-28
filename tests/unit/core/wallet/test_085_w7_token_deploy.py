@@ -44,7 +44,7 @@ def test_the_schema_is_a_plain_string_and_a_number_still_validates():
     for model in (DeployTokenParams, SolanaDeployTokenParams):
         prop = model.model_json_schema()["properties"]["supply"]
         assert prop["type"] == "string" and "anyOf" not in prop
-    assert DeployTokenParams(name="A", symbol="A", supply=1000,
+    assert DeployTokenParams(chain="base", name="A", symbol="A", supply=1000,
                              max_spend_usd=1).supply == Decimal(1000)
 
 
@@ -82,8 +82,9 @@ def test_every_provider_generator_emits_a_typed_supply(provider):
 def test_model_dump_is_json_safe_and_canonical():
     """A Decimal in model_dump() broke ``json.dump`` of the agent history; the
     dump is the exact plain digits, so 1e9 and 1000000000 hash the same."""
-    a = DeployTokenParams(name="A", symbol="A", supply="1e9", max_spend_usd=1)
-    b = DeployTokenParams(name="A", symbol="A", supply=1000000000, max_spend_usd=1)
+    a = DeployTokenParams(chain="base", name="A", symbol="A", supply="1e9", max_spend_usd=1)
+    b = DeployTokenParams(chain="base", name="A", symbol="A", supply=1000000000,
+                          max_spend_usd=1)
     assert a.model_dump()["supply"] == "1000000000" == b.model_dump()["supply"]
     json.dumps(a.model_dump())
     assert a.supply == Decimal(10 ** 9)          # the attribute stays exact
@@ -109,7 +110,7 @@ def test_an_ambiguous_comma_refuses(text):
 
 
 def test_a_string_supply_parses_exactly():
-    p = DeployTokenParams(name="A", symbol="A", supply="123456789.123456789",
+    p = DeployTokenParams(chain="base", name="A", symbol="A", supply="123456789.123456789",
                           max_spend_usd=1)
     assert p.supply == Decimal("123456789.123456789")
     assert T.whole_to_raw(p.supply, 18) == 123456789123456789 * 10 ** 9
@@ -118,8 +119,8 @@ def test_a_string_supply_parses_exactly():
 def test_a_json_number_that_was_rounded_refuses_and_names_the_remedy():
     """The tool-call JSON arrives through json.loads: 123456789.123456789 is
     already 123456789.12345679 before pydantic sees it."""
-    args = json.loads('{"name": "A", "symbol": "A", "supply": 123456789.123456789,'
-                      ' "max_spend_usd": 1}')
+    args = json.loads('{"chain": "base", "name": "A", "symbol": "A",'
+                      ' "supply": 123456789.123456789, "max_spend_usd": 1}')
     with pytest.raises(ValueError, match="as a string"):
         DeployTokenParams(**args)
     with pytest.raises(ValueError, match="as a string"):
@@ -130,7 +131,7 @@ def test_a_json_number_that_was_rounded_refuses_and_names_the_remedy():
     ('1000000000', Decimal(10 ** 9)), ('1e9', Decimal(10 ** 9)),
     ('1.5', Decimal("1.5")), ('"1000000"', Decimal(10 ** 6))])
 def test_the_natural_json_numbers_still_parse(raw, expected):
-    args = json.loads('{"name": "A", "symbol": "A", "supply": %s, '
+    args = json.loads('{"chain": "base", "name": "A", "symbol": "A", "supply": %s, '
                       '"max_spend_usd": 1}' % raw)
     assert DeployTokenParams(**args).supply == expected
 
@@ -189,9 +190,10 @@ async def test_the_telegram_retry_hint_carries_the_exact_supply(monkeypatch):
         seen["supply"] = params.supply
         return SimpleNamespace(error=None, extracted_content="dry run ok")
     monkeypatch.setattr(dv, "perform_deploy_token", _fake)
-    out = await token_ops.deploy_reply("owner", ["ROB", "1234567", "Rob", "Coin"])
+    out = await token_ops.deploy_reply("owner", ["ROB", "1234567", "Rob", "Coin",
+                                                 "on", "base"])
     assert seen["supply"] == Decimal(1234567)
-    assert "/deploy ROB 1234567 Rob Coin go" in out
+    assert "/deploy ROB 1234567 Rob Coin on base go" in out
     assert "e+06" not in out
 
 
@@ -226,7 +228,8 @@ def test_the_cli_confirmation_shows_the_exact_supply():
 def test_the_cli_refuses_a_supply_that_is_not_a_number():
     from click.testing import CliRunner
     from cli.commands.wallet import wallet_cmd
-    res = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "lots", "Rob"])
+    res = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "lots", "Rob",
+                                             "--chain", "base"])
     assert res.exit_code != 0
     assert "SUPPLY" in res.output or "supply" in res.output
 
@@ -256,7 +259,7 @@ async def test_deploy_parses_and_the_retry_hint_round_trips(
         return SimpleNamespace(error=None, extracted_content="dry run ok")
     monkeypatch.setattr(dv, "perform_deploy_token", _fake)
     monkeypatch.setattr(sv, "perform_solana_deploy_token", _fake)
-    extra = ["on", "solana"] if chain == "solana" else []
+    extra = ["on", chain]
     out = await token_ops.deploy_reply("owner", ["ROB", typed, "Rob", "Coin"] + extra)
     assert seen == [expected], out
     # The owner taps / pastes the hint: it re-parses to the SAME supply.
@@ -301,9 +304,9 @@ def test_the_cli_refuses_a_non_ascii_name_before_the_confirm_and_quotes_the_name
     from click.testing import CliRunner
     from cli.commands.wallet import wallet_cmd
     res = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "1,000,000",
-                                          "Rоb", "--execute"], input="y\n")
+                                          "Rоb", "--chain", "base", "--execute"], input="y\n")
     assert res.exit_code != 0 and "printable ASCII" in res.output
     assert "Proceed?" not in res.output
     ok = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "1,000,000",
-                                         "Rob", "Coin", "--execute"], input="n\n")
+                                         "Rob", "Coin", "--chain", "base", "--execute"], input="n\n")
     assert "'ROB' ('Rob Coin') with a fixed supply of 1000000" in ok.output

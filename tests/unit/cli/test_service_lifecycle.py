@@ -215,16 +215,9 @@ def test_status_shows_running_version_and_waiting_settings(linux_service, tmp_pa
     lc.record_boot(data_home=home)
     time.sleep(0.01)
     lc.record_pending("TELEGRAM_ALLOWED_CHAT_IDS", data_home=home)
-    lines = "\n".join(service.lifecycle_lines("linux"))
+    lines = "\n".join(service.lifecycle_lines())
     assert "running:" in lines and "starting" in lines
     assert "TELEGRAM_ALLOWED_CHAT_IDS" in lines
-
-
-def test_status_flags_a_unit_from_before_077(linux_service):
-    service, calls, state = linux_service
-    unit = service._systemd_unit_path()
-    unit.write_text(unit.read_text().replace("RestartForceExitStatus=75\n", ""))
-    assert any("polyrob service install" in l for l in service.lifecycle_lines("linux"))
 
 
 # ---- update --apply through the service --------------------------------------

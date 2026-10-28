@@ -609,7 +609,7 @@ class MessageRouter:
     def _record_proactive_room_post(self, surface_id, chat_id, text, media) -> None:
         """A DELIVERED `message(target=<room>)` post joins the room log too.
 
-        2026-10-06: the hourly den job warns members with the `message` tool
+        2026-10-06: an hourly group-room job warns members with the `message` tool
         (this shim, key ``direct:…``), which `_record_room_reply` never sees —
         so the next run found the offence and no warning, and warned again.
         Fail-open, and only for an allowlisted room (a DM has no room log).

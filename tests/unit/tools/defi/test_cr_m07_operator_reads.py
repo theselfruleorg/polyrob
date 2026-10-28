@@ -45,9 +45,9 @@ async def test_portfolio_default_wallet_refuses_a_non_owner(_owner, chain):
 @pytest.mark.asyncio
 async def test_nft_and_lp_defaults_refuse_a_non_owner(_owner):
     tool = DefiDataTool()
-    res = await tool.nft_holdings(NftHoldingsParams(), execution_context=STRANGER)
+    res = await tool.nft_holdings(NftHoldingsParams(chain="base"), execution_context=STRANGER)
     assert res.error and "owner" in res.error
-    res = await tool.lp_positions(LpPositionsParams(), execution_context=STRANGER)
+    res = await tool.lp_positions(LpPositionsParams(chain="robinhood"), execution_context=STRANGER)
     assert res.error and "owner" in res.error
     assert _owner == []
 

@@ -74,7 +74,7 @@ CEILINGS = {
     # Raised 2026-09-23 with the two models it names (+36): claude-opus-5 and
     # claude-fable-5-1 — the first Anthropic rows that accept mid-conversation
     # tool changes (F9 shape (b)), plus the comment that says which do not.
-    "modules/llm/model_catalog.py": 1591,
+    "modules/llm/model_catalog.py": 1553,
     # S6 (2026-08-29): scan / notify / subscriptions / reputation extracted to settlement_*.py mixins.
     "modules/x402/settlement_watcher.py": 330,
     "modules/llm/gemini_client.py": 1360,
@@ -91,7 +91,7 @@ CEILINGS = {
     # mixin (modules/memory/sqlite_scope_store.py) with the scope verbs.
     "modules/memory/sqlite_memory_provider.py": 320,
     "modules/x402/invoicing.py": 1169,
-    "modules/llm/adapters.py": 1140,
+    "modules/llm/adapters.py": 1111,
     "modules/memory/task/task_context_manager.py": 1135,
     "modules/llm/openrouter_client.py": 960,
     # Tightened 2026-09-08: the read-only client/model inventory
@@ -114,13 +114,12 @@ CEILINGS = {
     "cli/commands/wallet.py": 1841,
     "webview/pages.py": 1841,
     "tools/browser/context.py": 1793,
-    "tools/mcp/protocol.py": 1694,
     "cli/commands/owner.py": 1646,
-    "agents/task/agent/core/next_action_internal.py": 1625,
+    "agents/task/agent/core/next_action_internal.py": 1616,
     "tools/browser/browser.py": 1604,
     "core/prefs.py": 1569,
     "tools/controller/registry/service.py": 1552,
-    "api/admin_endpoints.py": 1546,
+    "api/admin_endpoints.py": 1328,
 }
 
 # Every production .py file not listed above may hold at most this many lines.

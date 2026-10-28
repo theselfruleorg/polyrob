@@ -18,7 +18,7 @@ from cron.service import CronService
 from tools.cronjob_tools import CronEditAction, CronJobTool, CronScheduleAction
 from tools.goal_tools import GoalCreateAction, GoalTool, GoalUpdateAction
 
-ADDR = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+ADDR = "0x3535353535353535353535353535353535353535"
 TARGET = {"chain": "robinhood", "address": ADDR}
 
 
@@ -139,7 +139,7 @@ def test_owner_turn_money_job_is_a_card_and_confirm_schedules_it(tmp_path, monke
     tool = _cron_tool(tmp_path)
     res = asyncio.run(tool.cronjob_schedule(
         CronScheduleAction(task="buy back the token, report the fill", schedule="0 */6 * * *",
-                           rig="money_rail", target_token=TARGET, skills=["buyback"]),
+                           rig="money_rail", target_token=TARGET, skills=["rebuy"]),
         execution_context=_owner_turn()))
     assert res.error is None and "NOT written" in res.extracted_content
     assert tool._cron_service.list_jobs(user_id="rob") == []
@@ -152,7 +152,7 @@ def test_owner_turn_money_job_is_a_card_and_confirm_schedules_it(tmp_path, monke
     job = tool._cron_service.list_jobs(user_id="rob")[0]
     assert job.payload["rig"] == "money_rail" and job.payload["actor"] == "owner_seat"
     assert job.payload["target_authored_by"] == "owner"
-    assert job.payload["skills"] == ["buyback"]
+    assert job.payload["skills"] == ["rebuy"]
 
 
 def test_non_money_owner_job_writes_at_once(tmp_path):

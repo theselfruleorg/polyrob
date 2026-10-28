@@ -132,7 +132,6 @@ def _run_standalone_with_keys(monkeypatch, keys: str):
     from prompt_toolkit.output import DummyOutput
 
     monkeypatch.setattr(ms, "available_models", lambda env=None: CHOICES)
-    monkeypatch.setattr(ms, "steer_notes", lambda env=None: [])
     monkeypatch.setattr(ms, "_resolved_default", lambda env, choices: None)
 
     with create_pipe_input() as pipe:
@@ -165,7 +164,6 @@ def test_standalone_ctrl_c_cancels(monkeypatch):
 
 def test_standalone_non_tty_returns_default_without_prompting(monkeypatch):
     monkeypatch.setattr(ms, "available_models", lambda env=None: CHOICES)
-    monkeypatch.setattr(ms, "steer_notes", lambda env=None: [])
     monkeypatch.setattr(ms, "_resolved_default", lambda env, choices: None)
     # No input pipe + isatty False → returns the default index (gpt-5), no app.
     result = ms.run_standalone(isatty_fn=lambda: False)
@@ -174,7 +172,6 @@ def test_standalone_non_tty_returns_default_without_prompting(monkeypatch):
 
 def test_standalone_no_models_returns_none(monkeypatch):
     monkeypatch.setattr(ms, "available_models", lambda env=None: [])
-    monkeypatch.setattr(ms, "steer_notes", lambda env=None: [])
     result = ms.run_standalone(isatty_fn=lambda: True)
     assert result is None
 
@@ -212,7 +209,6 @@ def test_run_standalone_async_works_inside_running_loop(monkeypatch):
     from prompt_toolkit.output import DummyOutput
 
     monkeypatch.setattr(ms, "available_models", lambda env=None: CHOICES)
-    monkeypatch.setattr(ms, "steer_notes", lambda env=None: [])
     monkeypatch.setattr(ms, "_resolved_default", lambda env, choices: None)
 
     async def scenario():
@@ -232,7 +228,6 @@ def test_run_standalone_sync_raises_inside_running_loop(monkeypatch):
     from prompt_toolkit.output import DummyOutput
 
     monkeypatch.setattr(ms, "available_models", lambda env=None: CHOICES)
-    monkeypatch.setattr(ms, "steer_notes", lambda env=None: [])
     monkeypatch.setattr(ms, "_resolved_default", lambda env, choices: None)
 
     async def scenario():

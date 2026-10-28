@@ -1,8 +1,8 @@
 """The uniqueness nudge lands on an amount a human can actually send.
 
-⚠️ Live, Playground Env 2026-09-15. A 3,500 PNL ban offer quoted
+⚠️ Live, Playground Env 2026-09-15. A 3,500 TKN ban offer quoted
 
-    SEND EXACTLY 3500.000000000000000005 PNL
+    SEND EXACTLY 3500.000000000000000005 TKN
 
 The nudge steps by ONE raw unit. On 6-decimal USDC that is a millionth of a
 dollar — invisible and harmless. On an 18-decimal token it is 5e-18, a figure

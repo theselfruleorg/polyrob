@@ -11,7 +11,7 @@ from modules.memory.provider import EpisodeRecord
 
 _LESSON = ("NOTE for the next cycle: declare max_spend_usd=$5, not $10 "
            "(SOUL's stale per-tx line).")
-_DONE = ("Bought 1.2M PNL for $5.00 via defi_trade. " * 30) + _LESSON + " Done."
+_DONE = ("Bought 1.2M TKN for $5.00 via defi_trade. " * 30) + _LESSON + " Done."
 
 
 def _rows(monkeypatch, rows):

@@ -92,7 +92,7 @@ async def test_an_unpriceable_grant_to_an_arbitrary_spender_refuses():
     """The S3 attack shape, refused at the verb with a remedy instead of
     reaching the guard as a $0.00 authorization."""
     tool, _ = _tool(price=None)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ATTACKER, amount=1.0, max_spend_usd=5.0,
         dry_run=True))
     assert res.error and "price" in res.error.lower()
@@ -105,7 +105,7 @@ async def test_an_unpriceable_grant_to_the_pinned_router_still_reaches_the_guard
     charges it the autonomous ceiling and asks the owner."""
     captured = []
     tool, _ = _tool(price=None, captured=captured)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=5.0,
         dry_run=True))
     assert res.error is None, res.error
@@ -118,7 +118,7 @@ async def test_a_priced_grant_to_an_arbitrary_spender_is_unchanged():
     the USD pre-check exactly as before, whoever the spender is."""
     captured = []
     tool, _ = _tool(price=1.0, captured=captured)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ATTACKER, amount=1.0, max_spend_usd=5.0,
         dry_run=True))
     assert res.error is None, res.error
@@ -129,7 +129,7 @@ async def test_a_priced_grant_to_an_arbitrary_spender_is_unchanged():
 async def test_a_revoke_of_an_unpriceable_token_is_never_blocked():
     captured = []
     tool, _ = _tool(price=None, captured=captured)
-    res = await tool.revoke_approval(RevokeParams(
+    res = await tool.revoke_approval(RevokeParams(chain="base",
         token=USDC, spender=ATTACKER, dry_run=True))
     assert res.error is None, res.error
     assert captured and captured[0].expected_allowance_grants == ()

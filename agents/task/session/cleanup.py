@@ -641,12 +641,15 @@ class SessionCleanupMixin:
                 try:
                     if self.controller:
                         mcp_tool = self.controller.get_tool('mcp')
-                        if mcp_tool and hasattr(mcp_tool, 'unload_user_servers'):
-                            # C6: unload only THIS session's tenant servers, explicitly.
+                        if mcp_tool and hasattr(mcp_tool, 'release_session'):
+                            # C6: unload only THIS session's tenant servers, explicitly,
+                            # and only when no OTHER live session of the tenant still
+                            # holds the shared tool (it would lose them mid-run).
                             # Do NOT set_user_context(None) here — on the shared singleton
                             # that would null the context out from under a concurrent
                             # session; the per-action path re-sets it before every action.
-                            unloaded_count = await mcp_tool.unload_user_servers(user_id=self.user_id)
+                            unloaded_count = await mcp_tool.release_session(
+                                self.controller, self.user_id)
                             if unloaded_count > 0:
                                 self.logger.info(f"🔌 Unloaded {unloaded_count} user MCP servers")
                 except Exception as e:

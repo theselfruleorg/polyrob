@@ -295,7 +295,7 @@ async def test_start_autonomy_stamps_pid_and_role(monkeypatch):
         attrs = rows[0]["attrs"]
         assert attrs["pid"] == os.getpid()
         assert isinstance(attrs.get("role"), str) and attrs["role"]
-        assert sorted(attrs["loops"]) == ["cron", "goals"]
+        assert sorted(attrs["loops"]) == ["cron", "goals", "trading"]  # 086 W4
     finally:
         await handles.stop()
 

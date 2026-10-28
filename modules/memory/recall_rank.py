@@ -5,8 +5,8 @@ fixed "chat before cron/goal" key and then by FTS5 bm25 rank alone. So
 
 - a cron or goal run never saw its OWN previous runs (they are cron/goal rows,
   sorted after every chat row that shared one word), and
-- a 10-05 "buybacks stopped" row beat the 10-11 "announce buybacks on X and
-  the den" row: nothing in the order knew which one was newer.
+- a 10-05 "the swaps stopped" row beat the 10-11 "announce the swaps on X"
+  row: nothing in the order knew which one was newer.
 
 This module is the ONE place that turns the provider's candidate pool into the
 returned order. Pure functions, stdlib only; the caller (the sqlite provider)

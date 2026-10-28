@@ -301,21 +301,17 @@ def test_code_half_refusals(scratch, tmp_path, monkeypatch, init, match):
 
 
 def test_hooks_reach_the_core_seams(scratch, tmp_path, monkeypatch):
-    from core import boot_reconcilers, token_check_hook
+    from core import boot_reconcilers
     monkeypatch.setattr(boot_reconcilers, "_RECONCILERS", {})
-    monkeypatch.setattr(token_check_hook, "_checker", None)
     init = ("from core.packs.spec import PackSpec, ToolContribution\n"
             "async def rec():\n    return 0\n"
-            "async def chk(tool, addr):\n    return {}\n"
             "def pack():\n    return PackSpec(id='hk', tools=(ToolContribution('hkt', "
-            "lambda: True),), hooks={'autonomy.boot_reconciler': {'hkt': rec}, "
-            "'identity.token_checker': chk})\n")
+            "lambda: True),), hooks={'autonomy.boot_reconciler': {'hkt': rec}})\n")
     write_pack(tmp_path, monkeypatch, "hk", _toml("hk"), init)
     _install(scratch, monkeypatch, ["hk"])
     scratch.load_packs()
     assert state.record("hk").status == state.LOADED, state.record("hk").reason
     assert boot_reconcilers.boot_reconciler("hkt").__name__ == "rec"
-    assert token_check_hook.token_checker().__name__ == "chk"
 
 
 def test_a_reconciler_for_a_foreign_tool_refuses_the_pack(scratch, tmp_path, monkeypatch):

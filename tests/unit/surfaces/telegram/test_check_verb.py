@@ -94,9 +94,9 @@ async def test_unknown_chain_is_named(calls):
 
 @pytest.mark.asyncio
 async def test_a_ticker_gets_candidates(calls):
-    out = await check_ops.check_reply("o", ["PNL"])
+    out = await check_ops.check_reply("o", ["TKN"])
     assert out == "Not an address — searched it as a ticker.\ntoken_resolve ok"
-    assert calls[0][1] == {"symbol": "PNL"}
+    assert calls[0][1] == {"symbol": "TKN"}
 
 
 def test_owner_text_drops_operator_env_var_remedies():

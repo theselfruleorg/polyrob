@@ -20,7 +20,7 @@ def _build_twitter_tool(config: Any, container: Any) -> Any:
 async def build_ready_twitter_tool(config: Any, container: Any) -> Any:
     """A built tool is not a usable one: its API client is made in
     ``initialize()``. Without it every write fails "client is not constructed"
-    (prod 2026-10-11: two owner-approved buyback posts were lost that way)."""
+    (prod 2026-10-11: two owner-approved scheduled posts were lost that way)."""
     tool = _build_twitter_tool(config, container)
     if hasattr(tool, "client") and tool.client is None:
         await tool.initialize()

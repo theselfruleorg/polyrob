@@ -42,16 +42,16 @@ class _Stub(MemoryPrefetchMixin):
 # ---- 1. cron: the query is the job's own text -------------------------------
 
 def test_cron_query_uses_the_seed_not_the_overlay():
-    job = "PNL BUYBACK every 4 hours, fixed size 0.05 ETH"
+    job = "TKN REBUY every 4 hours, fixed size 0.05 ETH"
     q = _Stub(f"{OVERLAY}\n\n{job}", seed=job)._build_recall_query()
     assert "OWNER RULES" not in q and "OVERRIDE" not in q
-    assert "PNL BUYBACK" in q
+    assert "TKN REBUY" in q
 
 
 def test_seed_still_carries_the_brain_next_goal():
-    q = _Stub("x", seed="buyback job", n_steps=3,
+    q = _Stub("x", seed="rebuy job", n_steps=3,
               brain=SimpleNamespace(next_goal="quote the swap"))._build_recall_query()
-    assert "buyback job" in q and "quote the swap" in q
+    assert "rebuy job" in q and "quote the swap" in q
 
 
 def test_d7_stale_brain_from_the_previous_run_is_ignored_at_step_one():
@@ -72,8 +72,8 @@ def test_d7_short_turn_falls_back_to_the_previous_subject():
 
 
 def test_d7_short_turn_without_history_falls_back_to_the_task():
-    q = _Stub("PNL buyback tranche plan", turn="ok 👍")._build_recall_query()
-    assert "PNL buyback tranche plan" in q
+    q = _Stub("TKN rebuy tranche plan", turn="ok 👍")._build_recall_query()
+    assert "TKN rebuy tranche plan" in q
 
 
 def test_d7_non_latin_turn_yields_terms():
@@ -132,8 +132,8 @@ def test_goal_request_carries_a_recall_seed():
 
 def test_chat_query_uses_the_latest_turn_text_not_the_first_message():
     q = _Stub("why that was rejected? explain",
-              turn="what is the buyback status now")._build_recall_query()
-    assert "buyback status" in q
+              turn="what is the rebuy status now")._build_recall_query()
+    assert "rebuy status" in q
     assert "rejected" not in q
 
 
@@ -184,7 +184,7 @@ async def test_injection_is_bounded(monkeypatch):
     kb = "\n".join(f"[doc.md #{i}] " + ("k" * 2000) for i in range(8))
     prov = _Provider(_rows(5, 4000), kb)
     set_external_memory_provider(prov)
-    msg = await build_prefetch_message("buyback", session_id="s1")
+    msg = await build_prefetch_message("rebuy", session_id="s1")
     assert msg is not None
     budget = RECALL_MEMORY_MAX_CHARS + RECALL_KB_MAX_CHARS
     assert budget <= 10_000
@@ -198,9 +198,9 @@ async def test_injection_is_bounded(monkeypatch):
 async def test_a_later_step_never_reinjects_a_seen_line():
     set_external_memory_provider(_Provider(_rows(3, 50)))
     seen = set()
-    first = await build_prefetch_message("buyback", session_id="s1", seen=seen)
+    first = await build_prefetch_message("rebuy", session_id="s1", seen=seen)
     assert first is not None and "[m2]" in first.content
-    assert await build_prefetch_message("buyback", session_id="s1", seen=seen) is None
+    assert await build_prefetch_message("rebuy", session_id="s1", seen=seen) is None
 
 
 @pytest.mark.asyncio
@@ -208,8 +208,8 @@ async def test_only_new_lines_ride_a_later_step():
     prov = _Provider(_rows(2, 50))
     set_external_memory_provider(prov)
     seen = set()
-    await build_prefetch_message("buyback", session_id="s1", seen=seen)
+    await build_prefetch_message("rebuy", session_id="s1", seen=seen)
     prov._recalled = _rows(3, 50)
-    msg = await build_prefetch_message("buyback", session_id="s1", seen=seen)
+    msg = await build_prefetch_message("rebuy", session_id="s1", seen=seen)
     assert msg is not None
     assert "[m2]" in msg.content and "[m0]" not in msg.content

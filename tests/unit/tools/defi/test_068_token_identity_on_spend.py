@@ -1,7 +1,7 @@
 """068 W0: which contract a buy may name, enforced by the verb.
 
-2026-09-25: a PNL-buyback cron bought 33.7M of an airdropped look-alike
-(`0x357A…`, "Pissin N Lying") for $134.54. `token_info` said `verified: false`,
+2026-09-25: a TKN-rebuy cron bought 33.7M of an airdropped look-alike
+(`0x3535…`, "Lookalike Token") for $134.54. `token_info` said `verified: false`,
 the route check said `UNAVAILABLE`, and the swap read neither.
 """
 from types import SimpleNamespace
@@ -12,8 +12,8 @@ from core.wallet import token_pins
 from tools.defi import identity_gate
 from tools.defi.identity_gate import buy_identity_refusal
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 CTX = SimpleNamespace(user_id="rob", metadata={})
 
 
@@ -30,7 +30,7 @@ def no_positions(monkeypatch):
     monkeypatch.setattr(op, "entries_for", lambda uid, **kw: {})
 
 
-def _ident(address, symbol="PNL", name="Pissin N Lying", verified=False):
+def _ident(address, symbol="TKN", name="Lookalike Token", verified=False):
     return SimpleNamespace(address=address, symbol=symbol, name=name,
                            verified=verified, decimals=18)
 
@@ -38,10 +38,10 @@ def _ident(address, symbol="PNL", name="Pissin N Lying", verified=False):
 # ---- the store -------------------------------------------------------------
 
 def test_pin_replaces_the_old_address_for_one_symbol(pins_db):
-    token_pins.pin("robinhood", FAKE, "pnl")
-    row = token_pins.pin("robinhood", REAL, "PNL", note="track record")
+    token_pins.pin("robinhood", FAKE, "tkn")
+    row = token_pins.pin("robinhood", REAL, "TKN", note="track record")
     assert row["replaced"].lower() == FAKE.lower()
-    assert token_pins.pinned_addresses_for_symbol("robinhood", "pnl") == [REAL]
+    assert token_pins.pinned_addresses_for_symbol("robinhood", "tkn") == [REAL]
     assert token_pins.owner_pin("robinhood", FAKE) is None
 
 
@@ -52,9 +52,9 @@ def test_missing_store_reads_as_no_pins(pins_db):
 
 def test_owner_pin_makes_identity_verified(monkeypatch, pins_db):
     import core.wallet.tokens as tokens
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     monkeypatch.setattr(tokens, "_identity_unpinned", lambda c, a, **kw: tokens.TokenIdentity(
-        chain=c, address=a, symbol="PNL", name="Rob Track Record", decimals=18,
+        chain=c, address=a, symbol="TKN", name="Owner Token", decimals=18,
         verified=False, metadata_changed=False, source="frozen"))
     real = tokens.get_token_identity("robinhood", REAL)
     fake = tokens.get_token_identity("robinhood", FAKE)
@@ -65,7 +65,7 @@ def test_owner_pin_makes_identity_verified(monkeypatch, pins_db):
 # ---- the gate --------------------------------------------------------------
 
 def test_the_incident_is_refused_once_the_owner_pins(pins_db, no_positions):
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident(FAKE),
                                max_spend_usd=140.0, route_verdict="UNAVAILABLE",
                                execution_context=CTX)
@@ -81,7 +81,7 @@ def test_the_incident_is_refused_with_no_pin_at_all(pins_db, no_positions):
 
 def test_second_contract_for_a_held_symbol_is_refused(pins_db, monkeypatch):
     import core.open_positions as op
-    held = SimpleNamespace(chain="robinhood", address=REAL, symbol="PNL")
+    held = SimpleNamespace(chain="robinhood", address=REAL, symbol="TKN")
     monkeypatch.setattr(op, "entries_for", lambda uid, **kw: {REAL.lower(): held})
     # Even a $1 ticket that the route check AGREES on: the name is the problem.
     why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident(FAKE),
@@ -91,7 +91,7 @@ def test_second_contract_for_a_held_symbol_is_refused(pins_db, monkeypatch):
 
 
 def test_the_pinned_contract_itself_passes(pins_db, no_positions):
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     assert buy_identity_refusal(
         chain="robinhood", token_out=REAL, id_out=_ident(REAL, verified=True),
         max_spend_usd=140.0, route_verdict="UNAVAILABLE", execution_context=CTX) is None
@@ -106,7 +106,7 @@ def test_scouting_tickets_and_checked_routes_are_untouched(pins_db, no_positions
 
 
 def test_owner_direct_cli_call_is_not_gated(pins_db, no_positions):
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     assert buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident(FAKE),
                                 max_spend_usd=140.0, route_verdict="UNAVAILABLE",
                                 execution_context=None) is None
@@ -135,7 +135,7 @@ async def test_approve_clamps_a_rounding_overshoot_to_the_held_balance():
     captured = []
     tool, _ = _tool(price=1.0, captured=captured, balance=4_999_999)
     try:
-        await tool.approve_token(ApproveParams(
+        await tool.approve_token(ApproveParams(chain="base",
             token=USDC, spender=ROUTER, amount=5.0, max_spend_usd=6.0, dry_run=True))
     finally:
         _Rail.last = None
@@ -150,7 +150,7 @@ async def test_approve_keeps_a_real_overshoot():
     captured = []
     tool, _ = _tool(price=1.0, captured=captured, balance=4_000_000)
     try:
-        await tool.approve_token(ApproveParams(
+        await tool.approve_token(ApproveParams(chain="base",
             token=USDC, spender=ROUTER, amount=5.0, max_spend_usd=6.0, dry_run=True))
     finally:
         _Rail.last = None
@@ -162,19 +162,19 @@ async def test_approve_keeps_a_real_overshoot():
 
 def test_reconcile_shows_the_look_alike_warning_before_any_row():
     from tools.defi import reconcile as rec
-    book = [rec.RailPosition(address=REAL, symbol="PNL", qty=126902897.45)]
+    book = [rec.RailPosition(address=REAL, symbol="TKN", qty=123456789.25)]
     holdings = [
-        rec.ChainHolding(address=FAKE, symbol="PNL", qty=615.17, raw_units=615,
-                         value_usd=None, balance_known=True, name="Pissin N Lying"),
-        rec.ChainHolding(address=REAL, symbol="PNL", qty=126902897.45, raw_units=1,
-                         value_usd=None, balance_known=True, name="Rob Track Record"),
+        rec.ChainHolding(address=FAKE, symbol="TKN", qty=615.17, raw_units=615,
+                         value_usd=None, balance_known=True, name="Lookalike Token"),
+        rec.ChainHolding(address=REAL, symbol="TKN", qty=123456789.25, raw_units=1,
+                         value_usd=None, balance_known=True, name="Owner Token"),
     ]
     report = rec.diff(book, holdings)
     out = rec.render(report, chain="robinhood", holder="0xabc", coverage="full")
     warn = out.index("ONE SYMBOL, MORE THAN ONE CONTRACT")
     # 071 W3: the unpriced look-alike not in the book is `unsolicited`, not an issue
     assert warn < out.index("matched:") < out.index("unsolicited (")
-    assert "Pissin N Lying" in out and "Rob Track Record" in out
+    assert "Lookalike Token" in out and "Owner Token" in out
     assert report.to_dict()["collisions"]
 
 

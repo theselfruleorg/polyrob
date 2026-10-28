@@ -423,6 +423,76 @@ def history(limit: int = 5, data_home: Optional[os.PathLike] = None) -> List[dic
     return out
 
 
+# --------------------------------------------------------------------------
+# The owner's "/update now" — the deployer skips its owner-quiet window (093 D6)
+# --------------------------------------------------------------------------
+
+#: Read by ``scripts/deploy_when_idle.sh`` (``owner_update_now``), relative to
+#: the data home. The deployer runs as root under ``env -i`` (``scripts/
+#: ops_deploy_root.sh``), so an env var never reaches it: this file is the one
+#: channel, and only the owner's ``/update now go`` writes it.
+OWNER_DEPLOY_NOW_FILE = "locks/owner_update_now.json"
+#: A marker older than this is ignored; the deployer also consumes it at launch.
+OWNER_DEPLOY_NOW_TTL_SEC = 1800
+
+
+def request_owner_deploy_now(*, origin: Optional[Dict[str, Any]] = None,
+                             data_home: Optional[os.PathLike] = None,
+                             ttl_sec: float = OWNER_DEPLOY_NOW_TTL_SEC) -> dict:
+    """Record that the OWNER asked for a deploy now (``/update now go``). The
+    next ``deploy_when_idle.sh`` run within ``ttl_sec`` does not wait for the
+    owner's chat to go quiet; every other idle check (a running or imminent
+    cron job, a running goal, a live turn, another deploy) stays. The caller is
+    an owner seat — this function does not decide who may ask."""
+    if data_home is None:
+        from core.runtime_paths import resolve_data_home
+        data_home = resolve_data_home()
+    now = time.time()
+    rec = {"requested_by": "owner", "id": uuid.uuid4().hex[:10], "at": now,
+           "expires_at": now + float(ttl_sec), "origin": dict(origin or {})}
+    _write_json(Path(data_home) / OWNER_DEPLOY_NOW_FILE, rec)
+    return rec
+
+
+def read_owner_deploy_now(data_home: Optional[os.PathLike] = None) -> Optional[dict]:
+    """The live ``/update now`` marker, or None when there is none or it expired.
+    An unreadable marker raises :class:`LifecycleUnreadable`."""
+    if data_home is None:
+        from core.runtime_paths import resolve_data_home
+        data_home = resolve_data_home()
+    rec = _read_json(Path(data_home) / OWNER_DEPLOY_NOW_FILE)
+    if not rec:
+        return None
+    # The age bound is OUR TTL from ``at`` — the same bound the deployer reads
+    # (``scripts/deploy_when_idle.sh``) — never the writer's ``expires_at`` alone.
+    now = time.time()
+    try:
+        at, expires = float(rec.get("at") or 0), float(rec.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires <= now or at <= 0 or now - at > OWNER_DEPLOY_NOW_TTL_SEC or at > now + 60:
+        return None
+    return rec
+
+
+def deploy_wait_line(data_home: Optional[os.PathLike] = None) -> str:
+    """093 C1: one line for a live owner deploy-now request, else ``""``. The
+    deploy itself runs outside this process (``scripts/deploy_when_idle.sh``),
+    so this says only what the marker proves: it was asked, and the waiter
+    still waits for an idle box. An unreadable marker is said, never hidden."""
+    try:
+        rec = read_owner_deploy_now(data_home)
+    except LifecycleUnreadable as exc:
+        return f"deploy: the owner deploy-now request is unreadable ({exc})"
+    if rec is None:
+        return ""
+    at = time.strftime("%H:%MZ", time.gmtime(float(rec.get("at") or 0)))
+    until = time.strftime("%H:%MZ", time.gmtime(float(rec.get("expires_at") or 0)))
+    return (f"deploy: the owner asked for a deploy now at {at} (valid until {until}); "
+            "the deploy skips the owner-quiet wait but still waits for an idle box "
+            "(no running job, no running goal, no live turn)")
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -680,6 +750,14 @@ def status_facts(data_dir: Optional[os.PathLike]) -> dict:
             health.append((f"restart_{outcome}",
                            str(last[0].get("detail") or outcome)[:300],
                            "/restart or /update again when it suits you"))
+    # 093 C1: an owner deploy-now request that waits for an idle box.
+    try:
+        wait = deploy_wait_line(data_dir)
+    except Exception:  # noqa: BLE001 — one fact, never the section
+        wait = ""
+    if wait:
+        lines.append(wait)
+        data["owner_deploy_now"] = True
     # 080 WS-1: a posture member set on its own env line is ignored — say so here,
     # not only in the journal.
     try:
@@ -702,4 +780,6 @@ __all__ = [
     "git_head", "withdraw_if_open", "settle_stale_request",
     "record_pending", "pending_keys",
     "begin_drain", "end_drain", "draining", "status_facts",
+    "OWNER_DEPLOY_NOW_FILE", "OWNER_DEPLOY_NOW_TTL_SEC", "request_owner_deploy_now",
+    "read_owner_deploy_now", "deploy_wait_line",
 ]

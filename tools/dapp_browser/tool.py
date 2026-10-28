@@ -44,7 +44,7 @@ class ConnectParams(BaseModel):
     url: str = Field(..., description=(
         "The dapp URL to open with the wallet attached. The page is loaded "
         "AFTER the provider is installed, which is what makes the dapp see it."))
-    chain: str = Field("base", description=(
+    chain: str = Field(..., description=(
         "Chain the session is armed for. The page cannot move the budget to "
         "another chain — that needs a deliberate reconnect."))
     max_spend_usd: float = Field(..., gt=0, description=(
@@ -227,7 +227,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
         "contracts the page may touch. Every transaction the page then requests "
         "is simulated and asserted against that envelope before anything is "
         "signed; anything over the autonomous ceiling waits for the owner. "
-        "Off-chain signature requests (permits) are ALWAYS refused. After this, "
+        "A page's off-chain signature request (permit, sign-in) is refused here; a "
+        "site login goes through wallet_sign. After this, "
         "drive the page with the ordinary browser actions.",
         param_model=ConnectParams)
     async def dapp_connect(self, params: ConnectParams, execution_context=None):
@@ -392,7 +393,8 @@ class DappBrowserTool(WalletHolderMixin, BaseTool):
             f"  per tx:   ${params.max_spend_usd:.2f}\n"
             f"  session:  ${params.session_budget_usd:.2f} total\n"
             f"  contracts: {', '.join(allow) if allow else 'any on this chain'}\n"
-            f"  REFUSED ALWAYS: off-chain signatures (permits), contract "
+            f"  REFUSED ALWAYS: a page's off-chain signatures (permits; a site login "
+            f"goes through wallet_sign), contract "
             f"deployment from the page, and moving to another chain.\n"
             f"  Drive the page with the ordinary browser actions. A transaction "
             f"over the autonomous ceiling waits up to "

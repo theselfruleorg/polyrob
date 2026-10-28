@@ -244,7 +244,7 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
             type="apiKey",
             name="X-API-KEY",
             in_="header",
-            description="API key for programmatic access. Create at POST /api/auth/api-keys (requires DEN token)."
+            description="API key for programmatic access. Create at POST /api/auth/api-keys (requires an access tier granted by the operator)."
         ),
         "bearer": SecurityScheme(
             type="http",
@@ -264,7 +264,7 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
         "api_key": {
             "description": "Recommended for AI agents. Create once, use forever.",
             "how_to_get": "1) Login with wallet at /api/auth/nonce + /api/auth/verify, 2) POST /api/auth/api-keys",
-            "requires": "DEN token ownership",
+            "requires": "an access tier granted by the operator",
             "header": "X-API-KEY: rob_xxx..."
         },
     }

@@ -31,7 +31,6 @@ _CATEGORY_LABELS = {
     ToolCategory.BROWSER: "automation",
     ToolCategory.COMMUNICATION: "integration",
     ToolCategory.SEARCH: "automation",
-    ToolCategory.VERIFICATION: "integration",
     ToolCategory.INTEGRATION: "integration",
 }
 

@@ -10,6 +10,78 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-10-29
+
+### Added
+
+- Operational self-awareness: `agent_status(tool=)` says why a tool is missing, who fixes it and when;
+  `propose_setting` gives the owner a one-tap fix card; `http_request` writes JSON over HTTP; `/update now`
+  skips the owner-quiet wait.
+- Console Work › Goals: a goal board with one lane per live status, the open decisions, dependencies, sub-goals,
+  cost against the run limit and a detail with runs and history; actions use the existing goal verbs and the
+  Inbox decider; the goal form takes `depends_on`.
+- `wallet_sign`: the agent signs a site's login or challenge text (EIP-191, SIWE, SIWS) once a classifier, re-run
+  in the signer, binds it to the site; permits, orders and blind bytes refuse; site keys are stored encrypted.
+- Trading mandate: one owner card (`/trade start`) starts a hunt, a daily review and an exit job per position;
+  code arms and cancels exits, $0 prechecks watch, entry-only breakers latch, `/trade status|pause|stop|release`.
+- Discovery reads say ok / empty / unavailable, and `token_info` carries survivability fields with a tier ceiling
+  (missing is unknown, one tier lower); `/book retire` and `defi_data.retire_row` close a measured zero or dust row.
+
+### Changed
+
+- Operator MCP servers belong in `~/.polyrob/mcp.json`; `config/mcp_config.json` ships defaults only, and a
+  deployed tree copies its servers there once at startup.
+- DeepSeek is a native provider: a `DEEPSEEK_API_KEY` alone runs the agent on DeepSeek's own API (`deepseek-flash`,
+  `deepseek-v4-pro`) with tool calls, thinking-mode reasoning replay, cache hits and the peak-hour price; the
+  bespoke client, its adapter and the old same-role message merge are removed.
+- No default chain: every `defi_trade`, `defi_data`, `dapp_browser` and `agent_nft` verb requires `chain`, the wallet,
+  identity and LP CLI commands require `--chain`, and `/nft`, `/identity` and `/deploy` require `on <chain>`.
+- A trading-mandate entry costs at most its promotion stage's ticket ($1 probe, then half, then full) and needs an
+  exit plan before any quote; the status snapshot and the digest gain a $0 Trading block (positions, exit coverage,
+  breaker, realized P&L with close reasons, LLM cost).
+- After a chat turn's first reply-only step the agent is told the reply was delivered (finish with `done()` or keep
+  working), so it stops repeating a reply in the extra step the conversational-exit allowance grants.
+- Solana swaps write the position book, a major↔stable swap books P&L, one $1 dust line is shared, and the
+  `exits`, `treasury-trading`, `sizing-and-risk` and `position-journal` skills lose their job templates and ledger text.
+
+### Fixed
+
+- The agent gets the true cause: a tool that cannot run is gated with its remedy, `load_tool` returns the
+  recorded reason, the retry wall quotes the last error and resets per owner turn; `/mcp add` works.
+- `wallet_sign`: one call fetches (POST/GET), signs and submits with the challenge's cookie; an unsent signature
+  says so and a second one refuses; SIWE without expiry, nonce-only sites, sibling hosts and disclaimers sign.
+- `cronjob_edit` no longer reports a value the job already has as an edit: a call that changes nothing now refuses
+  with the way to add task text (old_text and new_text), so an agent cannot loop on a no-op "Edited cron job".
+
+- `twitter_get_mentions` returns each mention's `author_id` and `author_username`; without them the model guessed
+  an author and tagged the wrong account in a reply.
+- `wallet_holdings`, `wallet_activity` and `token_origin` list `chain` as required in the schema the model sees (a 0x address
+  needs it), so a model stops omitting it; in-process calls for base58 addresses are unchanged.
+- The controller's retry key treats an omitted argument, an explicit `None` and stray whitespace as the same call, and the
+  retry-wall refusal carries a `retry_wall` flag instead of being recognised by its wording.
+- A step made only of "Maximum retries exceeded" refusals now counts as a failed step, so a run that keeps re-asking for a
+  dead operation stops after `max_failures` such steps instead of burning its whole step budget.
+- `defi_data wallet_holdings` on a 0x address with no chain now answers with a ready-to-copy call naming a chain, so a
+  model stops repeating the chain-less call that cost a 150-step run.
+- A short `message` caption no longer hides an earlier `send_message` text from the repeat-reply guard: the guard now
+  checks every text the turn spoke, so the owner stops receiving the same reply twice.
+- The CLI no longer stops with `PermissionError` when it runs from a directory its user cannot read (the retired
+  key-backfill hint stats a relative `config/.env.*`).
+- Every X tweet read carries `reposts_and_quotes` (retweets + quotes, the figure X's app shows as reposts), so a
+  repost goal no longer reads the retweet count alone and keeps pushing a target it has already met.
+
+### Removed
+
+- `polyrob service status` no longer checks the systemd unit for the pre-1.4.0 `RestartForceExitStatus=75` hint.
+- The NFT `holder` tier and its token gate: the Collab.Land and Alchemy check tools, admin `verify-token`,
+  the `den_token_count` and `requires_den_token` API fields, and six flags. A `holder` row migrates to `free_access`.
+- The one-goal `/trade` verb: `/trade` now opens and runs the trading mandate.
+
+### Security
+
+- Dependency floors for new advisories: `certifi>=2026.10.19`, `pillow>=13.0.0`, `pypdf>=6.21.2`; the lock also
+  takes the fixed `filelock`, `msgpack`, `opentelemetry-api` and `setuptools`.
+
 ## [1.6.0] — 2026-10-20
 
 ### Added

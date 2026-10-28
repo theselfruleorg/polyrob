@@ -43,11 +43,12 @@ _STDIO_MARKERS = ("npx", "uvx", "node", "python", "python3", "bunx", "deno", "sh
 _USAGE = (
     "Usage:\n"
     "  /mcp                      — the MCP servers I have\n"
-    "  /mcp add <id> <https-url> [api-key]\n"
+    "  /mcp add <id> <https-url> [api-key]  — works from the next turn\n"
     "  /mcp remove <id>\n"
     "  /mcp test <id>            — connect and count the tools\n\n"
-    "HTTP/SSE servers only. A local command (npx/uvx/…) is refused: persisting "
-    "one would persist arbitrary code execution on this box."
+    "HTTPS servers only (Streamable HTTP, HTTP or SSE — the add finds which). "
+    "A local command (npx/uvx/…) is refused: persisting one would persist "
+    "arbitrary code execution on this box."
 )
 
 
@@ -81,30 +82,93 @@ def _no_store_message() -> str:
             "database. Nothing was changed.")
 
 
-async def perform_mcp_list(service: Any, user_id: str) -> MCPAdminResult:
-    rows = await service.get_user_servers(user_id)
+def _when(value: Any) -> str:
+    """A stored timestamp as ``YYYY-MM-DD HH:MMZ`` (rows carry ISO text or datetime)."""
+    if value is None or value == "":
+        return ""
+    text = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    return text.replace("T", " ")[:16] + "Z"
+
+
+def _last_probe(row: Any) -> str:
+    """When the server was last probed (add/test/load), or ``never probed``.
+
+    ``auth_status`` is ``connected``/``error`` only after a probe wrote it; the
+    probe also stamps ``updated_at``."""
+    if getattr(row, "auth_status", None) in ("connected", "error"):
+        return _when(getattr(row, "updated_at", None)) or "probed"
+    return "never probed"
+
+
+def operator_server_lines(container: Any) -> List[str]:
+    """The operator's static servers (repo defaults + ``<polyrob_home>/mcp.json``),
+    with the live connection state when the ``mcp`` tool runs. Read-only — they
+    change in the operator file, not from the chat."""
+    cfg = getattr(getattr(container, "config", None), "mcp", None) or {}
+    servers = cfg.get("servers") if isinstance(cfg, dict) else None
+    if not isinstance(servers, dict) or not servers:
+        return []
+    manager = None
+    for name in ("mcp", "mcp_tool"):
+        try:
+            if container.has_service(name):
+                manager = getattr(container.get_service(name), "server_manager", None)
+                break
+        except Exception:
+            pass
+    conns = getattr(manager, "connections", None)
+    conns = conns if isinstance(conns, dict) else {}
+    lines = [f"Operator servers ({len(servers)}, set in the operator file):"]
+    for name, sc in servers.items():
+        sc = sc if isinstance(sc, dict) else {}
+        kind = getattr(sc.get("type"), "value", sc.get("type")) or "?"
+        where = sc.get("url") or " ".join(sc.get("command") or []) or ""
+        conn = conns.get(name)
+        if conn is None:
+            state = "not connected in this process"
+        else:
+            status = getattr(getattr(conn, "status", None), "value", "?")
+            state = f"{status} · {len(getattr(conn, 'tools', []) or [])} tools"
+            if getattr(conn, "connected_at", None):
+                from datetime import datetime, timezone
+                state += " · connected " + _when(
+                    datetime.fromtimestamp(conn.connected_at, timezone.utc).replace(tzinfo=None))
+        lines.append(f"• {name} [{kind}] {where} · {state}")
+        if conn is not None and getattr(conn, "last_error", None):
+            lines.append(f"    last error: {conn.last_error}")
+    return lines
+
+
+async def perform_mcp_list(service: Any, user_id: str, *,
+                           operator_lines: Sequence[str] = ()) -> MCPAdminResult:
+    rows = await service.get_user_servers(user_id, enabled_only=False)
+    lines: List[str] = []
     if not rows:
-        return MCPAdminResult(True, (
-            "No MCP servers saved. Add one with:\n"
-            "  /mcp add aave https://mcp.aave.com"))
-    lines = [f"MCP servers ({len(rows)}):"]
+        lines.append("No MCP servers saved. Add one with:\n"
+                     "  /mcp add aave https://mcp.aave.com")
+    else:
+        lines.append(f"MCP servers ({len(rows)}):")
     for r in rows:
         state = "on" if getattr(r, "enabled", True) else "off"
+        kind = getattr(r, "server_type", None) or "?"
         tools = getattr(r, "tools_discovered", 0) or 0
-        tail = f" · {tools} tools" if tools else ""
-        lines.append(f"• {r.server_name} [{state}] {r.server_url}{tail}")
+        lines.append(f"• {r.server_name} [{kind}, {state}] {r.server_url}")
+        lines.append(f"    {tools} tools · last probe: {_last_probe(r)}")
         err = getattr(r, "last_error", None)
         if err:
             lines.append(f"    last error: {err}")
+    if operator_lines:
+        lines.append("")
+        lines.extend(operator_lines)
     return MCPAdminResult(True, "\n".join(lines))
 
 
 async def perform_mcp_add(service: Any, user_id: str, server_id: str, url: str,
                           *, api_key: Optional[str] = None) -> MCPAdminResult:
-    server_type = "sse" if url.rstrip("/").endswith("/sse") else "http"
+    # 093 B1: probe streamable_http → http → sse; store the one that answered.
     result = await service.add_server(
         user_id, server_id, url,
-        server_type=server_type,
+        server_type="auto",
         api_key=api_key,
         auth_method="api_key" if api_key else "none",
         display_name=server_id,
@@ -113,9 +177,13 @@ async def perform_mcp_add(service: Any, user_id: str, server_id: str, url: str,
     if not getattr(result, "success", False):
         return MCPAdminResult(False, (
             f"Could not add '{server_id}': {getattr(result, 'error', None) or 'unknown error'}"))
+    server = getattr(result, "server", None)
+    kind = getattr(server, "server_type", None) or "auto"
+    tools = getattr(result, "tools_discovered", None)
+    tail = f", {tools} tools" if tools else ""
     return MCPAdminResult(True, (
-        f"Added MCP server '{server_id}' ({server_type}) — {url}\n"
-        f"It loads automatically at the start of every new session."))
+        f"Added MCP server '{server_id}' ({kind}{tail}) — {url}\n"
+        f"The agent can use it from the next turn (load_tool mcp)."))
 
 
 async def perform_mcp_remove(service: Any, user_id: str, server_id: str) -> MCPAdminResult:
@@ -123,8 +191,7 @@ async def perform_mcp_remove(service: Any, user_id: str, server_id: str) -> MCPA
     if not removed:
         return MCPAdminResult(False, f"No MCP server named '{server_id}' is saved.")
     return MCPAdminResult(True, (
-        f"Removed MCP server '{server_id}'. Sessions already running keep it "
-        f"until they end."))
+        f"Removed MCP server '{server_id}'. The agent loses it from the next turn."))
 
 
 async def perform_mcp_test(service: Any, user_id: str, server_id: str) -> MCPAdminResult:
@@ -143,19 +210,16 @@ async def perform_mcp_test(service: Any, user_id: str, server_id: str) -> MCPAdm
     return MCPAdminResult(True, " ".join(bits))
 
 
-def _run(coro):
-    """Run ``coro`` whether or not the caller already holds an event loop."""
-    try:
-        return asyncio.run(coro)
-    except RuntimeError:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
+async def mcp_reply_async(user_id: Optional[str], args: Sequence[str], *,
+                          service: Any = None, container: Any = None) -> str:
+    """Render one owner ``/mcp …`` command. AWAITED by every async seat
+    (Telegram, the console, the REPL) on the loop that owns the live MCP manager.
 
-
-def mcp_reply(user_id: Optional[str], args: Sequence[str], *,
-              service: Any = None, container: Any = None) -> str:
-    """Render one owner ``/mcp …`` command. Sync — every seat calls this."""
+    It used to run on a throwaway loop in a worker thread while the seat blocked
+    the main loop on ``.result()``: the store's change listener then dropped
+    connections from that foreign loop (a held manager lock deadlocked; aiohttp
+    sessions said "attached to a different loop"), and ``/mcp add`` froze the
+    whole process for up to three probes × 30 s."""
     if not user_id:
         return "Only the owner can manage MCP servers."
 
@@ -185,22 +249,42 @@ def mcp_reply(user_id: Optional[str], args: Sequence[str], *,
 
     try:
         if verb == "list":
-            return _run(perform_mcp_list(service, user_id)).message
+            if container is None:
+                from core.container import DependencyContainer
+                container = DependencyContainer._instance
+            return (await perform_mcp_list(
+                service, user_id, operator_lines=operator_server_lines(container))).message
         if verb == "add":
             if len(rest) < 2:
                 return _USAGE
             api_key = rest[2] if len(rest) > 2 else None
-            return _run(perform_mcp_add(service, user_id, rest[0], rest[1],
-                                        api_key=api_key)).message
+            return (await perform_mcp_add(service, user_id, rest[0], rest[1],
+                                          api_key=api_key)).message
         if verb in ("remove", "rm", "delete"):
             if not rest:
                 return _USAGE
-            return _run(perform_mcp_remove(service, user_id, rest[0])).message
+            return (await perform_mcp_remove(service, user_id, rest[0])).message
         if verb == "test":
             if not rest:
                 return _USAGE
-            return _run(perform_mcp_test(service, user_id, rest[0])).message
+            return (await perform_mcp_test(service, user_id, rest[0])).message
     except Exception as exc:
         logger.warning("mcp admin verb failed", exc_info=True)
         return f"The MCP command did not run: {exc}"
     return _USAGE
+
+
+def mcp_reply(user_id: Optional[str], args: Sequence[str], *,
+              service: Any = None, container: Any = None) -> str:
+    """Sync wrapper for a caller with NO running event loop (a script, a test).
+
+    On a running loop it refuses rather than block it: await
+    :func:`mcp_reply_async` there. A sync caller has no live MCP manager on its
+    thread; the store's change listener hands any manager change to the tool's
+    own loop (``tools/mcp/user_servers.py::schedule_store_change``)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(mcp_reply_async(user_id, args, service=service,
+                                           container=container))
+    raise RuntimeError("mcp_reply called on a running event loop; await mcp_reply_async")

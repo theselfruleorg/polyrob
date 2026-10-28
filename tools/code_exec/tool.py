@@ -82,6 +82,13 @@ class CodeExecutionTool(BaseTool):
         self._persistent_backends: dict = {}
         self._persistent_lock = asyncio.Lock()
 
+    def availability_gap(self):
+        """``("backend-unavailable", remedy)`` when ``run_code`` would refuse every
+        call on this deploy (no backend that starts here), else None (093 A3).
+        Read by ``tools.tool_disclosure.resolve_tool_status``; cached probe."""
+        from tools.code_exec.backend_probe import code_exec_gap
+        return code_exec_gap()
+
     async def _get_backend(self, execution_context=None, dev_mode: bool = False):
         """Resolve the backend to run on.
 

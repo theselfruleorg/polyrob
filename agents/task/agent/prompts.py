@@ -140,16 +140,20 @@ class SystemPrompt:
 		if not self.mcp_servers:
 			# No MCP servers — point at alternatives, but ONLY ones actually loaded
 			# this session (T1-11). Legacy callers without tool_ids keep the old text.
+			# 093 review: an owner seat is told the one remedy (/mcp add).
+			owner_add = ([_p("mcp_tools.owner_add")]
+			             if self.owner_seat and not self.sub_agent else [])  # a leaf cannot propose
 			if not self._tool_ids_known:
-				return "\n".join(_p(f"mcp_tools.{k}") for k in
-				                 ("off", "alt_browser", "alt_perplexity", "alt_files"))
+				return "\n".join([_p(f"mcp_tools.{k}") for k in
+				                   ("off", "alt_browser", "alt_perplexity", "alt_files")]
+				                  + owner_add)
 			alternatives = [_p(f"mcp_tools.alt_{tid}") for tid in ("browser", "perplexity", "web_fetch")
 			                if tid in self.tool_ids]
 			if not alternatives:
 				# Nothing to route to — drop the section entirely rather than
 				# describing an absence (the <using-your-tools> principle covers it).
 				return ""
-			return "\n".join([_p("mcp_tools.off"), *alternatives])
+			return "\n".join([_p("mcp_tools.off"), *alternatives, *owner_add])
 
 		# Build direct action examples for each server
 		direct_examples = []
@@ -269,7 +273,8 @@ class SystemPrompt:
 		"""B1: present_choice, for a live owner turn only."""
 		if self.autonomous or not self._owner_facing():
 			return ""
-		return _p("communication.owner_moves")
+		# 093 C3: a missing capability is read from the harness, then answered once.
+		return _p("communication.owner_moves") + "\n" + _p("harness")
 
 	def _get_rules_content(self) -> str:
 		"""Get critical rules section content.
@@ -546,7 +551,7 @@ class SystemPrompt:
 		"""035 P1-9 — where an owner instruction has to be RECORDED.
 
 		The 2026-09-08 failure was not a refusal and not a plumbing fault: the agent
-		understood "stop posting to the Telegram den", agreed, and wrote it to the one
+		understood "stop posting to the group room", agreed, and wrote it to the one
 		lane that cannot enforce anything — while the lane that applies immediately and
 		is enforced at 56 read sites (typed preferences) went unused for 30 days. No
 		prompt named any of the write lanes, and two tool descriptions both advertised

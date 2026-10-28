@@ -37,7 +37,7 @@ def test_a_different_turn_gets_a_different_key():
 async def test_the_same_approve_twice_in_one_turn_is_refused_as_a_replay(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _approve_sim)
     tool, gate = _tool()
-    params = ApproveParams(token=USDC, spender=ROUTER, amount=1.0,
+    params = ApproveParams(chain="base", token=USDC, spender=ROUTER, amount=1.0,
                            max_spend_usd=2.0, dry_run=False)
     first = await tool.approve_token(params, execution_context=_genuine_ctx())
     assert first.error is None and "CONFIRMED" in (first.extracted_content or "")

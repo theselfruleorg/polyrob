@@ -35,7 +35,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from modules.llm.anthropic_client import AnthropicClient
-    from modules.llm.deepseek_client import DeepSeekClient
     from modules.llm.gemini_client import GeminiClient
     from modules.llm.openai_client import OpenAIClient
 from modules.llm.llm_client import LLMClient, translate_llm_error
@@ -303,6 +302,7 @@ class LLMClientAdapter(BaseChatModel):
                 if hasattr(msg, 'tool_calls') and msg.tool_calls:
                     assistant_msg = {"role": role, "content": msg.content or ""}
                     assistant_msg["tool_calls"] = msg.tool_calls
+                    self._replay_reasoning(msg, assistant_msg)
                     client_messages.append(assistant_msg)
                     continue
             else:
@@ -359,6 +359,24 @@ class LLMClientAdapter(BaseChatModel):
                 
         return client_messages
     
+    def _stamp_reasoning(self, ai_message) -> None:
+        """Keep the call's ``reasoning_content`` on its OWN message (read right after the
+        await, like the response id) for clients that replay it."""
+        if not getattr(self._client, 'ROUND_TRIP_REASONING', False):
+            return
+        try:
+            reasoning = self._client.last_response.choices[0].message.reasoning_content
+        except (AttributeError, IndexError, TypeError):
+            return
+        if isinstance(reasoning, str) and reasoning:
+            ai_message.additional_kwargs['reasoning_content'] = reasoning
+
+    def _replay_reasoning(self, msg, client_msg: Dict[str, Any]) -> None:
+        """DeepSeek: every assistant turn replays ``reasoning_content`` (empty if none: else 400)."""
+        reasoning = (getattr(msg, 'additional_kwargs', None) or {}).get('reasoning_content')
+        if getattr(self._client, 'ROUND_TRIP_REASONING', False):
+            client_msg['reasoning_content'] = reasoning if isinstance(reasoning, str) else ""
+
     def _build_generation_params(self, stop: Optional[List[str]], kwargs: dict) -> dict:
         """Assemble per-call generation params (shared by _agenerate + _astream_true).
 
@@ -557,6 +575,7 @@ class LLMClientAdapter(BaseChatModel):
                     self._logger.debug(f"[NATIVE_TOOLS] Populating usage_metadata for token extraction: {usage_metadata}")
 
                 ai_message = AIMessage(content=self._scrub_content(content or ""), usage_metadata=usage_metadata)
+                self._stamp_reasoning(ai_message)
                 if tool_calls:
                     ai_message.tool_calls = tool_calls
                     self._logger.debug(f"[NATIVE_TOOLS] Response contains {len(tool_calls)} tool calls, content_length={len(content) if content else 0}")
@@ -929,51 +948,6 @@ class LLMClientAdapter(BaseChatModel):
         yield final_message
 
 
-class DeepSeekAdapter(LLMClientAdapter):
-    """Adapter for DeepSeek client with native function calling support.
-
-    DeepSeek V3+ supports OpenAI-compatible function calling via generate_agent_response.
-    The base class _agenerate automatically routes to native tools when available.
-
-    Docs: https://api-docs.deepseek.com/guides/function_calling
-    """
-
-    def __init__(self, client: "DeepSeekClient", **kwargs):
-        """Initialize with a DeepSeek client.
-
-        Args:
-            client: An initialized DeepSeek client
-        """
-        super().__init__(client, **kwargs)
-
-    # ✅ NATIVE TOOLS: Base class _agenerate (line 117) automatically calls
-    # client.generate_agent_response with tools, which DeepSeekClient implements
-    # via _generate_with_tools for OpenAI-compatible function calling
-
-    def with_structured_output(self, schema, **kwargs):
-        """DeepSeek doesn't support schema-based structured output.
-
-        DeepSeek V3 supports:
-        - ✅ Function calling (native tools) - handled by generate_agent_response
-        - ❌ Structured output (schema-based response formatting)
-
-        This method raises NotImplementedError to trigger fallback to regular
-        LLM calls with JSON parsing, which is the correct fallback for DeepSeek.
-
-        Note: Function calling and structured output are different capabilities.
-        The agent will use native tools successfully, but skip structured output.
-        """
-        raise NotImplementedError(
-            f"Structured output not supported for DeepSeek model {self._client.model_type}. "
-            "Use function calling (native tools) or regular LLM calls with JSON parsing."
-        )
-
-    @property
-    def _llm_type(self) -> str:
-        """Return the type of LLM."""
-        return f"deepseek-{self._client.model_type}-adapter"
-
-
 class GeminiAdapter(LLMClientAdapter):
     """Adapter for Gemini client - uses base class native tools implementation.
     
@@ -1132,7 +1106,6 @@ __all__ = [
     # Provider adapters
     "OpenAIAdapter",
     "AnthropicAdapter",
-    "DeepSeekAdapter",
     "GeminiAdapter",
     "OpenRouterAdapter",
 ]

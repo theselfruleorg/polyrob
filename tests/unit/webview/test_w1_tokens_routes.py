@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 from core import open_positions as op
 from core.wallet import token_pins
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def client(tmp_path, monkeypatch):
     pins = str(tmp_path / "wallet" / "token_pins.db")
     monkeypatch.setattr(token_pins, "token_pins_db_path", lambda data_home=None: pins)
     op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
-                                           symbol="PNL", qty=5.0, cost_usd=134.54),
+                                           symbol="TKN", qty=5.0, cost_usd=134.54),
                    db_path=op.open_positions_db_path(str(tmp_path)))
     app = FastAPI()
     app.include_router(routes.router)
@@ -40,7 +40,7 @@ def test_the_view_lists_sources_and_holdings(client):
 
 def test_trust_then_untrust_then_writeoff(client, tmp_path):
     r = client.post("/api/webgate/tokens/trust",
-                    json={"chain": "robinhood", "address": REAL, "symbol": "PNL"}).json()
+                    json={"chain": "robinhood", "address": REAL, "symbol": "TKN"}).json()
     assert r["ok"], r
     assert token_pins.owner_pin("robinhood", REAL)["source"] == "owner_approved"
     r = client.post("/api/webgate/tokens/untrust",

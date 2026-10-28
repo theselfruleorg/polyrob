@@ -1,0 +1,77 @@
+{
+  "function": {
+    "description": "Sign in to / enroll on a site with the agent's wallet in ONE call: ask its HTTPS challenge URL, sign the returned text, and POST the signature to submit_url on the same site. The tool fills submit_body_json from the challenge it fetched: '{challenge.challengeId}' = that field of the challenge, '{signature}' = the new signature. A key or session the site returns is stored encrypted. Signs login/challenge text only — never a hash, transaction, permit or order.",
+    "name": "wallet_sign_challenge",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "challenge_body_json": {
+          "default": "{}",
+          "description": "JSON object POSTed to challenge_url; '{address}' becomes this wallet's address.",
+          "maxLength": 8192,
+          "type": "string"
+        },
+        "challenge_method": {
+          "default": "POST",
+          "description": "POST (body = challenge_body_json) or GET (no body).",
+          "enum": [
+            "POST",
+            "GET"
+          ],
+          "type": "string"
+        },
+        "challenge_url": {
+          "description": "HTTPS URL that issues the challenge; '{address}' in it becomes this wallet's address.",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "credential_label": {
+          "default": "",
+          "description": "Name for a credential the site returns (stored encrypted; default: its field name).",
+          "maxLength": 80,
+          "type": "string"
+        },
+        "family": {
+          "default": "evm",
+          "description": "'evm' (EIP-191) or 'solana' (ed25519).",
+          "enum": [
+            "evm",
+            "solana"
+          ],
+          "type": "string"
+        },
+        "message_field": {
+          "default": "message",
+          "description": "Dot path of the text to sign in the challenge response; '' = the whole response body is the text (a text/plain challenge).",
+          "maxLength": 200,
+          "type": "string"
+        },
+        "message_template": {
+          "default": null,
+          "description": "Only for a site that returns a nonce and expects the client to build a Sign-In With Ethereum/Solana message: the full EIP-4361 text with '{address}', '{challenge.<path>}', '{issued_at}', '{expires_at}' filled in. Anything that does not parse as a sign-in message for this site is refused.",
+          "maxLength": 4096,
+          "nullable": true,
+          "type": "string"
+        },
+        "submit_body_json": {
+          "default": "{}",
+          "description": "JSON object POSTed to submit_url. Filled in: '{signature}', '{address}', '{message}', and '{challenge.<path>}' = a field of the challenge response. Example for a challenge that returns {\"challengeId\": ..., \"message\": ...}: {\"wallet\": \"{address}\", \"challengeId\": \"{challenge.challengeId}\", \"signature\": \"{signature}\"}",
+          "maxLength": 8192,
+          "type": "string"
+        },
+        "submit_url": {
+          "default": null,
+          "description": "HTTPS URL on the same site to POST the signature to. Give it: without it the signature is sent nowhere and nothing is enrolled or logged in.",
+          "maxLength": 2048,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "challenge_url"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

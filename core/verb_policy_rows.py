@@ -58,6 +58,13 @@ CORE_VERB_ROWS = {
         # the owner as Rob, so a tainted or room turn reaches neither.
         "present_choice": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "propose_action": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        # 086 W5: the trading mandate's intake card — a draft + ONE owner card; Confirm on
+        # the owner's seat writes the mandate. Same reach as propose_action.
+        "trade_mandate_propose": dict(effect="none", correspondent_blocked=True,
+                                      room_denied=True),
+        # 093 D1: a setting card (Confirm re-runs the owner's own seat line) or an
+        # operator request on the board. Speaks to the owner as Rob; owner turn only.
+        "propose_setting": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # Who we talked to and what was said (gated on CORRESPONDENT_ACCESS_ENABLED, so live
         # wherever taint exists); session_search/memory_search/recent_activity: past sessions
         # and the run ledger with per-run spend. With the D1 reply exemption on, what they
@@ -110,6 +117,11 @@ CORE_VERB_ROWS = {
         "browser_input_text": dict(effect="network"),
         "browser_send_keys": dict(effect="network"),
         "browser_select_dropdown_option": dict(effect="network"),
+    },
+    "http_request": {
+        # 093 F1: an agent-controlled body to a public host. GET rides the same verb
+        # (one action), so the verb is classed by its write shape.
+        "http_request": dict(effect="network", correspondent_blocked=True, room_denied=True),
     },
     "code_execution": {
         # P1-4: ⚠️ NAMESPACED. The method run_code registers as code_execution_run_code; the
@@ -170,6 +182,18 @@ CORE_VERB_ROWS = {
         "defi_data_wallet_activity": dict(correspondent_blocked=True, room_denied=True),
         # 071 W3: the rail book — sizes, cost basis and P&L of the OPERATOR's own positions.
         "defi_data_positions": dict(correspondent_blocked=True, room_denied=True),
+        # 086 W0: closes a book row of the OPERATOR's own wallet on a balance it measures
+        # itself (zero or dust only); moves nothing. Same gates as the own-book reads.
+        "defi_data_retire_row": dict(correspondent_blocked=True, room_denied=True),
+        # 086 W3: the trading mandate's $0 precheck reads. position_mark names ONE row
+        # of the operator's own book by an EXPLICIT (chain, account, address) — the
+        # wallet_holdings precedent — so, unlike positions/portfolio, a mandate's exit job
+        # may run it with no turn; it is still an own-funds read for a turn (owner probe).
+        # discovery_count reads public pools + the mandate's room for one more entry.
+        "defi_data_position_mark": dict(correspondent_blocked=True, room_denied=True,
+                                        read_job=True),
+        "defi_data_discovery_count": dict(correspondent_blocked=True, room_denied=True,
+                                          read_job=True),
         # 071 §3.9: $0 watches a cron read job may run. PUBLIC reads only: the own-wallet
         # reads above (portfolio, positions, reconcile) stay off it, because a read job runs
         # with no turn context and the owner gate cannot tell who scheduled it.
@@ -531,6 +555,17 @@ CORE_VERB_ROWS = {
             effect="money", side="receive", approval=("recommended",), approval_owner="hook",
             correspondent_blocked=True, room_denied=True, output=True,
         ),
+    },
+    # 090: classified signatures. A class-A text moves no value (effect network, no
+    # spend lane, no pause — D3); a tainted or room turn never signs with the treasury key.
+    "wallet_sign": {
+        "wallet_sign_challenge": dict(effect="network", correspondent_blocked=True,
+                                      room_denied=True),
+        "wallet_sign_message": dict(effect="network", correspondent_blocked=True,
+                                    room_denied=True),
+        "wallet_sign_api_call": dict(effect="network", correspondent_blocked=True,
+                                     room_denied=True),
+        "wallet_sign_status": dict(effect="none", correspondent_blocked=True, room_denied=True),
     },
     "x402_pay": {
         "x402_pay_x402_probe": dict(effect="none"),

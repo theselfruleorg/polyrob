@@ -1,0 +1,62 @@
+{
+  "function": {
+    "description": "Count the new / trending pools on the given chains that pass the hunt's cheap pre-screen (age, liquidity, 24h volume, market verdict; no LLM). With a trading mandate it also says whether the mandate may take an entry now. Built for a hunt job's $0 precheck.",
+    "name": "defi_data_discovery_count",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chains": {
+          "description": "The chains to read new / trending pools on",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kinds": {
+          "default": null,
+          "description": "'new' and/or 'trending'",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "mandate": {
+          "default": null,
+          "description": "The trading mandate id the hunt belongs to. A scheduled job's own payload.mandate wins.",
+          "nullable": true,
+          "type": "string"
+        },
+        "max_age_h": {
+          "default": null,
+          "exclusiveMinimum": 0,
+          "nullable": true,
+          "type": "number"
+        },
+        "min_age_h": {
+          "default": null,
+          "minimum": 0,
+          "nullable": true,
+          "type": "number"
+        },
+        "min_liquidity_usd": {
+          "default": null,
+          "minimum": 0,
+          "nullable": true,
+          "type": "number"
+        },
+        "min_volume_h24_usd": {
+          "default": null,
+          "minimum": 0,
+          "nullable": true,
+          "type": "number"
+        }
+      },
+      "required": [
+        "chains"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

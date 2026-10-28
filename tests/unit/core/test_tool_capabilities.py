@@ -17,7 +17,7 @@ from core.tool_capabilities import (
 def test_money_derivation_exact():
     assert ids_with("money") == frozenset(
         {"x402_pay", "x402_invoice", "hyperliquid", "polymarket", "defi_trade",
-         "launchpad", "dapp_browser", "agent_nft"})
+         "launchpad", "dapp_browser", "agent_nft", "wallet_sign"})
 
 
 def test_delegate_blocked_derivation_exact():
@@ -26,6 +26,7 @@ def test_delegate_blocked_derivation_exact():
         "hyperliquid", "polymarket", "git", "github", "process", "tool_manage",
         "mcp", "shell", "self_env", "hf_deploy", "defi_trade", "x_browser",
         "publish", "app_service", "launchpad", "dapp_browser", "worker_manage", "agent_nft", "twitter",
+        "wallet_sign", "http_request",
     })
 
 
@@ -36,6 +37,7 @@ def test_high_impact_derivation_exact():
         "tool_manage", "shell", "self_env", "x402_invoice", "anysite",
         "perplexity", "hf_deploy", "defi_trade", "x_browser", "publish",
         "app_service", "launchpad", "dapp_browser", "worker_manage", "agent_nft",
+        "wallet_sign", "http_request",
     })
 
 
@@ -96,9 +98,9 @@ def test_catalog_risk_tiers_derive_exactly():
 
     assert high_risk_tool_ids() == frozenset(
         {"twitter", "email", "polymarket", "hyperliquid", "x_browser",
-         "launchpad", "dapp_browser", "agent_nft",
+         "launchpad", "dapp_browser", "agent_nft", "wallet_sign",
          "code_execution", "coding", "shell", "process", "self_env",
-         "x402_pay", "x402_invoice", "defi_trade"})
+         "x402_pay", "x402_invoice", "defi_trade", "http_request"})
     assert medium_risk_tool_ids() == frozenset(
         {"mcp", "anysite", "browser_manager", "perplexity",
          "goal", "cronjob", "git", "github", "hf_deploy", "publish",

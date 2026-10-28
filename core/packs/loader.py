@@ -108,7 +108,7 @@ def _entry_points() -> list:
 #: (``core.money.hooks``) on package import. Phase 1 imports them at every
 #: process entry so no money reader depends on who imported the rail first.
 #: P5b deletes a row when that rail becomes a pack (the pack registers instead).
-_IN_CORE_RAILS = ("core.wallet",)
+_IN_CORE_RAILS = ("core.wallet", "core.trading_mandate")
 
 
 def _register_in_core_rails() -> None:
@@ -493,7 +493,6 @@ def _contribute(rec: "state.PackRecord", spec: PackSpec) -> None:
     from contextlib import ExitStack
     from core.boot_reconcilers import boot_reconciler, register_boot_reconciler
     from core.delivery_channels import unregister_pack
-    from core.token_check_hook import token_checker, register_token_checker
     from core.tool_gates import register_gate
     from core.verbs import unregister_verbs
     for tool in spec.tools:
@@ -506,9 +505,8 @@ def _contribute(rec: "state.PackRecord", spec: PackSpec) -> None:
         if tool.gate is not None:
             register_gate(tool.id, resolve_ref(tool.gate))
     # A later invalid hook must not leave a refused pack's earlier callbacks
-    # live (especially auth checks and outbound cron delivery).
+    # live (especially outbound cron delivery).
     with ExitStack() as rollback:
-        rollback.callback(register_token_checker, token_checker())
         rollback.callback(unregister_pack, rec.id)
         rollback.callback(unregister_verbs, verb_source(rec.id))
         for tool in spec.tools:
@@ -543,11 +541,6 @@ def _neutralize(rec: "state.PackRecord") -> None:
 
 
 # --- hooks ----------------------------------------------------------------------
-
-def _hook_token_checker(rec: "state.PackRecord", value: Any) -> None:
-    from core.token_check_hook import register_token_checker
-    register_token_checker(resolve_ref(value))
-
 
 def _hook_boot_reconciler(rec: "state.PackRecord", value: Any) -> None:
     """``{tool_id: coroutine function}`` — only for the pack's own tools."""
@@ -595,7 +588,6 @@ def _hook_owner_verbs(rec: "state.PackRecord", value: Any) -> None:
 
 #: hook name -> ``(record, value) -> None``. The seams core already owns.
 HOOKS: Dict[str, Callable[["state.PackRecord", Any], None]] = {
-    "identity.token_checker": _hook_token_checker,
     "autonomy.boot_reconciler": _hook_boot_reconciler,
     "cron.delivery_channel": _hook_delivery_channel,
     "owner.verbs": _hook_owner_verbs,

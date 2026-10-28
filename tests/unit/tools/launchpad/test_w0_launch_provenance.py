@@ -2,7 +2,7 @@
 
 A confirmed launch is recorded as ``own_launch`` so the identity gate never asks
 the owner to pin the instance's own token. The Pons probe covers a launch that
-happened off this rail (the prod PNL): the factory's record names our wallet as
+happened off this rail (the prod TKN): the factory's record names our wallet as
 the DEPLOYER. The creator-fee recipient does not count — anyone can name us.
 """
 import pytest

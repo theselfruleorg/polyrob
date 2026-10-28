@@ -55,8 +55,8 @@ with unverified receipt must be reconciled before any retry.
 ## If a tool is missing
 
 The trading verbs need `defi_trade` (and `defi_data` for reads) in THIS session.
-If they are not loaded, do the read steps you can, write the plan to the ledger or
-watchlist, and tell the owner which grant is missing. Never work around a missing
+If they are not loaded, do the read steps you can, write the plan in your run report or
+the watchlist, and tell the owner which grant is missing. Never work around a missing
 verb with a raw `call`, a browser dapp, or another agent.
 
 ## Related

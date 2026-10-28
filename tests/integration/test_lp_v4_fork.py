@@ -1,4 +1,4 @@
-"""v4 lp_add on the Pons PNL PoolKey, on a FORK of Robinhood Chain 4663 (core
+"""v4 lp_add on the Pons token PoolKey, on a FORK of Robinhood Chain 4663 (core
 handoff W6; 048 phase 3; 090 R1/R2).
 
 Opt-in: ``LP_V4_FORK_E2E=1`` and an anvil fork at ``LP_V4_FORK_RPC`` (default
@@ -30,17 +30,21 @@ from core.wallet import dex_registry, tx_guard
 from core.wallet.policy import PolicyGate
 from tools.defi import lp_reads, lp_v4 as V
 
-#: The holder impersonated on the fork: an address that holds PNL on chain
+#: The holder impersonated on the fork: an address that holds the token on chain
 #: 4663. Read from the env, never pinned here (no real wallet in shipped tests).
 TREASURY = os.environ.get("LP_V4_FORK_HOLDER", "")
+#: The Pons token and its native PoolKey's pool id: read from the env too (no
+#: real deployment's token in shipped tests).
+TOKEN = os.environ.get("LP_V4_FORK_TOKEN", "")
+POOL_ID = os.environ.get("LP_V4_FORK_POOL_ID", "")
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("LP_V4_FORK_E2E") != "1" or not TREASURY,
-    reason="fork e2e: set LP_V4_FORK_E2E=1, LP_V4_FORK_HOLDER=<a PNL holder> and run anvil (see module doc)")
+    os.environ.get("LP_V4_FORK_E2E") != "1" or not (TREASURY and TOKEN and POOL_ID),
+    reason="fork e2e: set LP_V4_FORK_E2E=1, LP_V4_FORK_HOLDER=<a token holder>, "
+           "LP_V4_FORK_TOKEN=<the Pons token>, LP_V4_FORK_POOL_ID=<its pool id> "
+           "and run anvil (see module doc)")
 
 RPC = os.environ.get("LP_V4_FORK_RPC", "http://127.0.0.1:8551")
-PNL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-POOL_ID = "0x43b7b259007600ad19df15a23b620fd77c8c121c8ecc8788d5116a833d031e94"
 ROW = dex_registry.row_for("robinhood", "v4")
 ETH_USD = 2690.0
 
@@ -70,8 +74,8 @@ def _send(frm, to, data, value=0):
 
 def _price(state):
     s = state.sqrt_price_x96 / 2 ** 96
-    pnl_per_eth = s * s
-    return lambda chain, addr: ETH_USD if addr.lower() != PNL.lower() else ETH_USD / pnl_per_eth
+    token_per_eth = s * s
+    return lambda chain, addr: ETH_USD if addr.lower() != TOKEN.lower() else ETH_USD / token_per_eth
 
 
 @pytest.fixture
@@ -104,16 +108,16 @@ def _authorize(intent, tx, price, **kw):
 def _grant(amount, spender=ROW.position_manager):
     exp = int(time.time()) + 900
     tx = {"to": ROW.permit2, "from": TREASURY, "value": 0, "chainId": 4663,
-          "data": V.encode_permit2_approve(PNL, spender, amount, exp)}
-    intent = tx_guard.TxIntent(chain="robinhood", token=PNL, to=spender, amount_raw=0,
+          "data": V.encode_permit2_approve(TOKEN, spender, amount, exp)}
+    intent = tx_guard.TxIntent(chain="robinhood", token=TOKEN, to=spender, amount_raw=0,
                                max_spend_usd=200.0, is_allowance_op=True,
-                               expected_allowance_grants=((PNL, spender, amount),),
+                               expected_allowance_grants=((TOKEN, spender, amount),),
                                idempotency_key=f"p2-{spender}-{amount}")
     return intent, tx
 
 
 def test_the_native_key_is_the_live_pool(fork):
-    key = V.pons_key_for(_rpc, PNL)
+    key = V.pons_key_for(_rpc, TOKEN)
     assert key["currency0"] == V.ZERO and lp_reads.pool_id(key) == POOL_ID
     assert fork["state"].sqrt_price_x96 > 0 and fork["state"].liquidity > 0
     dex_registry.verify_pins(_rpc, "robinhood", "v4")
@@ -122,7 +126,7 @@ def test_the_native_key_is_the_live_pool(fork):
 
 def test_permit2_grant_to_the_pinned_posm_is_allowed_and_another_is_refused(fork):
     amount = 10 ** 24
-    _send(TREASURY, PNL, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
+    _send(TREASURY, TOKEN, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
           + format(amount, "064x"))          # the owner's one ERC-20 allowance to Permit2
     d = _authorize(*_grant(amount), fork["price"])
     assert d.allowed and d.lane == "autonomous", d.reason
@@ -131,17 +135,17 @@ def test_permit2_grant_to_the_pinned_posm_is_allowed_and_another_is_refused(fork
     assert not d.allowed and "Permit2 Approval" in d.reason, d.reason
 
 
-def _plan(eth=0.01, pnl=1_000_000):
+def _plan(eth=0.01, tok=1_000_000):
     from tools.defi.lp_v4_verbs import prepare_add_v4
-    p = SimpleNamespace(chain="robinhood", token_a="native", token_b=PNL, amount_a=eth,
-                        amount_b=pnl, range="full", initial_price=None, token_id=None,
+    p = SimpleNamespace(chain="robinhood", token_a="native", token_b=TOKEN, amount_a=eth,
+                        amount_b=tok, range="full", initial_price=None, token_id=None,
                         slippage_bps=100, max_spend_usd=200.0)
     return prepare_add_v4(p, _rpc, TREASURY, ROW.position_manager, price_fn=None)
 
 
 def test_lp_add_through_the_guard_and_on_the_fork(fork):
     amount = 10 ** 24
-    _send(TREASURY, PNL, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
+    _send(TREASURY, TOKEN, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
           + format(amount, "064x"))
     _send(TREASURY, ROW.permit2, _grant(amount)[1]["data"])
     plan = _plan()
@@ -153,7 +157,7 @@ def test_lp_add_through_the_guard_and_on_the_fork(fork):
     assert d.position_token_id == next_id
     assert d.amount_usd and d.amount_usd < 200.0
 
-    # a declaration that under-states the calldata's PNL maximum refuses
+    # a declaration that under-states the calldata's token maximum refuses
     import dataclasses
     low = tuple((t, n - 1 if t else n) for t, n in plan.intent.lp_outflows)
     d2 = _authorize(dataclasses.replace(plan.intent, lp_outflows=low), tx, fork["price"])

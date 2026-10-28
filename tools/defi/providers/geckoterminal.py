@@ -365,6 +365,22 @@ def _get(url: str) -> Any:
     return _http.get_json(url, timeout=TIMEOUT_SEC)
 
 
+def _cached_get(url: str) -> Any:
+    """``_get`` behind the 45 s ``discovery`` cache (086 W9). The free tier
+    answers 429 after about four calls in a burst (measured 2026-10-23), so a
+    step that asks ``scan`` and ``new_pools`` for one chain reads the page
+    once. Only an ANSWER is cached; a failure propagates and is never stored."""
+    from tools.intel.cache import cache_for
+    cache = cache_for("discovery")
+    hit = cache.get_with_age(("geckoterminal", url))
+    if hit is not None:
+        return hit[0]
+    payload = _get(url)
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        cache.put(("geckoterminal", url), payload)
+    return payload
+
+
 def _fetch(chain: str, endpoint: str, *, fetch=None) -> List[PoolCandidate]:
     from core.wallet import chains
     row = chains.get(chain)
@@ -375,7 +391,7 @@ def _fetch(chain: str, endpoint: str, *, fetch=None) -> List[PoolCandidate]:
             f"could not read {endpoint} on {chain}: the indexer does not cover this chain")
     url = f"{BASE_URL}/networks/{row.geckoterminal_id}/{endpoint}"
     try:
-        payload = (fetch or _get)(url)
+        payload = _cached_get(url) if fetch is None else fetch(url)
     except Exception as exc:
         logger.info("geckoterminal: %s failed for %s (%s)", endpoint, chain, exc)
         why = ("geckoterminal rate-limited this read (HTTP 429) — wait about a "
@@ -446,7 +462,7 @@ def parse_search_pools(payload: Any) -> List:
         # CR-L11: the pool name is creator-authored text; bound it and keep it
         # to one printable line before it becomes a symbol anyone reads.
         symbol = clean_symbol(name.split("/")[0])
-        # The pool name ("PNL / WETH") is NOT the token's name, so it is not
+        # The pool name ("XYZ / WETH") is NOT the token's name, so it is not
         # passed off as one: the index sends no token name here.
         out.append(Candidate(
             chain=chain, address=address, symbol=symbol, name=None,
@@ -532,10 +548,10 @@ class PoolPick(NamedTuple):
     """Which pool was chosen, on what basis, and what the runner-up was.
 
     The basis is the point, and it has been wrong in both directions. 2026-09-22:
-    a buyback skip report narrated "a ~96% collapse inside a single hour" from
+    a recurring swap job's skip report narrated "a ~96% collapse inside a single hour" from
     candles on a pool holding $4,251 while the treasury's own quote — routed
     through a different, $18,350 venue — said the price was down 7%. 2026-09-23:
-    a reviewer read the reserve-top PNL pool ($18,190 held, **$1,390** traded),
+    a reviewer read the reserve-top pool ($18,190 held, **$1,390** traded),
     "cross-checked" it against a second index that ranks the same way, and filed
     a RED FLAG against a rail that was reading the pool the position actually
     trades ($4,147.81 held, **$61,792** traded) — then had to retract it.
@@ -595,6 +611,20 @@ def top_pool_for_token(chain: str, token_address: str, *, fetch=None) -> Optiona
     """
     pick = _top_pool(chain, token_address, fetch=fetch)
     return None if pick is None else pick.address
+
+
+def token_pools(chain: str, token_address: str, *, fetch=None) -> List[PoolCandidate]:
+    """Every pool the indexer lists for a token, parsed (086 W9: the pool age
+    and depth behind ``token_info``'s survivability block). Raises on a
+    provider error or an uncovered chain — "could not read" is not "no pool"."""
+    from core.wallet import chains
+    row = chains.get(chain)
+    if row is None or not row.geckoterminal_id:
+        raise DiscoveryUnavailable(f"the indexer does not cover {chain}")
+    token_address = _url_safe_address(chain, token_address, what="token")
+    url = f"{BASE_URL}/networks/{row.geckoterminal_id}/tokens/{token_address}/pools"
+    payload = _cached_get(url) if fetch is None else fetch(url)
+    return parse_pools(payload, chain, row.geckoterminal_id)
 
 
 def _top_pool(chain: str, token_address: str, *, fetch=None) -> Optional[PoolPick]:

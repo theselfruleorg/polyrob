@@ -58,14 +58,6 @@ tools/
 │   ├── actions.py                  # Browser action definitions
 │   └── playwright_utils.py         # Playwright utilities
 │
-├── alchemy/                        # Alchemy NFT API integration
-│   ├── __init__.py
-│   └── alchemy_tool.py             # NFT and blockchain data
-│
-├── collabland/                     # CollabLand integration
-│   ├── __init__.py
-│   └── collabland_tool.py          # Token verification
-│
 ├── mcp/                            # Model Context Protocol
 │   ├── __init__.py
 │   ├── mcp_tool.py                 # Main MCP tool (MCPTool — the service implementation)
@@ -273,33 +265,7 @@ async def list_tasks(self, status: str = None) -> List[Dict]
 async def complete_task(self, task_id: str) -> Dict
 ```
 
-### 7. Alchemy (`alchemy/`)
-
-NFT and blockchain data via Alchemy API.
-
-**Actions**:
-```python
-@BaseTool.action('Get NFTs for owner')
-async def get_nfts_for_owner(self, owner_address: str) -> List[Dict]
-
-@BaseTool.action('Get NFT metadata')
-async def get_nft_metadata(self, contract_address: str, token_id: str) -> Dict
-```
-
-### 8. CollabLand (`collabland/`)
-
-Token verification and community management.
-
-**Actions**:
-```python
-@BaseTool.action('Verify token ownership')
-async def verify_token_ownership(self, wallet: str, contract: str) -> bool
-
-@BaseTool.action('Get community roles')
-async def get_community_roles(self, user_id: str) -> List[str]
-```
-
-### 9. MCP (`mcp/`)
+### 7. MCP (`mcp/`)
 
 Model Context Protocol integration for connecting to MCP servers.
 
@@ -389,8 +355,6 @@ register_tool_class('filesystem', FileSystem)
 register_tool_class('task', TaskTool)          # the TODO tool (NOT delegation)
 register_tool_class('email', EmailTool)
 register_tool_class('web_fetch', WebFetchTool) # stateless lightweight web fetch
-register_tool_class('collabland', CollabLandTool)
-register_tool_class('alchemy', AlchemyTool)
 register_tool_class('mcp', MCPTool)
 ```
 
@@ -417,8 +381,6 @@ TOOL_INIT_ORDER = [
     'perplexity',    # Search services
     'twitter',       # Social/communication services
     'email',
-    'collabland',    # Token verification services
-    'alchemy',       # Alchemy as fallback for CollabLand
     'mcp'            # MCP service last - advanced feature
 ]
 ```
@@ -567,7 +529,7 @@ __all__ = [
     'BaseTool', 'ToolStatus',
     'FileSystem', 'TaskTool',
     'EmailTool',
-    'CollabLandTool', 'AlchemyTool', 'MCPTool',
+    'MCPTool',
     'TOOL_COMPONENTS', 'TOOL_DEPENDENCIES', 'TOOL_METADATA',
     'initialize_tool', 'cleanup_tools',
     'validate_tools', 'get_available_tools'

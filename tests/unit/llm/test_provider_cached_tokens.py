@@ -1,5 +1,5 @@
 """UP-08 Steps 8.2-8.4 — providers surface cached-token counts so billing applies the
-cached_input rate. DeepSeek (dict usage), OpenRouter/NIM (object usage), Gemini (usage_metadata).
+cached_input rate. DeepSeek/OpenRouter/NIM (object usage), Gemini (usage_metadata).
 """
 import types
 
@@ -21,14 +21,16 @@ def _bare(cls):
 
 
 def test_deepseek_surfaces_prompt_cache_hit_tokens():
+    # DeepSeek reports the hit count twice; an answer with only its own field still counts.
     c = _bare(DeepSeekClient)
-    c.last_response = {"usage": {
-        "prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050,
-        "prompt_cache_hit_tokens": 512,
-    }}
+    c.model_type = "deepseek-flash"
+    c.last_response = types.SimpleNamespace(usage=types.SimpleNamespace(
+        prompt_tokens=1000, completion_tokens=50, total_tokens=1050,
+        prompt_tokens_details=None, prompt_cache_hit_tokens=512, prompt_cache_miss_tokens=488))
     usage = c._extract_usage_data()
     assert usage["cached_tokens"] == 512
     assert usage["prompt_tokens"] == 1000
+    assert usage["billed_cost_usd"] > 0
 
 
 def test_deepseek_no_cache_field_defaults_zero():

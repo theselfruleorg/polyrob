@@ -13,9 +13,10 @@ configured out of the box.
 
 - Turn it on and add servers: see the MCP section of
   [../../docs/guide/configuration.md](../../docs/guide/configuration.md#mcp).
-  Servers come from `config/mcp_config.json` (secrets as `${VAR}` placeholders),
-  overlaid by `~/.polyrob/mcp.json`; `MCP_SERVERS_CONFIG` (a JSON string) is the
-  fallback when the file is absent. A project-local `.polyrob/mcp.json` is never loaded.
+  The defaults ship in `config/mcp_config.json`; your servers go in
+  `~/.polyrob/mcp.json` (secrets as `${VAR}` placeholders) or are added with `/mcp add`.
+  `MCP_SERVERS_CONFIG` (a JSON string) is the fallback when the defaults file is absent.
+  A project-local `.polyrob/mcp.json` is never loaded.
 - Add, remove and test servers from chat with `/mcp`:
   [../../docs/guide/owner-controls.md](../../docs/guide/owner-controls.md#mcp-servers-giving-the-agent-new-tools).
 - Manage per-tenant servers over HTTP (`/api/mcp/*`), or run POLYROB as an MCP server

@@ -39,7 +39,7 @@ from __future__ import annotations
 import sys
 from typing import Callable, List, Optional, Tuple
 
-from modules.llm.available_models import ModelChoice, available_models, steer_notes
+from modules.llm.available_models import ModelChoice, available_models
 
 #: Sentinel row that always trails the filtered list: pick it to enter a custom
 #: ``provider/model`` string (parsed from the current search text).
@@ -438,13 +438,9 @@ def _build_standalone(env, preselect, non_tty_default, isatty_fn, input, output)
     (in-REPL fallback, loop already running) entry points share one implementation
     without either calling ``asyncio.run()`` from inside a live loop.
     """
-    import click
-
     isatty = isatty_fn if isatty_fn is not None else sys.stdin.isatty
     choices = available_models(env)
     if not choices:
-        for n in steer_notes(env):
-            click.echo(click.style(n, fg="yellow"), err=True)
         return ("resolved", None)
 
     default = preselect or _resolved_default(env, choices)
@@ -464,7 +460,7 @@ def _build_standalone(env, preselect, non_tty_default, isatty_fn, input, output)
     from prompt_toolkit.styles import Style
 
     model = PickerModel(choices, d_idx)
-    notes = steer_notes(env)
+    notes: List[str] = []
     search = Buffer(multiline=False)
     search.on_text_changed += lambda _: model.set_query(search.text)
 

@@ -15,7 +15,8 @@ update it to a new release, and do both from a shell **or from your chat**.
 | Restart (finish the current work first) | `polyrob service restart` | `/restart` |
 | Restart at once | `polyrob service restart --now` | `/restart now` |
 | Update to the latest release | `polyrob update --apply` | `/update` |
-| Stop / start | `polyrob service stop` / `start` | — |
+| Restart only if it is idle now | `polyrob service restart --no-wait` | — |
+| Stop / start | `polyrob service stop` (`--now` cuts the turn) / `start` | — |
 | Read the log | `polyrob service logs -f` | — |
 
 ## What a restart does
@@ -31,13 +32,15 @@ A restart never cuts you off in the middle of a reply:
 4. **The service manager starts it again** (the unit restarts the process on exit code
    75 — `RestartForceExitStatus=75`).
 5. **It tells you it is back** — in the chat you asked from:
-   `✅ Back online on 1.4.0 (abc1234) — restart took 41 s.`
+   `✅ Back online on 1.7.0 (abc1234) — restart took 41 s.`
 
 If the service is still busy when the wait ends, **nothing restarts** and you are told
 what was busy. Ask again later, or use `/restart now` / `--now` to cut the work.
 
 `/restart` and `/update` show a quote with a **Confirm** button first; nothing happens
-until you confirm. Both are owner-only and refused inside a group room.
+until you confirm. Both are owner-only and refused inside a group room. Both also refuse,
+before any quote, when no service manager would start Rob again — for example when
+Rob runs in a terminal.
 
 ## What an update does
 
@@ -51,8 +54,8 @@ step: **the update is applied by the new process before it starts anything** —
 - If the new version installs but **does not start** (three starts in a row without a
   healthy start), it is rolled back the same way.
 - Either way you get one message with the outcome:
-  `✅ Updated and back online on 1.4.0 (was 1.3.0)` or
-  `⚠️ The update failed at the 'migrate' step: … It was rolled back. Back online on 1.3.0.`
+  `✅ Updated and back online on 1.7.0 (was 1.6.0) — took 95 s.` or
+  `⚠️ The update failed at the 'migrate' step: … It was rolled back. Back online on 1.6.0.`
 
 Automated updates are for **git and editable installs** (what `install.sh` sets up). A
 pip, pipx or Docker install tells you the manager command instead. `/update pre` includes
@@ -67,7 +70,7 @@ Most settings are read when the service starts. When you change one —
 `polyrob config set …`, `/config set …`, the console — the reply says so, and the service
 keeps a list:
 
-    waiting: 2 setting(s) apply at the next restart: TELEGRAM_ALLOWED_CHAT_IDS, X402_ENABLED
+    waiting: 2 setting(s) apply at the next restart: ALLOWED_TELEGRAM_USER_IDS, X402_ENABLED
 
 `/status`, `polyrob doctor` and `polyrob service status` show that line until you
 restart. A few autonomy settings apply at once from the REPL; everything that touches
@@ -97,30 +100,9 @@ polyrob service restart --user polyrob
 ```
 
 `polyrob` runs the verb as that user, through the interpreter named in the unit, with the
-user bus (`XDG_RUNTIME_DIR=/run/user/<uid>`) filled in. The same fix applies to
-`sudo -u polyrob polyrob service …`, which used to fail with *Failed to connect to user
-scope bus*.
+user bus (`XDG_RUNTIME_DIR=/run/user/<uid>`) filled in. The same applies to
+`sudo -u polyrob polyrob service …`.
 
 A deployment that runs POLYROB as **system units** (`/etc/systemd/system/polyrob*.service`)
 is restarted with `sudo systemctl restart <unit>` — the agent finishes its live turn
 first (up to 60 seconds) — or with `/restart` from your chat.
-
-## Older units and the first upgrade
-
-A unit written before this release has no `RestartForceExitStatus=75` line.
-`polyrob service status` says so; run `polyrob service install` once to rewrite it. Until
-then `polyrob service restart` still works — it restarts through the service manager.
-
-The update that brings this release in still runs the **old** `polyrob update`, which
-refuses while the service runs. Do that one update by hand, as the service's user:
-
-```bash
-systemctl --user stop polyrob.service      # or: launchctl bootout gui/$(id -u)/dev.polyrob.agent
-polyrob update --apply
-polyrob service install                    # rewrites the unit with the restart contract, starts it
-```
-
-As root on a server, run those as the service user with its bus:
-`sudo -iu polyrob env XDG_RUNTIME_DIR=/run/user/$(id -u polyrob) systemctl --user stop polyrob.service`
-(and the same prefix for the other two). Every later update is `/update` or
-`polyrob update --apply`.

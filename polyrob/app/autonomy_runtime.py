@@ -982,6 +982,11 @@ class AutonomyHandles:
             unregister_transition_hook(self.on_pause_transition)
         except Exception:
             logger.debug("pause hook unregister failed", exc_info=True)
+        try:
+            from polyrob.app import trading_lifecycle
+            trading_lifecycle.stop()
+        except Exception:
+            logger.debug("trading lifecycle listener unregister failed", exc_info=True)
         if self._watch_stop is not None:
             self._watch_stop.set()
         if self._watch_task is not None:
@@ -1188,6 +1193,13 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("cron", _build_cron_ticker(task_agent, data_dir))
         except Exception as e:
             logger.warning("Could not start cron ticker: %s", e)
+        try:
+            # 086 W4: the trading mandate's lifecycle — the book-event listener and
+            # the 5-minute pull pass (its first tick is the boot reconcile).
+            from polyrob.app import trading_lifecycle
+            trading_lifecycle.start(handles, task_agent, data_dir)
+        except Exception as e:
+            logger.warning("Could not start the trading lifecycle: %s", e)
     if _goals_enabled():
         try:
             handles._add("goals", _build_goal_ticker(task_agent, data_dir))

@@ -66,7 +66,7 @@ def test_a_quote_inherits_session_group_and_parent(st):
 
 
 def test_the_group_settles_once_when_every_card_is_decided(st):
-    p1, p2 = _propose(st, then="pay the PNL half next"), _propose(st)
+    p1, p2 = _propose(st, then="pay the TKN half next"), _propose(st)
     q1 = _quote_of(p1)
     assert G.groups(st).get(p1.group_id)["state"] == G.G_OPEN   # replaced ≠ decided
     _confirm(q1, "SENT AND CONFIRMED 24 USDG tx 0xc5")
@@ -78,7 +78,7 @@ def test_the_group_settles_once_when_every_card_is_decided(st):
     assert _wakes(st).pending_count() == 1
     text = G.render_outcomes(U, p1.group_id, st=st)
     assert "→ DONE: SENT AND CONFIRMED" in text and "→ FAILED: ❌ Nothing was sent" in text
-    assert "pay the PNL half next" in text
+    assert "pay the TKN half next" in text
     assert text.count("/send 24") == 2           # the replaced proposals are not repeated
 
 

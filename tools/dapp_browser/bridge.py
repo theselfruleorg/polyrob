@@ -383,10 +383,11 @@ class WalletBridge:
 
         if method in SIGN_METHODS:
             return self._refuse(UNSUPPORTED_METHOD, "signature", (
-                "this wallet does not produce off-chain signatures. A signature "
+                "this dapp wallet does not produce off-chain signatures. A signature "
                 "is not a transaction: a permit is submitted by someone else "
                 "later, so no simulation can catch what it authorizes. Use a "
-                "path that sends a transaction instead."))
+                "path that sends a transaction instead; a site's sign-in text goes "
+                "through the wallet_sign tool."))
 
         if method == "wallet_switchEthereumChain":
             return self._switch_chain(params)

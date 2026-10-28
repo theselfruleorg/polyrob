@@ -418,13 +418,7 @@ async def get_pricing():
         ],
         "tier_allowances": {
             "free": {
-                "welcome_bonus": WELCOME_BONUS,
-                "requires_den_token": False
-            },
-            "holder": {
-                "welcome_bonus": WELCOME_BONUS,
-                "requires_den_token": True,
-                "den_tokens_required": "1+"
+                "welcome_bonus": WELCOME_BONUS
             }
         }
     }

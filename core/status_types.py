@@ -70,7 +70,7 @@ MISSED_TEXT_CHARS = 400
 #: unavailability — it is present in `sections` and silent everywhere that
 #: matters. A new section belongs here in the same commit that adds it.
 SECTION_ORDER = ("session", "providers", "work", "approvals", "loops",
-                 "tools", "knowledge", "delivery", "posture", "security", "identity",
+                 "tools", "harness", "knowledge", "delivery", "posture", "security", "identity",
                  "rules", "apps", "groups", "room_actions", "creations", "collectibles",
                  "liquidity", "wallet", "custody", "packs", "money", "economics")
 

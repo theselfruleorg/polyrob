@@ -475,15 +475,11 @@ class NextActionInternalMixin:
 		collected_tool_calls = []
 
 		usage_metadata = None  # Collect usage metadata from final chunk
-		# Fix pass 2 (money-correctness): astream() only ever yields ONE chunk
-		# (the full ainvoke() result wrapped as a 1-item async iterator -- see
-		# LLMClientAdapter.astream), already carrying the per-call
-		# `_polyrob_provider_response_id` stamped by adapters.py._agenerate.
-		# Propagate it onto the rebuilt `response` below so streaming-mode
-		# calls get the same stable, per-call billing dedup key as the
-		# non-streaming path instead of falling back to the shared,
-		# concurrency-racy `<client>.last_response` read.
+		# Fix pass 2 (money-correctness): carry the per-call `_polyrob_provider_response_id`
+		# (stamped by adapters.py._agenerate) and the chunk's additional_kwargs (DeepSeek's
+		# reasoning_content) onto the rebuilt `response` — never the racy shared client read.
 		stamped_provider_response_id = None
+		extra_kwargs = {}
 		async def stream_with_timeout():
 			nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata, stamped_provider_response_id
 			async for chunk in self.llm.astream(current_messages, tools=tools):
@@ -498,7 +494,7 @@ class NextActionInternalMixin:
 				# Collect tool calls
 				if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
 					collected_tool_calls.extend(chunk.tool_calls)
-
+				extra_kwargs.update(getattr(chunk, 'additional_kwargs', None) or {})
 				chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
 				if chunk_stamped_id:
 					stamped_provider_response_id = chunk_stamped_id
@@ -512,6 +508,7 @@ class NextActionInternalMixin:
 
 		# Build complete response
 		response = AIMessage(content=full_content, usage_metadata=usage_metadata)
+		response.additional_kwargs.update(extra_kwargs)
 		if collected_tool_calls:
 			response.tool_calls = collected_tool_calls
 		if stamped_provider_response_id:
@@ -715,12 +712,6 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 		# CRITICAL FIX: Don't consume ephemeral message yet - get regular messages first
 		# This prevents losing the format hint during token management
 		converted_input_messages = self.message_manager.get_messages()  # NOT get_messages_for_llm() yet!
-
-		# Special handling for deepseek-reasoner after conversion
-		if self.model_name == 'deepseek-reasoner':
-			# DeepSeek needs additional message merging after conversion
-			converted_input_messages = self.message_manager.merge_successive_messages(converted_input_messages, HumanMessage)
-			converted_input_messages = self.message_manager.merge_successive_messages(converted_input_messages, AIMessage)
 
 		# Check token safety using MessageManager's API (SINGLE SOURCE OF TRUTH).
 		# Overflow first gets ONE emergency prune (the recalibration above can
@@ -1104,8 +1095,8 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 												registered_ids = self.tool_call_tracker.register_tool_calls(normalized_tool_calls)
 												self.logger.info(f"[NATIVE_TOOLS] ✅ Registered {len(registered_ids)} tool calls with tracker")
 
-											# ✅ FIX #6: Don't add model output here - let step() handle it
-											# This eliminates duplicate add_model_output() calls
+											# FIX #6: step() adds the model output (once); keep its reasoning for that.
+											self._current_reasoning_content = (response.additional_kwargs or {}).get('reasoning_content')
 
 											# STEP 3: Convert to actions using Controller's high-level API
 											actions = self.controller.tool_calls_to_actions(normalized_tool_calls)

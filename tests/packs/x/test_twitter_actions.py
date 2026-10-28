@@ -660,7 +660,7 @@ def _cron_ctx(monkeypatch, sid, job_id, *, recorded=True, tainted=False,
     from core import autonomy_marker as am
     am.mark_autonomous(sid, cron_job_id=job_id)
     if recorded:
-        am.note_job(job_id, "Daily 09:00: post the buyback notice on X")
+        am.note_job(job_id, "Daily 09:00: post the rebuy notice on X")
     ctx = ActionExecutionContext(session_id=sid, user_id="u1",
                                  role="leaf" if sub_agent else "orchestrator")
     ctx.metadata = {"correspondent_tainted": True} if tainted else {}
@@ -690,8 +690,8 @@ async def test_standing_cron_posts_without_a_queue(monkeypatch):
     t = _tool(monkeypatch, require_approval=False)
     asked = _owner_queue(monkeypatch)
     t.client.create_tweet.return_value = _resp()
-    ctx = _cron_ctx(monkeypatch, "cron-buyback-1", "job-buyback")
-    res = await t.twitter_post(TwitterPostAction(text="Buyback done"), execution_context=ctx)
+    ctx = _cron_ctx(monkeypatch, "cron-rebuy-1", "job-rebuy")
+    res = await t.twitter_post(TwitterPostAction(text="Rebuy done"), execution_context=ctx)
     assert res.error is None and asked == []
     t.client.create_tweet.assert_called_once()
 
@@ -711,7 +711,7 @@ async def test_unrecorded_tainted_or_delegated_cron_still_needs_the_owner(monkey
     t.client.create_tweet.assert_not_called()
 
 
-# --- prod 2026-10-08 12:05 (buyback 4def3260d811): the REAL owner queue ---------
+# --- prod 2026-10-08 12:05 (rebuy 0a1b2c3d4e5f): the REAL owner queue ---------
 # APPROVAL_PROVIDER unset, TWITTER_REQUIRE_APPROVAL=false, an agent-authored
 # autonomous cron run. The queue created the ask and returned at once ("the
 # next run redeems the grant" — never, for a post: its text is new each run),
@@ -741,7 +741,7 @@ async def test_prod_shape_agent_cron_post_asks_and_says_it_is_waiting(monkeypatc
     t = _tool(monkeypatch, require_approval=False)
     board, pushed = _real_queue(monkeypatch, tmp_path)
     ctx = _cron_ctx(monkeypatch, "cron-prod-1", "job-4def", recorded=False)
-    res = await t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of PNL."),
+    res = await t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of TKN."),
                                execution_context=ctx)
     assert res.error and "waiting for the owner's approval" in res.error
     assert "denied" not in res.error
@@ -769,7 +769,7 @@ async def test_prod_shape_agent_cron_post_goes_out_when_the_owner_taps(monkeypat
             await _asyncio.sleep(0.02)
 
     tap = _asyncio.create_task(_owner_taps())
-    res = await t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of PNL."),
+    res = await t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of TKN."),
                                execution_context=ctx)
     await tap
     assert res.error is None, res.error
@@ -778,7 +778,7 @@ async def test_prod_shape_agent_cron_post_goes_out_when_the_owner_taps(monkeypat
 
 # --- a LATE approval sends the approved post once and never re-runs the job ----
 # Prod risk (2026-10-08): an approval after the wait re-armed the cron job, and
-# the re-run repeated the WHOLE buyback — a second swap — to redeem one post.
+# the re-run repeated the WHOLE rebuy — a second swap — to redeem one post.
 
 @pytest.mark.asyncio
 async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swap(
@@ -797,13 +797,13 @@ async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swa
     monkeypatch.setattr(cd, "_build_twitter_tool", lambda config, container: t)
     board, pushed = _real_queue(monkeypatch, tmp_path, wait_s=0.3)
 
-    # The buyback job that swapped, then tried to post. Its next run is days away.
+    # The rebuy job that swapped, then tried to post. Its next run is days away.
     store = CronJobStore(str(tmp_path / "cron.db"))
     later = datetime.now() + timedelta(days=2)
-    store.add(CronJob(id="job-agent-buyback", task="PNL buyback: swap, then post", schedule_spec="4h",
+    store.add(CronJob(id="job-agent-rebuy", task="TKN rebuy: swap, then post", schedule_spec="4h",
                       user_id="u1", next_run_at=later, payload={}))
-    ctx = _cron_ctx(monkeypatch, "cron-late-1", "job-agent-buyback", recorded=False)
-    text = "Bought 0.05 ETH of PNL.\n\ntx 0xabc"
+    ctx = _cron_ctx(monkeypatch, "cron-late-1", "job-agent-rebuy", recorded=False)
+    text = "Bought 0.05 ETH of TKN.\n\ntx 0xabc"
 
     res = await t.twitter_post(TwitterPostAction(text=text), execution_context=ctx)
     assert res.error and "waiting for the owner's approval" in res.error
@@ -815,7 +815,7 @@ async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swa
     ok, msg = decide_tool_approval(board, ask.id, user_id="u1", approved=True)
     assert ok and "not re-run" in msg
     # NO re-arm: the job (and its swap) does not run again for this approval.
-    assert store.get("job-agent-buyback").next_run_at > datetime.now() + timedelta(days=1)
+    assert store.get("job-agent-rebuy").next_run_at > datetime.now() + timedelta(days=1)
 
     # The agent process's wake drain sends the approved post — once.
     queue = get_wake_queue(str(tmp_path / "wakes.db"))
@@ -859,7 +859,7 @@ async def test_an_approval_inside_the_wait_is_sent_by_the_run_not_the_drain(
     assert get_wake_queue(str(tmp_path / "wakes.db")).claim_pending("t") == []
 
 
-# --- prod 2026-10-09 00:03 (buyback 4def3260d811): the controller killed the wait ---
+# --- prod 2026-10-09 00:03 (rebuy 0a1b2c3d4e5f): the controller killed the wait ---
 # The in-run wait used the 300s owner_queue budget, but the controller cuts every
 # `twitter` action at its tool timeout (60s default). The tool's own "waiting for
 # the owner's approval" result never fired; the run saw a bare "timed out after
@@ -876,7 +876,7 @@ async def test_approval_wait_ends_inside_the_controller_action_timeout(monkeypat
     monkeypatch.delitem(TimeoutConfig.TOOL_TIMEOUTS, "twitter", raising=False)
     ctx = _cron_ctx(monkeypatch, "cron-prod-3", "job-4def-c", recorded=False)
     res = await _asyncio.wait_for(
-        t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of PNL."),
+        t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of TKN."),
                        execution_context=ctx),
         timeout=TimeoutConfig.get_tool_timeout("twitter"))
     assert res.error and "waiting for the owner's approval" in res.error
@@ -911,7 +911,7 @@ async def test_send_approved_initializes_a_freshly_built_tool(monkeypatch):
         closed.append(True)
     t.close = _close
 
-    ok, text = await tt.send_approved("twitter_post", {"text": "Bought PNL. tx 0xabc"})
+    ok, text = await tt.send_approved("twitter_post", {"text": "Bought TKN. tx 0xabc"})
     assert ok, text
     live_client.create_tweet.assert_called_once()
     assert closed, "a one-use tool must close its clients (Unclosed client session)"

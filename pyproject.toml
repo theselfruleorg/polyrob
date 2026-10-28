@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "1.6.0"
+version = "1.7.0"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -24,10 +24,10 @@ dependencies = [
   # installs on first use (local) or names in a refusal (server).
   "openai>=1.26.0",
   "tiktoken>=0.7.0", "aiohttp>=3.14.4", "aiofiles>=23.0.0", "aiosqlite>=0.19.0",
-  "requests>=2.30.0", "certifi>=2024.0.0", "cryptography>=50.0.0", "pyjwt>=2.15.1",
+  "requests>=2.30.0", "certifi>=2026.10.19", "cryptography>=50.0.0", "pyjwt>=2.15.1",
   "rich>=13.0.0", "prompt_toolkit>=3.0.43", "click>=8.0", "colorama>=0.4.6",
   "markdown>=3.5.0", "markdownify>=0.11.0",
-  "pillow>=12.3.0",
+  "pillow>=13.0.0",
   # Security floors for transitive parsers/HTTP clients; see the system security review.
   "httplib2>=0.32.0", "pyasn1>=0.6.4", "multidict>=6.9.1",
   "pyyaml>=6", "packaging>=23.2", "h2>=4.4.1",
@@ -47,7 +47,7 @@ anthropic = ["anthropic>=0.20.0"]
 # python-magic (058 T1.6): the upload MIME sniffer; a server without it REFUSES uploads.
 server = ["fastapi==0.141.1", "starlette==1.6.0", "uvicorn[standard]==0.38.0", "Jinja2==3.1.6", "python-socketio>=5.11.0", "python-multipart>=0.0.6", "watchfiles>=1.0.0", "argon2-cffi>=23.1.0", "python-magic>=0.4.27"]
 # 058 T1.6: document parsing (PDF / DOCX) — the filesystem tool refuses with the remedy without it.
-docs = ["pypdf>=6.16.1", "python-docx>=0.8.0"]
+docs = ["pypdf>=6.21.2", "python-docx>=0.8.0"]
 # 058 T1.6: the AnySite console script — the SDK of the discovery pack
 # (packs/discovery, shipped inside this dist; its pack.toml names this extra).
 anysite = ["anysite-cli>=0.3"]

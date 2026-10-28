@@ -12,4 +12,4 @@ def test_mcp_off_text_is_rendered_prose_not_a_remedy_key():
     text = _mcp_off_text()
     tail = text.rsplit("); ", 1)[-1]
     assert tail not in REMEDIES
-    assert "MCP_ENABLED" in tail and "configures servers" in tail
+    assert "MCP_ENABLED" in tail and "/mcp add" in tail

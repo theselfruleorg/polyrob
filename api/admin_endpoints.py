@@ -2,7 +2,6 @@
 
 Phase 1 MVP endpoints:
 - User search: GET /api/admin/users/search
-- Token verification: POST /api/admin/users/{user_id}/verify-token
 - User audit trail: GET /api/admin/users/{user_id}/audit
 - User sessions: GET /api/admin/users/{user_id}/sessions
 - Block/unblock: POST /api/admin/users/{user_id}/block, /unblock
@@ -72,7 +71,6 @@ class UserInfo(BaseModel):
     email: Optional[str]
     tier: Optional[str]
     role: str
-    den_token_count: int
     balance: int
     lifetime_earned: int
     lifetime_spent: int
@@ -101,21 +99,9 @@ class UserSearchResult(BaseModel):
     email: Optional[str]
     tier: Optional[str]
     role: str
-    den_token_count: int
     balance: int
     created_at: str
     is_blocked: bool = False
-
-
-class TokenVerificationResult(BaseModel):
-    """Token verification result."""
-    previous_count: int
-    new_count: int
-    previous_tier: str
-    new_tier: str
-    tier_changed: bool
-    token_ids: List[str]
-    verified_at: str
 
 
 class AuditEvent(BaseModel):
@@ -268,7 +254,6 @@ async def list_users(
             u.email,
             u.tier,
             u.role,
-            u.den_token_count,
             u.created_at,
             c.balance,
             c.lifetime_earned,
@@ -287,7 +272,6 @@ async def list_users(
             email=u['email'],
             tier=u['tier'],
             role=u['role'] or 'user',
-            den_token_count=u['den_token_count'] or 0,
             balance=u['balance'] or 0,
             lifetime_earned=u['lifetime_earned'] or 0,
             lifetime_spent=u['lifetime_spent'] or 0,
@@ -342,7 +326,6 @@ async def search_users(
             u.email,
             u.tier,
             u.role,
-            u.den_token_count,
             u.created_at,
             COALESCE(c.balance, 0) as balance,
             COALESCE(b.is_blocked, 0) as is_blocked
@@ -361,7 +344,6 @@ async def search_users(
             email=u['email'],
             tier=u['tier'],
             role=u['role'] or 'user',
-            den_token_count=u['den_token_count'] or 0,
             balance=u['balance'] or 0,
             created_at=str(u['created_at']),
             is_blocked=bool(u['is_blocked'])
@@ -384,7 +366,6 @@ async def get_user(request: Request, user_id: str) -> UserInfo:
             u.email,
             u.tier,
             u.role,
-            u.den_token_count,
             u.created_at,
             c.balance,
             c.lifetime_earned,
@@ -403,7 +384,6 @@ async def get_user(request: Request, user_id: str) -> UserInfo:
         email=user['email'],
         tier=user['tier'],
         role=user['role'] or 'user',
-        den_token_count=user['den_token_count'] or 0,
         balance=user['balance'] or 0,
         lifetime_earned=user['lifetime_earned'] or 0,
         lifetime_spent=user['lifetime_spent'] or 0,
@@ -620,8 +600,7 @@ async def set_user_tier(
 
     Tiers:
     - free: No access (blocked from sessions)
-    - free_access: Admin-granted access without DEN token (uses credits)
-    - holder: DEN token holder (automatic via token verification)
+    - free_access: Admin-granted access (uses credits)
     - x402: Pay-per-request
     - admin: Unlimited access
 
@@ -732,131 +711,6 @@ async def get_system_stats(request: Request):
             "total_revenue_usd": x402_payments['total_revenue'] if x402_payments else 0
         }
     }
-
-
-@router.post("/users/{user_id}/verify-token", dependencies=[Depends(require_admin)])
-async def verify_user_token(
-    request: Request,
-    user_id: str
-) -> TokenVerificationResult:
-    """Re-verify DEN token ownership for a user and update tier if needed.
-
-    Uses AlchemyTool to check current token ownership and:
-    1. Updates den_token_count and den_token_verified_at
-    2. Upgrades tier to 'holder' if user has tokens and is currently 'free'
-    3. Grants DEN Sign Up Allowance for any unclaimed token IDs
-    """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
-    db = require_service('database_manager', missing="Database unavailable")
-
-    # Get user info
-    user = await db.fetch_one("""
-        SELECT user_id, wallet_address, tier, den_token_count
-        FROM user_profiles WHERE user_id = ?
-    """, (user_id,))
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    wallet_address = user['wallet_address']
-    previous_tier = user['tier']
-    previous_count = user['den_token_count'] or 0
-
-    # require_service above established the container; the remaining services
-    # still come from that same registered runtime.
-    from api.dependencies import optional_container
-    container = optional_container()
-    # Try to get AlchemyTool from container services
-    alchemy_tool = container.get_service('alchemy_tool')
-    if not alchemy_tool:
-        # Try to get 'alchemy' service (the registered name)
-        alchemy_tool = container.get_service('alchemy')
-
-    if not alchemy_tool:
-        # Try to create one on the fly as last resort
-        try:
-            from tools.alchemy.alchemy_tool import AlchemyTool
-            from core.config import BotConfig
-            config = BotConfig()  # BaseSettings auto-loads from env
-            alchemy_tool = AlchemyTool(name="alchemy", config=config, container=container)
-            await alchemy_tool.initialize()
-        except Exception as e:
-            logger.error(f"Could not initialize AlchemyTool: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail=f"Token verification service unavailable: {e}"
-            )
-
-    # Call Alchemy to verify token
-    try:
-        from tools.alchemy.alchemy_tool import CheckTokenParams
-        result = await alchemy_tool.alchemy_check_token(
-            CheckTokenParams(address=wallet_address)
-        )
-    except Exception as e:
-        logger.error(f"Token verification failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Token verification failed: {e}")
-
-    if result.get('status') != 'success':
-        raise HTTPException(
-            status_code=500,
-            detail=result.get('message', 'Token verification failed')
-        )
-
-    # Extract results
-    new_count = result.get('token_count', 0)
-    token_ids = result.get('token_ids', [])
-    verified_at = datetime.utcnow().isoformat() + "Z"
-
-    # Determine new tier
-    new_tier = previous_tier
-    tier_changed = False
-
-    # Only auto-update tier between 'free' and 'holder'
-    # Preserve admin-granted tiers: free_access, x402, admin
-    if new_count > 0 and previous_tier == 'free':
-        new_tier = 'holder'
-        tier_changed = True
-    elif new_count == 0 and previous_tier == 'holder':
-        # Only downgrade from holder to free
-        # (Don't touch free_access, x402, or admin)
-        new_tier = 'free'
-        tier_changed = True
-
-    # Update user profile
-    await db.execute("""
-        UPDATE user_profiles
-        SET den_token_count = ?,
-            den_token_verified_at = CURRENT_TIMESTAMP,
-            tier = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    """, (new_count, new_tier, user_id))
-
-    # Audit log
-    admin_id = getattr(request.state, 'user_id', 'unknown')
-    client_ip = get_client_ip(request)
-    audit = await get_audit_logger()
-
-    if audit and tier_changed:
-        await audit.log_tier_change(
-            admin_id=admin_id,
-            target_user_id=user_id,
-            old_tier=previous_tier,
-            new_tier=new_tier,
-            ip_address=client_ip
-        )
-
-    return TokenVerificationResult(
-        previous_count=previous_count,
-        new_count=new_count,
-        previous_tier=previous_tier,
-        new_tier=new_tier,
-        tier_changed=tier_changed,
-        token_ids=token_ids,
-        verified_at=verified_at
-    )
 
 
 @router.get("/users/{user_id}/audit", dependencies=[Depends(require_admin)])
@@ -1167,21 +1021,6 @@ async def get_dashboard_stats(request: Request) -> DashboardStats:
 
     # Alerts
     alerts = []
-
-    # Check for outdated token verifications (>24h)
-    outdated_verifications = await db.fetch_one("""
-        SELECT COUNT(*) as count FROM user_profiles
-        WHERE den_token_count > 0
-        AND (den_token_verified_at IS NULL
-             OR den_token_verified_at < datetime('now', '-24 hours'))
-    """)
-    if outdated_verifications and outdated_verifications['count'] > 0:
-        alerts.append({
-            "type": "outdated_verification",
-            "severity": "warning",
-            "count": outdated_verifications['count'],
-            "message": f"{outdated_verifications['count']} users with outdated token verification (>24h)"
-        })
 
     # Check for pending sweeps (>1h)
     pending_sweeps = await db.fetch_one("""

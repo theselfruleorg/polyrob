@@ -48,7 +48,7 @@ def _echo_result(result, *, what: str) -> None:
 
 
 @identity.command("register")
-@click.option("--chain", default="base", show_default=True,
+@click.option("--chain", required=True,
               help="Chain whose ERC-8004 Identity Registry to mint on. The "
                    "registries are PINNED; an unsupported chain refuses.")
 @click.option("--max-usd", type=float, default=25.0, show_default=True,
@@ -89,7 +89,7 @@ def identity_register(chain, max_usd, dry_run, yes):
 
 @identity.command("set-uri")
 @click.argument("agent_id", type=int)
-@click.option("--chain", default="base", show_default=True)
+@click.option("--chain", required=True)
 @click.option("--max-usd", type=float, default=10.0, show_default=True)
 @click.option("--dry-run/--execute", "dry_run", default=True, show_default=True,
               help="Default simulates and reports; --execute broadcasts.")

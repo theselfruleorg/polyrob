@@ -55,8 +55,7 @@ from .filesystem import FileSystem
 from .task_tool import TaskTool
 from .email_tool import EmailTool
 from .web_fetch import WebFetchTool
-from .collabland.collabland_tool import CollabLandTool
-from .alchemy.alchemy_tool import AlchemyTool
+from .http_request import HttpRequestTool
 from .mcp.mcp_tool import MCPTool
 # Importing this registers the bridge STATUS reader with core's seam
 # (core/wallet/bridge_status.py) so the bridge watcher has one in every
@@ -93,10 +92,11 @@ register_tool_class('email', EmailTool)
 
 # Search tools
 register_tool_class('web_fetch', WebFetchTool)
+register_tool_class('http_request', HttpRequestTool)  # 093 F1
+# 093 A4: the effective line of `preferences explain <FLAG>` (core.config_service).
+from . import gate_effective as _gate_effective  # noqa: F401,E402
 
 # Verification tools
-register_tool_class('collabland', CollabLandTool)
-register_tool_class('alchemy', AlchemyTool)
 
 # Integration tools
 register_tool_class('mcp', MCPTool)
@@ -263,6 +263,30 @@ try:
 except Exception as _e:  # never block tool import on the optional dapp seam
     logging.getLogger(__name__).debug(f"dapp_browser registration skipped: {_e}")
 
+# Wallet signing (090): registers 'wallet_sign' with the on-chain money verbs
+# (DEFI_TRADE_ENABLED arms the key). It signs only a classified login/challenge
+# text (core/wallet/sign_policy.py); never in the default tool_ids.
+try:
+    from .wallet_sign import register_wallet_sign_tool
+    register_wallet_sign_tool()
+except Exception as _e:  # never block tool import on the optional signing seam
+    logging.getLogger(__name__).debug(f"wallet_sign registration skipped: {_e}")
+
+# 093 D1: the owner's /status names every gated tool (the ``harness`` slot of
+# the ONE snapshot; core may not import tools, so the provider registers here).
+# A failed import is REPORTED: the slot then renders unavailable(<reason>).
+def _gated_tools_block(controller) -> str:
+    from .harness_view import gated_tools_block
+    return gated_tools_block(controller)
+
+
+try:
+    from .status_harness import register as _register_harness_status
+    _register_harness_status(_gated_tools_block)
+except Exception as _e:
+    from core.status_sections import record_provider_error
+    record_provider_error("harness", f"{type(_e).__name__}: {str(_e)[:160]}")
+
 # Build TOOL_COMPONENTS for backward compatibility
 TOOL_COMPONENTS: List[Tuple[str, Type[BaseTool]]] = [
     (name, desc.tool_class)
@@ -391,8 +415,6 @@ __all__ = [
     'FileSystem',
     'TaskTool',
     'EmailTool',
-    'CollabLandTool',
-    'AlchemyTool',
     'MCPTool',
 
     # Functions

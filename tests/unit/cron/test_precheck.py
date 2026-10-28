@@ -14,17 +14,17 @@ from cron.jobs import CronJob, CronJobStore
 from cron.schedule import ScheduleError
 from cron.service import CronService
 
-PNL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
+TKN = "0x5555555555555555555555555555555555555555"
 
 
 def _spec(**kw):
-    base = {"verb": "defi_data.price", "params": {"chain": "base", "address": PNL}}
+    base = {"verb": "defi_data.price", "params": {"chain": "base", "address": TKN}}
     base.update(kw)
     return base
 
 
 def _job(payload, jid="w1"):
-    return CronJob(id=jid, task="watch PNL and act on a move", schedule_spec="30m",
+    return CronJob(id=jid, task="watch TKN and act on a move", schedule_spec="30m",
                    user_id="rob", next_run_at=None, payload=payload,
                    max_duration_seconds=600)
 
@@ -54,17 +54,17 @@ def test_a_precheck_that_can_never_say_quiet_is_refused():
 
 def test_service_validates_and_refuses_a_precheck_on_a_model_free_job(tmp_path):
     svc = CronService(CronJobStore(str(tmp_path / "cron.db")))
-    job = svc.schedule(task="watch the PNL pool for a move", schedule_spec="30m",
+    job = svc.schedule(task="watch the TKN pool for a move", schedule_spec="30m",
                        user_id="rob", payload={"precheck": _spec(move_pct=5, field="usd")})
     assert job.payload["precheck"]["move_pct"] == 5.0
     with pytest.raises(ScheduleError):
-        svc.schedule(task="watch the PNL pool for a move", schedule_spec="30m", user_id="rob",
+        svc.schedule(task="watch the TKN pool for a move", schedule_spec="30m", user_id="rob",
                      payload={"precheck": _spec()})
     with pytest.raises(ScheduleError):
-        svc.schedule(task="read the PNL pool every tick", schedule_spec="30m", user_id="rob",
+        svc.schedule(task="read the TKN pool every tick", schedule_spec="30m", user_id="rob",
                      payload={"precheck": _spec(move_pct=5, field="usd"),
                               "read_verb": {"verb": "defi_data.price",
-                                            "params": {"chain": "base", "address": PNL}}})
+                                            "params": {"chain": "base", "address": TKN}}})
     changed = svc.edit(job.id, user_id="rob",
                        payload_updates={"precheck": _spec(alert={"field": "usd", "below": 0.5})})
     assert changed

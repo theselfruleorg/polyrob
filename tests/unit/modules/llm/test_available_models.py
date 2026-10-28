@@ -5,7 +5,7 @@ Joins the provider-key oracle (modules.llm.profiles) x the model registry
 capabilities, /v1/models, pricing) can consume ONE list instead of the three
 that existed before this task.
 """
-from modules.llm.available_models import available_models, ModelChoice, steer_notes
+from modules.llm.available_models import available_models, ModelChoice
 
 
 def test_lists_models_for_provider_with_key():
@@ -17,11 +17,12 @@ def test_lists_models_for_provider_with_key():
     assert all(c.display_name for c in choices), "every choice has a display name"
 
 
-def test_deepseek_key_alone_yields_no_selectable_and_a_steer_note():
+def test_deepseek_key_alone_lists_the_direct_models():
     env = {"DEEPSEEK_API_KEY": "sk-" + "x" * 24}
-    assert available_models(env) == []            # initializable=False -> not selectable
-    notes = steer_notes(env)
-    assert any("openrouter" in n.lower() for n in notes)
+    choices = available_models(env)
+    assert {c.model for c in choices} == {"deepseek-flash", "deepseek-v4-pro"}
+    assert all(c.provider == "deepseek" for c in choices)
+    assert [c.model for c in choices if c.is_default] == ["deepseek-flash"]
 
 
 def test_canonical_provider_string_not_google():
@@ -31,10 +32,8 @@ def test_canonical_provider_string_not_google():
     assert all(c.provider == "gemini" for c in choices)  # never "google"
 
 
-def test_no_keys_yields_empty_list_and_no_steer_notes():
-    env = {}
-    assert available_models(env) == []
-    assert steer_notes(env) == []
+def test_no_keys_yields_empty_list():
+    assert available_models({}) == []
 
 
 def test_multiple_keys_preserve_profiles_order():

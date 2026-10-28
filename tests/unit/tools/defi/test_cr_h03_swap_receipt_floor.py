@@ -41,7 +41,7 @@ def _allowance(monkeypatch):
 async def test_a_swap_that_returns_nothing_is_refused_by_the_real_guard(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _nothing_back_sim)
     tool, _ = _tool()
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                      max_spend_usd=2.0, dry_run=False),
                           execution_context=_genuine_ctx())
     text = (res.extracted_content or "") + (res.error or "")
@@ -61,7 +61,7 @@ async def test_the_swap_intent_carries_the_route_floor(monkeypatch):
         from core.wallet import tx_guard
         return tx_guard.authorize(intent, tx, **kw)
     tool._guard_fn = spy
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                      max_spend_usd=2.0),
                           execution_context=_genuine_ctx())
     assert res.error is None, res.error

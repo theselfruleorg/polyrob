@@ -4,7 +4,7 @@ _Last reviewed: 2026-10-10._
 
 Organized migration system for POLYROB database schema.
 
-## Current Version: 1.10.0
+## Current Version: 1.11.0
 
 > **`migrations/versions/` is the authoritative list of migrations.** Run
 > `ls migrations/versions/` (and `python migrations/migrate.py status`) for the
@@ -22,7 +22,7 @@ migrations/
 └── versions/                          # Migration scripts
     ├── v1_0_0_baseline.py             # v1.0.0 - Auth & Credit System baseline
     ├── v1_1_0_user_mcp_servers.py     # v1.1.0 - Per-user MCP server config
-    ├── v1_2_0_den_token_bonuses.py    # v1.2.0 - DEN token bonuses
+    ├── v1_2_0_den_token_bonuses.py    # v1.2.0 - retired sign-up bonus table (history)
     ├── v1_3_0_billing_failures.py     # v1.3.0 - Billing-failure tracking table
     ├── v1_4_0_polymarket_credentials.py  # v1.4.0 - Polymarket credentials storage
     ├── v1_5_0_usage_records_request_id.py           # v1.5.0 - usage_records.request_id
@@ -30,7 +30,8 @@ migrations/
     ├── v1_7_0_x402_subscription_pending_unique.py   # v1.7.0 - one pending subscription request
     ├── v1_8_0_x402_tx_hash_case_normalize.py        # v1.8.0 - transaction_hash case normalized
     ├── v1_9_0_x402_payment_asset_columns.py         # v1.9.0 - x402 payment asset columns
-    └── v1_10_0_usage_records_cache_creation.py      # v1.10.0 - usage_records.cache_creation_tokens
+    ├── v1_10_0_usage_records_cache_creation.py      # v1.10.0 - usage_records.cache_creation_tokens
+    └── v1_11_0_retire_holder_tier.py                # v1.11.0 - NFT holder tier retired (holder -> free_access)
 ```
 
 The order is NUMERIC (`v1_10_0` runs after `v1_9_0`), never by filename.
@@ -393,5 +394,5 @@ Examples of what future migrations might include:
 
 ---
 
-**Current Version:** 1.10.0 (see `migrations/versions/` for the authoritative list)
+**Current Version:** 1.11.0 (see `migrations/versions/` for the authoritative list)
 **Last Updated:** 2026-10-10

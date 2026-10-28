@@ -14,7 +14,7 @@ grants `("defi_data", "defi_trade", "filesystem", "task", "message")`, and
 `filesystem` offered append-at-end and whole-file write with nothing in between.
 Rewriting 2,718 lines to prepend one row is not a reasonable move.
 
-**It reached a money decision.** At 10:49 the PNL buyback computed its rate
+**It reached a money decision.** At 10:49 the TKN rebuy computed its rate
 reference from that table and reported: *"That is 5 samples in the window (fewer
 than 6)"* — three of the missing samples were the rows the monitor could not
 write. The tranche still passed its checks, but a money rail sized a $218.50

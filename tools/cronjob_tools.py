@@ -79,7 +79,7 @@ class CronScheduleAction(BaseModel):
                                       description="Hard cap per run (60-1800s; default 600). A money rail "
                                                   "that reconciles, quotes, gates, swaps and reports needs "
                                                   "~15-25 min at 1-5 min/step — the 600 s ceiling cut the "
-                                                  "hourly buyback at step 6 before its swap (2026-09-18).")
+                                                  "an hourly swap job at step 6 before its swap (2026-09-18).")
     deliver: Optional[str] = Field(default=None,
                                    description="Optional out-of-band delivery sink for the result: "
                                                "'telegram' or 'email' (to the owner), or 'twitter' — a "
@@ -143,8 +143,8 @@ class CronScheduleAction(BaseModel):
     pause_windows: Optional[List[List[Any]]] = Field(
         default=None,
         description="Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 "
-                    "UTC. A tick inside a window is a $0 skip (e.g. hold the buyback from "
-                    "T-1h to 24h after the mint window).")
+                    "UTC. A tick inside a window is a $0 skip (e.g. hold a recurring swap "
+                    "from T-1h to 24h after a mint window).")
 
 
 class CronListAction(BaseModel):
@@ -203,6 +203,12 @@ class CronEditAction(BaseModel):
                                   "cronjob_schedule); {} clears it.")
     pause_windows: Optional[List[List[Any]]] = Field(
         default=None, description="Replace the job's pause windows ([[start, end], ...]); [] clears them.")
+
+
+_MANDATE_JOB_OWNER_ONLY = (
+    "cronjob_edit refused: this job belongs to a trading mandate — the mandate built it and "
+    "only the owner changes it (/trade, or /job edit on an owner seat). Follow the job as "
+    "written; tell the owner what you would change.")
 
 
 _WRITE_VERB_OWNER_ONLY = (
@@ -521,6 +527,10 @@ class CronJobTool(BaseTool):
         job = svc.store.get(params.job_id, user_id=user)
         if job is None:
             return ActionResult(error=f"No such cron job `{params.job_id}`.", include_in_memory=True)
+        # 086 W3: a trading mandate's job is code-built from the owner's card; an
+        # agent edit could drop its exit barriers or step outside the mandate gate.
+        if (job.payload or {}).get("mandate") and not owner_turn:
+            return ActionResult(error=_MANDATE_JOB_OWNER_ONLY, include_in_memory=True)
         updates: dict = {}
         if params.rig is not None:
             from core.config_policy.rigs import is_rig, rig_names
@@ -605,7 +615,11 @@ class CronJobTool(BaseTool):
         except ScheduleError as e:
             return ActionResult(error=f"Edit refused: {e}", include_in_memory=True)
         if not changed:
-            return ActionResult(error="Nothing to change: pass old_text/new_text, schedule, "
+            return ActionResult(error="Nothing to change: every value you passed is already "
+                                      "the job's current value (or none was passed). To add or "
+                                      "change task text, pass BOTH old_text (the exact passage "
+                                      "from cronjob_show) and new_text (to ADD text, make new_text the same "
+                                      "passage plus your addition); other fields: schedule, "
                                       "max_duration_seconds, rig, deliver, skills, target_token, "
                                       "read_verb, precheck, write_verb or pause_windows.",
                                 include_in_memory=True)

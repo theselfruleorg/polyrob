@@ -413,7 +413,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 use_vision=request.get('use_vision', True),
                 session_config=request.get('session_config'),
                 skills=request.get('skills'), **memory_scope_fields(request),
-                money_target=request.get('money_target'), recall_seed=request.get('recall_seed'),
+                money_target=request.get('money_target'), recall_seed=request.get('recall_seed'), mandate=request.get('mandate'),
             )
 
         from agents.task.billed_request import credit_billing_required, validate_billed_request
@@ -461,7 +461,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # a transport flag.
         orchestrator._public_session = room_session_source(kwargs.get("session_source"))
         orchestrator._rail_skill_ids = list(session_request.skills or [])  # 060 WS-5
-        orchestrator._money_target, orchestrator._recall_seed = (session_request.money_target, session_request.recall_seed)  # 068 G2; B1
+        orchestrator._money_target, orchestrator._recall_seed, orchestrator._mandate = (session_request.money_target, session_request.recall_seed, session_request.mandate)  # 068 G2; B1; 086
         bind_memory_scope(actual_id, session_request)  # 025: goal/cron memory scope
         # H16: a session created FOR a correspondent (conversation resume) is
         # third-party-facing for life, owner-only state never enters it (restored from `creator` on recreate).

@@ -617,13 +617,12 @@ async def test_model_picker_uses_embedded_picker_when_app_running(monkeypatch):
     from modules.llm.available_models import ModelChoice
     monkeypatch.setattr("prompt_toolkit.application.current.get_app_or_none",
                         lambda: _FakeApp())
-    # The handler imports available_models/steer_notes from their home module.
+    # The handler imports available_models from its home module.
     monkeypatch.setattr("modules.llm.available_models.available_models",
                         lambda env=None, **k: [ModelChoice(
                             provider="openrouter", model="z-ai/glm-5.2", display_name="GLM 5.2",
                             is_default=True, context_window=128000, pricing_hint="",
                             supports_vision=False, supports_tools=True)])
-    monkeypatch.setattr("modules.llm.available_models.steer_notes", lambda env=None: [])
     monkeypatch.setattr("cli.ui.model_selector._resolved_default", lambda env, choices: None)
     persisted = {}
     monkeypatch.setattr("cli.config_store.set_default_model",

@@ -1,0 +1,56 @@
+{
+  "function": {
+    "description": "After the trading-mandate intake: put the owner's trading mandate (allocation, networks, preset) to the owner as ONE card. Confirm starts it and all its jobs. Writes nothing itself.",
+    "name": "trade_mandate_propose",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_usd": {
+          "description": "The owner's allocation, USD.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "chains": {
+          "description": "Networks to trade on, e.g. ['solana'].",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "type": "array"
+        },
+        "preset": {
+          "default": "memecoin",
+          "description": "The style; its numbers come from the preset.",
+          "enum": [
+            "memecoin",
+            "majors",
+            "dca"
+          ],
+          "type": "string"
+        },
+        "slots": {
+          "default": null,
+          "description": "Max open; only if the owner named one.",
+          "maximum": 50,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
+        "ticket_usd": {
+          "default": null,
+          "description": "Only if the owner named one.",
+          "exclusiveMinimum": 0,
+          "nullable": true,
+          "type": "number"
+        }
+      },
+      "required": [
+        "budget_usd",
+        "chains"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

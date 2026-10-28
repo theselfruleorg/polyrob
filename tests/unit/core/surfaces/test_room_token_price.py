@@ -5,7 +5,7 @@ non-stable asset had to be QUOTED, so it had to clear `pool_screen.classify`.
 A room selling in the house's own token was therefore hostage to a *trading*
 heuristic answering a different question — "should I buy this?" — and a
 36-hour-old launch with ordinary churn (V/L 14.6 against a threshold of 10)
-could not be charged in at all. Measured on PNL/Robinhood Chain, 2026-09-15.
+could not be charged in at all. Measured on TKN/Robinhood Chain, 2026-09-15.
 
 A token-denominated price removes the oracle from the path entirely: the
 amount IS the price, so there is nothing to quote and nothing to screen.
@@ -72,15 +72,15 @@ def setup(tmp_path):
     home = str(tmp_path)
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(home)).upsert(PaymentAsset(
-        asset_id="pnl", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="PNL", rail="onchain_scan",
+        asset_id="tkn", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="TKN", rail="onchain_scan",
         min_amount_raw=500 * 10 ** 18, liquidity_floor_usd=5000.0,
         source="operator"))
     import os
     from core.surfaces.group_allowlist import GroupAllowlist
     GroupAllowlist(os.path.join(home, "group_allowlist.db")).allow(
         "telegram", CHAT, note="t")
-    for k, v in (("chat.paid_enabled", "true"), ("chat.paid_asset", "pnl"),
+    for k, v in (("chat.paid_enabled", "true"), ("chat.paid_asset", "tkn"),
                  ("chat.paid_mute_usd", "0.10"),
                  ("chat.paid_mute_max_duration", "6h"),
                  ("chat.member_verbs", "mute")):
@@ -102,7 +102,7 @@ def _mint(**kw):
 
 
 class _WashQuoter:
-    """The live PNL situation: a real price over a pool the screen calls WASH."""
+    """The live TKN situation: a real price over a pool the screen calls WASH."""
 
     def quote(self, asset):
         import time
@@ -134,7 +134,7 @@ def test_a_usd_priced_room_is_still_blocked_by_a_wash_pool(setup):
 
 def test_a_token_price_needs_no_quote_at_all(setup):
     ok, msg = chat_policy.set(setup, "rob", "telegram", CHAT,
-                              "chat.paid_mute_units", "1500 pnl")
+                              "chat.paid_mute_units", "1500 tkn")
     assert ok, msg
     r, mint = _offer(setup)
     assert r.ok is True, getattr(r, "text", "")
@@ -142,7 +142,7 @@ def test_a_token_price_needs_no_quote_at_all(setup):
 
 
 def test_a_token_price_works_even_with_no_quoter_present(setup):
-    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 pnl")
+    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 tkn")
     r, mint = _offer(setup, quoter=None)
     assert r.ok is True
     assert mint.calls["amount_raw"] == 1500 * 10 ** 18
@@ -151,7 +151,7 @@ def test_a_token_price_works_even_with_no_quoter_present(setup):
 def test_a_fractional_token_price_is_exact(setup):
     """⚠️ Decimal, not float: 0.1 tokens at 18 decimals must not drift."""
     chat_policy.set(setup, "rob", "telegram", CHAT,
-                    "chat.paid_mute_units", "1500.5 pnl")
+                    "chat.paid_mute_units", "1500.5 tkn")
     r, mint = _offer(setup)
     assert r.ok is True
     assert mint.calls["amount_raw"] == 15005 * 10 ** 17
@@ -160,7 +160,7 @@ def test_a_fractional_token_price_is_exact(setup):
 def test_the_declared_usd_is_still_recorded(setup):
     """⚠️ Never $0.00. The ledger, the invoice cap and the owner's reporting
     all read this figure."""
-    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 pnl")
+    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 tkn")
     r, mint = _offer(setup)
     assert r.ok is True
     assert mint.calls["price_usd"] == pytest.approx(0.10)
@@ -168,7 +168,7 @@ def test_the_declared_usd_is_still_recorded(setup):
 
 def test_the_asset_token_floor_still_applies(setup):
     """The real anti-dust control is not bypassed by pricing in tokens."""
-    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "10 pnl")
+    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "10 tkn")
     r, _ = _offer(setup)
     assert r.ok is False
     assert r.reason_code == "unpriceable"
@@ -177,15 +177,15 @@ def test_the_asset_token_floor_still_applies(setup):
 def test_a_zero_or_negative_token_price_is_refused(setup):
     for bad in ("0", "-5"):
         chat_policy.set(setup, "rob", "telegram", CHAT,
-                        "chat.paid_mute_units", f"{bad} pnl")
+                        "chat.paid_mute_units", f"{bad} tkn")
         r, _ = _offer(setup)
         assert r.ok is False, f"{bad} was accepted"
 
 
 def test_the_offer_text_names_the_token_amount(setup):
-    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 pnl")
+    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 tkn")
     r, _ = _offer(setup)
-    assert "1,500 PNL" in r.text or "1500 PNL" in r.text
+    assert "1,500 TKN" in r.text or "1500 TKN" in r.text
 
 
 def test_a_room_with_no_token_price_is_unchanged(setup):
@@ -205,19 +205,19 @@ def test_a_dollar_pegged_asset_ignores_a_token_price_absence(setup, tmp_path):
 # --- what a MEMBER is quoted ----------------------------------------------
 
 def test_the_member_price_list_quotes_the_token_amount(setup):
-    """⚠️ A member quoted '$0.10' while actually sending 1,500 PNL is a lie in
+    """⚠️ A member quoted '$0.10' while actually sending 1,500 TKN is a lie in
     the one place the payer reads before paying."""
     from core.surfaces.room_actions import render_member_prices
-    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 pnl")
+    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 tkn")
     out = render_member_prices(_Container(setup), surface="telegram", chat_id=CHAT)
-    assert "1,500 PNL" in out
+    assert "1,500 TKN" in out
 
 
 def test_a_token_price_without_a_declared_usd_names_the_remedy(setup):
     """The USD figure is the ledger's; a room that drops it must be TOLD, not
     silently reported as unpriced."""
     from core.surfaces.room_actions import render_member_prices
-    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 pnl")
+    chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_units", "1500 tkn")
     chat_policy.set(setup, "rob", "telegram", CHAT, "chat.paid_mute_usd", "0")
     out = render_member_prices(_Container(setup), surface="telegram", chat_id=CHAT)
     assert "/paid price mute" in out

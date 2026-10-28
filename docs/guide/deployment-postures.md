@@ -38,7 +38,10 @@ without `POLYROB_POSTURE`, it refuses to start and names the rename
 
 `webgate.bind_host()` mirrors that logic for the actual bind: `local` → `127.0.0.1`,
 `own_ops`/`multitenant` → `0.0.0.0`, unless `WEBGATE_HOST`/`WEBVIEW_HOST` is set
-explicitly (which always wins).
+explicitly (which wins). The one exception: under an explicit `POLYROB_POSTURE=local`
+a non-loopback host is ignored with an error and the console binds `127.0.0.1`.
+A `POLYROB_POSTURE` value that is not one of the three is logged as a warning and
+ignored, and resolution goes on as if it were unset.
 
 ### Running it
 
@@ -158,8 +161,8 @@ user-enumeration and username/password timing oracles.
 
 `POST /owner-login` verifies the submitted credentials and, on success, mints
 a session cookie (`issue_owner_session_cookie`) — a JWT signed with
-`JWT_SECRET_KEY`, 7-day expiry, `httponly`/`samesite=lax`, `secure` when
-`ENVIRONMENT=production`. It carries `role=owner`, `tier=admin`,
+`JWT_SECRET_KEY`, 24-hour expiry, `httponly`/`samesite=strict`, `secure` when
+`ENVIRONMENT=production` (the console's default), except under `local`. It carries `role=owner`, `tier=admin`,
 `payment_method=None`. This is the **same cookie name, algorithm, and
 `request.state` contract** the wallet-JWT path uses (`api/auth_state.py`), so
 the rest of the app (session ownership, socket auth, etc.) treats an owner
@@ -308,8 +311,8 @@ needs console access is you and you already have a VPN/tailnet set up.
 | `POLYROB_OWNER_PASSWORD_HASH` | unset | Argon2 hash of the owner password — never plaintext. |
 | `POLYROB_OWNER_USER_ID` | unset | The owner tenant. Required for a writable non-`local` console. |
 | `JWT_SECRET_KEY` | unset | Signs both the owner-login cookie and wallet/SIWE JWTs. Required for owner login to work. |
-| `WEBVIEW_DOMAIN` | *(the source ships a hardcoded fallback — always set this explicitly for your deployment)* | SIWE domain + default Socket.IO CORS origin. |
-| `ENVIRONMENT` | `production` | When `production`, the owner-login cookie is marked `secure` (HTTPS-only). |
+| `WEBVIEW_DOMAIN` | *(a localhost fallback — always set this explicitly for your deployment)* | SIWE domain + default Socket.IO CORS origin. |
+| `ENVIRONMENT` | `production` (as the console reads it) | When `production` (and not `local`), the owner-login cookie is marked `secure` (HTTPS-only). |
 
 The complete reference is [../CONFIGURATION.md](../CONFIGURATION.md); on a running
 box, `polyrob doctor --flags --search WEBVIEW` prints the resolved values and where

@@ -79,20 +79,6 @@ def test_filter_does_not_redact_working_hex_hash(monkeypatch):
     assert sha in out.content
 
 
-def test_merge_successive_text_uses_separator():
-    """B20: merging two successive text messages must keep a boundary, not glue
-    '...end''start...' into one run."""
-    from modules.llm.messages import HumanMessage
-    host = _Host()
-    merged = host.merge_successive_messages(
-        [HumanMessage(content="first line"), HumanMessage(content="second line")],
-        HumanMessage,
-    )
-    assert len(merged) == 1
-    assert merged[0].content == "first line\nsecond line"
-    assert "linesecond" not in merged[0].content
-
-
 # --- F16(i): the dedup back-reference is CONTENT-addressed, not positional ---
 
 def _dup_payload() -> str:
@@ -140,64 +126,3 @@ def test_dedup_backreference_names_the_digest():
     digest = hashlib.md5(payload.encode("utf-8", "ignore")).hexdigest()[:12]
     assert digest in out[1].content
     assert "#" not in out[1].content, "no positional index may survive in the pointer"
-
-
-# --- F16(iii): the deepseek-reasoner merge is scoped to ONE layer at a time ---
-
-def _deepseek_mm():
-    """A real MessageManager whose model name triggers the merge path."""
-    from unittest.mock import MagicMock
-    from agents.task.agent.message_manager.service import MessageManager
-    from agents.task.agent.prompts import SystemPrompt
-
-    llm = MagicMock()
-    llm.model_name = "deepseek-reasoner"
-    return MessageManager(
-        llm=llm, task="t", action_descriptions="acts",
-        system_prompt_class=SystemPrompt, max_input_tokens=40000,
-        session_id="s-deepseek",
-    )
-
-
-def test_deepseek_merge_leaves_the_foundation_bytes_tail_independent():
-    """The foundation's merged form must not change when the tail changes."""
-    from tests.support.prefix_cache import serialize_messages
-
-    mm = _deepseek_mm()
-    mm.set_skill_message("Use tool X to accomplish Y.")
-
-    mm.append_user_turn("first turn")
-    first = serialize_messages(mm.get_messages_for_llm(consume_ephemeral=False))
-    # Anything beyond the seam message must be untouched by a later append.
-    mm.add_tool_call_pair_atomic(
-        ai_content="working",
-        tool_calls=[{"id": "c1", "name": "noop", "args": {}}],
-        tool_responses=[("c1", "done")],
-    )
-    second = serialize_messages(mm.get_messages_for_llm(consume_ephemeral=False))
-
-    # The foundation (everything before the first conversation turn) is identical.
-    n_foundation = len(first) - 1
-    assert n_foundation >= 1
-    assert first[:n_foundation] == second[:n_foundation], (
-        "the deepseek merge rewrote the pinned foundation when the tail grew"
-    )
-
-
-def test_deepseek_merge_leaves_no_successive_same_role_pair():
-    """The provider contract the merge exists for must still hold."""
-    from modules.llm.messages import AIMessage, HumanMessage
-
-    mm = _deepseek_mm()
-    mm.set_skill_message("Use tool X.")
-    mm.append_user_turn("first turn")
-    msgs = mm.get_messages_for_llm(consume_ephemeral=False)
-
-    for prev, cur in zip(msgs, msgs[1:]):
-        same_human = isinstance(prev, HumanMessage) and isinstance(cur, HumanMessage)
-        same_ai = (isinstance(prev, AIMessage) and isinstance(cur, AIMessage)
-                   and not getattr(prev, "tool_calls", None))
-        assert not same_human and not same_ai, (
-            f"successive same-role pair survived the merge: "
-            f"{type(prev).__name__} -> {type(cur).__name__}"
-        )

@@ -6,6 +6,14 @@ from agents.task.loop_types.registry_views import ActionModel
 from agents.task.loop_types.controller_types import ActionResult
 
 
+
+def _visible_mcp_tools(manager, user_id):
+	"""093: the MCP servers this tenant may see (global + its own) — one manager
+	holds every tenant's servers."""
+	from tools.mcp.user_servers import visible_tools
+	return visible_tools(manager, user_id)
+
+
 class IntrospectionMixin:
 	def list_actions(self) -> List[str]:
 		"""
@@ -159,7 +167,7 @@ class IntrospectionMixin:
 			if 'mcp' in self._tools:
 				mcp_tool = self._tools['mcp'].instance
 				if hasattr(mcp_tool, 'server_manager') and mcp_tool.server_manager:
-					all_tools = mcp_tool.server_manager.get_all_tools()
+					all_tools = _visible_mcp_tools(mcp_tool.server_manager, getattr(self, 'user_id', None))
 
 					if all_tools:
 						mcp_section = ["\n**Available MCP Servers:**"]
@@ -206,7 +214,7 @@ class IntrospectionMixin:
 
 				# Get tools from regular MCP servers via server_manager
 				if hasattr(mcp_tool, 'server_manager') and mcp_tool.server_manager:
-					all_tools = mcp_tool.server_manager.get_all_tools()
+					all_tools = _visible_mcp_tools(mcp_tool.server_manager, getattr(self, 'user_id', None))
 					if all_tools:
 						for server_name, tools in all_tools.items():
 							if tools:
@@ -237,7 +245,7 @@ class IntrospectionMixin:
 			sm = getattr(inst, 'server_manager', None)
 			if sm is None:
 				return out
-			for server_name, tools in (sm.get_all_tools() or {}).items():
+			for server_name, tools in _visible_mcp_tools(sm, getattr(self, 'user_id', None)).items():
 				for t in tools or []:
 					out.append({
 						"server": server_name,

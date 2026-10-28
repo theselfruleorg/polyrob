@@ -12,10 +12,13 @@ counts): ``sign_transaction``, ``sign_transaction_with``, ``send_raw_transaction
 ``send_raw``, ``sign_and_send``, ``sign_message``, ``sign_typed_data``,
 ``unsafe_sign_hash``, ``sign_hash``, the SVM wrapper ``_solana_send``; a call
 whose first argument is the RPC method ``sendTransaction`` /
-``eth_sendRawTransaction``; ``EthAccountSigner(...)``; ``Account.from_key(...)`` / ``w3.eth.account.from_key(...)``.
+``eth_sendRawTransaction``; a call to an SDK signing entry point
+(``SDK_SIGNING_CALLS``: ``EthAccountSigner(...)``, the Polymarket
+``ClobClient(...)`` that receives the key, Hyperliquid ``sign_l1_action(...)``);
+``Account.from_key(...)`` / ``w3.eth.account.from_key(...)``.
 
-Blind spot: a third-party SDK that receives an account (x402, Hyperliquid)
-signs inside the SDK; the handoff is the pinned site.
+Blind spot: a third-party SDK that receives an account (x402, Hyperliquid,
+Polymarket) signs inside the SDK; the handoff is the pinned site.
 """
 import ast
 import pathlib
@@ -30,6 +33,9 @@ SINK_ATTRS = {"sign_transaction", "sign_transaction_with", "send_raw_transaction
               "send_raw", "sign_and_send", "sign_message", "sign_typed_data",
               "unsafe_sign_hash", "sign_hash", "_solana_send"}
 RPC_METHODS = {"sendTransaction", "eth_sendRawTransaction"}
+#: Calls that hand a key/account to an SDK or sign inside one (090 §1.4: the
+#: Hyperliquid signer op and the Polymarket client were not pinned).
+SDK_SIGNING_CALLS = {"EthAccountSigner", "ClobClient", "sign_l1_action"}
 
 _SIGNER = "the signer implementation itself (the seam every gated caller reaches)"
 _SIGNER_SVC = "polyrob-signer op: re-runs tx_guard / its own hard caps and ledger (core/signer/caps.py)"
@@ -48,6 +54,12 @@ ALLOWED = {
     ("core/signer/server.py", "SignerService._op_journal_sign", "sign_message"): (
         "EIP-191 over ONLY the account journal template (is_journal_template); a _MONEY_OPS op, "
         "so refused under the signer's pause; not a payment"),
+    ("core/signer/server.py", "SignerService._op_venue_sign", "sign_l1_action"): (
+        "Hyperliquid cancels only (HL_ORDER_ACTIONS), behind signer.toml hyperliquid_orders"),
+    ("core/signer/sign_ops.py", "op_sign_classified", "sign_message"): (
+        "090: re-classifies the wire text itself (sign_policy.classify); class A only"),
+    ("core/signer/shadow.py", "shadow_sign_classified", "sign_message"): (
+        "090: reached only from sign_policy.sign_classified after a class-A verdict"),
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_message", "sign_message"): _SIGNER,
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_transaction", "sign_transaction"): _SIGNER,
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_typed_data", "sign_typed_data"): _SIGNER,
@@ -68,6 +80,9 @@ ALLOWED = {
         "the EVM rail broadcast"),
     ("core/wallet/solana_rail.py", "SolanaRail.send_raw", "sendTransaction"): (
         "the SVM rail broadcast: refuses unsigned/durable-nonce bytes; journals first"),
+    ("core/wallet/sign_policy.py", "sign_classified", "sign_message"): (
+        "090: signs only a class-A login/challenge text; the wallet_sign tool runs the "
+        "turn bars, the replay log and the autonomous rate first"),
     ("core/wallet/nft_account.py", "sign_entry", "sign_message"): (
         "EIP-191 journal attestation with a fixed prefix; not a transaction or permit"),
     # -- modules -------------------------------------------------------------
@@ -127,6 +142,9 @@ ALLOWED = {
         "x402 SDK: max_amount policy, network + canonical-USDC pin, service PolicyGate"),
     ("tools/x402/real_client.py", "RealX402Client.fetch_with_payment", "EthAccountSigner"): (
         "same as _to_sdk_signer"),
+    ("packs/markets/polyrob_markets/polymarket/service.py", "PolymarketTool._get_clob_client", "ClobClient"): (
+        "Polymarket SDK gets the user-stored key (not the agent wallet); order verbs run "
+        "trade_turn_refusal + evaluate_live_trade; the SDK signs ClobAuth + orders inside"),
     ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool._get_exchange_client", "from_key"): (
         "Hyperliquid SDK account; every order verb runs trade_turn_refusal + evaluate_live_trade"),
     ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.approve_agent", "from_key"): (
@@ -155,8 +173,8 @@ def _sites(path: pathlib.Path):
                     out.add((where, ch.args[0].value))
                 name = f.id if isinstance(f, ast.Name) else (
                     f.attr if isinstance(f, ast.Attribute) else None)
-                if name == "EthAccountSigner":
-                    out.add((where, "EthAccountSigner"))
+                if name in SDK_SIGNING_CALLS:
+                    out.add((where, name))
                 owner = getattr(f, "value", None)
                 if (isinstance(f, ast.Attribute) and f.attr == "from_key" and (
                         (isinstance(owner, ast.Name) and owner.id == "Account")

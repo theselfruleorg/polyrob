@@ -42,7 +42,6 @@
                     <div class="user-badges" id="user-badges"></div>
                 </div>
                 <div class="user-actions">
-                    <button id="btn-verify-token" class="btn-action btn-success">Verify Token</button>
                     <button id="btn-block" class="btn-action btn-danger">Block User</button>
                 </div>
             </div>
@@ -94,7 +93,6 @@
                             <select id="select-tier" class="control-select">
                                 <option value="free">Free (No Access)</option>
                                 <option value="free_access">Free Access</option>
-                                <option value="holder">Holder</option>
                                 <option value="x402">x402</option>
                                 <option value="admin">Admin</option>
                             </select>
@@ -107,21 +105,6 @@
                             <span>Not blocked</span>
                         </div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Token Status Section -->
-            <div class="detail-section">
-                <div class="section-header">Access Token Status</div>
-                <div class="token-status" id="token-status">
-                    <div style="display: flex; align-items: center;">
-                        <span class="status-icon" id="token-icon">?</span>
-                        <div class="status-text">
-                            <h4 id="token-count">Loading...</h4>
-                            <p id="token-verified">Last verified: -</p>
-                        </div>
-                    </div>
-                    <div class="token-ids" id="token-ids"></div>
                 </div>
             </div>
 

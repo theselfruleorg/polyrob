@@ -19,7 +19,8 @@ class _CapturingMM:
     def __init__(self):
         self.captured = {}
 
-    def add_tool_call_pair_atomic(self, *, ai_content, tool_calls, tool_responses):
+    def add_tool_call_pair_atomic(self, *, ai_content, tool_calls, tool_responses,
+                                  reasoning_content=None):
         self.captured["ai_content"] = ai_content
 
 

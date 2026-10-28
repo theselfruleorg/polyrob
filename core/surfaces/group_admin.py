@@ -282,7 +282,7 @@ def set_key(container: Any, owner_uid: str, surface: str, chat_id: str,
         key = f"chat.{key}"
     # ⚠️ A unit price is BOUND to the asset it was written for. A bare number
     # was reinterpreted against whatever `chat.paid_asset` happened to be, so
-    # switching a room priced at 75,000 PNL (~$5) to USDC would have quoted the
+    # switching a room priced at 75,000 TOKEN (~$5) to USDC would have quoted the
     # next payer 75,000 USDC. Binding here means the owner never types an asset
     # id and a bare value can never reach the store.
     if key.endswith("_units") and str(value).strip():

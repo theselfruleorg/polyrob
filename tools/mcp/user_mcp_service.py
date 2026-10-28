@@ -34,6 +34,7 @@ class AddServerResult:
     server: Optional[UserMCPServer] = None
     error: Optional[str] = None
     ready: bool = False
+    tools_discovered: int = 0  # from the verification probe (0 when not verified)
 
 
 @dataclass
@@ -76,6 +77,51 @@ class UserMCPService:
         self.logger = get_component_logger("UserMCPService")
         # FIX #11: Rate limiting
         self._rate_limiter = RateLimiter(rate_limit_requests, rate_limit_window)
+        # 093 B2: enabled servers across every tenant — the sync read behind
+        # MCPTool.availability_gap. None = unknown (never read, or a read fault).
+        self.enabled_server_count: Optional[int] = None
+        self._change_listeners: List[Any] = []
+
+    def add_change_listener(self, callback: Any) -> None:
+        """``await callback(user_id, server_name, event)`` after an add/remove/update.
+
+        A bound method is held weakly, so a discarded tool is not kept alive."""
+        import weakref
+        listeners = self.__dict__.setdefault("_change_listeners", [])
+        ref = weakref.WeakMethod(callback) if hasattr(callback, "__self__") else (lambda: callback)
+        if any(r() == callback for r in listeners):
+            return
+        listeners.append(ref)
+
+    async def refresh_enabled_count(self) -> Optional[int]:
+        """Re-read the count of enabled servers (all tenants); None on a read fault."""
+        try:
+            counter = getattr(self.db, "enabled_server_count", None)
+            if callable(counter):
+                count = int(await counter())
+            else:
+                row = await self.db.db.fetch_one(
+                    "SELECT COUNT(*) AS count FROM user_mcp_servers WHERE enabled = 1", ())
+                count = int(row["count"]) if row else 0
+        except Exception as e:
+            logger.warning(f"MCP server count unreadable: {e}")
+            count = None
+        self.enabled_server_count = count
+        return count
+
+    async def _changed(self, user_id: str, server_name: str, event: str) -> None:
+        """Refresh the count and tell the live tool (fail-open per listener)."""
+        await self.refresh_enabled_count()
+        listeners = getattr(self, "_change_listeners", [])
+        listeners[:] = [r for r in listeners if r() is not None]
+        for ref in list(listeners):
+            callback = ref()
+            if callback is None:
+                continue
+            try:
+                await callback(user_id, server_name, event)
+            except Exception as e:
+                logger.warning(f"MCP change listener failed ({event} {server_name}): {e}")
     
     def _check_rate_limit(self, user_id: str) -> None:
         """Check rate limit and raise if exceeded (FIX #11)."""
@@ -125,7 +171,9 @@ class UserMCPService:
             user_id: Owner's user ID
             server_name: Unique name for the server (lowercase, alphanumeric, hyphens)
             server_url: Server endpoint URL (must be HTTPS)
-            server_type: 'sse' or 'http' (NOT 'stdio' - blocked for security)
+            server_type: 'streamable_http', 'http' or 'sse' — or 'auto': probe
+                ``streamable_http → http → sse`` and store the one that answered
+                ``initialize`` (093 B1). NOT 'stdio' - blocked for security.
             api_key: API key for authentication
             headers: Custom headers for requests
             auth_method: 'api_key', 'bearer', or 'none'
@@ -142,8 +190,10 @@ class UserMCPService:
         except ValueError as e:
             return AddServerResult(success=False, error=str(e))
 
-        # Validate server type (NO STDIO for users)
-        type_valid, type_error = self.validator.validate_server_type(server_type)
+        # Validate server type (NO STDIO for users); 'auto' probes below.
+        probe = server_type in (None, "", "auto")
+        type_valid, type_error = self.validator.validate_server_type(
+            "streamable_http" if probe else server_type)
         if not type_valid:
             return AddServerResult(
                 success=False,
@@ -192,7 +242,12 @@ class UserMCPService:
 
         # FIX #6: Optionally verify connection before saving
         tools_discovered = 0
-        if verify_connection and (api_key is not None or auth_method == 'none'):
+        if probe:
+            server_type = "streamable_http"  # the current spec; replaced by the probe's answer
+        # 'auto' always probes when it can (it cannot know the transport
+        # otherwise); an explicit type probes only when asked to verify.
+        verified = (verify_connection or probe) and (api_key is not None or auth_method == 'none')
+        if verified:
             # Build temporary config for testing
             temp_config = MCPServerConfig(
                 type=MCPServerType(server_type),
@@ -201,12 +256,21 @@ class UserMCPService:
                 enabled=True,
                 timeout=options.get('timeout', 30)
             )
-            
-            # Test MCP protocol
-            test_result = await self._test_mcp_protocol_with_config(
-                temp_config, user_id=user_id, server_name=server_name
-            )
-            
+
+            if probe:
+                from tools.mcp.probe import probe_failure_text, probe_transports
+                answered, test_result, attempts = await probe_transports(
+                    temp_config, user_id=user_id, server_name=server_name)
+                if answered is None:
+                    return AddServerResult(
+                        success=False,
+                        error=f"Server verification failed: {probe_failure_text(attempts)}")
+                server_type = answered
+            else:
+                test_result = await self._test_mcp_protocol_with_config(
+                    temp_config, user_id=user_id, server_name=server_name
+                )
+
             if not test_result.success:
                 return AddServerResult(
                     success=False,
@@ -230,18 +294,20 @@ class UserMCPService:
                 **options
             )
 
-            # Update tools_discovered if we verified
-            if tools_discovered > 0:
+            # Record the verification probe (time, tool count) when we ran one
+            if verified:
                 await self.db.update_connection_status(
                     user_id, server_name,
                     connected=True,
                     tools_count=tools_discovered
                 )
+            await self._changed(user_id, server_name, "added")
 
             return AddServerResult(
                 success=True,
                 server=server,
-                ready=api_key is not None or auth_method == 'none'
+                ready=api_key is not None or auth_method == 'none',
+                tools_discovered=tools_discovered,
             )
 
         except Exception as e:
@@ -287,74 +353,8 @@ class UserMCPService:
                 the bridge call is a no-op in practice until a future task
                 extends the per-user server schema/API to accept one.
         """
-        import time
-        import asyncio
-        from tools.mcp.protocol import MCPClient, MCPSSETransport, MCPHTTPTransport
-        from tools.mcp.oauth_bridge import apply_oauth_headers, make_auth_refresh_callback, oauth_applies_to
-
-        client = None
-        start = time.time()
-
-        try:
-            resolved_headers = await apply_oauth_headers(config, user_id, server_name)
-            on_auth_refresh = (
-                make_auth_refresh_callback(user_id, server_name)
-                if oauth_applies_to(config) else None
-            )
-            if config.type == MCPServerType.SSE:
-                transport = MCPSSETransport(
-                    url=config.url,
-                    headers=resolved_headers,
-                    timeout=min(config.timeout, 30),
-                    validate_ssrf=True,  # SSRF: user-supplied URL
-                    on_auth_refresh=on_auth_refresh
-                )
-            elif config.type == MCPServerType.HTTP:
-                transport = MCPHTTPTransport(
-                    url=config.url,
-                    headers=resolved_headers,
-                    timeout=min(config.timeout, 30),
-                    validate_ssrf=True,  # SSRF: user-supplied URL
-                    on_auth_refresh=on_auth_refresh
-                )
-            else:
-                return TestConnectionResult(
-                    success=False,
-                    error=f"Unsupported server type: {config.type}"
-                )
-
-            client = MCPClient(transport)
-            
-            try:
-                await asyncio.wait_for(client.connect(), timeout=30)
-            except asyncio.TimeoutError:
-                return TestConnectionResult(
-                    success=False,
-                    error="MCP handshake timed out (30s)"
-                )
-
-            latency = (time.time() - start) * 1000
-            tools = client.tools
-            tool_names = [t.get('name', 'unknown') for t in tools]
-
-            return TestConnectionResult(
-                success=True,
-                latency_ms=round(latency, 2),
-                tools_discovered=len(tools),
-                tools=tool_names[:20]
-            )
-
-        except Exception as e:
-            return TestConnectionResult(
-                success=False,
-                error=f"MCP protocol error: {str(e)}"
-            )
-        finally:
-            if client:
-                try:
-                    await client.close()
-                except Exception:
-                    pass
+        from tools.mcp.probe import connect_test
+        return await connect_test(config, user_id=user_id, server_name=server_name)
 
     async def get_user_servers(
         self,
@@ -493,7 +493,10 @@ class UserMCPService:
             if not type_valid:
                 raise ValueError(type_error)
 
-        return await self.db.update_server(user_id, server_name, **updates)
+        updated = await self.db.update_server(user_id, server_name, **updates)
+        if updated:
+            await self._changed(user_id, server_name, "updated")
+        return updated
 
     async def delete_server(self, user_id: str, server_name: str) -> bool:
         """
@@ -517,7 +520,10 @@ class UserMCPService:
             details=None
         )
 
-        return await self.db.delete_server(user_id, server_name)
+        removed = await self.db.delete_server(user_id, server_name)
+        if removed:
+            await self._changed(user_id, server_name, "removed")
+        return removed
 
     async def test_connection(
         self,
@@ -656,99 +662,18 @@ class UserMCPService:
         
         Connects, sends initialize request, and attempts to list tools.
         """
-        import time
-        import asyncio
-        from tools.mcp.protocol import MCPClient, MCPSSETransport, MCPHTTPTransport
-        from tools.mcp.oauth_bridge import apply_oauth_headers, make_auth_refresh_callback, oauth_applies_to
-
-        client = None
-        try:
-            # T2.4: OAuth header injection — real user_id/server_name are both
-            # already in scope here (see tools/mcp/oauth_bridge.py module
-            # docstring). config.auth is always None on this path today (the
-            # per-user DB-backed server schema has no OAuth column yet), so
-            # this is a no-op in practice.
-            resolved_headers = await apply_oauth_headers(config, user_id, server_name)
-            on_auth_refresh = (
-                make_auth_refresh_callback(user_id, server_name)
-                if oauth_applies_to(config) else None
-            )
-            # Create appropriate transport based on server type
-            if config.type == MCPServerType.SSE:
-                transport = MCPSSETransport(
-                    url=config.url,
-                    headers=resolved_headers,
-                    timeout=min(config.timeout, 30),  # Cap at 30s for test
-                    validate_ssrf=True,  # SSRF: user-supplied URL
-                    on_auth_refresh=on_auth_refresh
-                )
-            elif config.type == MCPServerType.HTTP:
-                transport = MCPHTTPTransport(
-                    url=config.url,
-                    headers=resolved_headers,
-                    timeout=min(config.timeout, 30),
-                    validate_ssrf=True,  # SSRF: user-supplied URL
-                    on_auth_refresh=on_auth_refresh
-                )
-            else:
-                return TestConnectionResult(
-                    success=False,
-                    error=f"Unsupported server type for testing: {config.type}"
-                )
-
-            # Create client and connect with timeout
-            client = MCPClient(transport)
-            
-            try:
-                await asyncio.wait_for(client.connect(), timeout=30)
-            except asyncio.TimeoutError:
-                return TestConnectionResult(
-                    success=False,
-                    error="MCP handshake timed out (30s)"
-                )
-
-            latency = (time.time() - start_time) * 1000
-
-            # Get discovered tools
-            tools = client.tools
-            tool_names = [t.get('name', 'unknown') for t in tools]
-            tools_count = len(tools)
-
-            # Update database with results
+        from tools.mcp.probe import connect_test
+        result = await connect_test(config, user_id=user_id, server_name=server_name)
+        if result.success:
             await self.db.update_connection_status(
-                user_id, server_name,
-                connected=True,
-                tools_count=tools_count
-            )
-
+                user_id, server_name, connected=True, tools_count=result.tools_discovered)
             self.logger.info(
                 f"MCP protocol test passed for {server_name}: "
-                f"{tools_count} tools, {latency:.0f}ms"
-            )
-
-            return TestConnectionResult(
-                success=True,
-                latency_ms=round(latency, 2),
-                tools_discovered=tools_count,
-                tools=tool_names[:20]  # Limit to first 20 tool names
-            )
-
-        except Exception as e:
-            error = f"MCP protocol error: {str(e)}"
+                f"{result.tools_discovered} tools, {result.latency_ms:.0f}ms")
+        else:
             await self.db.update_connection_status(
-                user_id, server_name,
-                connected=False,
-                error=error
-            )
-            return TestConnectionResult(success=False, error=error)
-
-        finally:
-            # Clean up client
-            if client:
-                try:
-                    await client.close()
-                except Exception:
-                    pass
+                user_id, server_name, connected=False, error=result.error)
+        return result
 
     async def get_user_settings(self, user_id: str) -> UserMCPSettings:
         """

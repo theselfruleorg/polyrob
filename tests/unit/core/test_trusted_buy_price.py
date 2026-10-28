@@ -1,7 +1,7 @@
 """B4 (verifier round 3): a TRUSTED buy priced only by the exit-grade reading
 accepted a DISPUTED quote (DexScreener and GeckoTerminal far apart). It now
 refuses to verify the route on a dispute — the buy is held to the unchecked
-ticket — while two agreeing sources (the owner's PNL buyback today: 1.3 %
+ticket — while two agreeing sources (the owner's TKN rebuy today: 1.3 %
 apart) still verify it."""
 from tools.intel import price as P
 from tools.intel.model import SourceAnswer
@@ -30,6 +30,6 @@ def test_a_disputed_quote_does_not(monkeypatch):
     assert P.exit_price("robinhood", ADDR) == 3.612e-05   # an exit stays possible
 
 
-def test_a_failed_second_source_leaves_the_buyback_as_it_was(monkeypatch):
+def test_a_failed_second_source_leaves_the_rebuy_as_it_was(monkeypatch):
     _setup(monkeypatch, 3.612e-05, None)
     assert P.trusted_buy_price("robinhood", ADDR) == 3.612e-05

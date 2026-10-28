@@ -41,7 +41,7 @@ _register(".gemini_client", "GeminiClient")
 _register(".deepseek_client", "DeepSeekClient")
 _register(".openrouter_client", "OpenRouterClient")
 _register(".adapters", "BaseChatModel", "LLMClientAdapter", "OpenAIAdapter",
-          "AnthropicAdapter", "DeepSeekAdapter", "GeminiAdapter", "OpenRouterAdapter")
+          "AnthropicAdapter", "GeminiAdapter", "OpenRouterAdapter")
 _register(".llm_factory", "create_chat_model")
 _register(".llm_client_registry", "create_llm_client", "AVAILABLE_MODELS",
           "DEFAULT_MODELS", "get_default_model")
@@ -65,7 +65,7 @@ if TYPE_CHECKING:  # static analysis / IDEs only — no runtime import
     from .deepseek_client import DeepSeekClient
     from .openrouter_client import OpenRouterClient
     from .adapters import (BaseChatModel, LLMClientAdapter, OpenAIAdapter,
-                           AnthropicAdapter, DeepSeekAdapter, GeminiAdapter,
+                           AnthropicAdapter, GeminiAdapter,
                            OpenRouterAdapter)
     from .llm_factory import create_chat_model
     from .llm_client_registry import (create_llm_client, AVAILABLE_MODELS,

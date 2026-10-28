@@ -38,7 +38,7 @@ def test_seams_derive_from_the_registry(clean_registry):
     assert "openrouter" in _known_providers()
     assert ("kimi", "nvidia") in _prefix_to_provider()
     assert ("OPENROUTER_API_KEY", "openrouter") in _key_to_provider()
-    assert all(p != "deepseek" for _, p in _key_to_provider())  # never auto-resolves
+    assert ("DEEPSEEK_API_KEY", "deepseek") in _key_to_provider()  # native since 2026-10-27
 
 
 def test_estimate_cost_forwards_cache_write_tokens():

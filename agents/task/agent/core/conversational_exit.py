@@ -49,6 +49,54 @@ def should_conversational_exit(consecutive_reply_steps: int, is_sub_agent: bool,
     return consecutive_reply_steps >= CONVERSATIONAL_EXIT_AFTER_REPLIES
 
 
+#: Said to the model at the one decision point the exit allowance creates. The
+#: allowance (2 reply-only steps, not 1) exists so a lone status message can be
+#: followed by real work — but it also hands the model an extra step in which a
+#: weak model repeats a reply it already delivered (prod 2026-10-26: the owner got
+#: the same reply twice). Rather than police the repeat after the fact, say plainly
+#: what state the turn is in. It forbids nothing: more messages and more work stay
+#: legal.
+REPLY_DELIVERED_NOTE = (
+    "Your reply was delivered to the user. If it fully answers them, call done() now "
+    "- do not send it again. If you still have work to do, do that work now.")
+
+
+def should_note_reply_delivered(consecutive_reply_steps: int, is_sub_agent: bool,
+                                is_autonomous: bool = False) -> bool:
+    """True on the FIRST reply-only step of a live chat turn (the step after which
+    the model is offered one more step). Sub-agents and autonomous runs never take
+    the exit path, so they get no note either."""
+    if is_sub_agent or is_autonomous:
+        return False
+    return consecutive_reply_steps == 1
+
+
+#: Prefix of the controller's retry-wall refusal (tools/controller/execution.py).
+_RETRY_WALL = "\u26a0\ufe0f Maximum retries"
+
+
+def is_retry_wall_only_step(results: Iterable) -> bool:
+    """True if every result of this step is the controller's "Maximum retries
+    exceeded" refusal - the operation was already declared dead and the model
+    asked for it again anyway.
+
+    Prod 2026-10-26 04:00-04:08Z: a job called ``wallet_holdings`` without its
+    chain 150 times. The wall answered every call after the 5th, but a refusal is
+    an error RESULT, not an exception, so ``consecutive_failures`` never moved and
+    the run burned its whole 150-step budget (and posted nothing). A step made only
+    of retry-wall refusals is a failed step; enough in a row ends the run.
+    """
+    results = list(results or [])
+    if not results:
+        return False
+    def _is_wall(r) -> bool:
+        if (getattr(r, "metadata", None) or {}).get("retry_wall"):
+            return True
+        err = getattr(r, "error", None)
+        return isinstance(err, str) and err.startswith(_RETRY_WALL)
+    return all(_is_wall(r) for r in results)
+
+
 def is_planning_turn_only_step(results: Iterable) -> bool:
     """True if every result of this step is the ALLOWED_REASONING_TURNS
     placeholder (tagged ``metadata.planning_turn``, from

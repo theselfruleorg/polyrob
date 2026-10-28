@@ -2,10 +2,10 @@
 
 The canonical list (``tokens.CANONICAL_TOKENS``) pins only USDC and the wrapped
 native per chain. Everything the instance itself trades by NAME — its own
-launch, a buyback target — was an unverified address the model carried in
-prose, and on 2026-09-25 a buyback cron whose text had lost the address bought
-an airdropped look-alike ("PNL", "Pissin N Lying") for $134.54 instead of the
-track-record token.
+launch, a scheduled buy's target — was an unverified address the model carried
+in prose, and on 2026-09-25 a recurring swap job whose text had lost the address
+bought an airdropped look-alike with the same symbol instead of the intended
+token.
 
 A pin binds ``(chain, SYMBOL) -> address`` on the OWNER's word. Two effects:
 

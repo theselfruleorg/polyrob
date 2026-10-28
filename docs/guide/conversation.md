@@ -3,7 +3,7 @@
 You have one conversation with your agent. It runs on your phone, in the web
 console and in the terminal, and it does not stop when a session ends. This
 page names the four regimes every seat implements, what rolls when a session
-rolls, and the three switches behind it.
+rolls, and the switches behind it.
 
 ## The owner thread
 
@@ -16,8 +16,10 @@ tenant, bounded). A session **reads** that thread; it never owns it.
   last `OWNER_THREAD_TAIL_HOURS` hours or `OWNER_THREAD_TAIL_ROWS` lines,
   whichever is smaller, at most 2000 characters).
 - A warm session sees the **delta** on every later turn: what other sessions
-  and background runs exchanged with you since its own last turn. An empty
-  delta is no message.
+  and background runs exchanged with you since its own last turn. A long
+  delta keeps the newest lines and gives a count of the rest. Your own
+  commands, button taps and their results show as yours, never as Rob's or
+  a background run's. An empty delta is no message.
 - A Telegram **quote-reply** names the exact line you answered, even when that
   line came from a run this session never saw.
 - A background run (a goal or a job) sees its own **slice**: the last thing it
@@ -28,8 +30,9 @@ context, whichever session answers. The idle reset and `/new` stay what they
 were — a clean workspace and a fresh context window — but they are no longer
 a memory cliff.
 
-`/thread [n | <hours>h]` shows the thread on Telegram and in the REPL, every
-line labelled with the run it came from. `/status` reports how many lines were recorded in the last day.
+`/thread [n | <hours>h]` shows it on Telegram, in the REPL and in the
+console, every line labelled with the run it came from. A group chat refuses
+it. `/status` reports how many lines were recorded in the last day.
 
 ## The four regimes
 
@@ -46,8 +49,10 @@ A background run cannot wait for your answer: the run ends before you reply,
 and your reply lands in a chat session. So a decision it needs is an **ask**,
 never a question in a message. The agent raises it with `owner_ask`; it is
 durable, deduplicated, shown on every owner seat, and delivered to you once
-with its id. Answer in chat ("A"), or with `/fulfill <id> <answer>`. The
-answer is handed to that work's next run, once. `send_message(wait_for_response=true)`
+with its id. Answer in chat ("A"), with the option button on the notice, or
+with `/fulfill <id> <answer>`. A chat answer counts only when the words are
+yours, typed in that message. The answer is handed to that work's next run,
+once. `send_message(wait_for_response=true)`
 from a background run is refused with this remedy.
 
 ## Switches

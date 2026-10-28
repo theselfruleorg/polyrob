@@ -214,13 +214,15 @@ def _is_tokenbound(rpc, address: str) -> bool:
         return False
 
 
-def resolve_target(target: str, default_chain: str = "robinhood"):
-    """``'<chain>:<collection>/<id>'`` | ``'<chain>:<id>'`` | ``'<id>'`` → ``(chain, profile, id)``.
-    The collection must be pinned on that chain (one pinned collection may be left unnamed)."""
+def resolve_target(target: str):
+    """``'<chain>:<collection>/<id>'`` | ``'<chain>:<id>'`` → ``(chain, profile, id)``. The chain
+    is always named (there is no default chain); the collection must be pinned on it (one
+    pinned collection may be left unnamed)."""
     t = str(target).strip()
-    chain = default_chain
-    if ":" in t:
-        chain, t = t.split(":", 1)
+    if ":" not in t:
+        raise ViewError(f"name the chain: {target!r} -> '<chain>:<collection>/<id>' "
+                        f"or '<chain>:<id>'")
+    chain, t = t.split(":", 1)
     collection = None
     if "/" in t:
         collection, t = t.rsplit("/", 1)

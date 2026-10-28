@@ -1,0 +1,28 @@
+{
+  "function": {
+    "description": "Propose a setting change to the OWNER as a one-tap card (owner turn only). An operator-only setting is filed for the operator and you get its id. Not for money (propose_action).",
+    "name": "propose_setting",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "The owner's line: `/mcp add <id> <https-url>`, `/config set <key> <value>`, `/goal grant <id> tools=a,b` or `/job edit <id> grant tools=a,b`.",
+          "maxLength": 600,
+          "minLength": 5,
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "description": "One line: why.",
+          "maxLength": 600,
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

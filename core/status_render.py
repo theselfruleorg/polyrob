@@ -31,6 +31,7 @@ _SECTION_TITLES = {
     "approvals": "Approvals",
     "loops": "Loops",
     "tools": "Tools",
+    "harness": "Tool gates",
     "knowledge": "Knowledge",
     "delivery": "Delivery",
     "posture": "Posture",

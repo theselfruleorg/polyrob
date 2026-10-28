@@ -68,24 +68,6 @@ def _no_nft_marketplace_integration() -> bool:
     return True
 
 
-#: Verbs that move the treasury's money OUT (matches the codebase's own
-#: income/SPEND terminology — see AGENTS.md's unified-ledger section). Deliberately
-#: narrower than the "money" capability tag: x402_invoice is tagged "money" too
-#: but only ever RECEIVES, so it's correctly allowed on a self-created goal —
-#: the claim under test is about spending, not the tag.
-_SPEND_TOOLS = frozenset({"defi_trade", "hyperliquid", "polymarket", "x402_pay"})
-
-
-def _goal_create_still_excludes_money_tools() -> bool:
-    """True while a self-created (agent-authored) goal can never be granted a
-    money-SPEND tool, in ANY mode including full autonomy — the invariant the
-    treasury skill tells the agent to rely on when explaining why it must wait
-    for an owner-seeded goal rather than re-requesting the grant every run."""
-    from tools.goal_tools import allowed_self_goal_tools
-    return not (allowed_self_goal_tools() & _SPEND_TOOLS)
-
-
-
 # ---- 068 W2 procedure skills ----------------------------------------------
 
 def _trade_tool_methods():
@@ -120,16 +102,6 @@ def _no_price_impact_field() -> bool:
     return True
 
 
-def _no_onchain_strategy_budget_or_loss_breaker() -> bool:
-    """True while the on-chain money path has no per-strategy budget or drawdown halt."""
-    for base in ("core/money", "core/wallet", "tools/defi"):
-        for path in (ROOT / base).rglob("*.py"):
-            text = path.read_text(encoding="utf-8").lower()
-            if any(w in text for w in ("strategy_budget", "per_strategy", "drawdown", "loss_breaker")):
-                return False
-    return True
-
-
 def _no_lending_verb() -> bool:
     """True while defi_trade has no lend/supply/borrow verb (call can reach a protocol)."""
     return not any(w in m for m in _trade_tool_methods()
@@ -152,20 +124,8 @@ CLAIMS = (
             "become false. The 2026-09-15 hold/see/send/revoke verbs do NOT "
             "make it false -- they are not a purchase rail",
     ),
-    CapabilityClaim(
-        id="goal-create-excludes-money-tools",
-        file="data/prompts/skills/treasury-trading/SKILL.md",
-        # Re-anchored 2026-09-08: efa589b0 rewrote this section ("defi_trade is a
-        # standing grant on the cycle"), so the old "cannot trade" wording is gone
-        # while the invariant below is unchanged. Anchor on the sentence that names
-        # the mechanism `still_true` actually checks.
-        phrase="strips the whole money set",
-        still_true=_goal_create_still_excludes_money_tools,
-        why="the UNARMED default: allowed_self_goal_tools() (no autonomy env) would "
-            "need to start intersecting a spend verb for this to flip. Armed, it "
-            "does include defi_trade by design (2026-09-12) -- the skill says so "
-            "since Codex A8 (2026-09-26)",
-    ),
+    # goal-create-excludes-money-tools RETIRED 2026-10-23 (086 W7): treasury-trading
+    # no longer explains the goal grant; trading runs only under a mandate.
     CapabilityClaim(
         id="068-no-native-dex-orders",
         file="data/prompts/skills/exits/SKILL.md",
@@ -204,13 +164,8 @@ CLAIMS = (
     # 068-no-realized-pnl RETIRED 2026-10-02 (071 W3): the rail book records
     # realized P&L per token (core/open_positions.py position_realized) and
     # defi_data.positions reads it; position-journal no longer makes the claim.
-    CapabilityClaim(
-        id="068-no-strategy-budget-or-breaker",
-        file="data/prompts/skills/sizing-and-risk/SKILL.md",
-        phrase="does not have yet: a per-strategy or per-goal budget",
-        still_true=_no_onchain_strategy_budget_or_loss_breaker,
-        why="a per-strategy budget or a drawdown/loss breaker would need to ship on the on-chain money path",
-    ),
+    # 068-no-strategy-budget-or-breaker RETIRED 2026-10-23 (086 W7): the trading
+    # mandate's allocation and latching breakers ship in core/money (086 W2).
     CapabilityClaim(
         id="068-no-lending-verb",
         file="data/prompts/skills/stable-cash/SKILL.md",

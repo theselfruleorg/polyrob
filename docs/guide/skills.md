@@ -22,7 +22,9 @@ scanned, quarantined pipeline.
 Skills come from the scopes below. Resolution order is **builtin > user > pack >
 project > user-external**. Builtin and pack names are protected: a user skill cannot
 take one, and an external skill of the same name is skipped. A pack skill whose name
-is a builtin's uses `<pack-id>:<skill-id>`.
+is a builtin's uses `<pack-id>:<skill-id>`. When two unprotected scopes (user, project,
+user-external) hold different bodies under one name, neither is served and the conflict
+is logged.
 
 | Scope | Location | Writable? | How it gets there |
 |-------|----------|-----------|-------------------|
@@ -59,8 +61,8 @@ a whole procedure rather than add knowledge:
   cause, roll back before you debug, one change at a time, an append-only
   timeline, and recovery only on an observed signal. It includes the order for a
   leaked secret: revoke or rotate, scope the exposure, purge, prove the old
-  credential dead, record. It loads on words like "outage", "leaked key" or
-  "wallet drained".
+  credential dead, record. Its index line reads "Something is broken live, or a
+  secret leaked"; there is no keyword matcher, so Rob loads it from that line.
 - **`adversarial-consensus`** — for a large or hard-to-reverse decision, or when
   you ask for a blind panel: several `delegate_task` children answer
   independently, each critiques the others' anonymised answers, and the agent
@@ -242,7 +244,7 @@ Inside the interactive REPL (`polyrob chat` / `polyrob run`) the same operations
 available as slash commands:
 
 ```
-/skills                     list every auto-activatable skill
+/skills [query]             list the skills the agent can load (also on Telegram and the console)
 /skills list                full scope/state inventory
 /skills info <id>           frontmatter + provenance/usage
 /skills install <spec>      install (local operator only)
@@ -257,7 +259,11 @@ available as slash commands:
 
 ## Pinned skills
 
-A scheduled job or a goal can pin skills by id (`skills=[...]`). The write is refused
+A scheduled job or a goal can pin skills by id (`skills=[...]`); the persona seeds and
+each pinned skill's `polyrob-requires` prerequisites are pinned with them. Pinned skills
+load in full when the run starts while their bodies fit a 20,000-character budget,
+prerequisites first; a pin that does not fit is listed `LOAD FIRST` in the skill index.
+No other skill loads by itself. The write is refused
 when an id names no skill, so a typing error does not wait until the run. When a pinned
 skill is gone at run time, the run continues without it, and the first line of the
 run's instructions names the missing id, so the report tells you to fix the pin. The
@@ -317,8 +323,9 @@ enforces, all fail-closed:
   `scripts/`/`references/`/`assets/` files (realpath-confined to the skill folder, framed
   as untrusted data) — they never run them. Script execution is a separate, gated feature.
 - **Server hard-gate.** `skill install` and `skill approve` are **owner/CLI-only**; a
-  multi-tenant server refuses them, and there is **no REST install endpoint**. Installed
-  skills stay tenant-scoped under `user_<uid>/`.
+  multi-tenant server refuses them, and there is **no REST install endpoint** (the
+  `/api/skills` routes create and edit your own user skills from text — see
+  [api.md](api.md#skills)). Installed skills stay tenant-scoped under `user_<uid>/`.
 - **Local-only provenance.** Who authored/installed a skill is recorded in a local
   database, never read from a (forgeable) frontmatter field.
 - **Lenient consume, strict author.** Externally-supplied skills are loaded leniently

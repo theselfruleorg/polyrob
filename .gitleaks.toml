@@ -8,6 +8,10 @@ useDefault = true
 
 [allowlist]
 description = "Known-benign matches"
+# The first public commit (immutable history) carried a deployment's public
+# token-contract address in an env template; its only finding. The address is
+# refused in the tree by the scrub gate's identifier list.
+commits = ["f072daabaddae3f86829165a5984ede7471c410d"]
 paths = [
     # vendored minified library — hash-like strings are code, not secrets
     '''webview/static/js/ethers\.min\.js''',
@@ -57,8 +61,6 @@ paths = [
     '''tests/unit/core/app_service/test_app_registry\.py''',
 ]
 regexes = [
-    # public on-chain token contract addresses (public by definition, not secrets)
-    '''0xb0d79432bb6d163d3832157cff61a918d38aab81''',
     # mainnet USDC token contract (defi guard tests)
     '''0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48''',
     # Base USDC token contract — used by the solana_swap test that asserts an EVM

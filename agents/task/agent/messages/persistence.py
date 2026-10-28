@@ -327,6 +327,9 @@ class PersistenceMixin:
 					msg_data["tool_calls"] = msg.tool_calls
 				if hasattr(msg, 'tool_call_id') and msg.tool_call_id:
 					msg_data["tool_call_id"] = msg.tool_call_id
+				reasoning = (getattr(msg, 'additional_kwargs', None) or {}).get('reasoning_content')
+				if reasoning:  # DeepSeek replays it on later tool calls
+					msg_data["reasoning_content"] = reasoning
 
 				history_data["messages"].append(msg_data)
 
@@ -464,6 +467,8 @@ class PersistenceMixin:
 					message.tool_calls = msg_data["tool_calls"]
 				if msg_data.get("tool_call_id"):
 					message.tool_call_id = msg_data["tool_call_id"]
+				if msg_data.get("reasoning_content"):
+					message.additional_kwargs["reasoning_content"] = msg_data["reasoning_content"]
 
 				# Add to history (this will recalculate tokens). Restoring persisted
 				# AI/Tool messages is a trusted internal path, so bypass the single-writer

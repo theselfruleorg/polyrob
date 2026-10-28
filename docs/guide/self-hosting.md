@@ -36,6 +36,10 @@ file named `config/.env.development.template` is for a **host** install — it s
 outside the volume, so nothing survives a restart. (`config/.env.production.example`
 is the same shape for a host production install.)
 
+Compose hands the file to the container as its process environment. polyrob itself
+never reads a `config/.env.*` file: on a host install, put the values in the unit's
+`EnvironmentFile` (for example `/etc/polyrob/polyrob.env`) or in `~/.polyrob/.env`.
+
 Set at least one provider key (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.). See [configuration.md](configuration.md) for all options.
 
 `docker-compose.yml` ships pointing `env_file` at the tracked `config/.env.example` so a fresh clone's `docker compose up` resolves without error. Before running for real, edit the `env_file:` line in `docker-compose.yml` to point at `config/.env.development` instead — that keeps your real key out of a git-tracked file.
@@ -57,7 +61,7 @@ inside the image.
 docker compose up
 ```
 
-This builds the image (if not cached), installs the `server`, `browser`, `memory-vector`, `docs` and `media` extras, runs `python -m playwright install --with-deps chromium`, and starts the FastAPI server. The app runs as UID 1000. Docker sets `UVICORN_PORT=8000` and publishes `127.0.0.1:8000:8000`; `curl http://localhost:8000/health` checks readiness; `/docs` requires authentication.
+This builds the image (if not cached), installs the `server`, `browser`, `memory-vector`, `docs` and `media` extras, hash-checked against `requirements.lock`, runs `python -m playwright install --with-deps chromium`, and starts the FastAPI server. The app runs as UID 1000. Docker sets `UVICORN_PORT=8000` and publishes `127.0.0.1:8000:8000`; `curl http://localhost:8000/health` checks readiness; `/docs` requires authentication.
 
 For detached (background) mode:
 
@@ -68,9 +72,12 @@ docker compose up -d
 ### 4. Verify it's running
 
 ```bash
-curl http://localhost:8000/docs
-# Should return the interactive Swagger UI HTML
+curl http://localhost:8000/health
+# Should return a JSON health document
 ```
+
+`/docs`, `/redoc` and `/openapi.json` need an authenticated request; an anonymous
+`curl` gets a 401.
 
 ---
 
@@ -81,6 +88,8 @@ The `Dockerfile` builds a production image with:
 - `polyrob[server,browser,memory-vector,docs,media]` extras installed
 - Playwright Chromium binary pre-installed
 - `python main.py` as the entrypoint (`UVICORN_PORT=8000` set by the image)
+- no first-party pack SDKs by default; the `PACKS` build argument adds them
+  (`docker build --build-arg PACKS="x discovery" .`, or `PACKS=all`)
 
 ⚠️ **The image is API-only.** `.[server,browser,memory-vector,docs,media]` does not carry the
 `telegram`, `crypto`, `solana`, `twitter` or `voice` extras, and the entrypoint is
@@ -121,7 +130,10 @@ Instance data (memory, sessions, skills, cron jobs) survives container restarts 
 |-----------|---------------|---------|
 | `./.polyrob/` | `/app/.polyrob/` | Memory DB, sessions, skills, cron jobs (the server-side data home: the image sets `POLYROB_DATA_DIR=/app/.polyrob`, so a plain `docker run` with no env file uses it too) |
 
-To back up your instance data, copy the `.polyrob/` directory.
+To back up your instance data, copy the `.polyrob/` directory. Your own MCP servers
+live in the service user's `~/.polyrob/mcp.json` (on the shipped units
+`/var/lib/polyrob-agent/.polyrob/mcp.json`), which is outside the data directory:
+back it up too.
 
 ---
 
@@ -403,11 +415,11 @@ For multi-user / production deployments, review these defaults:
 | Variable | Recommended server value | Notes |
 |----------|-------------------------|-------|
 | `POLYROB_LOCAL` | *(unset)* | The single-user profile. Leave unset on a server: it is what turns on the interactive tool group (coding, git, knowledge base, project context), and it is also a precondition for the autonomy group |
-| `AUTONOMY_ENABLED` | *(unset / `false`)* | Master switch for the self-directed loops (self-wake, goals, curator, writable skills). They need **both** this and `POLYROB_LOCAL`, so a plain server has them off either way |
+| `AUTONOMY_ENABLED` | *(unset / `false`)* | Master switch for the self-directed loops (self-wake, goals, curator, writable skills). Their bundle default needs **both** this and `POLYROB_LOCAL`, so a plain server has them off; turn one on with its `POLYROB_OVERRIDES` entry |
 | `POLYROB_OWNER_USER_ID` | *(set it)* | The owner tenant every surface, the console and `polyrob owner` resolve. Set the same value everywhere |
 | `MEMORY_REQUIRE_USER_ID` | `true` (default) | Prevents cross-tenant memory bleed |
 | `CODE_EXEC_ENABLED` | `false` (default) | The local subprocess backend is not a sandbox. If you need code execution on a server, use `CODE_EXEC_BACKEND=docker` |
-| `CRON_ENABLED` | `false` (default) | Scheduled runs. Off unless you set it, or set `AUTONOMY_POSTURE=full` |
+| `CRON_ENABLED` | off (default) | Scheduled runs. On under `AUTONOMY_POSTURE=full`, or with `POLYROB_OVERRIDES=CRON_ENABLED=true`; a `CRON_ENABLED=` line of its own is ignored |
 | `SUB_AGENTS_ENABLED` | `true` (default) | Disable to prevent agent delegation |
 
 See [configuration.md](configuration.md) for how these fit together and

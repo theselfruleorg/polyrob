@@ -65,7 +65,7 @@ async def test_a_bad_buy_amount_is_refused_before_anything_runs():
 @pytest.mark.asyncio
 async def test_a_bad_supply_is_refused_before_anything_runs():
     assert "positive number" in await token_ops.deploy_reply(
-        OWNER, ["ROB", "-5", "Rob", "Coin"])
+        OWNER, ["ROB", "-5", "Rob", "Coin", "on", "base"])
 
 
 @pytest.mark.asyncio
@@ -131,7 +131,7 @@ async def test_an_empty_report_is_flagged_as_a_bug_not_a_success(monkeypatch):
         return type("R", (), {"error": None, "extracted_content": ""})()
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
-    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob"])
+    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob", "on", "base"])
     assert "That is a bug" in out
     assert "do NOT retry" in out
 
@@ -165,7 +165,8 @@ async def test_a_vanity_prefix_reaches_the_EVM_verb(monkeypatch):
         return type("R", (), {"error": None, "extracted_content": "quoted"})()
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
-    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob", "vanity", "b0b"])
+    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob", "on", "base",
+                                               "vanity", "b0b"])
     assert captured["params"].vanity == "b0b"
     assert "vanity b0b go" in out
 
@@ -230,7 +231,7 @@ async def test_deploy_accepts_decimals_on_an_evm_chain(monkeypatch):
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "Coin", "decimals", "6"])
+        OWNER, ["ROB", "1000", "Rob", "Coin", "on", "base", "decimals", "6"])
     assert captured["params"].decimals == 6
     assert "decimals 6" in out
 
@@ -261,7 +262,7 @@ async def test_deploy_accepts_a_salt(monkeypatch):
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "salt", "0xfeed"])
+        OWNER, ["ROB", "1000", "Rob", "on", "base", "salt", "0xfeed"])
     assert captured["params"].salt == "0xfeed"
     assert "salt 0xfeed" in out
 
@@ -269,7 +270,7 @@ async def test_deploy_accepts_a_salt(monkeypatch):
 @pytest.mark.asyncio
 async def test_salt_and_vanity_together_are_refused_as_ambiguous():
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "salt", "0xfeed", "vanity", "b0b"])
+        OWNER, ["ROB", "1000", "Rob", "on", "base", "salt", "0xfeed", "vanity", "b0b"])
     assert "not both" in out
 
 

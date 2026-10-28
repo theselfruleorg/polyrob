@@ -6,7 +6,6 @@
       "additionalProperties": false,
       "properties": {
         "chain": {
-          "default": "base",
           "description": "Chain whose ERC-8004 Identity Registry to register on. Pinned; unsupported chains refuse.",
           "type": "string"
         },
@@ -21,6 +20,9 @@
           "type": "number"
         }
       },
+      "required": [
+        "chain"
+      ],
       "type": "object"
     }
   },

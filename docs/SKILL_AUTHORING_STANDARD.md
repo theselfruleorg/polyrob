@@ -38,7 +38,7 @@ The `tool_ids` array in the `polyrob-triggers` frontmatter value names the tools
 "triggers": {"tool_ids": ["anysite", "web_fetch"]}
 ```
 
-Every entry in `tool_ids` must be a member of `VALID_TOOL_IDS` (defined in `agents/task/agent/skill_manager.py`). Unknown tool IDs cause validation warnings.
+Every entry in `tool_ids` must be a member of `VALID_TOOL_IDS` (`core/skills/catalog.py`, derived from the one tool-capability table in `core/tool_capabilities.py`). Unknown tool IDs cause validation warnings.
 
 ## 4. anysite: always discover-first, never hardcode paths
 
@@ -77,11 +77,14 @@ When refining an **existing** skill, always read the current body before writing
 
 ```
 # Correct workflow for editing an existing skill:
-# 1. load_skill(skill_id="my-skill") — read the current body
-#    (skill_manage has no "read" verb; its actions are create/patch/delete/promote)
+# 1. load_skill(skill_id="my-skill") — read the current body and its sha256
+#    (skill_manage has no "read" verb; its actions are
+#    create/patch/edit/delete/rollback/promote)
 # 2. Plan the minimal diff
-# 3. skill_manage(action="patch", ...) or action="create" with the merged body
+# 3. skill_manage(action="patch" or "edit", expected_sha256=<the sha256 from step 1>, ...)
 ```
+
+A `patch`, `edit` or `delete` with a stale `expected_sha256` is refused with the current sha256: read the skill again. `create` never overwrites a skill that exists and needs a `when` line (section 9).
 
 Overwriting an active skill creates a `.pending` proposal that the owner must promote. Surface the pending ID to the user.
 
@@ -122,6 +125,7 @@ metadata:
   polyrob-triggers: '{"tool_ids":["defi_trade"]}'   # optional; the gate domain, see 9a
   polyrob-requires: '["token-identity"]'   # optional prerequisite skill ids, see 9b
   polyrob-version: '1'
+  polyrob-generated: '<generator>; do not edit'   # optional; a generated skill — edit the generator, never the file
 ---
 ```
 
@@ -137,7 +141,7 @@ skill: it is an index line with no rule.
 
 ### 9a. How a skill reaches the model
 
-- **A pin loads it.** A job's or goal's `payload.skills`, `TaskSessionConfig.skills` and the persona seeds load at session start (`SkillManager.get_pinned_skills`). A pin is explicit intent: it loads even when its rule is gated. The cron lane stop keys on a job's first pinned id, so a pinned id is never renamed or retired.
+- **A pin loads it.** A job's or goal's `payload.skills`, `TaskSessionConfig.skills` and the persona seeds load at session start (`SkillManager.get_pinned_skills`). A pin is explicit intent: it loads even when its rule is gated. An owner chat seat pins `OWNER_SEAT_SKILLS` (`agents/task/agent/core/construction.py`: the generated `harness-manual`); a delegated sub-agent does not. The cron lane stop keys on a job's first pinned id, so a pinned id is never renamed or retired.
 - **Otherwise the model chooses.** Every other session — owner chat, room, correspondent, a goal or cron run with no pin — gets the short `<skill-catalog>` index and calls `load_skill` for the line that fits the task.
 - **Money gate.** A rule that declares a MONEY tool (`core.tool_capabilities.ids_with("money")`, e.g. `defi_trade`) in `tool_ids` is an index line (and a pullable prerequisite) only when the session holds a declared money tool or a declared read tool with no `high_impact` capability (e.g. `defi_data`). A declared action tool that moves no funds (`cronjob`) does not open it.
 
@@ -175,6 +179,7 @@ An agentskills.io `allowed-tools` frontmatter field is recorded and one advisory
 - Every rule in the index has a `SKILL.md` body (true by construction: the index is built from the bodies).
 - No `SKILL.md` contains `mcp_execute_tool`.
 - No `SKILL.md` contains an obvious hardcoded secret (`sk-…`, `AKIA…`, PEM private key).
+- Every bundled skill passes the strict authored validation (`polyrob skills validate`).
 
 Run after adding a new skill:
 ```bash

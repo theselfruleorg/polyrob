@@ -11,7 +11,7 @@ from tools.controller.owner_ask_action import ask_options
 
 
 def test_options_are_parsed_only_from_a_real_choice():
-    assert ask_options("Buy PNL? A) yes, 0.05 ETH or B) no, wait") == {
+    assert ask_options("Buy TKN? A) yes, 0.05 ETH or B) no, wait") == {
         "A": "yes, 0.05 ETH", "B": "no, wait"}
     assert ask_options("Is it OK? A) yes") == {}
     assert ask_options("Plan B) is fine A) no") == {}

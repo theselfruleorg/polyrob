@@ -65,6 +65,8 @@ DELEGATION_ACTION_NAMES: frozenset = frozenset({
     # never to the owner — each refuses a leaf at call time; excluding them here
     # keeps the schemas (and the temptation) out of the child's tool list.
     "owner_ask", "present_choice", "propose_action",
+    "trade_mandate_propose",  # 086 W5: the mandate's intake card is the owner's
+    "propose_setting",  # 093 D1: a setting card is the owner's
 })
 
 _BLOCKED_TOOLS_ENV = "DELEGATE_BLOCKED_TOOLS"

@@ -141,7 +141,7 @@ async def test_a_failed_read_is_an_error_not_no_pools(verb):
     def _refused(chain, kind):
         raise gt.DiscoveryUnavailable("geckoterminal rate-limited this read (HTTP 429)")
     tool = DefiDataTool(discover_fn=_refused)
-    params = ScanParams() if verb == "scan" else DiscoverParams()
+    params = ScanParams(chain="base") if verb == "scan" else DiscoverParams(chain="base")
     result = await getattr(tool, verb)(params)
     out = (result.extracted_content or "") + (result.error or "")
     assert result.error
@@ -158,7 +158,7 @@ async def test_a_failed_read_is_an_error_not_no_pools(verb):
 async def test_new_pools_lists_what_it_found():
     tool = DefiDataTool(discover_fn=lambda chain, kind: gt.parse_pools(
         _payload(), "base", "base"))
-    out = _text(await tool.new_pools(DiscoverParams()))
+    out = _text(await tool.new_pools(DiscoverParams(chain="base")))
     assert "MEME / WETH" in out
     assert TOK in out
     assert "aerodrome-base" in out
@@ -169,7 +169,7 @@ async def test_discovery_says_out_loud_that_nothing_is_screened():
     """The one thing this verb must never imply. It returns places to look."""
     tool = DefiDataTool(discover_fn=lambda chain, kind: gt.parse_pools(
         _payload(), "base", "base"))
-    out = _text(await tool.new_pools(DiscoverParams())).lower()
+    out = _text(await tool.new_pools(DiscoverParams(chain="base"))).lower()
     assert "not screened" in out or "screen" in out
     assert "token_info" in out, "name the verb that DOES screen"
 
@@ -178,7 +178,7 @@ async def test_discovery_says_out_loud_that_nothing_is_screened():
 async def test_unknown_liquidity_renders_as_unknown_not_a_dollar_zero():
     tool = DefiDataTool(discover_fn=lambda chain, kind: gt.parse_pools(
         _payload(reserve="-1"), "base", "base"))
-    out = _text(await tool.new_pools(DiscoverParams()))
+    out = _text(await tool.new_pools(DiscoverParams(chain="base")))
     assert "unknown" in out.lower()
     assert "$0.00" not in out
 
@@ -188,7 +188,7 @@ async def test_floors_exclude_a_thin_pool_but_say_how_many_were_excluded():
     """A silent filter reads as 'this is all there was'."""
     tool = DefiDataTool(discover_fn=lambda chain, kind: gt.parse_pools(
         _payload(reserve="500.0"), "base", "base"))
-    out = _text(await tool.new_pools(DiscoverParams(min_liquidity_usd=3000.0)))
+    out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=3000.0)))
     assert "1" in out and "excluded" in out.lower()
 
 
@@ -197,7 +197,7 @@ async def test_an_unknown_liquidity_row_is_not_silently_dropped_by_a_floor():
     """Unknown is not 'below the floor' — the agent decides, having been told."""
     tool = DefiDataTool(discover_fn=lambda chain, kind: gt.parse_pools(
         _payload(reserve="-1"), "base", "base"))
-    out = _text(await tool.new_pools(DiscoverParams(min_liquidity_usd=3000.0)))
+    out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=3000.0)))
     assert "MEME / WETH" in out
 
 
@@ -205,7 +205,7 @@ async def test_an_unknown_liquidity_row_is_not_silently_dropped_by_a_floor():
 async def test_trending_is_a_separate_verb_with_its_own_caveat():
     tool = DefiDataTool(discover_fn=lambda chain, kind: gt.parse_pools(
         _payload(), "base", "base"))
-    out = _text(await tool.trending(DiscoverParams()))
+    out = _text(await tool.trending(DiscoverParams(chain="base")))
     assert "MEME / WETH" in out
     assert "purchasab" in out.lower() or "paid" in out.lower()
 
@@ -213,8 +213,10 @@ async def test_trending_is_a_separate_verb_with_its_own_caveat():
 @pytest.mark.asyncio
 async def test_an_empty_result_is_honest_about_being_empty():
     tool = DefiDataTool(discover_fn=lambda chain, kind: [])
-    out = _text(await tool.new_pools(DiscoverParams()))
-    assert "no pools" in out.lower()
+    res = await tool.new_pools(DiscoverParams(chain="base"))
+    out = _text(res)
+    assert "zero pools" in out.lower() and "not a failed read" in out
+    assert res.metadata["discovery"]["status"] == "empty"
 
 
 @pytest.mark.asyncio
@@ -255,7 +257,7 @@ async def test_swap_quote_asks_the_route_seam_not_uniswap_directly():
         identity_fn=lambda c, a: type("I", (), {"symbol": "T", "name": "T",
                                                 "decimals": 18, "verified": False,
                                                 "metadata_changed": False})())
-    out = _text(await tool.swap_quote(SwapQuoteParams(
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base",
         token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0)))
     assert seen.get("called"), "the read verb must use the same seam as the write verb"
     assert "lifi:kyberswap" in out, "name the venue, so the agent knows which rail"
@@ -271,7 +273,7 @@ async def test_swap_quote_no_route_names_who_was_asked():
         identity_fn=lambda c, a: type("I", (), {"symbol": "T", "name": "T",
                                                 "decimals": 18, "verified": False,
                                                 "metadata_changed": False})())
-    out = _text(await tool.swap_quote(SwapQuoteParams(
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base",
         token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0)))
     assert "univ3" in out
     assert "unknown" in out.lower(), "no route is UNKNOWN, not a zero-value trade"
@@ -295,7 +297,7 @@ async def test_swap_quote_never_asks_a_route_for_the_zero_address():
         identity_fn=lambda c, a: type("I", (), {"symbol": "T", "name": "T",
                                                 "decimals": 18, "verified": False,
                                                 "metadata_changed": False})())
-    await tool.swap_quote(SwapQuoteParams(
+    await tool.swap_quote(SwapQuoteParams(chain="base",
         token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0))
     assert holders
     assert int(holders[0], 16) != 0, "a zero-address quote is refused by providers"
@@ -318,7 +320,7 @@ async def test_swap_quote_prefers_the_wallets_own_address_when_there_is_one():
         identity_fn=lambda c, a: type("I", (), {"symbol": "T", "name": "T",
                                                 "decimals": 18, "verified": False,
                                                 "metadata_changed": False})())
-    await tool.swap_quote(SwapQuoteParams(
+    await tool.swap_quote(SwapQuoteParams(chain="base",
         token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0))
     assert holders == [mine]
 
@@ -396,7 +398,7 @@ async def test_swap_quote_is_stamped_so_two_reads_are_never_byte_identical():
         identity_fn=lambda c, a: type("I", (), {"symbol": "T", "name": "T",
                                                 "decimals": 18, "verified": False,
                                                 "metadata_changed": False})())
-    p = SwapQuoteParams(token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0)
+    p = SwapQuoteParams(chain="base", token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0)
     a = _text(await tool.swap_quote(p))
     b = _text(await tool.swap_quote(p))
     assert "quoted_at:" in a and "Z" in a

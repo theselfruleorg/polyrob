@@ -1244,7 +1244,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				except KeyError:
 					return ActionResult(error=config_service.unknown_key_message(params.key),
 					                    include_in_memory=True)
-				out = [f"{info.key} = {info.effective}   ({info.source})",
+				out = [f"{info.key} = {info.effective}   ({info.source})"  # 093 A4 ↓
+				       + (f" · {info.gate_effective}" if info.gate_effective else ""),
 				       f"namespace: {info.namespace} | kind: {info.kind} | "
 				       f"applies: {info.applies} | enforcement: {info.enforcement}"]
 				if info.description:
@@ -1471,7 +1472,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				if ums is not None and entry is not None and entry.url:
 					res = await ums.add_server(
 						user_id, params.server_id, entry.url,
-						server_type=entry.transport if entry.transport in ("sse", "http") else "sse",
+						server_type=entry.transport if entry.transport in ("sse", "http", "streamable_http") else "auto",
 						display_name=entry.description or params.server_id,
 					)
 					persisted = bool(getattr(res, "success", False))

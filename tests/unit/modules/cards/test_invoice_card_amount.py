@@ -1,6 +1,6 @@
 """The card's amount block fits, and never invites a round-number payment.
 
-⚠️ Live, Playground Env 2026-09-15. A PNL ban offer rendered its headline as
+⚠️ Live, Playground Env 2026-09-15. A TKN ban offer rendered its headline as
 ``3500.0000000000000000…`` running off the right edge of the card. The true
 figure is ``3500.000000000000000004`` — 18 decimals, because the amount jitter
 nudges the last raw units so two same-price offers can never share an amount.
@@ -25,7 +25,7 @@ DEC = 18
 JITTERED = 3500 * 10 ** DEC + 4          # what the rail actually mints
 
 
-def _lines(raw=JITTERED, dec=DEC, sym="PNL", usd="0.25"):
+def _lines(raw=JITTERED, dec=DEC, sym="TKN", usd="0.25"):
     return _amount_block_lines(raw=raw, decimals=dec, symbol=sym, amount_usd=usd)
 
 
@@ -34,7 +34,7 @@ def _lines(raw=JITTERED, dec=DEC, sym="PNL", usd="0.25"):
 def test_the_headline_is_short_and_marked_approximate():
     head = _lines()["headline"]
     assert head.startswith("≈"), f"no approximation marker: {head!r}"
-    assert "3,500" in head and "PNL" in head
+    assert "3,500" in head and "TKN" in head
     assert len(head) < 24, f"headline still long enough to truncate: {head!r}"
 
 
@@ -48,7 +48,7 @@ def test_the_headline_never_carries_the_full_precision():
 def test_the_exact_amount_is_present_in_full():
     block = _lines()
     assert "3500.000000000000000004" in block["exact"]
-    assert "PNL" in block["exact"]
+    assert "TKN" in block["exact"]
 
 
 def test_the_exact_line_is_labelled_as_mandatory():

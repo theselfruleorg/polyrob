@@ -211,8 +211,7 @@ class MessageRetrievalMixin:
 		2. Conversation (subject to repair): Recent messages, ephemeral messages
 		3. Repair ONLY conversation (foundation untouched)
 		4. Combine: foundation + repaired conversation
-		5. Model-specific handling (e.g., deepseek merging)
-		6. Return messages: Ready for LLM provider
+		5. Return messages: Ready for LLM provider
 
 		This ensures H-MEM can never be lost because it's in the protected foundation layer.
 		"""
@@ -311,24 +310,6 @@ class MessageRetrievalMixin:
 		if hmem_msg is not None:
 			conversation.append(hmem_msg)
 
-		# Model-specific handling (F16(iii)).
-		# deepseek-reasoner refuses two successive messages of the same role, so
-		# same-role runs are merged. The merge used to run over the WHOLE assembled
-		# list, which let a streak that starts in the pinned foundation absorb
-		# whatever the conversation currently begins with — so the foundation's
-		# merged bytes, the one block the prompt cache exists to hold, changed with
-		# the tail. Merge each layer on its own instead: the foundation's merged form
-		# now depends only on the foundation. The seam is still resolved (below), but
-		# that is the ONE boundary message it can touch, not the whole prefix.
-		# Message types imported at module level from modules.llm.messages
-		if self.model_name == 'deepseek-reasoner':
-			conversation = self.merge_successive_messages(conversation, HumanMessage)
-			conversation = self.merge_successive_messages(conversation, AIMessage)
-			foundation = self.merge_successive_messages(foundation, HumanMessage)
-			foundation = self.merge_successive_messages(foundation, AIMessage)
-			foundation, conversation = self._merge_layer_seam(foundation, conversation)
-			self.logger.debug("Applied deepseek-reasoner message merging (per layer)")
-
 		messages = foundation + conversation
 
 		# F12: record where the foundation ENDS on the provider wire, so the
@@ -386,30 +367,6 @@ class MessageRetrievalMixin:
 		self.logger.debug("✅ System message validation passed")
 		return messages
 
-
-	def _merge_layer_seam(self, foundation: List[BaseMessage],
-	                      conversation: List[BaseMessage]) -> tuple:
-		"""Resolve a same-role pair that straddles the foundation/conversation seam.
-
-		F16(iii). Merging each layer on its own leaves exactly one place where two
-		successive same-role messages can still meet: the last foundation message
-		and the first conversation message. ``deepseek-reasoner`` rejects that pair,
-		so fold the conversation head into the foundation tail — and ONLY that pair.
-		A run that starts in the foundation can no longer swallow the tail.
-
-		Returns the (foundation, conversation) pair, unchanged when there is nothing
-		to merge (different roles, an AIMessage carrying tool_calls, either side
-		empty).
-		"""
-		if not foundation or not conversation:
-			return foundation, conversation
-		head, tail = foundation[-1], conversation[0]
-		if type(head) is not type(tail) or not isinstance(head, (HumanMessage, AIMessage)):
-			return foundation, conversation
-		merged = self.merge_successive_messages([head, tail], type(tail))
-		if len(merged) != 1:
-			return foundation, conversation  # refused (e.g. tool_calls) — leave it
-		return foundation[:-1] + merged, conversation[1:]
 
 	def note_call_usage(self, *, output_tokens: int = 0, input_tokens: int = 0,
 	                    cached_tokens: int = 0, cache_creation_tokens: int = 0) -> None:

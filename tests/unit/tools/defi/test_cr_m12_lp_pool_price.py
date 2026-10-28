@@ -15,8 +15,8 @@ def test_lp_slippage_is_capped_at_the_swap_bound():
         LpAddParams(chain='base', token_a=lp.T0, token_b=lp.T1, amount_a=1,
                     amount_b=1, max_spend_usd=5, slippage_bps=5000)
     with pytest.raises(ValidationError):
-        LpRemoveParams(token_id=42, slippage_bps=1001)
-    assert LpRemoveParams(token_id=42, slippage_bps=1000).slippage_bps == 1000
+        LpRemoveParams(chain="robinhood", token_id=42, slippage_bps=1001)
+    assert LpRemoveParams(chain="robinhood", token_id=42, slippage_bps=1000).slippage_bps == 1000
 
 
 def test_an_existing_pool_far_from_the_independent_price_refuses(monkeypatch):
@@ -51,7 +51,7 @@ def test_live_liquidity_refuses_unavailable_independent_price(monkeypatch, price
             V.prepare_add(lp.add(dry_run=False), None, lp.HOLDER, lp.NPM,
                           price_fn=lambda c, t: price)
         else:
-            V.prepare_exit(LpRemoveParams(token_id=42, dry_run=False), None,
+            V.prepare_exit(LpRemoveParams(chain="robinhood", token_id=42, dry_run=False), None,
                            lp.HOLDER, lp.NPM, verb, price_fn=lambda c, t: price)
 
 

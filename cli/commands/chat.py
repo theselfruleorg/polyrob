@@ -454,7 +454,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     # Graceful onboarding: if NO usable provider key is present after env-load (+ backfill),
     # onboard INLINE (OpenRouter-first wizard) on a TTY and fall through into the REPL in the
     # same process; on a non-TTY / declined, print the canonical message and return. Drives
-    # off the initializable oracle so a deepseek-only env onboards instead of crashing.
+    # off the initializable oracle so a key with no buildable client onboards instead of crashing.
     from cli.keys import first_run_no_config, preflight_or_onboard, should_warn_no_key
     if should_warn_no_key():
         # Onboarding output is about to print — retire the transient notice first

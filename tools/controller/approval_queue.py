@@ -637,7 +637,7 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
                 # A CRON run asked (2026-09-18). Same shape as the goal carve-out:
                 # the session that asked has FINISHED, and a self-wake into it is
                 # a forged turn the money guard refuses — live on prod 2026-09-17
-                # 16:14, the owner tapped approve on a buyback tranche, the wake
+                # 16:14, the owner tapped approve on a scheduled buy tranche, the wake
                 # said "grant is live, wait for the owner", and the agent asked
                 # the owner to trigger a trade the owner had just approved. So:
                 # no wake. Re-arm the JOB instead — its next tick is a genuine
@@ -694,7 +694,7 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
 #: Pure outbound writes: a post, a reply, a DM, a mail. A late approval of one
 #: sends exactly the approved params ONCE (``run_approved_outbound``); it never
 #: re-arms the job or goal that asked, because re-running the job repeats every
-#: other step in it — a buyback's swap included (prod 2026-10-08).
+#: other step in it — a swap job's swap included (prod 2026-10-08).
 #: The ``late_send`` column of the verb-policy rows (W4; a pack's in its
 #: ``pack.toml``), built on first read.
 def _build_outbound_write_tools():
@@ -1321,7 +1321,7 @@ class OwnerQueueApprover(ApprovalProvider):
                     # re-arms THIS job to run on the next tick (see
                     # decide_tool_approval). None for every other origin.
                     # ⚠️ NEVER for an outbound write (a post, a DM, a mail): the
-                    # re-run would repeat the WHOLE job — a buyback's swap
+                    # re-run would repeat the WHOLE job — a swap job's swap
                     # included — to redeem one post (prod 2026-10-08). A late
                     # approval sends exactly the approved params instead.
                     "cron_job_id": None if _outbound else _cron_job_id(session_id),

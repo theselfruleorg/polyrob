@@ -23,8 +23,9 @@ import { postJson, serverAnswer } from './http.js';
 
 //: Fields the writers want as an integer, not as text.
 const NUMERIC = new Set(['priority']);
-//: Fields the writers want as a list of names, typed one per line.
-const LINE_LIST = new Set(['tools']);
+//: Fields the writers want as a list of names (tools) or goal ids (depends_on),
+//: typed one per line.
+const LINE_LIST = new Set(['tools', 'depends_on']);
 //: Fields that are a plain yes/no. A checkbox is ABSENT from FormData when it
 //: is unticked, so an explicit false has to be built rather than inferred.
 const BOOLEAN = new Set(['wake_agent']);

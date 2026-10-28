@@ -114,6 +114,36 @@ def _positions_line(user_id: str, data_dir: Optional[str]) -> str:
             f"NOT verified against chain; run `reconcile`")
 
 
+def _trading_block(sec: Section, user_id: str, data_dir: Optional[str]) -> None:
+    """086 W6: the Trading block (``core.trading_report``, the ONE renderer
+    ``/trade status`` and the digest read). Absent when there is no mandate and
+    no position; a store it could not read is named and the block's state is
+    ``unavailable`` — never an empty block. Cheap: no price read here."""
+    import time as _time
+    from core.trading_report import trading_view
+    try:
+        view = trading_view(user_id, now=_time.time(), data_dir=data_dir)
+    except Exception as e:  # trading_view never raises; a fault is still named
+        view = {"present": True, "unknown": ["report"],
+                "lines": [f"trading: unavailable ({type(e).__name__})"]}
+    if not view.get("present"):
+        sec.data["trading"] = {"state": STATE_OK, "present": False}
+        return
+    unknown = list(view.get("unknown") or [])
+    sec.data["trading"] = {"state": STATE_UNAVAILABLE if unknown else STATE_OK,
+                           "present": True, "unknown": unknown,
+                           "mandate": view.get("mandate")}
+    head = "trading:" if not unknown else f"trading: unavailable in part ({', '.join(unknown)})"
+    if unknown:
+        sec.health.append(HealthItem(
+            key="trading_unreadable", severity=SEVERITY_WARN,
+            text=f"trading figures partly unreadable ({', '.join(unknown)}) — treat them "
+                 f"as UNKNOWN, never as none",
+            remedy="`polyrob doctor` for the store paths"))
+    sec.lines.append(head)
+    sec.lines.extend(f"  {ln}" for ln in view.get("lines") or [])
+
+
 def _runtime_window(user_id: str, ledger: Dict[str, Any], r: Dict[str, Any],
                     data_dir: Optional[str]) -> tuple:
     """``(usd, label)`` for the runtime line, labelled with the window the figure
@@ -196,6 +226,7 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
         sec.lines.append(_positions_line(user_id, data_dir))
     except Exception as e:
         sec.lines.append(f"open positions: UNKNOWN ({type(e).__name__}: {e})")
+    _trading_block(sec, user_id, data_dir)
     from core.activity_evidence import ledger_note
     note = ledger_note(ledger)
     if note:

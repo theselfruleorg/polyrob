@@ -36,14 +36,30 @@ On a public posture, `/` is also the status page an unauthenticated visitor sees
 "polyrob is live", the instance id, the version. Signing in replaces it with the
 console.
 
-**Inbox** is the one list of what is blocked on a person, composed from five stores:
-the self-evolution review queue, tool approvals, correspondents awaiting your
-approval, the agent's open asks, and pending app deployments. Each card says what it
+**Inbox** is the one list of what is blocked on a person, composed from the same seven
+stores every seat reads: the self-evolution review queue, tool approvals, correspondents
+awaiting your approval, the agent's open asks, pending app deployments, spends the wallet
+signer holds for you, and open action cards. Each card says what it
 wants, why, what yes costs, what no costs, and how long it has waited; Approve,
 Reject and Fulfill act through exactly the same deciders as `polyrob owner pending`
 and the chat verbs, so one decision means the same thing on every seat. A store that
 would not answer is listed as an unreadable entry with its reason — never dropped,
 and never counted as zero.
+
+**Work** has five tabs: Now & next, Goals, Scheduled jobs, Apps and Log. **Work › Goals**
+is the goal board: one lane per live status (being sorted, waiting for other goals,
+ready, running, needs a fix, paused), your open decisions first, and the finished goals
+folded away under it with "Show more". Each goal says what it is, why it is where
+it is, who started it, its age and last change, the last run's AI cost against the
+per-run limit, the decision that holds it, and what it waits for or what waits for it;
+a sub-goal sits inside its parent. Click a goal for the detail: what it is,
+when it is done, every run with its steps, cost and why it stopped, the chats it ran
+in (and their files), and its full history. Pause, Resume, Try it again, Stop, and stop
+for good are the same `/goal` verbs Telegram and the terminal run; a decision is answered with the Inbox's
+own decider. A lane is never a status change: nothing is dragged. The filters (text,
+kind, who started it, show finished) and the open goal stay in the URL. The goal form
+lives here and can name the goals a new one waits for. An unreadable board says so;
+when live updates are off the board says it may be out of date.
 
 
 ### Live sessions
@@ -54,8 +70,7 @@ screenshots it captured. (`/session/{id}` is a permanent redirect to it.)
 
 ⚠️ **A session URL is not a grant.** On both authenticated postures a session page,
 its feed and its workspace reads are owner-only — possessing the link gives you
-nothing. Earlier builds let anyone holding a session URL read the transcript; that
-is gone. There is one narrow bypass left in the code — an expiring preview token
+nothing. There is one narrow bypass left in the code — an expiring preview token
 scoped to a single session's `/serve/` subtree is still accepted — but nothing
 hands one out: the endpoint that minted them was removed because no screen had
 ever called it. So today there is no way to share a session at all.
@@ -93,7 +108,7 @@ The console is a control plane, not only a monitor. Unless it is read-only, you 
 - approve or reject anything in the Inbox — and **answer** an ask in writing, not
   only agree to it, because an ask is a question ("which key should I use?") and
   "approved" is not an answer to one;
-- act on goals and cancel cron jobs;
+- act on goals (Work › Goals) and pause, resume, run or stop scheduled jobs;
 - settle an invoice (an attestation, not a payment);
 - approve, reject or kill a durable app, and read its logs;
 - write preferences and cataloged flags;
@@ -117,8 +132,7 @@ your quotes, and the agent's proposals and questions — with the same buttons.
 
 This works from an empty chat box too, not only inside a thread you already have
 open: a leading verb typed on the front door is answered inline and starts no
-session. (It used to become a task, so `/halt` from a cold open started an agent
-run whose job was the literal text `/halt`.)
+session.
 
 `/task` and `/new` are the exception: the console has its own controls for starting
 a session, so they are excluded here and `/help task` says so. Prose and an unknown

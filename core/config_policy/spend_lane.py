@@ -100,7 +100,7 @@ def autonomous_ceiling_usd() -> float:
     autonomous ceiling from chat, tx_guard honoured it, and this hook still
     demanded a tap for every live swap over the env's $5 — three taps in one
     afternoon for trades the owner had already said may run unattended, and an
-    unattended cron buyback that could never run at all. Delegating to
+    unattended recurring swap job that could never run at all. Delegating to
     tx_guard's own resolver keeps the two in sync by construction; a failed
     resolve fails CLOSED to 0.0 (every live spend asks): the raw env value
     would skip the per-tx clamp and a lower owner pref.

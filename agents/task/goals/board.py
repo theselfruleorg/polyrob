@@ -1086,8 +1086,12 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         return [Goal.from_row(r) for r in rows]
 
     def list_recent(self, *, user_id: str, statuses: Optional[tuple] = None,
-                    limit: int = 30) -> List[Goal]:
+                    limit: int = 30, newest: str = "created") -> List[Goal]:
         """This tenant's GOAL rows, newest first, optionally filtered by status.
+
+        ``newest="finished"`` orders by when the goal ended (``completed_at``,
+        else ``created_at``) — what a "recently finished" list means; a goal
+        created long ago and finished today is at the top, not past the window.
 
         :meth:`list` is ``ORDER BY priority DESC, created_at ASC LIMIT ?`` — a
         dispatcher-shaped order. Used as a *view* it is wrong: on the 409-row prod
@@ -1101,7 +1105,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         if statuses:
             sql += " AND status IN (%s)" % ",".join("?" for _ in statuses)
             params.extend(statuses)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        order = ("COALESCE(completed_at, created_at)" if newest == "finished"
+                 else "created_at")
+        sql += f" ORDER BY {order} DESC LIMIT ?"
         params.append(int(limit))
         rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
         return [Goal.from_row(r) for r in rows]
@@ -1155,17 +1161,32 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         ) or []
         return self._drop_held([Goal.from_row(r) for r in rows])
 
-    def events(self, goal_id: str) -> List[Dict[str, Any]]:
-        rows = execute_retry(
-            self.db_path, "SELECT * FROM goal_events WHERE goal_id=? ORDER BY id",
-            (goal_id,), fetch="all",
-        ) or []
+    def events(self, goal_id: str, *, last: Optional[int] = None) -> List[Dict[str, Any]]:
+        """A goal's history, oldest first; ``last=N`` reads only the newest N rows."""
+        if last is None:
+            sql, args = "SELECT * FROM goal_events WHERE goal_id=? ORDER BY id", (goal_id,)
+        else:
+            sql = ("SELECT * FROM (SELECT * FROM goal_events WHERE goal_id=? "
+                   "ORDER BY id DESC LIMIT ?) ORDER BY id")
+            args = (goal_id, int(last))
+        rows = execute_retry(self.db_path, sql, args, fetch="all") or []
         out = []
         for r in rows:
             d = dict(r)
             d["payload"] = json.loads(d.get("payload") or "{}")
             out.append(d)
         return out
+
+    def last_event_times(self, *, user_id: str) -> Dict[str, float]:
+        """``{goal_id: newest goal_events.created_at}`` over this tenant's rows —
+        the "last activity" of a board view, in one grouped read."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT e.goal_id AS goal_id, MAX(e.created_at) AS ts FROM goal_events e "
+            "JOIN goals g ON g.id = e.goal_id WHERE g.user_id=? GROUP BY e.goal_id",
+            (user_id,), fetch="all",
+        ) or []
+        return {r["goal_id"]: float(r["ts"]) for r in rows if r["ts"] is not None}
 
     def update_fields(self, goal_id: str, *, user_id: Optional[str] = None,
                       title: Optional[str] = None, body: Optional[str] = None,

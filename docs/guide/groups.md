@@ -76,7 +76,7 @@ outbound messages).
 | Mention / reply-to-bot / wake word triggers a turn | yes | yes | yes | no |
 | Triggers without a mention (`chat.mode=active`) | yes | yes | judged by the agent | no |
 | `/groups mode\|tail`, `/mute`, `/cancel`, `/new` in the room | yes | yes | no | no |
-| `/groups allow\|deny\|set\|role\|service` (owner-only, confirmed by DM) | yes | no | no | no |
+| `/groups allow\|deny\|list\|set\|role\|service\|admins` (owner-only, confirmed by DM) | yes | no | no | no |
 | Tools on the turn | room toolset | room toolset | room toolset | — |
 | Money, self-mod, host, secrets, recall, `/pause`, `/dev`, wallet, trade, deploy | never in a room — the owner uses the DM | no | no | no |
 
@@ -113,11 +113,12 @@ groups set <surface> <chat_id> <key> <value>` (`unset`/`-` clears it back to def
 | `chat.member_cooldown_sec` | int, 0-600 | `20` | Overrides `GROUP_MEMBER_COOLDOWN_SEC` for this room |
 | `chat.quiet_hours` | `HH-HH` (0-23, local) | tenant `digest.quiet_hours` | Demotes the room to `listen` inside the window: an addressed owner or admin still gets an answer, a member does not, whatever `chat.mode` says |
 | `chat.mute_until` | float (unix epoch) | `0` (not muted) | Written by `/mute`; demotes the room to `listen` until it elapses |
+| `chat.member_verbs` | list | `help` | The slash verbs a plain member may type in this room. Only `help`, `mute`, `unmute`, `ban`, `unban` and `paid` (the price list only) can be granted; any other name stays ordinary room chatter. See [Paid moderation actions](#paid-moderation-actions-046) |
+| `chat.paid_*` | see below | off | What the room sells, at what price and in what token — [Paid moderation actions](#paid-moderation-actions-046) |
 
-**Reserved, no row yet — `set` refuses them today:** `chat.persona`, `chat.tool_deny`,
-`chat.member_verbs`, `chat.reply_mode`, `chat.thread_scope`. These are named in the
-design for a later release; setting one now returns a clear "not yet a real key" error
-rather than silently writing somewhere nothing reads.
+`set` refuses any other key with `unknown chat.* key`, so a typo never writes a
+setting that nothing reads. `chat.persona`, `chat.tool_deny`, `chat.reply_mode` and
+`chat.thread_scope` are not settable.
 
 A forum supergroup's topics each get their own bound session (Telegram's own topic id
 threads the session key); the `chat.*` policy itself is set once for the whole chat —
@@ -271,15 +272,18 @@ so a member who talked the owner into typing one got it, and a room is the one p
 shoulder-surfer or a screen-share is guaranteed. These are refused with a one-line note
 in his DM:
 
-`/trade` `/wallet` `/send` `/swap` `/cards` `/deploy` `/launch` `/lp` `/bridge` `/claim` `/pay`
-`/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause` `/halt`
-`/resume` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs` `/mcp` `/apps`
-`/invoices` `/settle` `/job` `/goal` `/fulfill` `/contacts` `/thread`
-`/why` `/restart` `/update` — do these in the private chat. A verb that a pack contributes is refused
-too, unless the pack declares it safe for a room.
+`/trade` `/wallet` `/send` `/swap` `/check` `/cards` `/deploy` `/launch` `/lp` `/bridge`
+`/claim` `/pay` `/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause`
+`/halt` `/resume` `/run` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs`
+`/model` `/skills` `/mcp` `/apps` `/invoices` `/settle` `/job` `/goal` `/fulfill`
+`/contacts` `/thread` `/why` `/restart` `/update`, plus the write forms
+`/book retire` and `/avatar set|clear` — do these in the private chat. A verb that a
+pack contributes (for example `/x`) is refused too, unless the pack declares it safe
+for a room.
 
 Still reachable from a room, answered in the owner's DM: `/status` `/help` `/groups`
-`/mute` `/paid` `/book` `/cancel` `/new` `/goals` `/recap` `/journey` `/missed`.
+`/mute` `/paid` `/book` `/cancel` `/new` `/goals` `/jobs` `/inbox` `/pending`
+`/asks` `/recap` `/journey` `/missed` `/usage`.
 
 ---
 
@@ -410,7 +414,7 @@ one admin's `/groups use` never redirects another's `here`.
 token at mint, which needs a live quote over a pool the screen will accept. A
 young token fails that — not because anything is wrong with it, but because
 `pool_screen.classify` answers *"should I buy this?"*, and ordinary launch churn
-(volume far above depth) reads as WASH. Measured on PNL/Robinhood Chain,
+(volume far above depth) reads as WASH. Measured on a young launchpad token,
 2026-09-15: V/L 14.6 against a threshold of 10, at 36 hours old.
 
 So a room may name the amount directly:

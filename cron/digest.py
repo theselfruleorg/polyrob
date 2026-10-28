@@ -198,6 +198,23 @@ def _health_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
         return [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
 
 
+def _trading_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
+    """086 W6: the Trading section — the same renderer as ``/trade status``
+    (``core.trading_report``), $0, no LLM. Absent with no mandate and no
+    position; an unreadable store is named on its line, never "none"."""
+    try:
+        from core.trading_report import trading_view
+        view = trading_view(user_id, now=time.time(), data_dir=data_dir)
+    except Exception as e:  # noqa: BLE001 — render the reason, never a silent blank
+        return [f"• Trading: unavailable ({type(e).__name__}: {str(e)[:120]})"]
+    if not view.get("present"):
+        return []
+    unknown = view.get("unknown") or []
+    head = ("• Trading:" if not unknown
+            else f"• Trading (could not read: {', '.join(unknown)}):")
+    return [head] + [f"   {ln}" for ln in view.get("lines") or []]
+
+
 async def compose_digest(user_id: str, *, days: int = 1,
                          data_dir: Optional[str] = None, db=None) -> str:
     """Build the digest text from evidence. Pure-ish (all reads fail-open)."""
@@ -286,6 +303,8 @@ async def compose_digest(user_id: str, *, days: int = 1,
     # 2026-10-14 D6: the one "top cost" line (`/usage` has the full split).
     lines.append(f"• {top_cost}" if top_cost is not None
                  else "• Top AI cost: could not read the records (see above)")
+
+    lines.extend(_trading_lines(user_id, data_dir))
 
     if asks is None:
         lines.append("• Pending approvals: could not read the open asks (see above)")

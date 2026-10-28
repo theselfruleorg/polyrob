@@ -86,7 +86,7 @@ async def test_cronjob_schedule_refuses_an_unknown_rig_with_the_valid_list(tmp_p
 def test_set_job_rig_merges_and_is_tenant_scoped(tmp_path):
     store = CronJobStore(str(tmp_path / "cron.db"))
     svc = CronService(store)
-    job = svc.schedule(task="hourly buyback", schedule_spec="0 * * * *",
+    job = svc.schedule(task="hourly rebuy", schedule_spec="0 * * * *",
                        user_id="u1", payload={"deliver": "telegram"})
     assert set_job_rig(store, job.id, "money_rail", user_id="u1") is True
     got = store.get(job.id)

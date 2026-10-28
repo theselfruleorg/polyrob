@@ -30,21 +30,17 @@ def test_failing_cli_import_refuses_only_that_pack(scratch, tmp_path, monkeypatc
     assert not state.discovery_error()
 
 
-def test_refused_pack_cannot_leave_auth_or_delivery_hooks_live(scratch, tmp_path, monkeypatch):
-    from core import boot_reconcilers, delivery_channels, token_check_hook
-    previous = lambda *args: None
-    monkeypatch.setattr(token_check_hook, "_checker", previous)
+def test_refused_pack_cannot_leave_delivery_hooks_live(scratch, tmp_path, monkeypatch):
+    from core import boot_reconcilers, delivery_channels
     monkeypatch.setattr(boot_reconcilers, "_RECONCILERS", {})
     toml = _toml("bad").replace('capabilities = ["tools"]',
                                'capabilities = ["tools"]\ndelivery_channels = ["badpost"]')
     init = _init("bad", extra=", hooks={"
-                 "'identity.token_checker': print, "
                  "'cron.delivery_channel': {'badpost': print}, "
                  "'autonomy.boot_reconciler': {'badt': print, 'foreign': print}}")
     write_pack(tmp_path, monkeypatch, "bad", toml, init)
     _install(scratch, monkeypatch, ["bad"])
     scratch.load_packs()
     assert state.record("bad").status == state.REFUSED
-    assert token_check_hook.token_checker() is previous
     assert boot_reconcilers.boot_reconciler("badt") is None
     assert delivery_channels.sender_for("badpost") is None

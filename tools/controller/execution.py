@@ -73,6 +73,23 @@ def _scrub_error(text: str) -> str:
 _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"})
 
 
+def _retry_wall_text(action_name: str, attempts: int, last_error: str) -> str:
+    """The retry-wall refusal (093 E1). It says what the wall IS: a counter on
+    the agent's own identical call in this turn — the tool is not broken, locked
+    or held by anyone. Prod 2026-10-28: a vaguer text made the agent tell the
+    owner the signer was "hard-blocked" and needed a reset. The prefix is read by
+    ``agents.task.agent.core.conversational_exit``; keep it."""
+    last = (last_error or "").strip().splitlines()
+    last_line = last[0][:300] if last else "(no error text was recorded)"
+    return (
+        f"⚠️ Maximum retries exceeded for {action_name}: you made the SAME call "
+        f"{attempts} times in this turn and it failed each time. Last error: "
+        f"{last_line} — The tool is not broken, locked or blocked: this limit counts "
+        f"only your identical call, and only the owner's next message resets it. "
+        f"Change the parameter the last error names, or stop and tell the owner that "
+        f"last error. Do not repeat this call.")
+
+
 class ExecutionMixin:
 	def _emit_governance_event(self, kind, execution_context=None, **attrs):
 		"""Record a governance event (tool_denied/tool_timeout) to the durable event
@@ -551,15 +568,14 @@ class ExecutionMixin:
 				call_id = getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
 
 				if attempt_count >= max_retries:
-					error_msg = (
-						f"⚠️ Maximum retries ({max_retries}) exceeded for {action_name}. "
-						f"This operation has failed {attempt_count} times. "
-						f"Try a different approach or parameters."
-					)
+					error_msg = _retry_wall_text(
+						action_name, attempt_count,
+						(getattr(self, "_operation_last_error", None) or {}).get(operation_key, ""))
 					self.logger.error(error_msg)
 					action_result = ActionResult(
 						error=error_msg,
-						include_in_memory=True
+						include_in_memory=True,
+						metadata={'retry_wall': True},
 					)
 					# multi_act already wrote tool_started: close the span.
 					self._capture_tool_telemetry(
@@ -631,6 +647,8 @@ class ExecutionMixin:
 					else:
 						action_result = ActionResult(extracted_content=str(result))
 
+					if action_result.error:
+						self._note_operation_error(operation_key, action_result.error)
 					# W1.1: record the completion (tool_execution + tool_result) on
 					# the ONE execution path, success or returned error.
 					self._capture_tool_telemetry(
@@ -658,6 +676,7 @@ This usually indicates a method was called that's not fully implemented.
 Check the controller registry and action implementations.
 """
 					action_result = ActionResult(error=_scrub_error(detailed_error), include_in_memory=True)
+					self._note_operation_error(operation_key, action_result.error)
 					self._capture_tool_telemetry(
 						action_name=action_name,
 						tool_name=tool_name,
@@ -679,6 +698,7 @@ Check the controller registry and action implementations.
 						error=_agent_facing_error(action_name, e, _tb),
 						include_in_memory=True
 					)
+					self._note_operation_error(operation_key, action_result.error)
 					self._capture_tool_telemetry(
 						action_name=action_name,
 						tool_name=tool_name,
@@ -704,6 +724,21 @@ Check the controller registry and action implementations.
 				error=error_msg,
 				include_in_memory=True
 			)
+
+	def _note_operation_error(self, operation_key: str, error: Any) -> None:
+		"""Keep the last real error of an operation, so the retry wall can quote it
+		(093 E1). Lazily created: test doubles skip ``__init__``."""
+		errors = getattr(self, "_operation_last_error", None)
+		if errors is None:
+			errors = self._operation_last_error = {}
+		errors[operation_key] = str(error or "")
+
+	def reset_retry_wall(self) -> None:
+		"""Clear every retry budget (093 E2). The run loop calls this on a new owner
+		turn: the wall counts identical calls within one turn, so a new owner
+		message (often "the tool is fixed, try again") gets a fresh budget."""
+		self._operation_attempts = {}
+		self._operation_last_error = {}
 
 	def _get_operation_key(self, action_name: str, params: Any) -> str:
 		"""Generate unique key for retry tracking.
@@ -742,7 +777,12 @@ Check the controller registry and action implementations.
 				payload = params.dict()
 			else:
 				payload = getattr(params, "__dict__", {}) or {}
-			items = sorted(payload.items(), key=lambda kv: str(kv[0]))
+			# An omitted argument, an explicit None and stray whitespace are the same
+			# call: without this a model gets a fresh retry budget per spelling.
+			items = sorted(
+				((k, v.strip() if isinstance(v, str) else v)
+				 for k, v in payload.items() if v is not None),
+				key=lambda kv: str(kv[0]))
 			disc = hashlib.sha1(repr(items).encode("utf-8", "replace")).hexdigest()[:8]
 			return f"{action_name}:{disc}"
 		except Exception:

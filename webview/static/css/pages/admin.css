@@ -268,12 +268,6 @@
     color: var(--color-accent-green);
 }
 
-.user-table .token-count {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-xs);
-}
-
 .token-icon {
     width: 16px;
     height: 16px;
@@ -384,47 +378,6 @@
 .control-select:focus {
     outline: none;
     border-color: var(--color-accent-blue);
-}
-
-/* Token status */
-.token-status {
-    background: var(--color-bg-primary);
-    padding: var(--spacing-xl);
-    border: 1px solid var(--color-border);
-}
-
-.token-status.has-token {
-    border-color: var(--color-accent-green);
-}
-
-.token-status.no-token {
-    border-color: var(--color-accent-yellow);
-}
-
-.token-status .status-icon {
-    font-size: 24px;
-    margin-right: var(--spacing-md);
-}
-
-.token-status .status-text {
-    flex: 1;
-}
-
-.token-status h4 {
-    color: var(--color-text-primary);
-    margin-bottom: var(--spacing-sm);
-}
-
-.token-status p {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-}
-
-.token-ids {
-    margin-top: var(--spacing-md);
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-sm);
-    color: var(--color-accent-purple);
 }
 
 /* Credits form */

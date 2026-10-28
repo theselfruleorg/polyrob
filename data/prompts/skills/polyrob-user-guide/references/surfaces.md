@@ -11,8 +11,8 @@ loop, several front doors — each surface adapts inbound/outbound to the SAME
   instead of starting a new task. Flags: `--model`/`-m`, `--provider`/`-p`
   (any provider row with a key: openai, anthropic, gemini, openrouter,
   nvidia, zai (Z.AI GLM), moonshot (Kimi), xai (Grok), cerebras, and more —
-  `polyrob model list` shows the ones this install can use; DeepSeek rides
-  `-p openrouter -m deepseek/deepseek-chat`),
+  `polyrob model list` shows the ones this install can use; `-p deepseek`
+  is DeepSeek's own API, default model `deepseek-flash`),
   `--tools`/`-t`, `--toolset` (`minimal|default|safe|research|
   trading_research|coding|development|browser|social|earn|full`),
   `--max-steps` (default 50), `--plain`, `--verbose`/`-v`.

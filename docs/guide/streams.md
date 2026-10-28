@@ -27,7 +27,7 @@ polyrob autonomy status      # every axis, the loop state, any active pause
 The goal board comes up with `AUTONOMY_ENABLED` on a local install. Jobs need
 `CRON_ENABLED` too, which turns on by itself at `AUTONOMY_POSTURE=full`. The
 autonomy axes are explained in
-[configuration.md §5](configuration.md#6-the-autonomy-dial).
+[configuration.md §6](configuration.md#6-the-autonomy-dial).
 
 You can add a goal with autonomy off — the board is a database. The CLI warns
 you when you do, because nothing will start it.
@@ -52,7 +52,7 @@ polyrob goals create "Draft the Q3 summary" \
   --acceptance "a file at reports/q3.md" \
   --priority 7
 
-polyrob goals list --status ready     # ready|running|done|blocked|cancelled|triage
+polyrob goals list --status ready     # ready|running|paused|waiting|done|blocked|cancelled|triage
 polyrob goals show <id>               # fields, tools, events, files
 polyrob goals events <id>             # what happened, timestamped
 polyrob goals edit <id> --priority 9 --acceptance "…"
@@ -102,6 +102,15 @@ provider outage caused goes back to the queue within
 `GOAL_BLOCKED_MAX_AGE_DAYS`. A goal that needs something only you can supply
 opens a decision in your inbox (§4) and names it.
 
+### How long one run may go
+
+Every goal, job and helper run stops at one step limit,
+`AUTONOMOUS_MAX_STEPS` (default 150), and at `AUTONOMOUS_RUN_BUDGET_USD`
+(default $2.00) of AI cost, its helpers included. Both are owner env settings:
+no goal or job sets its own budget. At a limit the run reports once, and a run
+that stops before it finishes names the reason in its record, in the CLI and in
+its status.
+
 ### What the agent may give its own goals
 
 A goal the agent writes for itself may ask only for a safe set of tools:
@@ -118,7 +127,7 @@ and the owner approval above `DEFI_AUTONOMOUS_MAX_USD`. See
 [payments.md](payments.md) and [security-model.md](security-model.md).
 
 A goal's `payload.tools` is used **as written** when it runs. Anything an owner
-seat writes there — `polyrob goals create --tools`, `/trade` in chat — is a
+seat writes there — `polyrob goals create --tools`, `tools=` on `/job new` — is a
 grant, with no filter on the way through. Only a group service run overrides
 it, down to the group's read-only toolset.
 
@@ -161,8 +170,10 @@ polyrob job show <id>
 polyrob job pause <id>      # or resume / run / stop
 ```
 
-`--max-duration` sets the hard limit per run in seconds (default 180). Jobs
-belong to one owner: you can only change your own.
+`--max-duration` sets the hard limit per run in seconds (default 600).
+`polyrob job edit <id> --tools a,b,c` sets the job's abilities (`none` clears
+them), so a posting job can be kept away from spending. Jobs belong to one owner:
+you can only change your own.
 
 Two behaviours are worth knowing:
 
@@ -172,6 +183,12 @@ Two behaviours are worth knowing:
   review-shaped job skip its paid model call when nothing it watches changed
   since the last run — a $0 run instead of a model paid to find that out. A
   delivery job is never gated.
+
+`/trade start` makes jobs too. Its one decision shows every number before
+anything is created; Confirm creates the trading mandate with a hunt job, an
+exit job for each open trade and a daily review. `/trade pause` and
+`/trade stop` stop new entries and leave every exit job running. See
+[owner-controls.md](owner-controls.md#one-run-this-chat-or-the-trading-mandate).
 
 A group chat can run a catch-up pass over its own messages at set times instead
 of waiting for a mention. That is a job bound to the group, created with
@@ -188,6 +205,11 @@ and the jobs and goals the agent wrote that you can make yours (§6).
 its own tap, or with `/approve <id>`, `/reject <id>` or `/fulfill <id>` (an
 ask). Answering an ask puts the goals behind it back in the queue.
 
+When Rob raised several decisions in a chat, it continues by itself once you
+have made every one: it gets each outcome (sent, failed, dismissed, expired)
+in one new turn and reports back. A payment it wants next comes to you as a
+new decision.
+
 The terminal reads the same list: `polyrob owner inbox`, `polyrob owner asks`
 and `polyrob owner fulfill <id>`. The full list of approval kinds and the
 `/gates` that decide which actions need you first are in
@@ -200,8 +222,10 @@ and `polyrob owner fulfill <id>`. The full list of approval kinds and the
 ```text
 /pause                    stop all autonomous work now
 /pause <scope>            one scope only (for example trading)
-/pause <job id|goal id>   one job or one goal
 /resume                   lift the pause
+/job pause <id>           one job; /job resume <id> turns it back on
+/goal pause <id>          one goal; /goal retry <id> puts it back in the queue
+/run pause <n>            one run that is live now; /run resume <n> continues it
 ```
 
 The terminal has `polyrob autonomy pause` and `polyrob autonomy resume`. A

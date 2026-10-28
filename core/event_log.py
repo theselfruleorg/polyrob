@@ -430,3 +430,26 @@ def event_log_enabled() -> bool:
     """Additive observability sink; default ON, fail-open. Disable with =off/false/0."""
     v = os.getenv("TELEMETRY_EVENT_LOG_ENABLED", "true").strip().lower()
     return v not in ("0", "false", "off", "no", "")
+
+
+def _position_telemetry(event) -> None:
+    """086 W1: the durable record of the book's lifecycle — ``position_opened``
+    on open, ``position_closed`` on every terminal kind (``attrs.kind`` names it).
+    A listener of ``core.position_events``; fail-open like :func:`emit`."""
+    from core import position_events as pe
+    from core.event_kinds import POSITION_CLOSED, POSITION_OPENED
+    if event.kind == pe.OPENED:
+        kind = POSITION_OPENED
+    elif event.kind in pe.TERMINAL_KINDS:
+        kind = POSITION_CLOSED
+    else:
+        return
+    emit(kind, source="position_events", user_id=event.user_id, attrs=event.to_attrs())
+
+
+def _register_position_telemetry() -> None:
+    from core import position_events
+    position_events.register_listener(_position_telemetry)
+
+
+_register_position_telemetry()

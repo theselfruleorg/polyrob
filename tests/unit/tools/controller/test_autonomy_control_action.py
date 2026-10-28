@@ -195,7 +195,7 @@ def test_the_tool_description_no_longer_teaches_resume(home):
 
 
 def test_the_description_does_not_turn_a_bare_stop_or_a_resume_into_a_pause(home):
-    """O7/A3: "Stop" mid-request and "resume buyback" both became pause(all)."""
+    """O7/A3: "Stop" mid-request and "resume rebuy" both became pause(all)."""
     from tools.controller.autonomy_control_action import register_autonomy_control_action
     c = _Controller(str(home))
     register_autonomy_control_action(c)

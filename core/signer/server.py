@@ -11,7 +11,8 @@ Two layers:
 What the signer enforces, whatever the agent says:
 
 1. **Known shapes only.** An unknown op, field or version is ``unknown_shape``.
-   There is no generic message, typed-data or raw-hash signing.
+   There is no generic message, typed-data or raw-hash signing: ``sign.classified``
+   re-classifies a text itself and signs only a class-A login/challenge (090).
 2. **The guard runs here.** ``evm.send`` re-runs
    :func:`core.wallet.tx_guard.authorize` — the same module the agent runs —
    with the signer's own gate (hard caps, its own ledger), its own RPC pins and
@@ -593,6 +594,13 @@ class SignerService:
         self.store.log_decision(op="venue.sign", digest=None, allowed=True, peer_uid=peer_uid,
                                 reason=f"hyperliquid {action.get('type')}")
         return {"signature": sig}
+
+    # -- 090: classified off-chain signatures ------------------------------------
+
+    def _op_sign_classified(self, body, peer_uid):
+        """A class-A text only; the class is computed HERE (``core/signer/sign_ops.py``)."""
+        from core.signer.sign_ops import op_sign_classified
+        return op_sign_classified(self, body, peer_uid)
 
     # -- C1: the account journal entry ---------------------------------------
 

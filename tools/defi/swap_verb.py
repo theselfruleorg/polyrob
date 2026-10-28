@@ -42,6 +42,12 @@ async def perform_swap(tool, params, execution_context=None):
         return tool._ar(error=str(exc))
     if token_in == token_out:
         return tool._ar(error="token_in and token_out are the same token")
+    # 086 W6: a mandate ENTRY states its plan before anything is quoted.
+    from core.position_plans import plan_refusal, record_after_swap
+    if why := plan_refusal(execution_context, getattr(params, "plan", None), chain=params.chain,
+                           token_in=(None if native_in else token_in),
+                           token_out=token_out, in_native=native_in):
+        return tool._ar(error=why)
 
     id_out = get_token_identity(params.chain, token_out)
     from tools.defi.buy_screen import evm_buy_refusal, unchecked_route_refusal
@@ -163,7 +169,7 @@ async def perform_swap(tool, params, execution_context=None):
                                                      held_balance_raw=held_balance_raw,
                                                      out_trusted=out_trusted)
     # Dry run included: a dry run that reports "authorized" for a send this
-    # check will refuse told the 2026-10-10 buyback to go, then refused it.
+    # check will refuse told a 2026-10-10 scheduled buy to go, then refused it.
     # 085 EV-2: the $5 ticket tests trust on the asset AT RISK. For a sell
     # into the canonical quote asset that is token_in (the quote asset is
     # always trusted, so testing token_out lifted the ticket on every sell);
@@ -185,7 +191,7 @@ async def perform_swap(tool, params, execution_context=None):
         return tool._ar(error=why if not params.dry_run
                         else f"dry run — the live send would be {why}")
     # 068 G1: WHICH contract this buys is checked by the verb, not left
-    # to the skill text the 2026-09-25 buyback read and ignored.
+    # to the skill text a 2026-09-25 recurring swap job read and ignored.
     from tools.defi.identity_gate import buy_identity_refusal, container_of
     identity_refusal = buy_identity_refusal(
         chain=params.chain, token_out=token_out, id_out=id_out,
@@ -350,11 +356,18 @@ async def perform_swap(tool, params, execution_context=None):
                 # Authorized simulation balance deltas size both legs.
                 "in_decimals": in_decimals,
                 "out_decimals": id_out.decimals,
+                # 086 W6: a sell's typed close reason rides to the realized row.
+                "close_reason": getattr(params, "close_reason", None) or "",
             },
             held=held, journal_kind=journal_kind, journal_entry=journal_entry,
             journal_skipped=journal_skipped)
         result.metadata = dict(result.metadata or {}, min_out_raw=amount_out_min)
-        return result
+    plan = getattr(params, "plan", None)
+    if plan is not None and not params.dry_run and not getattr(result, "error", None):
+        record_after_swap(execution_context, plan=plan, chain=params.chain,
+                          address=token_out,
+                          account=(held.account if held is not None else ""))
+    return result
 
 
 def _owner_pinned(chain: str, token_out: str) -> bool:

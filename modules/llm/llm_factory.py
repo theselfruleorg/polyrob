@@ -174,22 +174,9 @@ def create_chat_model(
             logger.info(f"Creating AnthropicAdapter for model {model}")
             return AnthropicAdapter(client=llm_client, model_name=model, **sanitized_params)
 
-        elif provider_l == "deepseek":
-            from modules.llm.adapters import DeepSeekAdapter
-            from modules.llm.deepseek_client import DeepSeekClient
-            if not isinstance(llm_client, DeepSeekClient):
-                logger.warning(f"Expected DeepSeekClient but got {type(llm_client).__name__}, trying to adapt anyway")
-
-            sanitized_params = common_params.copy()
-            for key in ("parallel_tool_calls", "tool_choice", "model"):
-                sanitized_params.pop(key, None)
-
-            logger.info(f"Creating DeepSeekAdapter for model {model}")
-            return DeepSeekAdapter(client=llm_client, model_name=model, **sanitized_params)
-
-        elif provider_l in ("openrouter", "nvidia"):
-            # NVIDIA NIM is OpenAI-compatible exactly like OpenRouter, and NvidiaClient
-            # subclasses OpenRouterClient — so it rides the same adapter path.
+        elif provider_l in ("openrouter", "nvidia", "deepseek"):
+            # NVIDIA NIM and DeepSeek are OpenAI-compatible exactly like OpenRouter, and
+            # both clients subclass OpenRouterClient — so they ride the same adapter path.
             from modules.llm.adapters import OpenRouterAdapter
             from modules.llm.openrouter_client import OpenRouterClient
             if not isinstance(llm_client, OpenRouterClient):

@@ -34,11 +34,11 @@ see the [Extras layout](#extras-layout) section.
 
 ## Running tests
 
-Run the full suite (this is what CI runs — a bare `pytest`, which also collects the
-co-located `test_*.py` files that live next to the code outside `tests/`):
+Run the full suite (a bare `pytest` collects the `tests/` tree; it is long, so
+spread it over your cores with `pytest-xdist`, which the `dev` extra installs):
 
 ```bash
-pytest -q
+pytest -q -n auto
 ```
 
 For faster local iteration, run just the unit tests:
@@ -71,7 +71,7 @@ with `ruff check . --fix`.
 
 | Extra | What it pulls in |
 |---|---|
-| *(none)* | The base: the OpenAI SDK (serves OpenAI, OpenRouter, NVIDIA, DeepSeek and every OpenAI-compatible endpoint), pydantic, Pillow, rich, click — 24 names |
+| *(none)* | The base: the OpenAI SDK (serves OpenAI, OpenRouter, NVIDIA, DeepSeek and every OpenAI-compatible endpoint), pydantic, Pillow, rich, click, httpx — 28 names |
 | `gemini` | The Google Gemini SDK (12 exclusive packages) |
 | `anthropic` | The Anthropic SDK (also the z.ai / Anthropic-transport seats) |
 | `server` | FastAPI, Uvicorn, WebSocket support, python-magic (the upload MIME sniffer) |
@@ -80,13 +80,16 @@ with `ruff check . --fix`.
 | `media` | numpy (the Pillow avatar renderer), imageio (GIFs), qrcode (invoice cards) |
 | `anysite` | The AnySite scraping CLI |
 | `memory-vector` | Semantic vector recall (sentence-transformers + apsw + sqlite-vec + numpy) |
-| `crypto` | web3, eth-account, x402 payment support |
+| `crypto` | web3, eth-account, x402 payment support, the Hyperliquid and Polymarket SDKs |
 | `solana` | Solana signing and trading |
 | `telegram` | aiogram Telegram surface |
-| `twitter` | Twitter/X API client |
+| `twitter` | Twitter/X API client and the X Chat DM client |
 | `voice` | Voice transcription (faster-whisper) |
+| `feishu` | The Feishu / Lark SDK |
+| `hf` | The Hugging Face Hub client (the `hf_deploy` tool) |
+| `modal` / `daytona` / `vercel-sandbox` | The SDK for that optional code-exec sandbox pack |
 | `dev` | pytest, ruff, build tooling |
-| `all` | Everything above |
+| `all` | Everything above except `dev` |
 
 Install only what you need, e.g. `pip install -c requirements.lock -e ".[server,browser]"`.
 On a dev machine an optional extra installs itself on first use (`core/lazy_deps.py`,
@@ -112,15 +115,18 @@ follow our [Code of Conduct](CODE_OF_CONDUCT.md).
    accompanied by unit tests in `tests/unit/`.
 3. **Check tests and lint** before opening a PR:
    ```bash
-   pytest -q
+   pytest -q -n auto
    ruff check .
    ```
 4. **Open a Pull Request** against `main` on the upstream repo.
    - Keep PRs focused: one logical change per PR.
    - Describe *what* you changed and *why* in the PR description (the PR template will prompt you).
    - Reference any related issues with `Closes #<number>`.
-5. **CI must be green.** The `ci` workflow runs a `pytest` job and a `gitleaks` secret-scan job
-   on every PR; both must pass before merge.
+5. **CI must be green.** The `ci` workflow runs the source-tree ratchets (`static`), the suite in
+   parallel shards (`test`), a bare `pip install polyrob` import check (`base-install`), the
+   production extras (`prod-extras`) and a `gitleaks` secret scan (`secrets`) on every PR; all
+   must pass before merge. A failing `tests/test_*_ratchet.py` is a design rule, not a flaky
+   test: extend the one existing thing it names instead of adding a second.
 6. **Review.** A maintainer reviews the PR and may ask for changes.
 7. **Squash-merge.** Once approved and green, the PR is squash-merged into `main`.
 

@@ -6,7 +6,7 @@
 any message whose first word was stop/halt/pause/freeze/standby/resume/unpause/
 unfreeze and acted on it without the agent. It intercepted ordinary sentences
 ("resume where you left off", "pause the video", "stop worrying about the
-ledger") and answered "Ok please resume buyback" by pausing EVERYTHING. The
+ledger") and answered "Ok please resume the swaps" by pausing EVERYTHING. The
 owner's rule: a command is a slash command (or a button); a sentence is chat and
 goes to the agent, which has the owner-only ``autonomy_control`` action. The
 deterministic, model-free stop is ``/pause`` (``/halt``) — it needs no model,

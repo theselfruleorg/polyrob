@@ -24,6 +24,9 @@ from core.security.pinned_resolver import PinnedResolver, url_host_key
 from tools.mcp.security import get_url_validator
 
 _REDIRECT_STATUS = {301, 302, 303, 307, 308}
+#: GET follows (re-validated) redirects; every other method follows none.
+#: PUT/PATCH/DELETE: the ``http_request`` tool (093 F1).
+_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 
 # An honest, disclosed bot UA. Many sites (e.g. Wikipedia) reject requests with no
 # User-Agent; the "Mozilla/5.0 (compatible; ...)" form is the widely-accepted shape.
@@ -45,6 +48,9 @@ class FetchResult:
 	status: int
 	content_type: str
 	body: bytes
+	#: The raw ``Set-Cookie`` headers of the final response (090: wallet_sign
+	#: carries a site's session cookie from its challenge to its submit).
+	set_cookies: tuple = ()
 
 
 class _PinnedResolver(PinnedResolver):
@@ -70,6 +76,19 @@ def _default_session_factory(pinned_ip: Optional[str], hostname: Optional[str]):
 	return aiohttp.ClientSession(connector=connector, auto_decompress=False)
 
 
+def _origin_key(url: str):
+	"""(scheme, host key, effective port): a same-host redirect may not downgrade
+	https to http or move to another port (the caller's headers go with it)."""
+	from urllib.parse import urlsplit
+	parts = urlsplit(url)
+	scheme = (parts.scheme or "").lower()
+	try:
+		port = parts.port or {"https": 443, "http": 80}.get(scheme)
+	except ValueError:
+		port = None
+	return (scheme, url_host_key(url), port)
+
+
 async def safe_fetch(
 	url: str,
 	*,
@@ -79,8 +98,18 @@ async def safe_fetch(
 	validate: bool = True,
 	validator=None,
 	session_factory: Optional[Callable] = None,
+	method: str = "GET",
+	json_body=None,
+	extra_headers: Optional[dict] = None,
+	same_host_redirects: bool = False,
 ) -> FetchResult:
 	"""Fetch ``url`` with per-hop SSRF validation, IP pinning, no auto-redirects, and caps.
+
+	``method="POST"`` (090: the wallet_sign challenge/submit calls) sends ``json_body``
+	as JSON and follows NO redirect: a 3xx to a POST is an error, never a re-send of
+	the body to another URL. ``extra_headers`` are added to the defaults. PUT, PATCH
+	and DELETE (093 F1, ``http_request``) behave like POST. ``same_host_redirects``:
+	a GET redirect to another host is an error instead of a followed hop.
 
 	Args:
 		validate: when False, skip SSRF validation entirely (single-user/local only).
@@ -90,18 +119,23 @@ async def safe_fetch(
 	"""
 	if max_bytes < 1 or max_redirects < 0 or timeout_sec <= 0:
 		raise ValueError("fetch limits must be positive (redirect count may be zero)")
+	method = str(method or "GET").upper()
+	if method not in _METHODS:
+		raise ValueError(f"unsupported method {method!r}")
 	try:
 		return await asyncio.wait_for(_fetch_hops(
 			url, max_bytes=max_bytes, max_redirects=max_redirects,
 			timeout_sec=timeout_sec, validate=validate, validator=validator,
-			session_factory=session_factory,
+			session_factory=session_factory, method=method, json_body=json_body,
+			extra_headers=extra_headers, same_host_redirects=same_host_redirects,
 		), timeout=timeout_sec)
 	except asyncio.TimeoutError as exc:
 		raise WebFetchError("fetch exceeded its total time limit") from exc
 
 
 async def _fetch_hops(url, *, max_bytes, max_redirects, timeout_sec,
-                     validate, validator, session_factory):
+                     validate, validator, session_factory, method="GET", json_body=None,
+                     extra_headers=None, same_host_redirects=False):
 	if validate and validator is None:
 		validator = get_url_validator(allow_http=True)
 
@@ -138,12 +172,28 @@ async def _fetch_hops(url, *, max_bytes, max_redirects, timeout_sec,
 
 		async with session_cm as session:
 			timeout = aiohttp.ClientTimeout(total=timeout_sec)
-			async with session.get(current, allow_redirects=False, timeout=timeout, headers=_DEFAULT_HEADERS) as resp:
+			headers = dict(_DEFAULT_HEADERS)
+			headers.update(extra_headers or {})
+			if method == "POST":
+				request_cm = session.post(current, allow_redirects=False, timeout=timeout,
+				                          headers=headers, json=json_body)
+			elif method != "GET":
+				request_cm = session.request(method, current, allow_redirects=False,
+				                             timeout=timeout, headers=headers, json=json_body)
+			else:
+				request_cm = session.get(current, allow_redirects=False, timeout=timeout, headers=headers)
+			async with request_cm as resp:
+				if resp.status in _REDIRECT_STATUS and method != "GET":
+					raise WebFetchError(f"{method} answered with a redirect ({current}); not followed")
 				if resp.status in _REDIRECT_STATUS:
 					location = resp.headers.get("Location")
 					if not location:
 						raise WebFetchError(f"redirect with no Location ({current})")
-					current = urljoin(current, location)
+					target = urljoin(current, location)
+					if same_host_redirects and _origin_key(target) != _origin_key(current):
+						raise WebFetchError(
+							f"redirect to another origin ({target}); not followed")
+					current = target
 					continue
 				encoding = resp.headers.get("Content-Encoding", "identity").strip().lower()
 				if encoding not in ("", "identity"):
@@ -154,6 +204,8 @@ async def _fetch_hops(url, *, max_bytes, max_redirects, timeout_sec,
 					if len(chunk) > max_bytes - len(buf):
 						raise WebFetchError(f"response exceeds {max_bytes} bytes ({current})")
 					buf.extend(chunk)
+				getall = getattr(resp.headers, "getall", None)
 				return FetchResult(final_url=current, status=resp.status,
-				                   content_type=ctype, body=bytes(buf))
+				                   content_type=ctype, body=bytes(buf),
+				                   set_cookies=tuple(getall("Set-Cookie", ())) if getall else ())
 	raise WebFetchError(f"too many redirects (>{max_redirects})")

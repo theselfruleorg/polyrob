@@ -97,7 +97,7 @@ def _no_package(tool):
 def test_snapshot_needs_no_package_and_reads_one_block(armed):
     chain = ViewChain(armed.address)
     tool, seen = _tool(armed, chain)
-    res = _run(_no_package(tool).agent_nft_snapshot(SnapshotParams(nft="3")))
+    res = _run(_no_package(tool).agent_nft_snapshot(SnapshotParams(chain="robinhood", nft="3")))
     assert res.error is None, res.error
     text = res.extracted_content
     assert text.index("open approvals") < text.index("CHECKS") < text.index("owner:")
@@ -108,7 +108,7 @@ def test_snapshot_needs_no_package_and_reads_one_block(armed):
 
 def test_an_unreadable_value_is_named_never_zero(armed):
     tool, _ = _tool(armed, ViewChain(armed.address, locked_broken=True))
-    text = _run(_no_package(tool).agent_nft_snapshot(SnapshotParams(nft="3"))).extracted_content
+    text = _run(_no_package(tool).agent_nft_snapshot(SnapshotParams(chain="robinhood", nft="3"))).extracted_content
     assert "locked:    unreadable" in text and "[unknown] locked" in text
     assert "isLocked reverted" in text
 
@@ -129,7 +129,7 @@ def test_a_failing_package_hook_is_named_not_fatal(armed):
     def boom(view, rpc):
         raise RuntimeError("bad face")
     tool._impl_override = types.SimpleNamespace(extend_view=boom)
-    res = _run(tool.agent_nft_inspect(InspectParams(target="3")))
+    res = _run(tool.agent_nft_inspect(InspectParams(target="robinhood:3")))
     assert res.error is None and "package's lines failed: bad face" in res.extracted_content
 
 
@@ -141,7 +141,7 @@ def test_inspect_refuses_an_unpinned_collection(armed):
 
 def test_bind_registers_through_the_account(armed):
     tool, seen = _tool(armed, ViewChain(armed.address))
-    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(nft="3", dry_run=True)))
+    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(chain="robinhood", nft="3", dry_run=True)))
     assert res.error is None, res.error
     (intent, tx, _), = seen
     assert intent.is_registration and intent.expects_mint and intent.via_account == ACCOUNT
@@ -166,20 +166,20 @@ def _identity_chain(owner, *, minted=True):
 
 def test_bind_refuses_a_second_identity(armed):
     tool, seen = _tool(armed, _identity_chain(armed.address))
-    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(nft="3")))
+    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(chain="robinhood", nft="3")))
     assert res.error and "already holds" in res.error and seen == []
 
 
 def test_journal_writes_only_author_kinds(armed):
     tool, seen = _tool(armed, ViewChain(armed.address))
-    res = _run(_no_package(tool).agent_nft_journal(JournalParams(kind="entry", text="x", nft="3")))
+    res = _run(_no_package(tool).agent_nft_journal(JournalParams(chain="robinhood", kind="entry", text="x", nft="3")))
     assert res.error and "thesis or note" in res.error and seen == []
 
 
 def test_journal_anchor_without_an_identity_is_skipped_and_said(armed):
     tool, _ = _tool(armed, ViewChain(armed.address))
     res = _run(_no_package(tool).agent_nft_journal(JournalParams(
-        kind="thesis", text="PNL", nft="3", anchor=True, dry_run=False)))
+        chain="robinhood", kind="thesis", text="TKN", nft="3", anchor=True, dry_run=False)))
     assert res.error is None, res.error
     assert "journal: entry #0 (thesis) signed" in res.extracted_content
     assert "anchor: skipped — the account has no identity yet" in res.extracted_content
@@ -194,7 +194,7 @@ def test_the_anchor_key_follows_the_prefix():
 def test_bind_refuses_a_foreign_registration_uri_before_signing(armed):
     tool, seen = _tool(armed, ViewChain(armed.address))
     result = _run(_no_package(tool).agent_nft_bind_identity(
-        BindParams(nft="3", agent_uri="https://attacker.example/identity.json", dry_run=False)))
+        BindParams(chain="robinhood", nft="3", agent_uri="https://attacker.example/identity.json", dry_run=False)))
     assert "alternate agent_uri" in result.error
     assert not seen and not FakeRail.sent
 
@@ -204,7 +204,7 @@ def test_journal_refuses_credentials_before_any_signature(armed, monkeypatch):
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", secret)
     tool, seen = _tool(armed, ViewChain(armed.address))
     result = _run(_no_package(tool).agent_nft_journal(
-        JournalParams(kind="note", text=secret, nft="3", dry_run=False)))
+        JournalParams(chain="robinhood", kind="note", text=secret, nft="3", dry_run=False)))
     assert "credential material" in result.error
     assert secret not in result.error
     assert not seen and not FakeRail.sent
@@ -219,6 +219,6 @@ def test_automatic_journal_entries_use_the_same_secret_check():
 
 def test_bind_ignores_an_unsolicited_identity(armed):
     tool, seen = _tool(armed, _identity_chain(armed.address, minted=False))
-    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(nft="3")))
+    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(chain="robinhood", nft="3")))
     assert res.error is None, res.error
     assert len(seen) == 1

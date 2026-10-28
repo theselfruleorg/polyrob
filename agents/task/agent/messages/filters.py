@@ -4,7 +4,7 @@ import copy
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 
 from modules.llm.messages import (
     AIMessage,
@@ -395,89 +395,6 @@ class FiltersMixin:
 	# declares one — three mixins omitted it until 2026-09-22, so the claim in
 	# this comment was false for as long as it had been written.
 	__slots__ = ()
-
-	def merge_successive_messages(self, messages: list[BaseMessage], class_to_merge: Type[BaseMessage]) -> list[BaseMessage]:
-		"""Merge successive messages without mutating original content
-		
-		IMPORTANT: Messages with tool_calls are never merged to preserve integrity
-		"""
-		merged_messages = []
-		streak = 0
-		
-		for message in messages:
-			if isinstance(message, class_to_merge):
-				# Never merge AI messages with tool_calls to preserve integrity
-				if isinstance(message, AIMessage) and hasattr(message, 'tool_calls') and message.tool_calls:
-					merged_messages.append(message)
-					streak = 0
-					continue
-				
-				# Check if previous message has tool_calls (should not merge into it)
-				if (streak > 0 and merged_messages and 
-					isinstance(merged_messages[-1], AIMessage) and 
-					hasattr(merged_messages[-1], 'tool_calls') and 
-					merged_messages[-1].tool_calls):
-					merged_messages.append(message)
-					streak = 1
-					continue
-				
-				streak += 1
-				if streak > 1:
-					# Create new message instead of mutating
-					if isinstance(message.content, list) and isinstance(merged_messages[-1].content, list):
-						# FIXED: Properly handle multimodal content by extending lists instead of concatenating strings
-						new_content = merged_messages[-1].content + message.content
-					elif isinstance(message.content, list):
-						# Previous message was text, current is multimodal
-						text_content = merged_messages[-1].content
-						new_content = [{"type": "text", "text": text_content}] + message.content
-					elif isinstance(merged_messages[-1].content, list):
-						# Previous message was multimodal, current is text
-						text_part = {"type": "text", "text": message.content}
-						new_content = merged_messages[-1].content + [text_part]
-					else:
-						# Both are text — join with a newline so the two messages' content
-						# keeps its boundary (bare concatenation glued "...end""start..." together).
-						prev_text = merged_messages[-1].content
-						sep = "\n" if prev_text and not prev_text.endswith("\n") else ""
-						new_content = prev_text + sep + message.content
-					
-					# Preserve all other fields from the first message when merging
-					# This ensures we don't lose important metadata
-					first_msg = merged_messages[-1]
-					
-					# Create new message with known supported fields
-					# Most chat message classes support these fields
-					kwargs = {'content': new_content}
-					
-					# Preserve common optional fields if they exist
-					if hasattr(first_msg, 'additional_kwargs') and first_msg.additional_kwargs:
-						kwargs['additional_kwargs'] = first_msg.additional_kwargs
-					if hasattr(first_msg, 'response_metadata') and first_msg.response_metadata:
-						kwargs['response_metadata'] = first_msg.response_metadata
-					if hasattr(first_msg, 'id') and first_msg.id:
-						kwargs['id'] = first_msg.id
-					
-					# For AI messages, preserve tool_calls (though we shouldn't merge those)
-					if isinstance(first_msg, AIMessage):
-						if hasattr(first_msg, 'tool_calls') and first_msg.tool_calls:
-							kwargs['tool_calls'] = first_msg.tool_calls
-						if hasattr(first_msg, 'invalid_tool_calls') and first_msg.invalid_tool_calls:
-							kwargs['invalid_tool_calls'] = first_msg.invalid_tool_calls
-					
-					try:
-						merged_messages[-1] = class_to_merge(**kwargs)
-					except Exception as e:
-						self.logger.warning(f"Failed to merge messages with kwargs, falling back to content only: {e}")
-						# Fallback to just content if the class doesn't support the kwargs
-						merged_messages[-1] = class_to_merge(content=new_content)
-				else:
-					merged_messages.append(message)
-			else:
-				merged_messages.append(message)
-				streak = 0
-		
-		return merged_messages
 
 	def _filter_sensitive_data(self, message: BaseMessage) -> BaseMessage:
 		"""Filter out sensitive data from the message, tool calls, and metadata.

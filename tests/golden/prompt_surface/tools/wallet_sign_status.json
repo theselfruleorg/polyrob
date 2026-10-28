@@ -1,0 +1,19 @@
+{
+  "function": {
+    "description": "Recent wallet signatures and stored credentials (ids and fingerprints only).",
+    "name": "wallet_sign_status",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 10,
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

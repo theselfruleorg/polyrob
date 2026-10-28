@@ -12,7 +12,7 @@ through the Arachnid CREATE2 deployer (impersonated owner) → ``openMint`` → 
 qty 1, then (after the first id is due, so the second mint auto-reveals it) qty 3, each through
 the real ``tx_guard.authorize`` + ``simulation.simulate`` (``eth_simulateV1``) with the
 ``is_collection_mint`` shape, signed by a real ``LocalEoaSigner`` and broadcast by ``EvmRail`` → the
-ids are owned by the treasury, every account holds its stipend plus its PNL/ETH share, and the
+ids are owned by the treasury, every account holds its stipend plus its token/ETH share, and the
 treasury paid exactly qty × PRICE plus gas.
 
 ⚠️ The treasury is a FRESH key (``Account.create()``), not an anvil default: on real 4663 the
@@ -31,8 +31,13 @@ import pytest
 
 from tests.collection_pins import live_profile, pin
 
-pytestmark = pytest.mark.skipif(os.environ.get("AGENT_NFT_FORK_E2E") != "1",
-                                reason="fork e2e: set AGENT_NFT_FORK_E2E=1 (see module doc)")
+#: The token each account's mint buy delivers: read from the env (no real
+#: deployment's token in shipped tests).
+TOKEN = os.environ.get("AGENT_NFT_FORK_TOKEN", "")
+
+pytestmark = pytest.mark.skipif(os.environ.get("AGENT_NFT_FORK_E2E") != "1" or not TOKEN,
+                                reason="fork e2e: set AGENT_NFT_FORK_E2E=1 and "
+                                       "AGENT_NFT_FORK_TOKEN=<the bought token> (see module doc)")
 
 PORT = 8556
 URL = f"http://127.0.0.1:{PORT}"
@@ -43,7 +48,6 @@ CONTRACTS = Path(os.environ["AGENT_NFT_CONTRACTS_DIR"]) if os.environ.get("AGENT
 CONTRACT = os.environ.get("AGENT_NFT_CONTRACT", "Polyrob")
 ARACHNID = "0x4e59b44847b379578588920cA78FbF26c0B4956C"
 STIPEND = 5 * 10 ** 14
-PNL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
 ETH_USD = 4000.0
 
 
@@ -202,10 +206,10 @@ def test_collection_mint_qty_1_and_3_through_the_real_guard(fork, tmp_path, monk
             assert owner_of.lower() == signer.address.lower(), (i, owner_of)
             acct = to_checksum_address("0x" + _call(collection, u256("accountOf", i))[-40:])
             eth = int(_rpc("eth_getBalance", [acct, "latest"]), 16)
-            pnl = int(_call(PNL, abi.encode_call("balanceOf", [{"type": "address"}], [acct])), 16)
+            tok = int(_call(TOKEN, abi.encode_call("balanceOf", [{"type": "address"}], [acct])), 16)
             assert eth >= STIPEND, (i, eth)
-            assert pnl > 0 or eth > STIPEND, (i, eth, pnl)          # the buy or the ETH fallback
-            print(f"  id {i}: owner treasury, account {acct} eth {eth} pnl {pnl}")
+            assert tok > 0 or eth > STIPEND, (i, eth, tok)          # the buy or the ETH fallback
+            print(f"  id {i}: owner treasury, account {acct} eth {eth} token {tok}")
         return ids, tx_hash
 
     ids1, _ = mint(1)

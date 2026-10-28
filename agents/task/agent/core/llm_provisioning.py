@@ -251,8 +251,6 @@ class LLMProvisioningMixin:
                 return 'function_calling'
             elif self.chat_model_library == 'ChatGoogleGenerativeAI':
                 return 'function_calling'
-            elif self.chat_model_library in ['ChatDeepSeek', 'DeepSeekChatAdapter']:
-                return 'function_calling'
             else:
                 # Default to function_calling for unknown providers
                 self.logger.info(f"Unknown chat model library {self.chat_model_library}, defaulting to function_calling")

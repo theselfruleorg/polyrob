@@ -691,7 +691,7 @@ def render_line(row: dict, *, this_session: str = "") -> str:
         return (f"{_hhmm(row.get('ts'))} seat→owner (the result of the owner's OWN "
                 f"command or card tap{via}; NOT sent by you){mid}: {body}")
     # "private chat" is spelled out: on 2026-10-10 a cron run read its own
-    # misrouted den reply here and still told the owner "nothing went to your inbox".
+    # misrouted group-room reply here and still told the owner "nothing went to your inbox".
     return (f"{_hhmm(row.get('ts'))} you→owner (sent to the owner's PRIVATE chat"
             f"{', ' + origin if origin else ''}){same}{mid}: {body}")
 

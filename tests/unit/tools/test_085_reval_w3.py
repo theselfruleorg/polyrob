@@ -14,7 +14,7 @@ from cron.service import CronService
 from tools.cronjob_tools import CronEditAction, CronJobTool, CronScheduleAction
 from tools.goal_tools import GoalCreateAction, GoalTool, GoalUpdateAction
 
-ADDR = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+ADDR = "0x3535353535353535353535353535353535353535"
 TARGET = {"chain": "robinhood", "address": ADDR}
 
 
@@ -130,7 +130,7 @@ def test_worker_steer_carries_the_typed_words():
 
 # --- (b) the card line round-trips on Telegram (split) and the REPL (shlex) ---
 
-TASK = ('it\'s the "weekly" buyback: tools=defi_trade is NOT a grant, use C:\\tmp | '
+TASK = ('it\'s the "weekly" rebuy: tools=defi_trade is NOT a grant, use C:\\tmp | '
         'and report')
 
 
@@ -140,7 +140,7 @@ def test_job_card_line_round_trips_every_field(tmp_path, monkeypatch, split):
     tool = _cron_tool(tmp_path)
     res = asyncio.run(tool.cronjob_schedule(
         CronScheduleAction(task=TASK, schedule="0 9 * * 1-5", rig="money_rail",
-                           target_token=TARGET, skills=["buyback", "report"],
+                           target_token=TARGET, skills=["rebuy", "report"],
                            deliver="telegram"),
         execution_context=_turn()))
     assert res.error is None, res.error
@@ -153,7 +153,7 @@ def test_job_card_line_round_trips_every_field(tmp_path, monkeypatch, split):
     job = tool._cron_service.list_jobs(user_id="rob")[0]
     assert job.schedule_spec == "0 9 * * 1-5"
     assert job.payload["rig"] == "money_rail" and job.payload["actor"] == "owner_seat"
-    assert job.payload["skills"] == ["buyback", "report"]
+    assert job.payload["skills"] == ["rebuy", "report"]
     assert job.payload["deliver"] == "telegram"
     assert job.payload["target_token"]["address"].lower() == ADDR.lower()
     assert "tools" not in job.payload                      # the prose word is not a grant
@@ -167,14 +167,14 @@ def test_goal_card_line_round_trips(tmp_path, split):
     asyncio.run(tool.goal_create(
         GoalCreateAction(title="don't miss the dip", body='buy "back" target=0xdead first',
                          tools=["defi_trade", "web_fetch"], target_token=TARGET,
-                         skills=["buyback"]), _turn()))
+                         skills=["rebuy"]), _turn()))
     card = _only_card()
     words = split(cards.press(card.card_id, "ok", "rob").run)
     reply = goal_reply("rob", str(tmp_path), words[1:], board=tool._resolve_board())
     assert reply.startswith("✅"), reply
     goal = tool._resolve_board().list_recent(user_id="rob", limit=1)[0]
     assert {"defi_trade", "web_fetch"} <= set(goal.payload["tools"])
-    assert goal.payload["actor"] == "owner_seat" and goal.payload["skills"] == ["buyback"]
+    assert goal.payload["actor"] == "owner_seat" and goal.payload["skills"] == ["rebuy"]
     assert goal.payload["target_token"]["address"].lower() == ADDR.lower()
     assert "target:0xdead" in goal.title + goal.body
 

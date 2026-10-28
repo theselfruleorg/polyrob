@@ -30,9 +30,9 @@ the NEXT process but the result says so explicitly.
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,9 @@ class SettingInfo:
     enforcement: str          # enforced|advisory
     secret: bool
     chain: tuple = field(default_factory=tuple)  # populated by explain()
+    #: 093 A4: ``effective: ON|OFF — <why>`` when a tool gate names this flag
+    #: (the flag alone is not the state: MCP on + 0 servers = off). explain() only.
+    gate_effective: str = ""
 
 
 @dataclass(frozen=True)
@@ -127,8 +130,51 @@ def effective(key: str, *, user_id: Optional[str] = None, home_dir=None) -> obje
 
 
 def explain(key: str, *, user_id: Optional[str] = None, home_dir=None) -> SettingInfo:
-    """`describe` + the full provenance chain (`git config --show-origin` style)."""
-    return describe(key, user_id=user_id, home_dir=home_dir, include_chain=True)
+    """`describe` + the full provenance chain (`git config --show-origin` style),
+    + the gate's effective line for a flag a tool gate names (093 A4)."""
+    info = describe(key, user_id=user_id, home_dir=home_dir, include_chain=True)
+    line = gate_effective(key, info.effective) if info.namespace == "flag" else ""
+    return replace(info, gate_effective=line) if line else info
+
+
+# ---------------------------------------------------------------------------
+# 093 A4: the effective line — the SAME gate the tool catalog reads
+# ---------------------------------------------------------------------------
+
+#: ``(flag, flag value) -> "effective: …"``. The tool tier registers it at import
+#: (``tools/gate_effective.py``): core may not import tools (layering ratchet).
+_GATE_EFFECTIVE_PROBE: Optional[Callable[[str, object], str]] = None
+
+
+def register_gate_effective_probe(fn: Optional[Callable[[str, object], str]]) -> None:
+    """Called once by the tool tier at import. Last registration wins."""
+    global _GATE_EFFECTIVE_PROBE
+    _GATE_EFFECTIVE_PROBE = fn
+
+
+def gate_tools_for_flag(key: str) -> tuple:
+    """The tool ids whose gate row names *key* (``core.tool_capabilities``)."""
+    from core.tool_capabilities import gate_flag_map
+    return tuple(sorted(t for t, flag in gate_flag_map().items() if flag == key))
+
+
+def gate_effective(key: str, value: object) -> str:
+    """``""`` when no tool gate names *key*, else one ``effective: …`` line. It
+    never raises: an unread state is said, never guessed."""
+    try:
+        if not gate_tools_for_flag(key):
+            return ""
+    except Exception:
+        logger.debug("gate_effective: gate map unreadable for %s", key, exc_info=True)
+        return ""
+    probe = _GATE_EFFECTIVE_PROBE
+    if probe is None:
+        return "effective: unknown — the tool tier is not loaded in this process"
+    try:
+        return probe(key, value) or "effective: unknown — the gate gave no answer"
+    except Exception as exc:
+        logger.debug("gate_effective: probe failed for %s", key, exc_info=True)
+        return f"effective: unknown — the gate probe failed ({type(exc).__name__})"
 
 
 def _describe_pref(key: str, user_id, home_dir, include_chain: bool) -> SettingInfo:

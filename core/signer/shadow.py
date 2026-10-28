@@ -26,7 +26,9 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-KINDS = ("agree", "disagree", "unreachable", "no_intent")
+#: ``agent_only`` (090): the signer refused a fetched text it cannot prove; expected,
+#: and not a disagreement for the cut-over.
+KINDS = ("agree", "disagree", "unreachable", "no_intent", "agent_only")
 _MAX_BYTES = 5 * 1024 * 1024
 _VERDICT_TIMEOUT_SEC = 20.0
 _lock = threading.Lock()
@@ -94,6 +96,54 @@ def summary(days: float = 7.0, *, now: Optional[float] = None) -> Dict[str, Any]
             "since": first_ts, "days": days}
 
 
+def shadow_sign_classified(get_client, local, req, verdict):
+    """090: the signer's ``verdict_only`` on *req*, logged, then the local signature.
+
+    A text the agent may sign only because IT fetched it (``owner_turn_only``) is
+    class C in the signer by design — the signer cannot prove the fetch. That
+    refusal is logged ``agent_only``, not ``disagree``, so it never blocks the
+    cut-over; any other refusal is a real disagreement."""
+    from core.wallet.sign_policy import _render_signature
+    try:
+        get_client().call("sign.classified", dict(req.to_wire(), verdict_only=True))
+        log_comparison("agree", digest=verdict.digest, op="sign.classified", cls=verdict.cls)
+    except Exception as exc:  # noqa: BLE001 — shadow never blocks a signature
+        from core.signer.client import SignerRefused
+        if isinstance(exc, SignerRefused):
+            kind = ("agent_only" if getattr(verdict, "owner_turn_only", False)
+                    and (getattr(exc, "extra", None) or {}).get("cls") == "C" else "disagree")
+            log_comparison(kind, digest=verdict.digest, op="sign.classified",
+                           code=exc.code, reason=exc.reason)
+        else:
+            log_comparison("unreachable", digest=verdict.digest, op="sign.classified",
+                           reason=f"{type(exc).__name__}: {exc}")
+    return _render_signature(req.scheme, local.sign_message(req.payload.encode("utf-8")))
+
+
+class ShadowSolanaSigner:
+    """The local ``SolanaSigner`` with its class-A text signatures compared (090).
+    Every other attribute is the local signer's, unchanged."""
+
+    def __init__(self, local, client=None):
+        self._local = local
+        self._client = client
+
+    def _get_client(self):
+        if self._client is None:
+            from core.signer.client import SignerClient
+            self._client = SignerClient(timeout=_VERDICT_TIMEOUT_SEC)
+        return self._client
+
+    def sign_classified(self, req, verdict):
+        return shadow_sign_classified(self._get_client, self._local, req, verdict)
+
+    def __getattr__(self, name):
+        return getattr(self._local, name)
+
+    def __repr__(self) -> str:
+        return f"<ShadowSolanaSigner {self._local!r}>"
+
+
 class ShadowEvmSigner:
     """A ``LocalEoaSigner`` that also asks the signer. Never blocks."""
 
@@ -120,6 +170,11 @@ class ShadowEvmSigner:
 
     def sign_typed_data(self, domain, types, message):
         return self._local.sign_typed_data(domain, types, message)
+
+    def sign_classified(self, req, verdict):
+        """090: ask the signer for a ``verdict_only`` on the same text, log the
+        comparison, then sign locally — whatever the signer said."""
+        return shadow_sign_classified(self._get_client, self._local, req, verdict)
 
     def compare(self, tx: Dict[str, Any]) -> str:
         """Ask for a verdict on *tx* and record the comparison. Returns the kind."""
@@ -177,6 +232,15 @@ def shadow_wallet_class():
             wrapped = self._signers.get(key)
             if wrapped is None:
                 wrapped = ShadowEvmSigner(local)
+                self._signers[key] = wrapped
+            return wrapped
+
+        def solana_signer(self, account: int = 0):
+            local = super().solana_signer(account)
+            key = f"__shadow_solana:{int(account)}"
+            wrapped = self._signers.get(key)
+            if wrapped is None or wrapped._local is not local:
+                wrapped = ShadowSolanaSigner(local)
                 self._signers[key] = wrapped
             return wrapped
 

@@ -559,6 +559,19 @@ async def initialize_user_mcp_service(container: DependencyContainer) -> None:
     """
     if not getattr(container.config, "mcp_enabled", False):
         return
+    # 093 B3 (D5): operator servers leave the code tree. On a DEPLOYED tree
+    # (`.deployed_sha` present — never a dev checkout or a pip install) copy the
+    # repo file's servers into <polyrob_home>/mcp.json once (idempotent); the
+    # repo file then ships defaults only. Fail-open: the repo file still loads.
+    try:
+        from pathlib import Path
+        from core.version import deployed_sha
+        from tools.mcp.operator_home import migrate_repo_servers
+        base_dir = getattr(container.config, "base_dir", None) or "."
+        if deployed_sha():
+            migrate_repo_servers(Path(base_dir) / "config" / "mcp_config.json")
+    except Exception as e:
+        logger.warning(f"  ⚠ MCP operator-server migration skipped: {e}")
     db_manager = container.get_service('database_manager')
     if db_manager is None or getattr(db_manager, "connection", None) is None:
         logger.info("  ⏩ User MCP service skipped (no database) — MCP servers "
@@ -571,8 +584,10 @@ async def initialize_user_mcp_service(container: DependencyContainer) -> None:
         user_mcp_handler = UserMCPServersHandler(db_manager.connection)
         await user_mcp_handler.ensure_tables()
         container.register_service('user_mcp_handler', user_mcp_handler)
-        container.register_service('user_mcp_service',
-                                   init_user_mcp_service(user_mcp_handler))
+        user_mcp_service = init_user_mcp_service(user_mcp_handler)
+        # 093 B2: the count MCPTool.availability_gap reads (one /mcp add = on).
+        await user_mcp_service.refresh_enabled_count()
+        container.register_service('user_mcp_service', user_mcp_service)
         logger.info("  ✓ User MCP service initialized")
     except Exception as e:
         logger.warning(f"  ⚠ User MCP service initialization failed (optional): {e}")
@@ -590,13 +605,9 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
     try:
         # Get required services
         db_manager = container.get_service('database_manager')
-        alchemy_tool = container.get_service('alchemy')
 
         if not db_manager:
             raise ComponentInitializationError("Database manager required for auth")
-
-        if not alchemy_tool:
-            logger.warning("  ⚠ Alchemy tool not available - token gating will be limited")
 
         # Auth tables are already created during database initialization (STEP 1)
         # No need to recreate them here - just verify they exist
@@ -616,18 +627,14 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         from modules.auth.identity_mapper import IdentityMapper
         identity_mapper = IdentityMapper(
             db=db_manager,
-            user_profiles=db_manager.user_profiles,
-            alchemy_tool=alchemy_tool
+            user_profiles=db_manager.user_profiles
         )
         container.register_service('identity_mapper', identity_mapper)
         logger.info("  ✓ Identity mapper initialized")
 
         # Tier Manager
         from modules.auth.tier_manager import TierManager
-        tier_manager = TierManager(
-            db=db_manager,
-            alchemy_tool=alchemy_tool
-        )
+        tier_manager = TierManager(db=db_manager)
         container.register_service('tier_manager', tier_manager)
         logger.info("  ✓ Tier manager initialized")
 

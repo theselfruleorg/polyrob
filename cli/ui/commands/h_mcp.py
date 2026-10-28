@@ -213,9 +213,9 @@ async def h_mcp(ctx: Any) -> None:
 
     if sub in _WRITE_VERBS:
         from core import mcp_admin
-        ctx.emit(mcp_admin.mcp_reply(getattr(ctx, "user_id", None),
-                                     list(ctx.args),
-                                     container=getattr(ctx, "container", None)),
+        ctx.emit(await mcp_admin.mcp_reply_async(getattr(ctx, "user_id", None),
+                                                 list(ctx.args),
+                                                 container=getattr(ctx, "container", None)),
                  title="mcp")
         return
 

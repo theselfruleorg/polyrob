@@ -11,7 +11,8 @@ An empty slot renders ONE line, ``not installed — …``, in state ``ok``: abse
 is stated, never omitted (the status-silence rule), and a feature nobody
 installed does not mark every snapshot ``partial``.
 
-Until the wallet leaves core (067 P5b) the current builders register from
+The ``harness`` slot (093 D1) is filled from the tools tier. Until the
+wallet leaves core (067 P5b) the current builders register from
 their own modules; :data:`_IN_CORE_PROVIDERS` names them, and the snapshot
 imports them on first build. P5b deletes a row when the pack registers that
 slot instead.
@@ -28,7 +29,11 @@ logger = logging.getLogger(__name__)
 #: The SECTION_ORDER names a provider may fill (pinned against SECTION_ORDER by
 #: tests/unit/core/test_status_sections.py).
 CONTRIBUTED_SLOTS = ("room_actions", "creations", "collectibles", "liquidity",
-                     "wallet", "custody", "money", "economics")
+                     "wallet", "custody", "money", "economics", "harness")
+# ``harness`` (093 D1, the gated-tool view) is filled from the TOOLS tier: core
+# may not import it, so its provider registers itself when ``tools`` is
+# imported (the provider module is in ``tools/``). A process that never imports
+# ``tools`` shows the slot ``not installed``.
 
 #: In-core provider module -> the slots it registers on import. Shrink-only as
 #: P5b moves each builder into the wallet pack.
@@ -51,7 +56,8 @@ class SectionContext:
     ``ledger`` is the ``build_ledger`` dict (or the exception it raised) the
     caller passed in; the ``money`` builder fills it when it reads one, and the
     ``economics`` builder (built after it, in SECTION_ORDER) reads it for the
-    runway line."""
+    runway line. ``container`` is the live DI container (the caller's, else the
+    task agent's), ``None`` when the process has none (doctor, the console)."""
     uid: str
     data_dir: str
     now: float
@@ -60,6 +66,7 @@ class SectionContext:
     include_balances: bool = False
     ledger: Any = None
     liquidity_reader: Optional[Callable[..., Any]] = None
+    container: Any = None
     extras: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -91,6 +98,16 @@ def register_status_section(name: str, build: Callable[[SectionContext], Any], *
     if not callable(build):
         raise TypeError(f"status section {name!r}: {build!r} is not callable")
     _PROVIDERS[name] = SectionProvider(name, build, bool(tenant), str(source))
+
+
+def record_provider_error(name: str, reason: str) -> None:
+    """A provider of slot ``name`` that could not register (a higher tier's
+    import failed): the slot renders ``unavailable (<reason>)``, not ``not
+    installed`` — a failed provider is never mistaken for an absent one."""
+    if name not in CONTRIBUTED_SLOTS:
+        raise ValueError(f"status section {name!r} is not a slot")
+    logger.error("status provider for %s did not register: %s", name, reason)
+    _IMPORT_ERRORS[name] = str(reason)[:200]
 
 
 def provider(name: str) -> Optional[SectionProvider]:
@@ -143,4 +160,4 @@ def build_slot(name: str, ctx: SectionContext):
 
 
 __all__ = ["CONTRIBUTED_SLOTS", "NOT_INSTALLED", "SectionContext", "SectionProvider",
-           "build_slot", "provider", "register_status_section"]
+           "build_slot", "provider", "record_provider_error", "register_status_section"]

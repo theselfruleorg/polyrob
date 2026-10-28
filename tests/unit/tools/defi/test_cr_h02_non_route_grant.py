@@ -23,7 +23,7 @@ def _reset_rail():
 
 
 def _approve(spender, **kw):
-    return ApproveParams(token=USDC, spender=spender, amount=1.0,
+    return ApproveParams(chain="base", token=USDC, spender=spender, amount=1.0,
                          max_spend_usd=2.0, dry_run=False, **kw)
 
 

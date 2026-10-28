@@ -56,8 +56,9 @@ defaults of a fixed capability group on (Twitter, MCP, groups, the email
 surface, invoicing receive-side, allowlisted autonomous messaging, correspondent
 access and reply), widens the autonomous toolset, turns approvals into
 allow-audit-notify, opens the outbound policy under a daily cap, and raises axis
-4's default to `full`. Never moves: money-SPEND and self-modification verbs
-(they stay on the owner queue), host access, secrets. Clamp: it is effective
+4's default to `full`. Payment approvals default to `auto` within the money
+limits (`PAYMENT_APPROVAL_MODE`). Never moves: self-modification verbs (they stay on
+the owner queue), the money limits, host access, secrets. Clamp: it is effective
 only on a single-owner box — axis 1 on and an owner bound; otherwise the card
 shows `supervised` with the reason.
 
@@ -87,7 +88,7 @@ access, secrets.
 its own gate under every combination of the six.
 
 **An axis is the only source of its member flags.** The flags an axis turns on
-(`KB_ENABLED`, `GOALS_ENABLED`, `SHELL_TOOLS_ENABLED`, `MCP_ENABLED`, … — 51 in
+(`KB_ENABLED`, `GOALS_ENABLED`, `SHELL_TOOLS_ENABLED`, `MCP_ENABLED`, … — 50 in
 all, listed in the "Posture bundles" table of `docs/CONFIGURATION.md`) are not
 settings of their own. To change one member, add it to the ONE override line:
 
@@ -110,8 +111,8 @@ POLYROB has three kinds of settings. Each has one home and one command.
 
 | Kind | Example | Where it lives | Set it with |
 |---|---|---|---|
-| **Secret** (an API key or token) | `ANTHROPIC_API_KEY` | `~/.polyrob/.env` | `polyrob config set ANTHROPIC_API_KEY` (prompts, hidden) |
-| **Environment flag** (a switch or number the process reads at start) | `AUTONOMY_ENABLED`, `MEMORY_BACKEND` | `~/.polyrob/.env` (the active config home) | `polyrob config set KEY VALUE [--global]` |
+| **Secret** (an API key or token) | `ANTHROPIC_API_KEY` | `~/.polyrob/.env` (on a deployed box, `<data_home>/.env`) | `polyrob config set ANTHROPIC_API_KEY` (prompts, hidden) |
+| **Environment flag** (a switch or number the process reads at start) | `AUTONOMY_ENABLED`, `MEMORY_BACKEND` | the same file | `polyrob config set KEY VALUE [--global]` |
 | **Preference** (an owner setting the running agent reads live) | `style.verbosity`, `goals.daily_quota`, `chat.mode` | `<data_home>/identity/{instance_id}/user_{uid}/preferences.toml` | `polyrob config set style.verbosity brief` |
 
 `polyrob config set` routes by the shape of the key: a secret-shaped name goes
@@ -128,7 +129,7 @@ An **environment flag is read when the process starts**, so a change needs a
 restart of whatever is running (the REPL, `polyrob serve`, a surface, a systemd
 unit). Two of them are stricter still: `AGENT_COMPUTE_POSTURE` and the approval
 flags (`PAYMENT_APPROVAL_MODE`, `APPROVAL_GRANT_TTL_HOURS`,
-`PAYMENT_APPROVAL_TIMEOUT_SEC`) are frozen when the module first imports, so
+`APPROVAL_TIMEOUT_SEC`) are frozen when the module first imports, so
 changing them inside a live process is ignored on purpose — a running agent
 cannot widen its own host access or approval lane. A **preference** needs no
 restart at all.
@@ -144,12 +145,16 @@ path, so they validate a value and report a problem in the same words.
 
 **Which file does my process read?**
 
-| Process | Reads |
+Every process reads ONE ladder — the CLI, the REPL, `polyrob serve`, `python main.py`,
+`polyrob telegram` and a systemd unit alike. The process environment wins; a file only
+fills a key the environment does not set.
+
+| Process | Its process environment comes from |
 |---|---|
-| `polyrob` CLI and REPL | shell env, then `~/.polyrob/.env` (the list below); never a project file |
-| `polyrob serve` / `python main.py` | the same, then `config/.env.<env>`, which wins |
-| a systemd unit | its `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`) only |
-| the console's settings page | writes the active config home's `.env`; under a server posture its reply says the value applies to CLI runs only |
+| `polyrob` CLI and REPL | your shell |
+| `polyrob serve` / `python main.py` | your shell, or the container's `env_file` |
+| a systemd unit | its `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`) |
+| the console's settings page | writes the same file `polyrob config set` writes; on a server its reply says when the value applies |
 
 When a feature is off, every hint names the fix the same way:
 `enable: `polyrob config set KEY true` (takes effect: restart)`, or the
@@ -157,31 +162,38 @@ feature's own verb where it has one (`polyrob autonomy on`).
 
 ### Files and precedence
 
-On the CLI (local mode) the first value found wins, in this order:
+The first value found wins, in this order:
 
-1. your shell environment,
-2. `~/.polyrob/.env` — your active config home (`polyrob config set`, `polyrob auth add`, `polyrob init`),
-3. the legacy `~/.rob/.env` (read only).
+1. the process environment (your shell, or a unit's `EnvironmentFile`),
+2. on a deployed box, the file `<data_home>/.env` — every process of that
+   deployment (the agent unit, console, email, a root CLI) reads the same one,
+3. `~/.polyrob/.env` — your active config home (`polyrob config set`, `polyrob auth add`, `polyrob init`),
+4. the legacy `~/.rob/.env` (read only).
 
-Project-local env files and MCP command configurations are not auto-loaded.
-Move intended settings into the active config home; `POLYROB_HOME` selects a
-separate operator-managed profile.
+Project-local env files (`./.env`, `./.polyrob/.env`), the repository's
+`config/.env.*` files and MCP command configurations are not loaded by any
+process. `polyrob config path` names a leftover `config/.env.*` file as "NOT
+read"; `polyrob config migrate` copies its keys into `~/.polyrob/.env`.
+`POLYROB_HOME` selects a separate operator-managed profile.
 
-A server started with `polyrob serve` or `python main.py` loads the `config/`
-files last and lets them win. A systemd deploy reads its environment from the
-unit file (for example `/etc/polyrob/polyrob.env`) and never touches `config/`.
+`polyrob config set` writes `<data_home>/.env` on a deployed box, else
+`~/.polyrob/.env`. It never writes `/etc/polyrob/polyrob.env`: a new value for a
+key that file sets is refused, and the reply names the file to change.
 
 ```bash
 polyrob config path        # the ENV files this process reads, highest precedence first
 polyrob config show        # the merged result, secrets redacted
-polyrob config explain KEY # every layer that sets KEY, and which one won
+polyrob config explain KEY # every layer that sets KEY, which one won, and the state it
+                           # really has (`MCP_ENABLED` on with no server: OFF)
 ```
 
 `config path` lists env files only. To validate your preferences file as well,
 name the tenant: `polyrob config check --user <uid>`.
 
 There are two environment names, `development` (default) and `production`,
-resolved from `CONFIG_ENV`, then `ENV`. There is no staging.
+resolved from `CONFIG_ENV`, then `ENV`. There is no staging. The name selects no
+file. Under `production` (or `ENVIRONMENT=production`) the API server refuses
+to start without a strong `JWT_SECRET_KEY`.
 
 ### A named profile is a whole separate home
 
@@ -264,8 +276,15 @@ another model with its own `payload.model`. The old `CHAT_PROVIDER`/`CHAT_MODEL`
 names are retired; set alone, POLYROB refuses to start and names the
 `DEFAULT_` name to use.
 
-`DEEPSEEK_API_KEY` is never auto-selected (its direct client has no tool
-calling); pass `-p deepseek` or reach DeepSeek through OpenRouter.
+`DEEPSEEK_API_KEY` selects DeepSeek's own API (last in the preference order
+above): `deepseek-flash` by default, `deepseek-v4-pro`, and the legacy ids
+`deepseek-chat` (thinking off) and `deepseek-reasoner` (thinking on). The
+names `deepseek-v4.1-flash` and `deepseek-pro` also work: Rob sends DeepSeek
+the API name (`deepseek-flash`, `deepseek-v4-pro`). Thinking
+is on by default; Rob sends each step's `reasoning_content` back to DeepSeek,
+as its API requires. Weekday peak hours (01:00–04:00 and
+06:00–10:00 UTC) bill at twice the catalog price, and the usage record
+carries that exact charge.
 `PERPLEXITY_API_KEY` is a web-search tool key, not a provider.
 
 ### Flat-rate and subscription plans
@@ -538,16 +557,28 @@ refuses it. `docker` is the hardened container. `ssh` runs on a remote host
 you name with `CODE_EXEC_SSH_HOST` and must be attested disposable with
 `CODE_EXEC_SSH_SANDBOXED=true` before a server accepts it.
 
+If the configured backend cannot start for Rob's service user, `shell`, `process`
+and `code_execution` show `gated:backend-unavailable` with the reason, and Rob
+does not call them. `polyrob doctor --full`, run as that service user, prints
+which backends work.
+
 ### MCP
 
-`polyrob config set MCP_ENABLED true` connects the outbound `mcp` tool to the servers in
-`config/mcp_config.json` (secrets as `${VAR}` placeholders). Adding a server
-from chat — and what an added server can and cannot reach — is in
+`polyrob config set MCP_ENABLED true` turns on the outbound `mcp` tool. It is
+usable as soon as one server exists: one of yours (`/mcp add`, from the next
+turn) or an operator server in `~/.polyrob/mcp.json` (secrets as `${VAR}`
+placeholders). `config/mcp_config.json` in the code tree ships the defaults
+only — a deploy or an update replaces it, so put your own servers in
+`~/.polyrob/mcp.json`; on a deployed box the servers already in the repo file
+are copied there once at startup. On a setup installed from a distribution,
+`mcp.json` belongs to the distribution and `polyrob profile update` replaces it:
+add your own servers there with `/mcp add`. Adding a server from chat — and what an
+added server can and cannot reach — is in
 [owner-controls.md](owner-controls.md#mcp-servers-giving-the-agent-new-tools).
 
 A server that holds its own money credential (an exchange key, an external
 wallet) can move money without Rob's wallet. Mark it in
-`~/.polyrob/mcp.json` or `config/mcp_config.json` with `"money": true`:
+`~/.polyrob/mcp.json` with `"money": true`:
 
 ```json
 {"servers": {"exchange": {"type": "http", "url": "https://mcp.example.com/rpc",
@@ -798,7 +829,7 @@ context-compaction step so old adversarial text cannot hijack it. Both are on.
 
 ## 14. Appendix — every flag
 
-There are about 780 catalogued flags in three tiers. About 85 are **public**:
+There are about 650 catalogued flags in three tiers. About 80 are **public**:
 the posture axes, paths, provider and model selectors, keys, caps and the main
 feature switches. The rest are **advanced** (tuning an operator rarely needs) or
 **internal** (reverts, aliases and debug knobs that are scheduled for removal).
@@ -816,9 +847,9 @@ polyrob config search "quiet"             # by description
 ```
 
 The groups, largest first: tools / code-exec / cron / approvals · identity /
-local profile · misc runtime knobs · autonomy loops · billing / x402 / wallet ·
-LLM / providers · API / server / sessions · DeFi · memory · console ·
-delegation · skills · crypto trading · preferences · avatar · self-update ·
+local profile · misc runtime knobs · billing / x402 / wallet · autonomy loops ·
+LLM / providers · DeFi · API / server / sessions · memory · console ·
+delegation · crypto trading · skills · avatar · preferences · self-update ·
 web fetch.
 
 The complete reference — every flag, its default, and the code that reads it —

@@ -45,14 +45,13 @@ ASSIGNABLE_ROLES: Set[str] = set(VALID_ROLES) - {'owner'}
 VALID_TIERS: List[str] = [
     'free',
     'free_access',
-    'holder',
     'x402',
     'admin',
 ]
 
-FULL_ACCESS_TIERS: Set[str] = {'free_access', 'holder', 'x402', 'admin'}
+FULL_ACCESS_TIERS: Set[str] = {'free_access', 'x402', 'admin'}
 
-PAID_TIERS: Set[str] = {'free_access', 'holder', 'x402'}
+PAID_TIERS: Set[str] = {'free_access', 'x402'}
 
 
 def is_admin_role(role: str) -> bool:

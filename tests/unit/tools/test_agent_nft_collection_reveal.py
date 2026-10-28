@@ -158,13 +158,13 @@ def _tool(chain, *, decision=None, seen=None):
 def test_the_verb_is_off_without_agent_nft_enabled(monkeypatch):
     monkeypatch.delenv("AGENT_NFT_ENABLED", raising=False)
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
-    assert "AGENT_NFT_ENABLED" in _err(_run(tool.agent_nft_collection_reveal(RevealParams())))
+    assert "AGENT_NFT_ENABLED" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
 def test_the_verb_needs_no_agent_nft_package(armed):
     tool, _ = _tool(Chain(head=100, blocks={1: 0}))
     tool._impl = lambda: None                                   # package absent
-    res = _run(tool.agent_nft_collection_reveal(RevealParams()))
+    res = _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood")))
     assert _err(res) is None and "nothing to reveal" in _text(res)
 
 
@@ -172,13 +172,13 @@ def test_no_pinned_collection_refuses(armed, monkeypatch):
     pin(monkeypatch)
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
     assert "no collection with the reveal capability is pinned" in _err(
-        _run(tool.agent_nft_collection_reveal(RevealParams())))
+        _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
 def test_a_collection_without_the_reveal_capability_is_not_revealed(armed, monkeypatch):
     pin(monkeypatch, profile(COLLECTION, capabilities=("mint",)))
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
-    assert "reveal capability" in _err(_run(tool.agent_nft_collection_reveal(RevealParams())))
+    assert "reveal capability" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
 def test_an_untrusted_registry_refuses(armed, monkeypatch):
@@ -186,18 +186,18 @@ def test_an_untrusted_registry_refuses(armed, monkeypatch):
         raise collection_registry.CollectionRegistryError("unknown spec")
     monkeypatch.setattr(collection_registry, "profiles", boom)
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
-    assert "cannot be trusted" in _err(_run(tool.agent_nft_collection_reveal(RevealParams())))
+    assert "cannot be trusted" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
 def test_nothing_due_sends_nothing(armed):
     tool, seen = _tool(Chain(head=100, blocks={1: 0, 2: 100}))
-    res = _run(tool.agent_nft_collection_reveal(RevealParams(dry_run=False)))
+    res = _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", dry_run=False)))
     assert "nothing to reveal" in _text(res) and "intent" not in seen and not FakeRail.sent
 
 
 def test_the_intent_is_the_reveal_shape_and_goes_through_the_guard(armed):
     tool, seen = _tool(Chain(head=100, blocks={1: 0, 2: 7, 3: 9, 4: 200}))
-    res = _run(tool.agent_nft_collection_reveal(RevealParams()))
+    res = _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood")))
     intent, tx = seen["intent"], seen["tx"]
     assert intent.is_collection_reveal and tuple(intent.reveal_ids) == (2, 3)
     assert (intent.to, intent.amount_raw, intent.token) == (COLLECTION, 0, None)
@@ -211,20 +211,20 @@ def test_the_intent_is_the_reveal_shape_and_goes_through_the_guard(armed):
 def test_max_spend_is_clamped_to_the_flag(armed, monkeypatch):
     monkeypatch.setenv(V.MAX_GAS_FLAG, "0.05")
     tool, seen = _tool(Chain(head=100, blocks={1: 7}))
-    _run(tool.agent_nft_collection_reveal(RevealParams(max_spend_usd=5.0)))
+    _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", max_spend_usd=5.0)))
     assert seen["intent"].max_spend_usd == 0.05
 
 
 def test_a_zero_cap_disables_the_verb(armed, monkeypatch):
     monkeypatch.setenv(V.MAX_GAS_FLAG, "0")
     tool, seen = _tool(Chain(head=100, blocks={1: 7}))
-    assert "disabled" in _err(_run(tool.agent_nft_collection_reveal(RevealParams())))
+    assert "disabled" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
 def test_a_guard_refusal_sends_nothing(armed):
     from core.wallet.tx_guard import Decision
     tool, _ = _tool(Chain(head=100, blocks={1: 7}), decision=Decision(False, "refused: x"))
-    res = _run(tool.agent_nft_collection_reveal(RevealParams(dry_run=False)))
+    res = _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", dry_run=False)))
     assert "NOT SENT" in _text(res) and not FakeRail.sent
 
 
@@ -232,7 +232,7 @@ def test_a_live_run_sends_and_reports_a_recommit_as_an_alert(armed):
     logs = [{"address": COLLECTION, "topics": [R.TOPIC_REVEALED, "0x" + format(1, "064x")]},
             {"address": COLLECTION, "topics": [R.TOPIC_RECOMMITTED, "0x" + format(2, "064x")]}]
     tool, _ = _tool(Chain(head=100, blocks={1: 7, 2: 8}, receipt_logs=logs))
-    res = _run(tool.agent_nft_collection_reveal(RevealParams(dry_run=False)))
+    res = _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", dry_run=False)))
     text = _text(res)
     assert len(FakeRail.sent) == 1 and "confirmed" in text
     assert "revealed 1 [1]" in text and "ALERT agent_nft_collection_reveal: 1 id(s) RE-COMMITTED [2]" in text
@@ -243,7 +243,7 @@ def test_the_owner_pause_holds_a_live_reveal(armed, monkeypatch):
     from core.money import authority
     monkeypatch.setattr(authority, "spend_pause_refusal", lambda entry=False: "refused: paused")
     tool, seen = _tool(Chain(head=100, blocks={1: 7}))
-    res = _run(tool.agent_nft_collection_reveal(RevealParams(dry_run=False)))
+    res = _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", dry_run=False)))
     assert "paused" in _err(res) and "intent" not in seen
 
 
@@ -252,7 +252,7 @@ def test_the_trading_entry_pause_does_not(armed, monkeypatch):
     monkeypatch.setattr(authority, "spend_pause_refusal",
                         lambda entry=False: "refused: entry paused" if entry else None)
     tool, seen = _tool(Chain(head=100, blocks={1: 7}))
-    _run(tool.agent_nft_collection_reveal(RevealParams(dry_run=False)))
+    _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", dry_run=False)))
     assert "intent" in seen
 
 

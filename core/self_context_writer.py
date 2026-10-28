@@ -613,7 +613,7 @@ class SelfContextWriter:
         A directory of ``self.0.md``/``self.1.md`` says WHAT was archived and
         nothing about WHY or what replaced it — so a superseded rule could not be
         traced back to the decision that superseded it, which is exactly the
-        question the 09-08 den incident raised. Append-only, best-effort: the
+        question the 09-08 group-room incident raised. Append-only, best-effort: the
         caller must never fail a write because provenance could not be recorded.
         """
         index = self._root(uid) / ".archived" / "INDEX.md"

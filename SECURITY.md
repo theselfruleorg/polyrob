@@ -48,8 +48,18 @@ security or financial impact.
 POLYROB includes optional support for crypto wallets and x402 pay-per-request payments.
 These features are **OFF by default** and gated behind environment flags:
 
-- `AGENT_WALLET_ENABLED=true` — enables the agent's personal wallet.
+- `AGENT_WALLET_ENABLED=true` — enables the agent's personal wallet (`AGENT_WALLET_NETWORK`
+  defaults to `testnet`).
 - `X402_CLIENT_ENABLED=true` — enables the agent-side x402 paying tool.
+- `DEFI_TRADE_ENABLED=true` / `SOLANA_TRADE_ENABLED=true` — enable the on-chain money verbs
+  (transfers, approvals, swaps). Every live call is simulated and its measured deltas are held
+  to the declared intent, and it refuses unless that chain's RPC is pinned.
+
+Every spend sits inside a per-transaction ceiling (`AGENT_WALLET_MAX_PER_TX_USD`) and a rolling
+24-hour cap (`WALLET_DAILY_CAP_USD`); a spend the agent starts above `DEFI_AUTONOMOUS_MAX_USD`
+waits for an owner approval. An optional separate signer process (`WALLET_SIGNER=shadow|remote`)
+runs under its own user with its own hard caps, which bound every other cap. A wallet seed that
+sits in an `.env` file the agent's user can read refuses code runs on the host.
 
 > ⚠️ **No security audit.** The crypto, wallet, signing, and payment code in POLYROB has
 > **not** undergone any independent or third-party security audit. It is provided **as-is**,
@@ -63,20 +73,28 @@ keys or mnemonics; use environment variables or a secrets manager.
 
 ### Code-execution backends
 
-POLYROB ships two code-execution backends, selected via `CODE_EXEC_BACKEND`. The whole
-feature is **disabled by default** (`CODE_EXEC_ENABLED=false`).
+Code execution is **disabled by default** (`CODE_EXEC_ENABLED=false`). `CODE_EXEC_BACKEND`
+selects the backend:
 
-> **Warning:** The default `local_subprocess` backend is a convenience for single-user /
-> local development. It is **NOT a security sandbox** — running it in a multi-tenant or
-> production environment is unsafe. For server deployments use the hardened
-> `CODE_EXEC_BACKEND=docker` backend (locked-down container: capabilities dropped,
-> no-new-privileges, read-only rootfs, workspace-only mount, network deny-by-default —
-> see `tools/code_exec/SANDBOX_SECURITY.md`), or keep `CODE_EXEC_ENABLED=false`.
+- `local_subprocess` (the default) — runs on this host. It is **NOT a security sandbox**: use it
+  only for single-user local development. A server refuses it.
+- `docker` — the hardened container (capabilities dropped, no-new-privileges, read-only rootfs,
+  workspace-only mount, network deny-by-default — see `tools/code_exec/SANDBOX_SECURITY.md`).
+  `CODE_EXEC_DOCKER_BINARY=podman` runs it on Podman. Use this on a server.
+- `ssh` — runs on a remote host with the SSH user's full rights. It is **not a sandbox**; a server
+  refuses it unless you set `CODE_EXEC_SSH_SANDBOXED=true` to attest that the host is disposable.
+- `modal`, `daytona`, `vercel_sandbox`, `singularity` — optional packs, tested against fakes so far.
+
+The agent's `shell` and `process` tools follow the same rule: they run in the session sandbox,
+and only the owner's own turn at the owner's own terminal runs on the host
+(`AGENT_COMPUTE_POSTURE=3`). A command guard classifies every shell line: a floor that no approval
+lifts, and a dangerous class that waits for the owner and that unattended runs refuse.
 
 ### MCP / external tool integrations
 
-MCP server credentials use `${VAR}` placeholder syntax in `config/mcp_config.json` and are
-resolved from environment variables at startup. Never commit real tokens to that file.
+MCP server credentials go in `~/.polyrob/mcp.json` (the operator file, outside the code tree),
+with `${VAR}` placeholder syntax resolved from environment variables at startup. The tracked
+`config/mcp_config.json` holds only the shipped defaults: never put a real token there.
 
 ### General guidance
 

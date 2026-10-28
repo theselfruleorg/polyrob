@@ -3,7 +3,7 @@
 Single home for "does the CLI have a *usable* provider key, and what do we do if
 not." The gating decisions (warn / onboard / resolve) drive off
 ``initializable_providers_with_keys`` — the SSOT in ``modules.llm.profiles`` — so a
-key that can't bootstrap a client (deepseek: direct client disabled) never passes a
+key that can't bootstrap a client (a declared provider with no client) never passes a
 guard only to hard-crash at container build. The raw ``providers_with_keys`` stays
 the DISPLAY oracle (doctor/webview show a key is present even when unusable directly).
 

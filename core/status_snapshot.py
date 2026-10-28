@@ -220,7 +220,7 @@ def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
 
     067 P5a: the SLOTS (``core.status_sections.CONTRIBUTED_SLOTS``: wallet,
     custody, money, economics, liquidity, collectibles, creations,
-    room_actions) come from their registered providers, built in SECTION_ORDER
+    room_actions, harness) come from their registered providers, built in SECTION_ORDER
     (money before economics: the runway line reads the ledger money read); an
     empty slot is one ``not installed`` line."""
     from core.status_sections import CONTRIBUTED_SLOTS, SectionContext, build_slot
@@ -229,7 +229,9 @@ def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
         container=container, window_hours=window_hours)
     ctx = SectionContext(uid=uid, data_dir=resolved_dir, now=now, window_sec=window_sec,
                          include_money=include_money, include_balances=include_balances,
-                         ledger=ledger, liquidity_reader=liquidity_enumerate_fn)
+                         ledger=ledger, liquidity_reader=liquidity_enumerate_fn,
+                         container=(container if container is not None
+                                    else getattr(task_agent, "container", None)))
     sections: Dict[str, Section] = {}
     # ⚠️ Insertion order IS the render order — `test_every_section_is_always_present`
     # asserts `tuple(snap.sections) == SECTION_ORDER`.

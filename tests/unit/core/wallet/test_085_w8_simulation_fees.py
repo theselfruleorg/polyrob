@@ -154,7 +154,7 @@ def test_a_missing_gas_used_refuses_when_gas_was_charged():
 def test_a_placeholder_gas_limit_never_starves_the_simulation():
     """Live 2026-10-19..20: the built swap carried the broadcaster's fixed 120k
     gas, the route needs ~341k, and the validated simulation ran out of gas
-    ("execution reverted", data 0x) — every buyback was refused. The simulated
+    ("execution reverted", data 0x) — every rebuy was refused. The simulated
     limit is never below the block-capped default; a larger given one is kept."""
     for given, expected in ((120_000, simulation._DEFAULT_TX_GAS),
                             (20_000_000, 20_000_000)):

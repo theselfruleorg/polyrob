@@ -28,12 +28,9 @@ from core.surfaces.cards import is_go_word, with_go_hint
 
 logger = logging.getLogger(__name__)
 
-#: Chain used when the owner names none — matches the tool default.
-_DEFAULT_CHAIN = "base"
-
 USAGE = (
-    "Usage: /identity register [on <chain>] [go]\n"
-    "/identity set-uri [on <chain>] [id <agentId>] [go]\n\n"
+    "Usage: /identity register on <chain> [go]\n"
+    "/identity set-uri on <chain> [id <agentId>] [go]\n\n"
     "`register` mints THIS instance's identity token on the ERC-8004 Identity "
     "Registry from my own wallet. The registry is PINNED per chain — it cannot "
     "be aimed anywhere else.\n"
@@ -104,7 +101,7 @@ async def identity_reply(user_id: Optional[str], data_dir: str,
         execute = True
         tokens.pop()
 
-    chain = _DEFAULT_CHAIN
+    chain = None
     agent_id_raw = None
     for i, word in enumerate(list(tokens)):
         low = word.lower()
@@ -112,6 +109,11 @@ async def identity_reply(user_id: Optional[str], data_dir: str,
             chain = tokens[i + 1]
         elif low in ("id", "agent", "agentid") and i + 1 < len(tokens):
             agent_id_raw = tokens[i + 1]
+
+    if not chain:
+        from core.wallet import chains
+        return (f"Name the network: /identity {verb} on <network>. There is no default "
+                f"network. Networks: {', '.join(chains.names())}.\n{USAGE}")
 
     from surfaces.telegram.token_ops import _owner_ctx
     ctx = _owner_ctx(user_id)

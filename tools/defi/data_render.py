@@ -365,8 +365,13 @@ def _fmt_scan_numbers(pool) -> str:
 _SCAN_ORDER = ("SURVIVOR", "CANDIDATE", "TOO_NEW", "PASS", "UNSCREENABLE", "WASH")
 
 
-def _render_scan(rows, *, chain: str, kind: str, excluded: int, floor: float) -> List[str]:
-    """Pure. Every classified pool, ordered by verdict, nothing dropped."""
+def _render_scan(rows, *, chain: str, kind: str, excluded: int, floor: float,
+                 read_count: Optional[int] = None) -> List[str]:
+    """Pure. Every classified pool, ordered by verdict, nothing dropped.
+
+    ``read_count`` is how many pools the indexer sent. 086 W9: a floor that
+    removed every pool used to render "no pools were returned" — the indexer
+    HAD returned them, and the hunt reported an empty chain."""
     label = "newest" if kind == "new" else "trending"
     head = [
         f"{label} pools on {chain} — {len(rows)} classified",
@@ -376,10 +381,19 @@ def _render_scan(rows, *, chain: str, kind: str, excluded: int, floor: float) ->
         "is not a safety claim.",
         "",
     ]
+    if not rows and excluded:
+        sent = read_count if read_count is not None else excluded
+        return head + [
+            f"  the indexer returned {sent} pool(s); all of them were below "
+            f"your liquidity floor ({_fmt_usd(floor)}).",
+            "  Lower the floor to see them — a filter that removed everything is "
+            "not an empty chain.",
+        ]
     if not rows:
         return head + [
-            "  no pools were returned for this chain and window.",
-            "  That is an empty answer from the indexer, not a verdict on the chain.",
+            "  no pools: the indexer answered with ZERO pools for this chain and window.",
+            "  That is an empty answer from the indexer, not a failed read and "
+            "not a verdict on the chain.",
         ]
 
     counts = {}
@@ -425,7 +439,7 @@ def _price_line(price) -> str:
 
     ⚠️ It used to read ``price: X  confidence: Y  pools: N  liquidity: Z`` —
     three numbers from three scopes, since the price is ONE pool's and the
-    liquidity is the SUM. On 2026-09-23 the SAFETY rail reported PNL liquidity
+    liquidity is the SUM. On 2026-09-23 the SAFETY rail reported one token's liquidity
     as $4,133 and then $17,887 with no flag, because it had silently switched
     venue; neither pool had moved. Nothing in this line could have revealed
     that. Naming the address is what lets two reports be told apart.
@@ -620,7 +634,7 @@ def _render_candles(candles, summary, *, chain: str, token: str, pool: str,
         pool_line = (f"  pool read: {pool}   window: {aggregate}x{timeframe}\n"
                      f"  {basis} of {count} indexed pool{'s' if count != 1 else ''}"
                      f" · {liq_txt} · {vol_txt}")
-        # 2026-09-23: reserve and volume pointed at DIFFERENT pools for PNL —
+        # 2026-09-23: reserve and volume pointed at DIFFERENT pools for one token —
         # $18,190/$1,390 against $4,148/$61,792 — and a reviewer who read the
         # deeper one filed a red flag against a correct rail. Naming the pool we
         # did NOT read is the only way the reader can see that choice was made.

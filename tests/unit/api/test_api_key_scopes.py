@@ -20,7 +20,7 @@ async def keys(tmp_path, monkeypatch):
     await conn.execute('CREATE TABLE api_keys (user_id TEXT, key_hash TEXT UNIQUE, key_prefix TEXT, '
                        'name TEXT, created_at TEXT, expires_at TEXT, is_active INTEGER, '
                        'scopes TEXT, last_used TEXT, revoked_at TEXT)')
-    manager = APIKeyManager(conn, SimpleNamespace(get_user_tier=AsyncMock(return_value='holder')))
+    manager = APIKeyManager(conn, SimpleNamespace(get_user_tier=AsyncMock(return_value='free_access')))
     container = SimpleNamespace(get_service=lambda name: conn if name == 'database_manager' else None)
     monkeypatch.setattr(DependencyContainer, 'get_instance', classmethod(lambda cls: container))
     yield manager

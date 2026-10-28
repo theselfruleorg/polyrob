@@ -111,6 +111,10 @@ def test_the_prod_variant_renders_the_owner_dm_with_the_prod_grants(fresh):
 def test_the_owner_first_call_is_at_most_45k_under_the_prod_posture(fresh):
     """081 bar 3 / WS-3.1 acceptance: the owner's first call (system + tool
     schemas) under the prod posture is at most 45K tokens (was 58K here, 90K
-    measured on prod with its larger identity docs)."""
+    measured on prod with its larger identity docs).
+
+    093 (2026-10-28) raised it to 45.7K for the operational self-awareness
+    surface (propose_setting + agent_status(tool=), the pinned harness manual,
+    the owner-seat harness rule) after trimming the rest; trim, don't raise."""
     sizes = json.loads((fresh / "sizes.json").read_text(encoding="utf-8"))
-    assert sizes[GEN.PROD_PREFIX + "owner_telegram_dm"]["total_tokens"] <= 45_000
+    assert sizes[GEN.PROD_PREFIX + "owner_telegram_dm"]["total_tokens"] <= 45_700

@@ -6,7 +6,6 @@
       "additionalProperties": false,
       "properties": {
         "chain": {
-          "default": "base",
           "description": "Chain to discover pools on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
           "type": "string"
         },
@@ -30,6 +29,9 @@
           "type": "number"
         }
       },
+      "required": [
+        "chain"
+      ],
       "type": "object"
     }
   },

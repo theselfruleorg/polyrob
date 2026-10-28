@@ -31,8 +31,10 @@ def test_count_authored_skills_matches_bundled_library_size():
     # ten basic trading procedure skills (29); Codex A10 split treasury-trading's
     # 57 KB body into five sibling skills (34). incident-response and
     # adversarial-consensus added the two generic procedure skills (36). 079 P0 added
-    # pay-for-work + get-paid-for-work, the task-agnostic money flows (38).
-    assert mgr.count_authored_skills() == 38
+    # pay-for-work + get-paid-for-work, the task-agnostic money flows (38). 086 W7
+    # added trading-mandate, the one skill for starting/stopping a trading programme (39).
+    # 093 C2 added harness-manual, the generated operations manual owner seats pin (40).
+    assert mgr.count_authored_skills() == 40
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():

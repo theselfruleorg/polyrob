@@ -205,6 +205,12 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# Same escape hatch as owner_ask.
 		from tools.controller.card_actions import register_card_actions
 		register_card_actions(self)
+		# 086 W5: the trading mandate's intake card (same gates as propose_action).
+		from tools.controller.trade_mandate_action import register_trade_mandate_action
+		register_trade_mandate_action(self)
+		# 093 D1: a setting change as a one-tap owner card (same gates + owner turn).
+		from tools.controller.setting_actions import register_setting_actions
+		register_setting_actions(self)
 
 		# NOTE: Backward compat aliases are registered LAZILY after task tool loads
 		# NOT here in __init__ - aliases to non-existent actions cause confusion

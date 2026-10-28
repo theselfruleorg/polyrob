@@ -174,8 +174,7 @@ class ToolManagementMixin:
 					# MCP tool: Register individual MCP tools as direct actions
 					# This eliminates the nested arguments problem that LLMs struggle with
 					if tool_id == 'mcp':
-						self.logger.info("✅ MCP tool loaded - registering individual MCP tools as direct actions")
-						await self._register_mcp_tools_as_direct_actions(tool)
+						await self.sync_mcp_session(tool)
 				else:
 					from tools.controller.tool_load_report import describe_missing_tool
 					self._record_tool_load_failure(tool_id, describe_missing_tool(
@@ -191,6 +190,19 @@ class ToolManagementMixin:
 		self._register_backward_compat_aliases()
 
 		return loaded
+
+	async def sync_mcp_session(self, tool: Any) -> None:
+		"""Bring this session's MCP state up to date: connect the tenant's saved
+		servers (drop removed ones), reconcile the flat ``{server}_{tool}``
+		actions, and link this controller to the tool so a later ``/mcp add`` or
+		``/mcp remove`` reaches it (tools/mcp/user_servers.py). Cheap when nothing
+		changed: one store read and an in-memory diff."""
+		from tools.controller.mcp_gate import prepare_user_servers
+		await prepare_user_servers(tool, self.container, getattr(self, 'user_id', None))
+		await self._register_mcp_tools_as_direct_actions(tool)
+		attach = getattr(tool, 'attach_controller', None)
+		if callable(attach):
+			attach(self)
 
 	def add_tool(self, name: str, tool: Any) -> Dict[str, Callable]:
 		"""

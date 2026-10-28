@@ -62,7 +62,7 @@ class _SlowT4Rail(t4._Rail):
 async def test_run_guarded_waits_for_the_receipt_off_the_loop():
     tool, gate = t4._tool()
     tool._rail_factory = _SlowT4Rail
-    res, ticks = await _ticks_during(tool.approve_token(ApproveParams(
+    res, ticks = await _ticks_during(tool.approve_token(ApproveParams(chain="base",
         token=t4.USDC, spender=t4.ROUTER, amount=1.0, max_spend_usd=2.0,
         dry_run=False)))
     assert res.error is None, res.error
@@ -76,7 +76,7 @@ async def test_transfer_waits_for_the_receipt_off_the_loop(monkeypatch):
                         lambda c, t: type("I", (), {"decimals": 6, "symbol": "USDC"})())
     tool, gate = t4._tool()
     tool._rail_factory = _SlowT4Rail
-    res, ticks = await _ticks_during(tool.transfer(TransferParams(
+    res, ticks = await _ticks_during(tool.transfer(TransferParams(chain="base",
         token=t4.USDC, to="0x" + "3" * 40, amount=1.0, max_spend_usd=2.0,
         dry_run=False)))
     assert res.error is None, res.error

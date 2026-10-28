@@ -744,6 +744,7 @@ _PASS_WORDS = {
     "is_blacklisted": "no blacklist", "transfer_pausable": "not pausable",
     "selfdestruct": "no self-destruct", "is_open_source": "source verified",
     "slippage_modifiable": "tax cannot be changed",
+    "owner_change_balance": "owner cannot change balances",
     "personal_slippage_modifiable": "no per-wallet tax", "trading_cooldown": "no cooldown",
     "bytecode": "contract code present", "closable": "mint not closable",
     "metadata_mutable": "metadata fixed", "rugcheck_risks": "no rugcheck risks",
@@ -762,6 +763,7 @@ _FLAG_ALIASES = {
     "transfer_hook_active": "transfer hook", "transfer_fee_upgradable": "transfer fee can be raised",
     "transfer_hook_upgradable": "transfer hook can be changed",
     "holder_concentration_over_50pct": "top-10 hold over 50%",
+    "owner_change_balance": "owner can change balances",
 }
 #: The check whose (longer) result explains a merged flag.
 _FLAG_DETAIL = {"upgradeable proxy": "proxy", "mintable": "mintable",
@@ -777,6 +779,7 @@ _FLAG_CHECKS = {
     "on the pump.fun curve": {"pump_curve"}, "low organic activity": {"organic_score"},
     "transfer hook": {"transfer_hook"}, "transfer hook can be changed": {"transfer_hook_upgradable"},
     "transfer fee can be raised": {"transfer_fee_upgradable"}, "mint can be closed": {"closable"},
+    "owner can change balances": {"owner_change_balance"},
 }
 #: Flags that are ordinary for a canonical, issuer-run token (e.g. USDC).
 _ISSUER_FLAGS = {"upgradeable proxy", "mintable", "freezable", "blacklist",

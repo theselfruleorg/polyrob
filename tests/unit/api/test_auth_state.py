@@ -9,11 +9,11 @@ from api.auth_state import set_auth_state
 def test_writes_all_five_canonical_fields():
     state = types.SimpleNamespace()
     set_auth_state(
-        state, user_id="u1", tier="holder", role="admin",
+        state, user_id="u1", tier="free_access", role="admin",
         payment_method="x402", authenticated=True,
     )
     assert state.user_id == "u1"
-    assert state.tier == "holder"
+    assert state.tier == "free_access"
     assert state.role == "admin"
     assert state.payment_method == "x402"
     assert state.authenticated is True

@@ -71,10 +71,6 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
                 "(the full list: `polyrob auth add <name>`)")
             continue
         hint = f" ({profile.signup_url})" if profile.signup_url else ""
-        # O4: a non-initializable provider (e.g. DeepSeek) can't bootstrap the
-        # agent alone — say so AT the prompt.
-        if not profile.initializable:
-            hint += " — can't bootstrap alone; pair with another provider (e.g. OpenRouter)"
         entered = click.prompt(
             f"{profile.display_name} API key{hint} (blank to skip)",
             default="", show_default=False, hide_input=True)
@@ -649,8 +645,7 @@ def init_cmd(
             pass
     if not usable_providers_with_credentials(env=merged_env):
         click.echo("⚠ No usable LLM API key set — add one with "
-                   "`polyrob config set OPENROUTER_API_KEY <key> --global` "
-                   "(for DeepSeek models use OPENROUTER_API_KEY + model deepseek/deepseek-chat)")
+                   "`polyrob config set OPENROUTER_API_KEY <key> --global`")
     # 030 WS-F7 (C8): the scripted install path (`--no-prompt`, the README's
     # recommendation) used to end with SILENCE about the capability axes — the
     # user was never told the axes exist or where they landed. Print the same

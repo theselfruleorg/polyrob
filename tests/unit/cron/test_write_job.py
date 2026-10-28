@@ -26,7 +26,7 @@ def test_validate_refuses_other_verbs_bad_params_and_bad_delivery():
         with pytest.raises(W.WriteJobError, match="not an allowlisted write verb"):
             W.validate_write_verb({"verb": verb, "params": {}})
     with pytest.raises(W.WriteJobError, match="do not validate"):
-        W.validate_write_verb({"verb": "agent_nft.agent_nft_collection_reveal", "params": {"max_ids": 500}})
+        W.validate_write_verb({"verb": "agent_nft.agent_nft_collection_reveal", "params": {"chain": "robinhood", "max_ids": 500}})
     with pytest.raises(W.WriteJobError, match="do not validate"):
         W.validate_write_verb({"verb": "agent_nft.agent_nft_collection_reveal", "params": {"chain": "base"}})
     with pytest.raises(W.WriteJobError, match="deliver_on"):
@@ -174,7 +174,7 @@ def test_a_write_job_may_recur_every_minute_and_is_validated(tmp_path):
         svc.schedule(task="both kinds at once", schedule_spec="1h", user_id="rob",
                      payload={"write_verb": SPEC, "read_verb": {
                          "verb": "defi_data.pool_metrics",
-                         "params": {"token": "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"}}})  # gitleaks:allow (token address)
+                         "params": {"chain": "robinhood", "token": "0x5555555555555555555555555555555555555555"}}})  # gitleaks:allow (token address)
 
 
 def test_dropping_the_write_verb_from_a_one_minute_job_refuses(tmp_path):

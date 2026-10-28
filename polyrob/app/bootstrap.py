@@ -92,10 +92,14 @@ def _warn_backfill_retired_once(config_dir: str = "config") -> None:
     has_candidate = False
     for cand in ("production", "development"):
         f = _Path(config_dir) / f".env.{cand}"
-        if not f.exists():
+        try:   # a relative path under a cwd this user cannot read: no hint, no crash
+            if not f.exists():
+                continue
+            values = dotenv_values(str(f))
+        except OSError:
             continue
         if any(v and _is_secret_key(k) and not os.environ.get(k)
-               for k, v in dotenv_values(str(f)).items()):
+               for k, v in values.items()):
             has_candidate = True
             break
     if not has_candidate:
@@ -377,32 +381,16 @@ def _cli_extra_gate(name: str) -> bool:
         the loader's phase 2 — e.g. the discovery pack's ``anysite``
         (ANYSITE_TOOL_ENABLED, default on), the X pack's ``twitter`` (X API
         credentials configured) and ``x_browser`` (X_BROWSER_ENABLED)): registered
-        only while the gate is on.
-      - mcp (S3, 2026-07-20): mirrors ``BotConfig._maybe_build_mcp``'s enablement —
-        explicit MCP_ENABLED, else the autonomous-mode capability default, else the
-        presence of local server files.
+        only while the gate is on. ``mcp`` registers its gate in
+        ``tools/mcp/config.py`` (093 A1).
 
     Every other tool returns True — its presence in the init order already IS its gate
     (the optional ones are only inserted when enabled; the remaining static ones are
     unconditional CLI tools).
-
-    067 P1 residue: the mcp predicate is the runtime half of the row's gate column but
-    still lives here. Moving it next to its tool means ``register_gate("mcp", ...)``,
-    which flips ``gate_for`` for that id in the policy golden — do it in a commit
-    that lists that change (the twitter one moved to the X pack in 067 P3b).
     """
     from core.tool_gates import gate_for, gate_on
     if gate_for(name) is not None:
         return gate_on(name)
-    if name == "mcp":
-        try:
-            from core.config_policy.members import member_flag
-            if member_flag("MCP_ENABLED"):
-                return True
-            from tools.mcp.config import load_local_mcp_servers
-            return bool(load_local_mcp_servers())
-        except Exception:
-            return False
     return True
 
 

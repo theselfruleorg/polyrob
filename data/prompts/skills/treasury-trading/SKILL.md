@@ -1,26 +1,27 @@
 ---
 name: treasury-trading
-description: 'The memecoin treasury strategy in degen mode: the reconcile step, which chain to hunt on, the tiered sizing ladder, routing, the anti-dust rule, executing, fast exits, the track record, learning the meta, and when to stop. Scouting, Robinhood Chain, bridging, launches and liquidity are separate skills.'
+description: 'The memecoin preset doctrine of a trading mandate: the reconcile step, which chain to hunt on, sizing by the survivability tier, routing, the anti-dust rule, executing, the track record, learning the meta, and when to stop. Scouting, Robinhood Chain, bridging, launches and liquidity are separate skills.'
 license: MIT
 metadata:
-  polyrob-when: 'Running the memecoin treasury strategy'
+  polyrob-when: 'Hunting memecoins (the memecoin preset)'
   polyrob-priority: '4'
   polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data","launchpad","dapp_browser"]}'
   polyrob-requires: '["token-identity","pre-trade-check"]'
-  polyrob-version: '23'
+  polyrob-version: '24'
 ---
-# Treasury Trading — degen mode
+# Treasury Trading — the memecoin preset
 
-How you grow your own treasury by trading **newly launched memecoins**, and how
-you show the work in public. Read this before any `defi_trade` call.
+How you trade **newly launched memecoins** inside a trading mandate whose
+preset is `memecoin`, and how you show the work. Read this before any
+`defi_trade` call on a memecoin hunt.
 
-**This doctrine applies only when the owner has asked for it.** Read the
-owner's instruction, the goal, or the cron payload: a memecoin hunt is a
-standing goal only when the owner made it one, and a request like "buy ETH every
+**This doctrine applies only inside a mandate the owner confirmed.** The
+mandate (`trading-mandate`) owns the hunt, the exit jobs, the breakers and the
+numbers; this skill is how you JUDGE a candidate. A request like "buy ETH every
 week" or "swap USDC for ETH" is NOT a memecoin hunt — follow `dca` /
-`trade-execution` and do not apply the ladder below to it. When the owner has
-asked for the hunt, the posture is: **new launches, not established tokens** —
+`trade-execution` and do not apply the ladder below to it. On the hunt, the
+posture is: **new launches, not established tokens** —
 AERO, VIRTUAL, ZORA and friends are not the game; you are looking for pairs that
 are hours to days old (details: `memecoin-scouting`).
 
@@ -55,8 +56,6 @@ Depth lives in `references/` — read a file with
   `defi_data` (quote, `token_info`, `reconcile`) and report; never claim a trade.
 - No `defi_data` either: you cannot verify a token, a price or a balance. Say so
   and stop — do not trade or report positions from memory.
-- No `cronjob`: you cannot schedule a monitor or an exit; tell the owner which
-  exits need a person.
 
 ## The reconcile step — read this before anything else
 
@@ -70,8 +69,10 @@ carefully"; it is:
   chain balances, both directions. Its output is authoritative over your
   memory and over any earlier summary of the book. If it reports a
   disagreement, settling it is the run's FIRST job — before any entry, exit,
-  or post: name each disagreement in your report, and ask the owner to
-  `/writeoff` a book row the chain does not back.
+  or post: name each disagreement in your report. A book row whose chain balance is zero or
+  dust is retired with `defi_data.retire_row` (it retires only on a measured
+  zero or dust balance); ask the owner to `/writeoff` a loss the chain does
+  not back.
 - **Never write "flat"/"NONE", and never post a track-record claim, unless the
   SAME run's reconcile output shows zero disagreements.** A reconcile that
   says UNVERIFIED (a read failed) blocks the claim too — unknown is not zero.
@@ -99,8 +100,8 @@ A ticker is a search key, never an identity.
   did not AGREE**; scouting below it is untouched. Solana has no independent
   route check, so an unpinned Solana buy stays under that limit;
 - **any other contract, when the run carries a `target_token`** — a job or
-  goal can name the one contract it may buy, as data (`cronjob_schedule(…,
-  target_token={"chain": …, "address": …})`). Under it the run may acquire no
+  goal can name the one contract it may buy, as data (`target_token={"chain":
+  …, "address": …}`). Under it the run may acquire no
   non-canonical token other than the target, on any chain. Canonical assets
   (USDC, the wrapped native, the native asset) move freely, a refund inside a
   sell is not an acquisition, and risk-reducing verbs (`lp_remove`,
@@ -130,8 +131,9 @@ in their own skills; `load_skill` the one you need:
 | Dry run, exact approve, send once, revoke | `trade-execution` |
 | Measure what arrived; a hash is not proof | `post-trade-verify` |
 | The position book; cost basis and P&L read from `defi_data.positions` (never by hand) | `position-journal` |
-| Stop, target, time limit — run on a schedule | `exits` |
-| Size from risk; loss breakers; units | `sizing-and-risk` |
+| Stop, target, time limit, close reasons — the exit job code arms | `exits` |
+| Size from risk; units | `sizing-and-risk` |
+| Start, pause or stop the programme; the mandate's breakers | `trading-mandate` |
 | What counts as cash; depeg rules | `stable-cash` |
 | Paying an API over x402 | `x402-pay` |
 | Buying a fixed amount on a schedule | `dca` |
@@ -153,22 +155,27 @@ Most of these go to zero. That is the strategy, not a failure of it. You are
 buying many cheap lottery tickets where one winner pays for the losers. So:
 
 - **Size by how much you actually know. This is a ladder, not one number.**
-  The autonomous ceiling is the hard cap the code enforces; the ladder is how
-  you choose a size UNDER it. Riskier and fresher means SMALLER, always:
+  The `memecoin` preset holds the ladder's numbers (one rung per tier); the
+  mandate's stage ticket (probe, small or normal) caps every rung; the guard's
+  cap is the hard limit above both. Riskier and fresher means SMALLER, always:
 
-  | Tier | What it means | Max ticket |
+  | Tier | What it means | Rung |
   |---|---|---|
-  | **A — solid** | Days-old at least, ≥$25k liquidity, volume that persisted past the first hours, a mechanism you verified on-chain, and social proof that passes the test in `memecoin-scouting` | **$5.00** |
-  | **B — developing** | Hours to days old, ≥$10k liquidity, real two-sided volume, passes both hard screens, at least one independent voice | **$2.50** |
-  | **C — fresh** | Minutes to hours old, $3-10k liquidity, thin or bot-shaped volume, thesis unconfirmed | **$1.00** |
+  | **A — solid** | Days-old at least, deep liquidity, volume that persisted past the first hours, a mechanism you verified on-chain, and social proof that passes the test in `memecoin-scouting` | the largest |
+  | **B — developing** | Hours to days old, real two-sided volume, passes both hard screens, at least one independent voice | the middle |
+  | **C — fresh** | Minutes to hours old, thin or bot-shaped volume, thesis unconfirmed | the smallest |
 
-  Never size a Tier C ticket like a Tier B one because you like the story. If a
-  check came back `unknown`, you are one tier lower than you thought — an
-  unknown is evidence you lack, not evidence in your favour.
+  `token_info`'s `survivability:` line gives the **tier ceiling** from the
+  measured gates (pool age, liquidity, LP lock, sell simulation, tax, holder
+  share): you may size at that tier or lower, never higher, and `REJECT` is no
+  entry. Never size a Tier C ticket like a Tier B one because you like the
+  story. If a check came back `unknown`, you are one tier lower than you
+  thought — an unknown is evidence you lack, not evidence in your favour.
 - **One open ticket per token, ever.** Never average down and never add to a
   winner mid-thesis.
 - **Declare `max_spend_usd` explicitly on every trade**, set to the tier's
-  number. The guard enforces the ceiling; the tier is you enforcing judgment.
+  rung under the stage ticket, and give every entry its `plan`
+  (`trading-mandate`). The guard enforces the ceiling; the tier is you enforcing judgment.
 - **Expect to be wrong most of the time.** A run where four of five go to zero
   and one triples is a GOOD run. Judge the book, never the single trade.
 - **Never average down.** In a memecoin a dip is usually information, not a
@@ -236,59 +243,27 @@ EXACT amount (never unlimited); dry run the swap; send it; revoke at once. Then
 CONFIRMED` is not a failure — check the chain before any retry, or you pay
 twice. The full order: `references/executing.md` and the `trade-execution` skill.
 
-## Exits — fast, because memecoins are fast
+## Exits — the preset's, armed by code
 
-**Arm the check, not just the rule.** An exit rule nobody wakes up to evaluate
-is a note, not a stop-loss: it fires only if someone happens to message you. The
-moment a position is open, schedule the check in the same turn —
-
-```
-cronjob_schedule(schedule="2h", rig="money_rail", skills=["exits"],
-    task="Check the open positions against their armed exits: base
-    0xAbC…123 (EXMPL). Read defi_data.positions(chain='base') and compare its
-    unrealized_pct and from_high_pct with the +100% / +300% trail / -50% stop /
-    time-stop, execute any that triggered. If the book is flat, report 'book flat -
-    cancel job <id>' to the owner.")
-```
-
-- **Name every position by chain and contract address in the task.** A symbol
-  is not an identity (`token-identity`), and the run starts with no memory of
-  this turn.
-- `rig="money_rail"` keeps each run narrow; `skills=["exits"]` loads the exit
-  rules every run instead of hoping a keyword matches. A rig is a request, not
-  a grant: when the money regime is not armed, the run gets no `defi_trade`
-  and can only report the trigger to the owner.
-- **The run cannot cancel its own job** — `money_rail` has no `cronjob` tool.
-  `cronjob_schedule` returns the job id: tell the owner that id in the same
-  turn. When the book goes flat, cancel it yourself with
-  `cronjob_cancel(job_id=…)` from a session that has `cronjob`, or the owner
-  stops it with `/job stop <id>`.
-
-This is configuration you create at runtime for a position you actually hold;
-it is never seeded ahead of one.
-
-The +25%/-15% rules of a blue-chip book do not apply here.
-
-- **Scale out on the way up.** Sell half at **+100%** — that takes your stake off
-  the table and makes the rest a free roll. Let the remainder run to **+300%** or
-  a trailing exit.
-- **Stop at −50%.** New launches dip hard and still recover, so a tight stop just
-  donates fees. But below half, the thesis is dead.
-- **Time stop: 48 hours.** A new coin that has not moved in two days is not going
-  to. Free the capital for the next ticket.
-- Act on a triggered rule in the SAME run you notice it. A postponed exit is not
-  a rule.
+The `memecoin` preset's exit is wide on purpose: new launches dip hard and
+still recover, so a tight stop just donates fees. It scales out on the way up,
+trails the rest, and has a time stop for a coin that never moves. The numbers
+live in the preset; the exit job code arms for each position applies them
+(`exits`). The tight stops of a blue-chip book do not apply here. Act on a
+triggered barrier in the SAME run you see it.
 
 ## Building the track record in public
 
 The public, verifiable record of an agent trading its own money is the asset —
 arguably more than the money is.
 
+- Post only when the owner turned on public posting for the mandate (it is
+  off by default); otherwise the fills and exits reach the owner as pushes.
 - Post entries and exits: what, why, size, treasury value after. Every figure
   in a post comes from a verb (`positions`, `portfolio`, `reconcile`) — never
   from your own arithmetic. **A public post
   is only for a completed, confirmed tranche** (a broadcast with a receipt, in a
-  run with no refusal). "No tranche this cycle" is an owner report, not a post.
+  run with no refusal). "No tranche this run" is an owner report, not a post.
 - **Post the losses in the same tone as the wins.** In this strategy most tickets
   lose; a feed showing only winners is a lie and reads like one.
 - **Only claim trades the position book records.** Never describe a token you did not
@@ -311,37 +286,28 @@ the owner, never improvise a raw call. Detail: `references/nfts.md`.
 
 ## Learning the meta
 
-Each cycle, answer four questions in the run report (what surprised you, which
-rule cost you, what would change a rule, where the next edge is) and write the
-dated answer with its falsifier to the knowledge base under `treasury meta
-notes`. How to ask them well: `references/learning-the-meta.md`.
+In the mandate's daily review run, answer four questions in the run report
+(what surprised you, which rule cost you, what would change a rule, where the
+next edge is) and write the dated answer with its falsifier to the knowledge
+base under `treasury meta notes`. How to ask them well: `references/learning-the-meta.md`.
 
 ## When to stop and ask the owner
 
-Gas runs low; USDC falls below half its starting value; a swap reverts twice on
-the same pair; the guard refuses something you believed was safe; or you catch
-yourself wanting a cap raised. Raising a cap is the owner's decision, never
-yours.
+Gas runs low; a swap reverts twice on the same pair; the guard refuses
+something you believed was safe; or you catch yourself wanting a cap raised.
+Raising a cap is the owner's decision, never yours. A latched breaker is his
+to release (`/trade release`), never yours.
 
-**Check the grant you have before you ask for one.** Look at your toolset: if
-`defi_trade` is in it, this run may trade, and the dry run's `lane:` line says
-whether a live send runs on its own or waits for the owner. If it is not, look
-for a recurring job or goal whose runs carry `defi_trade` (the
-goal board and `cronjob_list` show them) — when one exists, that job is where
-trades execute. So:
+**Trades execute on the mandate's runs.** The hunt job and the exit jobs carry
+`defi_trade`; their dry run's `lane:` line says whether a live send runs on its
+own or waits for the owner. If you find a candidate outside a mandate run,
+write it to the watchlist in one line and move on — the next hunt run reads it.
+If no mandate is live and the owner wants trading, that is `trading-mandate`'s
+intake, never a goal or a job you build.
 
-- **Never create your own "execute the first trade" / "trade once `defi_trade`
-  is granted" goal.** Whether a goal you create can carry a money tool depends
-  on the regime: unarmed, `goal_create` strips the whole money set, so such a
-  goal dispatches tool-starved and blocks; armed (`AUTONOMY_MODE=autonomous`
-  with `DEFI_AGENT_AUTONOMY`), it CAN carry `defi_trade`, bounded by the same
-  caps. Where a trading job already exists, it duplicates that
-  job. The unarmed loop once ran ~50 times and taught the owner nothing.
-- **Do not escalate "grant `defi_trade`" when a job that carries it already
-  exists** — use that job. Ask only when neither your toolset nor any
-  job carries it, and say which of the two you checked.
-- If you find a candidate outside a granted run, write it to the watchlist where
-  the next granted cycle reads it, in one line, and move on.
+A refusal from the mandate step ("slots in use", "allocation is used",
+"PAUSED", "HALTED", "token cooldown") is the structure working: report it in
+one line and stop entering.
 
 **A refusal that names a remedy is telling you what to do next; read it.** The
 tools now say which lever is missing rather than repeating one generic sentence

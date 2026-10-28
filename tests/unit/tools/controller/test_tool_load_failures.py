@@ -259,9 +259,30 @@ async def test_a_user_mcp_server_keeps_the_tool_and_a_later_one_shows_next_load(
 
 @pytest.mark.asyncio
 async def test_a_configured_server_or_an_unreadable_user_store_keeps_the_tool(monkeypatch):
+    from tools.mcp.server_manager import ServerStatus
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
-    c = _controller(_Container({"mcp_tool": _mcp_with(_Mgr({"github": object()}))}))
+    live = types.SimpleNamespace(status=ServerStatus.CONNECTED, tools=[])
+    c = _controller(_Container({"mcp_tool": _mcp_with(_Mgr({"github": live}))}))
     assert "mcp" in await c.load_tools_from_container(["mcp"])
     c = _controller(_Container({"mcp_tool": _mcp_with(_Mgr()),
                                 "user_mcp_service": _UserMcp(boom=True)}))
+    assert "mcp" in await c.load_tools_from_container(["mcp"])
+
+
+@pytest.mark.asyncio
+async def test_another_tenants_or_a_dead_connection_does_not_open_the_gate(monkeypatch):
+    """093 review: one manager holds every tenant's servers. Tenant u2's live
+    server, or a static server in ERROR, must not offer `mcp` to u1."""
+    from tools.mcp.server_manager import ServerStatus
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    other = types.SimpleNamespace(status=ServerStatus.CONNECTED, tools=[])
+    dead = types.SimpleNamespace(status=ServerStatus.ERROR, tools=[])
+    c = _controller(_Container({
+        "mcp_tool": _mcp_with(_Mgr({"user_u2::secret": other, "github": dead})),
+        "user_mcp_service": _UserMcp()}))
+    assert "mcp" not in await c.load_tools_from_container(["mcp"])
+    mine = types.SimpleNamespace(status=ServerStatus.CONNECTED, tools=[])
+    c = _controller(_Container({
+        "mcp_tool": _mcp_with(_Mgr({"user_u2::secret": other, "user_u1::mine": mine})),
+        "user_mcp_service": _UserMcp()}))
     assert "mcp" in await c.load_tools_from_container(["mcp"])

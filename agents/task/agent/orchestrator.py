@@ -458,9 +458,9 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         and never read.
 
         Unconditional is safe because ``MCPTool.load_user_servers`` already
-        carries the bounds: tenant-scoped rows, a once-per-tenant cache, an
-        overall timeout, and per-server fail-open. With nothing saved it is a
-        single empty query. Fail-open here too — a broken MCP store must degrade
+        carries the bounds: tenant-scoped rows, a sync that connects only new or
+        dropped rows (093 B2), an overall timeout, and per-server fail-open. With
+        nothing saved it is a single empty query. Fail-open here too — a broken MCP store must degrade
         the session's tool rig, never stop the session from starting.
         """
         if not self.user_id or not hasattr(mcp_service, 'load_user_servers'):

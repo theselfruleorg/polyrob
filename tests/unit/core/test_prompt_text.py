@@ -22,9 +22,12 @@ BLOCK_MAX_CHARS = {
     "communication": 2050,
     "communication_contract": 1700,
     "filesystem": 650,
+    # 093 C3: the missing-capability rule, owner seats only (~64 tokens).
+    "harness": 300,
     "identity": 250,
     "input_format": 350,
-    "mcp_tools": 1600,
+    # 093 review: + the owner-seat /mcp add line (owner_add, ~20 tokens).
+    "mcp_tools": 1720,
     "message_shape": 1100,
     "owner_instructions": 950,
     "response_format": 1850,
@@ -103,6 +106,9 @@ def _render_matrix(monkeypatch):
             SystemPrompt("a", use_native_tools=native, tool_ids=tools, mcp_servers=mcp,
                          sub_agent=sub, autonomous=auto, include_vision=vision,
                          surface=surface, verbosity=verbosity).get_system_message()
+    # 093 review: an owner seat with no MCP server gets the /mcp add line.
+    SystemPrompt("a", use_native_tools=True, tool_ids=["web_fetch"],
+                 owner_seat=True).get_system_message()
 
 
 def test_every_text_is_used_and_every_used_key_exists(monkeypatch):

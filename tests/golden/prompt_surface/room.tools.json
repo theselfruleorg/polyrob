@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "a7c396bae5f1"
+      "sha": "729d3abd9f2d"
     },
     {
       "name": "autonomy_control",
@@ -18,43 +18,51 @@
     },
     {
       "name": "defi_data_contract_read",
-      "sha": "6bf0958bcfbb"
+      "sha": "dae0db5291bc"
+    },
+    {
+      "name": "defi_data_discovery_count",
+      "sha": "045fedda3ca2"
     },
     {
       "name": "defi_data_lp_pool_info",
-      "sha": "18f04a850ef0"
+      "sha": "18f1635a2170"
     },
     {
       "name": "defi_data_lp_positions",
-      "sha": "9989db9be5c5"
+      "sha": "8dc7d76fcdad"
     },
     {
       "name": "defi_data_lp_quote",
-      "sha": "79898fd9294f"
+      "sha": "0f673be19029"
     },
     {
       "name": "defi_data_new_pools",
-      "sha": "49635064f50f"
+      "sha": "ea70e42b00bd"
     },
     {
       "name": "defi_data_nft_holdings",
-      "sha": "c7c6f08dbe6a"
+      "sha": "9cb101ff1954"
     },
     {
       "name": "defi_data_nft_info",
-      "sha": "34cb78c83188"
+      "sha": "8005c8d421c3"
     },
     {
       "name": "defi_data_ohlcv",
-      "sha": "0cbd08aebe62"
+      "sha": "ae8abe45e195"
     },
     {
       "name": "defi_data_pool_metrics",
-      "sha": "caaff748a02b"
+      "sha": "ec53dbf2cefb"
     },
     {
       "name": "defi_data_portfolio",
-      "sha": "42beba8f4e3b"
+      "sha": "011b50c4adfb"
+    },
+    {
+      "name": "defi_data_position_mark",
+      "sha": "bc6190df91df"
     },
     {
       "name": "defi_data_positions",
@@ -62,31 +70,35 @@
     },
     {
       "name": "defi_data_price",
-      "sha": "21c197133f98"
+      "sha": "978d8371ea5e"
     },
     {
       "name": "defi_data_reconcile",
-      "sha": "f62dc2757b04"
+      "sha": "6ade21472650"
+    },
+    {
+      "name": "defi_data_retire_row",
+      "sha": "47599677e2fb"
     },
     {
       "name": "defi_data_scan",
-      "sha": "5996573fc317"
+      "sha": "b316a8879f6a"
     },
     {
       "name": "defi_data_swap_quote",
-      "sha": "36b346a8d427"
+      "sha": "b59f084a11dc"
     },
     {
       "name": "defi_data_token_holders",
-      "sha": "647bace2b375"
+      "sha": "4f661307a9a0"
     },
     {
       "name": "defi_data_token_info",
-      "sha": "a96e585143e8"
+      "sha": "7578d7404034"
     },
     {
       "name": "defi_data_token_origin",
-      "sha": "aae00e28019b"
+      "sha": "92f01b7f2298"
     },
     {
       "name": "defi_data_token_resolve",
@@ -94,15 +106,15 @@
     },
     {
       "name": "defi_data_trending",
-      "sha": "9547d7b31d52"
+      "sha": "c314db246d3c"
     },
     {
       "name": "defi_data_wallet_activity",
-      "sha": "dcee34656528"
+      "sha": "89832867fe77"
     },
     {
       "name": "defi_data_wallet_holdings",
-      "sha": "4cbd3983d089"
+      "sha": "13069d122408"
     },
     {
       "name": "delegate_task",
@@ -147,6 +159,10 @@
     {
       "name": "propose_action",
       "sha": "bb1c23b06a81"
+    },
+    {
+      "name": "propose_setting",
+      "sha": "6f27817332ef"
     },
     {
       "name": "read_skill_resource",
@@ -199,6 +215,10 @@
     {
       "name": "tool_search",
       "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "trade_mandate_propose",
+      "sha": "ff5dfd36d681"
     },
     {
       "name": "web_fetch_fetch_url",

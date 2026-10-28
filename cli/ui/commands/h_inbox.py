@@ -78,6 +78,12 @@ async def h_book(ctx: CommandContext) -> None:
 
     from cli._admin_home import admin_owner_tenant
     user_id = admin_owner_tenant(ctx.user_id)
+    words = list(getattr(ctx, "args", None) or [])
+    if words and str(words[0]).lower() == "retire":
+        # 086 W0: close a gone/dust row on a fresh chain measurement.
+        from tools.defi.retire import book_retire_reply
+        ctx.emit(await book_retire_reply(user_id, _home(ctx), words[1:]), title="book")
+        return
     try:
         body = await read_book(user_id, _home(ctx))
     except Exception as exc:
@@ -115,7 +121,10 @@ HELP_BOOK = (
     "  check and the caps do. A chain I could not read is UNKNOWN, never clean.\n"
     "\n"
     "  The book also lists every position the chain does not back and every\n"
-    "  quarantined or written-off position (/writeoff, /unquarantine).",
+    "  quarantined or written-off position (/writeoff, /unquarantine).\n"
+    "\n"
+    "    /book retire <chain> <address> [go]   close a row the chain shows is\n"
+    "                                          gone or dust, with the read as proof",
     "`/book` on Telegram, `polyrob wallet book`, and the console's Money.",
 )
 
@@ -131,6 +140,6 @@ def register(reg, command_cls) -> None:
     reg.register(command_cls(
         "book", h_book,
         "The ledger against every money chain: one verdict, then what disagrees",
-        group="money",
+        usage="[retire <chain> <address> [go]]", group="money",
         help_long=HELP_BOOK[0], elsewhere=HELP_BOOK[1],
     ))

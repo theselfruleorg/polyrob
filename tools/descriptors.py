@@ -20,7 +20,6 @@ class ToolCategory(Enum):
     BROWSER = "browser"        # Browser automation
     COMMUNICATION = "comm"     # Email, social media
     SEARCH = "search"          # Search and research
-    VERIFICATION = "verify"    # Token gating, identity
     INTEGRATION = "integration"  # MCP, external APIs
 
 
@@ -122,6 +121,19 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         is_optional=True,
     ),
 
+    # 093 F1: one outbound HTTP write (POST/PUT/PATCH/DELETE) through web_fetch's
+    # SSRF path. Never in a default tool list; load_tool("http_request").
+    'http_request': ToolDescriptor(
+        name='http_request',
+        description='HTTP write with a JSON body (POST/PUT/PATCH/DELETE).',
+        category=ToolCategory.SEARCH,
+        required_services=[],
+        optional_services=[],
+        required_config=[],
+        init_priority=22,
+        is_optional=True,
+    ),
+
     # ---------------------------------------------------------------------
     # COMMUNICATION TOOLS (init_priority 30-39)
     # ---------------------------------------------------------------------
@@ -139,31 +151,6 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         optional_services=[],
         required_config=[],
         init_priority=35,
-        is_optional=True,
-    ),
-
-    # ---------------------------------------------------------------------
-    # VERIFICATION TOOLS (init_priority 40-49)
-    # ---------------------------------------------------------------------
-    'collabland': ToolDescriptor(
-        name='collabland',
-        description='CollabLand token gating verification',
-        category=ToolCategory.VERIFICATION,
-        required_services=['rate_limit_manager', 'database_manager'],
-        optional_services=['cache_manager'],
-        required_config=['collabland_api_key'],
-        init_priority=40,
-        is_optional=True,
-    ),
-
-    'alchemy': ToolDescriptor(
-        name='alchemy',
-        description='Alchemy NFT API for token verification',
-        category=ToolCategory.VERIFICATION,
-        required_services=['rate_limit_manager'],
-        optional_services=['cache_manager'],
-        required_config=['alchemy_api_key'],
-        init_priority=45,
         is_optional=True,
     ),
 
@@ -262,8 +249,7 @@ def get_agent_usable_tools() -> Dict[str, ToolDescriptor]:
     """Get tools that should appear in the agent configuration panel.
 
     Excludes:
-    - Internal verification tools (collabland, alchemy)
-    - Internal verification tools and tools represented elsewhere
+    - Tools represented elsewhere
     - Internal tools not meant for user selection (task)
     """
     # Categories that should appear in config panel
@@ -275,7 +261,7 @@ def get_agent_usable_tools() -> Dict[str, ToolDescriptor]:
     # high-risk and stay out of the DEFAULT tool lists (opt-in only).
     # twitter is loadable (G1 full write surface, gated by TWITTER_ENABLED) — it is
     # selectable in the panel but stays out of the DEFAULT tool lists (opt-in only).
-    excluded_tools = {'collabland', 'alchemy', 'task'}
+    excluded_tools = {'task'}
 
     return {
         name: desc
