@@ -128,10 +128,10 @@ def test_promote_of_a_sourced_rewrite_keeps_the_draft_stamps(tmp_path, monkeypat
     stamp the owner's approval onto anything the draft left bare."""
     monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
     w = OwnerDocWriter(tmp_path)
-    w.propose("NOTIFY ON EVERY BUYBACK: every executed tranche is announced.",
+    w.propose("NOTIFY ON EVERY REBUY: every executed tranche is announced.",
               user_id="u1", created_by="user", pending=False, source="owner said",
               observed_at="2026-09-18")
-    draft = ("NOTIFY ON EVERY BUYBACK (2026-09-18): every EXECUTED tranche is announced. [from: owner said 2026-09-20]\n"
+    draft = ("NOTIFY ON EVERY REBUY (2026-09-18): every EXECUTED tranche is announced. [from: owner said 2026-09-20]\n"
              "NO PUBLIC BUG-FIX REPORTS: never publish reports about bugs we fix. [from: owner said 2026-09-20]\n"
              "TEXT ONLY: never produce or attach a video.\n")
     res = w.propose(draft, user_id="u1", created_by="agent", source="owner said",

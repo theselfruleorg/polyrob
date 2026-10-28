@@ -46,12 +46,15 @@ It needs `CRON_ENABLED` on (`polyrob config set CRON_ENABLED true`; on by itself
 `AUTONOMY_POSTURE=full`).
 
 ```bash
-polyrob cron schedule "Check https://example.com/product/12345 and tell me if it is under $500" "every day 09:00"
-polyrob cron schedule "Review error logs for new patterns and summarise" "every sunday 03:00"
-polyrob cron schedule "Re-run the smoke suite" "30m"
-polyrob cron list
-polyrob cron show <id>
-polyrob cron cancel <id>
+polyrob job new "every day 09:00" 'Check https://example.com/product/12345 and tell me if it is under $500'
+polyrob job new "every sunday 03:00" "Review error logs for new patterns and summarise"
+polyrob job new 30m "Re-run the smoke suite"
+polyrob job list                # next run, last outcome, who wrote each
+polyrob job show <id>
+polyrob job edit <id> --schedule "every monday 09:00"
+polyrob job pause <id>          # resume <id> brings it back at its next slot
+polyrob job run <id>            # run on the next scheduler pass
+polyrob job stop <id>
 ```
 
 Schedule formats and the per-run cap: [guide/streams.md](guide/streams.md#3-jobs--the-same-work-at-set-times).
@@ -64,7 +67,10 @@ you the job id and the next run:
 > summary if anything is critical.
 ```
 
-Every job — one you schedule from the CLI, with `/cron add` or in the console, or
+`/jobs` and `/job new|show|edit|pause|resume|run|stop` do the same from the REPL, Telegram
+and the console.
+
+Every job — one you schedule from the CLI, with `/job new` or in the console, or
 one the agent schedules for itself — runs with the same standing authority: its
 tools as written. A job the agent schedules on its own may ask only for tools
 inside its self-goal ceiling.
@@ -249,6 +255,19 @@ The run stops **honestly** the moment its real provider cost reaches the cap —
 reported as stopped, never as a fabricated "done". The remaining budget is shown to
 the agent so it can pace itself, and sub-agents share the parent's.
 
+Unattended work is bounded without you asking: every goal, job, sub-agent and
+worker run stops at `AUTONOMOUS_MAX_STEPS` (150 steps) and at
+`AUTONOMOUS_RUN_BUDGET_USD` ($2.00 of spend, sub-agents included), whichever comes
+first. Both are operator settings — no goal, job or tool argument sets them:
+
+```bash
+polyrob config set AUTONOMOUS_RUN_BUDGET_USD 0.75
+```
+
+A run that stops before it finishes names why in its run record, in the CLI and in
+the session status. `/usage` shows what each job
+and kind of work cost.
+
 ---
 
 ## 9. Run code somewhere that is not your laptop
@@ -357,16 +376,17 @@ PAYMENT_APPROVAL_MODE=approve
 ```bash
 polyrob run "
 Resolve the ticker TOSHI with defi_data.token_resolve and show me every candidate
-contract address with its liquidity — do not pick one for me.
+contract address with its liquidity on base — do not pick one for me.
 Then run defi_data.token_info on the address I name and report the safety screen
-verbatim. If the screen is clean, quote a \$2 swap from USDC into it with
+verbatim. If the screen is clean, quote a \$2 swap from USDC into it on base with
 swap_quote, then run defi_trade.swap with max_spend_usd=2 as a DRY RUN and show me
 the guard's verdict, the simulated deltas, and the lane.
 "
 ```
 
-Re-running with `dry_run=false` broadcasts only after the same guard passes; above
-`DEFI_AUTONOMOUS_MAX_USD` it waits on the owner queue instead.
+Every on-chain verb names its chain — there is no default chain, so say "on base"
+(or pass `chain=base`). Re-running with `dry_run=false` broadcasts only after the
+same guard passes; above `DEFI_AUTONOMOUS_MAX_USD` it waits on the owner queue instead.
 
 **4. Check the book against the chain** — the anti-phantom-position check:
 
@@ -397,6 +417,22 @@ cost.
 **Solana:** arm `SOLANA_TRADE_ENABLED=true`, pin `DEFI_SOLANA_RPC`, fund the Solana
 address shown by `polyrob wallet` with SOL for fees, and ask for a swap by **mint
 address**.
+
+**6. Hand it a trading mandate** — one card sets the allocation, the chains and a
+preset, and Confirm creates the standing work: a hunt job, a daily review, and an
+exit job for every position it opens.
+
+```
+/trade start 150 solana,base memecoin   # one card with every number; nothing exists until Confirm
+/trade status                           # positions, exit coverage, breaker, realized P&L
+/trade pause                            # entries off, exits stay on (resume to lift it)
+/trade stop                             # the hunt ends; each exit job runs until its position closes
+/trade release                          # clear a latched breaker
+```
+
+Code arms and cancels the exits. An entry costs at most its promotion stage's ticket
+($1 probe first) and needs an exit plan before any quote. The wallet caps and the
+transaction guard bind every trade the jobs make.
 
 ---
 
@@ -451,7 +487,7 @@ approval-gated.
 ```yaml
 - name: Review the diff
   env:
-    GITHUB_TOOL_ENABLED: "true"
+    POLYROB_OVERRIDES: "GITHUB_TOOL_ENABLED=true"
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   run: |
     polyrob run --tools github,filesystem "

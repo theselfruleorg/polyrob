@@ -88,11 +88,9 @@ Legacy keys without expiry or explicit scopes must be replaced after signing in.
 > (`/api/auth/nonce` + `/api/auth/verify`), which produces the JWT the mint
 > call needs, answers 503 the same way for the same reason.
 >
-> **Using a key never does.** Since 2026-09-21 the `rob_xxx` validator is
-> registered unconditionally, so an existing key authenticates whether or not
-> `API_SECRET` / `ADMIN_TOKEN` is set. Before that it was only mounted
-> alongside `API_SECRET`, so on a default install a freshly minted key
-> authenticated nothing.
+> **Using a key never does.** The `rob_xxx` validator is registered
+> unconditionally, so an existing key authenticates whether or not
+> `API_SECRET` / `ADMIN_TOKEN` is set.
 
 ### Operator service token (not an API key)
 
@@ -142,13 +140,13 @@ when their flag is on, in which case the whole path space is absent rather than
 | `/health` | Minimal liveness/readiness (`503` when degraded) | always |
 | `/api/task/*` | Sessions: create, status, message, cancel, files | always |
 | `/api/auth/*` | SIWE sign-in, JWTs, API keys | always |
-| `/api/chat/message` | One-shot chat over the task agent (`/api/message` is the legacy alias) | always |
+| `/api/chat/message` | One-shot chat over the task agent, billed one credit like `/v1` (`/api/message` is the legacy alias) | always |
 | `/api/payments/*` | Deposit address, credit balance, transaction history | always (wallet sign-in only — an API-token identity is rejected) |
 | `/api/x402/*` | Public pricing, payment status, and the per-invoice challenge/pay pair | always (info-only until `X402_ENABLED`) |
 | `/api/pricing/*` | Public model pricing and a cost calculator | always |
 | `/api/admin/*` | Tenant administration: users, credits, roles, blocks, billing failures | always (admin role required) |
 | `/api/mcp/*` | Outbound MCP server management | always |
-| `/api/skills/*` | Read, edit, delete and fork a skill | always |
+| `/api/skills/*` | List, create, read, edit, delete and fork a skill | always |
 | `/api/packs/markets/polymarket/*`, `/api/packs/markets/hyperliquid/*` | Venue configuration, read data, and gated execution | when the `markets` pack is installed and enabled (the venues' own flags gate live trading) |
 | `/a2a/*`, `/.well-known/agent.json` | The A2A protocol surface | always |
 | `/eip8004/*` | ERC-8004 identity, reputation and validation | always (discovery-only until `EIP8004_ENABLED`) |
@@ -213,7 +211,9 @@ GET /api/task/sessions/{session_id}
 ```
 
 Returns a user-facing status (`active`/`idle`/`stopped`), whether the caller can cancel or message
-it, the resolved model/tools, timestamps, and the `webview_url` for live monitoring.
+it, the resolved model/tools, timestamps, the `webview_url` for live monitoring, and
+`stop_reason` — why the last run stopped (`done`, `max_steps`, `run_budget`, …; `null` when
+unknown).
 
 ### Send a message to a running session
 
@@ -232,8 +232,8 @@ POST /api/task/sessions/{session_id}/messages
 ```
 
 Injects a user guidance message into a running session. An optional `kind`
-must be one of `answer`, `correction`, `feedback`, `guidance` (the default),
-`question`, `steer`, `user_message`; anything else is **422**. The internal
+must be one of `answer`, `comment`, `continuation`, `correction`, `feedback`,
+`guidance` (the default), `question`, `steer`, `user_message`; anything else is **422**. The internal
 forged-turn kinds (`self_wake`, `delegation_result`) are refused — they mark a
 turn as machine-originated, which is what stops it auto-activating a skill or
 reaching a high-impact verb.
@@ -409,6 +409,7 @@ GET    /api/mcp/audit                       # what was called, and by whom
 ```
 
 Server secrets are stored encrypted; the read routes never return them.
+The add takes `server_type` `auto` (the default), `streamable_http`, `http` or `sse`; `auto` probes streamable_http → http → sse and stores the first that answers.
 
 ---
 
@@ -429,6 +430,8 @@ rejected before anything is read.
 ## Skills
 
 ```
+GET    /api/skills                   # list: {"system": [...], "user": [...]}
+POST   /api/skills                   # create a user skill {id, name, description, content, triggers, priority}
 GET    /api/skills/{skill_id}        # content and metadata
 PUT    /api/skills/{skill_id}        # edit a user skill (system skills are immutable)
 DELETE /api/skills/{skill_id}
@@ -473,9 +476,8 @@ key that cannot be spoofed with `X-Forwarded-For`. The full money model is in
 ```
 
 The venues come from the `markets` pack (`packs/markets`). Every pack
-router mounts under `/api/packs/<pack id>`; up to and including 1.1.0 these
-routes were `/api/polymarket/*` and `/api/hyperliquid/*`. 1.2.0 served the old paths
-deprecated for one release; 1.3.0 removed them (they answer 404). Without the pack (or with
+router mounts under `/api/packs/<pack id>`; the old `/api/polymarket/*` and
+`/api/hyperliquid/*` paths answer 404. Without the pack (or with
 `POLYROB_PACKS_DISABLED=markets`) the routes are absent and `polyrob pack list`
 names why.
 
@@ -529,7 +531,8 @@ Always mounted and harmless: with no webhook surface registered, both return
 
 `/api/admin/*` (admin role required) covers user lookup and search, credit
 add/deduct/read, role and tier changes, block and unblock, per-user audit and
-sessions, instance statistics, and the billing-failure queue
+sessions, instance statistics (`/api/admin/stats`, `/api/admin/stats/dashboard`),
+the audit-log activity feed (`/api/admin/activity`), and the billing-failure queue
 (`GET /api/admin/billing-failures`, `…/summary`, `POST …/{id}/resolve`). Browse
 the exact shapes at `/docs`.
 

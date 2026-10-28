@@ -67,7 +67,7 @@ def _amount_block_lines(*, raw: int, decimals: int, symbol: str,
                         amount_usd: str, at_par: Optional[bool] = None) -> dict:
     """The card's amount block, as text. Pure — the renderer only draws it.
 
-    ⚠️ Live 2026-09-15: an 18-decimal PNL amount
+    ⚠️ Live 2026-09-15: an 18-decimal token amount
     (``3500.000000000000000004``) overflowed the headline and rendered as
     ``3500.0000000000000000…``. Settlement matches the raw integer EXACTLY, so
     a payer who reads a truncated headline and sends a round 3500 gets

@@ -25,11 +25,11 @@ def test_identical_text_in_the_same_turn_is_a_repeat():
 def test_a_lightly_reworded_resend_is_a_repeat():
     """Prod 13:32:57 / 13:33:01: same correction, one sentence reworded."""
     first = ("You're right — three claims in it were false. Fixed:\n\n1. \"the token this account "
-             "runs on\" — wrong. I run on the POLYROB framework, not on PNL.\n2. \"the thing that "
-             "pays for the work\" — wrong. The work is paid from org funding, and buybacks stopped "
+             "runs on\" — wrong. I run on the POLYROB framework, not on TKN.\n2. \"the thing that "
+             "pays for the work\" — wrong. The work is paid from org funding, and rebuys stopped "
              "yesterday.\n3. \"I publish the ledger\" — wrong. I publish trading results, never balances.")
-    second = first.replace("The work is paid from org funding, and buybacks stopped yesterday.",
-                           "The work is funded by the org, not by PNL. The buyback ladder is off.")
+    second = first.replace("The work is paid from org funding, and rebuys stopped yesterday.",
+                           "The work is funded by the org, not by TKN. The rebuy ladder is off.")
     orch = SimpleNamespace()
     turn_reply.mark_reply_published(orch, first)
     assert turn_reply.is_repeat_reply(orch, second)
@@ -74,3 +74,20 @@ def test_repeat_note_never_orders_done_mid_task():
     assert "Continue the task" in turn_reply.REPEAT_REPLY_NOTE
     src = (ROOT / "tools/controller/action_registration.py").read_text(encoding="utf-8")
     assert "extracted_content=REPEAT_REPLY_NOTE" in src
+
+
+def test_caption_from_message_tool_does_not_hide_an_earlier_long_reply():
+    """Prod 2026-10-26: send_message(long) then message(short caption + file) then a
+    re-send of the long text. The caption overwrote the last-reply slot, so the repeat
+    reached the owner. The repeat check reads every text the turn spoke."""
+    from types import SimpleNamespace
+    from core.surfaces.turn_reply import is_repeat_reply, mark_reply_published, reset_turn
+
+    orch = SimpleNamespace()
+    long_text = "Updated. Pool $150 in TKN, cards convert at your tap. " * 6
+    mark_reply_published(orch, long_text)
+    mark_reply_published(orch, "Content bounty v2 - revised shape.")
+    assert is_repeat_reply(orch, long_text) is True
+    assert is_repeat_reply(orch, "A different, new message.") is False
+    reset_turn(orch)
+    assert is_repeat_reply(orch, long_text) is False

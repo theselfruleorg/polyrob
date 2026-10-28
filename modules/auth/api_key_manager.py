@@ -35,7 +35,7 @@ class APIKeyManager:
         """
         Generate new API key for user.
 
-        BETA: User must have DEN token to generate API keys.
+        The user's tier must carry access (admin, free_access or x402).
 
         Args:
             user_id: User ID
@@ -46,15 +46,14 @@ class APIKeyManager:
             Dict with api_key and metadata
 
         Raises:
-            ValueError: If user doesn't have DEN token
+            ValueError: If the user's tier carries no access
         """
 
-        # Verify user has tier (= has DEN token)
         try:
             tier = await self.tier_manager.get_user_tier(user_id)
         except AuthError:
-            raise ValueError("API keys require DEN token ownership")
-        if tier not in ('holder', 'admin', 'free_access', 'x402'):
+            raise ValueError("API keys require an eligible account tier")
+        if tier not in ('admin', 'free_access', 'x402'):
             raise ValueError("API keys require an eligible account tier")
         if type(expires_days) is not int or not 1 <= expires_days <= MAX_EXPIRY_DAYS:
             raise ValueError('API key expiry must be between 1 and 365 days')

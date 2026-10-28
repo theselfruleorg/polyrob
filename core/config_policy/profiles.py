@@ -100,7 +100,7 @@ PROFILES: Dict[str, Tuple[str, ...]] = {
                          "goal", "cronjob",
                          "x_browser"),
     # Added only when DEFI_AGENT_AUTONOMY is armed (agents/task/constants.py).
-    "grant:defi_autonomous": ("defi_data", "defi_trade"),
+    "grant:defi_autonomous": ("defi_data", "defi_trade", "wallet_sign"),
     "grant:defi_launch_autonomous": ("launchpad", "dapp_browser"),
     # 068 X4: x402 auto-pay rides the same armed key. Bounded by the x402 lane
     # (X402_AUTONOMOUS_MAX_USD act-and-report, owner queue above) and the

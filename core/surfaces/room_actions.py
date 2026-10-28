@@ -193,7 +193,7 @@ def parse_unit_price(raw_value: Any, asset) -> UnitPrice:
 
     ⚠️ The amount and its asset are ONE value, and this is why. A bare number
     was reinterpreted against whatever ``chat.paid_asset`` happened to be, so
-    switching a room priced at 75,000 PNL (~$5) over to USDC would have quoted
+    switching a room priced at 75,000 TOKEN (~$5) over to USDC would have quoted
     the next payer 75,000 USDC. Nothing warned; the figure was simply rescaled.
 
     So: a price written for another asset REFUSES and names both. It does NOT
@@ -340,9 +340,9 @@ class MemberVerbRow:
     sellable: bool
     why: str = ""
     #: 046b — the TOKEN amount a payer actually sends, already formatted with
-    #: its symbol ("1,500 PNL"), or "" when this room prices in USD.
+    #: its symbol ("1,500 TOKEN"), or "" when this room prices in USD.
     #: ⚠️ When set it is what the member is QUOTED: showing "$0.10" while the
-    #: payer sends 1,500 PNL would be wrong in the one place he reads before
+    #: payer sends 1,500 TOKEN would be wrong in the one place he reads before
     #: paying.
     token_price: str = ""
 

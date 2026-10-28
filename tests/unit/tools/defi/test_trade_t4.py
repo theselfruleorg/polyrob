@@ -138,7 +138,7 @@ def _quote(amount_out=500_000_000_000_000, fee=500):
 async def test_approve_refuses_an_effectively_unlimited_allowance():
     """The classic infinite approval (MAX_UINT256-scale)."""
     tool, _ = _tool()
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1e60, max_spend_usd=1.0, dry_run=True))
     assert res.error and "UNLIMITED" in res.error
     assert _Rail.last is None or not getattr(_Rail.last, "sent", False)
@@ -150,7 +150,7 @@ async def test_approve_refuses_an_amount_worth_more_than_declared():
     below 2**128, so it slipped through until the USD bound was added. An
     allowance is a claim on funds and belongs under the same ceiling as a spend."""
     tool, _ = _tool(price=1.0)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1e30, max_spend_usd=1.0, dry_run=True))
     assert res.error and "at risk" in res.error
     assert "max_spend_usd" in res.error
@@ -159,7 +159,7 @@ async def test_approve_refuses_an_amount_worth_more_than_declared():
 @pytest.mark.asyncio
 async def test_approve_allows_an_amount_within_the_declared_ceiling():
     tool, _ = _tool(price=1.0)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
     assert res.error is None
     assert "DRY RUN" in (res.extracted_content or "")
@@ -171,7 +171,7 @@ async def test_approve_declares_the_grant_so_the_guard_can_verify_it():
     refused by tx_guard. Declaring it is what makes the approval checkable."""
     captured = []
     tool, _ = _tool(price=1.0, captured=captured)
-    await tool.approve_token(ApproveParams(
+    await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
     assert captured, "guard was never consulted"
     grants = captured[0].expected_allowance_grants
@@ -188,7 +188,7 @@ async def test_approve_declares_the_wallets_held_balance_for_the_028_exemption()
     tells it what's already held. approve_token must read and declare it."""
     captured = []
     tool, _ = _tool(price=1.0, captured=captured, balance=5_000_000)
-    await tool.approve_token(ApproveParams(
+    await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
     assert captured, "guard was never consulted"
     assert captured[0].held_balance_raw == 5_000_000
@@ -200,7 +200,7 @@ async def test_approve_declares_no_held_balance_when_the_read_fails():
     stays None, which is fail-closed (no exemption), not fail-open."""
     captured = []
     tool, _ = _tool(price=1.0, captured=captured)  # balance defaults to "no read"
-    await tool.approve_token(ApproveParams(
+    await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
     assert captured[0].held_balance_raw is None
 
@@ -215,7 +215,7 @@ async def test_approve_declares_no_held_balance_when_the_balance_fn_raises():
     def _boom(chain, holder, token):
         raise RuntimeError("rpc unavailable")
     tool._balance_fn = _boom
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
     assert res.error is None
     assert captured[0].held_balance_raw is None
@@ -224,7 +224,7 @@ async def test_approve_declares_no_held_balance_when_the_balance_fn_raises():
 @pytest.mark.asyncio
 async def test_approve_defaults_to_dry_run_and_does_not_broadcast():
     tool, gate = _tool(price=1.0)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0))
     assert "DRY RUN" in (res.extracted_content or "")
     assert not _Rail.last.sent
@@ -236,7 +236,7 @@ async def test_approve_defaults_to_dry_run_and_does_not_broadcast():
 @pytest.mark.asyncio
 async def test_revoke_encodes_a_zero_allowance():
     tool, _ = _tool()
-    await tool.revoke_approval(RevokeParams(
+    await tool.revoke_approval(RevokeParams(chain="base",
         token=USDC, spender=ROUTER, dry_run=True))
     data = _Rail.last.built["data"]
     assert data.startswith("0x095ea7b3")           # approve(address,uint256)
@@ -247,7 +247,7 @@ async def test_revoke_encodes_a_zero_allowance():
 async def test_revoke_declares_no_allowance_grant():
     captured = []
     tool, _ = _tool(captured=captured)
-    await tool.revoke_approval(RevokeParams(token=USDC, spender=ROUTER, dry_run=True))
+    await tool.revoke_approval(RevokeParams(chain="base", token=USDC, spender=ROUTER, dry_run=True))
     assert captured[0].expected_allowance_grants == ()
 
 
@@ -256,7 +256,7 @@ async def test_revoke_declares_no_allowance_grant():
 @pytest.mark.asyncio
 async def test_swap_refuses_when_no_route_exists():
     tool, _ = _tool(quote=None)
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "no route" in res.error
     assert "univ3" in res.error, "the refusal must name who was asked (029 R6)"
@@ -265,7 +265,7 @@ async def test_swap_refuses_when_no_route_exists():
 @pytest.mark.asyncio
 async def test_swap_refuses_identical_tokens():
     tool, _ = _tool(quote=_quote())
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=USDC,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=USDC,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "same token" in res.error
 
@@ -277,7 +277,7 @@ async def test_swap_refuses_without_a_sufficient_allowance(monkeypatch):
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 0)
     tool, _ = _tool(quote=_quote())
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "insufficient allowance" in res.error
     assert "approve_token" in res.error
@@ -300,7 +300,7 @@ async def test_swap_bounds_slippage_into_amount_out_minimum(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     out = 500_000_000_000_000
     tool, _ = _tool(quote=_quote(amount_out=out))
-    await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, slippage_bps=100, dry_run=True))
     data = _inner_swap_call(_Rail.last.built["data"])
     # word 6 of exactInputSingle is amountOutMinimum
@@ -313,7 +313,7 @@ async def test_swap_defaults_to_dry_run(monkeypatch):
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     tool, gate = _tool(quote=_quote())
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert "DRY RUN" in (res.extracted_content or "")
     assert not _Rail.last.sent
@@ -327,7 +327,7 @@ async def test_swap_targets_the_router_not_the_token(monkeypatch):
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     tool, _ = _tool(quote=_quote())
-    await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, dry_run=True))
     assert _Rail.last.built["to"].lower() == ROUTER.lower()
     # CR-L14: exactInputSingle rides a deadline-checked multicall.
@@ -343,7 +343,7 @@ async def test_swap_declares_no_allowance_grant(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     captured = []
     tool, _ = _tool(quote=_quote(), captured=captured)
-    await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, dry_run=True))
     assert captured[0].expected_allowance_grants == ()
 
@@ -357,7 +357,7 @@ async def test_swap_declares_the_wallets_held_balance_of_token_in(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     captured = []
     tool, _ = _tool(quote=_quote(), captured=captured, balance=7_000_000)
-    await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                max_spend_usd=2.0, dry_run=True))
     assert captured[0].held_balance_raw == 7_000_000
 
@@ -367,7 +367,7 @@ async def test_a_refused_guard_broadcasts_nothing(monkeypatch):
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     tool, gate = _tool(allow=False, quote=_quote())
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                                      max_spend_usd=2.0, dry_run=False))
     assert "NOT SENT" in (res.extracted_content or "")
     assert not _Rail.last.sent
@@ -423,7 +423,7 @@ async def test_swap_refuses_when_the_route_disagrees_with_the_independent_price(
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     # 1 USDC -> 0.00025 WETH implies $4000/WETH vs the independent $2000.
     tool, gate = _tool(quote=_quote(amount_out=250_000_000_000_000))
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0,
                                      dry_run=False))
     assert res.error and "DISAGREES" in res.error
@@ -439,7 +439,7 @@ async def test_swap_proceeds_with_a_loud_caution_when_no_independent_price(monke
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     tool, _ = _tool(quote=_quote(), price={USDC: 1.0, WETH: None})
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error is None
     assert "UNAVAILABLE" in (res.extracted_content or "")
@@ -534,7 +534,7 @@ async def test_swap_refuses_a_stale_quote(monkeypatch):
                       amount_in_raw=1_000_000, amount_out_raw=500_000_000_000_000,
                       fee_tier=500, router=ROUTER, quoted_at=time.time() - 120)
     tool, _ = _tool(quote=stale)
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
     assert res.error and "stale" in res.error.lower()
 
@@ -626,7 +626,7 @@ async def test_a_widened_tolerance_lets_a_previously_refused_route_through(monke
     # independent $2,000. (The default fixture's 250e12 is a 100% drift, which
     # must STILL refuse at 12% — see the test below.)
     tool, _ = _tool(quote=_quote(amount_out=454_545_454_545_454))
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0,
                                      dry_run=True))
     assert res.error is None or "DISAGREES" not in (res.error or "")
@@ -640,7 +640,7 @@ async def test_a_widened_tolerance_still_refuses_a_grossly_wrong_route(monkeypat
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     monkeypatch.setenv("DEFI_ROUTE_DRIFT_MAX_PCT", "24")
     tool, _ = _tool(quote=_quote(amount_out=250_000_000_000_000))   # 100% drift
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0,
                                      dry_run=False))
     assert res.error and "DISAGREES" in res.error
@@ -652,7 +652,7 @@ async def test_confirmed_minimum_cannot_be_lowered_by_a_new_route(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("Must refuse before checking an allowance")))
     tool, _ = _tool(quote=_quote())
-    result = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1,
+    result = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1,
         max_spend_usd=2, minimum_output_raw=10**18, dry_run=True))
     assert "confirmed quote" in result.error
 
@@ -676,7 +676,7 @@ async def test_a_requote_that_still_clears_the_confirmed_minimum_is_tightened(mo
 
     tool._route = _spy
     confirmed = 499_000_000_000_000                  # out 500e12, a 0.2% margin
-    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1,
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1,
         max_spend_usd=2, minimum_output_raw=confirmed, dry_run=True))
     assert "confirmed quote" not in (res.error or "")
     assert len(seen) == 2 and seen[1] < seen[0]

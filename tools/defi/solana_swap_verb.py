@@ -76,6 +76,9 @@ async def _prepare(tool, params, execution_context, s):
         return tool._ar(error=str(exc))
     if token_in == token_out:
         return tool._ar(error="token_in and token_out are the same token")
+    # 086 W6: a sell's typed close reason rides to the realized row.
+    s.plan = getattr(params, "plan", None)
+    s.close_reason = getattr(params, "close_reason", None) or ""
 
     wallet = tool._get_wallet()
     if wallet is None:
@@ -132,10 +135,20 @@ async def _prepare(tool, params, execution_context, s):
     # tx_guard steps 1-2, mirrored: owner kill-switch, then turn origin
     # (forged/leaf refusal, the DEFI_AUTONOMOUS_TURN_TRADING goal lane, and
     # the DEFI_MONITOR_EXITS exit-only carve-out).
+    # 086 W2: a mandate run's non-exit buy meets the kernel's mandate step. The
+    # quote is not built yet, so the entry is sized at its declared ceiling
+    # (max_spend_usd — the cap the valued outflow is later asserted against).
     refusal, autonomous_origin, monitor_exit = await asyncio.to_thread(tool._solana_turn_gate,
-        execution_context, exit_shaped_fn=_exit_shaped)
+        execution_context, exit_shaped_fn=_exit_shaped,
+        mandate_entry={"token": token_out, "usd": float(params.max_spend_usd)})
     if refusal:
         return tool._ar(error=refusal)
+    # 086 W6: a mandate ENTRY states its plan before anything is quoted (after
+    # the mandate step, so a paused mandate says PAUSED, not "add a plan").
+    from core.position_plans import plan_refusal
+    if why := plan_refusal(execution_context, s.plan, chain="solana", token_in=token_in,
+                           token_out=token_out, in_native=False):
+        return tool._ar(error=why)
     s._exit_shaped = _exit_shaped
     s._held_raw = _held_raw
     s.amount_in_raw = amount_in_raw
@@ -319,6 +332,7 @@ async def _quote_and_build(tool, params, execution_context, s):
     s.floor = floor
     s.quote = quote
     s.raw_tx = raw_tx
+    s.out_decimals = out_decimals
     return None
 
 
@@ -522,6 +536,10 @@ async def _simulate_and_assert(tool, params, execution_context, s):
             f"takes {token_in} and returns less than its minimum is not "
             f"the trade that was quoted. Nothing was broadcast."))
     s.deltas = deltas
+    # 086 W0: the simulation's measured sizes, for the book write on confirm.
+    # A SOL sell's folded outflow carries fee + rent; the principal is declared.
+    s.book_in_raw = amount_in_raw if selling_sol else outflow_raw
+    s.book_out_raw = received_raw
     s.fee_lamports = fee_lamports
     s.native_excess = native_excess
     s.out_delta_raw = out_delta_raw
@@ -596,6 +614,7 @@ async def _value(tool, params, execution_context, s):
               f"(fee {fee_lamports}, charged excess {native_excess})\n"
               f"  valued: ${amount_usd:.2f} (declared max ${declared:.2f})\n")
     s.amount_usd = amount_usd
+    s.value_usd = value_usd
     s.header = header
     s.valuation = valuation
     return None
@@ -748,6 +767,11 @@ async def _confirm(tool, params, execution_context, s):
             outcome, tx_notify.STATE_IN_FLIGHT),
         detail=detail, ledger_recorded=True), settled=True)
     if outcome == "confirmed":
+        _book_positions(execution_context, s)
+        if getattr(s, "plan", None) is not None:
+            from core.position_plans import record_after_swap
+            record_after_swap(execution_context, plan=s.plan, chain="solana",
+                              address=s.token_out)
         return tool._ar(content=header + (
             f"\n  RESULT: CONFIRMED ({detail})\n  sig: {signature}"))
     if outcome == "reverted":
@@ -759,6 +783,58 @@ async def _confirm(tool, params, execution_context, s):
         f"may still land, or the blockhash may have expired — do NOT retry "
         f"blindly; check the signature first.\n  sig: {signature}\n"
         f"  detail: {detail}"))
+
+
+def _book_positions(execution_context, s) -> None:
+    """086 W0: a CONFIRMED swap writes the position book — the EVM path's
+    ``classify_swap`` -> position-book write (``trade_tool``), on Solana.
+
+    Written here and not through ``gate.record``: Solana records the spend at
+    broadcast (before confirmation), and a reverted or expired swap must not
+    open a position. Sized from the vetted simulation (``qty_source =
+    "simulation"`` — not the measured fill) and valued at the swap's value
+    (fees excluded, as the declared max). REACH, not policy: fail-open, never
+    changes the result."""
+    try:
+        from core import open_positions
+        from core.money import hooks
+        from core.wallet.tokens import bounded_decimals
+        in_dec = bounded_decimals(getattr(s, "ident", None))
+        out_dec = bounded_decimals(getattr(s, "out_decimals", None))
+        in_raw = int(getattr(s, "book_in_raw", 0) or 0)
+        out_raw = int(getattr(s, "book_out_raw", 0) or 0)
+        if in_dec is None or out_dec is None or out_raw <= 0:
+            return
+        uid = str(getattr(execution_context, "user_id", "") or "").strip()
+        if not uid:
+            from core.exec_identity import current_exec_identity
+            uid = str(current_exec_identity()[0] or "").strip()
+        apply_deltas = hooks.position_book()
+        if not uid or apply_deltas is None:
+            return
+        legs = open_positions.classify_swap(
+            chain="solana", token_in=s.token_in, token_out=s.token_out,
+            in_native=False, in_symbol=_symbol_of(s.token_in, getattr(s, "_ident", None), s),
+            out_symbol=_symbol_of(s.token_out, getattr(s, "_ident", None), s),
+            in_qty=in_raw / (10 ** in_dec), out_qty=out_raw / (10 ** out_dec),
+            cost_usd=getattr(s, "value_usd", None), qty_source="simulation",
+            close_reason=getattr(s, "close_reason", "") or "")
+        if legs:
+            apply_deltas(uid, legs)
+    except Exception:
+        logger.debug("solana_swap: position-book write skipped (fail-open)", exc_info=True)
+
+
+def _symbol_of(mint, ident, s) -> str:
+    """A display symbol for a book row: the pinned one, else the screened
+    bought mint's (attacker-authored, cleaned), else the mint."""
+    from core.wallet.tokens import canonical_token, clean_symbol
+    pin = canonical_token("solana", mint)
+    if pin:
+        return str(pin.get("symbol") or mint)
+    if ident is not None and getattr(ident, "address", None) == mint:
+        return clean_symbol(getattr(ident, "symbol", None)) or mint
+    return mint
 
 
 async def perform_solana_swap(tool, params, execution_context=None):

@@ -254,7 +254,7 @@ def test_h04_answer_records_provenance_and_renders_one_line(tmp_path):
 def test_option_ends_at_its_question_mark():
     """prod 2026-10-07: option B was stored as "lower the fixed tranche size? Which"."""
     from tools.controller.owner_ask_action import ask_options
-    q = ("PNL buyback is blocked: 0.05 ETH now ≈ $130, above the $120 per-trade hard "
+    q = ("TKN rebuy is blocked: 0.05 ETH now ≈ $130, above the $120 per-trade hard "
          "ceiling. A) raise the per-trade cap, or B) lower the fixed tranche size? Which?")
     assert ask_options(q) == {"A": "raise the per-trade cap", "B": "lower the fixed tranche size"}
 

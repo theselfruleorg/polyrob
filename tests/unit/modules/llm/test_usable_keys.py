@@ -32,6 +32,6 @@ def test_real_length_key_is_usable():
     assert usable_providers_with_keys(env) == ["openrouter"]
 
 
-def test_deepseek_never_usable_even_with_long_key():
+def test_deepseek_usable_with_a_real_key():
     env = {"DEEPSEEK_API_KEY": "sk-" + "d" * 40}
-    assert usable_providers_with_keys(env) == []  # non-initializable
+    assert usable_providers_with_keys(env) == ["deepseek"]

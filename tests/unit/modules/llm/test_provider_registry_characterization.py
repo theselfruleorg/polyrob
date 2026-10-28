@@ -42,7 +42,7 @@ def registry_flag(monkeypatch):
 
 
 CANONICAL_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia", "deepseek"]
-INITIALIZABLE_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia"]
+INITIALIZABLE_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia", "deepseek"]
 
 #: Subscription/flat-rate rows appended by 024 T0. They exist ONLY on the
 #: registry path. Because these rows are appended AFTER the six,
@@ -130,8 +130,8 @@ class TestProfilesOracles:
         assert PROFILES["gemini"].env_key == "GEMINI_API_KEY"
         assert PROFILES["nvidia"].base_url == "https://integrate.api.nvidia.com/v1"
         assert PROFILES["nvidia"].supports_vision is False
-        assert PROFILES["deepseek"].initializable is False
-        assert PROFILES["deepseek"].supports_native_tools is False
+        assert PROFILES["deepseek"].initializable is True
+        assert PROFILES["deepseek"].supports_native_tools is True
         for name in INITIALIZABLE_ORDER:
             assert PROFILES[name].initializable is True
 
@@ -143,17 +143,17 @@ class TestProfilesOracles:
         # blank value counts as absent
         assert providers_with_keys({"OPENAI_API_KEY": ""}) == []
 
-    def test_initializable_excludes_deepseek(self, registry_flag):
+    def test_initializable_includes_deepseek(self, registry_flag):
         from modules.llm.profiles import initializable_providers_with_keys
         assert initializable_providers_with_keys(ALL_KEYS) == INITIALIZABLE_ORDER
-        assert initializable_providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == []
+        assert initializable_providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == ["deepseek"]
 
     def test_usable_rejects_malformed(self, registry_flag):
         from modules.llm.profiles import usable_providers_with_keys
         assert usable_providers_with_keys(ALL_KEYS) == INITIALIZABLE_ORDER
         assert usable_providers_with_keys({"OPENAI_API_KEY": "short"}) == []
         assert usable_providers_with_keys({"OPENAI_API_KEY": "your-openai-key"}) == []
-        assert usable_providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == []
+        assert usable_providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == ["deepseek"]
 
 
 # ---------------------------------------------------------------------------
@@ -190,11 +190,11 @@ class TestRuntimeConfigMatrix:
         env = {"GEMINI_API_KEY": REAL, "OPENAI_API_KEY": REAL}
         assert resolve_runtime_config(None, None, env=env) == ("openai", None)
 
-    def test_deepseek_key_never_autoresolves(self, registry_flag):
+    def test_deepseek_key_autoresolves(self, registry_flag):
         from core.runtime_config import resolve_runtime_config
         assert resolve_runtime_config(
             None, None, env={"DEEPSEEK_API_KEY": REAL}
-        ) == ("openai", None)  # falls to last_resort
+        ) == ("deepseek", None)
 
     def test_malformed_key_never_autoresolves(self, registry_flag):
         from core.runtime_config import resolve_runtime_config
@@ -208,11 +208,10 @@ class TestRuntimeConfigMatrix:
             None, None, env={}, available_keys={"ANTHROPIC_API_KEY", "GEMINI_API_KEY"}
         )
         assert got == ("anthropic", None)
-        # deepseek name is filtered by initializable
         got = resolve_runtime_config(
             None, None, env={}, available_keys={"DEEPSEEK_API_KEY"}
         )
-        assert got == ("openai", None)
+        assert got == ("deepseek", None)
 
     def test_last_resort(self, registry_flag):
         from core.runtime_config import resolve_runtime_config
@@ -230,7 +229,7 @@ class TestProviderConfig:
         expected = {
             "openai": ("OpenAIClient", True),
             "anthropic": ("AnthropicClient", True),
-            "deepseek": ("DeepSeekClient", False),
+            "deepseek": ("DeepSeekClient", False),  # native, not in the fallback ladder
             "gemini": ("GeminiClient", True),
             "openrouter": ("OpenRouterClient", True),
             "nvidia": ("NvidiaClient", False),
@@ -250,7 +249,7 @@ class TestDefaultModels:
         "anthropic": "claude-sonnet-4-5",
         "openai": "gpt-5",
         "gemini": "gemini-2.5-flash",
-        "deepseek": "deepseek-chat",
+        "deepseek": "deepseek-flash",
         "openrouter": "z-ai/glm-5.2",
         "nvidia": "moonshotai/kimi-k2.6",
     }

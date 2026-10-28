@@ -89,6 +89,11 @@ def test_the_cron_read_verbs_are_the_rows():
     from cron import read_job as R
     assert {v.replace(".", "_", 1) for v in R.READ_VERBS} == vp.ids_where(read_job=True)
     assert R.READ_VERBS == {
+        # 086 W3: the trading mandate's exit / hunt prechecks.
+        "defi_data.discovery_count": ("tools.defi.data_tool", "DefiDataTool",
+                                      "discovery_count", "DiscoveryCountParams"),
+        "defi_data.position_mark": ("tools.defi.data_tool", "DefiDataTool", "position_mark",
+                                    "PositionMarkParams"),
         "defi_data.pool_metrics": ("tools.defi.data_tool", "DefiDataTool", "pool_metrics",
                                    "PoolMetricsParams"),
         "defi_data.price": ("tools.defi.data_tool", "DefiDataTool", "price", "TokenRefParams"),

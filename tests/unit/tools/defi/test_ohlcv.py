@@ -262,10 +262,10 @@ async def test_ohlcv_names_the_indexer_refusal_not_an_absent_pool():
 
 # --- how DEEP is the pool it read? ----------------------------------------
 #
-# 2026-09-22, from a real money-rail artifact: the buyback skip report narrated
-# "a ~96% collapse inside a single hour" off candles for pool 0x9c54d4e1…, while
+# 2026-09-22, from a real money-rail artifact: the rebuy skip report narrated
+# "a ~96% collapse inside a single hour" off candles for pool 0x9999bbbb…, while
 # the same programme's live quote four hours later said 1 ETH still bought 73.6M
-# PNL against a 79.2M 24 h average — down 7%, not 96%. A true −96% would buy
+# TKN against a 79.2M 24 h average — down 7%, not 96%. A true −96% would buy
 # ~20× MORE, not less. The report itself recorded $4,251 liquidity "for the pool
 # they track" against the monitor's $18,350, so two pools were in play and the
 # resolver had picked the sideshow.

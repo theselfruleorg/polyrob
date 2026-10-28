@@ -631,14 +631,14 @@ async def _pick_model_interactive(preselect: Optional[tuple]):
         app = get_app_or_none()
         picker = getattr(app, "_picker", None) if app is not None else None
         if picker is not None and getattr(app, "is_running", False):
-            from modules.llm.available_models import available_models, steer_notes
+            from modules.llm.available_models import available_models
             from cli.ui.model_selector import _default_idx, _resolved_default
 
             choices = available_models()
             if not choices:
                 return None
             default = preselect or _resolved_default(None, choices)
-            return await picker.open(choices, _default_idx(choices, default), steer_notes())
+            return await picker.open(choices, _default_idx(choices, default), [])
     except Exception:
         pass
     return await run_standalone_async(preselect=preselect)

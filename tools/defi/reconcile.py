@@ -17,7 +17,8 @@ Design constraints that matter:
 - Chain holdings that the book does not explain are NOT auto-promoted to
   positions — the anti-dust rule stands.
 - The quote asset (USDC) and the wrapped native are working capital, not
-  positions; they are never "unexplained".
+  positions; they are never "unexplained". 086 W0: a wrapped-native BOOK row
+  (a major bought with a stable) carries its cost basis and is not size-compared.
 - An UNPRICED token the book does not hold is ``unsolicited`` (someone sent it;
   never interact) — NOT a disagreement, so a dusted wallet can read CLEAN. A
   priced holding above dust that the book does not explain stays
@@ -30,8 +31,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 #: Confidently-priced holdings below this are classified as dust, not as a
-#: disagreement — same spirit as the portfolio verb's dust framing.
-DUST_VALUE_USD = 0.25
+#: disagreement. 086 W0: the ONE threshold (``core.open_positions.DUST_USD``,
+#: $1 — it was $0.25 here and $1 in ``positions_view``).
+from core.open_positions import DUST_USD as DUST_VALUE_USD  # noqa: E402
 
 #: |chain − book| / book beyond this is a size mismatch (a quoted or simulated
 #: size is not the final fill), so exact equality is the wrong bar.
@@ -86,7 +88,7 @@ class ReconcileReport:
     unknown: List[str] = field(default_factory=list)        # could not verify (read failed)
     dust: List[str] = field(default_factory=list)
     #: 068: warning lines when >1 contract here claims one symbol. Rendered
-    #: FIRST — on 2026-09-25 a buyback took the first "PNL" line it saw.
+    #: FIRST — on 2026-09-25 a recurring swap job took the first line with its symbol.
     collisions: List[str] = field(default_factory=list)
     holdings_considered: int = 0
     #: rail-store rows compared on this chain.
@@ -133,6 +135,7 @@ def diff(rail: List[RailPosition],
          holdings: List[ChainHolding],
          *,
          quote_addresses: Optional[List[str]] = None,
+         major_addresses: Optional[List[str]] = None,
          evm_chain: bool = True,
          dust_value_usd: float = DUST_VALUE_USD,
          qty_rel_tolerance: float = QTY_REL_TOLERANCE,
@@ -142,6 +145,9 @@ def diff(rail: List[RailPosition],
     from core.wallet.tokens import clean_symbol
     report = ReconcileReport()
     quotes = {_norm(a) for a in (quote_addresses or []) if a}
+    #: 086 W0: the wrapped native — booked for its cost basis when bought
+    #: with a stable, but gas, wraps and native arrival move its size.
+    majors = {_norm(a) for a in (major_addresses or []) if a}
     by_addr: Dict[str, ChainHolding] = {_norm(h.address): h for h in holdings}
     report.holdings_considered = len(holdings)
     book_addrs = set()
@@ -158,6 +164,11 @@ def diff(rail: List[RailPosition],
             report.add("matched", rp.address,
                 f"{label} {rp.address} — the book marks it "
                 f"{rp.status.replace('_', ' ')}; not compared")
+            continue
+        if key in majors:
+            report.add("matched", rp.address,
+                f"{label} {rp.address} — working capital the book carries for its "
+                f"cost basis (book {rp.qty:,.6f}); size not compared")
             continue
         if held is not None and not held.balance_known:
             report.add("unknown", rp.address,
@@ -315,9 +326,9 @@ def _ticker_collision_lines(rows) -> list:
     """Warning lines when this wallet holds >1 contract claiming one symbol.
 
     ⚠️ On 2026-09-23 the SAFETY rail picked the token it was monitoring out of
-    the portfolio BY SYMBOL: *"PNL token address is 0x357A0436… — that is the
-    PNL contract."* It was not. The treasury holds that ticker twice — the
-    99,090,018-token buyback position and 615 tokens of a different contract
+    the portfolio BY SYMBOL: *"the token address is 0x… — that is the contract."*
+    It was not. The treasury held that ticker twice — a large position bought
+    by a recurring swap job and a few hundred tokens of a different contract
     received as dust — and every measurement after that premise was a correct
     reading of the wrong token, reported to the owner as a 78% liquidity
     collapse that never happened.
@@ -329,8 +340,8 @@ def _ticker_collision_lines(rows) -> list:
 
     ``rows`` is ``(symbol, address)`` or ``(symbol, address, name)`` per
     holding. The NAME is shown beside each address because it is what actually
-    separates them: read live on 2026-09-23, both contracts report symbol
-    ``PNL`` and their names are ``Rob Track Record`` and ``Pissin N Lying``.
+    separates them: read live on 2026-09-23, both contracts report the same
+    symbol and their names were two different phrases.
     The symbol cannot tell them apart and an address is 42 characters of hex.
     Showing the name is not ranking them — it hands over the other identifier
     the contract itself publishes, and lets the reader recognise their own

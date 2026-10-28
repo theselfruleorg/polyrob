@@ -71,3 +71,18 @@ def test_load_env_never_reads_config_env_files(clean_environ, monkeypatch):
     _write(clean_environ / "config" / ".env.production", "OPENROUTER_API_KEY=sk-or-z\n")
     bootstrap.load_env("production")
     assert os.environ.get("OPENROUTER_API_KEY") is None
+
+
+def test_warn_never_raises_on_an_unreadable_config_dir(monkeypatch):
+    # Prod 2026-10-22: `sudo -u polyrob-agent polyrob job edit …` run from
+    # /root died with PermissionError on stat('config/.env.production') — the
+    # relative path resolves against a cwd the service user cannot read. A
+    # one-time hint must never stop the CLI.
+    from pathlib import Path
+
+    def _denied(self, *a, **k):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(bootstrap, "_warned_backfill_retired", False)
+    monkeypatch.setattr(Path, "exists", _denied)
+    bootstrap._warn_backfill_retired_once("config")   # must not raise

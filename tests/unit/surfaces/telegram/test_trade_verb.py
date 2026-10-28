@@ -1,108 +1,192 @@
-"""`/trade <task>` — the owner launches a money-granted run in one message.
+"""086 W5: ``/trade`` is the trading mandate — start (one intake card), status,
+pause, resume, stop (+ the close-all card), release.
 
-The owner, 2026-09-09: "I need a freaking easy model of trading without hitting
-there is no defi trade tool here. I need agent to be able to freaking launch
-defi trade session."
-
-Today a money verb reaches a run ONLY through a stream leg in
-``data/streams/streams.yaml``, which seeds on a 4-hourly timer. Anything the
-agent creates for itself has money stripped by ``goal_create`` — correctly,
-since an INJECTED goal must never trade — so an on-demand "bridge this" or
-"trade that" produces a goal that looks fine and can never execute. That loop
-has now run ~50 times.
-
-The missing signal is that the OWNER asking, in an authenticated chat, IS the
-authorization. This verb carries it. The agent still cannot self-grant: the
-grant comes from an owner-authenticated command, and every spend the run
-attempts is still bounded by the caps and still queues for approval above the
-autonomous ceiling.
+It REPLACED the one-goal ``/trade <task>``: the owner says what to trade once,
+confirms ONE card, and code creates every job (the 10-12 record: four
+improvised goals, two blocked ten days on asks, one book-wide exit cron that
+ran 59 times on dust).
 """
-import types
+import time
 
 import pytest
 
+from core import cron_lanes
+from core import trading_mandate as tm
+from core.surfaces import cards
+from core.surfaces.command_reply import reply_text
+from cron.jobs import CronJobStore
+from cron.service import CronService
+from polyrob.app import trading_jobs as tj
+from surfaces.telegram import trade_ops
 
-class _Board:
-    def __init__(self):
-        self.created = []
-
-    def create(self, **kw):
-        self.created.append(kw)
-        return types.SimpleNamespace(id="new0000000", title=kw.get("title", ""))
-
-    def list(self, user_id=None, limit=1000):
-        return []
-
-
-def _reply(args, board=None):
-    from surfaces.telegram import owner_ops
-    return owner_ops.trade_reply("owner", "/tmp", args, board=board or _Board())
+U = "owner-1"
 
 
-class TestItGrantsTheMoneyVerb:
-    def test_the_created_goal_carries_defi_trade(self):
-        board = _Board()
-        _reply(["bridge", "0.93", "SOL", "to", "Base"], board=board)
-        assert board.created, "the verb must actually seed a goal"
-        tools = board.created[0]["payload"]["tools"]
-        assert "defi_trade" in tools, (
-            "the whole point: an owner-launched run carries the money verb")
-        assert "defi_data" in tools, "it needs to read the market it trades in"
-
-    def test_the_task_text_survives_into_the_goal(self):
-        board = _Board()
-        _reply(["bridge", "0.93", "SOL", "to", "Base"], board=board)
-        blob = (board.created[0]["title"] + board.created[0]["body"]).lower()
-        assert "bridge 0.93 sol to base" in blob
-
-    def test_it_is_marked_owner_granted_for_audit(self):
-        board = _Board()
-        _reply(["sell", "everything"], board=board)
-        assert board.created[0]["payload"].get("owner_granted") is True
+@pytest.fixture(autouse=True)
+def _env(tmp_path, monkeypatch):
+    monkeypatch.setattr(cron_lanes, "missing_pinned_skills", lambda payload, user_id: [])
+    cards.set_store(cards.CardStore(str(tmp_path / "cards.db")))
+    import core.money.mandate_gate as mg
+    monkeypatch.setattr(mg, "read_mandate_book", lambda m, **kw: ([], None))
+    yield
+    cards.set_store(None)
 
 
-class TestItIsStillBounded:
-    def test_the_reply_is_honest_about_the_ceiling(self, monkeypatch):
-        """Since the owner grant (2026-09-26) an approved spend above the ceiling
-        IS sent on the run's next attempt — the reply says so, and never claims
-        'not queued' (validation, 2026-09-27)."""
-        monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "true")
-        out = _reply(["bridge", "sol"])
-        assert "not queued" not in out
-        assert "asks you first (/pending)" in out
-        assert "next attempt sends it" in out
+@pytest.fixture
+def seat(tmp_path):
+    svc = CronService(CronJobStore(str(tmp_path / "cron.db")))
+    mp = str(tmp_path / "trading.db")
 
-    def test_no_ask_is_promised_when_the_run_cannot_sign(self, monkeypatch):
-        monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "false")
-        out = _reply(["bridge", "sol"])
-        assert "asks you first (/pending)" not in out.split("\n\n", 1)[-1]
+    def run(*words):
+        return trade_ops.trade_reply(U, str(tmp_path), list(words), svc=svc, mandate_path=mp,
+                                     price_fn=lambda c, a: None)
 
-    def test_the_reply_says_paused_when_dispatch_is_paused(self, monkeypatch):
-        from core import autonomy_control
-        st = autonomy_control.Decision(False, "paused (all)", None)
-        monkeypatch.setattr(autonomy_control, "allows", lambda kind, d=None: st)
-        out = _reply(["bridge", "sol"])
-        assert "Paused — it runs after /resume." in out
-        assert "next dispatcher tick" not in out
-
-    def test_the_reply_says_it_cannot_sign_when_turn_trading_is_off(self, monkeypatch):
-        monkeypatch.delenv("DEFI_AUTONOMOUS_TURN_TRADING", raising=False)
-        assert "cannot send a transaction" in _reply(["bridge", "sol"])
-        monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "true")
-        assert "cannot send a transaction" not in _reply(["bridge", "sol"])
-
-    def test_it_names_only_real_owner_actions(self):
-        from core.owner_remedy import unknown_owner_actions
-        assert unknown_owner_actions(_reply(["bridge", "sol"])) == []
+    run.svc, run.mp = svc, mp
+    return run
 
 
-class TestGuardrails:
-    def test_an_empty_task_is_refused_with_usage(self):
-        assert "usage" in _reply([]).lower()
+def _confirm(seat, reply):
+    """Tap Confirm: the card's ONE line, run on the seat as if typed."""
+    card = cards.store().get(reply.card_id)
+    p = cards.press(card.card_id, "ok", U)
+    assert p.run == card.line and p.run.startswith("/trade start d")
+    out = seat(*p.run.split()[1:])
+    cards.finish(card.card_id, out)
+    return out
 
-    def test_a_non_owner_never_reaches_it(self):
-        """Routing owner-gates the verb; this pins that the handler itself does
-        not assume it. A money grant must not rest on one layer."""
-        from surfaces.telegram import owner_ops
-        out = owner_ops.trade_reply(None, "/tmp", ["bridge"], board=_Board())
-        assert "owner" in out.lower()
+
+def test_bare_start_writes_nothing_and_names_the_presets(seat):
+    out = seat("start")
+    assert "memecoin" in out and "majors" in out and "allocation" in out
+    assert tm.get_active(U, path=seat.mp) is None
+    assert not tj.mandate_jobs(seat.svc)
+
+
+def test_start_with_fields_is_one_card_with_the_preset_numbers(seat):
+    reply = seat("start", "150", "robinhood,solana", "memecoin")
+    text = reply_text(reply)
+    assert reply.card_id
+    for want in ("$150 allocation", "$3 tickets", "up to 8 open", "-50% stop",
+                 "+100% sell 50%", "48 h time stop", "-10% of the allocation",
+                 "about $1.50", "Confirm:"):
+        assert want in text, want
+    assert tm.get_active(U, path=seat.mp) is None          # nothing before Confirm
+    assert not tj.mandate_jobs(seat.svc)
+
+
+def test_confirm_creates_the_mandate_and_its_jobs_in_one_line(seat):
+    reply = seat("start", "budget=150", "chains=solana", "ticket=2", "slots=4")
+    line = cards.store().get(reply.card_id).line
+    out = _confirm(seat, reply)
+    m = tm.get_active(U, path=seat.mp)
+    assert m is not None and m.actor == tm.OWNER_SEAT and m.status == tm.ACTIVE
+    assert (m.budget_usd, m.chains, m.ticket_usd, m.slots) == (150.0, ("solana",), 2.0, 4)
+    assert f"Trading mandate {m.id} started" in out
+    jobs = tj.mandate_jobs(seat.svc, mandate_id=m.id)
+    assert sorted(tj.role(j) for j in jobs) == ["hunt", "review"]
+    hunt = next(j for j in jobs if tj.role(j) == "hunt")
+    assert hunt.payload["actor"] == "owner_seat" and hunt.payload["rig"] == "money_rail"
+    assert hunt.payload["skills"][:2] == ["trading-mandate", "treasury-trading"]
+    assert hunt.payload["precheck"]["verb"] == "defi_data.discovery_count"
+    assert hunt.schedule_spec == "30m"
+    review = next(j for j in jobs if tj.role(j) == "review")
+    assert review.payload["rig"] == "research" and "precheck" not in review.payload
+    # The line runs once: again -> refused (live mandate), after a stop -> used.
+    assert "one live mandate" in seat(*line.split()[1:])
+    seat("stop")
+    assert "already used" in seat(*line.split()[1:])
+
+
+def test_a_bad_field_is_refused_before_any_card(seat):
+    assert "❌" in seat("start", "0", "solana")
+    assert "❌" in seat("start", "150", "solana", "preset=yolo")
+    assert "❌" in seat("start", "150", "solana", "colour=red")
+
+
+def test_one_live_mandate(seat):
+    _confirm(seat, seat("start", "150", "solana"))
+    assert "one live mandate" in reply_text(seat("start", "50", "base"))
+
+
+def test_job_failure_leaves_no_mandate(seat, monkeypatch):
+    reply = seat("start", "150", "solana")
+
+    def boom(*a, **k):
+        raise RuntimeError("cron store full")
+
+    monkeypatch.setattr(tj, "create_mandate_jobs", boom)
+    out = _confirm(seat, reply)
+    assert "Nothing was started" in out and tm.get_active(U, path=seat.mp) is None
+
+
+def test_pause_resume_keep_exits_and_move_the_hunt(seat):
+    _confirm(seat, seat("start", "150", "solana"))
+    m = tm.get_active(U, path=seat.mp)
+    assert "PAUSED" in seat("pause")
+    assert tm.get(m.id, path=seat.mp).status == tm.PAUSED
+    hunt = next(j for j in tj.mandate_jobs(seat.svc) if tj.role(j) == "hunt")
+    assert seat.svc.store.get(hunt.id, user_id=U).status == "paused"
+    assert "ACTIVE" in seat("resume")
+    assert seat.svc.store.get(hunt.id, user_id=U).status == "scheduled"
+
+
+def test_release_only_a_halted_mandate(seat):
+    _confirm(seat, seat("start", "150", "solana"))
+    m = tm.get_active(U, path=seat.mp)
+    assert "not halted" in seat("release")
+    tm.latch(m.id, "breaker:daily_loss", path=seat.mp)
+    assert "/trade release" in seat("resume")
+    assert "ACTIVE" in seat("release")
+    assert tm.get(m.id, path=seat.mp).status == tm.ACTIVE
+
+
+def test_stop_ends_hunt_and_review_and_offers_close_all(seat, monkeypatch):
+    import core.money.mandate_gate as mg
+    _confirm(seat, seat("start", "150", "solana"))
+    m = tm.get_active(U, path=seat.mp)
+    monkeypatch.setattr(mg, "read_mandate_book",
+                        lambda mm, **kw: ([{"chain": "solana", "address": "Mint1"}], None))
+    reply = seat("stop")
+    assert tm.get(m.id, path=seat.mp).status == tm.STOPPED
+    assert not [j for j in tj.mandate_jobs(seat.svc) if tj.holding(j)]
+    card = cards.store().get(reply.card_id)
+    assert card.line == f"/trade stop {m.id} close-all"
+    out = seat(*card.line.split()[1:])
+    assert "Close all" in out
+    (close,) = [j for j in tj.mandate_jobs(seat.svc) if tj.holding(j)]
+    assert tj.role(close) == "close_all" and close.one_shot
+    assert close.payload["actor"] == "owner_seat"
+
+
+def test_stop_with_nothing_open_needs_no_card(seat):
+    _confirm(seat, seat("start", "150", "solana"))
+    out = seat("stop")
+    assert isinstance(out, str) and "nothing is left running" in out
+
+
+def test_status_is_the_one_renderer(seat):
+    assert "no mandate" in seat("status")
+    _confirm(seat, seat("start", "150", "solana"))
+    assert "Trading:" in seat("status") and "ACTIVE" in seat("status")
+
+
+def test_only_the_owner(tmp_path):
+    assert "Only the owner" in trade_ops.trade_reply(None, str(tmp_path), ["status"])
+
+
+def test_an_unreadable_store_changes_nothing(tmp_path):
+    out = trade_ops.trade_reply(U, str(tmp_path), ["pause"], mandate_path=str(tmp_path))
+    assert "could not be read" in out
+
+
+def test_usage():
+    assert "start" in trade_ops.trade_reply(U, "/tmp", []) and "release" in trade_ops.USAGE
+
+
+def test_the_card_expires_with_its_draft(seat):
+    from core import trading_intake as ti
+    ref, _ = ti.save_draft(U, {"budget_usd": 10, "chains": ["base"]}, origin="owner",
+                           path=seat.mp, now=time.time() - ti.DRAFT_TTL_S - 5)
+    assert "expired" in seat("start", ref)
+    assert "no mandate draft" in trade_ops.trade_reply("someone-else", "/tmp",
+                                                       ["start", ref], mandate_path=seat.mp)

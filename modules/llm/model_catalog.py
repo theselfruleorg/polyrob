@@ -648,81 +648,43 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     ))
 
     # ========================================
-    # DEEPSEEK MODELS (December 2025)
-    # Source: https://api-docs.deepseek.com/quick_start/pricing
+    # DEEPSEEK MODELS — DeepSeek's own API (verified 2026-10-27)
+    # Source: https://api-docs.deepseek.com/quick_start/pricing + GET /models
+    # Prices are OFF-PEAK; weekdays 01:00-04:00 and 06:00-10:00 UTC bill 2x —
+    # DeepSeekClient reports the exact charge as billed_cost_usd.
+    # Thinking is ON by default (effort high); tool calls work in both modes.
     # ========================================
 
-    # DeepSeek-V3.2 Chat - Non-thinking mode (Released Dec 1, 2025)
-    # 671B total params, 37B active per token (MoE architecture)
+    # DeepSeek V4.1 Flash. The retired ids still answer and are served by this
+    # model: `deepseek-chat` = thinking OFF, `deepseek-reasoner` = thinking ON.
     register(ModelConfig(
-        name="deepseek-chat",
+        name="deepseek-flash",
         provider=ModelProvider.DEEPSEEK,
-        context_window=128000,  # 128K context with DSA (DeepSeek Sparse Attention)
-        max_completion_tokens=8192,  # 4K default, 8K max
-        pricing=ModelPricing(
-            input_price=0.28,  # $0.28/M tokens (cache miss)
-            cached_input_price=0.028,  # $0.028/M tokens (cache hit)
-            output_price=0.42  # $0.42/M tokens
-        ),
+        display_name_override="DeepSeek V4.1 Flash",
+        context_window=1048576,
+        max_completion_tokens=393216,
+        pricing=ModelPricing(input_price=0.15, cached_input_price=0.003, output_price=0.6),
         capabilities=ModelCapabilities(
-            supports_function_calling=True,
-            supports_tools=True,
-            supports_json_mode=True,
-            supports_vision=False,
-            supports_streaming=True
+            supports_vision=True, supports_function_calling=True, supports_tools=True,
+            supports_streaming=True, supports_json_mode=True, supports_thinking=True,
         ),
-        knowledge_cutoff="2025-12",
-        aliases=["deepseek-v3.2", "deepseek-v3", "deepseek-chat-v3.2"]
+        aliases=["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
+                 "deepseek-v4.1-flash", "deepseek-4.1-flash"]
     ))
 
-    # DeepSeek-V3.2 Reasoner - Thinking mode (Released Dec 1, 2025)
-    # Same architecture as chat but with extended thinking
+    # DeepSeek V4 Pro — the larger model, text only.
     register(ModelConfig(
-        name="deepseek-reasoner",
+        name="deepseek-v4-pro",
         provider=ModelProvider.DEEPSEEK,
-        context_window=128000,  # 128K context
-        max_completion_tokens=64000,  # 32K default, 64K max
-        pricing=ModelPricing(
-            input_price=0.28,  # $0.28/M tokens (cache miss)
-            cached_input_price=0.028,  # $0.028/M tokens (cache hit)
-            output_price=0.42  # $0.42/M tokens
-        ),
+        display_name_override="DeepSeek V4 Pro",
+        context_window=1048576,
+        max_completion_tokens=393216,
+        pricing=ModelPricing(input_price=0.66, cached_input_price=0.022, output_price=1.98),
         capabilities=ModelCapabilities(
-            supports_thinking=True,
-            thinking_budget_tokens=32000,  # UP-07: was deepseek_client DEFAULT_MAX_COT_TOKENS
-            supports_function_calling=True,  # V3.2 reasoner now supports tools
-            supports_tools=True,
-            supports_json_mode=True,
-            supports_vision=False,
-            supports_streaming=True
+            supports_vision=False, supports_function_calling=True, supports_tools=True,
+            supports_streaming=True, supports_json_mode=True, supports_thinking=True,
         ),
-        knowledge_cutoff="2025-12",
-        aliases=["deepseek-v3.2-reasoner", "deepseek-r1", "deepseek-thinking"]
-    ))
-
-    # DeepSeek-V3.2-Speciale - Extended reasoning (Temporary until Dec 15, 2025)
-    # Enhanced thinking mode with 128K output
-    register(ModelConfig(
-        name="deepseek-speciale",
-        provider=ModelProvider.DEEPSEEK,
-        context_window=128000,  # 128K context
-        # Not in the models.dev oracle; aligned with the deepseek-reasoner
-        # sibling (64K out / 128K ctx). reserve==window clamped the input
-        # budget to the 1,000-token floor (2026-08-15 audit P6).
-        max_completion_tokens=64000,
-        pricing=ModelPricing(
-            input_price=0.28,
-            cached_input_price=0.028,
-            output_price=0.42
-        ),
-        capabilities=ModelCapabilities(
-            supports_thinking=True,
-            supports_function_calling=False,  # Thinking mode only
-            supports_tools=False,
-            supports_vision=False  # DeepSeek doesn't support vision
-        ),
-        knowledge_cutoff="2025-12",
-        aliases=["deepseek-v3.2-speciale"]
+        aliases=["deepseek-pro"]
     ))
 
     # ========================================
@@ -1448,7 +1410,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
             supports_json_mode=True, supports_thinking=True,
         ),
         knowledge_cutoff="2025-12",
-        aliases=["deepseek-v4-flash", "deepseek-flash"]
+        aliases=["or-deepseek-v4-flash"]
     ))
 
     # DeepSeek V4.1 Flash — the cheap 1M-context workhorse, and it SEES: OpenRouter
@@ -1470,7 +1432,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
             supports_tools=True, supports_streaming=True,
             supports_json_mode=True, supports_thinking=True,
         ),
-        aliases=["deepseek-v4.1-flash", "or-deepseek-v4.1-flash", "deepseek-4.1-flash"]
+        aliases=["or-deepseek-v4.1-flash"]
     ))
 
     # Llama 3.3 70B Instruct — reliable open workhorse, native tools.

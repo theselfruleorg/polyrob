@@ -19,7 +19,20 @@ owns them, through ONE registration each:
   sentence as the old failed import); ``SpendLedger.record`` raises;
 * :func:`register_position_book` (P5a) — ``apply_deltas(user_id, deltas)``,
   the open-position book ``SpendLedger.record`` writes after a booked swap.
-  Absent = the book write is skipped (fail open, as before).
+  Absent = the book write is skipped (fail open, as before);
+* :func:`register_position_reader` (086 W2) — ``read(user_id, chain, token, *,
+  db_path=None) -> {"rows": [...], "token_sold_at": ts | None}``: one chain of
+  the open-position book as plain data for the trading-mandate step
+  (``core.money.mandate_gate``). Each row is a dict with ``entry_usd``,
+  ``entry_ts``, ``origin``, ``status``, ``qty`` and ``is_token`` (the row IS
+  *token*, by the rail's own address rule). Raises when the book cannot be
+  read. Absent = the mandate step refuses every mandate entry (fail closed);
+* :func:`register_mandate_gate` (086 W2) — ``refuse(mandate_id, *, user_id,
+  chain, token, usd) -> str | None``, the trading-mandate step
+  ``authorize_spend`` runs for a mandate entry. ``core.trading_mandate``
+  registers ``core.money.mandate_gate.entry_refusal`` at phase 1 (an in-core
+  rail of ``core.packs.loader``), so the kernel imports neither the store nor
+  the data-home resolver. Absent while a run names a mandate = refuse.
 
 Registration is last-writer-wins, so a test (or a later pack) can replace a
 provider; a replacement by another module is logged and kept (:func:`replacements`). There is NO default module any more (P5a deleted
@@ -43,6 +56,12 @@ _SPEND_LEDGER = "spend_ledger"
 _TREASURY_BALANCE = "treasury_balance"
 _SUBMISSION_JOURNAL = "submission_journal"
 _POSITION_BOOK = "position_book"
+_POSITION_READER = "position_reader"
+_MANDATE_GATE = "mandate_gate"
+
+#: The execution-context metadata key (and the run payload key) that names a
+#: run's trading mandate. ``core.trading_mandate`` re-exports it.
+MANDATE_METADATA_KEY = "mandate"
 
 _PROVIDERS: Dict[str, Callable[..., Any]] = {}
 
@@ -96,6 +115,24 @@ def register_submission_journal(getter: Callable[[], Any]) -> None:
 
 def register_position_book(apply_deltas: Callable[[str, list], Any]) -> None:
     _register(_POSITION_BOOK, apply_deltas)
+
+
+def register_position_reader(read: Callable[..., Any]) -> None:
+    _register(_POSITION_READER, read)
+
+
+def position_reader() -> Optional[Callable[..., Any]]:
+    """The book reader for the mandate step, or None (= refuse mandate entries)."""
+    return _provider(_POSITION_READER)
+
+
+def register_mandate_gate(refuse: Callable[..., Optional[str]]) -> None:
+    _register(_MANDATE_GATE, refuse)
+
+
+def mandate_gate() -> Optional[Callable[..., Optional[str]]]:
+    """The trading-mandate step, or None (= refuse a mandate entry)."""
+    return _provider(_MANDATE_GATE)
 
 
 def registered() -> tuple:

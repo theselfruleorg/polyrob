@@ -17,7 +17,6 @@
           "type": "number"
         },
         "chain": {
-          "default": "robinhood",
           "description": "Chain to quote a Uniswap v3 deposit on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
           "type": "string"
         },
@@ -50,6 +49,7 @@
         }
       },
       "required": [
+        "chain",
         "token_a",
         "token_b"
       ],

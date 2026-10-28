@@ -1,8 +1,8 @@
 """DEFI-5: rule 1 of the buy identity gate covers OUR OWN launches' symbols.
 
 Rule 1 refused a different contract only for canonical and pinned symbols. The
-instance's own launch (PNL) had no rule-1 protection, so a trusted-by-target
-look-alike "PNL" passed and quarantined the real position. A contract that
+instance's own launch (TKN) had no rule-1 protection, so a trusted-by-target
+look-alike "TKN" passed and quarantined the real position. A contract that
 takes the symbol of a token this instance launched is now refused, whatever
 else vouches for it — unless it is itself ours or the owner pinned it.
 """
@@ -16,8 +16,8 @@ from core.wallet import token_provenance as tp
 from core.wallet import tokens
 from tools.defi.identity_gate import buy_identity_refusal
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 
 
 def _ctx(target=None):
@@ -26,7 +26,7 @@ def _ctx(target=None):
                                  is_sub_agent=False)
 
 
-def _ident(symbol="PNL", verified=False, source="frozen"):
+def _ident(symbol="TKN", verified=False, source="frozen"):
     return types.SimpleNamespace(symbol=symbol, name="x", verified=verified, source=source)
 
 
@@ -39,7 +39,7 @@ def _stores(tmp_path, monkeypatch):
     monkeypatch.setattr(tp, "provenance_db_path", lambda data_home=None: str(tmp_path / "prov.db"))
     monkeypatch.setattr(op, "open_positions_db_path",
                         lambda data_dir=None: str(tmp_path / "open_positions.db"))
-    symbols = {REAL.lower(): "PNL"}
+    symbols = {REAL.lower(): "TKN"}
     monkeypatch.setattr(tokens, "frozen_record",
                         lambda chain, addr, **k: ({"symbol": symbols[addr.lower()]}
                                                   if addr.lower() in symbols else None))
@@ -69,5 +69,5 @@ def test_a_different_symbol_is_not_touched():
 
 
 def test_an_owner_pin_of_the_other_contract_stands():
-    token_pins.pin("robinhood", FAKE, "PNL")
+    token_pins.pin("robinhood", FAKE, "TKN")
     assert _buy(FAKE, ident=_ident(verified=True, source="owner_pin")) is None

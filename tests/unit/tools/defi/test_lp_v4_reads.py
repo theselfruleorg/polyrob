@@ -1,7 +1,7 @@
 """048 phase 3 / core handoff W6: the v4 reads on the Pons PoolKey.
 
 Pins the PoolKey question the 2026-09-29 core evaluation raised ("GeckoTerminal
-names the pool PNL/WETH, the key uses native address(0)"): the NATIVE key
+names the pool TKN/WETH, the key uses native address(0)"): the NATIVE key
 hashes to the pool id the mint contract buys from; a WETH key does not.
 """
 import asyncio
@@ -12,8 +12,8 @@ from core.wallet import abi, dex_registry
 from tools.defi import lp_reads, lp_v4 as V
 from tools.defi.data_tool import DefiDataTool, LpPoolInfoParams, LpQuoteParams
 
-PNL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-PINNED_POOL_ID = "0x43b7b259007600ad19df15a23b620fd77c8c121c8ecc8788d5116a833d031e94"
+TKN = "0x5555555555555555555555555555555555555555"
+PINNED_POOL_ID = "0x9aea68684de3d4fca647dfcf22ec651ab3df2b63c19fd172748024e1c007e960"
 HOOK = "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044"
 WETH_4663 = "0x7943e237c7F95DA44E0301572D358911207852Fa"
 # Measured on a 4663 fork 2026-09-29 (StateView.getSlot0 / getLiquidity).
@@ -21,14 +21,14 @@ SQRT = 627219137286278685928990650320595
 TICK = 179543
 LIQ = 29277002188455997052109
 
-RECORD = {"token": PNL, "pairToken": "0x" + "0" * 40, "poolFee": 0,
+RECORD = {"token": TKN, "pairToken": "0x" + "0" * 40, "poolFee": 0,
           "tickSpacing": 200, "phase": 2, "exists": True}
 
 
 def test_native_pons_key_is_the_pinned_pool_id():
     key = lp_reads.pons_pool_key(RECORD)
     assert key["currency0"] == "0x" + "0" * 40
-    assert key["currency1"].lower() == PNL.lower()
+    assert key["currency1"].lower() == TKN.lower()
     assert (key["fee"], key["tickSpacing"], key["hooks"]) == (0, 200, HOOK)
     assert lp_reads.pool_id(key) == PINNED_POOL_ID
 
@@ -47,7 +47,7 @@ def test_pons_key_refuses_changed_factory_before_reading_its_record(monkeypatch)
     monkeypatch.setattr(pons, 'verify_pins', bad_pin)
     monkeypatch.setattr(pons, 'launched_token', unexpected)
     with pytest.raises(V.LpReadError, match='code hash changed'):
-        V.pons_key_for(lambda *a: None, PNL)
+        V.pons_key_for(lambda *a: None, TKN)
 
 
 def _word(sqrt, tick, pfee=0, lfee=0):
@@ -141,22 +141,22 @@ def _tool(monkeypatch):
 
 def test_lp_pool_info_v4_reads_the_pons_pool(monkeypatch):
     res = asyncio.run(_tool(monkeypatch).lp_pool_info(
-        LpPoolInfoParams(protocol="v4", token_a="native", token_b=PNL)))
+        LpPoolInfoParams(chain="robinhood", protocol="v4", token_a="native", token_b=TKN)))
     assert PINNED_POOL_ID in res.extracted_content
     assert "tick: 179543" in res.extracted_content
 
 
 def test_lp_quote_v4_is_full_range_only(monkeypatch):
     tool = _tool(monkeypatch)
-    res = asyncio.run(tool.lp_quote(LpQuoteParams(
-        protocol="v4", token_a="native", token_b=PNL, amount_a=1.0, range="1,2")))
+    res = asyncio.run(tool.lp_quote(LpQuoteParams(chain="robinhood",
+        protocol="v4", token_a="native", token_b=TKN, amount_a=1.0, range="1,2")))
     assert "full range only" in res.error
 
 
 def test_lp_quote_v4_refuses_a_pair_that_is_not_the_key(monkeypatch):
     tool = _tool(monkeypatch)
-    res = asyncio.run(tool.lp_quote(LpQuoteParams(
-        protocol="v4", token_a=WETH_4663, token_b=PNL, amount_a=1.0)))
+    res = asyncio.run(tool.lp_quote(LpQuoteParams(chain="robinhood",
+        protocol="v4", token_a=WETH_4663, token_b=TKN, amount_a=1.0)))
     assert "not this token's Pons PoolKey" in res.error
 
 

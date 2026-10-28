@@ -41,8 +41,10 @@ CEILINGS = {
     "core/status_rules.py": 0,  # 060 WS-7
     "core/status_sections.py": 0,  # 067 P5a slot registry
     "core/status_money.py": 0,  # 067 P5a (moved from status_snapshot.py)
+    "core/trading_report.py": 0,  # 086 W6: the one trading renderer
     "core/status_room_actions.py": 0,  # 067 P5a (moved from status_snapshot.py)
     "tools/controller/agent_status_action.py": 0,
+    "tools/status_harness.py": 0,  # 093 D1: the snapshot's harness slot
     # the ONE outer fail-open guard around the injection itself (protects the
     # agent loop; the note it would carry is the thing that failed)
     "agents/task/agent/core/live_health.py": 1,

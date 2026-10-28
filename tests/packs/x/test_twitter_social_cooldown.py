@@ -211,7 +211,7 @@ async def test_cooldown_expires_after_the_configured_window(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cooldown_refusal_teaches_the_reschedule_not_the_drop(monkeypatch):
-    """2026-09-17 (intel 2169): buyback tranche 3 broadcast two seconds after the
+    """2026-09-17 (intel 2169): rebuy tranche 3 broadcast two seconds after the
     status-post cron consumed the cooldown; the refusal said "likely a re-fire"
     and the agent dropped a report the owner had asked for on EVERY tranche.
     The refusal must carry the remaining seconds and the exact way to defer the

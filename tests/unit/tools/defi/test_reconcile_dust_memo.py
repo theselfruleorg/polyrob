@@ -1,8 +1,8 @@
-"""The buyback's step-1 reconcile must not re-price airdropped dust every call.
+"""The rebuy's step-1 reconcile must not re-price airdropped dust every call.
 
 2026-10-08 16:00Z: the treasury held 116 tokens, almost all airdrops. Every
 reconcile re-read each one's identity and price; with slow DNS the gate passed
-its 60 s action budget twice and the buyback stopped. A dust/unsolicited
+its 60 s action budget twice and the rebuy stopped. A dust/unsolicited
 verdict for an UNCHANGED raw balance is reused — an unrecorded buy changes the
 balance, so it is always re-priced.
 """

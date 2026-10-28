@@ -3,12 +3,62 @@
     "description": "Swap one SPL token for another on SOLANA via the Jupiter aggregator. Simulated and asserted before anything is broadcast. There is NO allowance to grant or revoke on Solana — Jupiter needs none — so this is a single verb, not the EVM approve/swap/revoke cycle. dry_run defaults to TRUE.",
     "name": "defi_trade_solana_swap",
     "parameters": {
+      "$defs": {
+        "TradePlan": {
+          "additionalProperties": false,
+          "description": "086 W6: the plan an entry states before it quotes (072 D8).",
+          "properties": {
+            "confidence": {
+              "description": "0..1, your honest confidence.",
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Confidence",
+              "type": "number"
+            },
+            "invalidation": {
+              "description": "What, if seen, proves the thesis wrong.",
+              "maxLength": 400,
+              "minLength": 3,
+              "title": "Invalidation",
+              "type": "string"
+            },
+            "preset": {
+              "description": "The mandate preset this entry follows (memecoin | majors).",
+              "maxLength": 40,
+              "minLength": 2,
+              "title": "Preset",
+              "type": "string"
+            },
+            "thesis": {
+              "description": "Why this token, now — one or two sentences.",
+              "maxLength": 600,
+              "minLength": 3,
+              "title": "Thesis",
+              "type": "string"
+            }
+          },
+          "required": [
+            "thesis",
+            "confidence",
+            "invalidation",
+            "preset"
+          ],
+          "title": "TradePlan",
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "amount_in": {
           "description": "Human amount of token_in to sell",
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "close_reason": {
+          "default": null,
+          "description": "SELL only: why this closes the position — stop_loss | take_profit | trailing | time_stop | owner | retired | dust | orphan | manual | breaker:<name>. Leave empty on a buy.",
+          "nullable": true,
+          "type": "string"
         },
         "dry_run": {
           "default": true,
@@ -27,6 +77,11 @@
           "minimum": 1,
           "nullable": true,
           "type": "integer"
+        },
+        "plan": {
+          "$ref": "#/$defs/TradePlan",
+          "description": "Your entry plan {thesis, confidence, invalidation, preset}. REQUIRED for a buy inside a trading-mandate run (refused without it); the exit runs follow it. Omit on a sell.",
+          "nullable": true
         },
         "slippage_bps": {
           "default": null,

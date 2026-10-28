@@ -59,15 +59,11 @@ class UserProfile:
     
     # AUTHORIZATION
     role: str = 'user'                                     # user/admin
-    tier: str = 'free'                                     # free/holder/x402/admin
+    tier: str = 'free'                                     # free/free_access/x402/admin
     
     # WALLET TRACKING
     current_wallet_chain: Optional[str] = 'ethereum'        # ethereum/polygon/etc
     current_wallet_connected_at: Optional[datetime] = None
-    
-    # TOKEN OWNERSHIP
-    den_token_count: int = 0                               # NFT holdings
-    den_token_verified_at: Optional[datetime] = None
     
     # METADATA
     total_sessions: int = 0

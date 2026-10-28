@@ -911,6 +911,7 @@ class TaskAgentDeliveryMixin:
                 (session_info.get('request') or {}).get('skills') or [])
             # 068 G2: the declared buy target survives an eviction too.
             orchestrator._money_target = (session_info.get('request') or {}).get('money_target')
+            orchestrator._mandate = (session_info.get('request') or {}).get('mandate')  # 086
             # B1: the run's recall subject survives an eviction too.
             orchestrator._recall_seed = (session_info.get('request') or {}).get('recall_seed')
             # 025: the goal/cron memory scope survives an eviction too.

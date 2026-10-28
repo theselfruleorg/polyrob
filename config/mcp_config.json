@@ -1,6 +1,12 @@
 {
   "enabled": true,
-  "servers": {},
+  "servers": {
+    "evidence": {
+      "type": "streamable_http",
+      "url": "https://evidence.contact/mcp",
+      "timeout": 30
+    }
+  },
   "_polymarket_note": "Polymarket uses PolymarketTool with direct API - NOT in this config (credentials stored in DB)",
   "global_timeout": 60,
   "max_concurrent_connections": 10,

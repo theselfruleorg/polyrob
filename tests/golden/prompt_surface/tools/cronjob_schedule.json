@@ -20,14 +20,14 @@
         },
         "max_duration_seconds": {
           "default": 600,
-          "description": "Hard cap per run (60-1800s; default 600). A money rail that reconciles, quotes, gates, swaps and reports needs ~15-25 min at 1-5 min/step — the 600 s ceiling cut the hourly buyback at step 6 before its swap (2026-09-18).",
+          "description": "Hard cap per run (60-1800s; default 600). A money rail that reconciles, quotes, gates, swaps and reports needs ~15-25 min at 1-5 min/step — the 600 s ceiling cut the an hourly swap job at step 6 before its swap (2026-09-18).",
           "maximum": 1800,
           "minimum": 60,
           "type": "integer"
         },
         "pause_windows": {
           "default": null,
-          "description": "Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 UTC. A tick inside a window is a $0 skip (e.g. hold the buyback from T-1h to 24h after the mint window).",
+          "description": "Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 UTC. A tick inside a window is a $0 skip (e.g. hold a recurring swap from T-1h to 24h after a mint window).",
           "items": {
             "items": {},
             "type": "array"

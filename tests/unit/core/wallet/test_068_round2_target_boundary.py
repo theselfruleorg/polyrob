@@ -20,8 +20,8 @@ from core.wallet.simulation import Deltas
 
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 WETH = "0x4200000000000000000000000000000000000006"
-TARGET = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+TARGET = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 NFT = "0x4444444444444444444444444444444444444444"
 HOLDER = "0x2222222222222222222222222222222222222222"
 CALLEE = "0x3333333333333333333333333333333333333333"
@@ -147,7 +147,7 @@ def test_a_store_behind_an_unsearchable_parent_is_unreadable(tmp_path):
     parent = tmp_path / "wallet"
     parent.mkdir()
     path = str(parent / "token_pins.db")
-    token_pins.pin("robinhood", TARGET, "PNL", db_path=path)
+    token_pins.pin("robinhood", TARGET, "TKN", db_path=path)
     os.chmod(parent, 0o600)  # readable listing, no search (x) bit
     try:
         with pytest.raises(token_pins.PinStoreUnreadable):

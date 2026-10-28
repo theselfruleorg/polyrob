@@ -158,8 +158,8 @@ _ROUND_STEP_MIN_DECIMALS = 12
 def jitter_step(decimals) -> int:
     """How far apart two pending amounts of this asset must sit.
 
-    ⚠️ Live 2026-09-15: a 3,500 PNL offer quoted ``SEND EXACTLY
-    3500.000000000000000005 PNL``. The step was ONE raw unit — a millionth of a
+    ⚠️ Live 2026-09-15: a 3,500 TOKEN offer quoted ``SEND EXACTLY
+    3500.000000000000000005 TOKEN``. The step was ONE raw unit — a millionth of a
     dollar in 6-decimal USDC, harmless; 5e-18 in an 18-decimal token, a figure
     no wallet renders and no payer can reproduce, while settlement compares the
     integer EXACTLY.

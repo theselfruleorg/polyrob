@@ -36,7 +36,7 @@ strings live in ``core.tool_gates.REMEDIES``.
 """
 import logging
 from dataclasses import dataclass
-from typing import Iterable, Optional, Set
+from typing import Iterable, Optional, Set, Tuple
 
 from core.tool_gates import remedy_text
 
@@ -74,7 +74,7 @@ class ToolStatus:
     """Resolved status for one display tool id."""
     tool_id: str
     status: str          # "loaded" | "loadable" | "gated"
-    reason: str = ""     # gated only: money | leaf-blocked | unavailable-on-this-deploy | custody-no-browser | unknown-tool
+    reason: str = ""     # gated only: money | leaf-blocked | unavailable-on-this-deploy | custody-no-browser | unknown-tool | a tool's own availability_gap reason (no-mcp-server)
     remedy: str = ""     # the channel that unblocks it — never empty for gated/loadable
 
 
@@ -142,6 +142,26 @@ def _container_has_tool(container, display_id: str) -> bool:
     return False
 
 
+def _instance_gap(container, display_id: str) -> Optional[Tuple[str, str]]:
+    """``(reason, remedy)`` from a constructed tool that knows it cannot run on
+    this deploy (its ``availability_gap()``; 093 A1), else None. The catalog and
+    ``load_tool`` then say what the load path would find, before a load attempt.
+    Fail-open: a probe error is no gap."""
+    try:
+        tool = None
+        for name in (display_id, f"{display_id}_tool"):
+            if container.has_service(name):
+                tool = container.get_service(name)
+                break
+        probe = getattr(tool, "availability_gap", None)
+        gap = probe() if callable(probe) else None
+        if isinstance(gap, tuple) and len(gap) == 2 and all(isinstance(x, str) for x in gap):
+            return gap
+    except Exception:
+        logger.debug("availability_gap probe failed for %r", display_id, exc_info=True)
+    return None
+
+
 def resolve_tool_status(
     tool_id: str,
     *,
@@ -182,6 +202,13 @@ def resolve_tool_status(
     _verdict = _credential_verdict_status(display)
     if _verdict is not None:
         return _verdict
+
+    # 093: a constructed tool that cannot run here (no MCP server, an exec
+    # backend that cannot start) outranks `loaded` for the browser rail's reason.
+    if display in loaded_ids or _container_has_tool(container, display):
+        gap = _instance_gap(container, display) if container is not None else None
+        if gap is not None:
+            return ToolStatus(display, "gated", gap[0], gap[1])
 
     if display in loaded_ids:
         return ToolStatus(display, "loaded")
@@ -363,7 +390,17 @@ def render_tool_catalog(
             money_notes.setdefault(st.remedy.replace(f"'{display}'", "'<id>'"), []).append(display)
             lines.append(f"- {display}: {desc} [gated:money — see the money note]")
             continue
-        lines.append(f"- {display}: {desc} {_status_suffix(st)}")
+        lines.append((display, desc, st))
+    # 093: a gate text two or more tools share (an exec backend that cannot start
+    # gates shell + process + code_execution) is stated ONCE, like the money note.
+    _shared = {}
+    for item in lines:
+        if isinstance(item, tuple) and item[2].status == "gated" and item[2].remedy:
+            _shared.setdefault((item[2].reason, item[2].remedy), []).append(item[0])
+    _shared = {k: v for k, v in _shared.items() if len(v) > 1}
+    lines = [(f"- {i[0]}: {i[1]} [gated:{i[2].reason} — see the {i[2].reason} note]"
+              if (i[2].reason, i[2].remedy) in _shared else f"- {i[0]}: {i[1]} {_status_suffix(i[2])}")
+             if isinstance(i, tuple) else i for i in lines]
     # A gated tool with no descriptor (e.g. x402_pay before it is constructed)
     # still gets its one catalog line, so no tool status lives anywhere else.
     from core.tool_capabilities import gate_disclosure_map
@@ -375,6 +412,8 @@ def render_tool_catalog(
             lines.append(f"- {display}: [gated:money — see the money note]")
         else:
             lines.append(f"- {display}: {_status_suffix(st)}")
+    for (reason, remedy), tools in _shared.items():
+        lines.append(f"Note {reason} ({', '.join(tools)}): {remedy}")
     move = "\n" + remedy_text("money_owner_move")
     for text, tools in money_notes.items():
         lines.append(f"Money note ({', '.join(tools)}): {text.replace(move, '')}")
@@ -408,6 +447,13 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
         is_leaf=is_leaf, allowed_ids=disclosure_ceiling(controller))
 
     if st.status == "loaded":
+        if display == "mcp" and hasattr(controller, "sync_mcp_session"):
+            # A server the owner added (or removed) since this session loaded
+            # `mcp` is connected (dropped) and its actions (un)registered now.
+            try:
+                await controller.sync_mcp_session(controller.get_tool("mcp"))
+            except Exception:
+                logger.warning("mcp: session resync failed", exc_info=True)
         return ActionResult(
             extracted_content=(
                 f"Tool '{display}' is already loaded — its actions are available now."
@@ -422,10 +468,20 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
 
     loaded = await controller.load_tools_from_container([display])
     if display not in (loaded or {}):
+        # 093 A2: the load path recorded WHY (gate reason + remedy); the agent
+        # cannot read session logs, so the reason is the answer.
+        try:
+            why = (controller.get_tool_load_failures() or {}).get(display, "")
+        except Exception:
+            why = ""
+        if why.startswith("gated:") and not why.startswith("gated:load-failed"):
+            return ActionResult(
+                extracted_content=f"load_tool refused ({why.split(' — ', 1)[0]}): tool "
+                                  f"'{display}' — {why.split(' — ', 1)[-1]}",
+                include_in_memory=True)
         return ActionResult(
-            error=(
-                f"load_tool: tool '{display}' was loadable but failed to load from "
-                f"the container — see session logs"))
+            error=(f"load_tool: tool '{display}' did not load — "
+                   f"{why or 'no reason was recorded'}"))
 
     n_actions = len(getattr(loaded[display], "actions", None) or ()) or None
     return ActionResult(

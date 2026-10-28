@@ -6,7 +6,6 @@
       "additionalProperties": false,
       "properties": {
         "chain": {
-          "default": "robinhood",
           "description": "Chain to read a Uniswap v3 pool on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
           "type": "string"
         },
@@ -38,6 +37,9 @@
           "type": "string"
         }
       },
+      "required": [
+        "chain"
+      ],
       "type": "object"
     }
   },

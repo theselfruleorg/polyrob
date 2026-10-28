@@ -1,7 +1,28 @@
 # X / Twitter rails
 
 POLYROB has two complementary X rails because API access and the visible X inbox
-are not equivalent.
+are not equivalent. Both ship in the first-party `x` pack; the API tool needs the
+`polyrob[twitter]` extra.
+
+## The API tool (`twitter`)
+
+The `twitter` tool reads with any valid X credentials. Its writes also need
+`TWITTER_ENABLED` (on under `AUTONOMY_MODE=autonomous`) and follow the owner rule
+in [Who may write on X](#who-may-write-on-x).
+
+- **Reads:** `twitter_get_mentions`, `twitter_get_timeline`, `twitter_get_tweets`,
+  `twitter_get_user`, `twitter_search`, `twitter_whoami`, `twitter_poll_results`
+  and `twitter_get_dms`.
+- **Writes:** `twitter_post`, `twitter_thread`, `twitter_reply`, `twitter_quote`,
+  `twitter_dm`, `twitter_delete_tweet`, and the account actions (retweet, like,
+  follow, mute, block and their undo forms). X allows `twitter_block` only on the
+  Enterprise tier; use mute on the other tiers.
+
+Each mention carries `author_id` and `author_username`, so a reply goes to the
+account that wrote the mention. Each tweet read carries `reposts_and_quotes`
+(retweets plus quotes), the figure that X's app shows as reposts.
+
+`twitter` carries Rob's own X identity, so a helper cannot use it.
 
 ## API rails
 
@@ -19,14 +40,17 @@ X exposes two different private-message protocols:
   new DMs to it in September 2026, so it shows only old history; results are
   marked `obsolete`.
 
-`twitter_dm` tries X Chat first. When X Chat refuses the send (a 4xx — X Chat
-rejects a cold first contact — or a recipient without X Chat keys), it sends on
-the plaintext endpoint (`POST /2/dm_conversations/with/:id/messages`), which still
-delivers; the result names the rail. A 5xx or timeout is never re-sent on the
-other rail, since the message may have landed. Every decrypted message carries `verified`; a sender whose X
-Chat key record has no identity binding signature is returned with
-`verified: false` and a `trust` note instead of being dropped. A thread whose key
-this account cannot read is never re-keyed; the send goes plaintext instead.
+`twitter_dm` sends on encrypted X Chat. When X Chat refuses the send (a 4xx — X
+Chat rejects a cold first contact — a recipient without X Chat keys, or a thread
+whose key this account cannot read, which is never re-keyed), nothing is sent
+until a new call with `allow_plaintext=true` is in your approval. Only then does
+Rob use the plaintext endpoint
+(`POST /2/dm_conversations/with/:id/messages`), which still delivers; the result
+names the endpoint. The approval always shows that field. A 5xx or timeout is
+never re-sent on the other rail, since the message may have landed. Every
+decrypted message carries `verified`; a sender whose X Chat key record has no
+identity binding signature is returned with `verified: false` and a `trust` note
+instead of being dropped.
 
 `twitter_get_dms` accepts `rail=auto|chat|legacy`. `auto` selects X Chat when
 the OAuth 2.0 login is usable (legacy only when that login is dead). An account-wide Chat read lists
@@ -161,6 +185,13 @@ Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
 - `x_post`: publish a post, also approval-gated.
 - `x_reply`: reply under an existing post (status URL or id) — the lane the API tier refuses for non-mentioners; approval-gated like `x_post`.
 - `x_login_check`: verify the captured session.
+- `x_signup_start`: register Rob's own X account. It always waits for your
+  approval. It fills the form, reads the code from Rob's own mailbox, and
+  stores the generated password encrypted before it types it. `X_SIGNUP_HANDLE`
+  and `X_SIGNUP_DISCLOSURE` set the requested handle and the automation bio, and
+  the result reports whether each was applied. A CAPTCHA, a phone check or an
+  unknown page pauses the signup and asks you; POLYROB never solves a CAPTCHA.
+  The CLI form is `polyrob x-account signup [--resume]`.
 
 The encrypted session is tenant-scoped. If X expires it, run the capture command
 again. Browser-returned messages are framed as untrusted external data before

@@ -351,7 +351,43 @@ def load_local_mcp_servers() -> Dict[str, Any]:
             data = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError, ValueError):
             continue
-        servers = data.get("servers") or data.get("mcpServers") or {}
-        if isinstance(servers, dict):
-            merged.update(servers)
+        if not isinstance(data, dict):
+            continue
+        # Both keys are read: an editor may hold "mcpServers" while the 093 B3
+        # migration (or an older file) holds "servers". "servers" wins a clash.
+        for key in ("mcpServers", "servers"):
+            servers = data.get(key)
+            if isinstance(servers, dict):
+                merged.update(servers)
     return merged
+
+
+def mcp_explicitly_off() -> bool:
+    """The operator wrote ``MCP_ENABLED=false`` (a ``POLYROB_OVERRIDES`` entry).
+
+    An explicit off beats every enable signal, including the operator's own
+    server file — after the 093 B3 migration that file exists on every deployed
+    box, so treating it as "on" made ``MCP_ENABLED=false`` a no-op."""
+    from core.config_policy.members import member_raw
+    return member_raw("MCP_ENABLED") == "false"
+
+
+def mcp_gate_on() -> bool:
+    """The registration gate for ``mcp`` (093 A1, moved from
+    ``polyrob/app/bootstrap.py``): an explicit MCP_ENABLED (the posture member)
+    decides, on or off; unset, the member's default, else the presence of the
+    operator's local server file.
+
+    Registration only. A registered tool with no configured server is still
+    unusable; ``MCPTool.availability_gap`` says so to the catalog."""
+    from core.config_policy.members import member_flag
+    if mcp_explicitly_off():
+        return False
+    if member_flag("MCP_ENABLED"):
+        return True
+    return bool(load_local_mcp_servers())
+
+
+from core.tool_gates import register_gate as _register_gate  # noqa: E402
+
+_register_gate("mcp", mcp_gate_on)

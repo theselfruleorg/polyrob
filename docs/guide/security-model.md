@@ -27,7 +27,7 @@ actually trusted:
 |---|---|---|
 | The **owner** (bound owner principal, or the local CLI operator) | Trusted | Steers the agent directly — COMMAND/STEER/TASK_AGENT access |
 | A **correspondent** (a third party the agent itself initiated contact with) | Untrusted DATA | Their reply is delivered to the session as framed data, never as a command — see §2 |
-| **Fetched web content / browser page content / MCP tool outputs** | Untrusted DATA | Anything from `browser`, `web_fetch`, `mcp`, `perplexity`, `anysite`, `email` bodies, etc. may contain adversarial text (indirect prompt injection) |
+| **Fetched web content / browser page content / MCP tool outputs** | Untrusted DATA | Anything from `browser`, `web_fetch`, `http_request`, `mcp`, `perplexity`, `anysite`, `email` bodies, etc. may contain adversarial text (indirect prompt injection) |
 | **Skill content** authored by the agent itself (writable skills) | Untrusted-by-default | Content is threat-scanned before write; a forged/background turn can never auto-activate or patch an active skill |
 | A **group member** in an allowlisted room | Untrusted, room-scoped | May trigger a turn, but that turn runs a public session on a read-only toolset — see §2's room rail |
 | An **unknown or unverified sender** on any surface | Denied | No routing authority — see the four tiers below |
@@ -129,8 +129,12 @@ it does not itself sandbox what `run_code` does (see §3).
 `ApprovalProvider` + `make_approval_hook`, wired `fail_mode="closed"` so a denial,
 timeout, or a crashing provider **blocks** the action rather than allowing it.
 `APPROVAL_REQUIRED_TOOLS` (env, frozen at import) plus a `DEFAULT_APPROVAL_REQUIRED_TOOLS`
-set the Controller unions in automatically at `AGENT_COMPUTE_POSTURE >= 2`. The
-durable `owner_queue` provider makes this remotely-approvable and restart-surviving.
+set (`core/verb_policy.py`) the Controller unions in automatically at
+`AGENT_COMPUTE_POSTURE >= 2`. The durable `owner_queue` provider makes this
+remotely-approvable and restart-surviving. Under `AUTONOMY_MODE=autonomous` most
+approvals become allow-audit-notify; the verbs marked `always_queued` there
+(self-modification, `mcp_install`, a dangerous shell command) stay on the owner
+queue.
 
 What it stops: a gated action executing without an explicit approval decision,
 even across a process restart.
@@ -200,6 +204,15 @@ on a probe error):
 - **Transfers to yourself.** A genuine owner turn that transfers to one
   of `OWNER_WALLET_ADDRESSES` or to the agent's own wallet waits on no second tap.
   The caps, `tx_guard` and the pause still hold.
+- **A payout shape always waits for the owner.** A `defi_trade.call` that moves
+  value without declaring a fair inflow, and a `deploy_contract` that endows the
+  constructor, can pay an address nobody pinned
+  (`core/config_policy/spend_lane.py::payout_shaped`). `tx_guard` queues such a call
+  for the owner's tap in every lane, `PAYMENT_APPROVAL_MODE=auto` and the
+  autonomous ceiling included.
+- **No default network.** Every money verb (`defi_trade`, `defi_data`,
+  `dapp_browser`, `agent_nft`) and every wallet, identity and LP CLI command needs an
+  explicit `chain`; a call without one is refused, never sent to a guessed network.
 
 Persistent policy history refuses damaged storage and invalid amounts. A shared
 POSIX lock serializes check/spend/record across cooperating local processes. In
@@ -212,7 +225,28 @@ charge is booked, and a timeout never frees it.
 
 What it does not do: protect the wallet's *key material* from a host-level
 compromise — if the process itself is compromised (see §3's "process identity" gap),
-the caps are enforced by the same process an attacker would already control.
+the limits are enforced by the same process an attacker would already control. The
+wallet signer below is the lever that moves the key out of that process.
+
+### The wallet signer (`core/signer/`)
+
+`WALLET_SIGNER` (default `local`) decides where signatures come from:
+
+- `local` — Rob's own process holds the seed and signs. Every gate above runs in
+  that process.
+- `shadow` — Rob still signs, and also asks `polyrob-signer` for a verdict on the
+  same intent. The verdict is logged and counted in the `custody` status section;
+  it never blocks a send.
+- `remote` — Rob holds no key; a seed that reaches it is dropped. The signer runs
+  as its own OS user behind a Unix socket that checks the connecting UID, re-runs
+  `tx_guard` on its own pinned RPC against the hard limits in `signer.toml`, keeps
+  its own spend record, and only then signs. Above its hard limit the owner
+  approves on the box, as root.
+
+Under `shadow` and `remote` the signer's limits are the envelope: Rob lowers its own
+matching limits to them, so a raise from chat stops at the signer's limit. This is
+the one place in this section where a gate does not share Rob's process.
+Set-up and cut-over: [payments.md](payments.md).
 
 ### The on-chain transaction guard (`core/wallet/tx_guard.py`)
 
@@ -389,8 +423,8 @@ it wrote a wallet key into (`polyrob wallet init`, `polyrob config set`). Each c
 reads the file again, so the file decides, not what the process holds: a seed left
 in the file under the remote signer, or an older seed than the one the service
 manager set, refuses too, and the refusal ends when the seed leaves the file. The
-refusal names the fixes: move the seed to the signer (`polyrob signer install`)
-and remove it from that file, or run code in a sandbox backend
+refusal names the fixes: move the seed to the signer (`WALLET_SIGNER=remote`, see
+the wallet signer in §2) and remove it from that file, or run code in a sandbox backend
 (`CODE_EXEC_BACKEND=docker`). The other host children above stay allowed: they do
 not run code the model wrote. A seed only in the service manager's env file (the
 production shape: `wallet.env`, root-owned 0600) and an install with no wallet see

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 KNOWN_TOOLS = frozenset({
     'polymarket', 'mcp', 'twitter', 'email', 'perplexity',
-    'filesystem', 'browser', 'collabland', 'alchemy', 'task',
+    'filesystem', 'browser', 'task',
 })
 
 _FILESYSTEM_KW = ('document', 'doc_', 'extract_text', 'process_', 'file',

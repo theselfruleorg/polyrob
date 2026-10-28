@@ -45,24 +45,6 @@ async def test_block_preserves_administrative_hierarchy(services, monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_verify_token_uses_registered_alchemy_service(services):
-    db, registered = services
-    db.fetch_one.return_value = {
-        "user_id": "u1", "wallet_address": "0x" + "1" * 40,
-        "tier": "free", "den_token_count": 0,
-    }
-    alchemy = SimpleNamespace(alchemy_check_token=AsyncMock(return_value={
-        "status": "success", "token_count": 1, "token_ids": [],
-    }))
-    registered["alchemy"] = alchemy
-    request = SimpleNamespace(state=SimpleNamespace(user_id="admin"), headers={}, client=None)
-    result = await admin.verify_user_token(request, "u1")
-    assert result.new_tier == "holder"
-    alchemy.alchemy_check_token.assert_awaited_once()
-    db.execute.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("available", [True, False])
 async def test_charged_resolution_requires_an_actual_deduction(services, available):
     db, registered = services

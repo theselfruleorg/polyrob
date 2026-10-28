@@ -10,12 +10,12 @@ import pytest
 
 from core import open_positions as op
 
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+FAKE = "0x3535353535353535353535353535353535353535"
 
 
 def _buy(db, qty=10.0, cost=134.54):
     op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
-                                           symbol="PNL", qty=qty, cost_usd=cost),
+                                           symbol="TKN", qty=qty, cost_usd=cost),
                    db_path=db)
 
 
@@ -61,7 +61,7 @@ def test_a_pre_w0_store_upgrades_and_reads_open(tmp_path):
         entry_ts REAL NOT NULL, updated_ts REAL NOT NULL,
         origin TEXT NOT NULL DEFAULT 'trade',
         PRIMARY KEY (user_id, chain, account, address))""")
-    conn.execute("INSERT INTO open_positions VALUES ('rob','robinhood','',?, 'PNL', 5, 134.54, 1, 1, 'trade')",
+    conn.execute("INSERT INTO open_positions VALUES ('rob','robinhood','',?, 'TKN', 5, 134.54, 1, 1, 'trade')",
                  (FAKE.lower(),))
     conn.commit()
     conn.close()

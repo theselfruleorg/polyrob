@@ -7,10 +7,18 @@ same access model as every other surface: the owner, correspondents, group
 members, and everyone else denied. See [groups.md](groups.md) and
 [owner-controls.md](owner-controls.md).
 
-Your owner identity on these surfaces comes from a pairing row: send the bot a
-message, then approve the pairing request from a seat you already own
-(`polyrob owner approve`). A configured owner id alone does not make a sender
-the owner.
+Your owner identity on Feishu and DingTalk comes from a pairing row.
+
+⚠️ Pairing is one switch for every chat app: while it is on, a sender who is
+neither the owner nor paired is refused everywhere.
+
+Turn it on (`POLYROB_REQUIRE_PAIRING=true`) and send the bot a message. Then,
+on the box, run `polyrob owner pair pending` to find your request and
+`polyrob owner pair approve <code>` to approve it. Feishu and DingTalk do not
+send the code back to you, so check that the waiting request is the message
+you just sent. A paired sender is the owner there. A configured owner id alone
+does not make a sender the owner: `OWNER_FEISHU_ID` and `OWNER_DINGTALK_ID`
+only say where owner notices go.
 
 ## Feishu / Lark
 

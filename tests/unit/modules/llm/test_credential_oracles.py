@@ -66,9 +66,7 @@ def test_status_separates_present_from_usable(monkeypatch):
     assert st["openai"].present and not st["openai"].usable
     assert "malformed" in st["openai"].reason
 
-    # deepseek's key is real; its DIRECT client is what's disabled
-    assert st["deepseek"].present and not st["deepseek"].usable
-    assert "OpenRouter" in st["deepseek"].reason
+    assert st["deepseek"].present and st["deepseek"].usable
 
     assert not st["gemini"].present
     assert "GEMINI_API_KEY" in st["gemini"].reason

@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 391
+  "universe_size": 400
  },
  "actions": {
   "": {
@@ -872,49 +872,6 @@
    "room": {
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "alchemy": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": false,
-    "live_twitter_enabled": false,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": null,
-    "metering_gate.MONEY_TOOLS∋owner": null,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
    },
    "spend_exemption": {},
    "untrusted": {
@@ -3015,49 +2972,6 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
-  "collabland": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": false,
-    "live_twitter_enabled": false,
-    "synthetic_mcp": false
-   },
-   "listed_in": [],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": null,
-    "metering_gate.MONEY_TOOLS∋owner": null,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
   "contact_history": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -3712,6 +3626,54 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
+  "defi_data_discovery_count": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "defi_data"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "defi_data_lp_pool_info": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -4126,6 +4088,54 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
+  "defi_data_position_mark": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "defi_data"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "defi_data_positions": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -4220,6 +4230,54 @@
    }
   },
   "defi_data_reconcile": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "defi_data"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "defi_data_retire_row": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -9140,6 +9198,60 @@
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "http_request": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "http_request": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "http_request"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
    }
   },
   "hyperliquid": {
@@ -15622,6 +15734,53 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "propose_setting": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": true,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.ACTION_EFFECTS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
   "publish": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -17443,6 +17602,53 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "trade_mandate_propose": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": true,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.ACTION_EFFECTS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
   "twitter": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -18751,6 +18957,245 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "wallet_sign": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": false,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "wallet_sign_api_call": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "wallet_sign": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "wallet_sign_challenge": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "wallet_sign": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "wallet_sign_message": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "wallet_sign": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "wallet_sign_status": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "wallet_sign"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.NON_WRITE_ACTIONS",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
   "web_extract": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -19831,8 +20276,6 @@
  },
  "lists": {
   "bootstrap._CLI_INCOMPATIBLE": [
-   "alchemy",
-   "collabland",
    "hyperliquid",
    "hyperliquid_data",
    "perplexity",
@@ -19872,6 +20315,7 @@
    "github",
    "goal",
    "hf_deploy",
+   "http_request",
    "knowledge",
    "mcp",
    "process",
@@ -19890,6 +20334,7 @@
    "browser_manager",
    "email",
    "filesystem",
+   "http_request",
    "mcp",
    "task",
    "twitter",
@@ -19922,7 +20367,8 @@
   ],
   "constants.DEFI_AUTONOMOUS_TOOLS": [
    "defi_data",
-   "defi_trade"
+   "defi_trade",
+   "wallet_sign"
   ],
   "constants.DEFI_LAUNCH_AUTONOMOUS_TOOLS": [
    "launchpad",
@@ -20098,8 +20544,6 @@
    "approval.resolve_gated_actions().provider": "auto_notify",
    "bootstrap.cli_unavailable_tools(all)": [
     "agent_nft",
-    "alchemy",
-    "collabland",
     "dapp_browser",
     "defi_trade",
     "hyperliquid",
@@ -20110,6 +20554,7 @@
     "polymarket",
     "polymarket_data",
     "tool_manage",
+    "wallet_sign",
     "worker_manage"
    ],
    "constants.autonomous_mode_tools()": [
@@ -20157,6 +20602,7 @@
     "git",
     "github",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -20167,6 +20613,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20270,6 +20717,7 @@
     "github",
     "goal",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -20281,6 +20729,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20294,12 +20743,12 @@
    "tool_availability.compute_gate('code_execution')": [
     "AGENT_COMPUTE_POSTURE=0 (needs AGENT_COMPUTE_POSTURE>=1)",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "tool_availability.compute_gate('shell')": [
     "AGENT_COMPUTE_POSTURE=0 (needs AGENT_COMPUTE_POSTURE>=1)",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "tool_availability.grantable_autonomous_tools()": [
     "anysite",
@@ -20455,8 +20904,6 @@
    "approval.resolve_gated_actions().provider": "auto_notify",
    "bootstrap.cli_unavailable_tools(all)": [
     "agent_nft",
-    "alchemy",
-    "collabland",
     "dapp_browser",
     "defi_trade",
     "hyperliquid",
@@ -20467,6 +20914,7 @@
     "polymarket",
     "polymarket_data",
     "tool_manage",
+    "wallet_sign",
     "worker_manage"
    ],
    "constants.autonomous_mode_tools()": [
@@ -20487,6 +20935,7 @@
     "x_browser",
     "defi_data",
     "defi_trade",
+    "wallet_sign",
     "launchpad",
     "dapp_browser"
    ],
@@ -20508,6 +20957,7 @@
     "x_browser",
     "defi_data",
     "defi_trade",
+    "wallet_sign",
     "launchpad",
     "dapp_browser"
    ],
@@ -20522,6 +20972,7 @@
     "git",
     "github",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -20532,6 +20983,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20555,6 +21007,7 @@
     "perplexity",
     "task",
     "twitter",
+    "wallet_sign",
     "web_fetch",
     "x402_invoice",
     "x_browser"
@@ -20577,6 +21030,7 @@
     "perplexity",
     "task",
     "twitter",
+    "wallet_sign",
     "web_fetch",
     "x402_invoice",
     "x_browser"
@@ -20640,6 +21094,7 @@
     "github",
     "goal",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -20651,6 +21106,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -20664,12 +21120,12 @@
    "tool_availability.compute_gate('code_execution')": [
     "AGENT_COMPUTE_POSTURE=0 (needs AGENT_COMPUTE_POSTURE>=1)",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "tool_availability.compute_gate('shell')": [
     "AGENT_COMPUTE_POSTURE=0 (needs AGENT_COMPUTE_POSTURE>=1)",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "tool_availability.grantable_autonomous_tools()": [
     "anysite",
@@ -20689,6 +21145,7 @@
     "perplexity",
     "task",
     "twitter",
+    "wallet_sign",
     "web_fetch",
     "x402_invoice",
     "x_browser"
@@ -20844,8 +21301,6 @@
    "approval.resolve_gated_actions().provider": "interactive_cli",
    "bootstrap.cli_unavailable_tools(all)": [
     "agent_nft",
-    "alchemy",
-    "collabland",
     "dapp_browser",
     "defi_trade",
     "hyperliquid",
@@ -20856,6 +21311,7 @@
     "polymarket",
     "polymarket_data",
     "tool_manage",
+    "wallet_sign",
     "worker_manage"
    ],
    "constants.autonomous_mode_tools()": [
@@ -20903,6 +21359,7 @@
     "git",
     "github",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -20913,6 +21370,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -21013,6 +21471,7 @@
     "github",
     "goal",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -21024,6 +21483,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -21037,7 +21497,7 @@
    "tool_availability.compute_gate('code_execution')": [
     "CODE_EXEC_ENABLED=false (posture 2 already met)",
     "disabled",
-    "owner sets CODE_EXEC_ENABLED=true — raising the posture changes nothing here"
+    "operator sets CODE_EXEC_ENABLED=true — raising the posture changes nothing here"
    ],
    "tool_availability.compute_gate('shell')": [
     "SHELL_TOOLS_ENABLED=true, posture 2",
@@ -21177,8 +21637,6 @@
    "approval.resolve_gated_actions().provider": "auto",
    "bootstrap.cli_unavailable_tools(all)": [
     "agent_nft",
-    "alchemy",
-    "collabland",
     "dapp_browser",
     "defi_trade",
     "hyperliquid",
@@ -21189,6 +21647,7 @@
     "polymarket",
     "polymarket_data",
     "tool_manage",
+    "wallet_sign",
     "worker_manage"
    ],
    "constants.autonomous_mode_tools()": [
@@ -21236,6 +21695,7 @@
     "git",
     "github",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -21246,6 +21706,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -21346,6 +21807,7 @@
     "github",
     "goal",
     "hf_deploy",
+    "http_request",
     "hyperliquid",
     "launchpad",
     "mcp",
@@ -21357,6 +21819,7 @@
     "shell",
     "tool_manage",
     "twitter",
+    "wallet_sign",
     "worker_manage",
     "x402_invoice",
     "x402_pay",
@@ -21370,12 +21833,12 @@
    "tool_availability.compute_gate('code_execution')": [
     "AGENT_COMPUTE_POSTURE=0 (needs AGENT_COMPUTE_POSTURE>=1)",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "tool_availability.compute_gate('shell')": [
     "AGENT_COMPUTE_POSTURE=0 (needs AGENT_COMPUTE_POSTURE>=1)",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "tool_availability.grantable_autonomous_tools()": [
     "anysite",
@@ -21544,35 +22007,6 @@
    "permissions": [
     "network.write",
     "wallet.spend"
-   ],
-   "shared_identity_refusal(stranger)": false,
-   "untrusted_namespace": false
-  },
-  "alchemy": {
-   "DELEGATE_BLOCKED_TOOLS": false,
-   "GATED_TOOL_REGISTRY": null,
-   "HIGH_IMPACT_TOOL_IDS": false,
-   "TOOL_GATE_FLAGS": null,
-   "VALID_TOOL_IDS": true,
-   "capabilities": [],
-   "core.tool_gates.registered": false,
-   "effects.ceiling": null,
-   "high_risk": false,
-   "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 1,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 1,
-    "bootstrap._CLI_INCOMPATIBLE": 0,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 1,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 1
-   },
-   "is_classified": true,
-   "is_untrusted_tool(None, tool)": false,
-   "lacks_effect_ceiling": false,
-   "medium_risk": false,
-   "metering_gate.MONEY_TOOLS": false,
-   "money_tool": false,
-   "permissions": [
-    "network.read"
    ],
    "shared_identity_refusal(stranger)": false,
    "untrusted_namespace": false
@@ -21831,7 +22265,7 @@
    "GATED_TOOL_REGISTRY": [
     "CODE_EXEC_ENABLED / AGENT_COMPUTE_POSTURE>=1",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CODE_EXEC_ENABLED",
@@ -21877,7 +22311,7 @@
    "GATED_TOOL_REGISTRY": [
     "CODING_TOOLS_ENABLED",
     "disabled",
-    "owner sets POLYROB_OVERRIDES=CODING_TOOLS_ENABLED=true"
+    "operator sets POLYROB_OVERRIDES=CODING_TOOLS_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CODING_TOOLS_ENABLED",
@@ -21965,41 +22399,12 @@
    "shared_identity_refusal(stranger)": false,
    "untrusted_namespace": false
   },
-  "collabland": {
-   "DELEGATE_BLOCKED_TOOLS": false,
-   "GATED_TOOL_REGISTRY": null,
-   "HIGH_IMPACT_TOOL_IDS": false,
-   "TOOL_GATE_FLAGS": null,
-   "VALID_TOOL_IDS": true,
-   "capabilities": [],
-   "core.tool_gates.registered": false,
-   "effects.ceiling": null,
-   "high_risk": false,
-   "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 2,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 2,
-    "bootstrap._CLI_INCOMPATIBLE": 1,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 2,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 2
-   },
-   "is_classified": true,
-   "is_untrusted_tool(None, tool)": false,
-   "lacks_effect_ceiling": false,
-   "medium_risk": false,
-   "metering_gate.MONEY_TOOLS": false,
-   "money_tool": false,
-   "permissions": [
-    "network.read"
-   ],
-   "shared_identity_refusal(stranger)": false,
-   "untrusted_namespace": false
-  },
   "cronjob": {
    "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
     "CRON_ENABLED (AUTONOMY_POSTURE>=full)",
     "disabled",
-    "owner raises AUTONOMY_POSTURE or sets POLYROB_OVERRIDES=CRON_ENABLED=true"
+    "operator raises AUTONOMY_POSTURE or sets POLYROB_OVERRIDES=CRON_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CRON_ENABLED",
@@ -22079,23 +22484,23 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 3,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 1,
     "autonomous:delegation.get_blocked_child_tools()": 5,
     "autonomous:room_policy._forbidden_tool_ids()": 7,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 3,
-    "autonomous_defi_armed:constants.autonomous_mode_tools()": 18,
-    "autonomous_defi_armed:constants.effective_autonomous_tools()": 18,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 1,
+    "autonomous_defi_armed:constants.autonomous_mode_tools()": 19,
+    "autonomous_defi_armed:constants.effective_autonomous_tools()": 19,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 5,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 4,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 4,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 7,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 4,
     "constants.DEFI_LAUNCH_AUTONOMOUS_TOOLS": 1,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 3,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 1,
     "posture2:delegation.get_blocked_child_tools()": 5,
     "posture2:room_policy._forbidden_tool_ids()": 7,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 4,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 3,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 1,
     "supervised:delegation.get_blocked_child_tools()": 5,
     "supervised:room_policy._forbidden_tool_ids()": 7
    },
@@ -22212,12 +22617,12 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 4,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 2,
     "autonomous:delegation.get_blocked_child_tools()": 6,
     "autonomous:goal_tools.owner_turn_goal_tools()": 5,
     "autonomous:rigs.rig_tools('money_rail')": 1,
     "autonomous:room_policy._forbidden_tool_ids()": 8,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 4,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 2,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 16,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 16,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 6,
@@ -22227,13 +22632,13 @@
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 8,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 6,
     "constants.DEFI_AUTONOMOUS_TOOLS": 1,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 4,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 2,
     "posture2:delegation.get_blocked_child_tools()": 6,
     "posture2:goal_tools.owner_turn_goal_tools()": 5,
     "posture2:rigs.rig_tools('money_rail')": 1,
     "posture2:room_policy._forbidden_tool_ids()": 8,
     "rigs.RIGS['money_rail']": 1,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 4,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 2,
     "supervised:delegation.get_blocked_child_tools()": 6,
     "supervised:goal_tools.owner_turn_goal_tools()": 5,
     "supervised:rigs.rig_tools('money_rail')": 1,
@@ -22257,7 +22662,7 @@
    "GATED_TOOL_REGISTRY": [
     "SMTP/IMAP credentials + outbound policy",
     "disabled",
-    "owner configures email creds; sends follow outbound.policy"
+    "operator configures email creds; sends follow outbound.policy"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,
@@ -22565,7 +22970,7 @@
    "GATED_TOOL_REGISTRY": [
     "GOALS_ENABLED",
     "disabled",
-    "owner sets POLYROB_OVERRIDES=GOALS_ENABLED=true"
+    "operator sets POLYROB_OVERRIDES=GOALS_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "GOALS_ENABLED",
@@ -22665,6 +23070,45 @@
    "shared_identity_refusal(stranger)": true,
    "untrusted_namespace": false
   },
+  "http_request": {
+   "DELEGATE_BLOCKED_TOOLS": true,
+   "GATED_TOOL_REGISTRY": null,
+   "HIGH_IMPACT_TOOL_IDS": true,
+   "TOOL_GATE_FLAGS": null,
+   "VALID_TOOL_IDS": true,
+   "capabilities": [
+    "delegate_blocked",
+    "high_impact",
+    "writes_network"
+   ],
+   "core.tool_gates.registered": false,
+   "effects.ceiling": "network",
+   "high_risk": true,
+   "in": {
+    "autonomous:delegation.get_blocked_child_tools()": 10,
+    "autonomous:room_policy._forbidden_tool_ids()": 15,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 10,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 15,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 14,
+    "bootstrap._CLI_STATIC_TOOLS": 4,
+    "posture2:delegation.get_blocked_child_tools()": 10,
+    "posture2:room_policy._forbidden_tool_ids()": 15,
+    "supervised:delegation.get_blocked_child_tools()": 10,
+    "supervised:room_policy._forbidden_tool_ids()": 15
+   },
+   "is_classified": true,
+   "is_untrusted_tool(None, tool)": true,
+   "lacks_effect_ceiling": false,
+   "medium_risk": false,
+   "metering_gate.MONEY_TOOLS": false,
+   "money_tool": false,
+   "permissions": [
+    "network.write",
+    "network.read"
+   ],
+   "shared_identity_refusal(stranger)": false,
+   "untrusted_namespace": true
+  },
   "hyperliquid": {
    "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
@@ -22683,19 +23127,19 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 5,
-    "autonomous:delegation.get_blocked_child_tools()": 10,
-    "autonomous:room_policy._forbidden_tool_ids()": 15,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 5,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 10,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 15,
-    "bootstrap._CLI_INCOMPATIBLE": 2,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 5,
-    "posture2:delegation.get_blocked_child_tools()": 10,
-    "posture2:room_policy._forbidden_tool_ids()": 15,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 5,
-    "supervised:delegation.get_blocked_child_tools()": 10,
-    "supervised:room_policy._forbidden_tool_ids()": 15
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 3,
+    "autonomous:delegation.get_blocked_child_tools()": 11,
+    "autonomous:room_policy._forbidden_tool_ids()": 16,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 3,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 11,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 16,
+    "bootstrap._CLI_INCOMPATIBLE": 0,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 3,
+    "posture2:delegation.get_blocked_child_tools()": 11,
+    "posture2:room_policy._forbidden_tool_ids()": 16,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 3,
+    "supervised:delegation.get_blocked_child_tools()": 11,
+    "supervised:room_policy._forbidden_tool_ids()": 16
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -22721,17 +23165,17 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 6,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 4,
     "autonomous:tool_defaults.resolve_toolset('research')": 6,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 6,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 6,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 6,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 6,
-    "bootstrap._CLI_INCOMPATIBLE": 3,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 6,
+    "bootstrap._CLI_INCOMPATIBLE": 1,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 4,
     "posture2:tool_defaults.resolve_toolset('research')": 6,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 6,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 6,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 4,
     "supervised:tool_defaults.resolve_toolset('research')": 6,
     "supervised:tool_defaults.resolve_toolset('trading_research')": 6,
     "tool_defaults.TOOLSETS['research']": 6,
@@ -22754,7 +23198,7 @@
    "GATED_TOOL_REGISTRY": [
     "KB_ENABLED",
     "disabled",
-    "owner sets POLYROB_OVERRIDES=KB_ENABLED=true"
+    "operator sets POLYROB_OVERRIDES=KB_ENABLED=true"
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": "KB_ENABLED",
@@ -22781,7 +23225,7 @@
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 3,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 3,
     "bootstrap._CLI_OPTIONAL_TOOLS": 9,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 14,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 15,
     "constants.AUTONOMOUS_MODE_TOOLS": 3,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 6,
     "goal_tools._SELF_GOAL_BASELINE_TOOLS": 3,
@@ -22828,24 +23272,24 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 7,
-    "autonomous:delegation.get_blocked_child_tools()": 11,
-    "autonomous:room_policy._forbidden_tool_ids()": 16,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 7,
-    "autonomous_defi_armed:constants.autonomous_mode_tools()": 17,
-    "autonomous_defi_armed:constants.effective_autonomous_tools()": 17,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 11,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 5,
+    "autonomous:delegation.get_blocked_child_tools()": 12,
+    "autonomous:room_policy._forbidden_tool_ids()": 17,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 5,
+    "autonomous_defi_armed:constants.autonomous_mode_tools()": 18,
+    "autonomous_defi_armed:constants.effective_autonomous_tools()": 18,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 12,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 11,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 11,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 16,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 17,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 11,
     "constants.DEFI_LAUNCH_AUTONOMOUS_TOOLS": 0,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 7,
-    "posture2:delegation.get_blocked_child_tools()": 11,
-    "posture2:room_policy._forbidden_tool_ids()": 16,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 7,
-    "supervised:delegation.get_blocked_child_tools()": 11,
-    "supervised:room_policy._forbidden_tool_ids()": 16
+    "posture2:bootstrap.cli_unavailable_tools(all)": 5,
+    "posture2:delegation.get_blocked_child_tools()": 12,
+    "posture2:room_policy._forbidden_tool_ids()": 17,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 5,
+    "supervised:delegation.get_blocked_child_tools()": 12,
+    "supervised:room_policy._forbidden_tool_ids()": 17
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -22863,9 +23307,9 @@
   "mcp": {
    "DELEGATE_BLOCKED_TOOLS": true,
    "GATED_TOOL_REGISTRY": [
-    "MCP_ENABLED + config/mcp_config.json",
+    "MCP_ENABLED + an MCP server",
     "disabled",
-    "owner sets POLYROB_OVERRIDES=MCP_ENABLED=true and configures servers"
+    "operator sets POLYROB_OVERRIDES=MCP_ENABLED=true, then the owner adds a server with /mcp add <id> <https-url>"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "MCP_ENABLED",
@@ -22876,16 +23320,16 @@
     "shared_identity",
     "writes_network"
    ],
-   "core.tool_gates.registered": false,
+   "core.tool_gates.registered": true,
    "effects.ceiling": "network",
    "high_risk": false,
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 9,
     "autonomous:constants.effective_autonomous_tools()": 9,
-    "autonomous:delegation.get_blocked_child_tools()": 12,
+    "autonomous:delegation.get_blocked_child_tools()": 13,
     "autonomous:goal_tools.allowed_self_goal_tools()": 9,
     "autonomous:goal_tools.owner_turn_goal_tools()": 10,
-    "autonomous:room_policy._forbidden_tool_ids()": 17,
+    "autonomous:room_policy._forbidden_tool_ids()": 18,
     "autonomous:tool_availability.grantable_autonomous_tools()": 9,
     "autonomous:tool_defaults.default_session_tools()": 9,
     "autonomous:tool_defaults.resolve_toolset('earn')": 4,
@@ -22893,25 +23337,25 @@
     "autonomous:tool_defaults.server_default_tools()": 9,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 9,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 9,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 12,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 13,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 12,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 12,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 17,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 18,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 12,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 9,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('full')": 5,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 9,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 15,
-    "bootstrap._CLI_STATIC_TOOLS": 4,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 16,
+    "bootstrap._CLI_STATIC_TOOLS": 5,
     "constants.AUTONOMOUS_MODE_TOOLS": 9,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 7,
     "posture2:constants.autonomous_mode_tools()": 9,
     "posture2:constants.effective_autonomous_tools()": 9,
-    "posture2:delegation.get_blocked_child_tools()": 12,
+    "posture2:delegation.get_blocked_child_tools()": 13,
     "posture2:goal_tools.allowed_self_goal_tools()": 7,
     "posture2:goal_tools.owner_turn_goal_tools()": 10,
-    "posture2:room_policy._forbidden_tool_ids()": 17,
+    "posture2:room_policy._forbidden_tool_ids()": 18,
     "posture2:tool_availability.grantable_autonomous_tools()": 7,
     "posture2:tool_defaults.resolve_toolset('earn')": 4,
     "posture2:tool_defaults.resolve_toolset('full')": 5,
@@ -22919,10 +23363,10 @@
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 8,
     "supervised:constants.autonomous_mode_tools()": 9,
     "supervised:constants.effective_autonomous_tools()": 9,
-    "supervised:delegation.get_blocked_child_tools()": 12,
+    "supervised:delegation.get_blocked_child_tools()": 13,
     "supervised:goal_tools.allowed_self_goal_tools()": 7,
     "supervised:goal_tools.owner_turn_goal_tools()": 10,
-    "supervised:room_policy._forbidden_tool_ids()": 17,
+    "supervised:room_policy._forbidden_tool_ids()": 18,
     "supervised:tool_availability.grantable_autonomous_tools()": 7,
     "supervised:tool_defaults.resolve_toolset('earn')": 4,
     "supervised:tool_defaults.resolve_toolset('full')": 5,
@@ -22954,7 +23398,7 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 8,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 6,
     "autonomous:goal_tools.allowed_self_goal_tools()": 10,
     "autonomous:goal_tools.owner_turn_goal_tools()": 11,
     "autonomous:rigs.rig_tools('money_rail')": 4,
@@ -22963,7 +23407,7 @@
     "autonomous:rigs.rig_tools('research')": 5,
     "autonomous:rigs.rig_tools('social')": 4,
     "autonomous:tool_availability.grantable_autonomous_tools()": 10,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 8,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 6,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 13,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 13,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 4,
@@ -22973,7 +23417,7 @@
     "autonomous_defi_armed:rigs.rig_tools('social')": 4,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 13,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 8,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 8,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 6,
     "posture2:goal_tools.allowed_self_goal_tools()": 8,
     "posture2:goal_tools.owner_turn_goal_tools()": 11,
     "posture2:rigs.rig_tools('money_rail')": 4,
@@ -22987,7 +23431,7 @@
     "rigs.RIGS['owner']": 5,
     "rigs.RIGS['research']": 5,
     "rigs.RIGS['social']": 4,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 8,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 6,
     "supervised:goal_tools.allowed_self_goal_tools()": 8,
     "supervised:goal_tools.owner_turn_goal_tools()": 11,
     "supervised:rigs.rig_tools('money_rail')": 4,
@@ -23020,12 +23464,12 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 9,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 7,
     "autonomous:constants.autonomous_mode_tools()": 7,
     "autonomous:constants.effective_autonomous_tools()": 7,
     "autonomous:goal_tools.allowed_self_goal_tools()": 11,
     "autonomous:goal_tools.owner_turn_goal_tools()": 12,
-    "autonomous:room_policy._forbidden_tool_ids()": 18,
+    "autonomous:room_policy._forbidden_tool_ids()": 19,
     "autonomous:tool_availability.grantable_autonomous_tools()": 11,
     "autonomous:tool_defaults.default_session_tools()": 7,
     "autonomous:tool_defaults.resolve_toolset('earn')": 3,
@@ -23034,12 +23478,12 @@
     "autonomous:tool_defaults.resolve_toolset('social')": 3,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 2,
     "autonomous:tool_defaults.server_default_tools()": 7,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 9,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 7,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 7,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 7,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 14,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 14,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 18,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 19,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 14,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 7,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 3,
@@ -23048,15 +23492,15 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 3,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 2,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 7,
-    "bootstrap._CLI_INCOMPATIBLE": 4,
+    "bootstrap._CLI_INCOMPATIBLE": 2,
     "constants.AUTONOMOUS_MODE_TOOLS": 7,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 9,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 9,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 7,
     "posture2:constants.autonomous_mode_tools()": 7,
     "posture2:constants.effective_autonomous_tools()": 7,
     "posture2:goal_tools.allowed_self_goal_tools()": 9,
     "posture2:goal_tools.owner_turn_goal_tools()": 12,
-    "posture2:room_policy._forbidden_tool_ids()": 18,
+    "posture2:room_policy._forbidden_tool_ids()": 19,
     "posture2:tool_availability.grantable_autonomous_tools()": 9,
     "posture2:tool_defaults.resolve_toolset('earn')": 3,
     "posture2:tool_defaults.resolve_toolset('full')": 3,
@@ -23064,12 +23508,12 @@
     "posture2:tool_defaults.resolve_toolset('social')": 3,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 2,
     "posture2:tool_defaults.server_default_tools()": 3,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 9,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 7,
     "supervised:constants.autonomous_mode_tools()": 7,
     "supervised:constants.effective_autonomous_tools()": 7,
     "supervised:goal_tools.allowed_self_goal_tools()": 9,
     "supervised:goal_tools.owner_turn_goal_tools()": 12,
-    "supervised:room_policy._forbidden_tool_ids()": 18,
+    "supervised:room_policy._forbidden_tool_ids()": 19,
     "supervised:tool_availability.grantable_autonomous_tools()": 9,
     "supervised:tool_defaults.resolve_toolset('earn')": 3,
     "supervised:tool_defaults.resolve_toolset('full')": 3,
@@ -23113,19 +23557,19 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 10,
-    "autonomous:delegation.get_blocked_child_tools()": 13,
-    "autonomous:room_policy._forbidden_tool_ids()": 19,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 10,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 13,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 19,
-    "bootstrap._CLI_INCOMPATIBLE": 5,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 10,
-    "posture2:delegation.get_blocked_child_tools()": 13,
-    "posture2:room_policy._forbidden_tool_ids()": 19,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 10,
-    "supervised:delegation.get_blocked_child_tools()": 13,
-    "supervised:room_policy._forbidden_tool_ids()": 19
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 8,
+    "autonomous:delegation.get_blocked_child_tools()": 14,
+    "autonomous:room_policy._forbidden_tool_ids()": 20,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 8,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 14,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 20,
+    "bootstrap._CLI_INCOMPATIBLE": 3,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 8,
+    "posture2:delegation.get_blocked_child_tools()": 14,
+    "posture2:room_policy._forbidden_tool_ids()": 20,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 8,
+    "supervised:delegation.get_blocked_child_tools()": 14,
+    "supervised:room_policy._forbidden_tool_ids()": 20
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23151,17 +23595,17 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 11,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 9,
     "autonomous:tool_defaults.resolve_toolset('research')": 5,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 5,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 11,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 9,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 5,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 5,
-    "bootstrap._CLI_INCOMPATIBLE": 6,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 11,
+    "bootstrap._CLI_INCOMPATIBLE": 4,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 9,
     "posture2:tool_defaults.resolve_toolset('research')": 5,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 5,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 11,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 9,
     "supervised:tool_defaults.resolve_toolset('research')": 5,
     "supervised:tool_defaults.resolve_toolset('trading_research')": 5,
     "tool_defaults.TOOLSETS['research']": 5,
@@ -23194,17 +23638,17 @@
    "effects.ceiling": "code",
    "high_risk": true,
    "in": {
-    "autonomous:delegation.get_blocked_child_tools()": 14,
-    "autonomous:room_policy._forbidden_tool_ids()": 20,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 14,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 20,
+    "autonomous:delegation.get_blocked_child_tools()": 15,
+    "autonomous:room_policy._forbidden_tool_ids()": 21,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 15,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 21,
     "bootstrap._CLI_OPTIONAL_TOOLS": 10,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 16,
-    "posture2:delegation.get_blocked_child_tools()": 14,
-    "posture2:room_policy._forbidden_tool_ids()": 20,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 17,
+    "posture2:delegation.get_blocked_child_tools()": 15,
+    "posture2:room_policy._forbidden_tool_ids()": 21,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 9,
-    "supervised:delegation.get_blocked_child_tools()": 14,
-    "supervised:room_policy._forbidden_tool_ids()": 20
+    "supervised:delegation.get_blocked_child_tools()": 15,
+    "supervised:room_policy._forbidden_tool_ids()": 21
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23235,16 +23679,16 @@
    "effects.ceiling": "public",
    "high_risk": false,
    "in": {
-    "autonomous:delegation.get_blocked_child_tools()": 15,
-    "autonomous:room_policy._forbidden_tool_ids()": 21,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 15,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 21,
+    "autonomous:delegation.get_blocked_child_tools()": 16,
+    "autonomous:room_policy._forbidden_tool_ids()": 22,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 16,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 22,
     "bootstrap._CLI_OPTIONAL_TOOLS": 11,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 17,
-    "posture2:delegation.get_blocked_child_tools()": 15,
-    "posture2:room_policy._forbidden_tool_ids()": 21,
-    "supervised:delegation.get_blocked_child_tools()": 15,
-    "supervised:room_policy._forbidden_tool_ids()": 21
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 18,
+    "posture2:delegation.get_blocked_child_tools()": 16,
+    "posture2:room_policy._forbidden_tool_ids()": 22,
+    "supervised:delegation.get_blocked_child_tools()": 16,
+    "supervised:room_policy._forbidden_tool_ids()": 22
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23275,17 +23719,17 @@
    "effects.ceiling": "self",
    "high_risk": true,
    "in": {
-    "autonomous:delegation.get_blocked_child_tools()": 16,
-    "autonomous:room_policy._forbidden_tool_ids()": 22,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 16,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 22,
+    "autonomous:delegation.get_blocked_child_tools()": 17,
+    "autonomous:room_policy._forbidden_tool_ids()": 23,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 17,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 23,
     "bootstrap._CLI_OPTIONAL_TOOLS": 12,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 18,
-    "posture2:delegation.get_blocked_child_tools()": 16,
-    "posture2:room_policy._forbidden_tool_ids()": 22,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 19,
+    "posture2:delegation.get_blocked_child_tools()": 17,
+    "posture2:room_policy._forbidden_tool_ids()": 23,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 10,
-    "supervised:delegation.get_blocked_child_tools()": 16,
-    "supervised:room_policy._forbidden_tool_ids()": 22
+    "supervised:delegation.get_blocked_child_tools()": 17,
+    "supervised:room_policy._forbidden_tool_ids()": 23
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23307,7 +23751,7 @@
    "GATED_TOOL_REGISTRY": [
     "AGENT_COMPUTE_POSTURE>=1",
     "disabled",
-    "owner raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
+    "operator raises AGENT_COMPUTE_POSTURE (host axis; not part of AUTONOMY_MODE)"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "SHELL_TOOLS_ENABLED",
@@ -23321,18 +23765,18 @@
    "effects.ceiling": "code",
    "high_risk": true,
    "in": {
-    "autonomous:delegation.get_blocked_child_tools()": 17,
-    "autonomous:room_policy._forbidden_tool_ids()": 23,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 17,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 23,
+    "autonomous:delegation.get_blocked_child_tools()": 18,
+    "autonomous:room_policy._forbidden_tool_ids()": 24,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 18,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 24,
     "bootstrap._CLI_OPTIONAL_TOOLS": 13,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 19,
-    "posture2:delegation.get_blocked_child_tools()": 17,
-    "posture2:room_policy._forbidden_tool_ids()": 23,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 20,
+    "posture2:delegation.get_blocked_child_tools()": 18,
+    "posture2:room_policy._forbidden_tool_ids()": 24,
     "posture2:tool_defaults.with_compute_tools(['filesystem','task'])": 2,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 11,
-    "supervised:delegation.get_blocked_child_tools()": 17,
-    "supervised:room_policy._forbidden_tool_ids()": 23
+    "supervised:delegation.get_blocked_child_tools()": 18,
+    "supervised:room_policy._forbidden_tool_ids()": 24
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23414,8 +23858,8 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 1,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 1,
     "autonomous_defi_armed:tool_defaults.with_compute_tools(['filesystem','task'])": 1,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 20,
-    "bootstrap._CLI_STATIC_TOOLS": 5,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 21,
+    "bootstrap._CLI_STATIC_TOOLS": 6,
     "constants.AUTONOMOUS_MODE_TOOLS": 1,
     "constants.BASE_DEFAULT_TOOLS": 1,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 10,
@@ -23520,19 +23964,19 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 12,
-    "autonomous:delegation.get_blocked_child_tools()": 18,
-    "autonomous:room_policy._forbidden_tool_ids()": 24,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 12,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 18,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 24,
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 10,
+    "autonomous:delegation.get_blocked_child_tools()": 19,
+    "autonomous:room_policy._forbidden_tool_ids()": 25,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 10,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 19,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 25,
     "posture2:approval.resolve_gated_actions().actions": 10,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 12,
-    "posture2:delegation.get_blocked_child_tools()": 18,
-    "posture2:room_policy._forbidden_tool_ids()": 24,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 12,
-    "supervised:delegation.get_blocked_child_tools()": 18,
-    "supervised:room_policy._forbidden_tool_ids()": 24
+    "posture2:bootstrap.cli_unavailable_tools(all)": 10,
+    "posture2:delegation.get_blocked_child_tools()": 19,
+    "posture2:room_policy._forbidden_tool_ids()": 25,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 10,
+    "supervised:delegation.get_blocked_child_tools()": 19,
+    "supervised:room_policy._forbidden_tool_ids()": 25
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23551,7 +23995,7 @@
    "GATED_TOOL_REGISTRY": [
     "TWITTER_ENABLED",
     "disabled",
-    "owner configures X user credentials; POLYROB_OVERRIDES=TWITTER_ENABLED=true unlocks writes"
+    "operator configures X user credentials; POLYROB_OVERRIDES=TWITTER_ENABLED=true unlocks writes"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,
@@ -23569,47 +24013,47 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 4,
     "autonomous:constants.effective_autonomous_tools()": 4,
-    "autonomous:delegation.get_blocked_child_tools()": 19,
+    "autonomous:delegation.get_blocked_child_tools()": 20,
     "autonomous:goal_tools.allowed_self_goal_tools()": 13,
     "autonomous:goal_tools.owner_turn_goal_tools()": 14,
     "autonomous:rigs.rig_tools('social')": 0,
-    "autonomous:room_policy._forbidden_tool_ids()": 25,
+    "autonomous:room_policy._forbidden_tool_ids()": 26,
     "autonomous:tool_availability.grantable_autonomous_tools()": 13,
     "autonomous:tool_defaults.default_session_tools()": 4,
     "autonomous:tool_defaults.resolve_toolset('social')": 5,
     "autonomous:tool_defaults.server_default_tools()": 4,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 4,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 4,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 19,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 20,
     "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 16,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 16,
     "autonomous_defi_armed:rigs.rig_tools('social')": 0,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 25,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 26,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 16,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 5,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 4,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 21,
-    "bootstrap._CLI_STATIC_TOOLS": 6,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 22,
+    "bootstrap._CLI_STATIC_TOOLS": 7,
     "constants.AUTONOMOUS_MODE_TOOLS": 4,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 11,
     "posture2:constants.autonomous_mode_tools()": 4,
     "posture2:constants.effective_autonomous_tools()": 4,
-    "posture2:delegation.get_blocked_child_tools()": 19,
+    "posture2:delegation.get_blocked_child_tools()": 20,
     "posture2:goal_tools.allowed_self_goal_tools()": 11,
     "posture2:goal_tools.owner_turn_goal_tools()": 14,
     "posture2:rigs.rig_tools('social')": 0,
-    "posture2:room_policy._forbidden_tool_ids()": 25,
+    "posture2:room_policy._forbidden_tool_ids()": 26,
     "posture2:tool_availability.grantable_autonomous_tools()": 11,
     "posture2:tool_defaults.resolve_toolset('social')": 5,
     "rigs.RIGS['social']": 0,
     "supervised:constants.autonomous_mode_tools()": 4,
     "supervised:constants.effective_autonomous_tools()": 4,
-    "supervised:delegation.get_blocked_child_tools()": 19,
+    "supervised:delegation.get_blocked_child_tools()": 20,
     "supervised:goal_tools.allowed_self_goal_tools()": 11,
     "supervised:goal_tools.owner_turn_goal_tools()": 14,
     "supervised:rigs.rig_tools('social')": 0,
-    "supervised:room_policy._forbidden_tool_ids()": 25,
+    "supervised:room_policy._forbidden_tool_ids()": 26,
     "supervised:tool_availability.grantable_autonomous_tools()": 11,
     "supervised:tool_defaults.resolve_toolset('social')": 5,
     "tool_defaults.TOOLSETS['social']": 5
@@ -23627,6 +24071,53 @@
    ],
    "shared_identity_refusal(stranger)": true,
    "untrusted_namespace": true
+  },
+  "wallet_sign": {
+   "DELEGATE_BLOCKED_TOOLS": true,
+   "GATED_TOOL_REGISTRY": null,
+   "HIGH_IMPACT_TOOL_IDS": true,
+   "TOOL_GATE_FLAGS": null,
+   "VALID_TOOL_IDS": true,
+   "capabilities": [
+    "delegate_blocked",
+    "high_impact",
+    "money"
+   ],
+   "core.tool_gates.registered": false,
+   "effects.ceiling": "money",
+   "high_risk": true,
+   "in": {
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 11,
+    "autonomous:delegation.get_blocked_child_tools()": 21,
+    "autonomous:room_policy._forbidden_tool_ids()": 27,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 11,
+    "autonomous_defi_armed:constants.autonomous_mode_tools()": 17,
+    "autonomous_defi_armed:constants.effective_autonomous_tools()": 17,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 21,
+    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 17,
+    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 17,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 27,
+    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 17,
+    "constants.DEFI_AUTONOMOUS_TOOLS": 2,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 11,
+    "posture2:delegation.get_blocked_child_tools()": 21,
+    "posture2:room_policy._forbidden_tool_ids()": 27,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 11,
+    "supervised:delegation.get_blocked_child_tools()": 21,
+    "supervised:room_policy._forbidden_tool_ids()": 27
+   },
+   "is_classified": true,
+   "is_untrusted_tool(None, tool)": false,
+   "lacks_effect_ceiling": false,
+   "medium_risk": false,
+   "metering_gate.MONEY_TOOLS": true,
+   "money_tool": true,
+   "permissions": [
+    "network.write",
+    "wallet.spend"
+   ],
+   "shared_identity_refusal(stranger)": false,
+   "untrusted_namespace": false
   },
   "web_fetch": {
    "DELEGATE_BLOCKED_TOOLS": false,
@@ -23661,13 +24152,13 @@
     "autonomous:tool_defaults.server_default_tools()": 2,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 2,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 2,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 17,
-    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 17,
+    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 18,
+    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 18,
     "autonomous_defi_armed:rigs.rig_tools('owner')": 2,
     "autonomous_defi_armed:rigs.rig_tools('research')": 0,
     "autonomous_defi_armed:rigs.rig_tools('social')": 5,
     "autonomous_defi_armed:room_policy.room_tool_ids()": 1,
-    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 17,
+    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 18,
     "autonomous_defi_armed:tool_defaults.cli_default_tools()": 2,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 2,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('default')": 2,
@@ -23677,8 +24168,8 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 2,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 2,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 22,
-    "bootstrap._CLI_STATIC_TOOLS": 7,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 23,
+    "bootstrap._CLI_STATIC_TOOLS": 8,
     "constants.AUTONOMOUS_MODE_TOOLS": 2,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 12,
     "goal_tools._SELF_GOAL_BASELINE_TOOLS": 2,
@@ -23753,18 +24244,18 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:bootstrap.cli_unavailable_tools(all)": 13,
-    "autonomous:delegation.get_blocked_child_tools()": 20,
-    "autonomous:room_policy._forbidden_tool_ids()": 26,
-    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 13,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 20,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 26,
-    "posture2:bootstrap.cli_unavailable_tools(all)": 13,
-    "posture2:delegation.get_blocked_child_tools()": 20,
-    "posture2:room_policy._forbidden_tool_ids()": 26,
-    "supervised:bootstrap.cli_unavailable_tools(all)": 13,
-    "supervised:delegation.get_blocked_child_tools()": 20,
-    "supervised:room_policy._forbidden_tool_ids()": 26
+    "autonomous:bootstrap.cli_unavailable_tools(all)": 12,
+    "autonomous:delegation.get_blocked_child_tools()": 22,
+    "autonomous:room_policy._forbidden_tool_ids()": 28,
+    "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 12,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 22,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 28,
+    "posture2:bootstrap.cli_unavailable_tools(all)": 12,
+    "posture2:delegation.get_blocked_child_tools()": 22,
+    "posture2:room_policy._forbidden_tool_ids()": 28,
+    "supervised:bootstrap.cli_unavailable_tools(all)": 12,
+    "supervised:delegation.get_blocked_child_tools()": 22,
+    "supervised:room_policy._forbidden_tool_ids()": 28
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23784,7 +24275,7 @@
    "GATED_TOOL_REGISTRY": [
     "X402_INVOICE_ENABLED",
     "disabled",
-    "owner sets POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)"
+    "operator sets POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "X402_INVOICE_ENABLED",
@@ -23800,39 +24291,39 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 11,
     "autonomous:constants.effective_autonomous_tools()": 11,
-    "autonomous:delegation.get_blocked_child_tools()": 21,
+    "autonomous:delegation.get_blocked_child_tools()": 23,
     "autonomous:goal_tools.allowed_self_goal_tools()": 15,
     "autonomous:goal_tools.owner_turn_goal_tools()": 16,
-    "autonomous:room_policy._forbidden_tool_ids()": 27,
+    "autonomous:room_policy._forbidden_tool_ids()": 29,
     "autonomous:tool_availability.grantable_autonomous_tools()": 15,
     "autonomous:tool_defaults.default_session_tools()": 11,
     "autonomous:tool_defaults.server_default_tools()": 11,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 11,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 11,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 21,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 18,
-    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 18,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 27,
-    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 18,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 23,
+    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 19,
+    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 19,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 29,
+    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 19,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 11,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 11,
     "bootstrap._CLI_OPTIONAL_TOOLS": 14,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 23,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 24,
     "constants.AUTONOMOUS_MODE_TOOLS": 11,
     "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 13,
     "posture2:constants.autonomous_mode_tools()": 11,
     "posture2:constants.effective_autonomous_tools()": 11,
-    "posture2:delegation.get_blocked_child_tools()": 21,
+    "posture2:delegation.get_blocked_child_tools()": 23,
     "posture2:goal_tools.allowed_self_goal_tools()": 13,
     "posture2:goal_tools.owner_turn_goal_tools()": 16,
-    "posture2:room_policy._forbidden_tool_ids()": 27,
+    "posture2:room_policy._forbidden_tool_ids()": 29,
     "posture2:tool_availability.grantable_autonomous_tools()": 13,
     "supervised:constants.autonomous_mode_tools()": 11,
     "supervised:constants.effective_autonomous_tools()": 11,
-    "supervised:delegation.get_blocked_child_tools()": 21,
+    "supervised:delegation.get_blocked_child_tools()": 23,
     "supervised:goal_tools.allowed_self_goal_tools()": 13,
     "supervised:goal_tools.owner_turn_goal_tools()": 16,
-    "supervised:room_policy._forbidden_tool_ids()": 27,
+    "supervised:room_policy._forbidden_tool_ids()": 29,
     "supervised:tool_availability.grantable_autonomous_tools()": 13
    },
    "is_classified": true,
@@ -23869,16 +24360,16 @@
    "effects.ceiling": "money",
    "high_risk": true,
    "in": {
-    "autonomous:delegation.get_blocked_child_tools()": 22,
-    "autonomous:room_policy._forbidden_tool_ids()": 28,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 22,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 28,
+    "autonomous:delegation.get_blocked_child_tools()": 24,
+    "autonomous:room_policy._forbidden_tool_ids()": 30,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 24,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 30,
     "bootstrap._CLI_OPTIONAL_TOOLS": 15,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 24,
-    "posture2:delegation.get_blocked_child_tools()": 22,
-    "posture2:room_policy._forbidden_tool_ids()": 28,
-    "supervised:delegation.get_blocked_child_tools()": 22,
-    "supervised:room_policy._forbidden_tool_ids()": 28
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 25,
+    "posture2:delegation.get_blocked_child_tools()": 24,
+    "posture2:room_policy._forbidden_tool_ids()": 30,
+    "supervised:delegation.get_blocked_child_tools()": 24,
+    "supervised:room_policy._forbidden_tool_ids()": 30
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -23898,7 +24389,7 @@
    "GATED_TOOL_REGISTRY": [
     "X_BROWSER_ENABLED + captured X session",
     "disabled",
-    "owner enables X_BROWSER_ENABLED and runs `polyrob x-account capture-session`"
+    "operator enables X_BROWSER_ENABLED and runs `polyrob x-account capture-session`"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "X_BROWSER_ENABLED",
@@ -23915,44 +24406,44 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 14,
     "autonomous:constants.effective_autonomous_tools()": 14,
-    "autonomous:delegation.get_blocked_child_tools()": 23,
+    "autonomous:delegation.get_blocked_child_tools()": 25,
     "autonomous:goal_tools.allowed_self_goal_tools()": 16,
     "autonomous:goal_tools.owner_turn_goal_tools()": 17,
     "autonomous:rigs.rig_tools('social')": 1,
-    "autonomous:room_policy._forbidden_tool_ids()": 29,
+    "autonomous:room_policy._forbidden_tool_ids()": 31,
     "autonomous:tool_availability.grantable_autonomous_tools()": 16,
     "autonomous:tool_defaults.default_session_tools()": 12,
     "autonomous:tool_defaults.resolve_toolset('social')": 6,
     "autonomous:tool_defaults.server_default_tools()": 12,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 14,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 14,
-    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 23,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 19,
-    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 19,
+    "autonomous_defi_armed:delegation.get_blocked_child_tools()": 25,
+    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 20,
+    "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 20,
     "autonomous_defi_armed:rigs.rig_tools('social')": 1,
-    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 29,
-    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 19,
+    "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 31,
+    "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 20,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 12,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 6,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 12,
-    "bootstrap._CLI_REGISTERABLE_TOOLS": 25,
-    "bootstrap._CLI_STATIC_TOOLS": 8,
+    "bootstrap._CLI_REGISTERABLE_TOOLS": 26,
+    "bootstrap._CLI_STATIC_TOOLS": 9,
     "constants.AUTONOMOUS_MODE_TOOLS": 14,
     "posture2:constants.autonomous_mode_tools()": 14,
     "posture2:constants.effective_autonomous_tools()": 14,
-    "posture2:delegation.get_blocked_child_tools()": 23,
+    "posture2:delegation.get_blocked_child_tools()": 25,
     "posture2:goal_tools.owner_turn_goal_tools()": 17,
     "posture2:rigs.rig_tools('social')": 1,
-    "posture2:room_policy._forbidden_tool_ids()": 29,
+    "posture2:room_policy._forbidden_tool_ids()": 31,
     "posture2:tool_defaults.resolve_toolset('social')": 6,
     "rigs.RIGS['social']": 1,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 12,
     "supervised:constants.autonomous_mode_tools()": 14,
     "supervised:constants.effective_autonomous_tools()": 14,
-    "supervised:delegation.get_blocked_child_tools()": 23,
+    "supervised:delegation.get_blocked_child_tools()": 25,
     "supervised:goal_tools.owner_turn_goal_tools()": 17,
     "supervised:rigs.rig_tools('social')": 1,
-    "supervised:room_policy._forbidden_tool_ids()": 29,
+    "supervised:room_policy._forbidden_tool_ids()": 31,
     "supervised:tool_defaults.resolve_toolset('social')": 6,
     "tool_defaults.TOOLSETS['social']": 6
    },

@@ -117,7 +117,7 @@ async def test_race_pre_check_stale_read_does_not_clobber_concurrent_onboarding(
             wallet_address="0x" + "2" * 40,
             email="owner@example.com",
             first_name="Real Owner",
-            tier="holder",
+            tier="free_access",
         ))
 
         async def _always_absent(self, user_id):
@@ -135,7 +135,7 @@ async def test_race_pre_check_stale_read_does_not_clobber_concurrent_onboarding(
         )
         assert row["email"] == "owner@example.com"
         assert row["first_name"] == "Real Owner"
-        assert row["tier"] == "holder"
+        assert row["tier"] == "free_access"
         assert row["wallet_address"] == "0x" + "2" * 40
 
         # Still exactly one row — the seed write DID NOT clobber it.

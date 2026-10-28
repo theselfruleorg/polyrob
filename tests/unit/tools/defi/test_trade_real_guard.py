@@ -162,7 +162,7 @@ async def test_a_real_approve_clears_the_real_guard_dry_run(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _approve_sim)
     tool, gate = _tool()
     res = await tool.approve_token(
-        ApproveParams(token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0),
+        ApproveParams(chain="base", token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0),
         execution_context=_genuine_ctx())
     assert res.error is None
     content = res.extracted_content or ""
@@ -180,7 +180,7 @@ async def test_an_unpriceable_grant_is_refused_by_the_real_guard(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _approve_sim)
     tool, _ = _tool(price_fn=lambda c, a: None)
     res = await tool.approve_token(
-        ApproveParams(token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0),
+        ApproveParams(chain="base", token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0),
         execution_context=_genuine_ctx())
     content = res.extracted_content or ""
     assert "NOT SENT" in content
@@ -197,7 +197,7 @@ async def test_a_real_approve_broadcasts_and_records_zero_spend(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _approve_sim)
     tool, gate = _tool()
     res = await tool.approve_token(
-        ApproveParams(token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0,
+        ApproveParams(chain="base", token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0,
                       dry_run=False),
         execution_context=_genuine_ctx())
     assert res.error is None
@@ -215,7 +215,7 @@ async def test_a_leaf_turn_cannot_approve_through_the_real_detector(monkeypatch)
     monkeypatch.setattr(simulation, "simulate", _approve_sim)
     tool, gate = _tool()
     res = await tool.approve_token(
-        ApproveParams(token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0,
+        ApproveParams(chain="base", token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0,
                       dry_run=False),
         execution_context=_leaf_ctx())
     content = res.extracted_content or ""
@@ -263,7 +263,7 @@ async def test_no_pinned_rpc_refuses_before_simulating(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _boom)
     tool, _ = _tool()
     res = await tool.approve_token(
-        ApproveParams(token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0),
+        ApproveParams(chain="base", token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0),
         execution_context=_genuine_ctx())
     content = res.extracted_content or ""
     assert "NOT SENT" in content
@@ -287,7 +287,7 @@ async def test_a_real_revoke_clears_the_real_guard_without_a_price(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _revoke_sim)
     tool, _ = _tool(price_fn=lambda c, a: None)
     res = await tool.revoke_approval(
-        RevokeParams(token=USDC, spender=ROUTER),
+        RevokeParams(chain="base", token=USDC, spender=ROUTER),
         execution_context=_genuine_ctx())
     assert res.error is None
     assert "DRY RUN" in (res.extracted_content or "")
@@ -302,7 +302,7 @@ async def test_a_real_swap_clears_the_real_guard_dry_run(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _swap_sim)
     tool, _ = _tool()
     res = await tool.swap(
-        SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+        SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                    max_spend_usd=2.0),
         execution_context=_genuine_ctx())
     assert res.error is None, res.error
@@ -322,7 +322,7 @@ async def test_a_broadcast_swap_is_gas_sized_from_the_simulation(monkeypatch):
     monkeypatch.setattr(simulation, "simulate", _swap_sim)   # gas_used=140_000
     tool, _ = _tool()
     res = await tool.swap(
-        SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+        SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                    max_spend_usd=2.0, dry_run=False),
         execution_context=_genuine_ctx())
     assert res.error is None, res.error
@@ -351,7 +351,7 @@ async def test_a_swap_hiding_an_approval_to_an_unmeasured_spender_refuses(monkey
     monkeypatch.setattr(simulation, "simulate", _evil_sim)
     tool, gate = _tool()
     res = await tool.swap(
-        SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+        SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
                    max_spend_usd=2.0, dry_run=False),
         execution_context=_genuine_ctx())
     content = res.extracted_content or ""

@@ -53,6 +53,14 @@ NON_SPEND_MONEY_VERBS = {
     "x402_invoice_x402_invoices": "lists own invoices; receives nothing",
     "x402_invoice_accounting": "read-only ledger view",
 
+    # -- wallet_sign (090 P0) — signs a class-A login/challenge text only (sign_policy):
+    # it moves no value, so no spend lane (D1/D2); C and D refuse inside the verb and in
+    # the signer; B/C (value, authority) are later phases with their own gates. -----------
+    "wallet_sign_challenge": "class-A login/challenge text only; moves no value",
+    "wallet_sign_message": "class-A login text, owner turns only; moves no value",
+    "wallet_sign_api_call": "an HTTPS call with a site credential; signs nothing",
+    "wallet_sign_status": "read-only signature log and credential fingerprints",
+
     # -- agent_nft (050, 069) — the two chain READS; every agent_nft write is on the lane. ---
     "agent_nft_snapshot": "read-only view of the bound account (chain reads + local journal)",
     "agent_nft_inspect": "read-only view of any agent NFT before buying; signs nothing",

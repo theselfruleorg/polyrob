@@ -21,8 +21,10 @@ class AddServerRequest(BaseModel):
         description="Server endpoint URL (must be HTTPS)"
     )
     server_type: str = Field(
-        default="sse",
-        description="Server type: 'sse' or 'http' (STDIO not allowed)"
+        default="auto",
+        description=("Server type: 'auto' (probe streamable_http → http → sse and "
+                     "store the first that answers), 'streamable_http', 'http' or "
+                     "'sse' (STDIO not allowed)")
     )
     auth_method: str = Field(
         default="api_key",
@@ -96,8 +98,9 @@ class AddServerRequest(BaseModel):
     @classmethod
     def validate_server_type(cls, v):
         """Validate server type."""
-        if v not in ('sse', 'http', 'streamable_http'):
-            raise ValueError('Server type must be "sse", "http", or "streamable_http" (STDIO not allowed)')
+        if v not in ('auto', 'streamable_http', 'http', 'sse'):
+            raise ValueError('Server type must be "auto", "streamable_http", "http" '
+                             'or "sse" (STDIO not allowed)')
         return v
 
     @field_validator('auth_method')

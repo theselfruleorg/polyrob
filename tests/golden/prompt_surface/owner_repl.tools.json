@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "a7c396bae5f1"
+      "sha": "729d3abd9f2d"
     },
     {
       "name": "anysite_api",
@@ -233,6 +233,10 @@
       "sha": "bb1c23b06a81"
     },
     {
+      "name": "propose_setting",
+      "sha": "6f27817332ef"
+    },
+    {
       "name": "read_skill_resource",
       "sha": "5157194c3386"
     },
@@ -287,6 +291,10 @@
     {
       "name": "tool_search",
       "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "trade_mandate_propose",
+      "sha": "ff5dfd36d681"
     },
     {
       "name": "web_fetch_fetch_url",

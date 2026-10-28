@@ -36,10 +36,9 @@ from polyrob.app.bootstrap import register_cli_tools, _CLI_REGISTERABLE_TOOLS, c
 # (BaseComponent, not BaseTool shape) — see the matching note in polyrob/app/bootstrap.py.
 # "mcp" was moved OUT (2026-07-20, S3): MCPTool's __init__ is config parsing only —
 # server connections live in the deferred initialize() (see the matching note in
-# polyrob/app/bootstrap.py); registration is MCP_ENABLED-gated via _cli_extra_gate.
+# polyrob/app/bootstrap.py); registration is gated by tools/mcp/config.py::mcp_gate_on.
 SERVER_ONLY = {
     "perplexity",
-    "collabland", "alchemy",
     "polymarket", "polymarket_data", "hyperliquid", "hyperliquid_data",
 }
 

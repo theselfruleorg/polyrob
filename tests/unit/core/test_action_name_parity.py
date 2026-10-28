@@ -45,6 +45,8 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/owner_ask_action.py",  # H04: gated direct action (owner_ask)
     "tools/controller/avatar_action.py",
     "tools/controller/card_actions.py",  # action cards: present_choice / propose_action
+    "tools/controller/trade_mandate_action.py",  # 086 W5: trade_mandate_propose
+    "tools/controller/setting_actions.py",  # 093 D1: propose_setting
     "tools/controller/worker_manage_action.py",  # 041 phase 2: gated direct action
 )
 
@@ -84,6 +86,7 @@ def _register_every_optional_tool() -> None:
         ("tools.launchpad", "register_launchpad_tool"),
         ("tools.dapp_browser", "register_dapp_browser_tool"),
         ("tools.agent_nft", "register_agent_nft_tool"),
+        ("tools.wallet_sign", "register_wallet_sign_tool"),
         ("tools.knowledge_ingest", "register_knowledge_tool"),  # M03: kb verbs are name-gated
         ("tools.publish", "register_publish_tool"),
         ("tools.app_service", "register_app_service_tool"),

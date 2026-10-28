@@ -26,9 +26,9 @@ def test_a_chat_session_gets_one_group_and_its_then(st):
     from tools.controller.card_actions import _group_for, _joined
     a = _group_for(U, "chat1")
     assert a == _group_for(U, "chat1")
-    _joined(a, "pay the PNL half")
+    _joined(a, "pay the TKN half")
     g = G.groups(st).get(a)
-    assert (g["origin"], g["then_text"]) == (G.ORIGIN_CHAT, "pay the PNL half")
+    assert (g["origin"], g["then_text"]) == (G.ORIGIN_CHAT, "pay the TKN half")
     assert _group_for(U, "") is None
 
 

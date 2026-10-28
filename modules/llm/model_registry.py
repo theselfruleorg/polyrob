@@ -144,24 +144,14 @@ class ModelRegistry:
                     model = self._models.get('gemini-2.5-flash')
                 if model:
                         logger.info(f"Fallback: '{name}' -> 'gemini-2.5-flash' (default)")
-            # DeepSeek variants - try OpenRouter version first (better tool calling)
-            # then fall back to direct DeepSeek client
+            # DeepSeek variants: an OpenRouter slug keeps OpenRouter metadata,
+            # a bare name is DeepSeek's own API.
             elif 'deepseek' in model_lower:
-                # Check if user explicitly wants OpenRouter version
-                if 'openrouter' in model_lower or 'or-' in model_lower:
-                    model = self._models.get('deepseek/deepseek-chat')
-                    if model:
-                        logger.info(f"Fallback: '{name}' -> 'deepseek/deepseek-chat' (OpenRouter)")
-                else:
-                    # Try OpenRouter DeepSeek first (better tool support)
-                    model = self._models.get('deepseek/deepseek-chat')
-                    if model:
-                        logger.info(f"Fallback: '{name}' -> 'deepseek/deepseek-chat' (OpenRouter preferred)")
-                    else:
-                        # Fall back to direct DeepSeek client
-                        model = self._models.get('deepseek-chat')
-                        if model:
-                            logger.info(f"Fallback: '{name}' -> 'deepseek-chat' (direct)")
+                via_or = '/' in model_lower or 'openrouter' in model_lower or 'or-' in model_lower
+                target = 'deepseek/deepseek-chat' if via_or else 'deepseek-flash'
+                model = self._models.get(target)
+                if model:
+                    logger.info(f"Fallback: '{name}' -> '{target}'")
             # GLM / Z.AI variants fallback to z-ai/glm-5.2 (must precede the
             # final gpt fallback so an unknown glm id keeps GLM's metadata).
             elif 'glm' in model_lower or 'z-ai' in model_lower or 'zhipu' in model_lower:
@@ -264,7 +254,7 @@ def get_model_config(model_name: str) -> Optional[ModelConfig]:
 
 def thinking_config_enabled() -> bool:
     """UP-07 gate for SENDING per-model thinking params (Anthropic thinking block,
-    DeepSeek max_cot_tokens-from-registry, OpenAI reasoning_effort).
+    DeepSeek / OpenAI reasoning_effort).
 
     Default **OFF** so the hot path is byte-identical today — enabling extended thinking
     is a real behavior change (Anthropic forces temperature=1 + streaming, adds reasoning
@@ -343,9 +333,7 @@ def get_model_config_exact(model_name: str):
 # Rules:
 #   fallback_eligible=True  → provider is in LLMManager.FALLBACK_HIERARCHY
 #   fallback_eligible=False → provider is NOT in the fallback hierarchy;
-#                             can still be constructed explicitly (e.g. deepseek
-#                             is excluded because its direct client has broken
-#                             tool calling — use OpenRouter's DeepSeek instead)
+#                             can still be constructed explicitly
 #
 # Client classes are imported lazily inside the record factory to avoid
 # circular imports at module load time.
@@ -362,7 +350,6 @@ class _ProviderEntry:
     # Uninstantiated client class (lazy import avoids circular deps at load)
     client_class_name: str   # e.g. "AnthropicClient" — for documentation
     # Whether this provider participates in LLMManager.FALLBACK_HIERARCHY.
-    # NOTE: deepseek=False is INTENTIONAL (direct client has broken tool calling).
     fallback_eligible: bool
 
 

@@ -15,16 +15,16 @@
         "tokens": 72
       },
       "skill_catalog": {
-        "chars": 2242,
-        "tokens": 560
+        "chars": 2311,
+        "tokens": 577
       },
       "system_prompt": {
         "chars": 12522,
         "tokens": 3130
       },
       "tool_catalog": {
-        "chars": 5116,
-        "tokens": 1279
+        "chars": 4995,
+        "tokens": 1248
       },
       "workspace": {
         "chars": 122,
@@ -32,15 +32,15 @@
       }
     },
     "system": {
-      "chars": 21554,
-      "tokens": 5388
+      "chars": 21502,
+      "tokens": 5375
     },
     "tools": {
-      "chars": 38948,
-      "count": 39,
-      "tokens": 9737
+      "chars": 40873,
+      "count": 41,
+      "tokens": 10218
     },
-    "total_tokens": 15125
+    "total_tokens": 15593
   },
   "cron": {
     "layers": {
@@ -61,8 +61,8 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 2242,
-        "tokens": 560
+        "chars": 2311,
+        "tokens": 577
       },
       "step1:system_note": {
         "chars": 921,
@@ -73,8 +73,8 @@
         "tokens": 3928
       },
       "tool_catalog": {
-        "chars": 4555,
-        "tokens": 1138
+        "chars": 4434,
+        "tokens": 1108
       },
       "workspace": {
         "chars": 113,
@@ -82,15 +82,15 @@
       }
     },
     "system": {
-      "chars": 25312,
-      "tokens": 6328
+      "chars": 25260,
+      "tokens": 6315
     },
     "tools": {
-      "chars": 78233,
-      "count": 88,
-      "tokens": 19558
+      "chars": 80165,
+      "count": 90,
+      "tokens": 20041
     },
-    "total_tokens": 25886
+    "total_tokens": 26356
   },
   "goal": {
     "layers": {
@@ -111,8 +111,8 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 2242,
-        "tokens": 560
+        "chars": 2311,
+        "tokens": 577
       },
       "step1:system_note": {
         "chars": 921,
@@ -123,8 +123,8 @@
         "tokens": 3928
       },
       "tool_catalog": {
-        "chars": 4555,
-        "tokens": 1138
+        "chars": 4434,
+        "tokens": 1108
       },
       "workspace": {
         "chars": 113,
@@ -132,15 +132,15 @@
       }
     },
     "system": {
-      "chars": 25296,
-      "tokens": 6324
+      "chars": 25244,
+      "tokens": 6311
     },
     "tools": {
-      "chars": 78233,
-      "count": 88,
-      "tokens": 19558
+      "chars": 80165,
+      "count": 90,
+      "tokens": 20041
     },
-    "total_tokens": 25882
+    "total_tokens": 26352
   },
   "leaf": {
     "layers": {
@@ -161,16 +161,16 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 2242,
-        "tokens": 560
+        "chars": 2311,
+        "tokens": 577
       },
       "system_prompt": {
         "chars": 10125,
         "tokens": 2531
       },
       "tool_catalog": {
-        "chars": 5203,
-        "tokens": 1300
+        "chars": 4908,
+        "tokens": 1227
       },
       "workspace": {
         "chars": 113,
@@ -178,15 +178,15 @@
       }
     },
     "system": {
-      "chars": 19383,
-      "tokens": 4845
+      "chars": 19157,
+      "tokens": 4789
     },
     "tools": {
-      "chars": 36471,
+      "chars": 36631,
       "count": 42,
-      "tokens": 9117
+      "tokens": 9157
     },
-    "total_tokens": 13963
+    "total_tokens": 13947
   },
   "owner_repl": {
     "layers": {
@@ -207,20 +207,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 2242,
-        "tokens": 560
+        "chars": 3472,
+        "tokens": 868
       },
       "step1:system_note": {
         "chars": 921,
         "tokens": 230
       },
       "system_prompt": {
-        "chars": 15075,
-        "tokens": 3768
+        "chars": 15423,
+        "tokens": 3855
       },
       "tool_catalog": {
-        "chars": 4602,
-        "tokens": 1150
+        "chars": 4481,
+        "tokens": 1120
       },
       "workspace": {
         "chars": 119,
@@ -228,15 +228,15 @@
       }
     },
     "system": {
-      "chars": 24765,
-      "tokens": 6191
+      "chars": 26222,
+      "tokens": 6555
     },
     "tools": {
-      "chars": 59657,
-      "count": 76,
-      "tokens": 14914
+      "chars": 61582,
+      "count": 78,
+      "tokens": 15395
     },
-    "total_tokens": 21105
+    "total_tokens": 21951
   },
   "owner_telegram_dm": {
     "layers": {
@@ -257,20 +257,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 2242,
-        "tokens": 560
+        "chars": 3472,
+        "tokens": 868
       },
       "step1:system_note": {
         "chars": 921,
         "tokens": 230
       },
       "system_prompt": {
-        "chars": 15755,
-        "tokens": 3938
+        "chars": 16103,
+        "tokens": 4025
       },
       "tool_catalog": {
-        "chars": 4656,
-        "tokens": 1164
+        "chars": 4535,
+        "tokens": 1133
       },
       "workspace": {
         "chars": 126,
@@ -278,21 +278,21 @@
       }
     },
     "system": {
-      "chars": 25484,
-      "tokens": 6371
+      "chars": 26941,
+      "tokens": 6735
     },
     "tools": {
-      "chars": 62119,
-      "count": 56,
-      "tokens": 15529
+      "chars": 64051,
+      "count": 58,
+      "tokens": 16012
     },
-    "total_tokens": 21900
+    "total_tokens": 22748
   },
   "prod_owner_telegram_dm": {
     "layers": {
       "environment": {
-        "chars": 1187,
-        "tokens": 296
+        "chars": 1200,
+        "tokens": 300
       },
       "initial_task": {
         "chars": 107,
@@ -307,20 +307,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 3246,
-        "tokens": 811
+        "chars": 4551,
+        "tokens": 1137
       },
       "step1:system_note": {
         "chars": 1331,
         "tokens": 332
       },
       "system_prompt": {
-        "chars": 15792,
-        "tokens": 3948
+        "chars": 16153,
+        "tokens": 4038
       },
       "tool_catalog": {
-        "chars": 4605,
-        "tokens": 1151
+        "chars": 5027,
+        "tokens": 1256
       },
       "workspace": {
         "chars": 126,
@@ -328,15 +328,15 @@
       }
     },
     "system": {
-      "chars": 26896,
-      "tokens": 6724
+      "chars": 28997,
+      "tokens": 7249
     },
     "tools": {
-      "chars": 130994,
-      "count": 76,
-      "tokens": 32748
+      "chars": 153647,
+      "count": 82,
+      "tokens": 38411
     },
-    "total_tokens": 39472
+    "total_tokens": 45661
   },
   "room": {
     "layers": {
@@ -349,27 +349,27 @@
         "tokens": 72
       },
       "skill_catalog": {
-        "chars": 3112,
-        "tokens": 778
+        "chars": 3256,
+        "tokens": 814
       },
       "system_prompt": {
         "chars": 13856,
         "tokens": 3464
       },
       "tool_catalog": {
-        "chars": 5090,
-        "tokens": 1272
+        "chars": 4969,
+        "tokens": 1242
       }
     },
     "system": {
-      "chars": 22400,
-      "tokens": 5600
+      "chars": 22423,
+      "tokens": 5605
     },
     "tools": {
-      "chars": 57517,
-      "count": 51,
-      "tokens": 14379
+      "chars": 62367,
+      "count": 56,
+      "tokens": 15591
     },
-    "total_tokens": 19979
+    "total_tokens": 21197
   }
 }

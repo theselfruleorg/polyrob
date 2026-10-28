@@ -65,6 +65,7 @@ both instead). That is what keeps a server deployment with an explicit
 
 ```bash
 polyrob profile create scout --description "research bot"
+polyrob profile create scout2 --from scout   # clone scout's config, .env, characters, skills
 polyrob -P scout                      # run the REPL as scout
 polyrob profile use scout             # make scout sticky for this machine
 polyrob profile list                  # * marks the active profile
@@ -156,13 +157,22 @@ someone else's memories.
 One systemd unit per profile. Let the CLI emit one matched to your layout:
 
 ```bash
-polyrob profile create scout --service      # writes the polyrob@.service template; enable polyrob@scout
-sudo cp <emitted unit> /etc/systemd/system/ && sudo systemctl enable --now polyrob-scout
+polyrob profile create scout --service      # writes /etc/systemd/system/polyrob@.service
+sudo systemctl enable --now polyrob@scout
 ```
+
+Without write access to `/etc/systemd/system` it writes the unit next to its
+`.env` and prints the `sudo cp …` line to run. One template file serves
+all of them (`%i` = the name).
 
 The unit sets `POLYROB_PROFILE` and `POLYROB_PROFILES_ROOT` explicitly — the
 strong env tier that the CLI resolves at process start; without them a spawned
-daemon runs in the default mode and writes into the default home. Two rules:
+daemon runs in the default mode and writes into the default home. It reads exactly
+two env files: an optional `/etc/polyrob/profiles/<name>.env` for secrets you keep
+out of the data tree, then its own `.env` — never the main deployment's
+`/etc/polyrob/polyrob.env`, so copy the LLM key into one of the two. Its
+exit-75 contract is the same as the main unit's ([operate-the-service.md](operate-the-service.md)).
+Two rules:
 
 - The unit's `POLYROB_PROFILES_ROOT` must name the registry the profile
   actually lives in (the CLI default is `~/.polyrob/profiles`). Create server
@@ -171,9 +181,14 @@ daemon runs in the default mode and writes into the default home. Two rules:
 - Give each profile its own surface credentials in its `.env` (e.g. its own
   Telegram bot token) — two daemons long-polling one token fight each other.
 
+These daemons all run as the same unprivileged agent user and data group, so they
+are not isolated from each other: run an untrusted bot under its own OS user and
+data root, or on its own host.
+
 ## Guard rails
 
-- Profile names are `[A-Za-z0-9_-]`, max 64 chars — rejected, never rewritten.
+- Profile names are `[A-Za-z0-9_-]`, start with a letter or digit, max 64 chars —
+  rejected, never rewritten.
 - A session running as one profile cannot read or write another profile's home
   through the file tools (defense-in-depth, not a security boundary; bypass
   deliberately with `POLYROB_ALLOW_CROSS_PROFILE=1`).

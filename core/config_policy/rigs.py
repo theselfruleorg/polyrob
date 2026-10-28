@@ -4,7 +4,7 @@
 job's toolset is ``payload.tools`` else ``default_cron_tools()``, a goal's is
 ``payload.tools`` else ``default_goal_tools()``, and no prod cron job declared
 ``payload.tools`` at all (0 of 30 enabled, 2026-09-20). So a read-only watcher
-and an on-chain buyback shipped the same ~180 tool schemas, and the only
+and an on-chain swap job shipped the same ~180 tool schemas, and the only
 narrowing site in the tree (``goal_create``'s keyword inference) *widens*.
 
 **The shape.** ONE table of named rigs with a FIXED id order, and one pure

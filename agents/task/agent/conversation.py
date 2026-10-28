@@ -33,19 +33,29 @@ def extract_answer(history: Any) -> str:
 DEFAULT_TURN_BUDGET = 20  # interactive turns; raise for big asks, autonomous tasks use run()
 
 
-def _reset_turn_state(agent: Any) -> None:
+def _reset_turn_state(agent: Any, *, owner_line: bool = False) -> None:
     """Clear transient failure state so a NEW user turn gets a fresh attempt.
 
     Agent.run() resets n_steps but not consecutive_failures / _cancelled. Without
     this, once a turn hits max consecutive failures (e.g. an LLM quota error), the
     agent stays wedged and every later respond() returns 'failed | -1 steps' — the
     REPL is dead until restart. A fresh user message should start clean.
+
+    093 E2: ``owner_line`` — the owner typed this line (a REPL line), so the retry
+    wall starts empty, as it does for a drained owner batch
+    (``user_ingress._drain_user_messages``). A REPL line never rides that queue.
     """
     state = getattr(agent, "state", None)
     if state is not None and hasattr(state, "consecutive_failures"):
         state.consecutive_failures = 0
     if getattr(agent, "_cancelled", False):
         agent._cancelled = False
+    if owner_line:
+        agent._retry_wall_steps = 0
+        try:
+            agent.controller.reset_retry_wall()
+        except Exception:
+            pass
 
 
 @dataclass
@@ -73,7 +83,7 @@ class Conversation:
         words are set — otherwise the last drained batch (a /steer) stays the
         owner's words for every later line.
         """
-        _reset_turn_state(self.agent)                # recover from a prior failed turn
+        _reset_turn_state(self.agent, owner_line=True)  # recover; a fresh retry wall
         _set_owner_turn_text(self.agent, text if typed_text is None else typed_text)
         _record_repl_line(self.agent, text)          # 061: the terminal is an owner seat
         self.agent.set_turn_input(text)              # append-as-turn (Task 7)

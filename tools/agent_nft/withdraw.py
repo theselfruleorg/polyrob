@@ -45,7 +45,7 @@ def withdraw_card_context(params: dict, *, tool=None) -> list:
     if tool is None:
         from tools.agent_nft.tool import AgentNftTool
         tool = AgentNftTool()
-    p = types.SimpleNamespace(chain=params.get("chain") or "robinhood", nft=params.get("nft"),
+    p = types.SimpleNamespace(chain=params.get("chain"), nft=params.get("nft"),
                               account=params.get("account"), to=params.get("to"))
     lines = []
     to = str(p.to or "")

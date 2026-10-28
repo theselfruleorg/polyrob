@@ -1,6 +1,6 @@
 """`goal_ask` — a rail that needs an OWNER DECISION raises a durable board ask.
 
-2026-09-20 (intel 09:57Z): the 6-hourly PNL buyback skipped 12 h on a gate-1 A/B
+2026-09-20 (intel 09:57Z): the 6-hourly TKN rebuy skipped 12 h on a gate-1 A/B
 question Rob had asked ONCE in chat and never re-raised — nothing agent-callable
 reached `GoalBoard.create_ask`, so the question lived in a note to himself and
 vanished from every owner seat. The store already dedups OPEN asks (a matching
@@ -65,7 +65,7 @@ def test_a_leaf_or_sub_agent_cannot_raise_an_owner_ask(tmp_path):
 
 def test_blocks_goal_ids_are_recorded(tmp_path):
     t = _tool(tmp_path)
-    g = t._goal_board.create(user_id="rob", title="buy PNL tranche 15", force=True)
+    g = t._goal_board.create(user_id="rob", title="buy TKN tranche 15", force=True)
     from core.autonomy_marker import mark_autonomous
     mark_autonomous("ask-own-goal", g.id)
     r = asyncio.run(t.goal_ask(GoalAskAction(what="decide X", blocks_goal_ids=[g.id]), _ctx(session_id="ask-own-goal")))

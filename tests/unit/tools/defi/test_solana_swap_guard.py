@@ -614,7 +614,7 @@ async def test_swap_decimals_and_exit_balance_reads_run_off_loop():
         seen.append(('balance', threading.get_ident()))
         return 10 ** 10
     tool = _tool(solana_decimals_fn=decimals, solana_held_fn=balance)
-    def gate(ctx, *, exit_shaped_fn):
+    def gate(ctx, *, exit_shaped_fn, mandate_entry=None):
         assert exit_shaped_fn()
         return 'stopped after balance read', False, False
     tool._solana_turn_gate = gate
@@ -662,3 +662,116 @@ async def test_a_receipt_6_bp_below_the_floor_refuses():
                           native_delta=984_406)
     res = await _tool(deltas=deltas).solana_swap(_params(dry_run=True))
     assert res.error and "below the route's floor" in res.error
+
+
+# -- 086 W0: a CONFIRMED Solana swap writes the book -------------------------
+
+def _book_capture(monkeypatch):
+    from core.money import hooks
+    written = []
+    monkeypatch.setattr(hooks, "position_book",
+                        lambda: (lambda uid, deltas: written.append((uid, list(deltas)))))
+    return written
+
+
+async def _swap_live(tool):
+    from core.exec_identity import reset_exec_identity, set_exec_identity
+    token = set_exec_identity("owner", None)
+    try:
+        return await tool.solana_swap(_params(dry_run=False))
+    finally:
+        reset_exec_identity(token)
+
+
+@pytest.mark.asyncio
+async def test_086_a_confirmed_swap_writes_the_book_from_the_simulation(monkeypatch):
+    monkeypatch.setenv("DEFI_SOLANA_RPC", "https://solana.example/rpc")
+    written = _book_capture(monkeypatch)
+    tool = _tool(solana_send_fn=lambda raw: "sig123",
+                 solana_confirm_fn=lambda sig: (True, "finalized"))
+    res = await _swap_live(tool)
+    assert res.error is None, res.error
+    ((uid, legs),) = written
+    assert uid == "owner"
+    # USDC -> SOL: the major bought with a stable opens a SOL row, sized from
+    # the simulated receipt (native + fee add-back), labelled a simulation.
+    (leg,) = legs
+    assert leg.chain == "solana" and leg.address == WSOL
+    assert leg.qty == pytest.approx(1_005_000 / 10 ** 6)
+    assert leg.cost_usd == pytest.approx(1.0) and leg.qty_source == "simulation"
+
+
+@pytest.mark.asyncio
+async def test_086_a_reverted_or_unconfirmed_swap_writes_no_book_row(monkeypatch):
+    monkeypatch.setenv("DEFI_SOLANA_RPC", "https://solana.example/rpc")
+    written = _book_capture(monkeypatch)
+    for confirm in ((False, "reverted: custom program error"), (False, "timeout")):
+        tool = _tool(solana_send_fn=lambda raw: "sig", solana_confirm_fn=lambda s, c=confirm: c)
+        await _swap_live(tool)
+    assert written == []
+
+
+@pytest.mark.asyncio
+async def test_086_a_failed_book_write_never_breaks_the_result(monkeypatch):
+    monkeypatch.setenv("DEFI_SOLANA_RPC", "https://solana.example/rpc")
+    from core.money import hooks
+
+    def boom(uid, deltas):
+        raise RuntimeError("store locked")
+    monkeypatch.setattr(hooks, "position_book", lambda: boom)
+    wallet = _Wallet()
+    tool = _tool(wallet, solana_send_fn=lambda raw: "sig",
+                 solana_confirm_fn=lambda sig: (True, "finalized"))
+    res = await _swap_live(tool)
+    assert res.error is None and "RESULT: CONFIRMED" in res.extracted_content
+    assert wallet.policy.recorded
+
+
+# -- 086 W2 wiring: a Solana mandate ENTRY meets the mandate step -------------
+
+@pytest.fixture
+def _paused_mandate(tmp_path, monkeypatch):
+    from core import trading_mandate as tm
+    from core.money import mandate_gate as mg
+    from core.wallet import tx_guard as _tg
+    import core.wallet.authority as wa
+    import tools.controller.action_registration as ar
+    import tools.controller.turn_origin as to
+    mpath, book = str(tmp_path / "trading.db"), str(tmp_path / "open_positions.db")
+    real = mg.entry_refusal
+    seen = []
+
+    def gate(*a, **k):
+        seen.append(k)
+        return real(*a, **{**k, "path": mpath, "book_path": book})
+    monkeypatch.setattr(mg, "entry_refusal", gate)
+    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn: True)
+    monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", lambda c, t: True)
+    monkeypatch.setattr(to, "_is_forged_or_autonomous_turn", lambda c, t: True)
+    monkeypatch.setattr(wa, "turn_refusal", lambda ctx: None)
+    m = tm.create("owner", actor=tm.OWNER_SEAT, budget_usd=10, chains=["solana"], path=mpath)
+    tm.set_status(m.id, "paused", actor=tm.OWNER_SEAT, path=mpath)
+    ctx = types.SimpleNamespace(user_id="owner", session_id="s", role="orchestrator",
+                                is_sub_agent=False, metadata={"mandate": m.id})
+    return ctx, seen
+
+
+@pytest.mark.asyncio
+async def test_086_a_solana_mandate_entry_is_refused_when_the_mandate_is_paused(_paused_mandate):
+    ctx, seen = _paused_mandate
+    tool = _tool(solana_quote_fn=lambda *a, **k: pytest.fail("quoted past the mandate"))
+    res = await tool.solana_swap(_params(token_out=MEME, max_spend_usd=2.0),
+                                 execution_context=ctx)
+    assert res.error and "PAUSED" in res.error
+    (call,) = seen
+    assert call["chain"] == "solana" and call["token"] == MEME and call["usd"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_086_a_solana_mandate_exit_is_not_mandate_gated(_paused_mandate, monkeypatch):
+    ctx, seen = _paused_mandate
+    tool = _tool(solana_quote_fn=lambda *a, **k: None)  # stop right after the gate
+    tool._solana_held_raw = lambda owner, mint: 10 ** 12
+    res = await tool.solana_swap(_params(token_in=MEME, token_out=USDC, max_spend_usd=2.0),
+                                 execution_context=ctx)
+    assert seen == [] and "PAUSED" not in (res.error or "")

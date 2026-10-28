@@ -163,7 +163,8 @@ def _config_read(user_id: str, sub: str, rest: list) -> str:
         return config_service.unknown_key_message(key)
     except Exception as exc:  # noqa: BLE001 — an unread setting is not a value
         return f"I could not read {key} ({type(exc).__name__}: {str(exc)[:120]})."
-    lines = [f"{key} = {info.effective} ({info.source})",
+    lines = [f"{key} = {info.effective} ({info.source})"
+             + (f" · {info.gate_effective}" if info.gate_effective else ""),
              f"applies: {info.applies}"]
     if info.enforcement == "advisory":
         lines.append("advisory: it steers my prompt only; nothing enforces it")

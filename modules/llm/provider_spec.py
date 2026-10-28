@@ -255,10 +255,9 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="deepseek", display_name="DeepSeek", env_key="DEEPSEEK_API_KEY",
         transport=Transport.CHAT_COMPLETIONS, base_url="https://api.deepseek.com/v1",
-        supports_native_tools=False, supports_vision=False,
+        supports_native_tools=True, supports_vision=False,
         signup_url="https://platform.deepseek.com/", client_class_name="DeepSeekClient",
-        # Direct client disabled (tool-calling broken) — reach DeepSeek via OpenRouter.
-        initializable=False, model_prefixes=("deepseek",), builtin=True,
+        model_prefixes=("deepseek",), builtin=True,
         cache_strategy="automatic",  # disk cache, server-side
     ),
 

@@ -18,7 +18,7 @@ POLYROB is a self-hosted autonomous AI agent that runs on your own machine. You 
 plain language and it does the rest — planning the work into steps, browsing the web, reading and
 writing files, running code and shell commands, calling external tools and APIs, and recovering
 from its own errors until the goal is done. It works with every major LLM provider (OpenAI, Anthropic, Google, DeepSeek,
-OpenRouter, NVIDIA NIM, twenty more flat-rate and regional rows, six OAuth subscription plans,
+OpenRouter, NVIDIA NIM, twenty-one more flat-rate and regional rows, six OAuth subscription plans,
 and any endpoint you declare) and fails over between them automatically,
 remembers what it learns across sessions, and reaches you wherever you are — your terminal, the web
 console, a REST API, or chat surfaces like Telegram and email. Switch it into personal-agent mode
@@ -37,8 +37,10 @@ an evolving model of how you work.
 POLYROB doesn't just answer — it *works*, and it keeps working when you're not watching.
 
 - **Durable goal board** — a cross-session backlog in SQLite with atomic claims and a circuit breaker that survives process restarts, so long-running or unattended work isn't lost to a reboot.
-- **Cron in natural language** — the agent schedules its own recurring runs (`"every monday 09:00"`, `"30m"`, cron syntax), and can deliver results out-of-band to Telegram, email, or X.
+- **Scheduled jobs in natural language** — the agent schedules its own recurring runs (`"every monday 09:00"`, `"30m"`, cron syntax), you manage them with `/jobs` and `/job new|edit|pause|resume|run|stop` (or `polyrob job …`), and a job can deliver its result out-of-band to Telegram, email, or X.
 - **Self-wake** — re-enters idle sessions to continue or follow up, with depth and backoff guards so it never loops.
+- **Decide once, it carries on** — when the agent needs you it raises an action card (confirm a quote, answer a choice); once you have decided every card it raised, it continues by itself with each card's outcome.
+- **Bounded runs** — every goal, job, sub-agent and worker run stops at one operator step cap (`AUTONOMOUS_MAX_STEPS`, 150) and one spend cap (`AUTONOMOUS_RUN_BUDGET_USD`, $2.00, sub-agents included), reports once, and names why it stopped.
 - **Background review + curator** — a cheap aux model reviews what worked every few turns and can distill a new skill; unused skills are retired automatically and revived when relevant again.
 - **Parallel delegation** — `delegate_task` spawns least-privilege sub-agents for concurrent workstreams (no money/comms/code-exec, can't re-delegate), sync or detached in the background.
 - **Your standing work runs as written** — every cron job and goal carries the same standing authority (its toolset as written, an X post without a per-run tap); a job the agent schedules on its own may ask only for tools inside its self-goal ceiling, and under the supervised money regime no job moves funds unattended.
@@ -80,7 +82,7 @@ and the trading and wallet safety procedures.
 
 One agent core, many front doors:
 
-- **Terminal** — run `polyrob` to talk to the agent: live tool transcripts, secret-scrubbed output, resumable sessions, and nearly sixty slash commands (`/inbox`, `/goals`, `/model`, `/memory`, `/pause`, `/autonomy`, `/config`; the full list is in [docs/guide/cli.md](docs/guide/cli.md)).
+- **Terminal** — run `polyrob` to talk to the agent: live tool transcripts, secret-scrubbed output, resumable sessions, and about a hundred slash commands (`/inbox`, `/jobs`, `/goals`, `/model`, `/memory`, `/usage`, `/pause`, `/autonomy`, `/config`; the full list is in [docs/guide/cli.md](docs/guide/cli.md)).
 - **Web console** — five clear destinations for Chat, Inbox, Work, Money, and Rob (the agent itself). Watch live work, resolve approvals, manage standing jobs and apps, reconcile the agent's ledger, and change its capabilities from one owner surface.
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
@@ -132,12 +134,12 @@ read-only mode, and the actions each screen exposes.
 
 ## 🧠 Multi-provider intelligence
 
-- **One agent, every provider** — six built-ins plus flat-rate rows, OAuth subscription plans and your own endpoint, behind a native LLM layer with **no third-party agent framework**. The live list and how to pick one: [docs/guide/configuration.md §3](docs/guide/configuration.md#4-providers-and-models).
+- **One agent, every provider** — six built-ins plus flat-rate rows, OAuth subscription plans and your own endpoint, behind a native LLM layer with **no third-party agent framework**. The live list and how to pick one: [docs/guide/configuration.md §4](docs/guide/configuration.md#4-providers-and-models).
 - **Bring your own endpoint** — declare any OpenAI- or Anthropic-compatible provider in `~/.polyrob/providers.yaml` with **zero code**: a local Ollama/vLLM/LM Studio, Groq/Together/Fireworks, a z.ai GLM Coding Plan, or a corporate gateway. Declared models list and route like built-ins; hostile rows (secret-exfil `env_key`s, metadata endpoints) are refused at load.
 - **Automatic failover** — a rate-limited or failing provider silently retries on a fallback.
 - **Live model switching** — `/model <provider> <model>` mid-session, or per-request override on the `/v1` surface.
 - **Cross-provider prompt caching, on by default** — the prompt is assembled as a stable *prefix*: tool schemas sorted by name, the autonomous tool set held still, the rendered foundation replayed byte-for-byte after a restart. Providers serve the leading bytes from cache instead of re-billing them. Anthropic gets a 5-minute or 1-hour cache window chosen from the session class; OpenRouter, Gemini, OpenAI and DeepSeek each get the treatment their API supports. Cached **and written** tokens are priced, recorded and shown — live as `cache N%` in the status bar, after the fact in `polyrob doctor`.
-- **Optional extended thinking** — per-provider reasoning budgets (Anthropic thinking blocks, DeepSeek CoT, OpenAI reasoning effort), plus a scrubber that keeps leaked reasoning prose out of your history and output.
+- **Optional extended thinking** — per-provider reasoning budgets (Anthropic thinking blocks, DeepSeek thinking mode with its reasoning replayed on tool loops, OpenAI reasoning effort), plus a scrubber that keeps leaked reasoning prose out of your history and output.
 
 ---
 
@@ -157,8 +159,9 @@ your provider key right inside the pipe. Prefer to read a script before running 
 curl -fsSL https://polyrob.dev/install.sh -o install.sh && less install.sh && bash install.sh
 ```
 
-Flags: `--extras server,browser` · `--browser` / `--no-browser` · `--no-setup` · `--no-prompt`
-(fully scripted) · `--branch` / `--commit` (pin a version) · `--uninstall`.
+Flags: `--extras server,browser` · `--browser` / `--no-browser` · `--packs x,discovery` (first-party
+pack SDKs) · `--no-setup` · `--no-service` · `--no-prompt` (fully scripted) · `--branch` / `--commit`
+(pin a version) · `--uninstall`.
 
 <details>
 <summary>Already a Python user? Install from PyPI instead</summary>
@@ -201,11 +204,11 @@ workspace isolation.
 goal board, self-wake, episodic memory):
 
 ```bash
-polyrob autonomy on --global     # writes AUTONOMY_ENABLED=true to ~/.polyrob/.env; `polyrob init` also asks
+polyrob autonomy on     # writes AUTONOMY_ENABLED=true to ~/.polyrob/.env; `polyrob setup` also asks
 ```
 
 The four axes, what each one moves and how to stop it again:
-[docs/guide/configuration.md §5](docs/guide/configuration.md#6-the-autonomy-dial).
+[docs/guide/configuration.md §6](docs/guide/configuration.md#6-the-autonomy-dial).
 
 <details>
 <summary>Optional: web console & REST API</summary>
@@ -247,14 +250,14 @@ Run `polyrob` and you're in the agent. From inside the session, slash commands g
 |---|---|
 | `/compact` | Ages old tool results to a one-line pointer first, then LLM-compresses what is left (e.g. 8,432 → 3,210 tokens) mid-session |
 | `/context` | What is in the window right now: per-slot tokens, one-shot ephemerals, and the provider's own last-request prompt / cached / written split |
-| `/usage` | Authoritative token + cost accounting from the local DB |
+| `/usage [days]` | What your AI use cost — by model, kind of work, job and day, with the cache hit rate |
 | `/model <provider> <model>` | Hot-swap the model without losing the conversation |
 | `/memory search <q>` | Search cross-session memory inline |
 | `/self` | View the agent's SOUL (identity) and evolving SELF doc |
 | `/replay` | Visually replay a past session |
 | `/autonomy` | Inspect goals, cron, and the autonomy loops |
 
-Twelve named toolsets (`minimal`, `safe`, `research`, `coding`, `development`, `browser`, `social`,
+Eleven named toolsets (`minimal`, `safe`, `research`, `coding`, `development`, `browser`, `social`,
 `full` and more) let you scope exactly what the agent can touch. Management subcommands round it
 out — `polyrob doctor` (preflight), `polyrob kb add/search` (local knowledge base), `polyrob auth`
 (provider sign-in), `polyrob keys` (API access), `polyrob profile` (several bots on one machine),
@@ -292,17 +295,19 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | Capability | Detail |
 |---|---|
 | Durable goal board | SQLite, atomic claims, circuit breaker, daily quota — survives restarts |
-| Cron | natural-language schedules + out-of-band delivery (Telegram/email/X) |
+| Scheduled jobs | natural-language schedules, `/jobs` + `/job …` on every seat, out-of-band delivery (Telegram/email/X) |
 | Self-wake | re-enters idle sessions with depth/backoff guards |
 | Self-authored skills | background review → scan → quarantine → owner approval |
 | Skill curator | retires unused skills, revives on reuse |
 | Delegation | least-privilege sub-agents, sync or detached background |
+| Action cards | one owner decision per card (confirm a quote, answer a choice); the agent continues once every card is decided |
+| Run caps | one step cap (150) and one spend cap ($2.00) for every autonomous run, sub-agents included |
 
 **Interfaces & interop**
 
 | Capability | Detail |
 |---|---|
-| Terminal | `polyrob` opens the agent — live tool transcripts, ~60 slash commands, resumable sessions |
+| Terminal | `polyrob` opens the agent — live tool transcripts, ~100 slash commands, resumable sessions |
 | Web console | Chat, Inbox, Work, Money, and Rob over a real-time Socket.IO surface |
 | REST API | session lifecycle + mid-run guidance injection + SSE streaming |
 | OpenAI-compatible | drop-in `/v1/chat/completions` + `/v1/models` |
@@ -340,7 +345,7 @@ checks around it. The core protections below are **on by default**:
 | **Self-modification review** | New skills / identity edits are quarantined and reviewed before taking effect | **On** |
 | **Code-exec containment** | Hardened Docker container by default on a server; the local subprocess backend is a convenience, not a sandbox, and a server refuses it; no inherited API keys | On when code-exec enabled |
 | **Shell command guard** | Every shell line (wrappers, substitutions and heredocs included) is classified: a floor no approval lifts, a dangerous class that waits for you, unattended runs refuse it; a write to the agent's own state databases needs you whatever the path | On when the shell tools are on |
-| **Run budget** | Cap a session's provider spend; the run halts honestly at the ceiling rather than claiming success | Opt-in (`RUN_BUDGET_USD`) |
+| **Run budget** | Every autonomous run stops at `AUTONOMOUS_MAX_STEPS` (150) and `AUTONOMOUS_RUN_BUDGET_USD` ($2.00); `RUN_BUDGET_USD` caps a whole session. A run halts honestly at the ceiling rather than claiming success | **On** for autonomous runs; session cap opt-in |
 | **Four-tier access** | OWNER / CORRESPONDENT / GROUP MEMBER / DENIED routing for chat surfaces | Opt-in (`CORRESPONDENT_ACCESS_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
 | **Group chats (rooms)** | Allowlisted room + per-chat role; every room turn runs a read-only, audience-bounded toolset (never money/exec/delegation) in a session that carries no owner state | Opt-in (`GROUP_CHAT_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
 | **Memory threat-scan** | Rejects injected jailbreak/persona-rewrite patterns on write | Opt-in (`MEMORY_THREAT_SCAN`) |
@@ -366,8 +371,9 @@ and off by default:
 
 - **x402 pay-per-request** — USDC micropayments on Base (opt-in Solana settlement) via the x402 protocol; the agent can both charge for its API and pay for external resources, and invoices settle facilitator-free by on-chain detection.
 - **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default. The spend ledger is sealed with a seed-derived MAC, so an edited row fails closed. An optional separate signer process (`WALLET_SIGNER`) holds its own hard caps, and those caps are the outer envelope every other cap sits inside.
-- **On-chain token sight** — a read-only tool (over twenty verbs, NFTs and LP positions included) for token identity, price, liquidity, a safety screen, pool discovery, any wallet's holdings and recent activity, a token's deployer history, and the agent's own positions across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
+- **On-chain token sight** — a read-only tool (over twenty verbs, NFTs and LP positions included) for token identity, price, liquidity, a safety screen, pool discovery, any wallet's holdings and recent activity, a token's deployer history, and the agent's own positions across Base, Ethereum, Arbitrum, Polygon, Robinhood Chain, Optimism (read only) and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), unknown is never rendered as zero, and there is no default chain: every on-chain verb names its chain (`--chain` on the CLI, `on <chain>` in chat).
 - **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and a spend the agent starts above a configurable ceiling — or one that can pay an address nobody pinned, at any value — waits for an owner approval and is sent once approved; the owner's own `/send`, `/swap` and `/bridge` (typed, or built and confirmed with buttons) pass the ceiling but stay inside the per-transaction and daily caps. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
+- **Trading mandate** — one owner card (`/trade start`) sets the allocation, chains and preset, then creates a hunt job, a daily review and an exit job per open position. Code arms and cancels the exits, an entry costs at most its stage's ticket and needs an exit plan first, and a breaker stops new entries; `/trade status|pause|resume|stop|release` from any owner seat.
 - **Venue trading** — Hyperliquid (perps) and Polymarket (prediction markets) tools, dry-run by default behind a master + per-venue live switch and per-venue caps.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
 - **SIWE** wallet auth for the multi-tenant posture.
@@ -446,8 +452,10 @@ polyrob/
 ├── cli/       # Terminal-native `polyrob` agent
 ├── core/      # DI, config, permissions, instance/identity, autonomy runtime
 ├── modules/   # LLM, Memory, Database, Auth, Credits
-├── tools/     # Browser, MCP, Email, Twitter, code-exec
-├── surfaces/  # Chat-surface adapters (Telegram, Email, WhatsApp, Discord, Slack, Signal, X)
+├── tools/     # Browser, MCP, Email, DeFi, shell, code-exec
+├── surfaces/  # Chat-surface adapters (Telegram, Email, WhatsApp, Discord, Slack, Signal, Feishu, DingTalk)
+├── packs/     # First-party packs (X, markets, discovery, sandbox backends)
+├── polyrob/   # The pack SDK + the process wiring
 ├── cron/      # Durable scheduled runs + goal board
 └── webview/   # Optional web console
 ```
@@ -482,6 +490,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/api.md](docs/guide/api.md) | REST + A2A + OpenAI-compatible API |
 | [docs/guide/configuration.md](docs/guide/configuration.md) | Configuring the agent — providers, memory, the autonomy dial, tools, surfaces, preferences |
 | [docs/guide/owner-controls.md](docs/guide/owner-controls.md) | Stop, pause and resume from any seat; approvals and the inbox |
+| [docs/guide/conversation.md](docs/guide/conversation.md) | One conversation across phone, console and terminal — what rolls when a session rolls |
 | [docs/guide/groups.md](docs/guide/groups.md) | Group chats (rooms) — allowlist, roles, per-chat policy, the room service job |
 | [docs/guide/profiles.md](docs/guide/profiles.md) | Named profiles — several isolated bots on one machine |
 | [docs/guide/instances.md](docs/guide/instances.md) | Instance identity — SOUL, character, avatar |
@@ -496,6 +505,8 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/security-model.md](docs/guide/security-model.md) | Honest trust model — heuristic gates vs. the OS/container boundary |
 | [docs/guide/streams.md](docs/guide/streams.md) | Jobs, goals, decisions and pauses — which one to use, the goal board, scheduled jobs, the inbox |
 | [docs/guide/x-twitter.md](docs/guide/x-twitter.md) | The agent's X account — posts, X Chat DMs, sign-in |
+| [docs/guide/feishu-dingtalk.md](docs/guide/feishu-dingtalk.md) | The Feishu / Lark and DingTalk surfaces |
+| [docs/guide/rails-verification.md](docs/guide/rails-verification.md) | What counts as proof that a send landed, per outbound rail |
 | [docs/comparison.md](docs/comparison.md) | Comparison with other frameworks |
 | [docs/examples.md](docs/examples.md) | Real-world usage examples |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment-flag reference (SSOT) |

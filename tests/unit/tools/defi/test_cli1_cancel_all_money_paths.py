@@ -128,7 +128,7 @@ async def test_agent_nft_guarded_call(monkeypatch, tmp_path, capsys):
     tool, _ = wd._tool(signer, wd.Chain(signer.address))
     tool._impl = lambda: None
     await _cancel_mid_receipt(tool.agent_nft_withdraw_token(
-        TakeParams(to=wd.TO, nft="3", dry_run=False)))
+        TakeParams(chain="robinhood", to=wd.TO, nft="3", dry_run=False)))
     rows = [r for r in tool._get_wallet().policy.audit_log if r.get("action")]
     assert [r["action"] for r in rows] == ["agent_nft_withdraw_token"], rows
     _said_so(capsys, "0x" + "ef" * 32)
@@ -146,7 +146,7 @@ async def test_agent_nft_collection_reveal(monkeypatch, capsys):
     monkeypatch.setattr(rv.FakeRail, "await_receipt", _blocking_receipt)
     rv.FakeRail.sent = []
     tool, _ = rv._tool(rv.Chain(head=100, blocks={1: 7}))
-    await _cancel_mid_receipt(tool.agent_nft_collection_reveal(RevealParams(dry_run=False)))
+    await _cancel_mid_receipt(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", dry_run=False)))
     log = tool._get_wallet().policy.audit_log
     assert [r["action"] for r in log] == ["agent_nft_collection_reveal"], log
     assert log[-1]["amount_usd"] == pytest.approx(0.02)   # the worst-case fee: never under

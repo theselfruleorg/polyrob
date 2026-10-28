@@ -49,6 +49,10 @@ ASK_OBSOLETE = "obsolete"
 ASK_KIND_TOOL_APPROVAL = "tool_approval"
 ASK_KIND_TOKEN_IDENTITY = "token_identity"
 OWN_SURFACE_ASK_KINDS = frozenset({ASK_KIND_TOOL_APPROVAL, ASK_KIND_TOKEN_IDENTITY})
+#: 093 D2: an operator config change the agent filed (``propose_setting``): the
+#: exact env line rides ``payload.line``. A plain ask, answered with /fulfill —
+#: NOT an own-surface kind.
+ASK_KIND_CONFIG_CHANGE = "config_change"
 
 
 def has_own_surface(payload) -> bool:

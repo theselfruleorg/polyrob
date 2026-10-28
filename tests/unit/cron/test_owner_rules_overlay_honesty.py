@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from cron import owner_rules_overlay as ov
 
-DOC = """NEW RULE (2026-10-05): stop posting buybacks. [from: owner said 2026-10-05]
+DOC = """NEW RULE (2026-10-05): stop posting rebuys. [from: owner said 2026-10-05]
 
 UNDATED RULE with no stamp at all.
 ANOTHER undated line.
@@ -15,7 +15,7 @@ ANOTHER undated line.
 
 def test_undated_lines_are_counted_not_dropped_silently():
     block = ov.owner_rules_overlay(DOC, datetime(2026, 10, 1))
-    assert "stop posting buybacks" in block
+    assert "stop posting rebuys" in block
     assert "2 owner-doc line(s) carry no date" in block
 
 

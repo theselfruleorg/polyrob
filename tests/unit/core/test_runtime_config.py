@@ -48,13 +48,11 @@ def test_last_resort_default_is_openai():
     assert resolve_runtime_config(None, None, available_keys=set()) == ("openai", None)
 
 
-def test_deepseek_only_falls_to_last_resort():
-    # A DEEPSEEK_API_KEY alone must NOT auto-resolve to provider=deepseek (the manager
-    # can't bootstrap it → hard crash). It is not initializable, so auto-select skips
-    # it and falls to the last resort.
+def test_deepseek_only_resolves_to_deepseek():
+    # DeepSeek's direct client is native (2026-10-27): its key alone is a provider.
     assert resolve_runtime_config(
         None, None, available_keys={"DEEPSEEK_API_KEY"},
-    ) == ("openai", None)
+    ) == ("deepseek", None)
 
 
 def test_explicit_deepseek_still_returned():

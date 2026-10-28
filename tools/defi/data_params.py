@@ -5,7 +5,7 @@ so ``from tools.defi.data_tool import PortfolioParams`` keeps working.
 """
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _chain_field(what: str) -> str:
@@ -23,14 +23,14 @@ class ResolveParams(BaseModel):
 
 
 class SwapQuoteParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("quote on"))
+    chain: str = Field(..., description=_chain_field("quote on"))
     token_in: str = Field(..., description="CONTRACT ADDRESS of the token to sell (0x…), or the literal 'native' (quoted via the chain's wrapped-native, as the swap verb prefers)")
     token_out: str = Field(..., description="CONTRACT ADDRESS of the token to buy (0x…), or the literal 'native'")
     amount_in: float = Field(..., gt=0, description="Human amount of token_in to sell")
 
 
 class TokenRefParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("look the token up on"))
+    chain: str = Field(..., description=_chain_field("look the token up on"))
     address: str = Field(..., description=(
         "The TOKEN's address: on EVM chains its contract (0x…, 40 hex); on "
         "solana its MINT (base58). A ticker is not accepted — use token_resolve "
@@ -39,7 +39,7 @@ class TokenRefParams(BaseModel):
 
 
 class PortfolioParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("report holdings on"))
+    chain: str = Field(..., description=_chain_field("report holdings on"))
     account: Optional[str] = Field(None, description=(
         "Optional (069 v4) — report the holdings of the token-bound ERC-6551 account of an NFT "
         "this treasury OWNS instead of the treasury's (a pinned collection only; needs "
@@ -48,7 +48,23 @@ class PortfolioParams(BaseModel):
         "Optional — the same as `account`, naming the NFT: '<collection>#<id>' or '<id>'."))
 
 
+def chain_required_in_schema(schema: dict) -> None:
+    """Provider-facing schema only: list ``chain`` as required.
+
+    ``chain`` is optional in Python (a base58 address needs none, and in-process
+    callers rely on that) but REQUIRED for a 0x address. A model reads an optional
+    parameter as skippable: prod 2026-10-26 sent ``{"address": "0x…"}`` with no chain
+    on every call, twice in one morning, through the error text that named the fix.
+    Required parameters are the ones models actually fill in.
+    """
+    required = schema.setdefault("required", [])
+    if "chain" not in required:
+        required.append("chain")
+
+
+
 class WalletHoldingsParams(BaseModel):
+    model_config = ConfigDict(json_schema_extra=chain_required_in_schema)
     address: str = Field(..., description=(
         "The WALLET address to read — any owner, not only this agent's. A Solana "
         "wallet is base58 (e.g. 7xKX…); an EVM wallet is 0x… (40 hex). Give a "
@@ -60,7 +76,7 @@ class WalletHoldingsParams(BaseModel):
 
 
 class ReconcileParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("reconcile against"))
+    chain: str = Field(..., description=_chain_field("reconcile against"))
     account: Optional[str] = Field(None, description=(
         "Reconcile a token-bound ERC-6551 account (its 0x address) instead of the "
         "treasury wallet. Omit for the treasury."))
@@ -73,7 +89,7 @@ class PositionsParams(BaseModel):
 
 
 class DiscoverParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("discover pools on"))
+    chain: str = Field(..., description=_chain_field("discover pools on"))
     limit: int = Field(20, ge=1, le=50, description="How many pools to list.")
     min_liquidity_usd: float = Field(0.0, ge=0.0, description=(
         "Exclude pools whose reported liquidity is BELOW this. A pool whose "
@@ -84,7 +100,7 @@ class DiscoverParams(BaseModel):
 
 
 class OhlcvParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("read candles on"))
+    chain: str = Field(..., description=_chain_field("read candles on"))
     address: str = Field(..., description=(
         "The TOKEN contract address. Candles are POOL-scoped on this indexer, so "
         "the deepest pool for this token is resolved and named in the answer."))
@@ -100,7 +116,7 @@ class OhlcvParams(BaseModel):
 
 
 class ScanParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("scan pools on"))
+    chain: str = Field(..., description=_chain_field("scan pools on"))
     kind: str = Field("trending", description=(
         "'trending' (what the indexer currently ranks) or 'new' (the "
         "fresh-launch frontier). Trending is a popularity claim and popularity "
@@ -112,33 +128,33 @@ class ScanParams(BaseModel):
 
 
 class ContractReadParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("read from"))
+    chain: str = Field(..., description=_chain_field("read from"))
     address: str = Field(..., description="Contract address to read from (0x…). EVM chains only — there is no eth_call on solana.")
     signature: str = Field(..., description="Function signature, e.g. 'totalSupply()'")
     args: List[Any] = Field(default_factory=list, description="Arguments (currently unencoded; prefer no-arg views)")
 
 
 class NftHoldingsParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("list NFT holdings on"))
+    chain: str = Field(..., description=_chain_field("list NFT holdings on"))
     address: Optional[str] = Field(
         None, description=("Wallet address to inspect (0x…). EVM chains only. "
                            "Defaults to this agent's own wallet."))
 
 
 class NftInfoParams(BaseModel):
-    chain: str = Field("base", description=_chain_field("read the token on"))
+    chain: str = Field(..., description=_chain_field("read the token on"))
     contract: str = Field(..., description="The NFT collection contract (0x…). EVM chains only.")
     token_id: int = Field(..., ge=0, description="The token id to read.")
 
 
 class LpPositionsParams(BaseModel):
-    chain: str = Field("robinhood", description=_chain_field("read Uniswap v3 positions on"))
+    chain: str = Field(..., description=_chain_field("read Uniswap v3 positions on"))
     protocol: str = Field("v3", description="Uniswap protocol: v3 (v4 in a later phase).")
     address: Optional[str] = Field(None, description="Owner address; defaults to the agent wallet.")
 
 
 class LpPoolInfoParams(BaseModel):
-    chain: str = Field("robinhood", description=_chain_field("read a Uniswap v3 pool on"))
+    chain: str = Field(..., description=_chain_field("read a Uniswap v3 pool on"))
     protocol: str = Field("v3", description="v3, or v4 for a Pons graduated pool (give token_a + token_b; the other side is 'native').")
     pool: Optional[str] = Field(None, description="Pool address, OR give token_a+token_b+fee.")
     token_a: Optional[str] = None
@@ -147,7 +163,7 @@ class LpPoolInfoParams(BaseModel):
 
 
 class PoolMetricsParams(BaseModel):
-    chain: str = Field("robinhood", description=_chain_field("read a Pons v4 pool on"))
+    chain: str = Field(..., description=_chain_field("read a Pons v4 pool on"))
     token: str = Field(..., description="The Pons token whose graduated v4 pool to read (0x…). EVM only — Pons is a Robinhood-chain launchpad.")
     expect_pool_id: Optional[str] = Field(None, description=(
         "The pool id you expect (bytes32). A different PoolKey hash is reported as an ALERT."))
@@ -159,7 +175,7 @@ class PoolMetricsParams(BaseModel):
 
 
 class LpQuoteParams(BaseModel):
-    chain: str = Field("robinhood", description=_chain_field("quote a Uniswap v3 deposit on"))
+    chain: str = Field(..., description=_chain_field("quote a Uniswap v3 deposit on"))
     protocol: str = Field("v3", description="v3, or v4 for a Pons graduated pool (full range only; the other side is 'native').")
     token_a: str
     token_b: str

@@ -21,7 +21,7 @@ from cron.service import CronService
 
 @pytest.fixture(autouse=True)
 def _lane_ids_are_skills(monkeypatch):
-    """The lanes here (`buyback`, …) are lane names, not shipped skills: the pin
+    """The lanes here (`rebuy`, …) are lane names, not shipped skills: the pin
     validator (081 WS-5.4, tested in test_pinned_skill_validation) passes them."""
     monkeypatch.setattr(cron_lanes, "missing_pinned_skills", lambda payload, user_id: [])
 
@@ -30,15 +30,15 @@ def _svc(tmp_path):
     return CronService(CronJobStore(str(tmp_path / "cron.db")))
 
 
-def _stop_lane(tmp_path, lane="buyback", user="u1"):
+def _stop_lane(tmp_path, lane="rebuy", user="u1"):
     return suppress(str(tmp_path / "goals.db"), user_id=user, scope=SCOPE_CRON_LANE,
-                    value=lane, label=lane, reason="no more buybacks")
+                    value=lane, label=lane, reason="no more rebuys")
 
 
 # --- the lane rule ------------------------------------------------------------
 
 def test_lane_is_first_skill_else_rig_else_none():
-    assert job_lane({"skills": ["Buyback", "x"], "rig": "money_rail"}) == "buyback"
+    assert job_lane({"skills": ["Rebuy", "x"], "rig": "money_rail"}) == "rebuy"
     assert job_lane({"rig": "Money_Rail"}) == "money_rail"
     assert job_lane({"skills": [], "rig": ""}) == ""
     assert job_lane(None) == ""
@@ -54,27 +54,27 @@ def test_agent_create_in_stopped_lane_is_refused_naming_the_time(tmp_path):
     _stop_lane(tmp_path)
     with pytest.raises(LaneStopped) as e:
         _svc(tmp_path).schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                                payload={"skills": ["buyback"]})
+                                payload={"skills": ["rebuy"]})
     msg = str(e.value)
-    assert "the owner stopped `buyback` at" in msg and "UTC" in msg
-    assert "/job allow buyback" in msg
+    assert "the owner stopped `rebuy` at" in msg and "UTC" in msg
+    assert "/job allow rebuy" in msg
     assert _svc(tmp_path).list_jobs(user_id="u1") == []
 
 
 def test_owner_seat_create_succeeds_and_lifts_the_stop(tmp_path):
     _stop_lane(tmp_path)
     job = _svc(tmp_path).schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                                  payload={"skills": ["buyback"]}, owner_seat=True)
+                                  payload={"skills": ["rebuy"]}, owner_seat=True)
     assert job.status == "scheduled"
     assert any("is lifted" in n for n in cron_lanes.schedule_notes(job))
-    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="buyback") is None
+    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="rebuy") is None
 
 
 def test_payload_authorship_is_not_owner_provenance(tmp_path):
     _stop_lane(tmp_path)
     with pytest.raises(LaneStopped):
         _svc(tmp_path).schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                                payload={"skills": ["buyback"], "authored_by": "owner"})
+                                payload={"skills": ["rebuy"], "authored_by": "owner"})
 
 
 def test_other_lane_and_no_lane_and_other_tenant_unaffected(tmp_path):
@@ -84,7 +84,7 @@ def test_other_lane_and_no_lane_and_other_tenant_unaffected(tmp_path):
                         payload={"skills": ["engagement"]}).status == "scheduled"
     assert svc.schedule(task="plain", schedule_spec="1h", user_id="u1").status == "scheduled"
     assert svc.schedule(task="buy", schedule_spec="1h", user_id="u2",
-                        payload={"skills": ["buyback"]}).status == "scheduled"
+                        payload={"skills": ["rebuy"]}).status == "scheduled"
 
 
 def test_a_stopped_skill_pinned_second_is_refused(tmp_path):
@@ -93,8 +93,8 @@ def test_a_stopped_skill_pinned_second_is_refused(tmp_path):
     _stop_lane(tmp_path)
     with pytest.raises(LaneStopped) as e:
         _svc(tmp_path).schedule(task="notes then buy", schedule_spec="1h", user_id="u1",
-                                payload={"skills": ["notes", "buyback"]})
-    assert "`buyback`" in str(e.value)
+                                payload={"skills": ["notes", "rebuy"]})
+    assert "`rebuy`" in str(e.value)
     _stop_lane(tmp_path, lane="money_rail")
     with pytest.raises(LaneStopped):
         _svc(tmp_path).schedule(task="buy", schedule_spec="1h", user_id="u1",
@@ -108,7 +108,7 @@ def test_owner_create_with_an_unreadable_stop_store_says_so(tmp_path, monkeypatc
         raise OSError("disk")
     monkeypatch.setattr(gs, "lane_stop", broken)
     job = _svc(tmp_path).schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                                  payload={"skills": ["buyback"]}, owner_seat=True)
+                                  payload={"skills": ["rebuy"]}, owner_seat=True)
     assert job.status == "scheduled"
     assert any("could not read your stops" in n for n in cron_lanes.schedule_notes(job))
 
@@ -175,32 +175,32 @@ def test_job_stop_forever_then_allow_round_trip(tmp_path):
     from surfaces.telegram.job_ops import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                       payload={"skills": ["buyback"]})
+                       payload={"skills": ["rebuy"]})
     out = jobs_reply("u1", str(tmp_path), ["stop", job.id[:8], "--forever"])
-    assert "Stopped job" in out and "`buyback` lane is stopped" in out
+    assert "Stopped job" in out and "`rebuy` lane is stopped" in out
     assert svc.store.get(job.id).status == "cancelled"
     listing = jobs_reply("u1", str(tmp_path), ["list"])
-    assert "Stopped by you (1)" in listing and "/job allow buyback" in listing
+    assert "Stopped by you (1)" in listing and "/job allow rebuy" in listing
     with pytest.raises(LaneStopped):
         svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                     payload={"skills": ["buyback"]})
-    assert "Re-armed `buyback`" in jobs_reply("u1", str(tmp_path), ["allow", "buyback"])
+                     payload={"skills": ["rebuy"]})
+    assert "Re-armed `rebuy`" in jobs_reply("u1", str(tmp_path), ["allow", "rebuy"])
     assert "Stopped by you" not in jobs_reply("u1", str(tmp_path), ["list"])
     assert svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                        payload={"skills": ["buyback"]}).status == "scheduled"
+                        payload={"skills": ["rebuy"]}).status == "scheduled"
 
 
 def test_job_show_names_the_lane_and_its_stop(tmp_path):
     from surfaces.telegram.job_ops import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                       payload={"skills": ["buyback"]})
+                       payload={"skills": ["rebuy"]})
     shown = jobs_reply("u1", str(tmp_path), ["show", job.id[:8]])
-    assert "lane `buyback`" in shown and "stopped by you" not in shown
+    assert "lane `rebuy`" in shown and "stopped by you" not in shown
     jobs_reply("u1", str(tmp_path), ["stop", job.id[:8], "--forever"])
     shown = jobs_reply("u1", str(tmp_path), ["show", job.id[:8]])
-    assert "lane `buyback` — stopped by you since" in shown
-    assert "/job allow buyback" in shown
+    assert "lane `rebuy` — stopped by you since" in shown
+    assert "/job allow rebuy" in shown
     bare = svc.schedule(task="plain", schedule_spec="1h", user_id="u1")
     assert "lane" not in jobs_reply("u1", str(tmp_path), ["show", bare.id[:8]])
 
@@ -209,10 +209,10 @@ def test_job_stop_once_keeps_the_lane_open(tmp_path):
     from surfaces.telegram.job_ops import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                       payload={"skills": ["buyback"]})
+                       payload={"skills": ["rebuy"]})
     out = jobs_reply("u1", str(tmp_path), ["stop", job.id[:8]])
     assert "--forever" in out
-    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="buyback") is None
+    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="rebuy") is None
 
 
 def test_cli_stop_forever_and_allow(tmp_path, monkeypatch):
@@ -233,11 +233,11 @@ def test_cli_stop_forever_and_allow(tmp_path, monkeypatch):
 def test_prune_never_touches_the_stop(tmp_path):
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
-                       payload={"skills": ["buyback"]})
+                       payload={"skills": ["rebuy"]})
     cron_lanes.stop_job(svc, job, user_id="u1", via="cli", forever=True)
     assert svc.store.prune_cancelled(older_than_days=0,
                                      now=datetime.now() + timedelta(days=30)) == 1
-    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="buyback") is not None
+    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="rebuy") is not None
 
 
 def test_goal_views_do_not_list_lane_stops(tmp_path):
@@ -274,9 +274,9 @@ async def test_agent_tool_schedule_refused_in_stopped_lane(tmp_path, monkeypatch
     _stop_lane(tmp_path)
     t = _tool(tmp_path, monkeypatch, owner_turn=False)
     res = await t.cronjob_schedule(CronScheduleAction(
-        task="buy back the token", schedule="1h", skills=["buyback"]), execution_context=_ctx())
+        task="buy back the token", schedule="1h", skills=["rebuy"]), execution_context=_ctx())
     assert res.error and "cronjob_schedule refused" in res.error
-    assert "the owner stopped `buyback` at" in res.error
+    assert "the owner stopped `rebuy` at" in res.error
 
 
 @pytest.mark.asyncio
@@ -287,9 +287,9 @@ async def test_agent_tool_never_lifts_the_stop_even_on_an_owner_turn(tmp_path, m
     _stop_lane(tmp_path)
     t = _tool(tmp_path, monkeypatch, owner_turn=True)
     res = await t.cronjob_schedule(CronScheduleAction(
-        task="buy back the token", schedule="1h", skills=["buyback"]), execution_context=_ctx())
-    assert res.error and "/job allow buyback" in res.error
-    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="buyback") is not None
+        task="buy back the token", schedule="1h", skills=["rebuy"]), execution_context=_ctx())
+    assert res.error and "/job allow rebuy" in res.error
+    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="rebuy") is not None
     assert t._cron_service.list_jobs(user_id="u1") == []
 
 
@@ -300,7 +300,7 @@ async def test_agent_edit_on_owner_turn_may_not_add_a_stopped_skill(tmp_path, mo
     t = _tool(tmp_path, monkeypatch, owner_turn=True)
     job = t._cron_service.schedule(task="x", schedule_spec="1h", user_id="u1",
                                    payload={"skills": ["engagement"]})
-    res = await t.cronjob_edit(CronEditAction(job_id=job.id, skills=["engagement", "buyback"]),
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, skills=["engagement", "rebuy"]),
                                execution_context=_ctx())
     assert res.error and "cronjob_edit refused" in res.error
 
@@ -319,7 +319,7 @@ async def test_agent_cancel_forever_only_on_owner_turn(tmp_path, monkeypatch):
     from tools.cronjob_tools import CronCancelAction
     t = _tool(tmp_path, monkeypatch, owner_turn=False)
     job = t._cron_service.schedule(task="x", schedule_spec="1h", user_id="u1",
-                                   payload={"skills": ["buyback"]})
+                                   payload={"skills": ["rebuy"]})
     res = await t.cronjob_cancel(CronCancelAction(job_id=job.id, forever=True),
                                  execution_context=_ctx())
     assert res.error and "only the owner" in res.error
@@ -329,7 +329,7 @@ async def test_agent_cancel_forever_only_on_owner_turn(tmp_path, monkeypatch):
                                  execution_context=_ctx())
     assert "lane is stopped" in res.extracted_content
     assert t._cron_service.store.get(job.id).payload["stopped"]["via"] == "owner_turn"
-    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="buyback") is not None
+    assert lane_stop(str(tmp_path / "goals.db"), user_id="u1", lane="rebuy") is not None
 
 
 @pytest.mark.asyncio
@@ -339,6 +339,6 @@ async def test_agent_edit_may_not_move_a_job_into_a_stopped_lane(tmp_path, monke
     t = _tool(tmp_path, monkeypatch, owner_turn=False)
     job = t._cron_service.schedule(task="x", schedule_spec="1h", user_id="u1",
                                    payload={"skills": ["engagement"]})
-    res = await t.cronjob_edit(CronEditAction(job_id=job.id, skills=["buyback"]),
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, skills=["rebuy"]),
                                execution_context=_ctx())
     assert res.error and "cronjob_edit refused" in res.error

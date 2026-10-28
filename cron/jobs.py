@@ -54,7 +54,7 @@ def _parse(s: Optional[str]) -> Optional[datetime]:
 
 
 #: 056 WS5: the priority class a job declares in ``payload.priority``. ``money``
-#: marks the treasury rails (EXIT / SAFETY / WATCHER / SCOUT / BUYBACK); a due
+#: marks the treasury rails (e.g. exit / safety / watcher / scout / a recurring swap); a due
 #: money job pre-empts a running board goal (GOAL_YIELD_FOR_MONEY_RAIL).
 CRON_PRIORITY_MONEY = "money"
 

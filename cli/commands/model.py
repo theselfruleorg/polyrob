@@ -53,7 +53,7 @@ async def _model_list(as_json: bool = False):
         providers_with_keys,
         usable_providers_with_credentials,
     )
-    from modules.llm.available_models import available_models, steer_notes
+    from modules.llm.available_models import available_models
 
     # Same oracles + vocabulary as `polyrob doctor` (UX assessment 2026-08-07,
     # Q5): the old AgentConfig.available_providers() read pydantic fields that
@@ -141,8 +141,6 @@ async def _model_list(as_json: bool = False):
                 last_provider = c.provider
             star = "★" if c.is_default else " "
             click.echo(f"    {star} {c.display_name:<{name_w}}  {c.model:<{id_w}}  {c.pricing_hint}")
-    for note in steer_notes():
-        click.echo(click.style("  " + note, fg="yellow"))
 
 
 @model.command("set-default")

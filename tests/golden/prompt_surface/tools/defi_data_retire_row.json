@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Close (retire) a position-book row whose tokens are GONE or DUST (worth under $1). Measures the wallet's balance on chain itself and refuses unless it is zero or dust; the measurement is stored as proof. Moves nothing. A holding worth more is sold, or the owner writes it off.",
+    "name": "defi_data_retire_row",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "description": "The token contract / mint address of the book row",
+          "type": "string"
+        },
+        "chain": {
+          "description": "The chain the book row is on (base, robinhood, solana, …)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chain",
+        "address"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

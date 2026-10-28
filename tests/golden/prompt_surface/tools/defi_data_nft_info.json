@@ -6,7 +6,6 @@
       "additionalProperties": false,
       "properties": {
         "chain": {
-          "default": "base",
           "description": "Chain to read the token on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
           "type": "string"
         },
@@ -21,6 +20,7 @@
         }
       },
       "required": [
+        "chain",
         "contract",
         "token_id"
       ],

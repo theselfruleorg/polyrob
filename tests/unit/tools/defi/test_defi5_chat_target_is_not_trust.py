@@ -16,7 +16,7 @@ from cron.service import CronService
 from tools.cronjob_tools import CronJobTool, CronScheduleAction
 from tools.goal_tools import GoalCreateAction, GoalTool
 
-ADDR = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+ADDR = "0x3535353535353535353535353535353535353535"
 TARGET = {"chain": "robinhood", "address": ADDR}
 
 
@@ -67,7 +67,7 @@ def test_the_owner_typed_the_address_so_it_is_trust():
 def test_an_address_the_model_chose_is_restrict_only():
     from core.wallet.buy_target import AGENT, target_provenance
     # the owner did not name this contract
-    assert target_provenance(_turn(owner_text="buy back PNL every 6h"), TARGET, True) == AGENT
+    assert target_provenance(_turn(owner_text="buy back TKN every 6h"), TARGET, True) == AGENT
 
 
 @pytest.mark.parametrize("make", [_goal, _job])

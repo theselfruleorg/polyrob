@@ -56,7 +56,7 @@ def test_the_capabilities_endpoint_scopes_to_the_tenant(monkeypatch):
     monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "u1")
     seen = {}
     monkeypatch.setattr(mod, "_capabilities_body",
-                        lambda uid, owner=True: seen.update(uid=uid) or {"tools": {"items": []}})
+                        lambda uid, owner=True, **kw: seen.update(uid=uid) or {"tools": {"items": []}})
     app = FastAPI()
     app.include_router(mod.api_router)
     resp = TestClient(app).get("/api/webgate/capabilities")
@@ -180,13 +180,27 @@ def test_tool_risk_uses_catalog_permissions():
         assert row['risk'] == ('high' if row['id'] in high else 'medium' if row['id'] in medium else 'low')
 
 
-def test_mcp_inventory_uses_runtime_registration_gate(monkeypatch):
-    monkeypatch.setenv('MCP_ENABLED', 'false')
-    monkeypatch.setattr('tools.mcp.config.load_local_mcp_servers', lambda: {'local': {'command': 'example'}})
-    body = mod._mcp_section()
-    # Local server configuration enables registration even with the flag false,
-    # exactly as the runtime bootstrap gate does; this is not connection health.
-    assert body['enabled'] is True
-    assert body['items'][0]['on'] is True
-    monkeypatch.setattr('tools.mcp.config.load_local_mcp_servers', lambda: {})
-    assert mod._mcp_section()['enabled'] is False
+def test_mcp_inventory_shows_the_effective_state_not_the_registration_gate(monkeypatch, tmp_path):
+    """093 review: the panel showed the registration gate ("flag on" = "on")
+    while zero servers were configured. It now shows the effective state, the
+    tenant's own `/mcp add` rows, and SAYS when the operator file is not
+    readable from the console process (never an empty list)."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path))  # no operator file here
+    monkeypatch.setattr("tools.gate_effective.tool_state",
+                        lambda *a, **k: ("OFF", "no-mcp-server: no server"))
+    monkeypatch.setattr(mod, "_mcp_container", lambda: None)
+    row = SimpleNamespace(server_name="evidence", server_url="https://e.example/mcp/k",
+                          server_type="streamable_http", enabled=True)
+    body = mod._mcp_section("u1", ([row], None))
+    assert body["enabled"] is False and body["state"] == "OFF"
+    assert [i["id"] for i in body["items"]] == ["evidence"]
+    assert body["items"][0]["on"] is False
+    assert "/k" not in body["items"][0]["what"]          # the URL path is never shown
+    assert "not readable" in body["error"] or "no operator file" in body["error"]
+    monkeypatch.setattr("tools.gate_effective.tool_state", lambda *a, **k: ("ON", ""))
+    (tmp_path / "mcp.json").write_text('{"mcpServers": {"local": {"command": "npx srv"}}}')
+    body = mod._mcp_section("u1", ([row], None))
+    assert body["enabled"] is True and body["error"] is None
+    assert {i["id"] for i in body["items"]} == {"evidence", "local"}
+    assert all(i["on"] for i in body["items"])

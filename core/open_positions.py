@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS open_positions (
     qty_source    TEXT NOT NULL DEFAULT '',
     high_water_usd REAL,
     high_water_ts  REAL,
+    status_proof   TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, chain, account, address)
 );
 """
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS position_realized (
     unknown_legs INTEGER NOT NULL DEFAULT 0,
     sold_qty     REAL NOT NULL DEFAULT 0,
     updated_ts   REAL NOT NULL,
+    close_reason TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, chain, account, address)
 );
 """
@@ -118,7 +120,21 @@ TREASURY_ACCOUNT = ""
 STATUS_OPEN = "open"
 STATUS_QUARANTINED = "quarantined"
 STATUS_WRITTEN_OFF = "written_off"
-STATUSES = (STATUS_OPEN, STATUS_QUARANTINED, STATUS_WRITTEN_OFF)
+#: 086 W0: a row whose measured holding is worth under :data:`DUST_USD` (the
+#: pull pass stores it; a later buy reopens it).
+STATUS_DUST = "dust"
+#: 086 W0: a row closed with chain PROOF that nothing (or only dust) is held —
+#: :func:`core.position_retire.retire_row`. A later buy starts a fresh row.
+STATUS_RETIRED = "retired"
+STATUSES = (STATUS_OPEN, STATUS_QUARANTINED, STATUS_WRITTEN_OFF, STATUS_DUST,
+            STATUS_RETIRED)
+#: What :func:`positions_for` returns by default: the rows still in play.
+ACTIVE_STATUSES = (STATUS_OPEN, STATUS_QUARANTINED)
+
+#: 086 W0: the ONE dust threshold. A holding worth less than this (a KNOWN
+#: value) is dust: below the exit floor (gas costs more), never a position to
+#: chase, never a disagreement. ``positions_view`` and ``reconcile`` import it.
+DUST_USD = 1.0
 
 _STATUS_COLUMNS = (("status", "TEXT NOT NULL DEFAULT 'open'"),
                    ("status_reason", "TEXT NOT NULL DEFAULT ''"),
@@ -127,7 +143,9 @@ _STATUS_COLUMNS = (("status", "TEXT NOT NULL DEFAULT 'open'"),
 #: 071 W3 columns, added in place to an older store.
 _BOOK_COLUMNS = (("qty_source", "TEXT NOT NULL DEFAULT ''"),
                  ("high_water_usd", "REAL"),
-                 ("high_water_ts", "REAL"))
+                 ("high_water_ts", "REAL"),
+                 # 086 W0: the chain measurement a retire was recorded on (JSON).
+                 ("status_proof", "TEXT NOT NULL DEFAULT ''"))
 
 #: Where a row's size came from. ``receipt`` = legacy token-authored Transfer
 #: logs (unverified); ``simulation`` = preview balance delta, not final fill; ``quote`` = the
@@ -162,6 +180,9 @@ class PositionDelta:
     proceeds_usd: Optional[float] = None
     #: Quantity provenance (legacy receipts are unverified); see QTY_SOURCES.
     qty_source: str = "quote"
+    #: 086 W6: why a DISPOSE closed (``core.position_plans.CLOSE_REASONS``);
+    #: ``""`` = unknown. Ignored on an acquire.
+    close_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -180,7 +201,7 @@ class PositionEntry:
     account: str = TREASURY_ACCOUNT
     #: ``"trade"`` (the rail bought it) | ``"inherited"`` (held at adopt; no cost basis).
     origin: str = "trade"
-    #: ``open`` | ``quarantined`` | ``written_off`` (W0).
+    #: ``open`` | ``quarantined`` | ``written_off`` (W0) | ``dust`` | ``retired`` (086).
     status: str = STATUS_OPEN
     status_reason: str = ""
     #: 071 W3: where ``qty`` came from (QTY_SOURCES).
@@ -203,6 +224,8 @@ class RealizedEntry:
     unknown_legs: int
     sold_qty: float
     updated_ts: float
+    #: 086 W6: the typed reason of the LAST close booked here; ``""`` = unknown.
+    close_reason: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -218,31 +241,74 @@ def _is_value_asset(chain: str, address: Optional[str], is_native: bool) -> bool
     buy opens a MEME position (not a USDC one) and a MEME->USDC sell closes the
     MEME position (not opens a USDC one).
     """
+    return _asset_kind(chain, address, is_native) != "position"
+
+
+def _wrapped_native(chain: str) -> Optional[str]:
+    try:
+        from core.wallet import chains
+        row = chains.get(chain)
+    except Exception:
+        return None
+    return getattr(row, "wrapped_native", None) or None
+
+
+def _asset_kind(chain: str, address: Optional[str], is_native: bool) -> str:
+    """``major`` (the native coin or its pinned wrapped token — ETH/WETH,
+    SOL/wSOL) | ``stable`` (any other pinned token: USDC and the row's stables,
+    or a side with no address) | ``position`` (everything else).
+
+    Pinned by ``(chain, address)`` (``core.wallet.tokens.canonical_token``),
+    never by a self-reported symbol. A Solana mint compares exactly (base58 is
+    case-sensitive)."""
     if is_native:
-        return True
+        return "major"
     if not address:
-        return True
+        return "stable"
+    wrapped = _wrapped_native(chain)
+    if wrapped and _norm(address) == _norm(wrapped):
+        return "major"
     try:
         from core.wallet.tokens import canonical_token
-        return canonical_token(chain, address) is not None
+        pinned = canonical_token(chain, address) is not None
+        if not pinned and address.startswith("0x"):
+            # canonical_token keys EVM pins by their checksummed form.
+            pinned = any(c == str(chain or "").strip().lower() and a.lower() == address.lower()
+                         for (c, a) in _canonical_keys())
+        return "stable" if pinned else "position"
     except Exception:
-        # Fail-open toward "not value": a token we cannot classify is tracked as
-        # a position rather than silently dropped from the book.
-        return False
+        # Fail-open toward "position": a token we cannot classify is tracked
+        # rather than silently dropped from the book.
+        return "position"
+
+
+def _canonical_keys():
+    from core.wallet.tokens import CANONICAL_TOKENS
+    return CANONICAL_TOKENS.keys()
 
 
 def classify_swap(*, chain: str, token_in: str, token_out: str,
                   in_native: bool, in_symbol: str, out_symbol: str,
                   in_qty: float, out_qty: Optional[float],
                   cost_usd: Optional[float],
-                  qty_source: str = "quote") -> List[PositionDelta]:
+                  qty_source: str = "quote",
+                  close_reason: str = "") -> List[PositionDelta]:
     """Turn one swap into 0-2 :class:`PositionDelta` legs.
 
     - the token BOUGHT (``token_out``) opens/increases a position when it is not
       working capital — its cost basis is ``cost_usd`` (the USD the swap spent);
     - the token SOLD (``token_in``) reduces/closes a position when it is not
       working capital;
-    - a value<->value swap (e.g. USDC<->WETH) tracks nothing.
+    - 086 W0, the MAJOR leg: the native coin / wrapped native (ETH/WETH,
+      SOL/wSOL) is a position when it is BOUGHT WITH A STABLE (USDC -> WETH
+      opens a WETH row; the majors lab trades exactly this) and is reduced
+      whenever it is SOLD (WETH -> USDC closes it with realized P&L; SOL spent on
+      a memecoin reduces a held SOL row, a no-op when none is held). A major
+      received from selling a memecoin opens nothing — an exit is not a buy,
+      and the treasury's gas float must not become a row on every exit. Native
+      in keys the wrapped-native row (one row per major), and a wrap
+      (native -> its own wrapped token) tracks nothing;
+    - stable <-> stable tracks nothing.
 
     ``out_qty`` may be None (an aggregator that did not report a human output);
     without a size we cannot track the acquired position's close math, so that
@@ -256,20 +322,25 @@ def classify_swap(*, chain: str, token_in: str, token_out: str,
     """
     value = (float(cost_usd) if cost_usd is not None and float(cost_usd) > 0
              else None)
+    in_kind = _asset_kind(chain, token_in, in_native)
+    out_kind = _asset_kind(chain, token_out, False)
+    in_addr = (_wrapped_native(chain) or token_in) if in_native else token_in
+    if in_kind == "major" and out_kind == "major":
+        return []  # a wrap/unwrap moves no exposure
+    buy = out_kind == "position" or (out_kind == "major" and in_kind == "stable")
+    sell = in_kind in ("position", "major")
     deltas: List[PositionDelta] = []
-    if (out_qty is not None and out_qty > 0
-            and not _is_value_asset(chain, token_out, is_native=False)):
+    if buy and out_qty is not None and out_qty > 0:
         deltas.append(PositionDelta(
             chain=chain, address=_norm(token_out),
             symbol=out_symbol or (token_out or "?"),
             qty=float(out_qty), cost_usd=value, qty_source=qty_source))
-    if (in_qty and in_qty > 0
-            and not _is_value_asset(chain, token_in, is_native=in_native)):
+    if sell and in_qty and in_qty > 0 and in_addr:
         deltas.append(PositionDelta(
-            chain=chain, address=_norm(token_in),
-            symbol=in_symbol or (token_in or "?"),
+            chain=chain, address=_norm(in_addr),
+            symbol=in_symbol or (in_addr or "?"),
             qty=-float(in_qty), cost_usd=None, proceeds_usd=value,
-            qty_source=qty_source))
+            qty_source=qty_source, close_reason=str(close_reason or "")))
     return deltas
 
 
@@ -309,6 +380,7 @@ def _migrate(conn) -> None:
         _nullable_basis(conn, _cols)
         _add_columns(conn, _cols, _BOOK_COLUMNS)
         _zero_basis_is_unknown(conn)
+        _add_realized_close_reason(conn)
         return
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -344,6 +416,23 @@ def _add_columns(conn, cols_fn, columns) -> None:
         for name, decl in columns:
             if name not in have:
                 conn.execute(f"ALTER TABLE open_positions ADD COLUMN {name} {decl}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def _add_realized_close_reason(conn) -> None:
+    """086 W6: the typed close reason on an older realized table, in place."""
+    def _cols():
+        return [r[1] for r in conn.execute("PRAGMA table_info(position_realized)").fetchall()]
+    if not _cols() or "close_reason" in _cols():
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if _cols() and "close_reason" not in _cols():
+            conn.execute("ALTER TABLE position_realized "
+                         "ADD COLUMN close_reason TEXT NOT NULL DEFAULT ''")
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -492,6 +581,12 @@ def apply_delta(user_id: str, delta: PositionDelta, *,
             "FROM open_positions "
             "WHERE user_id=? AND chain=? AND account=? AND address=?",
             (uid, delta.chain, acct, delta.address), fetch="one")
+        if row and row["status"] == STATUS_RETIRED:
+            # 086 W0: a retired row holds nothing on the book: a sell is a
+            # no-op and a buy starts a fresh row (the old basis is history).
+            if delta.qty <= 0:
+                return
+            row = None
         cur_qty = float(row["qty"]) if row else 0.0
         # None = unknown basis. A new row starts from a known $0 of nothing.
         cur_entry: Optional[float] = (
@@ -520,12 +615,14 @@ def apply_delta(user_id: str, delta: PositionDelta, *,
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (uid, delta.chain, acct, delta.address, delta.symbol, new_qty,
                  new_entry, cur_entry_ts, ts,
-                 (row["status"] if row else STATUS_OPEN) or STATUS_OPEN,
-                 (row["status_reason"] if row else "") or "",
-                 row["status_ts"] if row else None,
+                 _status_after_buy(row),
+                 (row["status_reason"] if row and row["status"] != STATUS_DUST else "") or "",
+                 row["status_ts"] if row and row["status"] != STATUS_DUST else None,
                  source,
                  row["high_water_usd"] if row else None,
                  row["high_water_ts"] if row else None))
+            _event("opened" if (not row or row["status"] == STATUS_DUST) else "changed",
+                   uid, delta, acct, qty=new_qty, usd=delta.cost_usd, ts=ts)
             return
 
         # dispose (reduce / close)
@@ -541,6 +638,8 @@ def apply_delta(user_id: str, delta: PositionDelta, *,
                 "DELETE FROM open_positions "
                 "WHERE user_id=? AND chain=? AND account=? AND address=?",
                 (uid, delta.chain, acct, delta.address))
+            _event("closed", uid, delta, acct, qty=0.0, usd=delta.proceeds_usd, ts=ts,
+                   reason=delta.close_reason)
             return
         remaining = cur_qty - sell
         # Reduce the cost basis in the SAME proportion as the size, so the
@@ -551,8 +650,26 @@ def apply_delta(user_id: str, delta: PositionDelta, *,
             "UPDATE open_positions SET qty=?, entry_usd=?, updated_ts=? "
             "WHERE user_id=? AND chain=? AND account=? AND address=?",
             (remaining, new_entry, ts, uid, delta.chain, acct, delta.address))
+        _event("changed", uid, delta, acct, qty=remaining, usd=delta.proceeds_usd, ts=ts,
+               reason=delta.close_reason)
     except Exception:
         logger.debug("open-position write skipped (fail-open)", exc_info=True)
+
+
+def _event(kind: str, uid: str, delta: PositionDelta, acct: str, *, qty: float,
+           usd: Optional[float], ts: float, reason: str = "") -> None:
+    """086 W1: one position event AFTER the write committed (never raises)."""
+    from core import position_events
+    position_events.emit(kind, user_id=uid, chain=delta.chain, account=acct,
+                         address=delta.address, symbol=delta.symbol, qty=qty, usd=usd,
+                         reason=reason, ts=ts)
+
+
+def _status_after_buy(row) -> str:
+    """W0: a buy never lifts a quarantine or a write-off; 086 W0: it does
+    reopen a dust row (the holding is no longer dust)."""
+    status = (row["status"] if row else STATUS_OPEN) or STATUS_OPEN
+    return STATUS_OPEN if status == STATUS_DUST else status
 
 
 def _book_realized(path: str, uid: str, delta: PositionDelta, acct: str, *,
@@ -574,17 +691,19 @@ def _book_realized(path: str, uid: str, delta: PositionDelta, acct: str, *,
     execute_retry(
         path,
         "INSERT INTO position_realized (user_id, chain, account, address, symbol, "
-        "realized_usd, known_legs, unknown_legs, sold_qty, updated_ts) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "realized_usd, known_legs, unknown_legs, sold_qty, updated_ts, close_reason) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(user_id, chain, account, address) DO UPDATE SET "
         "realized_usd = realized_usd + excluded.realized_usd, "
         "known_legs = known_legs + excluded.known_legs, "
         "unknown_legs = unknown_legs + excluded.unknown_legs, "
         "sold_qty = sold_qty + excluded.sold_qty, "
         "symbol = COALESCE(excluded.symbol, symbol), "
+        "close_reason = excluded.close_reason, "
         "updated_ts = excluded.updated_ts",
         (uid, delta.chain, acct, delta.address, delta.symbol, pnl,
-         1 if known else 0, 0 if known else 1, sold, ts))
+         1 if known else 0, 0 if known else 1, sold, ts,
+         str(delta.close_reason or "")[:64]))
 
 
 def apply_deltas(user_id: str, deltas: List[PositionDelta], *,
@@ -676,9 +795,14 @@ def entries_for(user_id: str, *, data_dir: Optional[str] = None,
 
 def positions_for(user_id: str, *, chain: Optional[str] = None,
                   account: str = TREASURY_ACCOUNT,
-                  db_path: Optional[str] = None) -> List[PositionEntry]:
+                  db_path: Optional[str] = None,
+                  statuses=ACTIVE_STATUSES) -> List[PositionEntry]:
     """071 W3: every tracked row of one holder, chain KEPT (``entries_for``
     keys by address and so folds two chains' rows of one address together).
+
+    086 W0: only rows whose status is in ``statuses`` — by default the rows
+    still in play (:data:`ACTIVE_STATUSES`: open, quarantined); a written-off,
+    retired or dust row is asked for explicitly (``statuses=STATUSES``).
 
     Read-only; never creates the store. ⚠️ STRICT: an existing store that
     cannot be read RAISES — the ``positions`` verb must say "I could not read
@@ -701,7 +825,8 @@ def positions_for(user_id: str, *, chain: Optional[str] = None,
         args += (str(chain).strip().lower(),)
     rows = execute_retry(path, sql + " ORDER BY chain, entry_ts ASC", args,
                          fetch="all") or []
-    return [_entry_from_row(r) for r in rows]
+    wanted = set(statuses or ())
+    return [e for e in (_entry_from_row(r) for r in rows) if e.status in wanted]
 
 
 def realized_for(user_id: str, *, chain: Optional[str] = None,
@@ -723,8 +848,12 @@ def realized_for(user_id: str, *, chain: Optional[str] = None,
         (), fetch="one")
     if not have:
         return []  # written before 071 W3: no dispose was ever booked here
+    _ensure_readable(path)  # 086 W6: adds close_reason in place when it can
+    cols = [r["name"] for r in execute_retry(
+        path, "PRAGMA table_info(position_realized)", (), fetch="all") or []]
+    reason = "close_reason" if "close_reason" in cols else "'' AS close_reason"
     sql = ("SELECT chain, account, address, symbol, realized_usd, known_legs, "
-           "unknown_legs, sold_qty, updated_ts FROM position_realized "
+           f"unknown_legs, sold_qty, updated_ts, {reason} FROM position_realized "
            "WHERE user_id=? AND account=?")
     args: tuple = (uid, _account_key(account))
     if chain:
@@ -736,7 +865,8 @@ def realized_for(user_id: str, *, chain: Optional[str] = None,
         chain=r["chain"], address=r["address"], symbol=r["symbol"], account=r["account"],
         realized_usd=float(r["realized_usd"] or 0.0), known_legs=int(r["known_legs"] or 0),
         unknown_legs=int(r["unknown_legs"] or 0), sold_qty=float(r["sold_qty"] or 0.0),
-        updated_ts=float(r["updated_ts"])) for r in rows]
+        updated_ts=float(r["updated_ts"]),
+        close_reason=str(r["close_reason"] or "")) for r in rows]
 
 
 def observe_price(user_id: str, chain: str, address: str, price_usd: float, *,
@@ -802,6 +932,17 @@ def set_status(user_id: str, chain: str, address: str, status: str, *,
         "WHERE user_id=? AND lower(chain)=? AND account=? AND address=? AND status<>?",
         (status, str(reason or "")[:300], ts, uid, str(chain or "").strip().lower(),
          _account_key(account), _norm(address), status))
+    if changed:
+        # 086 W1: written_off / dust / retired keep their name; any other
+        # status keeps the row active (quarantined, re-opened) = changed.
+        from core import position_events as pe
+        pos = get_position(uid, str(chain or "").strip().lower(), address, db_path=path,
+                           account=account)
+        pe.emit(status if status in (pe.WRITTEN_OFF, pe.DUST, pe.RETIRED) else pe.CHANGED,
+                user_id=uid, chain=pos.chain if pos else str(chain or ""),
+                account=_account_key(account), address=_norm(address),
+                symbol=pos.symbol if pos else None, qty=pos.qty if pos else 0.0,
+                reason=str(reason or ""), ts=ts)
     return bool(changed)
 
 
@@ -834,4 +975,8 @@ def seed_inherited(user_id: str, *, chain: str, account: str, address: str, symb
         "entry_ts, updated_ts, origin, qty_source) "
         "VALUES (?,?,?,?,?,?,NULL,?,?,'inherited','inherited')",
         (uid, chain, acct, _norm(address), symbol, float(qty), ts, ts))
+    from core import position_events
+    position_events.emit(position_events.OPENED, user_id=uid, chain=chain, account=acct,
+                         address=_norm(address), symbol=symbol, qty=float(qty),
+                         reason="inherited", ts=ts)
     return True

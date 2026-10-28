@@ -380,6 +380,28 @@ def test_book_handler_renders_a_clean_book(monkeypatch):
     assert "The ledger and the chains agree." in ctx.text
 
 
+def test_086_book_retire_reaches_the_shared_retire_handler(monkeypatch):
+    """086 W0: `/book retire <chain> <address> [go]` on the REPL calls the SAME
+    function Telegram calls; the book read is not run."""
+    import asyncio
+
+    import cli.ui.commands.h_inbox as mod
+    import tools.defi.book as book_mod
+    seen = {}
+
+    async def fake(user_id, data_dir, args, **kw):
+        seen["args"] = list(args)
+        return "retire preview"
+
+    async def no_read(*a, **k):
+        raise AssertionError("the book read must not run for a retire")
+    monkeypatch.setattr("tools.defi.retire.book_retire_reply", fake)
+    monkeypatch.setattr(book_mod, "read_book", no_read)
+    ctx = Ctx(args=["retire", "base", "0xabc", "go"])
+    asyncio.run(mod.h_book(ctx))
+    assert seen["args"] == ["base", "0xabc", "go"] and "retire preview" in ctx.text
+
+
 # --- registration ------------------------------------------------------------ #
 
 def test_both_verbs_are_registered_in_their_groups():

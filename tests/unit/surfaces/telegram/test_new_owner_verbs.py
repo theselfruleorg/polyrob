@@ -144,7 +144,7 @@ async def test_nft_transfer_is_a_dry_run_until_go(monkeypatch):
 @pytest.mark.asyncio
 async def test_nft_info_needs_a_whole_token_id():
     from surfaces.telegram.nft_ops import nft_reply
-    assert "whole number" in await nft_reply("rob", ["info", "0xc", "seven"])
+    assert "whole number" in await nft_reply("rob", ["info", "0xc", "seven", "on", "base"])
 
 
 @pytest.mark.asyncio
@@ -256,7 +256,7 @@ async def test_identity_register_refuses_when_one_already_exists(tmp_path, monke
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (42, None))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["register", "go"])
+    out = await identity_reply("rob", str(tmp_path), ["register", "on", "base", "go"])
     assert "already registered as agentId" in out and "42" in out
     assert not called, "a second registration must never reach the rail"
 
@@ -276,7 +276,7 @@ async def test_identity_register_refuses_when_it_cannot_tell(tmp_path, monkeypat
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (None, "record unreadable"))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["register", "go"])
+    out = await identity_reply("rob", str(tmp_path), ["register", "on", "base", "go"])
     assert "I will not register" in out
     assert not called
 
@@ -294,7 +294,7 @@ async def test_identity_register_is_a_dry_run_until_go(tmp_path, monkeypatch):
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (None, None))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["register"])
+    out = await identity_reply("rob", str(tmp_path), ["register", "on", "base"])
     assert seen["dry_run"] is True
     assert "Add `go` to mint it" in out and "Permanent" in out
 
@@ -304,7 +304,7 @@ async def test_set_uri_without_a_registration_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (None, None))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["set-uri"])
+    out = await identity_reply("rob", str(tmp_path), ["set-uri", "on", "base"])
     assert "no registration on record" in out
 
 

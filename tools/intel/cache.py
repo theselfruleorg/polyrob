@@ -7,6 +7,10 @@ Data classes and their lifetimes:
 * ``screen``    — 60 s. One GoPlus answer serves ``screen`` AND ``holders``
   for the same token (R8: it was fetched twice per ``token_info``).
 * ``immutable`` — forever (decimals, a deployed contract's code).
+* ``discovery`` — 45 s. One indexer page (new/trending pools, a token's
+  pools) serves every read in a step: GeckoTerminal's free tier refuses a
+  burst of about four calls (429, measured 2026-10-23), and six discovery
+  asks on three chains in one step was the 2026-10-12 empty-hunt burst.
 
 The clock is injectable so tests never sleep. Only ANSWERS are cached: a
 caller must not put a failure in, because a cached failure is an outage that
@@ -18,7 +22,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Hashable, Optional, Tuple
 
-TTL_SEC = {"price": 20.0, "screen": 60.0, "immutable": None}
+TTL_SEC = {"price": 20.0, "screen": 60.0, "immutable": None, "discovery": 45.0}
 
 _MISSING = object()
 

@@ -1,10 +1,10 @@
 """Tokens THIS instance launched or deployed — the ``own_launch`` trust source.
 
-On 2026-09-25 the 6-hourly PNL buyback bought an airdropped look-alike, and from
-then on the identity gate refused the REAL PNL every cycle: the wallet held a
-tracked "PNL" at another address, and the only way to say which one was real was
-an owner CLI pin on the server. But the real PNL is the instance's OWN Pons
-launch — the chain already proves it (the factory records our wallet as its
+On 2026-09-25 a 6-hourly recurring swap job bought an airdropped look-alike, and
+from then on the identity gate refused the REAL token every cycle: the wallet held
+a tracked token of the same symbol at another address, and the only way to say
+which one was real was an owner CLI pin on the server. But the real token was the
+instance's OWN launchpad launch — the chain already proves it (the factory records our wallet as its
 deployer), and nothing fed that proof into ``tokens.get_token_identity``.
 
 This module is that proof, as a small store beside ``token_pins.db``:

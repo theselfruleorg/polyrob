@@ -66,6 +66,13 @@ KIND_BUILDER = "builder"
 #: the owner seat's own line (``/goal new …``, ``/job new …``); Confirm runs it
 #: on the seat, which writes the row with the owner's grant.
 KIND_JOB = "job"
+#: 093 D1: a setting change the agent proposed on an owner turn — the owner
+#: seat's own line (``/mcp add …``, ``/config set …``, a non-money grant). It
+#: behaves exactly like a job card: Confirm runs the stored line on the seat.
+#: The shapes are decided in ``core.setting_proposals``.
+KIND_SETTING = "setting"
+#: The kinds whose Confirm runs the stored seat line itself (no `go`).
+LINE_KINDS = frozenset({KIND_JOB, KIND_SETTING})
 
 ORIGIN_SYSTEM = "system"
 ORIGIN_AGENT = "agent"
@@ -145,6 +152,8 @@ _PROPOSAL_SUBCOMMANDS = {
 JOB_CARD_SUBCOMMANDS = {
     "/goal": frozenset({"new", "grant"}),
     "/job": frozenset({"new", "edit"}),
+    # 086 W5: the trading mandate's intake, its breaker release, its close-all.
+    "/trade": frozenset({"start", "release", "stop"}),
 }
 #: The most words one job card line holds (a task is prose).
 MAX_JOB_WORDS = 400
@@ -237,7 +246,7 @@ def card_actions(card: Card) -> list:
         return [Action("Confirm", card_token(cid, "ok"), "primary"),
                 Action("Refresh", card_token(cid, "re")),
                 Action("Cancel", card_token(cid, "no"), "danger")]
-    if card.kind == KIND_JOB:
+    if card.kind in LINE_KINDS:
         return [Action("Confirm", card_token(cid, "ok"), "primary"),
                 Action("Dismiss", card_token(cid, "no"), "danger")]
     if card.kind == KIND_PROPOSAL:
@@ -284,7 +293,7 @@ def render_text(card: Card) -> str:
         lines.append("")
         for i, opt in enumerate(card.options, start=1):
             lines.append(f"  {i}. {opt}")
-    if card.kind in (KIND_QUOTE, KIND_PROPOSAL, KIND_JOB) and card.line:
+    if card.kind in (KIND_QUOTE, KIND_PROPOSAL, KIND_JOB, KIND_SETTING) and card.line:
         lines.append("")
         lines.append(f"Command: {card.confirm_line if card.kind == KIND_QUOTE else card.line}")
     lines.append("")
@@ -295,7 +304,7 @@ def render_text(card: Card) -> str:
             lines.append(f"Confirm: {card_token(cid, 'ok')}   Refresh: {card_token(cid, 're')}"
                          f"   Cancel: {card_token(cid, 'no')}")
             lines.append(f"(the quote can be confirmed for {mins} min, once)")
-        elif card.kind == KIND_JOB:
+        elif card.kind in LINE_KINDS:
             lines.append(f"Confirm: {card_token(cid, 'ok')}   Dismiss: {card_token(cid, 'no')}")
             lines.append("(Confirm runs the command above as if you typed it — nothing is "
                          "written before)")
@@ -1005,7 +1014,8 @@ def card_words(text: Any) -> List[str]:
 
 
 def job_card(user_id: str, words: List[str], *, title: str, body: str = "",
-             session_id: Optional[str] = None, st: Optional[CardStore] = None) -> Card:
+             session_id: Optional[str] = None, st: Optional[CardStore] = None,
+             origin: str = ORIGIN_AGENT) -> Card:
     """085 W3 (D3): the agent's standing money work as ONE owner decision.
 
     ``words`` is the owner seat's own line (``/goal new …``, ``/goal grant <id> …``,
@@ -1017,14 +1027,17 @@ def job_card(user_id: str, words: List[str], *, title: str, body: str = "",
     verb = words[0].lower() if words else ""
     shape = JOB_CARD_SUBCOMMANDS.get(verb)
     if shape is None or len(words) < 3 or words[1].lower() not in shape:
-        raise ValueError("a job card carries only /goal new|grant or /job new|edit")
+        raise ValueError("a job card carries only /goal new|grant, /job new|edit or "
+                         "/trade start|release|stop")
     if verb == "/job" and words[1].lower() == "edit" and (
             len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a job card edits a job only as /job edit <id> grant …")
     args = words[1:]
     if len(args) > MAX_JOB_WORDS or not _valid_args(args):
         raise ValueError("the line is too long or has a word a command cannot carry")
-    return _new(user_id, KIND_JOB, ORIGIN_AGENT, title, body=body, verb=verb, args=args,
+    if origin not in (ORIGIN_AGENT, ORIGIN_SYSTEM):
+        raise ValueError(f"unknown card origin {origin!r}")
+    return _new(user_id, KIND_JOB, origin, title, body=body, verb=verb, args=args,
                 session_id=session_id, ttl=PROPOSAL_TTL_S, st=st)
 
 
@@ -1091,6 +1104,39 @@ class Press:
     pick: Optional[int] = None
 
 
+#: 093 D1: the seat lines a SETTING card may carry (the structural guard; the
+#: policy — which key, which tool — is ``core.setting_proposals.classify``).
+SETTING_CARD_SUBCOMMANDS = {
+    "/mcp": frozenset({"add"}),
+    "/config": frozenset({"set"}),
+    "/goal": frozenset({"grant"}),
+    "/job": frozenset({"edit"}),
+}
+MAX_SETTING_WORDS = 40
+
+
+def setting_card(user_id: str, words: List[str], *, title: str, body: str = "",
+                 session_id: Optional[str] = None, group_id: Optional[str] = None,
+                 st: Optional[CardStore] = None) -> Card:
+    """093 D1: one proposed setting change as ONE owner decision. ``words`` is
+    the owner seat's own line; Confirm runs it on the seat exactly as if the
+    owner typed it (the seat's owner gate, room refusal and the write oracle run
+    again). Raises ValueError on any other shape."""
+    words = [str(w) for w in (words or []) if str(w).strip()]
+    verb = words[0].lower() if words else ""
+    shape = SETTING_CARD_SUBCOMMANDS.get(verb)
+    if shape is None or len(words) < 3 or words[1].lower() not in shape:
+        raise ValueError("a setting card carries only /mcp add, /config set, "
+                         "/goal grant or /job edit <id> grant")
+    if verb == "/job" and (len(words) < 5 or words[3].lower() != "grant"):
+        raise ValueError("a setting card edits a job only as /job edit <id> grant …")
+    args = words[1:]
+    if len(args) > MAX_SETTING_WORDS or not _valid_args(args) or executes(args):
+        raise ValueError("the line is too long or has a word a command cannot carry")
+    return _new(user_id, KIND_SETTING, ORIGIN_AGENT, title, body=body, verb=verb, args=args,
+                session_id=session_id, ttl=PROPOSAL_TTL_S, st=st, group_id=group_id)
+
+
 _NO_CARD = "No such card — it may belong to another chat or be gone. See /cards."
 
 
@@ -1125,14 +1171,14 @@ def press(card_id: str, act: str, user_id: str, *,
             _notify(done)
             return Press(reply=_STATE_WORDS[S_CANCELLED], card=done)
         return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
-    if card.kind in (KIND_QUOTE, KIND_JOB) and act == "ok":
+    if (card.kind == KIND_QUOTE or card.kind in LINE_KINDS) and act == "ok":
         done = st.transition(card_id, frozenset({S_OPEN}), S_CONFIRMED)
         if not done:
             return Press(reply="That card was decided a moment ago — nothing was "
                                "run twice.", card=st.get(card_id))
         _notify(done)
         # A job card's line is the seat's own write verb: no `go` exists for it.
-        return Press(run=done.line if done.kind == KIND_JOB else done.confirm_line,
+        return Press(run=done.line if done.kind in LINE_KINDS else done.confirm_line,
                      card=done)
     if card.kind in (KIND_QUOTE, KIND_PROPOSAL) and act == "re":
         done = st.transition(card_id, frozenset({S_OPEN}), S_REPLACED)
@@ -1176,7 +1222,7 @@ def tap_line(text: str, user_id: str, *, st: Optional[CardStore] = None) -> str:
             return text
         if act == "ok" and card.kind == KIND_QUOTE:
             return card.confirm_line
-        if act == "ok" and card.kind == KIND_JOB:
+        if act == "ok" and card.kind in LINE_KINDS:
             return card.line
         if act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL):
             return card.refresh_line

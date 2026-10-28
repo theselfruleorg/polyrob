@@ -42,5 +42,22 @@ def _register_money_hooks() -> None:
     hooks.register_submission_journal(_submission_journal)
     hooks.register_position_book(_position_book)
 
+    def _position_reader(user_id, chain, token, *, db_path=None):
+        # 086 W2: the book as plain data for the kernel's mandate step. STRICT:
+        # an unreadable book raises (the step fails closed); an absent one is [].
+        from core.open_positions import positions_for, realized_for
+        from core.wallet.addresses import same_address
+        rows = [{"entry_usd": r.entry_usd, "entry_ts": r.entry_ts, "origin": r.origin,
+                 "status": r.status, "qty": r.qty, "address": r.address,
+                 "is_token": bool(token) and same_address(r.address, token)}
+                for r in positions_for(user_id, chain=chain, db_path=db_path)]
+        sold = None
+        if token:
+            sold = max((r.updated_ts for r in realized_for(user_id, chain=chain, db_path=db_path)
+                        if same_address(r.address, token)), default=None)
+        return {"rows": rows, "token_sold_at": sold}
+
+    hooks.register_position_reader(_position_reader)
+
 
 _register_money_hooks()

@@ -63,14 +63,12 @@ def test_models_list(client_and_agent):
     assert any("/" in i for i in ids)  # provider/model slugs listed
 
 
-def test_models_list_excludes_non_initializable(client_and_agent):
-    """Q6 (UX assessment 2026-08-07): /v1/models must not advertise a model
-    that cannot run — deepseek's direct client is disabled."""
+def test_models_list_advertises_deepseek_direct(client_and_agent):
+    """DeepSeek's direct client is native (2026-10-27), so /v1/models lists it."""
     client, _ = client_and_agent
     resp = client.get("/v1/models")
     ids = [m["id"] for m in resp.json()["data"]]
-    assert ids  # still lists the initializable providers
-    assert not any(i.startswith("deepseek/") for i in ids)
+    assert "deepseek/deepseek-flash" in ids
 
 
 def test_models_list_includes_user_providers(client_and_agent, tmp_path, monkeypatch):

@@ -173,7 +173,7 @@ async def launch_reply(user_id: Optional[str], args: List[str]) -> str:
 # ---------------------------------------------------------------------------
 
 async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
-    """`/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals n] [salt <hex>] [go]`.
+    """`/deploy <SYMBOL> <supply> <name…> on <chain> [decimals n] [salt <hex>] [go]`.
 
     An ordinary ERC-20 with no launchpad attached: fixed supply, minted to the
     wallet, no mint function and no owner. Deploying a token does NOT make it
@@ -182,9 +182,9 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
     if not user_id:
         return "Only the owner can deploy a token."
     if len(args) < 2:
-        return ("Usage: /deploy <SYMBOL> <supply> <name…> [on <chain>] "
+        return ("Usage: /deploy <SYMBOL> <supply> <name…> on <chain> "
                 "[decimals <n>] [uri <url>] [go]\n"
-                "e.g. /deploy ROB 1000000000 Rob Coin              — quote only\n"
+                "e.g. /deploy ROB 1000000000 Rob Coin on base      — quote only\n"
                 "     /deploy ROB 1e9 Rob Coin on solana uri https://x/y.json\n"
                 "\n"
                 "`decimals` defaults to 18 on an EVM chain and 9 on Solana — "
@@ -205,7 +205,7 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
         execute = True
         tokens.pop()
 
-    chain = "base"
+    chain = None
     for i, word in enumerate(tokens):
         if word.lower() == "on" and i + 1 < len(tokens):
             chain = tokens[i + 1]
@@ -254,7 +254,11 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
                 "reach an address prefix, so naming one too is ambiguous.")
 
     if len(tokens) < 2:
-        return "Give me a symbol and a supply: /deploy <SYMBOL> <supply> <name…>"
+        return "Give me a symbol and a supply: /deploy <SYMBOL> <supply> <name…> on <chain>"
+    if not chain:
+        from core.wallet import chains
+        return (f"Name the network: /deploy … on <network>. There is no default network. "
+                f"Networks: {', '.join(chains.names())}.")
     symbol = tokens[0]
     supply = _exact_positive(tokens[1])
     if supply is None:
@@ -310,7 +314,7 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
 
     hint = None if execute else (
         f"/deploy {symbol} {_supply_text(supply)} {name}"
-        + (f" on {chain}" if chain != "base" else "")
+        + f" on {chain}"
         + (f" decimals {decimals}" if decimals is not None else "")
         + (f" vanity {vanity}" if vanity else "")
         + (f" salt {salt}" if salt else "") + " go")

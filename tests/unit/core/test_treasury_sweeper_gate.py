@@ -58,7 +58,7 @@ class _StubContainer:
     def __init__(self, config):
         self.config = config
         self.registered = {}
-        self._services = {"database_manager": _StubDBManager(), "alchemy": None}
+        self._services = {"database_manager": _StubDBManager()}
 
     def get_service(self, name):
         return self._services.get(name)

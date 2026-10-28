@@ -187,6 +187,7 @@ class RunLoopMixin:
 			# I-3 / H3 (D1): bounded verify-before-done nudge counter — reset
 			# per run() call, same lifetime as n_steps/max_steps above.
 			self._verify_nudge_count = 0
+			self._retry_wall_steps = 0  # 093 E3: wall-only steps in this run/turn
 
 			# Session-scoped setup (session-start telemetry + hierarchical memory)
 			# runs ONCE per session. Conversational turns (Conversation.respond with
@@ -487,6 +488,22 @@ class RunLoopMixin:
 					# entire step budget in this exact alternation, never recovering).
 					# A planning turn is a bounded allowance, not genuine progress — it must
 					# not count as the "successful step" that clears the failure counter.
+					# The retry wall already declared this operation dead; asking again is a
+					# failed step, so a model stuck re-asking stops after max_failures of them
+					# instead of at the step limit (prod 2026-10-26: 150 identical calls).
+					try:
+						from agents.task.agent.core.conversational_exit import is_retry_wall_only_step
+						if is_retry_wall_only_step(self._last_result):
+							self.state.consecutive_failures += 1
+							# 093 E3: the second wall-only step of a turn ends it — the
+							# wall text already named the last real error and the stop;
+							# prod 2026-10-28 hit the wall ~35 times at 2 s intervals.
+							self._retry_wall_steps = getattr(self, '_retry_wall_steps', 0) + 1
+							if self._retry_wall_steps >= 2:
+								self.state.consecutive_failures = max(
+									self.state.consecutive_failures, self.max_failures)
+					except Exception:
+						self.logger.debug('retry-wall failure count skipped (fail-open)', exc_info=True)
 					if (self._last_result and not is_planning_turn_only_step(self._last_result)
 							and not any(r.error for r in self._last_result)):
 						if self.state.consecutive_failures > 0:
@@ -657,6 +674,19 @@ class RunLoopMixin:
 						)
 						set_stop(self, StopReason.CONVERSATIONAL_EXIT)
 						break
+					# The extra step the allowance grants: tell the model the reply landed,
+					# so it finishes (done) or works instead of repeating the reply.
+					try:
+						from agents.task.agent.core.conversational_exit import (
+							REPLY_DELIVERED_NOTE, should_note_reply_delivered)
+						if should_note_reply_delivered(
+							consecutive_reply_steps, getattr(self, '_is_sub_agent', False),
+							is_autonomous=_is_autonomous_run):
+							self.message_manager.inject_runtime_guidance(
+								REPLY_DELIVERED_NOTE, origin=MessageOrigin.GUIDANCE,
+								source='reply_delivered')
+					except Exception:
+						self.logger.debug('reply-delivered note skipped (fail-open)', exc_info=True)
 				else:
 					# 083 WS-1: the loop ran out of steps (no break) — unless the last step was stopped.
 					set_stop(self, StopReason.CONTROL if getattr(self.state, "stopped", False) else StopReason.MAX_STEPS)

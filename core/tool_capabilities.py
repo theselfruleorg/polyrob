@@ -137,8 +137,6 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
                       tier="disabled",
                       label="KB_ENABLED",
                       remedy="set_flag")),
-    "alchemy": ToolRow(cli="incompatible"),            # read-only chain data
-    "collabland": ToolRow(cli="incompatible"),
     # Read-only token sight (proposal 023 T0+T1). No signer, no broadcast, so
     # not `money`. The one own-funds verb (portfolio) is gated by NAME in
     # correspondent_gate — holdings are pre-drain reconnaissance — while the
@@ -153,6 +151,12 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
                       label="session tool_ids",
                       remedy="load_tool")),
     "web_fetch": ToolRow({"high_impact"},  # outbound fetch (SSRF / exfil)
+        untrusted_output=True, cli="static"),
+    # 093 F1: an outbound WRITE (agent-controlled body to any public host) —
+    # web_fetch's SSRF path, no ambient credentials. An autonomous run asks the
+    # owner once per new domain (tools/http_request/tool.py, 093 D2).
+    # delegate_blocked: the tool refuses a sub-agent; the catalog says so too.
+    "http_request": ToolRow({"high_impact", "delegate_blocked", "writes_network"},
         untrusted_output=True, cli="static"),
     # send_email — outbound comms
     "email": ToolRow({"high_impact", "shared_identity", "writes_comms"},
@@ -220,7 +224,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
         untrusted_output=True, cli="static",
         gate=ToolGate(flag="MCP_ENABLED",
                       tier="disabled",
-                      label="MCP_ENABLED + config/mcp_config.json",
+                      label="MCP_ENABLED + an MCP server",
                       remedy="mcp_servers")),
     "hf_deploy": ToolRow({"high_impact", "delegate_blocked", "shared_identity", "writes_public"},
         cli="optional", cli_registrar="tools.hf_deploy:register_hf_deploy_tool",
@@ -264,6 +268,10 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # refuses an unclassified tool — so the row lands in core BEFORE the package.
     # Every write goes through tx_guard with `via_account`.
     "agent_nft": frozenset({"money", "high_impact", "delegate_blocked"}),
+    # 090: classified off-chain signatures with the operational key. MONEY because the
+    # key is the treasury's (a signature can be authority, so it is explicit-grant-only,
+    # never load_tool); only a class-A login/challenge text is signable today.
+    "wallet_sign": frozenset({"money", "high_impact", "delegate_blocked"}),
     # Trading venues (hyperliquid, polymarket and their *_data read tools): the
     # markets pack classifies them in its pack.toml (067 P4).
 }
@@ -410,8 +418,6 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     "launchpad": ("network.write", "wallet.spend"),
     "dapp_browser": ("network.write", "wallet.spend"),
     "email": ("network.write", "email.send"),
-    "collabland": ("network.read",),
-    "alchemy": ("network.read",),
     "mcp": ("mcp.call", "network.read"),
     # -- F44/A9 (2026-09-14): the 19 ids that were classified in
     # TOOL_CAPABILITIES but had no TOOL_PERMISSIONS row, so they were invisible
@@ -434,6 +440,7 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     "x402_invoice": ("network.write", "memory.read", "memory.write"),
     "defi_trade": ("network.write", "wallet.spend"),
     "agent_nft": ("network.write", "wallet.spend"),
+    "wallet_sign": ("network.write", "wallet.spend"),
     # high_impact-only -> medium (no external-write permission on these rows;
     # `network.read` mirrors the existing browser_manager/mcp/anysite/perplexity
     # precedent of tagging outward reach without the definitive write token):
@@ -447,6 +454,8 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     "tool_manage": ("mcp.call",),
     "worker_manage": ("memory.read", "memory.write"),
     "web_fetch": ("network.read",),
+    # 093 F1: a write egress -> high risk.
+    "http_request": ("network.write", "network.read"),
     # empty capability set -> low (no high_impact, no external-write permission):
     "knowledge": ("fs.read", "memory.read", "memory.write"),
     "defi_data": ("network.read",),

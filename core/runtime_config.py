@@ -57,7 +57,7 @@ def resolve_runtime_config(
         )
     # Canonical preference order, from the one Seam-1 oracle — restricted to
     # *initializable* providers so auto-select never emits a provider the LLM
-    # manager can't bootstrap (e.g. deepseek → hard-crash). An explicit --provider
+    # manager can't bootstrap (a declared provider with no client → hard-crash). An explicit --provider
     # or operator pin (below) stays exempt and reaches the manager to error honestly.
     if available_keys is not None:
         # Name-based presence: callers pass a set of env-var NAMES (values already

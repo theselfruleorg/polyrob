@@ -1,11 +1,12 @@
 """A run's declared money target (068 G2).
 
-The 2026-09-25 buyback carried its target in PROSE: the cron text said "PNL",
+The 2026-09-25 recurring swap job carried its target in PROSE: the cron text
+said only the symbol,
 three rewrites had dropped the address, and the model filled the gap from the
 first matching line it read. A goal or cron payload may now declare the target
 as DATA:
 
-    payload["target_token"] = {"chain": "robinhood", "address": "0xbBa6…2c7e"}
+    payload["target_token"] = {"chain": "robinhood", "address": "0x…"}
 
 It is normalized when the job is created and again when the run starts, rides
 the session (``SessionRequest.money_target`` → ``orchestrator._money_target`` →

@@ -75,7 +75,7 @@ def test_legacy_session_cannot_resume_as_unrestricted_billed_compute(billed, inf
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('tier', ['free', 'holder', 'x402', None])
+@pytest.mark.parametrize('tier', ['free', 'free_access', 'x402', None])
 async def test_non_http_legacy_session_cannot_skip_reservations(tier):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock

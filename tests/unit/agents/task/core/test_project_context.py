@@ -692,9 +692,6 @@ class TestRetrievalOrdering:
             def convert_messages_for_non_function_calling_models(self, msgs):
                 return msgs
 
-            def merge_successive_messages(self, msgs, cls):
-                return msgs
-
             @property
             def provider_name(self):
                 return "test"

@@ -30,5 +30,5 @@ def test_normalised_callers_use_the_presets():
 def test_tx_guard_turn_origin_asks_the_kernel():
     text = (REPO / "core/wallet/tx_guard_steps/turn.py").read_text()
     body = text[text.index("def step_2_turn_origin"):text.index("def step_2b_token_bound_account")]
-    assert "authorize_spend(" in body and "SpendIntent.turn_origin()" in body
+    assert "authorize_spend(" in body and "SpendIntent.turn_origin(" in body
     assert "forged_fn(execution_context" not in body

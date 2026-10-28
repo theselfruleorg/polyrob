@@ -23,7 +23,7 @@
     // Load users
     async function loadUsers() {
         const tbody = document.getElementById('users-tbody');
-        tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading users</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading users</td></tr>';
 
         try {
             let endpoint;
@@ -52,7 +52,7 @@
             const users = await apiCall(endpoint);
 
             if (!users || users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No users found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No users found</td></tr>';
                 updatePagination(0);
                 return;
             }
@@ -66,8 +66,6 @@
                     h('td', null, h('span', { class: `tier tier-${user.tier}`, text: user.tier })),
                     h('td', null, h('span', { class: `role role-${user.role}`, text: user.role })),
                     h('td', { class: 'credits', text: formatCredits(user.balance) }),
-                    h('td', null, h('span', { class: 'token-count',
-                        text: `${user.den_token_count > 0 ? '\u2714' : '\u2718'} ${user.den_token_count || 0}` })),
                     h('td', { text: formatDate(user.created_at) }),
                     h('td', { class: 'actions' },
                         h('a', { class: 'btn-view', href: `/admin/users/${encodeURIComponent(user.user_id)}`, text: 'View' })));

@@ -50,7 +50,7 @@ from this list; never invent a verb that is not on it.
 - `/wallet` — Wallet addresses, network, and spend caps; set the no-ask ceiling or trust a token
 - `/invoices` — What I have billed and who owes me
 - `/settle` — Mark an invoice paid
-- `/trade` — Start a run that carries the money verb
+- `/trade` — Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop
 - `/bridge` — Move value between chains: ETH/native or USDC in; native, WETH or USDC out
 - `/launch` — Launch a token on the launchpad
 - `/deploy` — Deploy a fixed-supply token
@@ -76,7 +76,7 @@ from this list; never invent a verb that is not on it.
 - `/mode` — The effective autonomy posture and how to change it
 - `/dev` — Message the dev and ops loop directly (not inside a group)
 - `/restart` — Restart me once my current work is done (not inside a group)
-- `/update` — Update me to the latest release, then report back (not inside a group)
+- `/update` — Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet) (not inside a group)
 - `/autonomy` — My background loops and what they hold; switch them on or off (only in the terminal REPL)
 
 ## remember

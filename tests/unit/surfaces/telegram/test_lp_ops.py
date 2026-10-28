@@ -46,7 +46,7 @@ def test_cli_help_and_no_implicit_broadcast(monkeypatch):
         seen.append((uid, action, values))
         return SimpleNamespace(error=None, extracted_content='dry run')
     monkeypatch.setattr(L, 'dispatch', _dispatch)
-    result = runner.invoke(lp_cmd, ['collect', '42'])
+    result = runner.invoke(lp_cmd, ['collect', '42', '--chain', 'robinhood'])
     assert result.exit_code == 0, result.output
     assert seen[0][0] and seen[0][2]['dry_run'] is True
 

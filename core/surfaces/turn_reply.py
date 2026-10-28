@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 #: ``_message_router``.
 _TEXT_ATTR = "_reply_text_this_turn"
 
+#: Every text the turn has spoken, oldest first. ``_TEXT_ATTR`` keeps only the LAST
+#: one (the unbound delivery path wants "the" reply), so a short caption sent by the
+#: ``message`` tool overwrote the long ``send_message`` text and a re-send of that long
+#: text then passed ``is_repeat_reply`` (prod 2026-10-26 00:48 / 00:53: the owner got
+#: the reply twice). The repeat check reads THIS list.
+_TEXTS_ATTR = "_reply_texts_this_turn"
+_TEXTS_KEEP = 20
+
 
 def mark_reply_published(orchestrator, text: str = "") -> None:
     """Record what this turn said to the user.
@@ -43,6 +51,9 @@ def mark_reply_published(orchestrator, text: str = "") -> None:
     try:
         if isinstance(text, str) and text.strip():
             setattr(orchestrator, _TEXT_ATTR, text)
+            seen = list(getattr(orchestrator, _TEXTS_ATTR, None) or [])
+            seen.append(text)
+            setattr(orchestrator, _TEXTS_ATTR, seen[-_TEXTS_KEEP:])
     except Exception:
         logger.debug("turn_reply: reply-text write failed (fail-open)", exc_info=True)
     # 061: this latch is the ONE place every seat's reply passes, so it is where
@@ -82,17 +93,25 @@ def is_repeat_reply(orchestrator, text: str) -> bool:
     try:
         if not isinstance(text, str) or not text.strip():
             return False
-        prior = last_reply_text(orchestrator)
-        if prior is None:
-            return False
-        a, b = prior.strip(), text.strip()
-        if a == b:
-            return True
-        # 13:32:57 / 13:33:01 the same day: a re-send with a few words reworded
-        # reached the owner twice too. Long, near-identical text is the same message.
-        if min(len(a), len(b)) >= _NEAR_MIN_CHARS:
-            from difflib import SequenceMatcher
-            return SequenceMatcher(None, a, b).ratio() >= _NEAR_RATIO
+        priors = []
+        try:
+            priors = [t for t in (getattr(orchestrator, _TEXTS_ATTR, None) or []) if isinstance(t, str)]
+        except Exception:
+            priors = []
+        last = last_reply_text(orchestrator)
+        if last is not None and last not in priors:
+            priors.append(last)
+        b = text.strip()
+        for prior in priors:
+            a = prior.strip()
+            if a == b:
+                return True
+            # 13:32:57 / 13:33:01 the same day: a re-send with a few words reworded
+            # reached the owner twice too. Long, near-identical text is the same message.
+            if min(len(a), len(b)) >= _NEAR_MIN_CHARS:
+                from difflib import SequenceMatcher
+                if SequenceMatcher(None, a, b).ratio() >= _NEAR_RATIO:
+                    return True
         return False
     except Exception:
         return False
@@ -115,7 +134,8 @@ def reset_turn(orchestrator) -> None:
     if orchestrator is None:
         return
     try:
-        if hasattr(orchestrator, _TEXT_ATTR):
-            delattr(orchestrator, _TEXT_ATTR)
+        for attr in (_TEXT_ATTR, _TEXTS_ATTR):
+            if hasattr(orchestrator, attr):
+                delattr(orchestrator, attr)
     except Exception:
         logger.debug("turn_reply: reset failed (fail-open)", exc_info=True)

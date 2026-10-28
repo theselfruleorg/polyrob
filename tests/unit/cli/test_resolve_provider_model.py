@@ -112,12 +112,11 @@ def test_keyed_stored_default_still_wins_over_first_key(monkeypatch):
     assert model == "gpt-5"
 
 
-def test_deepseek_key_does_not_autoresolve(monkeypatch):
-    # A DEEPSEEK_API_KEY alone must NOT auto-resolve to provider=deepseek (disabled
-    # direct client → would hard-crash the manager). Falls to the none last resort.
+def test_deepseek_key_autoresolves(monkeypatch):
+    # A DEEPSEEK_API_KEY alone resolves to DeepSeek's own API (native since 2026-10-27).
     monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
     provider, _ = cs.resolve_provider_model(None, None, available_keys={"DEEPSEEK_API_KEY"})
-    assert provider is None
+    assert provider == "deepseek"
 
 
 def test_default_provider_env_pins_resolution(monkeypatch):

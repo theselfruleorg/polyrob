@@ -17,8 +17,8 @@ a read on a tool the capability table does not mark ``money`` or
 
 Pause window — ``payload.pause_windows``: a list of ``[start, end]`` pairs
 (epoch seconds, or ISO-8601 UTC). A tick inside a window is a $0
-``cron_run skipped/pause_window`` for ANY job kind — e.g. the 6-hourly buyback
-paused from T-1 h to 24 h after the mint window (090 R5, D45). A malformed
+``cron_run skipped/pause_window`` for ANY job kind — e.g. a 6-hourly swap job
+paused from T-1 h to 24 h after a mint window (090 R5, D45). A malformed
 window is refused when the job is scheduled or edited, never silently ignored.
 """
 from __future__ import annotations
@@ -165,15 +165,16 @@ def validate_read_verb(spec: Any) -> Dict[str, Any]:
     return out
 
 
-def normalize_alert(value: Any) -> Optional[Dict[str, Any]]:
-    """``{"field": "<metadata key, dot path>", "below": n, "above": n}`` or None.
+#: The string conditions of an alert (086 W3): a typed state field such as a
+#: position mark's ``barrier`` (``none`` · ``near`` · ``crossed`` · ``unknown``).
+_STR_OPS = ("equals", "not_equals")
+MAX_ALERTS = 8
 
-    071 §3.9: a watch fires on a threshold the OWNER set, read from the verb's
-    typed ``metadata`` — never from prose. At least one bound is required."""
-    if value is None:
-        return None
+
+def _one_alert(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
-        raise ReadJobError("read_verb.alert must be an object {field, below?, above?}")
+        raise ReadJobError("read_verb.alert must be an object {field, below?, above?, "
+                           "equals?, not_equals?} or a list of them")
     field = str(value.get("field") or "").strip()
     if not field:
         raise ReadJobError("read_verb.alert needs a field (a key of the verb's metadata)")
@@ -184,9 +185,34 @@ def normalize_alert(value: Any) -> Optional[Dict[str, Any]]:
                 out[bound] = float(value[bound])
             except (TypeError, ValueError) as exc:
                 raise ReadJobError(f"read_verb.alert.{bound} must be a number") from exc
+    for op in _STR_OPS:
+        if value.get(op) is not None:
+            if isinstance(value[op], (dict, list, tuple)):
+                raise ReadJobError(f"read_verb.alert.{op} must be one value")
+            out[op] = str(value[op])
     if len(out) == 1:
-        raise ReadJobError("read_verb.alert needs below and/or above")
+        raise ReadJobError("read_verb.alert needs below, above, equals and/or not_equals")
     return out
+
+
+def normalize_alert(value: Any):
+    """``{"field": "<metadata key, dot path>", "below": n, "above": n}`` or None.
+
+    071 §3.9: a watch fires on a threshold the OWNER set, read from the verb's
+    typed ``metadata`` — never from prose. At least one bound is required.
+
+    086 W3: also ``equals`` / ``not_equals`` (a string state, e.g.
+    ``{"field": "barrier", "not_equals": "none"}``), and a LIST of such
+    conditions — any one crossing alerts. A one-item list stays a list."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        if len(value) > MAX_ALERTS:
+            raise ReadJobError(f"at most {MAX_ALERTS} alert conditions per job")
+        return [_one_alert(v) for v in value]
+    return _one_alert(value)
 
 
 def _metadata_value(metadata: Any, path: str):
@@ -198,24 +224,45 @@ def _metadata_value(metadata: Any, path: str):
     return cur
 
 
-def alert_lines(alert: Optional[Dict[str, Any]], metadata: Any) -> List[str]:
-    """The ALERT lines a threshold produces. An unreadable value ALERTS — a
-    watch that cannot see its number must not read as "all quiet"."""
+def _alert_conditions(alert) -> List[Dict[str, Any]]:
     if not alert:
         return []
+    return list(alert) if isinstance(alert, (list, tuple)) else [alert]
+
+
+def _one_alert_lines(alert: Dict[str, Any], metadata: Any) -> List[str]:
     field = alert["field"]
     raw = _metadata_value(metadata, field)
+    out = []
+    if any(op in alert for op in _STR_OPS):
+        if raw is None:
+            return [f"ALERT: {field} is UNKNOWN — the watch could not read it."]
+        text = str(raw)
+        if "equals" in alert and text == alert["equals"]:
+            out.append(f"ALERT: {field} = {text}.")
+        if "not_equals" in alert and text != alert["not_equals"]:
+            out.append(f"ALERT: {field} = {text} (not {alert['not_equals']}).")
+        if not any(b in alert for b in ("below", "above")):
+            return out
     try:
         value = None if raw is None or isinstance(raw, bool) else float(raw)
     except (TypeError, ValueError):
         value = None
     if value is None:
-        return [f"ALERT: {field} is UNKNOWN — the watch could not read it (not zero)."]
-    out = []
+        return out + [f"ALERT: {field} is UNKNOWN — the watch could not read it (not zero)."]
     if "below" in alert and value < alert["below"]:
         out.append(f"ALERT: {field} = {value:,.6g} is below {alert['below']:,.6g}.")
     if "above" in alert and value > alert["above"]:
         out.append(f"ALERT: {field} = {value:,.6g} is above {alert['above']:,.6g}.")
+    return out
+
+
+def alert_lines(alert, metadata: Any) -> List[str]:
+    """The ALERT lines a threshold (or a list of them) produces. An unreadable
+    value ALERTS — a watch that cannot see its number must not read as "all quiet"."""
+    out: List[str] = []
+    for cond in _alert_conditions(alert):
+        out.extend(_one_alert_lines(cond, metadata))
     return out
 
 
@@ -293,7 +340,17 @@ IN FRONT of an LLM job:
         "move_pct": 5,             # optional, needs "field": run on a ≥ 5 % move
         "field": "price_usd",      # the metadata key move_pct watches
         "max_quiet_hours": 24,     # optional: run anyway after this long
+        "cancel_when": ["closed", "dust"],  # optional (086 W3): retire the job
     }
+
+086 W3: ``alert`` may be a LIST of conditions (any one wakes), a condition may
+compare a string state (``{"field": "barrier", "not_equals": "none"}``), and
+``cancel_when`` names metadata flags (``closed`` / ``dust``) that END the job:
+when the read is clean and one of them is ``true``, the runner cancels the job
+(``via="orphan"``) and runs no model — how an exit job retires itself once its
+position is gone. A verb param named ``mandate`` is filled from the job's own
+``payload.mandate`` (it wins over the params), so a mandate's numbers are read
+from the mandate, never copied into a job.
 
 The verb runs first ($0). The tick is a ``cron_run skipped/precheck_quiet``
 (no session, no model call) when the verb read cleanly AND nothing fired:
@@ -330,6 +387,15 @@ class PrecheckVerdict:
     context: str = ""
     #: the watched value this tick read (recorded as the baseline after a run)
     value: Optional[float] = None
+    #: 086 W3: the ``cancel_when`` flag that fired ("" = none) — the runner
+    #: cancels the job and runs no model.
+    cancel: str = ""
+
+
+#: The metadata flags a ``cancel_when`` may name (086 W3).
+CANCEL_WHEN = ("closed", "dust")
+#: The ``via`` (and the ``cron_run`` reason) of a job a ``cancel_when`` ended.
+ORPHAN_VIA = "orphan"
 
 
 def validate_precheck(spec: Any) -> Dict[str, Any]:
@@ -366,6 +432,13 @@ def validate_precheck(spec: Any) -> Dict[str, Any]:
         if not hours > 0:
             raise PrecheckError("precheck.max_quiet_hours must be above 0")
         out["max_quiet_hours"] = hours
+    if spec.get("cancel_when") is not None:
+        raw = spec["cancel_when"]
+        flags = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, (list, tuple)) \
+            else None
+        if not flags or any(str(f) not in CANCEL_WHEN for f in flags):
+            raise PrecheckError(f"precheck.cancel_when must name {' and/or '.join(CANCEL_WHEN)}")
+        out["cancel_when"] = list(dict.fromkeys(str(f) for f in flags))
     if "alert" not in out and "move_pct" not in out:
         raise PrecheckError("precheck needs alert {field, below?, above?} and/or "
                             "move_pct + field — otherwise nothing can ever say 'quiet'")
@@ -438,7 +511,16 @@ async def run_precheck(job: Any, *, data_dir: str, tool_factory=None) -> Optiona
         cls, model = _load(spec["verb"])
         tool = (tool_factory or cls)()
         action = _read_verbs()[spec["verb"]][2]
-        result = await getattr(tool, action)(model(**spec["params"]))
+        params = dict(spec["params"])
+        mandate = str(payload.get("mandate") or "").strip()
+        if mandate and "mandate" in getattr(model, "model_fields", {}):
+            params["mandate"] = mandate  # the job's own mandate wins
+        from core.exec_identity import reset_exec_identity, set_exec_identity
+        token = set_exec_identity(getattr(job, "user_id", "") or "", "")
+        try:
+            result = await getattr(tool, action)(model(**params))
+        finally:
+            reset_exec_identity(token)
     except Exception as exc:
         return PrecheckVerdict(False, "precheck_error", {"error": f"{type(exc).__name__}"})
     err = getattr(result, "error", None)
@@ -447,8 +529,13 @@ async def run_precheck(job: Any, *, data_dir: str, tool_factory=None) -> Optiona
         return PrecheckVerdict(False, "precheck_error", {"error": str(err)[:200]},
                                context=f"The pre-check read FAILED: {str(err)[:300]}")
     metadata = getattr(result, "metadata", None)
+    for flag in spec.get("cancel_when") or ():
+        if _metadata_value(metadata, flag) is True:
+            return PrecheckVerdict(False, ORPHAN_VIA, {"precheck": spec["verb"], "flag": flag},
+                                   text[:1500], None, cancel=flag)
     lines = alert_lines(spec.get("alert"), metadata)
-    watched = spec.get("field") or (spec.get("alert") or {}).get("field")
+    conds = _alert_conditions(spec.get("alert"))
+    watched = spec.get("field") or (conds[0]["field"] if conds else None)
     value = _value(metadata, watched) if watched else None
     ctx = ("\n".join(lines) + "\n\n" if lines else "") + text[:1500]
     if lines:

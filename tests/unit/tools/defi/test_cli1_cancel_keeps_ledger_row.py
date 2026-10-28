@@ -50,7 +50,7 @@ async def test_transfer_cancelled_during_receipt_still_records(monkeypatch, caps
                         lambda c, t: type("I", (), {"decimals": 6, "symbol": "USDC"})())
     tool, gate = t4._tool()
     tool._rail_factory = _BlockingRail
-    await _cancel_mid_receipt(tool.transfer(TransferParams(
+    await _cancel_mid_receipt(tool.transfer(TransferParams(chain="base",
         token=t4.USDC, to="0x" + "3" * 40, amount=1.0, max_spend_usd=2.0,
         dry_run=False)))
     assert len(gate.recorded) == 1, gate.recorded
@@ -67,7 +67,7 @@ async def test_transfer_cancelled_during_receipt_still_records(monkeypatch, caps
 async def test_run_guarded_cancelled_during_receipt_still_records(capsys):
     tool, gate = t4._tool()
     tool._rail_factory = _BlockingRail
-    await _cancel_mid_receipt(tool.approve_token(ApproveParams(
+    await _cancel_mid_receipt(tool.approve_token(ApproveParams(chain="base",
         token=t4.USDC, spender=t4.ROUTER, amount=1.0, max_spend_usd=2.0,
         dry_run=False)))
     assert len(gate.recorded) == 1, gate.recorded

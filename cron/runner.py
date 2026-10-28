@@ -136,7 +136,7 @@ _SKIPPED_RE = __import__("re").compile(r"^\s*(?:OUTCOME:\s*)?SKIP(?:PED)?\b")
 def declared_outcome(run: Any) -> tuple:
     """``(outcome, why)`` for a run that called done(): ``blocked`` when it
     declared BLOCKED, ``skipped`` when its record OPENS with SKIPPED, else
-    ``done`` (2026-10-13 review C-11 — 6 of 18 buyback cycles that were
+    ``done`` (2026-10-13 review C-11 — 6 of 18 recurring swap cycles that were
     blocked or skipped counted as plain success)."""
     if getattr(run, "blocked", False):
         return "blocked", (getattr(run, "blocked_need", None) or "declared BLOCKED")[:300]
@@ -211,8 +211,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
     """
     async def runner(job: CronJob) -> bool:
         payload = dict(job.payload or {})
-        # W9 (090 R5, D45): a per-job pause window — e.g. the buyback held from
-        # T-1 h to 24 h after the mint window. A $0 skip for every job kind.
+        # W9 (090 R5, D45): a per-job pause window — e.g. a recurring swap held
+        # from T-1 h to 24 h after a mint window. A $0 skip for every job kind.
         from cron.read_job import active_pause_window
         _window = active_pause_window(payload)
         if _window is not None:
@@ -345,6 +345,18 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         try:
             from cron.read_job import run_precheck
             _precheck = await run_precheck(job, data_dir=data_dir)
+            if _precheck is not None and _precheck.cancel:
+                # 086 W3 `cancel_when`: the job's purpose is gone (its position
+                # closed / dust) — end it, no model run.
+                from cron.read_job import ORPHAN_VIA
+                from cron.service import CronService
+                from cron.jobs import CronJobStore
+                CronService(CronJobStore(cron_db_path(data_dir))).cancel(
+                    job.id, user_id=job.user_id, via=ORPHAN_VIA)
+                logger.info("cron job %s: pre-check %s — job cancelled (orphan)",
+                            job.id, _precheck.cancel)
+                _cron_ev(job, "skipped", ORPHAN_VIA, **_precheck.attrs)
+                return True
             if _precheck is not None and _precheck.skip:
                 logger.info("cron job %s: pre-check quiet — $0 tick, agent not invoked (%s)",
                             job.id, _precheck.attrs)
@@ -407,7 +419,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         await record_run(regime=_CRON_REGIME, kind="cron", session_id=session_id,
                          user_id=job.user_id, rail_id=f"cron:{job.id}", task=job.task,
                          outcome=outcome, reason=reason, error=error, run=run,
-                         summary=summary, meta={"source": "cron", "job_id": job.id})
+                         summary=summary, meta={"source": "cron", "job_id": job.id},
+                         mandate=(job.payload or {}).get("mandate"))
 
     async def _record_cut_run(job: CronJob, session_id, *, idle_outcome: str = "cancelled",
                               reason: str = "cut by an owner pause before done()",
@@ -611,6 +624,9 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             # W0: a target the owner typed is trust for this run.
             from core.wallet.buy_target import with_authorship
             request["money_target"] = with_authorship(_target, payload)
+        if payload.get("mandate"):
+            # 086 W2: the run's trading mandate rides as DATA (the kernel's mandate step).
+            request["mandate"] = str(payload["mandate"])
         if _room is not None:
             # The room's own toolset wins: a room session is PUBLIC and
             # `payload.tools` must not be able to widen it.

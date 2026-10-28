@@ -9,7 +9,7 @@ again at 20:20. Both runs died identically:
               …no activity for 600 seconds…
     20:31:00  Agent stalled: No activity for 601.3 seconds
 
-`safety-monitor-baseline.md` stopped at 16:21 and the rate floor that the buyback
+`safety-monitor-baseline.md` stopped at 16:21 and the rate floor that the rebuy
 reads from it went stale for hours.
 
 It was NOT a missing timeout — every call in the path is bounded (`fetch_balances`
@@ -84,9 +84,9 @@ def test_an_unpriced_holding_is_named_with_its_amount_not_dropped():
     """The whole point. A rail that reads a shorter list concludes a position is
     gone — which is the 2026-08-25 USDC bug with a new cause."""
     out = "\n".join(data_tool._budget_exhausted_lines(
-        [("0x" + "a" * 40, 1.5, "PNL"), ("0x" + "b" * 40, 2.0, "PONS")], priced=3, total=5))
+        [("0x" + "a" * 40, 1.5, "OWN"), ("0x" + "b" * 40, 2.0, "PONS")], priced=3, total=5))
     assert "0x" + "a" * 40 in out and "0x" + "b" * 40 in out
-    assert "PNL" in out and "PONS" in out
+    assert "OWN" in out and "PONS" in out
     assert "1.5" in out.replace(",", "") and "2.0" in out.replace(",", "")
 
 
@@ -184,8 +184,8 @@ def test_a_three_element_row_still_renders(monkeypatch):
     """The older shape stays valid — the amount/symbol are known when identity
     resolved before the budget ran out."""
     out = "\n".join(data_tool._budget_exhausted_lines(
-        [("0x" + "d" * 40, 2.5, "PNL")], priced=1, total=2))
-    assert "PNL" in out and "2.5" in out.replace(",", "")
+        [("0x" + "d" * 40, 2.5, "OWN")], priced=1, total=2))
+    assert "OWN" in out and "2.5" in out.replace(",", "")
 
 
 def _addr(n):

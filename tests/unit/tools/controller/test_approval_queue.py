@@ -704,7 +704,7 @@ async def test_a_rejection_never_wakes(board):
 
 # --- 2026-09-18: a CRON run's ask re-arms the JOB, never wakes the dead session --
 #
-# Live on prod 2026-09-17 16:13-16:15. The buyback-ladder cron run hit the owner
+# Live on prod 2026-09-17 16:13-16:15. The rebuy-ladder cron run hit the owner
 # queue, released its slot, and the owner tapped approve 56 s later. The ask had
 # no goal to re-arm, so resume-on-grant woke the FINISHED cron session — a
 # self-wake, a forged turn the money guard refuses — and the agent told the owner
@@ -717,7 +717,7 @@ def _cron_store(tmp_path):
     from cron.jobs import CronJob, CronJobStore
     store = CronJobStore(str(tmp_path / "cron.db"))
     later = datetime.now(timezone.utc) + timedelta(hours=3)
-    store.add(CronJob(id="job-buyback", task="buyback tranche", schedule_spec="every 4h",
+    store.add(CronJob(id="job-rebuy", task="rebuy tranche", schedule_spec="every 4h",
                       user_id="u1", next_run_at=later))
     return store, later
 
@@ -726,11 +726,11 @@ def _cron_store(tmp_path):
 async def test_an_ask_from_a_cron_run_names_its_job(
         provider, board, autonomous_goal_turn, monkeypatch):
     from core import autonomy_marker as am
-    am.mark_autonomous("s-cron", None, cron_job_id="job-buyback")
+    am.mark_autonomous("s-cron", None, cron_job_id="job-rebuy")
     await provider.request("defi_trade_swap", {"amount_in": 0.04},
                            _goal_ctx(session_id="s-cron"))
     ask = board.asks(user_id="u1", status=ASK_OPEN)[0]
-    assert ask.payload.get("cron_job_id") == "job-buyback"
+    assert ask.payload.get("cron_job_id") == "job-rebuy"
     assert ask.payload.get("blocks_goal_ids") == []
 
 
@@ -744,7 +744,7 @@ async def test_approving_a_cron_ask_re_arms_the_job_and_never_wakes(board, tmp_p
                            extra_payload={"ask_kind": "tool_approval",
                                           "tool_name": "defi_trade_swap",
                                           "session_id": "s-cron",
-                                          "cron_job_id": "job-buyback"})
+                                          "cron_job_id": "job-rebuy"})
     spy = _WakeSpy()
     ok, msg = decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
                                    approved=True, task_agent=spy)
@@ -752,7 +752,7 @@ async def test_approving_a_cron_ask_re_arms_the_job_and_never_wakes(board, tmp_p
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert spy.calls == [], "a self-wake into a finished cron run cannot spend"
-    job = store.get("job-buyback")
+    job = store.get("job-rebuy")
     assert job.next_run_at <= datetime.now(timezone.utc), "the job must be due now"
     assert job.next_run_at < later
     assert "next tick" in msg
@@ -764,17 +764,17 @@ async def test_a_running_cron_job_is_not_re_armed(board, tmp_path):
     its own next run and the owner is told so."""
     from tools.controller.approval_queue import decide_tool_approval, tap_display_id
     store, later = _cron_store(tmp_path)
-    assert store.claim_for_run("job-buyback")
+    assert store.claim_for_run("job-rebuy")
     ask = board.create_ask(user_id="u1", what="Approve defi_trade_swap?", why="x",
                            force=True,
                            extra_payload={"ask_kind": "tool_approval",
                                           "tool_name": "defi_trade_swap",
                                           "session_id": "s-cron",
-                                          "cron_job_id": "job-buyback"})
+                                          "cron_job_id": "job-rebuy"})
     ok, msg = decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
                                    approved=True, task_agent=_WakeSpy())
     assert ok is True
-    assert store.get("job-buyback").next_run_at == later
+    assert store.get("job-rebuy").next_run_at == later
     assert "next run redeems" in msg
 
 
@@ -787,10 +787,10 @@ async def test_rejecting_a_cron_ask_leaves_the_job_alone(board, tmp_path):
                            extra_payload={"ask_kind": "tool_approval",
                                           "tool_name": "defi_trade_swap",
                                           "session_id": "s-cron",
-                                          "cron_job_id": "job-buyback"})
+                                          "cron_job_id": "job-rebuy"})
     decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
                          approved=False, task_agent=_WakeSpy())
-    assert store.get("job-buyback").next_run_at == later
+    assert store.get("job-rebuy").next_run_at == later
 
 
 def test_the_marker_remembers_which_cron_job_a_session_runs():

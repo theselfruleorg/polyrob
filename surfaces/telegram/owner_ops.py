@@ -72,120 +72,6 @@ def resolve_prefix(prefix: str, ids: List[str]) -> Tuple[Optional[str], Optional
 
 
 # ---------------------------------------------------------------------------
-# /trade — the owner launches a money-granted run
-# ---------------------------------------------------------------------------
-
-#: What an owner-launched trading run carries. ``defi_trade`` is the money verb;
-#: ``defi_data`` is how it reads the market it is about to act in. Nothing else
-#: is added — a money run is not the place for a wide toolset.
-_TRADE_TOOLS = ["defi_trade", "defi_data", "knowledge", "filesystem", "task"]
-
-
-def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
-                board: Optional[Any] = None) -> str:
-    """``/trade <what to do>`` — seed a run that actually carries the money verb.
-
-    Everything the agent writes for ITSELF has money stripped by ``goal_create``
-    — correctly, since an injected goal must never trade — so "bridge my SOL"
-    produced a goal that looked fine and could never execute, roughly fifty
-    times over.
-
-    ⚠️ D71: this used to say a money verb "reaches a run only through a stream
-    leg in ``data/streams/streams.yaml``". That file does not exist: the shipped
-    manifest, its seeder and its timer were DELETED on 2026-09-11 (the harness
-    ships no work). A run carries a money verb because an OWNER put one in
-    ``payload.tools`` from an authenticated seat — this verb, ``polyrob goals
-    create --tools``, or the console. That is the whole list.
-
-    The signal the system was throwing away is that the OWNER asking, from an
-    authenticated seat, IS the authorization. This verb carries it into the
-    payload. The agent still cannot self-grant; nothing here widens a cap; and
-    every spend is still bounded by the per-transaction ceiling. Above the
-    autonomous ceiling a spend raises an owner ask; the owner's tap re-arms the
-    run, and its next attempt of the SAME call is sent (the owner grant,
-    2026-09-26). Until then an approved spend was re-refused — "NOT SENT".
-    """
-    if not user_id:
-        return "Only the owner can launch a trading run."
-    task = " ".join(args).strip()
-    if not task:
-        return ("Usage: /trade <what to do>\n"
-                "e.g. /trade bridge 0.93 SOL to USDC on Base\n"
-                "Seeds a run that carries the money verb. A spend above the "
-                "autonomous ceiling asks you first (/pending); once you approve "
-                "it, the run's next attempt sends it.")
-
-    if board is None:
-        from agents.task.goals.board import GoalBoard
-        from core.runtime_paths import goals_db_path
-        board = GoalBoard(goals_db_path(data_dir))
-
-    body = (
-        f"{task}\n\n"
-        "The owner asked for this directly, so this run carries `defi_trade`. "
-        "Read the treasury-trading skill before acting. Every spend is still "
-        "bounded by the wallet caps. A live spend above the autonomous ceiling "
-        "is refused with an owner ask (it is in /pending). Tell the owner the "
-        "amount and the ceiling, and stop. The owner's approval re-arms this "
-        "run: make the SAME call again, with the same parameters — a changed or "
-        "split call is a different request and asks again. Do NOT create "
-        "follow-up goals to 'get the tool granted' — you have it here."
-    )
-    try:
-        goal = board.create(
-            user_id=user_id,
-            title=f"Owner-launched: {task}"[:200],
-            body=body,
-            priority=9,                     # the owner asked; it goes first
-            payload={"tools": list(_TRADE_TOOLS), "owner_granted": True},
-            actor="owner_seat",   # 036 §3.3: the owner asking IS the grant (audited)
-        )
-    except Exception as e:
-        logger.warning("trade run could not be seeded: %s", e)
-        return f"Could not seed the run: {e}"
-
-    return (f"✅ Launched {_code(str(getattr(goal, 'id', '?'))[:8])} with "
-            f"`defi_trade` granted.\n{task}\n\n"
-            + "\n".join(_trade_run_notes(data_dir)) + "\nProgress: /goals")
-
-
-def _trade_run_notes(data_dir: str) -> List[str]:
-    """A10/O17: what the seeded run can actually do, read at launch.
-
-    Views only — this reads the pause record and the turn-trading flag the
-    guard reads; it decides nothing. Each read fails toward the cautious line.
-    """
-    notes: List[str] = []
-    try:
-        from core.autonomy_control import allows
-        dispatch, entry = allows("dispatch", data_dir), allows("trade_entry", data_dir)
-    except Exception:
-        dispatch = entry = None
-    if dispatch is None:
-        notes.append("I could not read the pause state; /status shows it.")
-    elif not dispatch.allowed:
-        notes.append("Paused — it runs after /resume.")
-    else:
-        notes.append("It runs on the next dispatcher tick.")
-        if entry is not None and not entry.allowed:
-            notes.append("Trading is paused: it can read and quote, but it starts "
-                         "no buy until /resume trading.")
-    try:
-        from core.wallet.tx_guard import autonomous_turn_trading_enabled
-        can_sign = autonomous_turn_trading_enabled()
-    except Exception:
-        can_sign = False
-    if not can_sign:
-        notes.append("Unattended runs may not sign on this instance: it can read "
-                     "and quote, but it cannot send a transaction.")
-    if can_sign:
-        notes.append("A spend above the autonomous ceiling asks you first "
-                     "(/pending); once you approve it, the run's next attempt "
-                     "sends it.")
-    return notes
-
-
-# ---------------------------------------------------------------------------
 # /goal
 # ---------------------------------------------------------------------------
 
@@ -908,15 +794,16 @@ async def bridge_reply(user_id: Optional[str], data_dir: str,
 # /mcp — per-tenant MCP servers
 # ---------------------------------------------------------------------------
 
-def mcp_reply(user_id: Optional[str], args: List[str]) -> str:
+async def mcp_reply(user_id: Optional[str], args: List[str]) -> str:
     """`/mcp [add <id> <url> [key] | remove <id> | test <id>]`.
 
     Thin plumbing over ``core.mcp_admin`` — the ONE helper set every owner seat
     renders, so Telegram, the REPL and the console can never drift into three
-    different answers about which MCP servers exist.
+    different answers about which MCP servers exist. AWAITED on the seat's loop
+    (the one that owns the live MCP manager); never bridged onto another loop.
     """
     from core import mcp_admin
-    return mcp_admin.mcp_reply(user_id, args)
+    return await mcp_admin.mcp_reply_async(user_id, args)
 
 
 # ---------------------------------------------------------------------------

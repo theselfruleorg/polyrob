@@ -59,7 +59,7 @@ def _mint_logs(ids=IDS, to=HOLDER):
     for i in ids:
         out += [_log(M.TOPIC_TRANSFER, _word(0), _addr_word(to), _word(i)),
                 _log(M.TOPIC_MINTED, _word(i), _addr_word(to))]
-    # the rest of a real mint: account creation, the PNL buy — none names the signer
+    # the rest of a real mint: account creation, the TKN buy — none names the signer
     out.append(_log("0x" + "ab" * 32, _word(1), address=OTHER))
     return tuple(out)
 

@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "a7c396bae5f1"
+      "sha": "729d3abd9f2d"
     },
     {
       "name": "autonomy_control",
@@ -30,7 +30,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "eb48c969bc2d"
+      "sha": "ac9e4bce6c7c"
     },
     {
       "name": "cronjob_show",
@@ -38,7 +38,7 @@
     },
     {
       "name": "defi_trade_approve_token",
-      "sha": "a9ebf1c2b331"
+      "sha": "f362c84ca67d"
     },
     {
       "name": "defi_trade_bridge",
@@ -46,27 +46,27 @@
     },
     {
       "name": "defi_trade_call",
-      "sha": "4902e46f09aa"
+      "sha": "985068c12bbc"
     },
     {
       "name": "defi_trade_deploy_contract",
-      "sha": "7744e4536509"
+      "sha": "0d3d32d54c20"
     },
     {
       "name": "defi_trade_deploy_token",
-      "sha": "a6bda317e99f"
+      "sha": "7cf2dc66850d"
     },
     {
       "name": "defi_trade_lp_add",
-      "sha": "03ccd998af44"
+      "sha": "7e87d5b4cf0f"
     },
     {
       "name": "defi_trade_lp_collect",
-      "sha": "2115ff5f97eb"
+      "sha": "e62b4155217e"
     },
     {
       "name": "defi_trade_lp_remove",
-      "sha": "676809df6e55"
+      "sha": "0205fab0950f"
     },
     {
       "name": "defi_trade_nft_revoke_approval",
@@ -78,15 +78,15 @@
     },
     {
       "name": "defi_trade_register_agent",
-      "sha": "c370a6adaf75"
+      "sha": "00682388a788"
     },
     {
       "name": "defi_trade_revoke_approval",
-      "sha": "76045406d7ad"
+      "sha": "a5b2005c550d"
     },
     {
       "name": "defi_trade_set_agent_uri",
-      "sha": "cbfd4691841b"
+      "sha": "791f9fb05136"
     },
     {
       "name": "defi_trade_solana_deploy_token",
@@ -94,7 +94,7 @@
     },
     {
       "name": "defi_trade_solana_swap",
-      "sha": "ea3447d7f1cb"
+      "sha": "171b00dea17c"
     },
     {
       "name": "defi_trade_solana_transfer",
@@ -102,19 +102,19 @@
     },
     {
       "name": "defi_trade_swap",
-      "sha": "e9fc21f99fa3"
+      "sha": "fc325aba1c13"
     },
     {
       "name": "defi_trade_transfer",
-      "sha": "383c72fb061d"
+      "sha": "5c8c320d1c96"
     },
     {
       "name": "defi_trade_unwrap",
-      "sha": "1ef121477016"
+      "sha": "3d91c0ad62b3"
     },
     {
       "name": "defi_trade_wrap",
-      "sha": "f063caec80de"
+      "sha": "1e2a141b050d"
     },
     {
       "name": "delegate_task",
@@ -233,6 +233,10 @@
       "sha": "bb1c23b06a81"
     },
     {
+      "name": "propose_setting",
+      "sha": "6f27817332ef"
+    },
+    {
       "name": "read_skill_resource",
       "sha": "5157194c3386"
     },
@@ -287,6 +291,26 @@
     {
       "name": "tool_search",
       "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "trade_mandate_propose",
+      "sha": "ff5dfd36d681"
+    },
+    {
+      "name": "wallet_sign_api_call",
+      "sha": "a681a042561f"
+    },
+    {
+      "name": "wallet_sign_challenge",
+      "sha": "ea439e047f58"
+    },
+    {
+      "name": "wallet_sign_message",
+      "sha": "6f12b9b7bcfd"
+    },
+    {
+      "name": "wallet_sign_status",
+      "sha": "4977ad0b34c5"
     },
     {
       "name": "web_fetch_fetch_url",

@@ -12,9 +12,9 @@ def _terms(match: str) -> list:
 
 def test_stopwords_and_duplicates_are_dropped():
     q = ("the job that they wrote and the job that they ran with this and that "
-         "for the buyback swap")
+         "for the rebuy swap")
     picked = _terms(P._fts_match(P._query_terms(q)))
-    assert "buyback" in picked and "swap" in picked
+    assert "rebuy" in picked and "swap" in picked
     assert "the" not in picked and "that" not in picked
     assert len(picked) == len({t.lower() for t in picked})
 

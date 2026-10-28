@@ -9,9 +9,6 @@ PLATFORM_FIELDS = [
     "ethereum_rpc_url", "sepolia_rpc_url", "polygon_rpc_url",
     "base_rpc_url", "arbitrum_rpc_url", "treasury_address",
     "x402_enabled", "x402_facilitator_url",
-    "collabland_api_key", "collabland_api_url", "collabland_rules", "collabland_id",
-    "collabland_secret",
-    "alchemy_api_key", "alchemy_api_url", "den_token_contract_address",
 ]
 # 067 F4 deleted the unread x402/agent-wallet/ERC-8004/beta-gate mirrors; those
 # env names are read directly by core/wallet/config.py and modules/eip8004/.

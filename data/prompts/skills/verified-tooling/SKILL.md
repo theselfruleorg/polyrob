@@ -11,7 +11,7 @@ metadata:
 ---
 # Verified Tooling — small tools you can trust twice
 
-When you need the same analysis more than once — a ledger summary, a P&L curve,
+When you need the same analysis more than once — a trade-history summary, a P&L curve,
 a watchlist diff, a screen over candidate data — build a small tool instead of
 re-parsing by hand each session. Re-parsing by hand is not cheaper; it is the
 same work with no record of whether you got it right last time.
@@ -31,7 +31,7 @@ This is the pattern that worked in practice. It is about TRUST, not size.
    quietly absorbed an unknown as 0 is wrong in the direction that looks
    responsible, which is the worst direction.
 
-3. **One tool, one question.** `ledger_summary` (open/closed + totals),
+3. **One tool, one question.** `trades_summary` (open/closed + totals),
    `pnl_curve` (per-trade cumulative), `watchlist_diff` (added/dropped/carried).
    A tool that answers three questions is three tools you cannot test.
 
@@ -47,7 +47,7 @@ This is the pattern that worked in practice. It is about TRUST, not size.
    whether it ever ran.
 
 6. **Cross-check overlapping totals.** If two tools compute figures that must
-   agree — a P&L curve's final total against a ledger summary's — assert it.
+   agree — a P&L curve's final total against a trade-history summary's — assert it.
    Agreement between two independent paths is the strongest correctness evidence
    available without an oracle.
 

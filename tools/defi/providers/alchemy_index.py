@@ -5,8 +5,8 @@ name; GoPlus screens a token you name; neither enumerates. So a complete
 portfolio needs an indexer, and without one `portfolio` must say it scanned a
 candidate list rather than implying completeness.
 
-Reuses the existing ``ALCHEMY_API_KEY`` (today used only for NFT ownership in
-`tools/alchemy/`). Absent key = this provider is simply unavailable; it is never
+Reads ``ALCHEMY_API_KEY`` (also the per-chain RPC fallback in
+``core/wallet/onchain.py``). Absent key = this provider is simply unavailable; it is never
 a hard requirement.
 """
 from __future__ import annotations
@@ -91,7 +91,7 @@ def page_key(payload: Optional[Dict[str, Any]]) -> Optional[str]:
     return str(key) if key else None
 
 
-def fetch_all_balances(holder: str, timeout: float = 10.0, *, chain: str = "base",
+def fetch_all_balances(holder: str, timeout: float = 10.0, *, chain: str,
                        post=None) -> Optional[Tuple[Dict[str, int], bool]]:
     """``(holdings, complete)`` following ``pageKey`` to the end, or ``None``.
 
@@ -136,7 +136,7 @@ def _post_page(holder: str, chain: str, key: Optional[str], timeout: float):
 
 
 def fetch_balances(holder: str, timeout: float = 10.0, *,
-                   chain: str = "base") -> Optional[Dict[str, int]]:
+                   chain: str) -> Optional[Dict[str, int]]:
     """Holdings for *holder* on *chain*, or None when unavailable/failed.
 
     None means "no answer" — the caller must fall back to a candidate-list scan

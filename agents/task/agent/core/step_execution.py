@@ -245,6 +245,8 @@ class StepExecutionMixin:
 			metadata={"turn_kind": turn_kind,
 			          # 068 G2: the run's declared buy target (None = none).
 			          "money_target": getattr(self.orchestrator, "_money_target", None),
+			          # 086 W2: the run's trading mandate (None = not a mandate run).
+			          "mandate": getattr(self.orchestrator, "_mandate", None),
 			          # 073 W1: a foreground terminal of THIS process is the only
 			          # seat the host shell admits (core.security.host_execution).
 			          "seat": _seat_of(self.orchestrator),

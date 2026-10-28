@@ -18,7 +18,7 @@ def _err(res):
 
 def test_off_by_default(monkeypatch):
     monkeypatch.delenv("AGENT_NFT_ENABLED", raising=False)
-    res = _run(AgentNftTool().agent_nft_snapshot(SnapshotParams()))
+    res = _run(AgentNftTool().agent_nft_snapshot(SnapshotParams(chain="robinhood")))
     assert "AGENT_NFT_ENABLED" in _err(res)
 
 
@@ -35,7 +35,7 @@ def test_missing_package_is_a_refusal_with_a_remedy(monkeypatch):
         return real(name, *a, **k)
     monkeypatch.setattr(builtins, "__import__", fake)
     from tools.agent_nft.tool import MintParams
-    res = _run(AgentNftTool().agent_nft_collection_mint(MintParams(max_spend_usd=1.0)))
+    res = _run(AgentNftTool().agent_nft_collection_mint(MintParams(chain="robinhood", max_spend_usd=1.0)))
     assert "polyrob_drop" in _err(res)
     assert "polyrob[drop]" not in _err(res)  # no such extra until the dist publishes
     assert "theselfruleorg" not in _err(res)
@@ -74,7 +74,7 @@ def test_params_reach_the_package_verb(monkeypatch):
         seen["params"] = params
         return tool._ar(content="ok")
     tool = AgentNftTool(impl=types.SimpleNamespace(mint=mint))
-    res = _run(tool.agent_nft_collection_mint(MintParams(max_spend_usd=1.0)))
+    res = _run(tool.agent_nft_collection_mint(MintParams(chain="robinhood", max_spend_usd=1.0)))
     assert seen["params"].dry_run is True and not _err(res)
 
 
@@ -86,7 +86,7 @@ def test_a_verb_exception_is_an_error_result(monkeypatch):
     async def mint(tool, params, ctx):
         raise RuntimeError("rpc down")
     res = _run(AgentNftTool(impl=types.SimpleNamespace(mint=mint)).agent_nft_collection_mint(
-        MintParams(max_spend_usd=1.0)))
+        MintParams(chain="robinhood", max_spend_usd=1.0)))
     assert "rpc down" in _err(res)
 
 
@@ -96,13 +96,15 @@ def test_mint_params_are_the_blind_mint():
     from pydantic import ValidationError
 
     from tools.agent_nft.tool import MintParams
-    p = MintParams(max_spend_usd=200.0)
+    p = MintParams(chain="robinhood", max_spend_usd=200.0)
     assert (p.to, p.qty, p.min_pnl_out, p.chain) == (None, 1, 0, "robinhood")
     assert MintParams(qty=10, chain="robinhood-testnet", max_spend_usd=1.0).chain == "robinhood-testnet"
+    with pytest.raises(ValidationError):  # there is no default chain
+        MintParams(max_spend_usd=1.0)
     for bad in ({"qty": 0}, {"qty": 11}, {"min_pnl_out": -1}, {"chain": "base"}, {"seed": "POLYROB"},
                 {"to": "not-an-address"}):
         with pytest.raises(ValidationError):
-            MintParams(max_spend_usd=1.0, **bad)
+            MintParams(**{"chain": "robinhood", "max_spend_usd": 1.0, **bad})
 
 
 def test_descriptions_claim_only_what_ships():
@@ -125,12 +127,14 @@ def test_c10_snapshot_journal_and_bind_name_the_nft(monkeypatch):
     acct = "0x" + "ab" * 20
     for model, base in ((SnapshotParams, {}), (JournalParams, {"kind": "note", "text": "hi"}),
                         (BindParams, {})):
-        p = model(**base)
+        with pytest.raises(ValidationError):  # there is no default chain
+            model(**base)
+        p = model(chain="robinhood", **base)
         assert (p.chain, p.nft, p.account) == ("robinhood", None, None)
         p = model(chain="robinhood-testnet", nft="0x" + "c0" * 20 + "#7", account=acct, **base)
         assert (p.chain, p.nft, p.account) == ("robinhood-testnet", "0x" + "c0" * 20 + "#7", acct)
         with pytest.raises(ValidationError):
-            model(account="not-an-address", **base)
+            model(chain="robinhood", account="not-an-address", **base)
         with pytest.raises(ValidationError):
             model(chain="base", **base)
     seen = {}
@@ -140,5 +144,5 @@ def test_c10_snapshot_journal_and_bind_name_the_nft(monkeypatch):
         return tool._ar(content="ok")
     from tools.agent_nft import core_verbs
     monkeypatch.setattr(core_verbs, "snapshot", snapshot)
-    _run(AgentNftTool().agent_nft_snapshot(SnapshotParams(nft="7")))
+    _run(AgentNftTool().agent_nft_snapshot(SnapshotParams(chain="robinhood", nft="7")))
     assert seen["params"].nft == "7"

@@ -1,6 +1,6 @@
 """The owner's token-trust decisions, from any owner seat (W1).
 
-Before W1 the only way to say "this contract is the real PNL" was a server
+Before W1 the only way to say "this contract is the real token" was a server
 CLI (``polyrob wallet pin-token``), and a look-alike the wallet held blocked the
 real token until somebody opened a shell. The owner runs the agent from a phone.
 This module is the ONE implementation every owner seat calls:
@@ -320,7 +320,7 @@ def trust_view(user_id: str, *, pins_db: Optional[str] = None,
         from core import open_positions
         entries = open_positions.entries_for(user_id, db_path=positions_db, strict=True)
         for entry in entries.values():
-            if entry.status == "open":
+            if entry.status in ("open", "retired"):  # 086 W0: retired = closed
                 continue
             out["holdings"].append({
                 "chain": entry.chain, "address": entry.address,

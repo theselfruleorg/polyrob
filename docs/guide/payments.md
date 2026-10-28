@@ -10,8 +10,9 @@ the crypto trading tools, and the unified ledger.
 > ⚠️ **Unaudited — use at your own risk.** These features have had **no independent
 > security audit**. They handle real value on mainnet and are provided as-is with no
 > warranty (see [LICENSE](../../LICENSE) and
-> [SECURITY.md](../../SECURITY.md#crypto--wallet--payment-features)). **Everything here is
-> OFF by default.** Evaluate on testnets first. `modules/x402/README.md` is the deep
+> [SECURITY.md](../../SECURITY.md#crypto--wallet--payment-features)). **Everything here that
+> can move value is OFF by default** (only the read-only `defi_data` sight of §10.1 is on).
+> Evaluate on testnets first. `modules/x402/README.md` is the deep
 > module reference; `docs/CONFIGURATION.md` is the authoritative flag SSOT (this guide
 > quotes defaults but the catalog wins).
 
@@ -315,6 +316,12 @@ The `x402_fetch` flow (`tools/x402/service.py`, `real_client.py`):
 5. Sign + pay on the wire via the `x402` SDK; record the **actual settled** amount
    (a `success=false` settlement is treated as unpaid).
 
+**A paid fetch names its payee.** `x402_fetch` requires `expected_pay_to`, copied from
+the `payTo` address that `x402_quote` or `x402_probe` shows. The approval displays this
+recipient in full. A server that changes the recipient is refused before signing; only
+EIP-3009 transfers are supported. This binds the approved address, not the server's
+claimed identity. A fetch without a recipient can read a free response but cannot pay.
+
 `x402_pay` is **leaf-delegation-blocked** (in `DELEGATE_BLOCKED_TOOLS`) and
 **correspondent-taint-blocked** — a tainted or delegated-child turn can never spend.
 
@@ -596,11 +603,11 @@ invoice**, driven entirely from the same settlement-watcher tick. Gated
 > ledger, the `subscription_lapsed` cron gate and `polyrob owner sub list/cancel` are
 > all unreachable today. Either wire one caller or retire it — dead money machinery is
 > worse than absent money machinery, because it reads as a shipped capability.
-> It also — like the rest of the settlement-watcher-driven
-> money layer (invoice amount-jitter dedupe, on-chain detection) — it assumes
+> Like the rest of the settlement-watcher-driven
+> money layer (invoice amount-jitter dedupe, payment detection), it also assumes
 > `UVICORN_WORKERS=1`; the pending-renewal unique index is only a cross-process backstop,
 > not a substitute for single-worker. See the canonical `workers>1` note in
-> `docs/CONFIGURATION.md` for the full money-layer `workers=1` rationale (M5).
+> `docs/CONFIGURATION.md` for the full money-layer `workers=1` rationale.
 
 ---
 
@@ -662,7 +669,10 @@ Identity Registry — an ERC-721 collection, so the returned `agentId` is a toke
 wallet owns — and `defi_trade.set_agent_uri` republishes the file afterwards without
 minting anything. Both are money verbs on the capped lane (§10.2): the guard prices the
 fee, holds it to the declared `max_spend_usd`, and sends anything above
-`DEFI_AUTONOMOUS_MAX_USD` to the owner queue.
+`DEFI_AUTONOMOUS_MAX_USD` to the owner queue. The owner runs them with `/identity register on
+<chain> [go]` and `/identity set-uri on <chain> [id <agentId>] [go]` in chat, and
+`polyrob identity register --chain <chain>` / `polyrob identity set-uri <agentId> --chain
+<chain>` in the terminal (both simulate by default; `--execute` broadcasts).
 
 `EIP8004_AGENT_URI_MODE` decides where the registration file lives. `auto` (the default)
 publishes a hosted URL when `A2A_BASE_URL` is a public host and otherwise inlines the
@@ -705,6 +715,10 @@ for.
 Separate from the agent's own money: this is what *users* owe *the platform* for LLM
 calls. The real gate is `ENABLE_AUTH` (off = no billing service registered at all).
 
+Access comes from the account tier: `free_access` (an administrator grant), `x402`
+(pay per request) or `admin`. A `free` account has none. No tier is granted by token
+or NFT ownership.
+
 - **Metering:** each LLM call becomes a `usage_records` row (keyed by `user_id` +
   `session_id`), with cost from the model registry including cached-input and cache-write
   pricing. A stable `request_id` column dedupes a retried bill of the same completion.
@@ -740,6 +754,12 @@ value; `launchpad` and `dapp_browser` reach two things neither of those covers. 
 split deliberately: **reading is a different risk class from spending**, so they are
 different tools behind different flags, and enabling sight never implies enabling spend.
 
+**There is no default network.** The same address is a different token on each network, so
+every action names its network: `defi_trade`, `defi_data`, `dapp_browser` and `agent_nft` take
+a required `chain=`, the terminal commands a required `--chain`, and a chat command `on base` (or another name).
+An action without one is refused with the list of networks; a Solana (base58) address is the
+one case read without it.
+
 ### 10.1 `defi_data` — read-only token sight (`DEFI_DATA_ENABLED`, default ON)
 
 Read-only actions, **multichain**: the chain registry (`core/wallet/chains.py`)
@@ -768,6 +788,9 @@ constructed and nothing is broadcast**, so this tool cannot move value:
 | `wallet_activity` | ANY wallet's recent transfers and swaps, with a net-flow summary the verb computes (not a cost-basis P&L) | Solana; EVM via Blockscout (not Robinhood mainnet) |
 | `token_origin` | Who deployed a token, what else they deployed, whether they still hold it; on Solana the launch buyers and any shared funder ("addresses, not people") | Solana; EVM via Blockscout |
 | `positions` | The agent's own open positions: quantity, basis (or "basis unknown"), value, unrealized and realized P&L by average cost, high-water mark — the verb does the arithmetic | all money chains |
+| `retire_row` | Closes a record of a holding whose tokens are gone or dust (under $1). It measures the wallet's balance itself, refuses anything else, and stores the measurement as proof. It moves nothing — the one record `defi_data` writes | every money network, incl. Solana |
+| `lp_positions` / `lp_pool_info` / `lp_quote` | Pool deposits, a pool's live state, and a deposit quote — §10.11 | EVM |
+| `pool_metrics` | Monitors a Pons graduated Uniswap v4 pool: price, in-range liquidity, depth, the impact of one buy, a code-hash check of the pinned contracts; each reading is journaled | Robinhood |
 
 The safety screen in `token_info` merges sources and names each one: on Solana the mint
 and freeze authorities, Token-2022 extensions (a permanent delegate is a HARD FAIL),
@@ -775,8 +798,19 @@ holders and the pump.fun curve are read from the chain, then Jupiter, RugCheck a
 on EVM the proxy slots and `owner()`, Honeypot.is (Ethereum, Base) and GoPlus. A check a
 source did not run is listed as NOT CHECKED with the reason. Prices come from up to three
 sources (DexScreener, GeckoTerminal, Jupiter); when they disagree the price is DISPUTED
-and is never used to size or value a spend. `/check <address|ticker> [chain]` runs the
-same reads from the owner's seat with no model turn.
+and is never used to size or value a spend. `/check <address> [chain]` or `/check <TICKER>`
+runs the same reads for the owner with no model turn.
+
+`token_info` also carries a **survivability** block: will the pool still be there? Each
+gate (pool age and depth, liquidity, LP locked or burned, a sell simulation, the sell tax,
+mint and freeze authority or owner powers, the top-holder share, bundled supply) reads
+`pass`, `fail` or `unknown`. A `fail` anywhere is `REJECT`. The result is the highest
+size tier allowed (A, B or C), never a buy signal, and every `unknown` gate lowers that
+tier by one step — a gate no source answered is never safe.
+
+The discovery reads (`new_pools`, `trending`, `scan`) say which of three things happened:
+`ok` (pools came back), `empty` (the indexer answered with none) or `unavailable` (the
+read did not happen). "No pools" and "could not look" are never the same answer.
 
 Two rules run through the whole tier:
 
@@ -826,7 +860,7 @@ outside that set is invisible. The indexer is an upgrade path, never a requireme
 
 ### 10.2 `defi_trade` — value movement behind a transaction guard (`DEFI_TRADE_ENABLED`, default OFF)
 
-**This one can move real funds.** Sixteen verbs, every one defaulting `dry_run=true`
+**This one can move real funds.** Twenty verbs, every one defaulting `dry_run=true`
 so moving funds requires saying so explicitly. Most are behind a second flag of their
 own, named in the last column — arming `DEFI_TRADE_ENABLED` alone gives you the six
 verbs in the first five rows and nothing else.
@@ -848,6 +882,7 @@ verbs in the first five rows and nothing else.
 | `deploy_token` / `deploy_contract` | Deploy the pinned fixed-supply token, or your own compiled init code — §10.7 | `DEFI_DEPLOY_ENABLED` |
 | `solana_deploy_token` | A fixed-supply Token-2022 mint with on-chain metadata — §10.7 | `DEFI_DEPLOY_ENABLED` + `SOLANA_TRADE_ENABLED` |
 | `call` | Any contract write, with both directions declared — §10.8 | `DEFI_CALL_ENABLED` |
+| `lp_add` / `lp_remove` / `lp_collect` | Open or add to, withdraw, and collect fees from a Uniswap pool deposit — §10.11 | `DEFI_LIQUIDITY_ENABLED` |
 
 **The swap route is chosen conservatively.** Uniswap V3 calldata built locally
 from pinned contract addresses is the strongest trust position, so it is tried
@@ -941,7 +976,10 @@ the agent does on its own. A model-built spend in the owner's chat above the cei
 still tapped once by the owner, because the model wrote the address; a payout-shaped
 `call` or an endowed deploy is tapped at ANY value, in the owner's turn too. The per-tx cap,
 the daily cap, the simulation and the declared bound bind everyone. A call with no
-context (the remote signer, an internal call) is never treated as the owner.
+context (the remote signer, an internal call) is never treated as the owner. Once the
+owner has made every decision a run asked for, Rob continues by itself: one wake per
+group of decisions, carrying each outcome. A failed Confirm offers its extra check as a
+new decision, and Refresh works on an expired quote.
 
 Result rendering is honest by construction: a refusal says **NOT SENT**; an
 `owner_queue` lane says it did not execute; a reverted receipt says the transfer did
@@ -964,17 +1002,20 @@ a delegated sub-agent, and never in the default toolset. Every spending verb is 
 approval lane — irreversible and self-custodial, with no venue to dispute them. Two
 buckets, and a new verb must land in one or the other or a contract test fails:
 
-- **Capped** — swap, solana_swap, transfer, solana_transfer, approve/revoke, wrap/unwrap, bridge, all
-  three deploys, `call`, the NFT revoke, and the two ERC-8004 identity writes
-  (`register_agent`, `set_agent_uri` — a registration's whole cost is a fee the guard
-  prices, so the ceiling means something). Under `DEFI_AUTONOMOUS_MAX_USD` the call runs
-  and reports; above it, the owner's approval card, and an approved call is sent.
-  `DEFI_TIERED_SPEND_LANE` (default OFF)
-  can exempt a call whose *declared* ceiling sits within the autonomous limit from the
-  owner tap; dry runs and revokes are always exempt.
-- **Always owner-approved** — `nft_transfer`, and only that. An NFT has no reliable
-  price, so a USD cap cannot bound it, and a cap that cannot bound the thing it is
-  capping is worse than no cap because it reads as protection.
+- **Capped** — swap, solana_swap, approve/revoke, wrap/unwrap, bridge, all three
+  deploys, `call`, the NFT revoke, the three LP verbs, and the two ERC-8004 identity
+  writes (`register_agent`, `set_agent_uri` — a registration's whole cost is a fee the
+  guard prices, so the limit means something). The guard lets a call under
+  `DEFI_AUTONOMOUS_MAX_USD` run and sends a larger one to the owner for approval; an
+  approved call is sent. A live call also waits for the owner's tap unless
+  `DEFI_TIERED_SPEND_LANE` (default OFF) is on: then a call whose *declared* maximum sits
+  within the spend-without-asking limit, and a revoke, run and report. A dry run never
+  waits. A payout-shaped `call` (§10.8) is never exempt.
+- **Always owner-approved** — `transfer`, `solana_transfer` and `nft_transfer`. A plain
+  send can pay any address, so no flag exempts it; the one exception is a genuine owner
+  turn that sends to the owner's own address or Rob's wallet (§2). An NFT has no reliable
+  price, so a USD limit cannot bound it, and a limit that cannot bound what it limits is
+  worse than none because it reads as protection.
 
 All of this is ANDed with — never a replacement for — `AGENT_WALLET_MAX_PER_TX_USD`,
 `WALLET_DAILY_CAP_USD`, the owner pause and the `owner_queue` lane.
@@ -1016,7 +1057,8 @@ mirrored against `simulateTransaction` (there is no EVM transaction to hand to
    ceiling, rolling daily cap, replay guard — and the `DEFI_AUTONOMOUS_MAX_USD`
    owner-queue lane for a swap the agent starts (an owner-direct turn passes
    it; the per-tx and daily caps still bind). Confirmed swaps land in the same
-   spend audit.
+   spend audit and write the same holdings records (`open_positions.db`) as an
+   EVM swap, so `positions`, `reconcile` and `/book` see them.
 10. Broadcast requires a pinned `DEFI_SOLANA_RPC` (dry runs work unpinned); the
     signer refuses a foreign fee payer.
 
@@ -1040,12 +1082,14 @@ check no step budget or partial read can dilute:
   disagreement in both directions — book rows the chain does not back, chain
   holdings the book does not explain, size mismatches;
 - a failed read renders `UNVERIFIED`, never zero; quote asset and wrapped
-  native are working capital; confidently-priced sub-$0.25 holdings classify
-  as dust.
+  native are working capital; confidently-priced holdings under $1 classify
+  as dust (the same $1 line the records and `retire_row` use);
+- it compares only the network it reads: a record that names another network is
+  skipped, and a record with no network that reads zero is `unscoped` (UNVERIFIED), not
+  missing.
 
 Run it as step 0 of a trading session and again before any public claim about the
-book. Solana is refused explicitly — compare the `portfolio(chain=solana)` output by
-hand.
+records. It reads Solana too (the wallet's SPL token accounts).
 
 **The book across every chain, in one command.** `polyrob wallet book` loops
 `portfolio`/`reconcile` over every money-enabled chain plus Solana and prints one
@@ -1057,6 +1101,13 @@ clean.**
 
 The book it compares against is the rail's position store (`open_positions.db`);
 an unreadable book is an error, never a clean verdict.
+
+**Closing a record of a holding that is gone.** `/book retire <chain> <address> [go]`
+(Telegram and the REPL) and Rob's `defi_data.retire_row(chain, address)` share one path: it
+reads the wallet's balance of that token now, refuses anything but zero or dust (under
+$1 at a high-confidence price), and stores the measurement as proof. An unreadable
+balance or an unpriced non-zero balance refuses — unknown is never zero. A holding that
+is worth more is sold, or written off with `/writeoff` (§10.4b).
 
 > ⚠️ **The caps are global and chain-blind.** `AGENT_WALLET_MAX_PER_TX_USD`,
 > `WALLET_DAILY_CAP_USD` and `DEFI_AUTONOMOUS_MAX_USD` are one number across
@@ -1207,7 +1258,7 @@ worst-case sized gas and charged to the same caps.
 
 ```bash
 polyrob wallet deploy-token ROB 1000000000 Rob Coin --chain base   # quote
-polyrob wallet deploy-token ROB 1000000000 Rob Coin --execute      # deploy
+polyrob wallet deploy-token ROB 1000000000 Rob Coin --chain base --execute   # deploy
 ```
 
 **Names and supply.** A token's name and symbol are printable ASCII only (no
@@ -1225,7 +1276,7 @@ command is in the `token_template` docstring).
 **No vanity or salt for a token.** `deploy-token` refuses `--vanity` and
 `--salt`. The template mints the whole supply to the deployer, and through the
 CREATE2 factory the deployer is the factory, not the wallet — the supply would be
-stranded for good (CR-H07, 2026-09-23). A token is always deployed with a plain
+stranded for good. A token is always deployed with a plain
 CREATE, and the guard asserts the whole supply arriving in the wallet.
 `deploy_contract` still accepts a salt, but it refuses a constructor that names
 the factory as an owner or admin.
@@ -1313,15 +1364,154 @@ connect time and goes through `tx_guard`; above the autonomous ceiling a call th
 on the durable owner queue under a deadline. A page-authored native send to an
 address with no code is a payout: it waits for the owner's tap even when that address is
 in `allow_contracts`. A page tx that moves a token is undeclared and the guard refuses
-it. **Off-chain signatures are refused always** — a permit is submitted by someone else later, so no simulation can
-catch what it authorizes.
+it. **A page's off-chain signature requests are refused** — a permit is submitted by someone else later, so no
+simulation can catch what it authorizes. A site login goes through `wallet_sign` (§10.14).
 
 ⚠️ `dapp_connect` **is** the money verb (the spend happens in a browser callback),
 and a SESSION budget is required alongside the per-transaction ceiling: without
 it, a per-transaction ceiling is only a per-CLICK ceiling. Run `dapp_disconnect`
 when finished — an armed wallet on an open page is a standing authorization.
 
+### 10.11 Pool deposits — liquidity (`DEFI_LIQUIDITY_ENABLED`, default OFF)
+
+`defi_data` reads liquidity without any write flag: `lp_positions` (a wallet's Uniswap v3
+pool deposits, in range or not, with uncollected fees), `lp_pool_info` (a pool's live
+state) and `lp_quote` (the liquidity a deposit would mint and the exact paired amounts).
+`DEFI_LIQUIDITY_ENABLED=true` arms `defi_trade.lp_add`, `lp_remove` and `lp_collect`; all
+default to a dry run. The owner runs the same guarded actions with `polyrob wallet lp`
+(`positions`, `pool`, `quote`, `add`, `remove`, `collect`, each with `--chain`) in the
+terminal and `/lp` in chat. A short allowance refuses with the exact approval to make.
+
+- **Uniswap v3** on Robinhood, Base and Ethereum: add (a new deposit, or more to an
+  existing one), remove (a percentage, optionally burning the empty deposit NFT) and
+  collect.
+- **Uniswap v4** on Robinhood only: `lp_add(protocol='v4')` opens a new **full-range**
+  deposit in a Pons graduated pool. The token leg moves through Permit2: first a standing
+  allowance to Permit2, then `approve_token(via='permit2')`, ONE exact grant to the
+  pinned v4 manager contract that expires in 15 minutes. A v4 deposit is held to
+  `LP_ETH_CAP` (the program total in ETH, default `0` — every v4 deposit refuses until
+  the owner sets it), `LP_ETH_DAILY_CAP` and `LP_ETH_FLOOR` (the ETH the wallet keeps).
+  v4 remove and collect are not built.
+
+The guard checks both asset legs, the pinned code and destination, who owns the deposit,
+and the mint, hold or burn of its NFT. Collect minimums use the actual read-only collect
+returns, because nominal fee growth can round higher. A landed receipt is checked for the
+token transfers as well as the deposit events; a native refund cannot be verified from
+receipt logs alone.
+
+The console's Money page shows liquidity activity; its recheck lists deposits for the
+wallet owner only, and an unread holding is unknown, not zero. Liquidity activity does
+not adjust the per-token cost records: the remaining cost basis of a deposit is
+unavailable, and the sum of deposits is not that basis. The USD charged for
+`lp_collect` is gas, not fee revenue or income.
+
+### 10.12 Agent NFT accounts (`AGENT_NFT_ENABLED`, default OFF)
+
+An NFT can have its own wallet: an ERC-6551 token-bound account. Whoever owns the NFT
+controls that account. Rob acts through an NFT's account **only by owning the NFT on its
+own wallet address** — a person transfers it in, mints it to that address, or Rob mints
+it. There are no grants, bindings or operator keys.
+
+`AGENT_NFT_ENABLED` arms `agent_nft` (`agent_nft_snapshot`, `_inspect`, `_journal`,
+`_bind_identity`, `_revoke_all`, `_withdraw_token`, `_collection_reveal`, `_adopt`,
+`_collection_mint`) and the `account=` / `nft=` argument on `defi_trade.transfer`,
+`defi_trade.swap`, `launchpad_claim` and `defi_data.portfolio`. That argument makes the
+call from the NFT's account: Rob's key signs and the account holds, through the same
+`tx_guard` (`TxIntent.via_account`), recorded against the account. Account-admin calls
+(such as `lock`) refuse, and every pre-flight read — the pinned code, the lock state,
+that the signing wallet IS the NFT's owner — fails closed.
+
+- **Collections are pinned, none by default.** The owner pins one from chat with
+  `/nft trust <collection> on <chain> [go]` (a read-only fact check first): Rob may then
+  watch it and act from its accounts, never mint or reveal. Only the system
+  administrator's root-owned `/etc/polyrob/agent_nft_collections.json` can grant `mint`
+  or `reveal`. A malformed or writable registry refuses as a whole.
+- **Always owner-approved:** `agent_nft_collection_mint`, `agent_nft_withdraw_token` (the
+  owner's `/nft send <id> <to> on <chain>`), `agent_nft_adopt` and `agent_nft_bind_identity`.
+- A holdings watch (every 300 s, no model turn) tells the owner once when an NFT of a
+  pinned collection arrives in or leaves Rob's wallet; `/nft` lists them with their
+  accounts.
+- The collection mint and the `adopt` picture, holdings and brief live in a separately
+  installed agent-NFT package; without it those verbs refuse and name the remedy.
+- `AGENT_NFT_REVEAL_MAX_GAS_USD` (default `$1.00`) bounds the gas fee of one reveal.
+
+### 10.13 The trading mandate (`/trade`)
+
+A trading run belongs to a **mandate**: one owner-confirmed record with an allocation,
+the networks, a preset and the breakers. There is one live mandate at a time. A mandate
+holds intent, never a limit — the per-transaction and daily limits still bind every trade.
+
+```
+/trade start 150 solana,robinhood memecoin   # ONE card with every number; Confirm creates it
+/trade start budget=<usd> chains=<a,b> preset=memecoin|majors ticket=<usd> slots=<n>
+/trade status                                # positions, exit coverage, breaker, realized P&L
+/trade pause | resume                        # entries off or on; exits keep running
+/trade stop                                  # final; a card offers "close all"
+/trade release                               # clear a latched breaker (owner only)
+```
+
+The same verbs run on Telegram and in the REPL; a group refuses them. Rob can also
+propose a mandate (the `trading-mandate` skill ends in the same decision) — only the
+owner's Confirm creates one.
+
+- **Code builds the jobs, not the model.** Confirm writes a **hunt** job (its cadence from
+  the preset), a daily **review** job, and then an **exit** job for each holding the hunt
+  buys. A $0 precheck wakes the model only when an entry is possible and a candidate
+  passed the cheap screen, or when a holding is near a barrier. A holding with no exit
+  job gets one, and the owner is told; an exit job whose holding was sold is cancelled.
+- **An entry needs a plan.** Before a mandate swap quotes anything it must state a typed
+  plan: a thesis, a confidence, what invalidates it, and the preset. An exit never needs
+  one.
+- **Promotion stages.** One entry costs at most the stage's ticket: `probe` ($1), then
+  `small` (half the preset's ticket), then `normal` (the full ticket). `normal` needs
+  closed trades and realized P&L at `small`. The money check also refuses an entry on a
+  network that is not the mandate's, past the allocation at cost, with every slot full,
+  past the day's entry count, or into a token in its re-entry cooldown.
+- **Breakers stop entries, never exits.** Daily loss, drawdown and AI cost over the
+  allocation latch until `/trade release`; consecutive losses start a cooldown that
+  expires. A latch pauses the hunt and asks the owner one decision.
+- **Presets** hold the numbers: `memecoin` ($3 tickets, up to 8 open, a hunt every 30
+  min), `majors` (5–10 % of the allocation per ticket, up to 3 open) and `dca`. Rob may
+  only tighten a number; the owner may tune any on the intake decision.
+
+The status snapshot and the daily digest carry a $0 **Trading** block: holdings, exit
+coverage (PROTECTED / UNPROTECTED), the breaker state, realized P&L with the close reason
+of each trade, and the mandate's AI cost. A part that could not be read is named, never
+shown as zero. The jobs run unattended: they reach money only with the unattended steps
+of §13 armed, and each run stops at the operator's step limit (`AUTONOMOUS_MAX_STEPS`,
+150) and at `AUTONOMOUS_RUN_BUDGET_USD` ($2.00) of provider spend.
+
 ---
+
+### 10.14 Signing in to a site (`wallet_sign`, with `DEFI_TRADE_ENABLED`)
+
+Some services identify an agent by its wallet: Sign-In With Ethereum, Sign-In With
+Solana, or a "sign this challenge to enroll your payout wallet" step. `wallet_sign`
+signs those texts — and only those. Every request is classified first:
+
+| Class | Example | Result |
+|---|---|---|
+| A — login / challenge bound to its site | SIWE for the site Rob is talking to; a challenge Rob fetched itself | signed |
+| B — value-moving typed data | an order, a Permit2 transfer | refused (planned) |
+| C — authority, or a text not bound to its site | an ERC-2612 permit; "prove you own this wallet" handed over from elsewhere | refused (an owner decision is planned) |
+| D — blind | a hex hash, an encoded transaction, opaque bytes | refused, always |
+
+`wallet_sign_challenge` is the normal path, in one call: it asks the site's HTTPS
+challenge URL (POST or GET), signs the exact text the site returned, and POSTs the
+signature to the site's `submit_url` — `{challenge.challengeId}`, `{signature}` and
+`{address}` fill the body, and a login cookie the challenge set rides along. A
+signature made without `submit_url` is sent nowhere; Rob is told so, and a second one
+for the same site refuses. A key or login cookie the site returns is stored
+encrypted and shown only as a fingerprint; `wallet_sign_api_call` uses it, and only on
+that site. A site that returns only a nonce gets a Sign-In With Ethereum/Solana
+message built from `message_template`. `wallet_sign_message` signs a text you hand over, on an owner turn
+only, and the text must name the site. A goal or scheduled job may sign at most 10
+class-A texts per site and 30 in all per day, must send the signature straight back
+to the site, and never signs a challenge that does not name its site; a sign-in
+nonce is never signed twice. A text that derives a key (an L2 or trading key), that
+authorizes or spends, or that names another site is refused. The key is
+Rob's operational wallet; under `WALLET_SIGNER=remote` the signer
+re-classifies every request itself (`sign.classified`).
 
 ## 11. Crypto trading tools (the `markets` pack: `packs/markets/`)
 
@@ -1482,7 +1672,8 @@ DEFI_SOLANA_RPC=https://solana-mainnet.your-provider.example/v2/KEY
 
 Each further capability is its own flag on top of this: `DEFI_BRIDGE_ENABLED` (§10.5),
 `NFT_TOOLS_ENABLED` (§10.6), `DEFI_DEPLOY_ENABLED` (§10.7), `DEFI_CALL_ENABLED` (§10.8),
-`LAUNCHPAD_ENABLED` (§10.9), `DAPP_BROWSER_ENABLED` (§10.10).
+`LAUNCHPAD_ENABLED` (§10.9), `DAPP_BROWSER_ENABLED` (§10.10), `DEFI_LIQUIDITY_ENABLED`
+(§10.11), `AGENT_NFT_ENABLED` (§10.12).
 
 **Step 6 — unattended.** These let a run you are not watching reach the money verbs.
 Size `WALLET_DAILY_CAP_USD` as your loss bound before setting any of them.
@@ -1506,11 +1697,13 @@ Reaching a capability and arming it are different decisions — this flag also p
 but no host tool, and `launchpad`/`dapp_browser` stay behind their own
 switches.
 
-**What you will be told.** The agent always sends you **two**
-messages per broadcast (the old `TX_NOTIFY_ENABLED` switch is retired): a BROADCAST notice the moment the transaction is accepted (verb,
-chain, amounts, USD value, tx hash, the lane that allowed it, the daily-cap headroom it
-consumed) and a SETTLED notice with the measured outcome — confirmed, reverted, arrived
-or in flight. It is deliberately not stopped by the owner pause: a report about funds
+**What you will be told.** Every broadcast reaches you, on a lane no delivery limit
+silences: a BROADCAST notice (verb, network, amounts, USD value, tx hash, the lane that
+allowed it, the daily-cap headroom it consumed) and a SETTLED notice with the measured
+outcome — confirmed, reverted, arrived or in flight. The BROADCAST line waits
+`TX_NOTIFY_SENT_HOLD_SEC` (default 60 s) for its settlement: a transaction that settles
+inside the wait sends ONE line that carries both sets of facts, and one still unsettled
+after it gets its own BROADCAST line (`0` always sends two). It is deliberately not stopped by the owner pause: a report about funds
 already in flight is exactly what an owner who just stopped everything needs. A dry run
 never notifies, and an unknown value renders `unknown`, never `$0.00`.
 `WALLET_CONTEXT_VISIBLE` (default **on**) puts the agent's own balances into every
@@ -1559,32 +1752,3 @@ polyrob doctor --flags --changed          # only what this box set away from a d
 - [deployment-postures.md](deployment-postures.md) — how the money flags interact with deployment shapes.
 - [../examples.md](../examples.md) — a worked end-to-end money loop.
 - `SECURITY.md` in the repository root — the crypto/wallet/payment security posture.
-
-
-## Liquidity positions (v3; live acceptance pending)
-
-`defi_data` exposes `lp_positions`, `lp_pool_info` and `lp_quote` without enabling
-writes. `DEFI_LIQUIDITY_ENABLED=true` enables `defi_trade.lp_add`, `lp_collect` and
-`lp_remove`; all default to dry run. The owner CLI (`polyrob wallet lp`) and `/lp`
-share the same guarded actions. Short allowances refuse with an exact approval
-remedy. v4 and Permit2 are not supported yet.
-
-Money › Book shows liquidity activity. Its explicit recheck enumerates positions
-for the wallet owner only; unread holdings are unknown, not zero. Collect minima
-use actual read-only collect returns because nominal fee growth can round higher.
-Landed receipts check observable token transfers as well as position events.
-Native refunds cannot be verified from receipt logs alone.
-
-Liquidity activity does not adjust the token-keyed cost book. LP remaining cost
-basis is unavailable, and cumulative deposit spending is not remaining basis.
-The USD charged for collect is gas, not fee revenue or treasury income.
-
-A paid fetch requires `expected_pay_to`, copied from the `payTo` address shown by
-`x402_quote` or `x402_probe`. The approval displays this recipient in full. A
-server that changes the recipient is refused before signing; only EIP-3009
-transfers are supported. This binds the approved address, not the server's claimed
-identity. A fetch without a recipient can read a free response but cannot pay.
-
-Holder entitlement is reverified when its ownership proof is more than five minutes
-old. A transferred DEN loses holder access; unavailable verification blocks access
-instead of preserving a stale entitlement. Administrator grants are independent.

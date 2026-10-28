@@ -23,7 +23,6 @@ def test_preflight_non_interactive_no_key_returns_false_and_prints(monkeypatch, 
     assert keys.preflight_or_onboard(interactive=False) is False
     err = capsys.readouterr().err
     assert "No usable provider credential" in err
-    assert "deepseek/deepseek-chat" in err  # canonical message reused
 
 
 def test_preflight_interactive_onboards_then_proceeds(monkeypatch):

@@ -99,6 +99,49 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7
+
+- **There is no default network.** `polyrob wallet deploy-token`, `polyrob wallet lp …`,
+  `polyrob wallet nft …` and `polyrob identity register|set-uri` need `--chain <chain>`;
+  without it they stop with a usage error. In chat, `/deploy`, `/identity` and `/nft`
+  need `on <chain>`. Every `defi_trade`, `defi_data`, `dapp_browser` and `agent_nft`
+  verb Rob calls needs `chain` too — so name the network in the text of a job, a
+  goal or a skill that used to rely on the default.
+- **The NFT holder tier is gone.** A user on the `holder` tier moves to `free_access`
+  at the next start (a migration). The admin `verify-token` endpoint and the
+  `den_token_count` / `requires_den_token` API fields are removed, and six settings are
+  no longer read: `DEN_TOKEN_CONTRACT_ADDRESS`, `COLLABLAND_API_KEY`, `COLLABLAND_API_URL`,
+  `COLLABLAND_ID`, `COLLABLAND_SECRET` and `ALCHEMY_API_URL`. Delete them from your env
+  file. `ALCHEMY_API_KEY` stays: the NFT and holdings reads use it.
+- **`/trade` is the trading mandate.** The old one-goal `/trade` verb is removed;
+  `/trade start` now opens one decision that starts the whole programme
+  ([cli.md](cli.md#slash-commands-repl)).
+
+### Upgrading to 1.6
+
+- **One step limit and one spend limit for every run Rob starts by itself.** Goal,
+  scheduled-job, delegated and helper runs stop at `AUTONOMOUS_MAX_STEPS` (default 150)
+  and at `AUTONOMOUS_RUN_BUDGET_USD` (default $2.00, `0` turns it off) of spend; the
+  spend of a helper a run starts counts toward its run.
+  The per-run step settings are removed: `polyrob workers new/edit --max-steps`,
+  `polyrob job edit --max-steps`, the `max_steps` argument of `goal_create`,
+  `delegate_task` and `worker_manage`, and the `GOAL_DEFAULT_MAX_STEPS` flag. A job
+  that needs more steps needs a higher operator limit, not a per-job number.
+
+### Upgrading to 1.5
+
+- **One way to pick the model.** `CHAT_PROVIDER` / `CHAT_MODEL` are now
+  `DEFAULT_PROVIDER` / `DEFAULT_MODEL`, `COMPACTION_AUTO_AUX` is `AUX_AUTO`, and
+  `POLYROB_<PROVIDER>_MODEL` is no longer read. `polyrob doctor` names each retired line
+  your env still sets.
+- **Jobs and goals have their own verbs.** `/cron` is removed: use `/jobs` and
+  `/job new|show|edit|pause|resume|run|stop`, and `polyrob job …` (`polyrob cron` stays
+  an alias for one release). `/goal ready|resume|cancel` are removed: use
+  `/goal retry|pause|stop`; a stop is once unless you add `--forever`.
+- **Rails, objectives, streams and the planner are removed** — `/rail`, `polyrob rails`,
+  `/goal objective`, the `streams` and `planner` pause scopes and
+  `polyrob owner pause-streams`. A recurring need is a scheduled job.
+
 ### Upgrading from 1.3.x
 
 Three changes need an edit before or right after the upgrade. Run `polyrob doctor`

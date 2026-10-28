@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from core.config import BotConfig
 from core.exceptions import ToolError, ConfigurationError, ComponentInitializationError
@@ -12,6 +11,7 @@ from modules.memory.cache_manager import CacheManager
 from .config import MCPConfig, get_default_mcp_config, resolve_config_environment_variables
 from .param_coercion import coerce_arguments as _coerce_arguments
 from .server_manager import MCPServerManager, ServerStatus
+from .user_servers import UserServersLoadResult  # noqa: F401 — re-export (back-compat)
 from .views import (
     MCPExecuteToolAction, MCPReadResourceAction, MCPListToolsAction, MCPListResourcesAction,
     MCPListServersAction, MCPServerStatusAction, MCPConnectServerAction, MCPDisconnectServerAction,
@@ -26,15 +26,6 @@ def _mcp_off_text() -> str:
     from core.tool_capabilities import row_field
     return ("MCP is off on this instance (MCP_ENABLED is off or no server is "
             "configured); " + row_field("mcp", "gate").disclosure("mcp")[2])
-
-
-@dataclass
-class UserServersLoadResult:
-    """Result of loading user MCP servers (FIX #8)."""
-    loaded_count: int = 0
-    failed_count: int = 0
-    failed_servers: List[Dict[str, str]] = field(default_factory=list)  # [{name, error}]
-    timed_out: bool = False
 
 
 class MCPTool(BaseTool):
@@ -88,17 +79,57 @@ class MCPTool(BaseTool):
 
         # User MCP service (set via set_user_mcp_service)
         self._user_mcp_service: Optional[Any] = None
+        # The loop the manager runs on (set in _initialize) and the sessions
+        # holding the tool (weak; tools/mcp/user_servers.py).
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._controller_links: Dict[int, Any] = {}
 
-        # Enable if MCP is configured and enabled
-        self._enabled = self.mcp_config.enabled and bool(self.mcp_config.servers)
+        # 093 B2: the flag alone builds the server manager; whether a server is
+        # reachable (static OR a tenant's own) is `_enabled`, read live.
+        self._flag_on = bool(self.mcp_config.enabled)
+        # BaseComponent.__init__ set `_enabled = True`; MCP's own meaning is live.
+        self.__dict__.pop("_enabled_forced", None)
+        self.logger.info(
+            f"MCP service: flag {'on' if self._flag_on else 'off'}, "
+            f"{len(self.mcp_config.servers)} static servers")
 
-        # MCP uses discovery pattern - no callbacks needed
-        # Tools are discovered via list_tools and executed via execute_tool
+    @property
+    def _enabled(self) -> bool:
+        """A server is reachable (``tools/mcp/user_servers.py::has_reachable_server``).
 
-        if not self._enabled:
-            self.logger.info("MCP service is disabled or has no configured servers")
-        else:
-            self.logger.info(f"MCP service initialized with {len(self.mcp_config.servers)} servers")
+        Assignable for tests that build the tool with ``object.__new__``."""
+        forced = self.__dict__.get("_enabled_forced")
+        if forced is not None:
+            return forced
+        from .user_servers import has_reachable_server
+        return has_reachable_server(self)
+
+    @_enabled.setter
+    def _enabled(self, value: bool) -> None:
+        self.__dict__["_enabled_forced"] = bool(value)
+
+    def availability_gap(self) -> Optional[Tuple[str, str]]:
+        """``(reason, remedy)`` when no MCP server is reachable, else None (093 A1/B2).
+
+        Read by ``tools.tool_disclosure.resolve_tool_status``: flag on + zero
+        servers (static or any tenant's own) = off; one ``/mcp add`` = on."""
+        from core.tool_gates import remedy_text
+        missing = self.__dict__.get("_missing_services")
+        if missing:
+            # _validate_dependencies turned the tool off: a required service is
+            # missing. That is not "no server" — name the real cause.
+            what = ", ".join(f"the {n} service" for n in missing)
+            return "unavailable-on-this-deploy", remedy_text("needs-config", flag=what)
+        if self._enabled:
+            return None
+        return "no-mcp-server", remedy_text("no-mcp-server")
+
+    async def _validate_dependencies(self) -> None:
+        """Record WHICH required service is missing (``availability_gap`` names it)."""
+        services = getattr(self, "_services", None) or {}
+        missing = [n for n in self.required_services if n not in services]
+        self.__dict__["_missing_services"] = missing
+        await super()._validate_dependencies()
 
     @property
     def required_services(self) -> Dict[str, str]:
@@ -126,9 +157,19 @@ class MCPTool(BaseTool):
         # First call parent's _initialize to register decorated actions
         await super()._initialize()
         
-        if not self._enabled:
+        if not self._flag_on:
             self.logger.info("MCP service is disabled, skipping initialization")
             return
+        # The manager's locks, tasks and HTTP sessions belong to THIS loop; a
+        # store change from another loop is handed here (user_servers.py).
+        self._loop = asyncio.get_running_loop()
+        # A tenant's /mcp remove (or change) drops the live connection at once.
+        store = self._user_mcp_service
+        if store is None:
+            from .user_servers import user_store
+            store = user_store(self)
+        if store is not None and hasattr(store, "add_change_listener"):
+            store.add_change_listener(self._on_user_server_change)
         
         try:
             # Get optional cache manager
@@ -235,7 +276,31 @@ class MCPTool(BaseTool):
             service: UserMCPService instance
         """
         self._user_mcp_service = service
+        if service is not None and hasattr(service, "add_change_listener"):
+            service.add_change_listener(self._on_user_server_change)
         self.logger.debug("UserMCPService configured for MCPTool")
+
+    async def _on_user_server_change(self, user_id: str, server_name: str, event: str) -> None:
+        """A tenant server was added, removed or changed: reconcile the live
+        manager and the sessions that hold ``mcp`` — on the tool's OWN loop only
+        (``tools/mcp/user_servers.py::schedule_store_change``)."""
+        from .user_servers import schedule_store_change
+        pending = schedule_store_change(self, user_id, server_name, event)
+        if pending is not None:
+            await pending
+
+    def attach_controller(self, controller: Any) -> None:
+        """A session's controller holds this tool (store changes reach its actions)."""
+        from .user_servers import attach_controller
+        attach_controller(self, controller)
+
+    async def release_session(self, controller: Any, user_id: Optional[str]) -> int:
+        """A session ended: unload the tenant's servers only when no OTHER live
+        session of that tenant still holds the tool. Returns the count unloaded."""
+        from .user_servers import release_controller
+        if release_controller(self, controller, user_id) > 0:
+            return 0
+        return await self.unload_user_servers(user_id=user_id)
 
     def set_user_context(self, user_id: Optional[str]) -> None:
         """Set the current user context for user-specific servers.
@@ -258,104 +323,13 @@ class MCPTool(BaseTool):
         user_id: Optional[str] = None,
         overall_timeout: float = 60.0  # FIX #9: Overall timeout for loading all servers
     ) -> UserServersLoadResult:
-        """Load user-specific MCP servers.
+        """Reconcile this tenant's servers with the live manager (093 B2).
 
-        Args:
-            user_id: The tenant to load servers for. C6: pass this EXPLICITLY (from the
-                session's user_id). It is snapshotted here and used consistently across
-                awaits, so a concurrent session mutating the shared self._current_user_id
-                can't make this loop namespace/fetch servers for the wrong tenant. Falls
-                back to self._current_user_id only for legacy callers.
-            overall_timeout: Maximum time to spend loading all servers (FIX #9)
-
-        Returns:
-            UserServersLoadResult with loaded/failed counts and error details (FIX #8)
-        """
-        result = UserServersLoadResult()
-
-        # C6: snapshot the tenant ONCE — never re-read the shared field across awaits.
-        uid = user_id or self._current_user_id
-
-        if not uid:
-            self.logger.debug("No user context set, skipping user server loading")
-            return result
-
-        if uid in self._loaded_users:
-            self.logger.debug("User servers already loaded")
-            return result
-
-        if not self._user_mcp_service:
-            self.logger.warning("UserMCPService not configured, cannot load user servers")
-            return result
-
-        if not self.server_manager:
-            self.logger.warning("Server manager not initialized, cannot load user servers")
-            return result
-
-        try:
-            # FIX #9: Wrap entire loading process in timeout
-            async with asyncio.timeout(overall_timeout):
-                # Get user's enabled servers
-                user_servers = await self._user_mcp_service.get_user_servers(
-                    uid,
-                    enabled_only=True
-                )
-
-                for server in user_servers:
-                    # Create namespaced server name
-                    namespaced_name = f"user_{uid}::{server.server_name}"
-
-                    # Get server config with decrypted credentials
-                    config = await self._user_mcp_service.get_server_config(
-                        uid,
-                        server.server_name
-                    )
-
-                    if config:
-                        try:
-                            success = await self.server_manager.add_server(namespaced_name, config)
-                            if success:
-                                self.logger.info(f"Added user MCP server: {namespaced_name}")
-                                result.loaded_count += 1
-                            else:
-                                # FIX #8: Track failed servers
-                                error_msg = "Server manager rejected server (unknown reason)"
-                                result.failed_count += 1
-                                result.failed_servers.append({
-                                    "name": server.server_name,
-                                    "error": error_msg
-                                })
-                                self.logger.warning(f"Failed to add user MCP server: {namespaced_name}")
-                        except Exception as e:
-                            # FIX #8: Track failed servers with error details
-                            error_msg = str(e)
-                            result.failed_count += 1
-                            result.failed_servers.append({
-                                "name": server.server_name,
-                                "error": error_msg
-                            })
-                            self.logger.error(f"Error adding user MCP server {namespaced_name}: {e}")
-
-                self._loaded_users.add(uid)
-                self.logger.info(
-                    f"Loaded {result.loaded_count} user MCP servers for user {uid}"
-                    f" ({result.failed_count} failed)"
-                )
-                return result
-
-        except asyncio.TimeoutError:
-            # FIX #9: Handle overall timeout
-            result.timed_out = True
-            self.logger.error(
-                f"Timeout loading user servers after {overall_timeout}s - "
-                f"loaded {result.loaded_count}, failed {result.failed_count}"
-            )
-            self._loaded_users.add(uid)  # Mark as loaded to prevent retry loops
-            return result
-
-        except Exception as e:
-            self.logger.error(f"Failed to load user servers: {e}")
-            return result
+        ``user_id``: pass EXPLICITLY (C6) — it is snapshotted once. Runs on every
+        load (no once-per-tenant latch), so a server added mid-process connects
+        on the next load. See ``tools/mcp/user_servers.py::sync_user_servers``."""
+        from .user_servers import sync_user_servers
+        return await sync_user_servers(self, user_id, overall_timeout)
 
     async def unload_user_servers(self, user_id: Optional[str] = None) -> int:
         """Unload user-specific MCP servers.
@@ -484,6 +458,16 @@ class MCPTool(BaseTool):
             ``MCPExecutionResult`` — callers that need a raw result unwrap ``.result``.
         """
         start_time = time.time()
+
+        # One manager holds every tenant's servers (with their credentials): a
+        # tenant server runs only for its own tenant.
+        from .user_servers import is_user_server, server_visible
+        if is_user_server(server_name):
+            uid = getattr(execution_context, "user_id", None) or self._current_user_id
+            if not server_visible(server_name, uid):
+                return MCPExecutionResult(
+                    success=False, error=f"Server '{server_name}' is not one of yours",
+                    execution_time=time.time() - start_time)
 
         try:
             # Per-(user, server) execution rate limit (WS-B3). Coach the LLM to
@@ -854,7 +838,7 @@ class MCPTool(BaseTool):
         'List available tools from MCP servers',
         param_model=MCPListToolsAction
     )
-    async def list_tools(self, params: MCPListToolsAction) -> List[MCPToolInfo]:
+    async def list_tools(self, params: MCPListToolsAction, execution_context=None) -> List[MCPToolInfo]:
         """List available tools from MCP servers."""
         await self.ensure_initialized()
 
@@ -865,7 +849,9 @@ class MCPTool(BaseTool):
             # Apply rate limiting
             await self.rate_limit("mcp_list_tools")
 
-            all_tools = self.server_manager.get_all_tools()
+            from tools.mcp.user_servers import visible_tools  # 093: own + global only
+            all_tools = visible_tools(self.server_manager, getattr(
+                execution_context, "user_id", None) or self._current_user_id)
             tools = []
 
             # FIX (Dec 31, 2025): Apply requested_servers filter if set

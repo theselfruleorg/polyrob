@@ -11,14 +11,14 @@ import types
 from core.surfaces.inbox_render import BOOK_DISAGREEMENT_NOTE, render_book
 from tools.defi.book import tracked_rows
 
-FAKE = "0x357a04366240aa3c9d916aa0f15c3033686c9007"
+FAKE = "0x3535353535353535353535353535353535353535"
 
 
 def _body(**kw):
     body = {"verdict": "disagreement", "checked_at": None,
             "chains": {"robinhood": {"verdict": "disagreement", "report": {
-                "collisions": ["⚠ ONE SYMBOL, MORE THAN ONE CONTRACT: PNL"],
-                "unexplained": ["PNL 0xabc — held"]}}},
+                "collisions": ["⚠ ONE SYMBOL, MORE THAN ONE CONTRACT: TKN"],
+                "unexplained": ["TKN 0xabc — held"]}}},
             "rows": [], "tracked": []}
     body.update(kw)
     return body
@@ -38,7 +38,7 @@ def test_the_disagreement_note_is_the_true_behavior():
 
 
 def test_tracked_rows_and_lifecycle_render_with_the_owner_verbs():
-    tracked = [{"symbol": "PNL", "chain": "robinhood", "address": FAKE, "amount": 1.0,
+    tracked = [{"symbol": "TKN", "chain": "robinhood", "address": FAKE, "amount": 1.0,
                 "entry": 134.54, "lifecycle": "quarantined",
                 "lifecycle_reason": "look-alike"}]
     rows = [{"symbol": "OLD", "address": "0xdef", "lifecycle": "written_off",
@@ -52,7 +52,7 @@ def test_tracked_rows_and_lifecycle_render_with_the_owner_verbs():
 def test_tracked_rows_are_the_rows_that_wait_on_a_decision():
     from core.book import BookRow
     def _row(state, lifecycle):
-        return BookRow(symbol="PNL", address=FAKE, chain="robinhood", qty=2.0, usd=None,
+        return BookRow(symbol="TKN", address=FAKE, chain="robinhood", qty=2.0, usd=None,
                        state=state, entry=10.0, lifecycle=lifecycle)
     assert tracked_rows([_row("matched", "open")]) == []
     [q] = tracked_rows([_row("matched", "quarantined")])

@@ -478,7 +478,9 @@ function wireTabs() {
   links.forEach((a) => a.addEventListener("click", (ev) => {
     ev.preventDefault();
     const name = a.dataset.tab;
-    try { history.replaceState(null, "", `#${name}`); } catch (err) { /* ignore */ }
+    // Keep the query: Work › Goals keeps its filters and open goal there.
+    try { history.replaceState(null, "", `${location.pathname}${location.search}#${name}`); }
+    catch (err) { /* ignore */ }
     showTab(name, links, panes);
   }));
   window.addEventListener("hashchange", apply);

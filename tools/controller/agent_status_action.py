@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from agents.task.agent.views import ActionResult
 from core.runtime_paths import data_dir_or_home
+from tools.harness_view import gated_tools_block, tool_harness_view
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,46 @@ async def _detail_lines(controller, user_id, ledger) -> list:
 	return lines
 
 
+def _may_propose(controller, execution_context) -> bool:
+	"""093 review: whether ``propose_setting`` would run on this turn — the SAME
+	D4 check the verb makes, so the tool view never suggests a refused call. The
+	verb's registrar leaves the check on the controller (no import edge: it would
+	close a cycle); no verb registered = nothing to suggest."""
+	check = getattr(controller, "propose_setting_refusal", None)
+	if execution_context is None or not callable(check):
+		return False
+	try:
+		return check(execution_context) is None
+	except Exception:
+		return False
+
+
+def _tool_view(controller, tool_id: str, execution_context) -> str:
+	"""093 C1: one tool's harness view + the running version and a pending
+	owner deploy (the facts a "why is X missing" answer needs)."""
+	is_leaf = (getattr(execution_context, 'role', None) == 'leaf'
+			   or bool(getattr(execution_context, 'is_sub_agent', False)) or None)
+	try:
+		out = [tool_harness_view(controller, tool_id, is_leaf=is_leaf,
+								 may_propose=_may_propose(controller, execution_context))]
+	except Exception as e:
+		out = [_unavail(f"tool {tool_id}", e)]
+	try:
+		from core.version import running_version_line
+		out.append(f"running: {running_version_line()}")
+	except Exception as e:
+		out.append(_unavail("running", e))
+	try:
+		from core.lifecycle import deploy_wait_line
+		_cfg = getattr(getattr(controller, 'container', None), 'config', None)
+		line = deploy_wait_line(data_dir_or_home(getattr(_cfg, 'data_dir', None)))
+		if line:
+			out.append(line)
+	except Exception as e:
+		out.append(_unavail("deploy", e))
+	return "\n".join(out)
+
+
 def register_agent_status_action(controller) -> None:
 	"""Register the read-only `agent_status` introspection tool (I-6).
 
@@ -151,6 +192,7 @@ def register_agent_status_action(controller) -> None:
 
 	class AgentStatusAction(BaseModel):
 		release_notes: str = ""
+		tool: str = ""
 
 	_money = ("tools, context usage, and wallet/ledger balance" if detail
 			  else "tools and context usage")
@@ -160,7 +202,8 @@ def register_agent_status_action(controller) -> None:
 		f"used (of the cap), active {_money}. Read-only. Set release_notes to "
 		"'unreleased' (what changed since the last release), 'latest' or a version "
 		"('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with "
-		"your code.",
+		"your code. Set tool to a tool id to read why that tool is missing: its status, "
+		"remedy, who can fix it and when the fix applies.",
 		param_model=AgentStatusAction,
 	)
 	async def agent_status(params: AgentStatusAction, execution_context=None) -> ActionResult:
@@ -171,6 +214,10 @@ def register_agent_status_action(controller) -> None:
 				+ release_notes(params.release_notes),
 				include_in_memory=True,
 			)
+		if (params.tool or "").strip():
+			return ActionResult(extracted_content=_tool_view(controller, params.tool.strip(),
+															  execution_context),
+								include_in_memory=True)
 		user_id = getattr(execution_context, 'user_id', None) or getattr(controller, 'user_id', None)
 		lines = []
 		# 0) the shared status snapshot — health FIRST, then every section
@@ -199,7 +246,11 @@ def register_agent_status_action(controller) -> None:
 				container=getattr(controller, 'container', None),
 				session_id=getattr(orch, 'session_id', None), ledger=ledger,
 				include_money=detail)
-			lines.extend(render_status_lines(snap, prefix="- "))
+			# 093 D1: the snapshot's `harness` slot is the OWNER-seat view; this
+			# session's own view (its loads, ceiling, leaf) follows below.
+			from core.status_snapshot import SECTION_ORDER
+			lines.extend(render_status_lines(
+				snap, prefix="- ", sections=[n for n in SECTION_ORDER if n != "harness"]))
 		except Exception as e:
 			lines.append(_unavail("status snapshot", e))
 		# 1) steps used / budget — live AgentState
@@ -239,6 +290,13 @@ def register_agent_status_action(controller) -> None:
 		else:
 			lines.append("wallet, ledger, config: withheld on this posture "
 						 "(AGENT_STATUS_TOOL off) — say so; do not guess them")
+		# 093 C1: every gated tool with who can fix it and when the fix applies.
+		try:
+			block = gated_tools_block(controller)
+			if block:
+				lines.append(block)
+		except Exception as e:
+			lines.append(_unavail("harness", e))
 		# 7) capabilities — ground-truth tool availability (S1 catalog)
 		try:
 			is_leaf = getattr(execution_context, 'role', None) == 'leaf'

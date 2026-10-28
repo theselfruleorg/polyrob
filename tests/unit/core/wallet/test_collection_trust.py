@@ -164,10 +164,13 @@ def test_the_chat_seat_quotes_a_card_line_then_pins_on_go(_stores, monkeypatch):
     from core.surfaces.cards import confirm_line_in
     from surfaces.telegram.nft_ops import nft_reply
     monkeypatch.setattr(ct, "_rpc_for", lambda chain: fake_rpc())
-    quote = asyncio.run(nft_reply("rob", ["trust", COLL]))
-    assert confirm_line_in("/nft", ["trust", COLL], quote) == ["trust", COLL]
+    refused = asyncio.run(nft_reply("rob", ["trust", COLL]))
+    assert "Name the network" in refused and "no default network" in refused
+    args = ["trust", COLL, "on", "robinhood"]
+    quote = asyncio.run(nft_reply("rob", args))
+    assert confirm_line_in("/nft", args, quote) == args
     assert R.profiles() == ()
-    done = asyncio.run(nft_reply("rob", ["trust", COLL, "go"]))
+    done = asyncio.run(nft_reply("rob", args + ["go"]))
     assert "Trusted" in done and R.profiles()[0].address == COLL
 
 

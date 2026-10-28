@@ -9,7 +9,8 @@ Pins:
  - tenant scoping: one owner never sees another's positions;
  - an anonymous tenant never writes; a missing store reads empty, never created;
  - the swap classifier splits a trade into the right acquire/dispose legs and
-   treats the quote asset (USDC) + wrapped native as working capital.
+   treats the quote asset (USDC) as working capital (086 W0: a major bought
+   with a stable is a position).
 """
 import os
 
@@ -162,8 +163,9 @@ def test_classify_native_to_meme_is_a_buy():
     deltas = classify_swap(chain="base", token_in="native", token_out=MEME,
                            in_native=True, in_symbol="ETH", out_symbol="MEME",
                            in_qty=0.05, out_qty=5000.0, cost_usd=120.0)
-    assert len(deltas) == 1
-    assert deltas[0].address == MEME.lower() and deltas[0].qty == 5000.0
+    by_addr = {d.address: d.qty for d in deltas}
+    # 086 W0: the native leg reduces a held WETH row (a no-op when none is held).
+    assert by_addr == {MEME.lower(): 5000.0, WETH.lower(): -0.05}
 
 
 def test_classify_meme_to_meme_closes_one_opens_other():
@@ -176,11 +178,12 @@ def test_classify_meme_to_meme_closes_one_opens_other():
     assert by_addr[MEME2.lower()].cost_usd == 90.0
 
 
-def test_classify_value_to_value_tracks_nothing():
+def test_classify_stable_to_major_opens_the_major():
+    # 086 W0: the major<->stable leg is booked (it was "value<->value, nothing").
     deltas = classify_swap(chain="base", token_in=USDC, token_out=WETH,
                            in_native=False, in_symbol="USDC", out_symbol="WETH",
                            in_qty=100.0, out_qty=0.03, cost_usd=100.0)
-    assert deltas == []
+    assert [(d.address, d.qty) for d in deltas] == [(WETH.lower(), 0.03)]
 
 
 def test_classify_unknown_out_qty_drops_the_buy_leg():

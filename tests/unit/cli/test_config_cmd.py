@@ -263,7 +263,7 @@ def test_config_migrate_all_copies_secret_keys_only(tmp_path, monkeypatch):
         "OPENROUTER_API_KEY=sk-or-migrate-123456\n"
         'PERPLEXITY_API_KEY="pplx-quoted-123456"\n'   # dotenv-quoted → stored unquoted
         "UVICORN_WORKERS=4\n"                          # flag: name not secret-shaped
-        "REQUIRE_DEN_TOKEN=false\n"                    # _TOKEN suffix but flag-valued
+        "REQUIRE_INVITE_TOKEN=false\n"                    # _TOKEN suffix but flag-valued
         "MODEL_MAX_TOKENS=4096\n"                      # numeric flag
     )
     from cli.commands.config import config as config_group
@@ -273,7 +273,7 @@ def test_config_migrate_all_copies_secret_keys_only(tmp_path, monkeypatch):
     assert "OPENROUTER_API_KEY=sk-or-migrate-123456" in text
     assert "PERPLEXITY_API_KEY=pplx-quoted-123456" in text
     assert "UVICORN_WORKERS" not in text
-    assert "REQUIRE_DEN_TOKEN" not in text
+    assert "REQUIRE_INVITE_TOKEN" not in text
     assert "MODEL_MAX_TOKENS" not in text
     # names listed, values never shown
     assert "OPENROUTER_API_KEY" in res.output

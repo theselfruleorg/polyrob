@@ -123,7 +123,7 @@ def _tool(*, price=None, captured=None, balance=None, amount_usd=1.0):
 @pytest.mark.asyncio
 async def test_a_confirmed_approve_records_zero_spend(monkeypatch):
     tool, gate = _tool(amount_usd=1.99)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.99, max_spend_usd=2.0,
         dry_run=False))
     assert not res.error, res.error
@@ -135,7 +135,7 @@ async def test_a_confirmed_approve_records_zero_spend(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_confirmed_revoke_records_zero_spend():
     tool, gate = _tool(amount_usd=0.0)
-    res = await tool.revoke_approval(RevokeParams(
+    res = await tool.revoke_approval(RevokeParams(chain="base",
         token=USDC, spender=ROUTER, dry_run=False))
     assert not res.error, res.error
     assert gate.recorded[0]["amount_usd"] == 0.0
@@ -146,7 +146,7 @@ async def test_a_confirmed_swap_still_records_its_real_value(monkeypatch):
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     tool, gate = _tool(amount_usd=1.99)
-    res = await tool.swap(SwapParams(
+    res = await tool.swap(SwapParams(chain="base",
         token_in=USDC, token_out=WETH, amount_in=1.0, max_spend_usd=2.0,
         dry_run=False))
     assert not res.error, res.error
@@ -164,7 +164,7 @@ async def test_the_swap_intent_declares_its_inflow_token(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     captured = []
     tool, _ = _tool(captured=captured)
-    await tool.swap(SwapParams(
+    await tool.swap(SwapParams(chain="base",
         token_in=USDC, token_out=WETH, amount_in=1.0, max_spend_usd=2.0,
         dry_run=True))
     assert captured and captured[0].inflow_token == WETH
@@ -178,7 +178,7 @@ async def test_a_rounding_overshoot_clamps_to_the_held_balance(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     captured = []
     tool, _ = _tool(captured=captured, balance=999_990)
-    await tool.swap(SwapParams(
+    await tool.swap(SwapParams(chain="base",
         token_in=USDC, token_out=WETH, amount_in=1.0, max_spend_usd=2.0,
         dry_run=True))
     assert captured and captured[0].amount_raw == 999_990
@@ -192,7 +192,7 @@ async def test_a_real_overshoot_does_not_clamp(monkeypatch):
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
     captured = []
     tool, _ = _tool(captured=captured, balance=900_000)
-    await tool.swap(SwapParams(
+    await tool.swap(SwapParams(chain="base",
         token_in=USDC, token_out=WETH, amount_in=1.0, max_spend_usd=2.0,
         dry_run=True))
     assert captured and captured[0].amount_raw == 1_000_000
@@ -206,7 +206,7 @@ async def test_a_real_overshoot_does_not_clamp(monkeypatch):
 async def test_the_approve_precheck_tolerates_subcent_drift():
     """$1.9906 at-risk vs a declared $1.99 was a live refuse/resize dance."""
     tool, _ = _tool(price=1.0003)
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.99, max_spend_usd=1.99,
         dry_run=True))
     assert not (res.error and "puts $" in res.error), res.error

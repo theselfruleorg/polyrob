@@ -33,7 +33,7 @@ from cli.toolset import resolve_tool_list as _resolve_tool_list  # noqa: F401
 @click.option("--resume", "resume_id", default=None, metavar="SESSION_ID",
               help="Resume an existing session by id (continue it) instead of starting a new task.")
 @click.option("--model", "-m", default=None, help="Model name (e.g. gemini-2.5-flash, gpt-5)")
-@click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, or any provider declared in ~/.polyrob/providers.yaml; DeepSeek via openrouter + deepseek/deepseek-chat)")
+@click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, deepseek, or any provider declared in ~/.polyrob/providers.yaml)")
 @click.option("--tools", "-t", default=None, help="Comma-separated tool list (e.g. browser,mcp,filesystem). Takes precedence over --toolset.")
 @click.option("--toolset", default=None, help="Named toolset (minimal/default/research/coding/development/browser/full/safe). Ignored when --tools is given.")
 @click.option("--max-steps", default=INTERACTIVE_MAX_STEPS, type=click.IntRange(min=1), help=f"Maximum steps (default: {INTERACTIVE_MAX_STEPS})")

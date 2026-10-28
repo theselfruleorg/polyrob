@@ -1,0 +1,58 @@
+{
+  "function": {
+    "description": "Call an HTTPS API with a credential wallet_sign stored; it goes only to the host that issued it and is never shown.",
+    "name": "wallet_sign_api_call",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "body_json": {
+          "default": "{}",
+          "maxLength": 65536,
+          "type": "string"
+        },
+        "cookie_name": {
+          "default": null,
+          "description": "Send the credential as the cookie '<cookie_name>=<secret>' instead of a header (a session cookie the site set).",
+          "maxLength": 128,
+          "nullable": true,
+          "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]{1,128}$",
+          "type": "string"
+        },
+        "credential_id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "header": {
+          "default": "Authorization",
+          "maxLength": 64,
+          "pattern": "^(?:Authorization|X-[A-Za-z0-9-]*(?:Key|Token|Auth)[A-Za-z0-9-]*|Api-Key)$",
+          "type": "string"
+        },
+        "method": {
+          "default": "GET",
+          "enum": [
+            "GET",
+            "POST"
+          ],
+          "type": "string"
+        },
+        "prefix": {
+          "default": "Bearer ",
+          "maxLength": 32,
+          "type": "string"
+        },
+        "url": {
+          "description": "HTTPS URL on the credential's own host.",
+          "maxLength": 2048,
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "credential_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

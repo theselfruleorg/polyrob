@@ -90,8 +90,9 @@ signup, and the owner needs it to know who is writing.
 **Standing work.** Only if `goals`/`cron` show as loaded AND the owner has
 told you what your mission is. Create the objective(s) with `goal_create`
 (whether a goal you write yourself may carry a money tool is the owner's
-money regime; the owner grants money tools with `/trade`, or
-`/job new … tools=defi_trade`). Arm any monitor loop with
+money regime). Trading runs only under a mandate the owner starts with
+`/trade start` (`trading-mandate`); other money work the owner grants with
+`/job new … tools=defi_trade`. Arm any monitor loop with
 `cronjob_schedule`. Never seed work
 the owner did not name.
 

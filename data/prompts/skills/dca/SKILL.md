@@ -27,7 +27,7 @@ prediction, and the safest one to run unattended.
 ## Set it up
 
 1. **Confirm the target by ADDRESS** (`token-identity`). The job must carry the
-   address, not the symbol. On 2026-09-25 a recurring buyback whose text had
+   address, not the symbol. On 2026-09-25 a recurring swap job whose text had
    lost the address bought a look-alike — confirm the address with the owner
    before the first run. A target the owner writes into the job is trusted for
    that job; nobody has to pin it. If the identity check refuses a buy anyway,

@@ -37,10 +37,6 @@ class UserProfiles:
                     current_wallet_chain TEXT DEFAULT 'ethereum',
                     current_wallet_connected_at TIMESTAMP,
 
-                    -- TOKEN OWNERSHIP
-                    den_token_count INTEGER DEFAULT 0,
-                    den_token_verified_at TIMESTAMP,
-
                     -- METADATA
                     total_sessions INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -48,7 +44,7 @@ class UserProfiles:
 
                     -- CONSTRAINTS (simplified: only user/admin roles)
                     CHECK (role IN ('user', 'admin')),
-                    CHECK (tier IN ('free', 'free_access', 'holder', 'x402', 'admin'))
+                    CHECK (tier IN ('free', 'free_access', 'x402', 'admin'))
                 )
             ''')
 
@@ -68,8 +64,6 @@ class UserProfiles:
                     ("tier", "TEXT NOT NULL DEFAULT 'free'"),
                     ("current_wallet_chain", "TEXT DEFAULT 'ethereum'"),
                     ("current_wallet_connected_at", "TIMESTAMP"),
-                    ("den_token_count", "INTEGER DEFAULT 0"),
-                    ("den_token_verified_at", "TIMESTAMP"),
                     ("total_sessions", "INTEGER DEFAULT 0"),
                 ]
                 for col, ddl in backfill:
@@ -160,18 +154,6 @@ class UserProfiles:
             
     def _row_to_user_profile(self, row) -> UserProfile:
         """Convert database row to UserProfile object."""
-        # Parse den_token_verified_at timestamp if present
-        den_token_verified_at = None
-        if row.get('den_token_verified_at'):
-            try:
-                if isinstance(row['den_token_verified_at'], str):
-                    den_token_verified_at = datetime.fromisoformat(row['den_token_verified_at'])
-                else:
-                    den_token_verified_at = row['den_token_verified_at']
-            except (ValueError, TypeError) as e:
-                self.logger.debug(f"Failed to parse den_token_verified_at: {row.get('den_token_verified_at')} - {e}")
-                den_token_verified_at = None
-        
         # Parse wallet_connected_at timestamp if present
         current_wallet_connected_at = None
         if row.get('current_wallet_connected_at'):
@@ -217,8 +199,6 @@ class UserProfiles:
             tier=row.get('tier', 'free'),
             current_wallet_chain=row.get('current_wallet_chain', 'ethereum'),
             current_wallet_connected_at=current_wallet_connected_at,
-            den_token_count=row.get('den_token_count', 0),
-            den_token_verified_at=den_token_verified_at,
             total_sessions=row.get('total_sessions', 0),
             created_at=created_at,
             updated_at=updated_at
@@ -232,9 +212,8 @@ class UserProfiles:
                 INSERT INTO user_profiles (
                     user_id, wallet_address, email, first_name, last_name,
                     role, tier, current_wallet_chain, current_wallet_connected_at,
-                    den_token_count, den_token_verified_at, total_sessions,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    total_sessions, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id) DO UPDATE SET
                     wallet_address=excluded.wallet_address,
                     email=excluded.email,
@@ -244,8 +223,6 @@ class UserProfiles:
                     tier=excluded.tier,
                     current_wallet_chain=excluded.current_wallet_chain,
                     current_wallet_connected_at=excluded.current_wallet_connected_at,
-                    den_token_count=excluded.den_token_count,
-                    den_token_verified_at=excluded.den_token_verified_at,
                     total_sessions=excluded.total_sessions,
                     updated_at=CURRENT_TIMESTAMP
             """, (
@@ -258,8 +235,6 @@ class UserProfiles:
                 getattr(user_profile, 'tier', 'free'),
                 getattr(user_profile, 'current_wallet_chain', 'ethereum'),
                 getattr(user_profile, 'current_wallet_connected_at', None),
-                getattr(user_profile, 'den_token_count', 0),
-                getattr(user_profile, 'den_token_verified_at', None),
                 getattr(user_profile, 'total_sessions', 0)
             ))
             self.logger.info(f"Upserted profile for user_id: {user_profile.user_id}")
@@ -288,9 +263,8 @@ class UserProfiles:
                 INSERT INTO user_profiles (
                     user_id, wallet_address, email, first_name, last_name,
                     role, tier, current_wallet_chain, current_wallet_connected_at,
-                    den_token_count, den_token_verified_at, total_sessions,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    total_sessions, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id) DO NOTHING
             """, (
                 user_profile.user_id,
@@ -302,8 +276,6 @@ class UserProfiles:
                 getattr(user_profile, 'tier', 'free'),
                 getattr(user_profile, 'current_wallet_chain', 'ethereum'),
                 getattr(user_profile, 'current_wallet_connected_at', None),
-                getattr(user_profile, 'den_token_count', 0),
-                getattr(user_profile, 'den_token_verified_at', None),
                 getattr(user_profile, 'total_sessions', 0)
             ))
             inserted = bool(getattr(cursor, "rowcount", 0) and cursor.rowcount > 0)
@@ -387,8 +359,6 @@ class UserProfiles:
                     tier,
                     current_wallet_chain,
                     current_wallet_connected_at,
-                    den_token_count,
-                    den_token_verified_at,
                     total_sessions,
                     created_at,
                     updated_at

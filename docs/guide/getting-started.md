@@ -56,11 +56,15 @@ and the same file is in the repository root. Flags:
 |---|---|
 | `--extras server,browser` | Install pip extras up front |
 | `--browser` / `--no-browser` | Decide the browser engine without being asked |
+| `--packs x,discovery` | Install the SDKs of these first-party packs (`all` or `none`); the packs themselves ship inside `polyrob` |
 | `--no-setup` | Skip the wizard (run `polyrob setup` later) |
-| `--no-prompt` | Ask nothing at all — for scripts and images |
+| `--no-service` | Never offer the background service |
+| `--no-prompt` | Ask nothing at all — for scripts and images (implies `--no-browser` and `--no-service`) |
 | `--branch` / `--commit` | Pin the version it installs |
 | `--home DIR` | A different POLYROB home (default `~/.polyrob`) |
-| `--uninstall` | Remove the command, the `PATH` entry, the venv and the source |
+| `--dir DIR` / `--venv-dir DIR` | Install the source tree at `DIR` in place / put the virtualenv elsewhere |
+| `--reset` | Recreate the virtualenv from scratch |
+| `--uninstall` | Remove the command, the `PATH` entry, the venv and the source; your data is kept |
 
 It puts code in `~/.polyrob/src`, the virtualenv in `~/.polyrob/venv`, the command
 in `~/.local/bin/polyrob`, and your data — keys, memory, identity — in
@@ -113,7 +117,7 @@ pip install -e ".[dev,all]"
 | `hf` | Hugging Face Hub client, for publishing to a Space | — |
 | `modal` / `daytona` / `vercel-sandbox` | The SDK of that cloud sandbox pack, an optional backend for `run_code` and the shell | — |
 | `dev` | Tests, linting, build tooling | +30 MB |
-| `all` | Everything above | ~700 MB |
+| `all` | Everything above except `dev` | ~700 MB |
 
 You rarely type an extra: the **first use** of an optional capability installs it
 (`LAZY_DEPS_MODE=trusted`, the default). It installs the exact files the release
@@ -166,8 +170,10 @@ Three things worth knowing:
   Then `polyrob run -p ollama "hello"`. Full rules:
   [configuration.md §4](configuration.md#your-own-endpoint-providersyaml).
 
-DeepSeek has no standalone bootstrap path (its direct client's tool calling is
-unreliable); reach it through OpenRouter with a `deepseek/deepseek-chat` model.
+A `DEEPSEEK_API_KEY` alone is a working setup: POLYROB runs on DeepSeek's own
+API with native function calling, thinking and cache-hit pricing. The default
+model is `deepseek-flash` (V4.1 Flash, 1M context); `-m deepseek-v4-pro` is the
+larger model, and `-m deepseek-chat` is Flash with thinking off.
 
 ### Optional: the browser engine
 
@@ -219,7 +225,7 @@ polyrob
 
 Type your goal and press Enter. The agent acts step by step and prints each
 action and result. `Alt+Enter` (or `Esc` then `Enter`) inserts a newline,
-`Ctrl-L` repaints the screen, `Ctrl-C` interrupts the current turn, and `exit`
+`Ctrl-L` repaints the screen, `Ctrl-C` interrupts the current turn, and `/exit`
 or `Ctrl-D` leaves.
 
 The startup banner is two quiet lines:
@@ -234,7 +240,7 @@ $ polyrob
 
 ```
 /help                    the grouped command list; /help <verb> explains one
-/status                  live session status: tokens, cost, context
+/status                  health first, then session, goals, loops, wallet
 /usage [days]            AI cost by kind of work, job, model and day
 /model <provider> <model>  swap the model live and persist it as the default
 /memory [search <query>]   the memory provider, or recall across sessions
@@ -319,10 +325,10 @@ jobs, an owner doc, skills or keys. A `.polyrob/` data home left by an older ver
 is not read, moved or deleted; POLYROB names it in a warning, and
 `POLYROB_DATA_DIR=<that path>` keeps using it.
 
-Those five are examples: `core/db_manifest.py::SIDECAR_DB_NAMES` is the
-authoritative list and names **37** sidecar stores (surfaces, dedup cursors,
-artifacts, apps, bridges, the session registry…), beside the relational `bot.db`
-whose path `DB_PATH` sets. `polyrob update --apply` and the boot-time migration both
+Those are examples: `core/db_manifest.py::SIDECAR_DB_NAMES` is the
+authoritative list of the sidecar stores (surfaces, dedup cursors, artifacts,
+apps, bridges, cards, trading, the session registry…), beside the relational
+`bot.db` whose path `DB_PATH` sets. `polyrob update --apply` and the boot-time migration both
 snapshot that whole set together, so a rollback never restores a half of it.
 
 `POLYROB_DATA_DIR` moves the runtime root; a named profile replaces both homes
@@ -350,6 +356,8 @@ profile, if one is active) explicitly, because a systemd user unit inherits noth
 from your shell.
 
 The installer offers this at the end when the wizard configured a chat surface.
+To connect one later, `polyrob surfaces add <surface>` asks for its credentials and
+proves them with a read; `polyrob surfaces list` shows what is configured.
 
 From your chat, `/restart` and `/update` do the same (owner-only, confirmed with a
 button) and answer "back online on <version>" when the service is back. How a

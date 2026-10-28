@@ -165,8 +165,9 @@ run. Read that line every time.
   every token on Robinhood chain**, including real ones, so treating it as a hard
   requirement there rejects the whole chain while proving nothing.
 - What you have left on a partially-screened chain is the market read (`scan`,
-  `ohlcv`), the size limit, and the exit plan. Say that out loud in the ledger
-  rather than implying a screen you did not get.
+  `ohlcv`), the size limit, and the exit plan. Say that out loud in the
+  entry's `plan` and the run report rather than implying a screen you did not
+  get.
 
 ### Social proof — what counts, and what is bait
 
@@ -235,8 +236,8 @@ position.
 ## If a tool is missing
 
 The trading verbs need `defi_trade` (and `defi_data` for reads) in THIS session.
-If they are not loaded, do the read steps you can, write the plan to the ledger or
-watchlist, and tell the owner which grant is missing. Never work around a missing
+If they are not loaded, do the read steps you can, write the plan in your run report or
+the watchlist, and tell the owner which grant is missing. Never work around a missing
 verb with a raw `call`, a browser dapp, or another agent.
 
 ## Related

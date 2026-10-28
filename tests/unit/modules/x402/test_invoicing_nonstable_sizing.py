@@ -36,8 +36,8 @@ def pnl_asset(tmp_path):
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     home = str(tmp_path / "home")
     AssetStore(store_path(home)).upsert(PaymentAsset(
-        asset_id="pnl", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="PNL", rail="onchain_scan", source="operator",
+        asset_id="tkn", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="TKN", rail="onchain_scan", source="operator",
         min_amount_raw=1, liquidity_floor_usd=100))
     return home
 
@@ -69,9 +69,9 @@ async def test_a_non_stable_asset_is_never_sized_at_par(x402_db, pnl_asset):
     with pytest.raises(ValueError) as e:
         await invoicing.create_payment_request(
             user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
-            chain="robinhood", asset_id="pnl", quoter=None, db=x402_db)
+            chain="robinhood", asset_id="tkn", quoter=None, db=x402_db)
     msg = str(e.value).lower()
-    assert "price" in msg and "pnl" in msg
+    assert "price" in msg and "tkn" in msg
 
 
 @pytest.mark.asyncio
@@ -79,7 +79,7 @@ async def test_a_quoted_non_stable_asset_is_sized_from_the_price(x402_db, pnl_as
     q = _Quoter(usd_per_token=0.00006364)
     inv = await invoicing.create_payment_request(
         user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
-        chain="robinhood", asset_id="pnl", quoter=q, db=x402_db)
+        chain="robinhood", asset_id="tkn", quoter=q, db=x402_db)
     assert q.calls == 1
     # 5 / 0.00006364 = 78566.94... tokens, at 18 decimals.
     assert inv["amount_raw"] == pytest.approx(78566.94e18, rel=1e-6)
@@ -92,7 +92,7 @@ async def test_a_wash_pool_is_refused_rather_than_priced(x402_db, pnl_asset):
     with pytest.raises(ValueError) as e:
         await invoicing.create_payment_request(
             user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
-            chain="robinhood", asset_id="pnl", quoter=q, db=x402_db)
+            chain="robinhood", asset_id="tkn", quoter=q, db=x402_db)
     assert "WASH" in str(e.value)
 
 
@@ -103,7 +103,7 @@ async def test_a_raising_quoter_refuses_and_never_falls_back_to_par(
     with pytest.raises(ValueError):
         await invoicing.create_payment_request(
             user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
-            chain="robinhood", asset_id="pnl", quoter=_Quoter(raises=True),
+            chain="robinhood", asset_id="tkn", quoter=_Quoter(raises=True),
             db=x402_db)
 
 
@@ -112,13 +112,13 @@ async def test_the_asset_min_amount_floor_still_applies_after_sizing(
         x402_db, tmp_path):
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(str(tmp_path / "home"))).upsert(PaymentAsset(
-        asset_id="pnl", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="PNL", rail="onchain_scan",
+        asset_id="tkn", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="TKN", rail="onchain_scan",
         min_amount_raw=10 ** 30, source="operator"))
     with pytest.raises(ValueError) as e:
         await invoicing.create_payment_request(
             user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
-            chain="robinhood", asset_id="pnl", quoter=_Quoter(), db=x402_db)
+            chain="robinhood", asset_id="tkn", quoter=_Quoter(), db=x402_db)
     assert "floor" in str(e.value)
 
 
@@ -139,7 +139,7 @@ async def test_an_explicit_amount_raw_still_wins(x402_db, pnl_asset):
     q = _Quoter()
     inv = await invoicing.create_payment_request(
         user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
-        chain="robinhood", asset_id="pnl", amount_raw=7 * 10 ** 22,
+        chain="robinhood", asset_id="tkn", amount_raw=7 * 10 ** 22,
         quoter=q, db=x402_db)
     assert q.calls == 0
     assert inv["amount_raw"] == 7 * 10 ** 22

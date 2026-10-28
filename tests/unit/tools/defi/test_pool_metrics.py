@@ -4,11 +4,11 @@ import pytest
 from core.wallet import dex_registry
 from tools.defi import lp_reads, lp_v4 as V, pool_metrics as PM
 
-PNL = "0xbba60ab93fc409b1a34371cbf6c3173795ed2c7e"
-POOL_ID = "0x43b7b259007600ad19df15a23b620fd77c8c121c8ecc8788d5116a833d031e94"
+TKN = "0x5555555555555555555555555555555555555555"
+POOL_ID = "0x9aea68684de3d4fca647dfcf22ec651ab3df2b63c19fd172748024e1c007e960"
 SQRT = 627219137286278685928990650320595        # measured 2026-09-29, 4663 fork
 LIQ = 29277002188455997052109
-KEY = lp_reads.pons_pool_key({"token": PNL, "pairToken": "0x" + "0" * 40,
+KEY = lp_reads.pons_pool_key({"token": TKN, "pairToken": "0x" + "0" * 40,
                               "poolFee": 0, "tickSpacing": 200})
 
 
@@ -25,7 +25,7 @@ def reads(monkeypatch):
 
 
 def _run(recorded, rows=(), **kw):
-    return PM.pool_metrics(None, "robinhood", PNL, now=10 ** 9,
+    return PM.pool_metrics(None, "robinhood", TKN, now=10 ** 9,
                            query_fn=lambda **q: list(rows),
                            record_fn=lambda kind, **a: recorded.append((kind, a)), **kw)
 
@@ -69,7 +69,7 @@ def test_history_gives_24h_change_and_the_median_reference(reads):
 def test_an_unreadable_history_is_not_derivable_not_zero(reads):
     def boom(**q):
         raise RuntimeError("db locked")
-    out = PM.pool_metrics(None, "robinhood", PNL, now=10 ** 9, query_fn=boom,
+    out = PM.pool_metrics(None, "robinhood", TKN, now=10 ** 9, query_fn=boom,
                           record_fn=lambda *a, **k: None)
     assert out["change_24h_pct"] is None
     assert any("unreadable" in line for line in out["lines"])

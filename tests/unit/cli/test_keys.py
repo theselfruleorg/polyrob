@@ -24,22 +24,15 @@ def test_does_not_warn_with_any_of_five_initializable_providers():
         assert should_warn_no_key({key: _OK}) is False, key
 
 
-def test_deepseek_only_still_warns():
-    # A DEEPSEEK_API_KEY alone can't bootstrap (direct client disabled) — must warn,
-    # NOT silently pass the guard and then hard-crash at container build.
-    assert should_warn_no_key({"DEEPSEEK_API_KEY": _OK}) is True
+def test_deepseek_only_does_not_warn():
+    # DeepSeek's direct client is native: its key alone is a usable provider.
+    assert should_warn_no_key({"DEEPSEEK_API_KEY": _OK}) is False
 
 
 def test_malformed_short_key_still_warns():
     # Live bug 2026-07-01: a too-short ANTHROPIC key (BotConfig blanks <20 chars) must
     # NOT pass the guard — it would block the real-key backfill and crash the manager.
     assert should_warn_no_key({"ANTHROPIC_API_KEY": "sk-junk123"}) is True
-
-
-def test_message_mentions_openrouter_for_deepseek():
-    msg = no_key_message()
-    assert "deepseek/deepseek-chat" in msg
-    assert "OPENROUTER_API_KEY" in msg
 
 
 def test_keyless_rob_env_still_warns():

@@ -20,10 +20,10 @@ from core.doc_claims import (SUPERSEDED_HEADING, carry_superseded,
 from core.instance import OWNER_DOC_MAX_CHARS, load_owner_doc, self_tier_root
 from core.owner_doc_writer import OwnerDocWriter
 
-STOP_0909 = ("BUYBACKS STOPPED (2026-10-09 03:29): owner said \"Stop buybacks\". "
-             "Cron 4def3260d811 CANCELLED. Supersedes BUYBACKS RESUMED (2026-10-07 05:45).")
-RESUMED = ("- BUYBACKS RESUMED (2026-10-07 05:45): owner said \"start buybacks again\". "
-           "New recurring job 4def3260d811.")
+STOP_0909 = ("REBUYS STOPPED (2026-10-09 03:29): owner said \"Stop rebuys\". "
+             "Cron 0a1b2c3d4e5f CANCELLED. Supersedes REBUYS RESUMED (2026-10-07 05:45).")
+RESUMED = ("- REBUYS RESUMED (2026-10-07 05:45): owner said \"start rebuys again\". "
+           "New recurring job 0a1b2c3d4e5f.")
 
 
 def _prod_shaped_doc() -> str:
@@ -32,10 +32,10 @@ def _prod_shaped_doc() -> str:
 	          f"{STOP_0909}\n\n"
 	          "LINK RULE (2026-09-18): polyrob.dev in all comms.\n")
 	sup = "\n".join([
-		f"{RESUMED} — superseded 2026-10-07 by: BUYBACKS RESUMED (2026-10-07 05:45) every 4h",
+		f"{RESUMED} — superseded 2026-10-07 by: REBUYS RESUMED (2026-10-07 05:45) every 4h",
 		f"{RESUMED} every 4h — superseded 2026-10-09 by: {STOP_0909[:60]}…",
 		f"{RESUMED} every 6h — superseded 2026-10-10 by: {STOP_0909[:60]}…",
-		"- PNL BUYBACK — FIXED SIZE 0.05 ETH (2026-09-23 17:01) — superseded 2026-10-05",
+		"- TKN REBUY — FIXED SIZE 0.05 ETH (2026-09-23 17:01) — superseded 2026-10-05",
 	])
 	return active + "\n" + SUPERSEDED_HEADING + "\n\n" + sup + "\n"
 
@@ -52,12 +52,12 @@ def _seed(tmp_path, body: str, uid: str = "u1") -> OwnerDocWriter:
 def test_patch_matches_the_active_rules_only(tmp_path):
 	w = _seed(tmp_path, _prod_shaped_doc())
 	before_sup = superseded_entries(w.read("u1"))
-	res = w.patch(user_id="u1", old_string="Supersedes BUYBACKS RESUMED (2026-10-07 05:45).",
-	              new_string="Supersedes BUYBACKS RESUMED (2026-10-07 05:45). Cron 45e7a8066a94 cancelled.",
+	res = w.patch(user_id="u1", old_string="Supersedes REBUYS RESUMED (2026-10-07 05:45).",
+	              new_string="Supersedes REBUYS RESUMED (2026-10-07 05:45). Cron 6f7e8d9c0b1a cancelled.",
 	              created_by="user", pending=False)
 	assert res.ok, res.errors
 	active, _sup = split_superseded(w.read("u1"))
-	assert "45e7a8066a94" in active
+	assert "6f7e8d9c0b1a" in active
 	after_sup = superseded_entries(w.read("u1"))
 	# history is untouched: every old entry is still there, byte for byte
 	for entry in before_sup:
@@ -67,11 +67,11 @@ def test_patch_matches_the_active_rules_only(tmp_path):
 def test_replace_all_never_rewrites_superseded_history(tmp_path):
 	w = _seed(tmp_path, _prod_shaped_doc())
 	before_sup = superseded_entries(w.read("u1"))
-	res = w.patch(user_id="u1", old_string="4def3260d811", new_string="45e7a8066a94",
+	res = w.patch(user_id="u1", old_string="0a1b2c3d4e5f", new_string="6f7e8d9c0b1a",
 	              replace_all=True, created_by="user", pending=False)
 	assert res.ok, res.errors
 	active, _sup = split_superseded(w.read("u1"))
-	assert "45e7a8066a94" in active and "4def3260d811" not in active
+	assert "6f7e8d9c0b1a" in active and "0a1b2c3d4e5f" not in active
 	after_sup = superseded_entries(w.read("u1"))
 	for entry in before_sup:
 		assert entry in after_sup, "a patch rewrote a Superseded entry"

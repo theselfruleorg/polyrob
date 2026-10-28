@@ -310,8 +310,12 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
                      outcome: str, reason: str = "", error: str = "",
                      run: Any = None, summary: Optional[str] = None,
                      goal_id: Optional[str] = None,
-                     meta: Optional[dict] = None) -> None:
+                     meta: Optional[dict] = None,
+                     mandate: Any = None) -> None:
     """Write the run record for one exit path. Never raises.
+
+    ``mandate`` (086 W6): the run's trading mandate id (``payload.mandate``),
+    stamped on ``meta["mandate"]`` so the mandate's LLM cost reads per run.
 
     ``summary=None`` composes one from the outcome, the reason, the error and
     the run's facts (a run that stopped before ``done()`` has no done text, and
@@ -322,6 +326,8 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
         on = run_record_on(regime)
         facts = run_record_facts(run) if on else {}
         m = dict(meta or {})
+        if mandate is not None and str(mandate).strip():
+            m["mandate"] = str(mandate).strip()
         if on:
             m.update({k: v for k, v in facts.items() if v})
             if reason:

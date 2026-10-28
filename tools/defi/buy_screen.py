@@ -42,7 +42,7 @@ def unchecked_route_refusal(verdict: str, max_spend_usd: float, *,
     A TRUSTED ``token_out`` (owner pin, own launch, the run's owner target)
     whose route is UNAVAILABLE is not ticket-capped (owner decision
     2026-10-10): on a chain no price source covers, its route can never
-    AGREE, and the cap refused every owner buyback. The per-tx ceiling, the
+    AGREE, and the cap refused every owner-set scheduled buy. The per-tx ceiling, the
     slippage bound and the route's minimum output still bound it. A route
     that DISAGREES is never lifted, and an untrusted token keeps the ticket."""
     from tools.defi.identity_gate import UNVERIFIED_UNCHECKED_MAX_USD

@@ -16,7 +16,7 @@ from cron.runner import make_agent_runner
 
 DOC = """APPROVE POSTS WITH OWNER (2026-10-05 17:56): owner said "Approve posts with me." [from: owner said 2026-10-05]
 
-PNL FIRST, 6551 SECOND (2026-10-05 17:56): owner said "We should shill pnl token first." [from: owner said 2026-10-05]
+TKN FIRST, 6551 SECOND (2026-10-05 17:56): owner said "We should shill tkn token first." [from: owner said 2026-10-05]
 
 OLD RULE (2026-09-23 03:28): owner ruled something long ago. [from: owner said 2026-09-23]
 
@@ -30,7 +30,7 @@ UNDATED RULE with no stamp at all.
 def test_only_active_rules_dated_on_or_after_the_job_are_returned():
     rules = newer_owner_rules(DOC, datetime(2026, 10, 4, 7, 38))
     assert [r.split(" (")[0] for r in rules] == [
-        "APPROVE POSTS WITH OWNER", "PNL FIRST, 6551 SECOND"]
+        "APPROVE POSTS WITH OWNER", "TKN FIRST, 6551 SECOND"]
 
 
 def test_nothing_newer_means_no_overlay():

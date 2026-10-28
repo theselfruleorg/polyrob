@@ -1,7 +1,7 @@
 """Which contract a BUY may name (068 G1).
 
-On 2026-09-25 a buyback cron bought an airdropped look-alike: the text said
-"PNL", the reconcile output listed the fake "PNL" first, the model took that
+On 2026-09-25 a recurring swap job bought an airdropped look-alike: the text
+said only the symbol, the reconcile output listed the fake token first, the model took that
 address, and every check that ran said so — ``token_info`` returned
 ``verified: false``, the dry run said ``route check: UNAVAILABLE`` — and the
 swap verb read none of it. A skill can TEACH "resolve by address"; only the verb

@@ -13,8 +13,9 @@ def test_anthropic_budget_from_registry():
     assert get_thinking_config("claude-opus-4-1").get("budget_tokens") == 32768
 
 
-def test_deepseek_reasoner_budget():
-    assert get_thinking_config("deepseek-reasoner").get("budget_tokens") == 32000
+def test_deepseek_thinks_by_server_default():
+    # DeepSeek's thinking is ON server-side; the registry sends no budget/effort.
+    assert get_thinking_config("deepseek-flash") == {}
 
 
 def test_non_thinking_or_unknown_model_empty():
@@ -40,20 +41,21 @@ def _deepseek():
     from modules.llm.deepseek_client import DeepSeekClient
     c = object.__new__(DeepSeekClient)
     c.logger = logging.getLogger("deepseek-thinking-test")
-    c.model_type = "deepseek-reasoner"
+    c.model_type = "deepseek-flash"
     c.temperature = 0.7
     return c
 
 
-def test_deepseek_cot_from_registry_when_gated_on(monkeypatch):
+def test_deepseek_effort_from_registry_when_gated_on(monkeypatch):
+    import modules.llm.model_registry as mr
     monkeypatch.setenv("THINKING_CONFIG_ENABLED", "true")
-    c = _deepseek()
-    body = c._build_request_body([{"role": "user", "content": "hi"}], max_tokens=100)
-    assert body["max_cot_tokens"] == 32000
+    monkeypatch.setattr(mr, "get_thinking_config", lambda m: {"reasoning_effort": "max"})
+    body = _deepseek().request_extras({"model": "deepseek-flash"}, 100)
+    assert body["reasoning_effort"] == "max"
 
 
-def test_deepseek_cot_falls_back_to_const_when_gated_off(monkeypatch):
+def test_deepseek_sends_no_openrouter_extras_when_gated_off(monkeypatch):
     monkeypatch.delenv("THINKING_CONFIG_ENABLED", raising=False)
-    c = _deepseek()
-    body = c._build_request_body([{"role": "user", "content": "hi"}], max_tokens=100)
-    assert body["max_cot_tokens"] == c.DEFAULT_MAX_COT_TOKENS
+    body = _deepseek().request_extras({"model": "deepseek-flash"}, 100)
+    assert "reasoning_effort" not in body
+    assert not (body.get("extra_body") or {}).keys() & {"usage", "reasoning", "provider"}

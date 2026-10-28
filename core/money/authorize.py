@@ -21,6 +21,12 @@ in this order, stopping at the first refusal:
    broadcasts nothing (``spend_lane.py``). Never on a genuine owner turn
    (``owner_direct_turn`` with the injected ``forged_fn``): the pause bounds
    the agent's own work, not the owner acting through it.
+4b. **mandate** — with ``intent.mandate`` and ``intent.entry``, a run that
+   belongs to a trading mandate (``metadata["mandate"]`` on the context) is
+   refused when the mandate is paused / halted / stopped / cooling down, its
+   allocation or slots are used, its daily entries are reached, or the token is
+   in cooldown (``core.money.mandate_gate``; 086 §3.5). Never on a dry run or a
+   genuine owner turn; no mandate on the context = not a mandate entry.
 5. **ledger** — ``SpendLedger.check`` when the caller asks and the amount is
    known.
 6. **lane** — with ``intent.params``, ``spend_lane.spend_exemption`` decides
@@ -39,7 +45,7 @@ OWNER_QUEUE = "owner_queue"
 REFUSED = "refused"
 
 #: Steps, in order. ``turn_probe`` = the forged-turn detector raised.
-STEPS = ("principal", "leaf", "turn", "turn_probe", "pause", "ledger", "lane")
+STEPS = ("principal", "leaf", "turn", "turn_probe", "pause", "mandate", "ledger", "lane")
 
 _UNSET: Any = object()
 
@@ -68,6 +74,11 @@ class SpendIntent:
     check_ledger: bool = False
     #: Given = decide the lane (act vs owner queue) with ``spend_exemption``.
     params: Optional[Mapping[str, Any]] = None
+    #: 086: run the trading-mandate step for an ``entry`` (the chain and the token
+    #: acquired name the slot, the allocation and the token cooldown).
+    mandate: bool = False
+    chain: str = ""
+    token: Optional[str] = None
 
     # -- the named bar sets (W5): a caller picks one, never a hand-mixed set --
 
@@ -207,6 +218,29 @@ def authorize_spend(intent: SpendIntent, context=None, *,
                             detail=str(exc))
         if refusal:
             return _refused("pause", refusal)
+
+    # -- 4b. trading mandate (entries only) ------------------------------
+    if intent.mandate and intent.entry and not intent.dry_run \
+            and not owner_direct_turn(context, forged_fn, tool_self):
+        try:
+            from core.money.hooks import MANDATE_METADATA_KEY, mandate_gate
+            meta = getattr(context, "metadata", None)
+            mandate_id = str((meta.get(MANDATE_METADATA_KEY) if isinstance(meta, dict)
+                              else None) or "").strip()
+            if mandate_id:
+                # Reached through the hook (registered by core.trading_mandate):
+                # the kernel imports neither the store nor the path resolver.
+                gate = mandate_gate()
+                if gate is None:
+                    return _refused("mandate", "refused: this run belongs to a trading "
+                                    "mandate and no mandate gate is registered; failing closed")
+                refusal = gate(mandate_id, user_id=str(getattr(context, "user_id", "") or ""),
+                               chain=intent.chain, token=intent.token, usd=intent.usd)
+                if refusal:
+                    return _refused("mandate", refusal)
+        except Exception as exc:
+            return _refused("mandate", f"refused: mandate probe failed ({exc}); failing closed",
+                            detail=str(exc))
 
     # -- 5. ledger --------------------------------------------------------
     if intent.check_ledger and intent.usd is not None:

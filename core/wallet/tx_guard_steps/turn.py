@@ -124,10 +124,21 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
     from core.money.authorize import FORGED_TEXT, SpendIntent, authorize_spend
     autonomous_origin = False
     monitor_exit = False
+    # 086 W2: a run that belongs to a trading mandate (``metadata["mandate"]``) has
+    # its ENTRIES checked by the kernel's mandate step: an intent that receives a
+    # token and is not exit-shaped. Exits, sends and approvals are never gated.
+    mandate_entry = bool(intent.inflow_token) and not _tg._intent_is_exit_shaped(intent)
     verdict = authorize_spend(
-        SpendIntent.turn_origin(), execution_context, forged_fn=forged_fn,
+        SpendIntent.turn_origin(mandate=mandate_entry, entry=mandate_entry,
+                                chain=str(intent.chain or ""), token=intent.inflow_token,
+                                usd=intent.max_spend_usd),
+        execution_context, forged_fn=forged_fn,
         autonomous_ok_fn=lambda ctx, ts: _tg._autonomous_turn_allowed(ctx, ts, autonomous_ok_fn),
         tool_self=tool_self)
+    if verdict.refused and verdict.step == "mandate":
+        _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"mandate: {verdict.reason}")
+        return Decision(False, verdict.reason)
     if verdict.refused and verdict.reason != FORGED_TEXT:
         # No detector, or the detector raised: the kernel's sentence, fail closed.
         return Decision(False, verdict.reason)

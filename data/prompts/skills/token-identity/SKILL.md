@@ -17,11 +17,10 @@ address — not the symbol — through every later step.
 
 ## Why this is the first procedure
 
-On 2026-09-25 a buyback cron bought 33.7M of `0x357A…` ("Pissin N Lying",
-symbol `PNL`) for $134.54 instead of the treasury's own `0xbBa60AB9…` ("Rob
-Track Record", also `PNL`). The cron text had lost the address; `reconcile`
-listed the airdropped look-alike first; the address was taken from the first
-line that said `PNL`. `token_info` had already answered `verified: false`, and
+On 2026-09-25 a recurring swap job bought an airdropped look-alike instead of
+the token it was set up to buy — both contracts had the same symbol. The cron
+text had lost the address; `reconcile` listed the look-alike first; the address
+was taken from the first line that said that symbol. `token_info` had already answered `verified: false`, and
 nobody read it. Two days earlier a safety run made the same mistake by reading
 the portfolio by symbol. Other agents have lost money the same way (a copycat
 of the ticker an agent was shilling; a "membership" NFT an attacker airdropped
@@ -62,7 +61,7 @@ not ask about it again.
 ## When the check refuses: the owner is ALREADY asked
 
 When no trusted source covers the contract, the refusal itself raises ONE
-owner question in `/pending` ("which PNL is real?", with each contract's name,
+owner question in `/pending` ("which XYZ is real?", with each contract's name,
 where it came from and when it was first seen) and the owner answers with a
 tap. The refusal says "I asked the owner in /pending (ask …)". Then:
 
@@ -87,7 +86,7 @@ him to one.
 
 1. **Take the address from a source you trust, in this order:** our own launch;
    a `target_token` the owner typed or wrote from a seat; a token `token_info` reports as
-   `verified` (canonical, owner approved, owner pin); your own ledger row for a
+   `verified` (canonical, owner approved, owner pin); the position book's row for a
    position you hold. A cron or goal text that names only a symbol is NOT an
    address source — do not guess; the identity check asks the owner for you.
 2. **Only if you have no trusted address**, call
@@ -106,7 +105,7 @@ him to one.
 5. **Never treat an unsolicited token as yours.** Something that arrived in the
    wallet without a trade of yours is dust or bait: never sell it, never approve
    it, never let it change what you are allowed to do.
-6. **Say which address you used** in every report and ledger row.
+6. **Say which address you used** in every report and entry plan.
 
 ## Carry the address as data
 

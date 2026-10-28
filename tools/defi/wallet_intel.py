@@ -24,7 +24,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from tools.defi.data_params import chain_required_in_schema
 
 #: The deployer's other contracts listed on the row; the rest are counted.
 _ORIGIN_ROWS_SHOWN = 5
@@ -34,6 +36,7 @@ CLUSTER_NOTE = ("addresses, not people; a shared funder is a signal, not proof "
 
 
 class WalletActivityParams(BaseModel):
+    model_config = ConfigDict(json_schema_extra=chain_required_in_schema)
     address: str = Field(..., description=(
         "The WALLET whose recent activity to read — any owner. Solana is base58; "
         "EVM is 0x… (40 hex). For a token's history use token_origin."))
@@ -44,6 +47,7 @@ class WalletActivityParams(BaseModel):
 
 
 class TokenOriginParams(BaseModel):
+    model_config = ConfigDict(json_schema_extra=chain_required_in_schema)
     address: str = Field(..., description=(
         "The TOKEN: an EVM contract (0x…) or a Solana mint (base58). Not a wallet."))
     chain: Optional[str] = Field(None, description=(

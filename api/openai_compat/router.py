@@ -292,8 +292,7 @@ async def list_models(user_id: str = Depends(get_user_id)):
     One card per initializable provider's effective default (honors
     the operator's ``DEFAULT_MODEL`` / a spec's ``default_model``) plus every
     spec-declared model — so a providers.yaml row is *discoverable*, not just
-    routable, and a non-initializable provider (deepseek direct) is never
-    advertised. Falls open to the DEFAULT_MODELS policy table on a registry fault.
+    routable, and a non-initializable provider is never advertised. Falls open to the DEFAULT_MODELS policy table on a registry fault.
     """
     from modules.llm.llm_client_registry import DEFAULT_MODELS, get_default_model
 

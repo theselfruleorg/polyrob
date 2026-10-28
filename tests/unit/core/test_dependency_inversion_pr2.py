@@ -22,7 +22,7 @@ def test_core_constants_has_canonical_definitions():
     assert 'admin' in constants.ADMIN_ROLES
     assert 'owner' in constants.ADMIN_ROLES
     assert 'owner' not in constants.ASSIGNABLE_ROLES  # never admin-grantable
-    assert {'free', 'free_access', 'holder', 'x402', 'admin'} == set(constants.VALID_TIERS)
+    assert {'free', 'free_access', 'x402', 'admin'} == set(constants.VALID_TIERS)
     assert callable(constants.is_admin)
     assert callable(constants.validate_role)
 

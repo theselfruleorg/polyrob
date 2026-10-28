@@ -34,7 +34,8 @@ QTY_SOURCE_WORDS = {
 #: 2026-10-14 review C-7: a position worth less than this is DUST. An exit run
 #: spent 1.14M tokens trying to sell $0.005 (gas costs more) and messaged the
 #: owner about it; the exits skill skips dust and never escalates it.
-DUST_USD = 1.0
+#: 086 W0: the ONE threshold lives in the book (reconcile reads it too).
+from core.open_positions import DUST_USD  # noqa: E402
 
 
 def is_dust(value_usd: Optional[float]) -> bool:
@@ -43,7 +44,8 @@ def is_dust(value_usd: Optional[float]) -> bool:
 
 
 STATUS_WORDS = {"open": "open", "quarantined": "QUARANTINED look-alike",
-                "written_off": "WRITTEN OFF by the owner"}
+                "written_off": "WRITTEN OFF by the owner", "dust": "DUST",
+                "retired": "RETIRED (chain shows nothing held)"}
 
 
 @dataclass

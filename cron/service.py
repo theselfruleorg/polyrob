@@ -372,7 +372,7 @@ class CronService:
 
         Why: with only schedule/list/cancel, changing one number in a rail meant
         cancel + re-schedule — a full rewrite of the task prose from memory. The
-        0.05 buyback rewrite (2026-09-24) silently dropped its reconcile gate and
+        0.05 recurring swap rewrite (2026-09-24) silently dropped its reconcile gate and
         row-write ordering that way. The task is therefore PATCHED, never
         replaced: ``old_text`` must occur exactly once and is swapped for
         ``new_text``; everything else in the prose survives byte-for-byte.
@@ -386,6 +386,15 @@ class CronService:
             raise ScheduleError(f"no cron job {job_id!r} for this tenant")
         if job.status not in LIVE_STATUSES:
             raise ScheduleError(f"cron job {job_id!r} is {job.status}; only a live job can be edited")
+        # A request for a value the job already has changes nothing, and must not be
+        # reported as an edit: an agent that re-sent ``deliver`` over and over got
+        # "Edited cron job" each time and never saw that its text never landed.
+        current = job.payload or {}
+        if payload_updates:
+            payload_updates = {k: v for k, v in payload_updates.items()
+                               if current.get(k) != v}
+        if max_duration_seconds is not None and int(max_duration_seconds) == job.max_duration_seconds:
+            max_duration_seconds = None
         new_task = None
         if old_text is not None or new_text is not None:
             if not old_text:
@@ -398,6 +407,8 @@ class CronService:
             new_task = job.task.replace(old_text, new_text or "", 1)
             if not new_task.strip():
                 raise ScheduleError("the edit would leave an empty task; cancel the job instead")
+            if new_task == job.task:
+                new_task = None
         if schedule_spec is not None:
             schedule = parse_schedule(schedule_spec)  # raises ScheduleError
             now = self._now()

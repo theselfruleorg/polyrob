@@ -79,6 +79,9 @@ class SessionRequest:
     #: 068 G2: the run's declared buy target (``core.wallet.buy_target``), normalized
     #: by the cron runner / goal dispatcher from ``payload.target_token``.
     money_target: Optional[Dict[str, str]] = None
+    #: 086 W2: the run's trading mandate id (``payload.mandate``); the money kernel's
+    #: mandate step reads it from the execution context. None = not a mandate run.
+    mandate: Optional[str] = None
     #: B1: the run's own text for memory recall (the cron job / goal text, minus
     #: the overlays the runner prepends to ``task``). None = recall from ``task``.
     recall_seed: Optional[str] = None

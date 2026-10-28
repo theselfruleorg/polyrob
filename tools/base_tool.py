@@ -33,7 +33,6 @@ class ToolStatus(Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     FAILED = "failed"
-    DISABLED = "disabled"  # intentionally off (e.g. missing optional API key) — not a failure
 
 class BaseTool(BaseComponent):
     """Base class for tools."""

@@ -25,8 +25,8 @@ def test_recency_weight_falls_to_a_floor():
 
 
 def test_newer_row_wins_at_equal_relevance():
-    old = _row("Buybacks stopped by the owner on the fifth", age_days=8)
-    new = _row("Announce every buyback on X and the den", age_days=2)
+    old = _row("Rebuys stopped by the owner on the fifth", age_days=8)
+    new = _row("Announce every rebuy on X and the den", age_days=2)
     out = rr.rerank([old, new], limit=2, now=NOW)
     assert out[0] is new
 
@@ -73,13 +73,13 @@ def _age(provider, content, days):
 
 def test_provider_prefers_the_newer_contrary_row(provider):
     """A3: of two equally matching rows, the 10-11 one beats the 10-05 one."""
-    old = "Buybacks stopped, job cancelled, no buyback announcement."
-    new = "Owner rule: announce every buyback on X and the den."
+    old = "Rebuys stopped, job cancelled, no rebuy announcement."
+    new = "Owner rule: announce every rebuy on X and the den."
     for c in (old, new):
         asyncio.run(provider.sync_turn("q", c, session_id="s1", user_id="u"))
     _age(provider, old, 8)
     _age(provider, new, 2)
-    out = asyncio.run(provider.search("buyback announce", user_id="u"))
+    out = asyncio.run(provider.search("rebuy announce", user_id="u"))
     lines = out.splitlines()
     assert new in lines[0] and old in lines[1]
     assert lines[0].startswith("- [")       # dated

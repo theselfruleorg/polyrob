@@ -289,7 +289,7 @@ async def _mcp(c: AdminCall) -> str:
     # Giving the agent a new MCP server used to be a box-side file edit, which
     # the owner (on a phone) could not do.
     from surfaces.telegram import owner_ops
-    return owner_ops.mcp_reply(c.user_id, c.args)
+    return await owner_ops.mcp_reply(c.user_id, c.args)
 
 
 async def _bridge(c: AdminCall) -> str:
@@ -299,10 +299,11 @@ async def _bridge(c: AdminCall) -> str:
     return await owner_ops.bridge_reply(c.user_id, c.data_dir, c.args)
 
 
-async def _trade(c: AdminCall) -> str:
-    # The owner asking IS the authorization a stream leg cannot express.
-    from surfaces.telegram import owner_ops
-    return owner_ops.trade_reply(c.user_id, c.data_dir, c.args, board=c.board)
+async def _trade(c: AdminCall) -> Any:
+    # 086 W5: the trading mandate — start (one card), status, pause, resume, stop, release.
+    from surfaces.telegram import trade_ops
+    return await asyncio.to_thread(trade_ops.trade_reply, c.user_id, c.data_dir, c.args,
+                                   via="telegram")
 
 
 async def _job(c: AdminCall) -> str:
@@ -345,6 +346,10 @@ async def _inbox(c: AdminCall) -> str:
 
 
 async def _book(c: AdminCall) -> str:
+    if c.args and str(c.args[0]).lower() == "retire":
+        # 086 W0: close a gone/dust row on a fresh chain measurement.
+        from tools.defi.retire import book_retire_reply
+        return await book_retire_reply(c.user_id, c.data_dir, list(c.args[1:]))
     from surfaces.telegram import owner_ops
     return await owner_ops.book_reply(c.user_id, c.data_dir)
 

@@ -18,6 +18,10 @@ went (an update that fails, or whose new code does not start, is rolled back).
   --json`` in a subprocess (the entry-point tier may not import itself in a
   cycle; ``tests/test_layering_ratchet.py``).
 
+``/update now`` (093 D6) is a different act: it starts nothing here. It records
+that the owner wants the operator's waiting deploy (``scripts/deploy_when_idle.sh``)
+to skip its owner-quiet window once (:func:`update_now_reply`).
+
 The REPL twin (``cli/ui/commands/h_lifecycle.py``) calls the same functions.
 """
 from __future__ import annotations
@@ -26,6 +30,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.surfaces.cards import GO_WORDS as _GO
@@ -35,7 +40,8 @@ from core import lifecycle as lc
 RESTART_USAGE = ("Usage: /restart — restart me once my current work is done\n"
                  "/restart now — restart at once, even in the middle of work")
 UPDATE_USAGE = ("Usage: /update — update me to the latest release\n"
-                "/update pre — include pre-releases")
+                "/update pre — include pre-releases\n"
+                "/update now — the operator's deploy stops waiting for your chat to go quiet")
 
 _UPDATE_CHANNELS = ("stable", "pre")
 #: The install methods whose code ``polyrob update --apply`` can move itself.
@@ -141,11 +147,34 @@ async def _update_check(channel: str) -> Tuple[Optional[dict], str]:
         return None, f"the update check failed ({tail[0][:200] or 'no output'})"
 
 
+def update_now_reply(data_dir: str, go: bool, origin: Dict[str, str]) -> str:
+    """``/update now`` (093 D6): the operator's deploy (``scripts/deploy_when_idle.sh``)
+    skips its owner-quiet window once — the owner's own chat no longer blocks the
+    owner's own fix. Every other idle check stays. Reached only from an owner seat
+    (``/update`` is an owner admin verb, refused in a room)."""
+    mins = lc.OWNER_DEPLOY_NOW_TTL_SEC // 60
+    if not go:
+        return (f"Deploy now — the next deploy started within {mins} min does not wait for "
+                f"your chat to be quiet for 10 min. It still waits for a running or due cron "
+                f"job, a running goal, a reply I am writing and another deploy. This starts no "
+                f"deploy by itself: it lets the one the operator started (or starts) go."
+                f"\n\nTo deploy now: /update now go")
+    try:
+        rec = lc.request_owner_deploy_now(origin=origin, data_home=data_dir)
+    except OSError as exc:
+        return f"I could not record your request ({exc}); a waiting deploy still waits."
+    until = time.strftime("%H:%M UTC", time.gmtime(rec["expires_at"]))
+    return (f"OK — a deploy no longer waits for your chat to go quiet (until {until}). "
+            f"It still waits for running work.")
+
+
 async def update_reply(user_id: str, data_dir: str, args: List[str],
                        origin: Dict[str, str], *, check=None) -> str:
-    rest, go, bad = _parse(args, _UPDATE_CHANNELS)
+    rest, go, bad = _parse(args, _UPDATE_CHANNELS + ("now",))
     if bad or len(rest) > 1:
         return UPDATE_USAGE
+    if rest == ["now"]:
+        return update_now_reply(data_dir, go, origin)
     channel = rest[0] if rest else "stable"
     boot, why = _running_service(data_dir)
     if boot is None:
@@ -179,4 +208,4 @@ async def update_reply(user_id: str, data_dir: str, args: List[str],
             "I tell you here how it went.")
 
 
-__all__ = ["restart_reply", "update_reply", "origin_of", "RESTART_USAGE", "UPDATE_USAGE"]
+__all__ = ["restart_reply", "update_reply", "update_now_reply", "origin_of", "RESTART_USAGE", "UPDATE_USAGE"]

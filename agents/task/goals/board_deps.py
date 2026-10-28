@@ -153,6 +153,28 @@ class BoardDepsMixin:
         :meth:`_dependents_of` for callers outside this module (e.g. `goal_show`)."""
         return self._dependents_of(goal_id)
 
+    def edges(self, *, user_id: str) -> List[tuple]:
+        """Every ``(goal_id, depends_on_id)`` edge of this tenant, oldest first —
+        one read for a whole-board view (the console's Work › Goals), so it does
+        not ask :meth:`dependencies` once per card."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT goal_id, depends_on_id FROM goal_edges WHERE user_id=? "
+            "ORDER BY created_at",
+            (user_id,), fetch="all",
+        ) or []
+        return [(r["goal_id"], r["depends_on_id"]) for r in rows]
+
+    def children(self, goal_id: str, *, user_id: str) -> List[Goal]:
+        """This tenant's GOAL rows whose ``parent_id`` is ``goal_id``, oldest first."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM goals WHERE parent_id=? AND user_id=? AND kind=? "
+            "ORDER BY created_at",
+            (goal_id, user_id, KIND_GOAL), fetch="all",
+        ) or []
+        return [Goal.from_row(r) for r in rows]
+
     def deps_satisfied(self, goal_id: str) -> bool:
         """True iff every prerequisite edge for ``goal_id`` currently points to
         a ``done`` goal. Always a FRESH read against ``goals.status`` — never

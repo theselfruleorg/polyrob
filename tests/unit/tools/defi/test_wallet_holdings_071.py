@@ -269,22 +269,22 @@ B = "0x" + "bb" * 20
 def test_alchemy_follows_page_keys_to_the_end():
     pages = {None: _page([(A, 1)], "k1"), "k1": _page([(B, 2)])}
     got, complete = alchemy_index.fetch_all_balances(
-        "0x" + "11" * 20, post=lambda h, c, k, t: pages[k])
+        "0x" + "11" * 20, chain="base", post=lambda h, c, k, t: pages[k])
     assert complete is True and len(got) == 2
 
 
 def test_alchemy_page_cap_is_reported_incomplete():
     got, complete = alchemy_index.fetch_all_balances(
-        "0x" + "11" * 20, post=lambda h, c, k, t: _page([(A, 1)], "more"))
+        "0x" + "11" * 20, chain="base", post=lambda h, c, k, t: _page([(A, 1)], "more"))
     assert complete is False and got
 
 
 def test_alchemy_later_page_failure_is_partial_first_is_unknown():
     pages = {None: _page([(A, 1)], "k1"), "k1": None}
     got, complete = alchemy_index.fetch_all_balances(
-        "0x" + "11" * 20, post=lambda h, c, k, t: pages[k])
+        "0x" + "11" * 20, chain="base", post=lambda h, c, k, t: pages[k])
     assert complete is False and len(got) == 1
-    assert alchemy_index.fetch_all_balances("0x" + "11" * 20,
+    assert alchemy_index.fetch_all_balances("0x" + "11" * 20, chain="base",
                                             post=lambda h, c, k, t: None) is None
 
 
@@ -375,3 +375,15 @@ async def test_a_big_wallet_lists_top_valued_rows_then_counts(no_wallet):
     # Largest first: the 12th row (12 units) is listed, the 1st (1 unit) is not.
     assert rows[11].mint in text and rows[0].mint not in text
     assert "$78.00" in text                      # the total still counts every row
+
+
+def test_provider_schema_requires_chain_but_python_still_allows_omitting_it():
+    """A model skips an optional parameter (prod 2026-10-26: no chain on any call, twice).
+    The schema the provider sees lists chain as required; in-process callers (a base58
+    address needs none) still validate without it."""
+    from tools.defi.data_params import WalletHoldingsParams
+    from tools.defi.wallet_intel import TokenOriginParams, WalletActivityParams
+
+    for model in (WalletHoldingsParams, WalletActivityParams, TokenOriginParams):
+        assert "chain" in model.model_json_schema().get("required", []), model.__name__
+    assert WalletHoldingsParams(address="7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU").chain is None

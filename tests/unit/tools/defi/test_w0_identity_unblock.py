@@ -1,7 +1,7 @@
-"""W0 (token-management evaluation): the prod PNL deadlock, reproduced and closed.
+"""W0 (token-management evaluation): the prod TKN deadlock, reproduced and closed.
 
-Prod: the wallet holds a tracked "PNL" at the look-alike 0x357A…, so rule 2 of
-the identity gate refused every 6-hourly buyback of the REAL PNL 0xbBa6… (the
+Prod: the wallet holds a tracked "TKN" at the look-alike 0x3535…, so rule 2 of
+the identity gate refused every 6-hourly rebuy of the REAL TKN 0x5555… (the
 instance's own Pons launch) and told the owner to run a server CLI command.
 
 After W0:
@@ -21,8 +21,8 @@ from core.wallet import token_pins
 from core.wallet import token_provenance as tp
 from tools.defi.identity_gate import buy_identity_refusal
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 
 
 def _ctx(target=None, uid="rob"):
@@ -31,8 +31,8 @@ def _ctx(target=None, uid="rob"):
                                  is_sub_agent=False)
 
 
-def _ident(symbol="PNL", verified=False, source="frozen"):
-    return types.SimpleNamespace(symbol=symbol, name="Rob Track Record",
+def _ident(symbol="TKN", verified=False, source="frozen"):
+    return types.SimpleNamespace(symbol=symbol, name="Owner Token",
                                  verified=verified, source=source)
 
 
@@ -46,7 +46,7 @@ def _stores(tmp_path, monkeypatch):
     monkeypatch.setattr(op, "open_positions_db_path", lambda data_dir=None: book)
     # the look-alike bought by mistake on 2026-09-25, $134.54
     op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
-                                           symbol="PNL", qty=33_700_000.0,
+                                           symbol="TKN", qty=33_700_000.0,
                                            cost_usd=134.54))
     yield book
     tp._reset_for_tests()
@@ -64,7 +64,7 @@ def _status(address=FAKE):
 
 def test_today_neither_side_is_trusted_and_the_buy_is_refused_without_a_shell_command():
     why = _buy()
-    assert why and "tracked PNL position" in why and "not trusted" in why
+    assert why and "tracked TKN position" in why and "not trusted" in why
     assert "polyrob" not in why and "`" not in why and "pin-token" not in why
     assert "ask" in why.lower() and FAKE.lower() in why.lower() and REAL in why
     assert _status() == "open"
@@ -96,7 +96,7 @@ def test_an_owner_authored_target_is_trust_for_its_run():
 def test_an_agent_authored_target_stays_restrict_only():
     target = {"chain": "robinhood", "address": REAL}
     why = _buy(ctx=_ctx(target))
-    assert why and "tracked PNL position" in why
+    assert why and "tracked TKN position" in why
     assert _status() == "open"
 
 
@@ -106,7 +106,7 @@ def test_an_owner_target_does_not_trust_a_different_contract():
 
 
 def test_an_owner_pin_quarantines_the_lookalike_too():
-    token_pins.pin("robinhood", REAL, "PNL")
+    token_pins.pin("robinhood", REAL, "TKN")
     assert _buy(ident=_ident(verified=True, source="owner_pin")) is None
     assert _status() == "quarantined"
 
@@ -131,7 +131,7 @@ def test_a_quarantined_row_is_no_longer_a_claim():
 def test_buying_the_lookalike_itself_is_still_refused_under_the_owner_target():
     tp.record_own_token("robinhood", REAL, kind="launchpad_launch")
     op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=REAL.lower(),
-                                           symbol="PNL", qty=1.0, cost_usd=1.0))
+                                           symbol="TKN", qty=1.0, cost_usd=1.0))
     why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident(),
                                max_spend_usd=50.0, route_verdict="UNAVAILABLE",
                                execution_context=_ctx())
@@ -177,7 +177,7 @@ async def test_the_cron_run_stamps_an_owner_target(target_author, stamped):
     if target_author:
         payload["target_authored_by"] = target_author
     ta = _TaskAgent()
-    job = CronJob(id="j", task="PNL buyback", schedule_spec="6h", user_id="u1",
+    job = CronJob(id="j", task="TKN rebuy", schedule_spec="6h", user_id="u1",
                   next_run_at=None, payload=payload)
     assert await make_agent_runner(ta)(job) is True
     assert (ta.request["money_target"].get("authored_by") == "owner") is stamped

@@ -69,7 +69,8 @@ def test_every_board_create_names_its_actor():
 def test_known_writers_are_covered():
     """The writers 036 §3.3 lists are all in the scan (the scanner sees them)."""
     files = {rel for rel, _l, _k in _create_sites()}
-    for rel in ("tools/goal_tools.py", "cli/commands/goals.py",
-                "surfaces/telegram/owner_ops.py", "core/owner_create.py",
+    # 086 W5: surfaces/telegram/owner_ops.py left the list — its one-goal /trade
+    # became the trading mandate (no goal is written).
+    for rel in ("tools/goal_tools.py", "cli/commands/goals.py", "core/owner_create.py",
                 "agents/task/goals/board_asks.py"):
         assert rel in files, rel

@@ -1,8 +1,8 @@
 """Where `send_message` goes in an AUTONOMOUS run — and telling the agent so.
 
 Prod 2026-10-09 19:01: the hourly room-engagement cron read its group room,
-decided to answer ``@EmilyWhale``, and called ``send_message`` instead of
-``message(surface=…, target=<den>, …)``. In a goal/cron run ``send_message`` has
+decided to answer a member, and called ``send_message`` instead of
+``message(surface=…, target=<room>, …)``. In a goal/cron run ``send_message`` has
 exactly one destination — the owner's private chat (§3.1) — so the room reply
 landed in the owner's DM. The action result said only "Message sent to user",
 so the run recorded "replied in the room", and a later run told the owner

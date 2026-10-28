@@ -361,7 +361,7 @@ _MIGRATE_SECRET_SUFFIXES = (
 
 def _looks_like_flag_value(value: str) -> bool:
     """True for boolean/numeric values — a flag wearing a secret-shaped name
-    (REQUIRE_DEN_TOKEN=false, MODEL_MAX_TOKENS=4096) is never a credential."""
+    (REQUIRE_INVITE_TOKEN=false, MODEL_MAX_TOKENS=4096) is never a credential."""
     s = str(value).strip().strip('"').strip("'").lower()
     if s in ("true", "false", "yes", "no", "on", "off", ""):
         return True
@@ -567,6 +567,8 @@ def _info_payload(info, *, include_chain: bool = False) -> dict:
     if include_chain:
         payload["chain"] = [{"value": s.value, "origin": s.origin}
                             for s in info.chain]
+        if getattr(info, "gate_effective", ""):
+            payload["gate_effective"] = info.gate_effective  # 093 A4
     return payload
 
 
@@ -699,6 +701,10 @@ def search_cmd(text, user_id, home_dir_opt, as_json):
 def explain_cmd(key, user_id, home_dir_opt, as_json):
     """Full provenance chain for one key (`git config --show-origin` style)."""
     from core import config_service
+    try:  # 093 A4: the tool tier registers the gate's effective line
+        import tools.gate_effective  # noqa: F401
+    except Exception:
+        pass
     tenant = _resolved_tenant(user_id)
     home_dir = home_dir_opt or _default_home_dir()
     try:
@@ -708,7 +714,8 @@ def explain_cmd(key, user_id, home_dir_opt, as_json):
     if as_json:
         _echo_json(_info_payload(info, include_chain=True))
         return
-    click.echo(f"{info.key} = {info.effective}   ({info.source})")
+    click.echo(f"{info.key} = {info.effective}   ({info.source})"
+               + (f" · {info.gate_effective}" if info.gate_effective else ""))
     click.echo(f"namespace: {info.namespace} | kind: {info.kind} | "
                f"applies: {info.applies}")
     if info.enforcement == "advisory":

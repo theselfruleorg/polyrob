@@ -64,7 +64,7 @@ async def _swap(status, logs, *, out_raw=3 * 10**17):
     original_guard = tool._guard_fn
     tool._guard_fn = lambda *a, **kw: replace(original_guard(*a, **kw),
         simulated_token_deltas={t4.USDC: -1_000_000, MEME: out_raw})
-    res = await tool.swap(SwapParams(token_in=t4.USDC, token_out=MEME,
+    res = await tool.swap(SwapParams(chain="base", token_in=t4.USDC, token_out=MEME,
                                      amount_in=1.0, max_spend_usd=2.0,
                                      dry_run=False))
     assert res.error is None, res.error

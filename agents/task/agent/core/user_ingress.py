@@ -281,6 +281,21 @@ class UserIngressMixin:
         except Exception:
             pass
 
+        # 093 E2: a GENUINE owner batch is a new turn — the retry wall counts
+        # identical calls within one turn, so it starts empty (prod 2026-10-28:
+        # "we updated the tool, try again" met a wall left from 5 turns before).
+        # A room admin's steer or a system continuation is not the owner: only a
+        # batch the owner spoke in (the taint-clearing predicate above) resets it.
+        if messages and getattr(getattr(self, 'orchestrator', None),
+                                '_forged_turn_kind', None) is None and any(
+                m.get("kind") in _TAINT_CLEARING_KINDS and _owner_spoke(m)
+                for m in messages):
+            self._retry_wall_steps = 0
+            try:
+                self.controller.reset_retry_wall()
+            except Exception:
+                pass
+
         # 061: a GENUINE owner batch brings the thread with it — the referent of
         # a quote-reply, and (mid-run only; a turn's first step injects its own
         # delta) what other sessions/rails said meanwhile. Fail-open.

@@ -3,7 +3,7 @@
 ``group_allowlist.note`` is what the owner typed after
 ``polyrob owner groups allow <surface> <chat_id>`` — the CLI calls it "Label".
 Three renderers promoted it to the room's quoted TITLE, so a note written once
-as a reminder ("the den, ask before posting") came back months later looking
+as a reminder ("public room, ask before posting") came back months later looking
 like the room's actual name, and the agent reasoned about it as if Telegram had
 told it so. The 09-19 "fix" was a data edit: somebody retyped the note. The code
 still lied.

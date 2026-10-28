@@ -21,7 +21,7 @@ TX = "0x" + "ab" * 32
 
 
 def _job(**kw):
-    base = dict(id="j1", task="buy back PNL", schedule_spec="30m", user_id="u1",
+    base = dict(id="j1", task="buy back TKN", schedule_spec="30m", user_id="u1",
                 next_run_at=None, one_shot=True, skip_memory=True,
                 max_duration_seconds=180, payload=kw.pop("payload", {}), created_at=None)
     base.update(kw)
@@ -61,7 +61,7 @@ def _patch_run(monkeypatch, env, outcome: RunOutcome):
 async def test_a_run_that_bought_then_ran_out_of_steps_is_partial(monkeypatch, env):
     _patch_run(monkeypatch, env, RunOutcome(
         session_id="s1", status="Session completed successfully", done_called=False,
-        user_messages=[f"Bought 0.1 ETH of PNL, tx {TX}"],
+        user_messages=[f"Bought 0.1 ETH of TKN, tx {TX}"],
         artifacts=[{"kind": "defi_swap", "detail": f"swap confirmed {TX}"}], steps=20))
     ok = await make_agent_runner(_Agent(), data_dir=env["dir"])(_job())
     assert ok is False                       # still not a completed money run
@@ -203,7 +203,7 @@ async def test_a_raise_before_the_session_existed_writes_no_record(monkeypatch, 
 async def test_the_next_run_reads_its_own_previous_runs(monkeypatch, env):
     from modules.memory.provider import EpisodeRecord
     prev = EpisodeRecord(ts=1_760_000_000, user_id="u1", session_id="old", kind="cron",
-                         task="buy back PNL", outcome="partial", summary="PARTIAL: stopped",
+                         task="buy back TKN", outcome="partial", summary="PARTIAL: stopped",
                          thread_key="cron:j1",
                          meta={"job_id": "j1", "reason": "stopped before done()",
                                "sent": ["told the owner: bought"], "tx": [TX]})
@@ -220,7 +220,7 @@ async def test_the_next_run_reads_its_own_previous_runs(monkeypatch, env):
     task = env["tasks"][-1]
     assert '<previous-runs rail="cron:j1">' in task
     assert TX in task and "PARTIAL" in task and "told the owner: bought" in task
-    assert task.rstrip().endswith("buy back PNL"), "the job text stays last"
+    assert task.rstrip().endswith("buy back TKN"), "the job text stays last"
 
 
 @pytest.mark.asyncio
@@ -230,7 +230,7 @@ async def test_a_decline_survives_a_failed_run_and_is_consumed_after_a_completed
     from agents.task.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     board = GoalBoard(goals_db_path(env["dir"]))
-    ask = board.create_ask(user_id="u1", what="Post the buyback on X?",
+    ask = board.create_ask(user_id="u1", what="Post the rebuy on X?",
                            extra_payload={"rail_id": "cron:j1", "rail_kind": "cron"})
     board.decide_ask(ask.id, user_id="u1", approved=False)
     run = make_agent_runner(_Agent(), data_dir=env["dir"])
@@ -271,9 +271,9 @@ async def test_a_declared_skip_is_not_done(monkeypatch, env):
 
 def test_a_public_sink_never_gets_the_closing_line():
     from cron.delivery import report_body
-    run = RunOutcome(session_id="s", user_messages=["PNL buyback: 0.1 ETH in.",
+    run = RunOutcome(session_id="s", user_messages=["TKN rebuy: 0.1 ETH in.",
                                                     "Done — cost $0.40"])
-    assert report_body(run, "twitter") == "PNL buyback: 0.1 ETH in."
+    assert report_body(run, "twitter") == "TKN rebuy: 0.1 ETH in."
     assert report_body(run, "telegram") == "Done — cost $0.40"
     only_closing = RunOutcome(session_id="s", user_messages=["✅ Done — cost $0.40"])
     assert report_body(only_closing, "twitter") == ""

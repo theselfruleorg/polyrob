@@ -7,11 +7,11 @@ import pytest
 from core.wallet import dex_registry, liquidity_guard as G, tx_guard
 from tools.defi import lp_reads, lp_v4 as V
 
-PNL = "0xbba60ab93fc409b1a34371cbf6c3173795ed2c7e"
+TKN = "0x5555555555555555555555555555555555555555"
 HOLDER = "0x" + "ab" * 20
 ROW = dex_registry.row_for("robinhood", "v4")
 NPM, PM, P2 = ROW.position_manager, ROW.pool_manager, ROW.permit2
-KEY = lp_reads.pons_pool_key({"token": PNL, "pairToken": "0x" + "0" * 40,
+KEY = lp_reads.pons_pool_key({"token": TKN, "pairToken": "0x" + "0" * 40,
                               "poolFee": 0, "tickSpacing": 200})
 MAX0, MAX1 = 10 ** 16, 7 * 10 ** 23
 
@@ -24,7 +24,7 @@ def _tx(key=KEY, owner=HOLDER, a0=MAX0, a1=MAX1, value=MAX0, data=None):
 
 def _intent(**kw):
     base = dict(chain="robinhood", token=None, to=NPM, amount_raw=0, max_spend_usd=100.0,
-                is_liquidity_op=True, lp_outflows=((None, MAX0), (PNL, MAX1)),
+                is_liquidity_op=True, lp_outflows=((None, MAX0), (TKN, MAX1)),
                 watch_spenders=(P2,), lp_position=(NPM, None), lp_position_effect="mint",
                 expected_events=((PM, V.TOPIC_MODIFY_LIQUIDITY),))
     base.update(kw)
@@ -43,7 +43,7 @@ def test_the_one_v4_shape_passes():
 
 def test_calldata_may_not_pay_more_than_declared():
     with pytest.raises(ValueError, match="may pay"):
-        G.structural(_intent(lp_outflows=((None, MAX0), (PNL, MAX1 - 1))), _tx())
+        G.structural(_intent(lp_outflows=((None, MAX0), (TKN, MAX1 - 1))), _tx())
 
 
 def test_an_unpinned_hook_refuses():
@@ -98,16 +98,16 @@ def test_position_event_must_be_ours_and_adding():
 
 def _grant(spender=NPM, amount=MAX1, exp=None, declared=MAX1, to=P2):
     exp = int(time.time()) + 900 if exp is None else exp
-    tx = {"to": to, "data": V.encode_permit2_approve(PNL, spender, amount, exp)}
-    intent = tx_guard.TxIntent(chain="robinhood", token=PNL, to=spender, amount_raw=0,
+    tx = {"to": to, "data": V.encode_permit2_approve(TKN, spender, amount, exp)}
+    intent = tx_guard.TxIntent(chain="robinhood", token=TKN, to=spender, amount_raw=0,
                                max_spend_usd=10.0, is_allowance_op=True,
-                               expected_allowance_grants=((PNL, spender, declared),))
+                               expected_allowance_grants=((TKN, spender, declared),))
     return intent, tx
 
 
 def test_the_exact_expiring_grant_to_the_pinned_posm_is_recognised():
     intent, tx = _grant()
-    assert G.permit2_grant_declared(intent, tx, P2, PNL, NPM, MAX1)
+    assert G.permit2_grant_declared(intent, tx, P2, TKN, NPM, MAX1)
 
 
 @pytest.mark.parametrize("kw,emitted", [
@@ -124,14 +124,14 @@ def test_every_other_grant_refuses(kw, emitted):
         kw["exp"] = int(time.time()) + kw.pop("exp_in")
     intent, tx = _grant(**kw)
     spender = kw.get("spender", NPM)
-    assert not G.permit2_grant_declared(intent, tx, P2, PNL, spender, emitted or MAX1)
+    assert not G.permit2_grant_declared(intent, tx, P2, TKN, spender, emitted or MAX1)
 
 
 def test_a_grant_through_a_token_bound_account_is_not_recognised():
     intent, tx = _grant()
     import dataclasses
     intent = dataclasses.replace(intent, via_account="0x" + "5" * 40)
-    assert not G.permit2_grant_declared(intent, tx, P2, PNL, NPM, MAX1)
+    assert not G.permit2_grant_declared(intent, tx, P2, TKN, NPM, MAX1)
 
 
 # -- the LP program caps (090 R4) -------------------------------------------

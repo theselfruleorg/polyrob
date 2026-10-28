@@ -24,7 +24,7 @@ SPLIT = {
 }
 
 TARGETS = {
-    "token-identity": "verify the token contract address before buying PNL",
+    "token-identity": "verify the token contract address before buying TKN",
     "pre-trade-check": "check the price impact and slippage before a trade",
     "trade-execution": "execute the swap with a dry run first",
     "post-trade-verify": "verify the fill price and the tx receipt of that swap",

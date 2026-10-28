@@ -26,12 +26,13 @@ def test_armed_adds_exactly_the_defi_rail(monkeypatch):
 
     Both additions stay independently flag-gated (LAUNCHPAD_ENABLED /
     DAPP_BROWSER_ENABLED, default OFF) — pinned below — so this grant makes them
-    reachable, never armed.
+    reachable, never armed. 090 adds ``wallet_sign``: it signs with the same key
+    as ``defi_trade`` and registers only when DEFI_TRADE_ENABLED arms that key.
     """
     monkeypatch.setenv("DEFI_AGENT_AUTONOMY", "true")
     got = set(constants.autonomous_mode_tools())
     assert got - set(constants.AUTONOMOUS_MODE_TOOLS) == {
-        "defi_data", "defi_trade", "launchpad", "dapp_browser"}
+        "defi_data", "defi_trade", "wallet_sign", "launchpad", "dapp_browser"}
 
 
 def test_reaching_a_money_tool_is_not_arming_it(monkeypatch):

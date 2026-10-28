@@ -75,7 +75,7 @@ def test_cross_check_unavailable_never_a_verdict(p_in, p_out):
 @pytest.mark.asyncio
 async def test_swap_quote_flags_a_20x_quote_as_suspect():
     tool = _tool(40 * 10 ** 18, {IN: _p(2.0), OUT: _p(1.0)})
-    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base", token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "SUSPECT" in out
     assert "20.0x" in out and "implied" in out.lower()
     assert "min-out" in out or "floor" in out, "must say not to use it as a floor"
@@ -84,7 +84,7 @@ async def test_swap_quote_flags_a_20x_quote_as_suspect():
 @pytest.mark.asyncio
 async def test_swap_quote_consistent_quote_says_so():
     tool = _tool(21 * 10 ** 17, {IN: _p(2.0), OUT: _p(1.0)})
-    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base", token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "SUSPECT" not in out
     assert "cross-check: consistent" in out
 
@@ -92,7 +92,7 @@ async def test_swap_quote_consistent_quote_says_so():
 @pytest.mark.asyncio
 async def test_swap_quote_without_indexer_price_says_unavailable_not_suspect():
     tool = _tool(40 * 10 ** 18, {IN: _p(2.0), OUT: _p(None)})
-    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base", token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "SUSPECT" not in out
     assert "cross-check: unavailable" in out
 
@@ -107,7 +107,7 @@ async def test_swap_quote_price_lookup_failure_is_fail_open():
                           spender="0xspend", to="0xspend", calldata="0x", value_raw=0,
                           venue="lifi:fly", quoted_at=_t.time())
     tool = DefiDataTool(route_fn=_route, identity_fn=_identity, price_fn=_boom)
-    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base", token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "lifi:fly" in out and "cross-check: unavailable" in out
 
 
@@ -135,7 +135,7 @@ async def test_swap_quote_accepts_the_literal_native_and_says_what_it_quoted_via
                           venue="lifi:fly", quoted_at=_t.time())
     tool = DefiDataTool(route_fn=_route, identity_fn=_identity,
                         price_fn=lambda c, a: {WETH_BASE.lower(): _p(2.0), OUT.lower(): _p(1.0)}[a.lower()])
-    res = await tool.swap_quote(SwapQuoteParams(token_in="native", token_out=OUT, amount_in=1.0))
+    res = await tool.swap_quote(SwapQuoteParams(chain="base", token_in="native", token_out=OUT, amount_in=1.0))
     assert res.error is None, res.error
     assert calls["ti"].lower() == WETH_BASE.lower()
     assert "native" in _text(res).lower() and WETH_BASE[:8].lower() in _text(res).lower()
@@ -152,7 +152,7 @@ async def test_swap_quote_accepts_the_literal_native_and_says_what_it_quoted_via
 async def test_swap_quote_renders_the_output_value_in_usd():
     # 2.1 OUT at $1.00 each; IN at $2.00 (consistent quote)
     tool = _tool(21 * 10 ** 17, {IN: _p(2.0), OUT: _p(1.0)})
-    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base", token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "value:  ≈ $2.10" in out
     assert "$1.00 per T" in out  # names the rate it used, and that it is indexed
 
@@ -160,6 +160,6 @@ async def test_swap_quote_renders_the_output_value_in_usd():
 @pytest.mark.asyncio
 async def test_swap_quote_value_is_unknown_without_a_usable_out_price():
     tool = _tool(21 * 10 ** 17, {IN: _p(2.0), OUT: _p(None)})
-    out = _text(await tool.swap_quote(SwapQuoteParams(token_in=IN, token_out=OUT, amount_in=1.0)))
+    out = _text(await tool.swap_quote(SwapQuoteParams(chain="base", token_in=IN, token_out=OUT, amount_in=1.0)))
     assert "value:  unknown" in out
     assert "$0.00" not in out

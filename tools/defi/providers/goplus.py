@@ -285,6 +285,15 @@ def parse_screen(payload: Optional[Dict[str, Any]]) -> ScreenVerdict:
         if value is not None and value > _TAX_FLAG_THRESHOLD:
             flags.append(f"{field}_{value:.0%}")
 
+    # 086 W9: "can the owner change balances" — read when sent, and NOT added
+    # to `missing` (the survivability block names it unknown itself), so a
+    # chain that never sends it does not grow every screen's "not run" line.
+    raw = str(data.get("owner_change_balance")).strip()
+    if raw in {"0", "1"}:
+        checks["owner_change_balance"] = raw
+        if raw == "1":
+            flags.append("owner_change_balance")
+
     if "is_open_source" in data:
         checks["is_open_source"] = str(data.get("is_open_source"))
         if str(data.get("is_open_source")) == "0":
@@ -333,6 +342,7 @@ def _holder_rows(raw: Any) -> list:
             is_contract=_flag(item.get("is_contract")),
             is_locked=_flag(item.get("is_locked")),
             tag=(str(item.get("tag")).strip() or None) if item.get("tag") else None,
+            is_nft_position=(bool(item.get("NFT_list")) if "NFT_list" in item else None),
         ))
     return rows
 

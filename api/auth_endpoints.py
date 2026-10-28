@@ -379,7 +379,7 @@ async def create_api_key(request: Request, key_request: CreateAPIKeyRequest):
 
     Requires:
     - Authenticated user (JWT from wallet login)
-    - DEN token ownership (verified via tier)
+    - An access tier (free_access, x402 or admin)
 
     Example:
         POST /api/auth/api-keys

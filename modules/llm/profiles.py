@@ -30,7 +30,6 @@ class ProviderProfile:
     supports_vision: bool = True
     signup_url: Optional[str] = None
     initializable: bool = True        # False = key alone can't bootstrap a client
-                                      # (deepseek: direct client disabled → use OpenRouter)
     subscription: bool = False        # flat-rate plan — per-token cost is meaningless
     prompt_in_init: bool = True       # `polyrob init` asks for this key by default
     #: Extra key vars this provider answers to, tried after ``env_key``. See
@@ -190,7 +189,7 @@ def initializable_providers_with_keys(env=None) -> List[str]:
     This is the SSOT for "does the user have a *usable* provider key" — the gating
     oracle that ``should_warn_no_key`` / the runtime resolver / the env-backfill and
     ``LLMManager._initialize``'s ``clients_to_try`` all derive from, so they can never
-    disagree. Excludes deepseek (direct client disabled — route via OpenRouter).
+    disagree.
     Includes keyless-by-design (``auth_type: none``) providers unconditionally. The
     raw ``providers_with_keys`` stays the DISPLAY oracle (doctor/webview show a key is
     present even when it can't bootstrap directly).
@@ -260,7 +259,7 @@ def usable_providers_with_keys(env=None) -> List[str]:
 #
 # These three delegate to the ONE resolution oracle
 # (`core.llm_auth.resolve.resolve_credential`) and add what it does not know:
-# `initializable` (a key alone can't bootstrap deepseek) and the raw
+# `initializable` (a key alone can't bootstrap the provider) and the raw
 # presence/validity split the display surfaces render.
 #
 # With `LLM_AUTH_STORE_ENABLED` off — the default — resolve_credential serves
@@ -419,7 +418,7 @@ def credential_status(env=None, *, user_id=None) -> Dict[str, CredentialStatus]:
             # there sends people hunting for a key they already pasted.
             reason = "malformed (placeholder or too short to be a real key)"
         elif not p.initializable:
-            reason = "direct client disabled — route via OpenRouter"
+            reason = "no client can serve this provider yet"
         elif relogin:
             reason = "credential expired — reconnect required"
         elif health != "ok":
@@ -500,11 +499,6 @@ def no_key_message() -> str:
         label = p.env_key
         if p.name == "openrouter":
             label += " (recommended)"
-        if not p.initializable:
-            label += (
-                " (direct client disabled — use OPENROUTER_API_KEY with model "
-                "deepseek/deepseek-chat)"
-            )
         parts.append(label)
     more = (f" ({extra} more providers — subscription plans, gateways, regional "
             f"endpoints: `polyrob model list`)" if extra else "")

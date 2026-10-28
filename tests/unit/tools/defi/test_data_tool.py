@@ -135,7 +135,7 @@ async def test_portfolio_labels_partial_coverage_without_a_key(monkeypatch):
     tool = _tool(holder="0x" + "22" * 20,
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0))
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "partial" in out.lower()
     assert "scanned" in out.lower()
 
@@ -146,7 +146,7 @@ async def test_portfolio_labels_indexed_coverage_with_a_key(monkeypatch):
     tool = _tool(holder="0x" + "22" * 20,
                  index_fn=lambda h, chain="base": {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0))
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "indexed" in out.lower()
 
 
@@ -157,7 +157,7 @@ async def test_portfolio_excludes_low_confidence_from_the_total():
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000, FAKE: 5_000_000_000_000_000_000},
                  price_fn=lambda c, a: (_price(p=1.0) if a == USDC
                                         else _price(p=1_000_000.0, liq=900.0, pools=1, conf="low")))
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "unvalued" in out.lower()
     assert "5,000,000,000,000" not in out.replace(" ", "")
 
@@ -167,14 +167,14 @@ async def test_portfolio_unknown_balance_is_not_zero():
     tool = _tool(holder="0x" + "22" * 20,
                  balances_fn=lambda h, c, toks: {USDC: None},
                  price_fn=lambda c, a: _price(p=1.0))
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "unknown" in out.lower()
 
 
 @pytest.mark.asyncio
 async def test_portfolio_without_a_wallet_is_honest():
     tool = _tool(holder=None)
-    res = await tool.portfolio(PortfolioParams())
+    res = await tool.portfolio(PortfolioParams(chain="base"))
     assert res.error and "wallet" in res.error.lower()
 
 
@@ -287,7 +287,7 @@ async def test_portfolio_shows_the_native_gas_balance():
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0),
                  native_fn=lambda h, c: 0.001021436159620694)
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "0.001021" in out, "the gas balance itself must be on the page"
     assert "ETH" in out
     assert "gas" in out.lower()
@@ -299,7 +299,7 @@ async def test_portfolio_native_unknown_is_not_empty():
     tool = _tool(holder="0x" + "22" * 20,
                  balances_fn=lambda h, c, toks: {},
                  native_fn=lambda h, c: None)
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "UNKNOWN" in out
     assert "empty" not in out.lower(), "unknown must not claim the tank is empty"
 
@@ -310,7 +310,7 @@ async def test_portfolio_native_zero_says_empty_out_loud():
     tool = _tool(holder="0x" + "22" * 20,
                  balances_fn=lambda h, c, toks: {},
                  native_fn=lambda h, c: 0.0)
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "empty" in out.lower()
     assert "broadcast" in out.lower(), "say what an empty tank actually blocks"
 
@@ -325,7 +325,7 @@ async def test_portfolio_native_read_failure_does_not_break_the_report():
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0),
                  native_fn=_boom)
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert USDC in out, "the token rows must still render"
     assert "UNKNOWN" in out
 
@@ -348,5 +348,5 @@ async def test_portfolio_gas_is_not_summed_into_the_token_total():
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0),
                  native_fn=lambda h, c: 1.0)
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "$10.00" in out, "the token total stays exactly the token total"

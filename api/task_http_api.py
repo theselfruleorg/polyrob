@@ -1201,7 +1201,7 @@ async def create_session(
 ):
     """Create and start a new Task session.
 
-    BETA: Requires DEN token ownership for session creation.
+    Requires an access tier (free_access, x402 or admin).
     Supports both credits (for authenticated users) and x402 payment.
     """
     try:
@@ -1257,9 +1257,8 @@ async def create_session(
         logger.info(f"Creating session for user: {user_id} (tier: {tier}, payment: {payment_method})")
 
         # BETA ACCESS: Only allow tiers with full access
-        # - free: BLOCKED (no DEN token, no admin grant)
+        # - free: BLOCKED (no admin grant)
         # - free_access: ALLOWED (admin-granted access, uses credits)
-        # - holder: ALLOWED (has DEN token)
         # - x402: ALLOWED (pay-per-request)
         # - admin: ALLOWED (via admin_bypass payment method)
         from api.auth_constants import has_full_access

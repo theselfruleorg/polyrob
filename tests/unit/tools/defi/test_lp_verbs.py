@@ -64,8 +64,8 @@ def tool(captured=None, receipt=None, allow=True):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('verb,params', [('lp_add', add()), ('lp_remove', LpRemoveParams(token_id=42)),
-                                        ('lp_collect', LpCollectParams(token_id=42))])
+@pytest.mark.parametrize('verb,params', [('lp_add', add()), ('lp_remove', LpRemoveParams(chain="robinhood", token_id=42)),
+                                        ('lp_collect', LpCollectParams(chain="robinhood", token_id=42))])
 async def test_flag_and_leaf(monkeypatch, verb, params):
     t, _ = tool()
     monkeypatch.delenv(V.FLAG)
@@ -127,8 +127,8 @@ async def test_insufficient_balance_is_refused(monkeypatch):
 async def test_v4_builds_a_full_range_mint_only():
     # 048 phase 3 (core handoff W6): v4 exits are not built (090 R5).
     t, _ = tool()
-    assert 'lp_add' in (await t.lp_remove(LpRemoveParams(token_id=42, protocol='v4'))).error
-    assert 'lp_add' in (await t.lp_collect(LpCollectParams(token_id=42, protocol='v4'))).error
+    assert 'lp_add' in (await t.lp_remove(LpRemoveParams(chain="robinhood", token_id=42, protocol='v4'))).error
+    assert 'lp_add' in (await t.lp_collect(LpCollectParams(chain="robinhood", token_id=42, protocol='v4'))).error
     assert 'unknown protocol' in (await t.lp_add(add(protocol='v5'))).error
 
 
@@ -215,7 +215,7 @@ def test_remove_collect_and_burn():
     assert plan.intent.lp_position_effect == 'burn' and len(plan.intent.lp_inflows) == 2
     assert (NPM, A.TOPIC_DECREASE_LIQUIDITY) in plan.intent.expected_events
     with pytest.raises(ValueError, match='100'):
-        V.prepare_exit(LpRemoveParams(token_id=42, burn=True, liquidity_pct=50), None, HOLDER, NPM, 'lp_remove')
+        V.prepare_exit(LpRemoveParams(chain="robinhood", token_id=42, burn=True, liquidity_pct=50), None, HOLDER, NPM, 'lp_remove')
     plan = V.prepare_exit(LpCollectParams(chain='base', token_id=42), None, HOLDER, NPM, 'lp_collect')
     assert plan.intent.lp_inflows == ((T0, 2), (T1, 3))
     assert not plan.intent.lp_outflows

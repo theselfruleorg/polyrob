@@ -31,22 +31,52 @@ class MCPActionRegistrar:
     def logger(self):
         return self._controller.logger
 
+    def _registered(self) -> Dict[str, Any]:
+        """name -> registered action (the real Registry exposes ``get_actions``)."""
+        getter = getattr(self.registry, "get_actions", None)
+        if callable(getter):
+            return getter() or {}
+        return dict(getattr(self.registry, "actions", None) or {})
+
+    def _unregister(self, name: str) -> None:
+        remover = getattr(self.registry, "remove_action", None)
+        if callable(remover):
+            remover(name)
+        else:
+            (getattr(self.registry, "actions", None) or {}).pop(name, None)
+
     async def register(self, mcp_tool: Any) -> None:
-        """Register individual MCP tools as direct actions with flat parameter schemas.
+        """Reconcile this session's flat ``{server}_{tool}`` actions with the
+        servers it may use: register the new ones, unregister the ones whose
+        server is gone (removed, disconnected, or not this tenant's).
+
+        Only CONNECTED servers that are global (static/operator/installed) or
+        named ``user_{uid}::`` for THIS controller's tenant are registered — one
+        manager holds every tenant's servers with their credentials. Cheap when
+        nothing changed: an in-memory diff.
 
         Args:
             mcp_tool: The MCPTool instance with server_manager
         """
-        self.logger.info("🔧 _register_mcp_tools_as_direct_actions called")
-
         if not hasattr(mcp_tool, 'server_manager') or not mcp_tool.server_manager:
             self.logger.warning("MCP tool has no server_manager, cannot register direct actions")
             return
 
         try:
-            # Get all MCP tools from all servers
-            all_tools = mcp_tool.server_manager.get_all_tools()
-            self.logger.info(f"🔧 Found {len(all_tools)} MCP servers with tools")
+            from tools.mcp.user_servers import server_visible
+            uid = getattr(self._controller, "user_id", None)
+            uid = str(uid) if uid else None
+            all_tools = {name: tools for name, tools in
+                         (mcp_tool.server_manager.get_all_tools() or {}).items()
+                         if server_visible(name, uid)}
+            wanted = {f"{srv}_{getattr(t, 'name', '')}" for srv, tools in all_tools.items()
+                      for t in tools}
+            for name, action in self._registered().items():
+                fn = getattr(action, "function", None)
+                if getattr(fn, "_mcp_server", None) is not None and name not in wanted:
+                    self._unregister(name)
+                    self.logger.info(f"MCP action unregistered (server gone): {name}")
+            existing = set(self._registered())
             registered_count = 0
             # 085 A5: the actions of a server the owner marked `"money": true`.
             money_actions = []
@@ -60,7 +90,7 @@ class MCPActionRegistrar:
                         action_name = f"{server_name}_{tool_meta.name}"
 
                         # Skip if already registered (avoid duplicates with mcp_* wrapper actions)
-                        if action_name in self.registry.actions:
+                        if action_name in existing:
                             self.logger.debug(f"MCP action '{action_name}' already registered, skipping")
                             continue
 
@@ -117,6 +147,7 @@ class MCPActionRegistrar:
                             param_model=param_model
                         )
 
+                        existing.add(action_name)
                         registered_count += 1
                         if money_server:
                             money_actions.append(action_name)
@@ -125,7 +156,8 @@ class MCPActionRegistrar:
                     except Exception as e:
                         self.logger.warning(f"Failed to register MCP tool {server_name}_{tool_meta.name}: {e}")
 
-            self.logger.info(f"✅ Registered {registered_count} MCP tools as direct actions")
+            if registered_count:
+                self.logger.info(f"✅ Registered {registered_count} MCP tools as direct actions")
             if money_actions:
                 self.install_money_gate(money_actions)
 

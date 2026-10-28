@@ -6,13 +6,13 @@ measure properly"): ``_top_pool`` ranked purely on ``reserve_in_usd``, and
 described whichever pool held the biggest reserve — which on a token with many
 pools is routinely not the one anybody trades.
 
-Measured on PNL (Robinhood Chain) at 03:20Z:
+Measured on TKN (Robinhood Chain) at 03:20Z:
 
 ===================  ===========  ==============  ==========
 pool                 reserve      24 h volume     24 h change
 ===================  ===========  ==============  ==========
-``0x43b7b259…``      $18,190      **$1,390**      +9.6%
-``0x9c54d4e1…`` 1%   $4,147.81    **$61,792**     −84.17%
+``0x4444aaaa…``      $18,190      **$1,390**      +9.6%
+``0x9999bbbb…`` 1%   $4,147.81    **$61,792**     −84.17%
 ===================  ===========  ==============  ==========
 
 **44x the volume on a quarter of the reserve.** A reviewer read the reserve-top
@@ -51,14 +51,14 @@ def _pick(*pools, chain="robinhood"):
 
 
 #: The live shape this was built from.
-PNL = (("0x43b7b259", "18190", "1390"), ("0x9c54d4e1", "4147.81", "61792"))
+TKN = (("0x4444aaaa", "18190", "1390"), ("0x9999bbbb", "4147.81", "61792"))
 
 
 # --- the defect itself --------------------------------------------------------- #
 
 def test_the_busiest_pool_wins_over_the_deepest():
-    pick = _pick(*PNL)
-    assert pick.address == "0x9c54d4e1"
+    pick = _pick(*TKN)
+    assert pick.address == "0x9999bbbb"
     assert pick.liquidity_usd == pytest.approx(4147.81)
     assert pick.volume_h24_usd == pytest.approx(61792)
 
@@ -66,8 +66,8 @@ def test_the_busiest_pool_wins_over_the_deepest():
 def test_the_deeper_pool_is_carried_so_the_disagreement_is_visible():
     """The whole reason a volume-only ranking would be no better: it must show
     its work, or the next reviewer inherits an unauditable pick."""
-    pick = _pick(*PNL)
-    assert pick.deepest_address == "0x43b7b259"
+    pick = _pick(*TKN)
+    assert pick.deepest_address == "0x4444aaaa"
     assert pick.deepest_liquidity_usd == pytest.approx(18190)
     assert pick.deepest_volume_h24_usd == pytest.approx(1390)
     assert pick.pools_disagree is True
@@ -75,9 +75,9 @@ def test_the_deeper_pool_is_carried_so_the_disagreement_is_visible():
 
 def test_listing_order_does_not_decide_it():
     """The indexer returns reserve-ordered rows; the pick must not inherit that."""
-    forwards = _pick(*PNL)
-    backwards = _pick(*reversed(PNL))
-    assert forwards.address == backwards.address == "0x9c54d4e1"
+    forwards = _pick(*TKN)
+    backwards = _pick(*reversed(TKN))
+    assert forwards.address == backwards.address == "0x9999bbbb"
 
 
 # --- when the two agree, there is nothing to report ---------------------------- #
@@ -146,8 +146,8 @@ def test_a_provider_error_still_propagates():
 
 def test_the_address_only_helper_still_returns_a_string():
     addr = top_pool_for_token("robinhood", "0x" + "b" * 40,
-                              fetch=lambda url: _payload(*PNL))
-    assert addr == "0x9c54d4e1"
+                              fetch=lambda url: _payload(*TKN))
+    assert addr == "0x9999bbbb"
 
 
 def test_the_old_three_field_construction_still_works():
@@ -169,7 +169,7 @@ def _rendered(depth):
 
 
 def test_the_rendered_answer_says_it_read_the_busiest_pool_and_shows_the_volume():
-    text = _rendered(_pick(*PNL))
+    text = _rendered(_pick(*TKN))
     assert "busiest of 2 indexed pools" in text
     assert "$61,792" in text or "61,792" in text
 
@@ -177,9 +177,9 @@ def test_the_rendered_answer_says_it_read_the_busiest_pool_and_shows_the_volume(
 def test_the_rendered_answer_names_the_deeper_pool_it_did_not_read():
     """The reader must be able to see that a choice was made — this exact line is
     what would have stopped the 03:25Z retraction from being needed."""
-    text = _rendered(_pick(*PNL))
+    text = _rendered(_pick(*TKN))
     assert "a DEEPER pool exists and was not read" in text
-    assert "0x43b7b259" in text
+    assert "0x4444aaaa" in text
 
 
 def test_no_disagreement_line_when_there_is_no_disagreement():

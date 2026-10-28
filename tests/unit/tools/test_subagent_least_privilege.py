@@ -118,7 +118,8 @@ def test_leaf_excludes_delegation_actions():
         {"delegate_task", "preferences",
          "autonomy_control",  # 031: a leaf never touches the owner pause record
          # review F13: a leaf never speaks to the owner
-         "owner_ask", "present_choice", "propose_action"}
+         "owner_ask", "present_choice", "propose_action", "trade_mandate_propose",
+         "propose_setting"}
     )
 
 
@@ -207,5 +208,6 @@ async def test_build_child_controller_narrows_and_excludes(monkeypatch):
     # delegation actions (+ `preferences`, owner-UX P2 T2) excluded for the leaf child
     assert set(captured["exclude_actions"]) == {
         "delegate_task", "preferences", "autonomy_control",
-        "owner_ask", "present_choice", "propose_action",
+        "owner_ask", "present_choice", "propose_action", "trade_mandate_propose",
+        "propose_setting",
     }

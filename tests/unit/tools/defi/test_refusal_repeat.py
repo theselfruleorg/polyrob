@@ -22,7 +22,7 @@ def _ctx(step, session="run-c09"):
 
 
 async def _approve(tool, max_spend, step, session="run-c09"):
-    res = await tool.approve_token(ApproveParams(
+    res = await tool.approve_token(ApproveParams(chain="base",
         token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=max_spend,
         dry_run=True), execution_context=_ctx(step, session))
     return res.extracted_content or res.error or ""

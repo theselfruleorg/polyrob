@@ -5,7 +5,7 @@ goes to the agent. Two pre-LLM word gates broke this and are retired:
 
 * ``owner_stop_intent`` took any message whose first word was stop/pause/resume
   (…) and acted on it without the agent — "resume where you left off" never
-  reached Rob, and "Ok please resume buyback" paused EVERYTHING.
+  reached Rob, and "Ok please resume rebuy" paused EVERYTHING.
 * ``parse_pending_decision`` read a bare "approve"/"reject" as a decision on the
   pending queue.
 

@@ -44,7 +44,7 @@ _DRY = Field(True, description=(
     "happen, broadcasting nothing. Set false to actually send."))
 
 
-_CHAIN = Field("robinhood", description="'robinhood' (4663) or 'robinhood-testnet' (46630).")
+_CHAIN = Field(..., description="'robinhood' (4663) or 'robinhood-testnet' (46630).")
 _NFT = Field(None, description=(
     "Which NFT: '<collection>#<id>', or '<id>' when one collection is pinned on the chain. Omit "
     "when this treasury holds exactly one tracked NFT there."))
@@ -63,8 +63,8 @@ class SnapshotParams(BaseModel):
 class InspectParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: str = Field(..., description=(
-        "Any agent NFT, as '<chain>:<collection>/<token_id>' (e.g. 'robinhood:0xabc…/42') or just "
-        "the token id on the pinned collection. Read-only: owner, holdings, lock, state, identity "
+        "Any agent NFT, as '<chain>:<collection>/<token_id>' (e.g. 'base:0xabc…/42') or "
+        "'<chain>:<token_id>' on the chain's one pinned collection. Read-only: owner, holdings, lock, state, identity "
         "count and — FIRST — every open approval on the account."))
 
 
@@ -134,7 +134,7 @@ class MintParams(BaseModel):
         "Least PNL (raw token units) each new account must receive from the mint's buy, "
         "else the mint reverts. 0 = never revert on price (the contract still caps impact at 3%)."))
     chain: Literal["robinhood", "robinhood-testnet"] = Field(
-        "robinhood", description="'robinhood' (4663) or 'robinhood-testnet' (46630, no PNL pool: ETH fallback).")
+        ..., description="'robinhood' (4663) or 'robinhood-testnet' (46630, no PNL pool: ETH fallback).")
     collection: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
         "Only when more than one collection is pinned on the chain; it must be one of them."))
     max_spend_usd: float = Field(..., gt=0, description="Most USD authorized: qty × the mint price plus gas.")
@@ -162,7 +162,7 @@ class RevealParams(BaseModel):
     """``reveal(uint256[] ids)`` on a pinned collection profile with the ``reveal`` capability."""
     model_config = ConfigDict(extra="forbid")
     chain: Literal["robinhood", "robinhood-testnet"] = Field(
-        "robinhood", description="'robinhood' (4663) or 'robinhood-testnet' (46630).")
+        ..., description="'robinhood' (4663) or 'robinhood-testnet' (46630).")
     collection: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
         "Only when more than one collection is pinned on the chain; it must be one of them."))
     max_ids: int = Field(10, ge=1, le=64, description=(

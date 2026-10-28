@@ -1,5 +1,7 @@
 <!-- part: off -->
 MCP tools are not currently configured. If you need external data sources, use:
+<!-- part: owner_add -->
+- or the owner adds a server: /mcp add <id> <https-url> (offer it with propose_setting)
 <!-- part: alt_browser -->
 - Browser actions for web scraping
 <!-- part: alt_perplexity -->

@@ -2,10 +2,10 @@
 
 ⚠️ The defect, from the prod session of 2026-09-29 10:06Z. Asked to "assess
 current treasury", the agent read ``defi_data_portfolio``. The budget ran out
-before the wallet's OWN buyback token (the loop walked addresses in sorted
+before the wallet's OWN rebuy token (the loop walked addresses in sorted
 order), so the line was::
 
-    0xbBa6…  156387468620751102999533403 raw units (decimals not read)  value NOT READ (budget)
+    0x5555…  156387468620751102999533403 raw units (decimals not read)  value NOT READ (budget)
 
 The model converted it in its head, then wrote in its memory
 ``156,387,468.62 raw units = 156.38746862 tokens (18 dec) ≈ $6.78`` — one
@@ -58,7 +58,7 @@ def test_the_indicative_value_is_not_parsed_as_a_confident_one():
     """`book._worth_from_portfolio` reads `= $X` at the line end as a confident
     value. The indicative figure must never be mistaken for it."""
     addr = _addr(7)
-    line = (f"  {addr}  156,387,468.620000 PNL  "
+    line = (f"  {addr}  156,387,468.620000 TKN  "
             f"{data_tool._excluded_value_text(156_387_468.62, _Price(0.00004335, 'low'))}")
     assert book._worth_from_portfolio(line, addr) is None
 
@@ -77,7 +77,7 @@ async def test_portfolio_renders_the_indicative_value_for_a_pinned_token(monkeyp
     tool = data_tool.DefiDataTool(
         holder=_addr(0xABC),
         index_fn=lambda h, chain=None: {_addr(1): 156387468620751102999533403},
-        identity_fn=lambda c, a: _Ident("PNL"),
+        identity_fn=lambda c, a: _Ident("TKN"),
         price_fn=lambda c, a: _Price(0.00004335, "low"),
     )
     tool._gas_lines = lambda *a, **k: []
@@ -118,7 +118,7 @@ async def test_a_pinned_token_is_valued_before_the_budget_runs_out(monkeypatch):
 
     def _ident(chain, addr):
         resolved.append(addr)
-        return _Ident("PNL")
+        return _Ident("TKN")
 
     tool = data_tool.DefiDataTool(
         holder=_addr(0xABC),
@@ -160,13 +160,13 @@ def test_an_unpriced_claim_worth_is_unknown_not_zero():
 
 
 def test_an_own_launch_counts_as_ours_without_an_owner_pin(monkeypatch):
-    """Prod 2026-09-29: no token_pins.db at all; the buyback token is proven ours
+    """Prod 2026-09-29: no token_pins.db at all; the rebuy token is proven ours
     only by `token_provenance.own_tokens`. It must still be valued first."""
     from core.wallet import token_pins, token_provenance
     monkeypatch.setattr(token_pins, "all_pins", lambda **k: [])
     monkeypatch.setattr(token_provenance, "all_own_tokens", lambda **k: [
-        {"chain": "robinhood", "address": "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e",
+        {"chain": "robinhood", "address": "0x5555555555555555555555555555555555555555",
          "kind": "onchain_probe", "evidence": "pons"},
         {"chain": "base", "address": _addr(5), "kind": "deploy", "evidence": ""}])
     got = data_tool._pinned_addresses("robinhood")
-    assert got == {"0xbba60ab93fc409b1a34371cbf6c3173795ed2c7e"}
+    assert got == {"0x5555555555555555555555555555555555555555"}

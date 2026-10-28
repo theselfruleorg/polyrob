@@ -1,6 +1,6 @@
 """`confidence` must describe the depth behind the QUOTED price, not a sum.
 
-⚠️ The defect (2026-09-23, found while tracing the PNL two-pool confusion):
+⚠️ The defect (2026-09-23, found while tracing the TKN two-pool confusion):
 ``parse_pair`` takes ``price_usd`` from the **deepest single pool** but
 ``liquidity_usd`` as the **sum of every base-side pool**, and then graded
 ``confidence`` from that sum. Those describe different things, and the grade was

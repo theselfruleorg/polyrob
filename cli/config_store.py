@@ -184,11 +184,6 @@ def check_provider_model(provider: str, model: str) -> Tuple[bool, str]:
     return True, ""
 
 
-# NOTE: deepseek is intentionally OMITTED — its direct client is disabled, so a
-# DEEPSEEK_API_KEY must never AUTO-resolve as the provider (that would hand the LLM
-# manager a provider it can't build → hard crash). An explicit `-p deepseek` flows
-# through `explicit_provider`, not `available_keys`, so it is unaffected. Reach
-# DeepSeek via OPENROUTER_API_KEY + model deepseek/deepseek-chat.
 def _key_to_provider():
     """(env_key, provider) pairs for key-based auto-detection (024 seam 9).
 

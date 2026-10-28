@@ -188,7 +188,7 @@ _USAGE = {
     "/unquarantine": "<chain> <address> [go]",
     "/invoices": "[status]",
     "/settle": "<id> [tx]",
-    "/trade": "<what to do>",
+    "/trade": "start|status|pause|resume|stop|release",
     "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
     "/lp": "positions|pool|quote|add|remove|collect",
     "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
@@ -460,6 +460,7 @@ _ROOM_REFUSED_COMMANDS = _build_room_refused()
 #: like every other owner write never runs from a room.
 _ROOM_REFUSED_SUBVERBS = {
     "/avatar": frozenset({"set", "clear"}),
+    "/book": frozenset({"retire"}),  # 086 W0: the book read stays; a retire writes
 }
 
 

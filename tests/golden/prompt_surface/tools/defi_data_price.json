@@ -10,12 +10,12 @@
           "type": "string"
         },
         "chain": {
-          "default": "base",
           "description": "Chain to look the token up on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
           "type": "string"
         }
       },
       "required": [
+        "chain",
         "address"
       ],
       "type": "object"

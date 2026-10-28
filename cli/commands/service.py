@@ -30,7 +30,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -304,11 +303,11 @@ def service_status(as_user=None):
 
     click.echo(f"surfaces: {', '.join(surfaces)}")
     click.echo(f"command:  {' '.join(_exec_argv())}")
-    for line in lifecycle_lines(plat):
+    for line in lifecycle_lines():
         click.echo(line)
 
 
-def lifecycle_lines(plat: Optional[str] = None) -> list:
+def lifecycle_lines() -> list:
     """077: what is RUNNING vs what is on disk, an open restart request, the
     last restart's outcome and the settings that wait for a restart. Read-only;
     an unreadable record is said, never shown as empty."""
@@ -367,14 +366,6 @@ def lifecycle_lines(plat: Optional[str] = None) -> list:
                        + ", ".join(keys[:8]) + (" …" if len(keys) > 8 else ""))
     except lc.LifecycleUnreadable as exc:
         out.append(f"waiting:  unreadable ({exc})")
-    if (plat or _platform()) == "linux":
-        unit = _systemd_unit_path()
-        try:
-            if unit.is_file() and "RestartForceExitStatus=75" not in unit.read_text(encoding="utf-8"):
-                out.append("unit:     written before the drained restart — refresh it with "
-                           "`polyrob service install`")
-        except OSError:
-            pass
     return out
 
 

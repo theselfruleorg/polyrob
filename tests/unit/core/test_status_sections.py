@@ -10,14 +10,41 @@ def test_every_slot_is_a_section_order_name():
     assert set(S.CONTRIBUTED_SLOTS) <= set(SECTION_ORDER)
     assert set(S.CONTRIBUTED_SLOTS) == {
         "wallet", "custody", "money", "economics", "liquidity", "collectibles",
-        "creations", "room_actions"}
+        "creations", "room_actions", "harness"}
 
 
-def test_the_in_core_providers_fill_every_slot():
+#: 093 D1: slots a HIGHER tier fills (core may not import it).
+_UPPER_TIER = {"harness"}
+
+
+def test_the_in_core_providers_fill_every_core_slot():
     covered = {slot for slots in S._IN_CORE_PROVIDERS.values() for slot in slots}
-    assert covered == set(S.CONTRIBUTED_SLOTS)
+    assert covered == set(S.CONTRIBUTED_SLOTS) - _UPPER_TIER
+    import tools  # noqa: F401  (registers the upper-tier slots)
     for slot in S.CONTRIBUTED_SLOTS:
         assert S.provider(slot) is not None, slot
+
+
+def test_a_provider_that_did_not_register_is_reported(empty, tmp_path):
+    S.record_provider_error("harness", "ImportError: boom")
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    assert snap.sections["harness"].state == STATE_UNAVAILABLE
+    assert "harness (ImportError: boom)" in snap.unavailable_sources
+    with pytest.raises(ValueError):
+        S.record_provider_error("not_a_slot", "x")
+
+
+def test_the_container_reaches_the_slot(empty, tmp_path):
+    seen = []
+    S.register_status_section(
+        "harness", lambda ctx: seen.append(ctx.container) or Section(name="harness"),
+        tenant=False)
+    marker = object()
+    build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False, container=marker)
+    agent = type("A", (), {"container": marker})()
+    build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False, task_agent=agent)
+    build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    assert seen == [marker, marker, None]
 
 
 def test_a_provider_cannot_add_a_section():

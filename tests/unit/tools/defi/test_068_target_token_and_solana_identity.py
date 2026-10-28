@@ -2,7 +2,7 @@
 
 G2: a goal/cron payload may declare `target_token` {chain, address}; it rides the
 run as data and a buy of any other contract on that chain is refused. The
-2026-09-25 buyback carried its target only in prose, and lost it.
+2026-09-25 rebuy carried its target only in prose, and lost it.
 
 G1 (Solana): `solana_swap` runs the same identity gate as the EVM swap, with the
 mint's self-reported symbol from the GoPlus screen and verified = owner pin.
@@ -13,8 +13,8 @@ import pytest
 
 from core.wallet.buy_target import normalize_target, target_refusal
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 OTHER_MINT = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr"
 USDC_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -35,7 +35,7 @@ def test_normalize_checksums_evm_and_keeps_base58_verbatim():
     assert normalize_target(None) is None and normalize_target({}) is None
 
 
-@pytest.mark.parametrize("bad", ["PNL", {"chain": "robinhood"}, {"address": REAL},
+@pytest.mark.parametrize("bad", ["TKN", {"chain": "robinhood"}, {"address": REAL},
                                  {"chain": "nochain", "address": REAL},
                                  {"chain": "robinhood", "address": "0x123"}])
 def test_a_malformed_target_is_refused_not_dropped(bad):
@@ -101,7 +101,7 @@ async def test_the_cron_request_carries_a_normalized_target():
     from cron.jobs import CronJob
     from cron.runner import make_agent_runner
     ta = _TaskAgent()
-    job = CronJob(id="j", task="PNL buyback", schedule_spec="1d", user_id="u1", next_run_at=None,
+    job = CronJob(id="j", task="TKN rebuy", schedule_spec="1d", user_id="u1", next_run_at=None,
                   payload={"provider": "anthropic", "target_authored_by": "owner",
                            "target_token": {"chain": "robinhood", "address": REAL.lower()}})
     assert await make_agent_runner(ta)(job) is True
@@ -115,8 +115,8 @@ async def test_a_cron_with_a_malformed_target_does_not_run():
     from cron.jobs import CronJob
     from cron.runner import make_agent_runner
     ta = _TaskAgent()
-    job = CronJob(id="j", task="PNL buyback", schedule_spec="1d", user_id="u1", next_run_at=None,
-                  payload={"provider": "anthropic", "target_token": "PNL"})
+    job = CronJob(id="j", task="TKN rebuy", schedule_spec="1d", user_id="u1", next_run_at=None,
+                  payload={"provider": "anthropic", "target_token": "TKN"})
     assert await make_agent_runner(ta)(job) is False
     assert ta.request is None
 
@@ -131,10 +131,10 @@ async def test_cronjob_schedule_validates_and_stores_the_target(tmp_path):
     ctx = types.SimpleNamespace(user_id="u1", role="orchestrator", is_sub_agent=False,
                                 metadata={}, session_id=None)
     bad = await t.cronjob_schedule(CronScheduleAction(
-        task="buy the PNL tranche", schedule="1d", target_token={"chain": "robinhood"}), execution_context=ctx)
+        task="buy the TKN tranche", schedule="1d", target_token={"chain": "robinhood"}), execution_context=ctx)
     assert bad.error and "target_token" in bad.error
     ok = await t.cronjob_schedule(CronScheduleAction(
-        task="buy the PNL tranche", schedule="1d", target_token={"chain": "robinhood", "address": REAL.lower()}),
+        task="buy the TKN tranche", schedule="1d", target_token={"chain": "robinhood", "address": REAL.lower()}),
         execution_context=ctx)
     assert ok.error is None
     assert t._cron_service.list_jobs(user_id="u1")[0].payload["target_token"] == {
@@ -149,11 +149,11 @@ def test_owner_create_normalizes_and_refuses():
         def create(self, **kw):
             seen.update(kw)
             return kw
-    create_goal(_Board(), user_id="rob", title="buyback",
+    create_goal(_Board(), user_id="rob", title="rebuy",
                 extra_payload={"target_token": {"chain": "robinhood", "address": REAL.lower()}})
     assert seen["payload"]["target_token"]["address"] == REAL
     with pytest.raises(ValueError):
-        create_goal(_Board(), user_id="rob", title="buyback",
+        create_goal(_Board(), user_id="rob", title="rebuy",
                     extra_payload={"target_token": {"chain": "robinhood", "address": "0x1"}})
 
 
@@ -169,7 +169,7 @@ def test_solana_screen_carries_the_self_reported_symbol():
 
 # ---- solana_swap runs the identity gate and the target ----------------------
 
-def _solana_tool(monkeypatch, symbol="PNL"):
+def _solana_tool(monkeypatch, symbol="TKN"):
     pytest.importorskip("solders", reason="needs the `solana` extra")
     from tools.defi.providers.base import ScreenVerdict
     from tools.defi.trade_tool import DefiTradeTool
@@ -213,14 +213,14 @@ async def test_scouting_ticket_and_pinned_mint_pass_the_gate(monkeypatch, pins):
     tool = _solana_tool(monkeypatch)
     res = await tool.solana_swap(_sparams(amount_in=5.0, max_spend_usd=5.0), _ctx())
     assert res.error and "no route" in res.error.lower()
-    pins.pin("solana", MINT, "PNL")
+    pins.pin("solana", MINT, "TKN")
     res = await tool.solana_swap(_sparams(), _ctx())
     assert res.error and "no route" in res.error.lower()
 
 
 @pytest.mark.asyncio
 async def test_solana_look_alike_of_a_pinned_symbol_is_refused(monkeypatch, pins):
-    pins.pin("solana", OTHER_MINT, "PNL")
+    pins.pin("solana", OTHER_MINT, "TKN")
     tool = _solana_tool(monkeypatch)
     res = await tool.solana_swap(_sparams(amount_in=1.0, max_spend_usd=1.0), _ctx())
     assert res.error and "PINNED" in res.error

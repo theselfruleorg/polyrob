@@ -51,8 +51,8 @@ def render_owner_answer(answer: str, *, ask_id: str = "", via: str = "",
 
 def rearm_cron_rail(board: Any, ask: Any) -> bool:
     """An APPROVED ask a cron run raised pulls that job to the next tick, so the
-    answer is acted on now and not at the job's next slot (6 h later for the PNL
-    buyback, live on prod 2026-10-07). The rerun is a genuine cron turn, which
+    answer is acted on now and not at the job's next slot (6 h later for a
+    6-hourly swap job, live on prod 2026-10-07). The rerun is a genuine cron turn, which
     reads the answer via :func:`consume_rail_answers`. A job that is RUNNING is
     not touched here: ``cron/scheduler.py`` re-arms it when that run ends.
     True iff the job moved. Fail-open."""

@@ -230,7 +230,8 @@ def _cmd_explain(ctx: ConfigCtx, rest: List[str]) -> str:
         suffix = f" (did you mean {hint}?)" if hint else ""
         return f"unknown key: {key}{suffix}"
     lines = [
-        candy.kv_lines([(key, f"{info.effective}   ({info.source})")]),
+        candy.kv_lines([(key, f"{info.effective}   ({info.source})"
+                              + (f" · {info.gate_effective}" if info.gate_effective else ""))]),
         f"namespace: {info.namespace} | kind: {info.kind} | applies: {info.applies}",
     ]
     if info.enforcement == "advisory":

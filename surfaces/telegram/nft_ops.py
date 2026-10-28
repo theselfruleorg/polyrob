@@ -32,27 +32,32 @@ from core.surfaces.cards import is_go_word, with_go_hint
 
 logger = logging.getLogger(__name__)
 
-#: Chain used when the owner names none. Matches the tool defaults.
-_DEFAULT_CHAIN = "base"
-
 USAGE = (
     "Usage: /nft — the agent NFTs I own (pinned collections), their accounts and holdings\n"
-    "/nft trust <collection> [on <chain>] [go] — let me use the NFTs of a collection that I "
+    "/nft trust <collection> on <chain> [go] — let me use the NFTs of a collection that I "
     "own (shows the facts first)\n"
-    "/nft untrust <collection|all> [on <chain>] [go]\n"
-    "/nft send <id|collection#id> <to> [on <chain>] [go] — give one away (its account goes "
+    "/nft untrust <collection|all> on <chain> [go]\n"
+    "/nft send <id|collection#id> <to> on <chain> [go] — give one away (its account goes "
     "with it; its approvals must be cleared first)\n"
-    "/nft list [on <chain>] [address <0x…>]\n"
-    "/nft info <contract> <token-id> [on <chain>]\n"
-    "/nft transfer <contract> <token-id> <to> [on <chain>] "
+    "/nft list on <chain> [address <0x…>]\n"
+    "/nft info <contract> <token-id> on <chain>\n"
+    "/nft transfer <contract> <token-id> <to> on <chain> "
     "[std erc721|erc1155] [amount <n>] [go]\n"
-    "/nft revoke <contract> <operator> [on <chain>] [go]\n\n"
-    "Default chain is base. Writes simulate unless you add `go`.\n"
+    "/nft revoke <contract> <operator> on <chain> [go]\n\n"
+    "There is no default chain: name it with `on <chain>`. Writes simulate unless you add "
+    "`go`.\n"
     "⚠️ A transfer is irreversible and a collectible has no reliable price, so "
     "it ALWAYS comes to you for approval — the spend caps cannot bound it.\n"
     "⚠️ `revoke` retires a standing approval over a whole collection. There is "
     "no verb here that GRANTS one, by design."
 )
+
+
+def _name_the_chain(verb: str) -> str:
+    """There is no default chain: a verb that does not name one is refused with the fix."""
+    from core.wallet import chains
+    return (f"Name the network: {verb} … on <network>. There is no default network. "
+            f"Networks: {', '.join(chains.names())}.")
 
 
 def _pull(tokens: List[str], key: str) -> Optional[str]:
@@ -96,11 +101,12 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
         execute = True
         tokens.pop()
 
-    named_chain = _pull(tokens, "on")
-    chain = named_chain or _DEFAULT_CHAIN
+    chain = _pull(tokens, "on")
+    if not chain:
+        return _name_the_chain(f"/nft {verb}")
     if verb in ("trust", "untrust"):
         return await _collection_trust(user_id, verb, tokens, typed=typed,
-                                       chain=named_chain or _AGENT_NFT_CHAIN, execute=execute)
+                                       chain=chain, execute=execute)
     from surfaces.telegram.token_ops import _owner_ctx
     ctx = _owner_ctx(user_id)
 
@@ -121,13 +127,13 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
 
         if verb == "send":
             if len(tokens) < 2:
-                return "Usage: /nft send <id|collection#id> <to> [on <chain>] [go]"
+                return "Usage: /nft send <id|collection#id> <to> on <chain> [go]"
             return await _agent_nft_send(ctx, tokens[0], tokens[1],
-                                         chain=named_chain or _AGENT_NFT_CHAIN, execute=execute)
+                                         chain=chain, execute=execute)
 
         if verb == "info":
             if len(tokens) < 2:
-                return "Usage: /nft info <contract> <token-id> [on <chain>]"
+                return "Usage: /nft info <contract> <token-id> on <chain>"
             try:
                 token_id = int(tokens[1])
             except (TypeError, ValueError):
@@ -143,7 +149,7 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
             amount_raw = _pull(tokens, "amount") or "1"
             if len(tokens) < 3:
                 return ("Usage: /nft transfer <contract> <token-id> <to> "
-                        "[on <chain>] [std erc721|erc1155] [amount <n>] [go]")
+                        "on <chain> [std erc721|erc1155] [amount <n>] [go]")
             try:
                 token_id = int(tokens[1])
                 amount = int(amount_raw)
@@ -163,7 +169,7 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
             return body
 
         if len(tokens) < 2:
-            return "Usage: /nft revoke <contract> <operator> [on <chain>] [go]"
+            return "Usage: /nft revoke <contract> <operator> on <chain> [go]"
         result = await DefiTradeTool().nft_revoke_approval(
             NftRevokeParams(chain=chain, contract=tokens[0],
                             operator=tokens[1], dry_run=not execute), ctx)
@@ -175,10 +181,6 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
     except Exception as exc:
         logger.warning("nft verb %s failed", verb, exc_info=True)
         return f"The NFT verb did not run: {exc}"
-
-
-#: The chain of the agent-NFT verbs when the owner names none (the collection's chain).
-_AGENT_NFT_CHAIN = "robinhood"
 
 
 async def agent_nft_overview() -> str:
@@ -233,7 +235,7 @@ async def _collection_trust(user_id: str, verb: str, tokens: List[str], *, typed
     from core.wallet.token_trust import owner_seat_ctx
     max_raw, from_raw = _pull(tokens, "max"), _pull(tokens, "from")
     if len(tokens) != 1:
-        return f"Usage: /nft {verb} <collection> [on <chain>] [go]"
+        return f"Usage: /nft {verb} <collection> on <chain> [go]"
     try:
         max_supply = int(max_raw) if max_raw else None
         from_block = int(from_raw) if from_raw else None

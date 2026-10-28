@@ -62,7 +62,7 @@ def owner_turn(monkeypatch):
 def _seller_chain():
     seller = LocalEoaSigner(os.urandom(32))
     e0 = nft_account.sign_entry(nft_account.build_entry(
-        prior=[], account=ACCOUNT, chain_id=4663, kind="thesis", text="PNL", owner=seller.address),
+        prior=[], account=ACCOUNT, chain_id=4663, kind="thesis", text="TKN", owner=seller.address),
         seller, prefix="POLYROB")
     return seller, [e0]
 
@@ -77,7 +77,7 @@ def _entry_of(tx):
 
 def test_a_note_goes_on_chain_as_the_accounts_single_call(armed):
     tool, seen = _tool(armed, JournalChain(armed.address))
-    res = _run(tool.write_journal_entry(JournalParams(kind="note", text="hi", nft="3", dry_run=False),
+    res = _run(tool.write_journal_entry(JournalParams(chain="robinhood", kind="note", text="hi", nft="3", dry_run=False),
                                         kind="note", text="hi"))
     assert res.error is None, res.error
     intent, tx, _ = seen[0]
@@ -93,7 +93,7 @@ def test_a_note_goes_on_chain_as_the_accounts_single_call(armed):
 def test_without_a_journal_log_the_note_is_local(armed, monkeypatch):
     pin(monkeypatch, profile(PINNED, journal_prefix="POLYROB"))
     tool, seen = _tool(armed, Chain(armed.address))
-    res = _run(tool.write_journal_entry(JournalParams(kind="note", text="hi", nft="3", dry_run=False),
+    res = _run(tool.write_journal_entry(JournalParams(chain="robinhood", kind="note", text="hi", nft="3", dry_run=False),
                                         kind="note", text="hi"))
     assert seen == [] and "local journal" in res.extracted_content
     assert "journal: entry #0 (note) signed" in res.extracted_content
@@ -103,7 +103,7 @@ def test_without_a_journal_log_the_note_is_local(armed, monkeypatch):
 
 def test_adopt_outside_an_owner_turn_refuses(armed):
     tool, seen = _tool(armed, JournalChain(armed.address))
-    res = _run(tool.agent_nft_adopt(AdoptParams(nft="3")))
+    res = _run(tool.agent_nft_adopt(AdoptParams(chain="robinhood", nft="3")))
     assert res.error and "Nothing was written" in res.error and seen == []
 
 
@@ -112,7 +112,7 @@ def test_adopt_dry_run_reads_the_on_chain_history(armed, owner_turn):
     tool, seen = _tool(armed, JournalChain(armed.address, history))
     called = []
     tool._impl_override = types.SimpleNamespace(adopt=lambda *a: called.append(a))
-    res = _run(tool.agent_nft_adopt(AdoptParams(nft="3")))
+    res = _run(tool.agent_nft_adopt(AdoptParams(chain="robinhood", nft="3")))
     assert res.error is None, res.error
     assert "1 verified entry" in res.extracted_content and seller.address.lower() in res.extracted_content
     assert "DRY RUN" in res.extracted_content and seen == [] and called == []
@@ -121,7 +121,7 @@ def test_adopt_dry_run_reads_the_on_chain_history(armed, owner_turn):
 def test_adopt_refuses_over_an_unreadable_history(armed, owner_turn):
     tool, seen = _tool(armed, JournalChain(armed.address, broken=True))
     tool._impl_override = types.SimpleNamespace(adopt=lambda *a: pytest.fail("package ran"))
-    res = _run(tool.agent_nft_adopt(AdoptParams(nft="3", dry_run=False)))
+    res = _run(tool.agent_nft_adopt(AdoptParams(chain="robinhood", nft="3", dry_run=False)))
     assert res.error and "could not be read" in res.error and seen == []
 
 
@@ -134,7 +134,7 @@ def test_adopt_runs_the_package_then_continues_the_chain_with_a_handover(armed, 
         got["history"] = tool_.journal_history(params)[1]
         return tool_._ar(content="ADOPTED: pfp, positions, Brief")
     tool._impl_override = types.SimpleNamespace(adopt=adopt)
-    res = _run(tool.agent_nft_adopt(AdoptParams(nft="3", dry_run=False)))
+    res = _run(tool.agent_nft_adopt(AdoptParams(chain="robinhood", nft="3", dry_run=False)))
     assert res.error is None, res.error
     assert got["history"] == history
     assert "ADOPTED" in res.extracted_content
@@ -147,5 +147,5 @@ def test_adopt_runs_the_package_then_continues_the_chain_with_a_handover(armed, 
 def test_adopt_without_the_package_verb_refuses_live(armed, owner_turn):
     tool, seen = _tool(armed, JournalChain(armed.address))
     tool._impl_override = types.SimpleNamespace()
-    res = _run(tool.agent_nft_adopt(AdoptParams(nft="3", dry_run=False)))
+    res = _run(tool.agent_nft_adopt(AdoptParams(chain="robinhood", nft="3", dry_run=False)))
     assert res.error and "no `adopt`" in res.error and seen == []

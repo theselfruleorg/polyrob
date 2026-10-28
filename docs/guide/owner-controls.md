@@ -17,7 +17,7 @@ Still on: this chat, crash/security/credit alerts.
 Resume with /resume. /status shows this first.
 ```
 
-Plain words are never commands. "stop", "pause the buyback" or "resume where you
+Plain words are never commands. "stop", "pause the swaps" or "resume where you
 left off" — typed or spoken — is a message to the agent like any other. The agent
 can pause and resume through its owner-only `autonomy_control` action, but that
 path needs a working model; `/pause` does not. On the box:
@@ -50,13 +50,38 @@ Five plain words cover most of it: `everything` (= `all`), `trading`,
 escalations) and `deploying` (the durable app service — no new deploys, and live
 app containers are stopped until resume). A raw scope still works for anything a
 plain word does not cover: `all`, `trading`, `cron`,
-`social`, `oversight`, `pings`, `apps`. An unrecognized word refuses — it never
+`social`, `oversight`, `pings`, `apps`, `release`. An unrecognized word refuses — it never
 silently widens to "everything". Durations are `90m`, `6h`, `2d`. The CLI form
 is `polyrob autonomy pause trading --for 6h`.
 
 In prose, a scoped ask ("stop trading for 6 hours") goes to the agent, which
 narrows it through its owner-only `autonomy_control` action and quotes the
 result. Nothing acts on the sentence before the agent reads it.
+
+### One run, this chat, or the trading mandate
+
+```
+/run                  # what runs in the background now, numbered
+/run pause 2          # pause run 2 at its next step; /run resume 2 continues it
+/run stop 2           # stop that run only
+/cancel               # stop the task I am running for you in this chat
+/trade pause          # no new trading entries; every exit job keeps running
+/trade stop           # end the trading mandate (it asks whether to close every open position)
+```
+
+`/run` acts on one live run and leaves the job or goal behind it alone: a
+stopped goal run is retried or not by the board's own rules. A paused goal or
+job still runs inside its time limit, so a long pause can end the run. To pause
+or stop the job or goal itself, use `/job pause|stop <id>` or `/goal pause|stop
+<id>` ([streams.md](streams.md)).
+
+The trading mandate is how you let Rob trade on its own.
+`/trade start <budget> <chain,chain> [preset]` (for example
+`/trade start 150 solana,base memecoin`) shows one decision with every number;
+Confirm creates the mandate and its jobs: a hunt, an exit job for each open
+trade, and a daily review. `/trade status` shows it, `/trade resume` lifts its
+pause, and `/trade release` clears a loss stop that a breaker latched. A pause
+or a stop leaves every exit job running until its trade is closed.
 
 ### Narrow pauses with their own verbs
 
@@ -76,7 +101,7 @@ polyrob autonomy resume
 ```
 
 The reply is the verified state: `▶ Autonomy RESUMED.` or
-`▶ Resumed; still paused: cron.` A sentence such as "resume the buyback" is
+`▶ Resumed; still paused: cron.` A sentence such as "resume the swaps" is
 chat for the agent, never a switch.
 
 ## Pause versus off
@@ -113,9 +138,11 @@ so.
 
 `/restart` restarts the background service once its current work is done
 (`/restart now` cuts it); `/update` updates it to the latest release, rolls back
-on any failure, and restarts. Both show a quote with a Confirm button, both are
+on any failure, and restarts. `/update now` (confirmed with `/update now go`) lets a
+deploy that the operator already started skip its wait for a quiet chat, once; it
+still waits for running jobs and goals. Both show a quote with a Confirm button, both are
 owner-only and refused in a group room, and the service answers in the chat you
-asked from when it is back: `✅ Back online on 1.4.0 (abc1234)`. A setting that
+asked from when it is back: `✅ Back online on 1.7.0 (abc1234) — restart took 14 s.` A setting that
 waits for a restart is listed in `/status` with `/restart` as its remedy. The
 whole story, and the shell and root equivalents:
 [operate-the-service.md](operate-the-service.md).
@@ -212,16 +239,19 @@ digest is enabled but no digest job is scheduled"**, that is this gap.
 
 An MCP server is how a protocol hands an agent its own tools — Aave, GitHub, a
 docs index. You add one from wherever you are; it is saved against your tenant
-and loads at the start of every new session.
+and the agent can use it **from the next turn** — no restart, no deploy.
 
 ```
-/mcp                                 # the MCP servers I have, and their state
+/mcp                                 # each server: transport, tool count, last probe, last error
 /mcp add aave https://mcp.aave.com   # add one (an api key may follow the URL)
-/mcp remove <id>                     # drop it; running sessions keep it until they end
+/mcp remove <id>                     # drop it; the agent loses it from the next turn
 /mcp test <id>                       # connect now and count the tools
 ```
 
-Same verbs in the REPL. **HTTPS URLs only.** A local command (`npx …`) is
+Same verbs in the REPL. `/mcp add` finds the transport itself: it tries
+Streamable HTTP, then plain HTTP, then SSE, and saves the first one that
+answers. A refusal names the HTTP status and the server's first line (for
+example `HTTP 401: missing api key`). **HTTPS URLs only.** A local command (`npx …`) is
 refused: saving one would save arbitrary code execution on this box, which is
 the whole threat model for installing an MCP server. If you genuinely need a
 local server, put a reviewed entry in `MCP_INSTALL_CATALOG_FILE` on the box.
@@ -263,7 +293,8 @@ the text you approved, once; it does not re-run the job or goal that wrote it.
 
 On the command line the same queue is `polyrob owner pending`, and
 `polyrob owner promote|reject <kind> <id>` (or `… promote all`) decides it.
-In the REPL it is `/pending` and `/pending approve <kind> <id>`.
+In the REPL it is `/pending` and `/pending approve <kind> <id>`, and `/gates`
+lists which actions stop and wait for your approval.
 
 ### Answering an ask in words
 
@@ -281,6 +312,11 @@ the retry prompt as *the owner answered: …*. Without it the run learns only
 that it may proceed, not what you decided — which is how the same ask comes
 back a second time. The answer is kept on the ask too, so you can see later
 what you said.
+
+You can also answer in plain words in the chat ("A", "use the second
+account"). Rob records that answer on the ask, but only with words you typed in
+that message: text from a page, a mail or a search result cannot decide an
+ask.
 
 An answer to an ask that a cron job raised re-runs that job now, not at its next
 slot. Every seat's reply says where the answer went: the goals it unblocked, or
@@ -318,9 +354,10 @@ vhost and certificate: [deployment-postures.md](deployment-postures.md).
 
 ## The money verbs you can reach from chat
 
-Four rails shipped as AGENT actions with no human seat at all: the owner could
-watch them and could not run them. Each now has the same shape as `/bridge` —
-a **quote by default**, and an explicit `go` to execute. Typing `go` is YOUR
+Every money verb has the same shape as `/bridge`: a **quote by default**, and
+an explicit `go` to execute. The full list, with `/pay`, `/lp`, `/launch`,
+`/deploy`, `/book` and `/invoices`, is in [cli.md](cli.md#slash-commands-repl),
+and `/help` lists the verbs you can run where you are. Typing `go` is YOUR
 act: you typed the amount and the address, so there is no second tap, and the
 pause and the autonomous ceiling (which bound what I do on my own) do not
 apply. The per-transaction cap, the daily cap and the simulation always do, and
@@ -331,9 +368,12 @@ the quote shows them before you type `go`.
 /swap <amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]
 /cards                              # open action cards: confirm, refresh, cancel, answer
 /claim <token> [go]                 # collect the creator fees a launchpad owes me
-/nft list|info|transfer|revoke      # what I hold, send one, retire an approval
+/check <address|ticker> [chain]     # look at any wallet or token, read-only
+/nft                                # the agent NFTs I own, their accounts and holdings
+/nft list|info|transfer|revoke … on <chain> [go]   # what I hold, send one, retire an approval
+/nft trust|untrust|send … on <chain> [go]          # use, stop using, or give away an agent NFT
 /dapp list|revoke <id>              # web pages my wallet is armed for
-/identity register|set-uri [go]     # my own ERC-8004 registration
+/identity register|set-uri on <chain> [go]   # my own ERC-8004 registration
 /contacts [<surface> <address>]     # third parties I have written to, and one transcript
 /thread [n | <hours>h]              # OUR conversation, every session and rail (you are not a contact)
 /wallet tokens                      # which tokens I trust and why; what is quarantined
@@ -358,14 +398,20 @@ send or swap from pickers (chain, a token I trust, a recent recipient) and answe
 the same card. The agent uses cards too: `propose_action` puts a
 money verb to you whose only button gets the real quote (the agent never writes a
 confirm), and `present_choice` asks you to pick one of a few options and waits for
-the tap. `/cards` lists what is open. When you have made every decision Rob
+the tap. When Rob lacks something you can fix, `propose_setting` puts the fix
+behind a Confirm button — `/mcp add`, a safe `/config set`, or a grant without
+money — and Confirm runs that line as if you typed it; a change only the operator can
+make is filed as an ask in `/asks`. `/cards` lists what is open. When you have made every decision Rob
 raised in a chat, Rob continues by itself: it gets each outcome (sent, failed,
 dismissed, expired) and reports back, without you telling it. It still cannot
 spend on that turn — a next payment comes to you as a new decision.
 
-A token-identity question ("which PNL is real?") arrives in `/pending` with a
+A token-identity question ("which XYZ is real?") arrives in `/pending` with a
 *trust it* and a *not trusted* tap per contract — see
 [payments.md §10.4b](payments.md#104b-which-tokens-the-agent-trusts).
+
+There is no default network. Name it with `on <chain>`: `/nft`, `/identity`
+and `/deploy` refuse a line without it and list the networks you can use.
 
 Three things worth knowing before you use them:
 

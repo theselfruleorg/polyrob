@@ -18,7 +18,16 @@ The entry point (`main.py` or `polyrob`) builds a **DI container** (`core/`) tha
 - **Component lifecycle** — starts and stops services in dependency order
 - **Permission system** — enforces what tools and surfaces can access
 
-Everything is resolved from the container; subsystems do not import each other directly.
+Services are resolved from the container. Imports run in one direction only:
+
+```
+core <- modules <- agents <- tools <- cron <- polyrob.app <- {api, cli, surfaces, webview} <- packs
+```
+
+`polyrob/app/` is the composition root (env layering, the server and CLI
+containers, the background loops) and only the entry points call it. A lower tier
+never imports a higher one; it exposes a hook that the higher tier registers into.
+A test fails the build on a new upward import.
 
 ---
 
@@ -47,9 +56,9 @@ POLYROB assembles each request the same way twice in a row, on purpose.
 **What is held still.** The tool schemas are sorted by action name, so a cron
 job, a goal and a chat session holding the same tools send identical bytes. The
 requested tool set does not shrink and re-grow when a credential check flaps.
-The first eight messages (system prompt, runtime identity, environment, SOUL,
-project context, the skill catalog, the tool catalog, the initial task) are a
-pinned *foundation*: written once, never repaired, never evicted, and a later
+The leading messages (system prompt, runtime identity, environment, SOUL,
+project context, the skill catalog, the approved-worker catalog when there is one,
+the tool catalog, the working directory, the initial task) are a pinned *foundation*: written once, never repaired, never evicted, and a later
 change to the tool catalog arrives as a short note at the end rather than a
 rewrite in place. The rows that differ per chat come last, so two runs of one
 scheduled job share every row before them.
@@ -111,6 +120,14 @@ prepare_step
 
 Each step is driven by the LLM's response. The agent loops until it calls `done()`, hits a budget cap, or the session is cancelled.
 
+The limits depend on who started the run. An interactive run (`polyrob run`, the API,
+another agent over the protocol) stops at `INTERACTIVE_MAX_STEPS` (50); a chat turn on a
+messaging app stops at `CHAT_MAX_STEPS` (8). A run that Rob starts by itself — a goal, a
+scheduled job, a helper — stops at one operator limit, `AUTONOMOUS_MAX_STEPS` (150), or at
+`AUTONOMOUS_RUN_BUDGET_USD` ($2.00) of spend, helpers included. No argument or job
+payload sets a step budget. A run that stops before `done()` reports once and records why
+(`stop_reason`: `max_steps`, `run_budget`, …) in its run record, the CLI and the status.
+
 **Key components:**
 
 | Component | Responsibility |
@@ -131,6 +148,7 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 | Tool set | Capabilities |
 |----------|-------------|
 | Web fetch / search | `web_fetch` reads a single URL as clean markdown without a browser (the lightweight default reader); Perplexity-backed web search (the `discovery` pack) when `PERPLEXITY_API_KEY` is set |
+| HTTP write | `http_request` sends one POST/PUT/PATCH/DELETE with a JSON body through the same SSRF checks as `web_fetch`; it adds no cookie or stored key. A scheduled job or goal asks the owner once for each new domain |
 | Browser (`tools/browser/`) | Playwright: navigate, click, type, scroll, screenshot, extract DOM — opt-in (`browser` toolset/tool) |
 | Filesystem / docs | Create, read, edit files in the session workspace |
 | AnySite (the `discovery` pack, `packs/discovery/`) | Structured data from 200+ external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
@@ -216,7 +234,7 @@ between your messages:
 | Loop | Description | Flag |
 |------|-------------|------|
 | Goals | Durable goal board — the agent pursues queued goals when idle | `GOALS_ENABLED` |
-| Self-wake | Re-enters an idle session when a goal or a background result arrives | `SELF_WAKE_ENABLED` |
+| Self-wake | Re-enters an idle session when a goal or a background result arrives, or when you have answered every decision Rob raised (one wake per group, with each outcome) | `SELF_WAKE_ENABLED` |
 | Background review | An aux model reviews the work after productive turns | `BACKGROUND_REVIEW_ENABLED` |
 | Curator | Archives stale authored skills, reactivates them on reuse | `CURATOR_ENABLED` |
 | Cron | Scheduled runs | `CRON_ENABLED` |
@@ -224,8 +242,10 @@ between your messages:
 **They are all off by default, everywhere.** The first four turn on as a group only
 when `POLYROB_LOCAL` **and** `AUTONOMY_ENABLED` are both set — `POLYROB_LOCAL` alone
 turns on the *interactive* tools (coding, git, knowledge base, project context) and
-nothing self-directed. `CRON_ENABLED` is not in that group at all: set it yourself,
-or set `AUTONOMY_POSTURE=full`, which moves its default. The dial, its four axes and
+nothing self-directed. `CRON_ENABLED` is not in that group at all: set
+`AUTONOMY_POSTURE=full`, which moves its default, or turn it on alone with
+`POLYROB_OVERRIDES=CRON_ENABLED=true`. These loop settings are members of a bundle: a
+plain `CRON_ENABLED=true` line in the env file is ignored, and `polyrob doctor` says so. The dial, its four axes and
 how to stop it are in [configuration.md](configuration.md#6-the-autonomy-dial) and
 [owner-controls.md](owner-controls.md).
 
@@ -240,6 +260,20 @@ per-run tap, and it may moderate a room its text names. When it is created, a tu
 of yours may ask for any rig; an autonomous run may ask only for tools inside the
 agent's self-goal ceiling, and only your turn may put a write verb on a job. Under
 the `supervised` money regime no goal or cron run moves funds unattended.
+
+A **trading mandate** is the one exception you start on purpose: one owner decision
+(`/trade start`) creates a hunt job, a daily review and an exit job for each token it buys.
+Code arms and cancels the exits, each entry is capped by its promotion stage's ticket,
+and `/trade status|pause|stop|release` controls it. See [payments.md](payments.md).
+
+---
+
+## Packs
+
+Optional features ship as **packs**: posting on X, the trading venues, discovery, the
+sandbox executors and more. A pack declares what it adds in a `pack.toml` and
+reaches the core only through `polyrob.sdk`. The first-party packs
+ship inside the `polyrob` wheel; their SDKs are pip extras. See [packs.md](packs.md).
 
 ---
 

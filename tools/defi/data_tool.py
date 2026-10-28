@@ -38,6 +38,9 @@ from tools.defi.data_lp import LpReadsMixin
 from tools.defi.data_quote import (  # noqa: F401 — re-exported (tests)
     QUOTE_SUSPECT_RATIO, QuoteCrossCheck, QuoteReadsMixin, _usable_price, quote_cross_check)
 from tools.defi.data_reconcile import ReconcileReadsMixin
+from tools.defi.data_retire import RetireReadsMixin
+from tools.defi.marks import (  # noqa: F401 — the param models: cron/read_job.py loads them here
+    DiscoveryCountParams, MarksReadsMixin, PositionMarkParams)
 from tools.defi.providers import alchemy_index, dexscreener, goplus  # noqa: F401
 from tools.defi.providers.base import Candidate, ScreenVerdict
 from tools.defi.token_screen import quoted
@@ -153,8 +156,8 @@ def _valuation_priority(chain: str, addr: str, pinned: set) -> int:
     """0 for a canonical, owner-pinned or own-launch token, 1 for everything else.
 
     The portfolio loop is bounded by a time budget, and a sorted-by-address walk
-    let the budget run out BEFORE the wallet's own buyback token (2026-09-29:
-    ``0xbBa6…`` rendered as 27 digits of raw units with no decimals). The tokens
+    let the budget run out BEFORE a token the wallet deliberately holds (2026-09-29:
+    its ``0x…`` row rendered as 27 digits of raw units with no decimals). The tokens
     the instance deliberately holds are valued first; dust takes what is left.
     """
     from core.wallet.tokens import canonical_token
@@ -169,7 +172,7 @@ _RECONCILE_WORKERS = 8
 #: (chain, address) -> (raw_units, ChainHolding, monotonic stamp) for holdings
 #: last valued as dust or unsolicited. 2026-10-08 16:00Z: re-reading ~110
 #: airdrops on every call passed the 60 s action budget under slow DNS and
-#: stopped the buyback at its gate. An unrecorded buy changes the raw balance,
+#: stopped a scheduled buy at its gate. An unrecorded buy changes the raw balance,
 #: so only an UNCHANGED balance reuses the verdict; booked/pinned rows and
 #: failed or priced reads are never memoised.
 _DUST_MEMO: Dict[Tuple[str, str], Tuple[int, Any, float]] = {}
@@ -179,7 +182,7 @@ _DUST_MEMO_TTL_S = 6 * 3600
 def _pinned_addresses(chain: str) -> set:
     """Owner-pinned tokens and the instance's OWN launches on *chain*, lower-cased.
 
-    Own launches count: the prod buyback token is not owner-pinned, it is proven
+    Own launches count: a token the instance launched is not owner-pinned, it is proven
     ours by the launch record (`token_provenance`). Empty on any read failure —
     this orders the valuation loop and gates the indicative figure, it never
     grants trust to spend."""
@@ -212,15 +215,18 @@ def _quote_slippage_bps() -> int:
         return 100
 
 
-def _discovery_error(chain: str, exc: BaseException) -> str:
+def _discovery_unavailable(got):
     """A failed indexer read, worded so it is never taken for an empty market
-    (2026-10-12: a 429 burst read as "the discovery rail is empty")."""
-    return (f"pool discovery could not read {chain}: {exc}. This is NOT "
-            f"'no pools' — the list was not read.")
+    (2026-10-12: a 429 burst read as "the discovery rail is empty"). The error
+    carries the typed status too (086 W9), so a precheck need not parse prose."""
+    from agents.task.loop_types.controller_types import ActionResult
+    from tools.defi import discovery
+    return ActionResult(error=discovery.unavailable_text(got),
+                        metadata={"discovery": discovery.read_metadata(got)})
 
 
 class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileReadsMixin,
-                   HoldingsReadsMixin, BaseTool):
+                   RetireReadsMixin, MarksReadsMixin, HoldingsReadsMixin, BaseTool):
     """Read-only token sight. Seams are injectable so unit tests never hit the network."""
 
     def __init__(self, name: str = "defi_data", config=None, container=None, *,
@@ -243,6 +249,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
                  lp_rpc: Optional[Callable] = None,
                  kind_fn: Optional[Callable] = None,
                  solana_holdings_fn: Optional[Callable] = None,
+                 survival_fn: Optional[Callable] = None,
                  holder: Optional[str] = "__from_wallet__"):
         super().__init__(name=name, config=config if config is not None else _NULL_CONFIG,
                          container=container)
@@ -283,6 +290,9 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         #: Solana display enumeration (`token_holdings`). Injected in tests.
         self._kind_fn = kind_fn
         self._solana_holdings_fn = solana_holdings_fn
+        #: 086 W9: `gather(chain, address, family) -> {pools, insiders, ..._error}`
+        #: — the two reads the survivability block adds to the screen's.
+        self._survival_fn = survival_fn
         self._holder = holder
 
     # -- seams ------------------------------------------------------------
@@ -668,7 +678,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
                 "directly with token_info."))
 
         # Exact symbol matches first (case-insensitive), then by liquidity. A
-        # search for PNL used to open with TRX-USDT and BNB.
+        # search for one small-cap symbol used to open with TRX-USDT and BNB.
         # NOT trimmed: "USDC  " is a whitespace typosquat, never an exact match.
         want = (params.symbol or "").strip().lower()
         ranked = sorted(cands, key=lambda c: (
@@ -753,6 +763,13 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         except Exception:
             holders = None
         lines.append(_holders_line(holders, screen))
+        # 086 W9: the hunt's hard screen — will the POOL survive. Missing =
+        # unknown = one tier lower, never safe. Numbers and statuses only.
+        from tools.defi import survivability
+        survival = survivability.for_token(params.chain, address, screen=screen,
+                                           holders=holders, quote=price,
+                                           gather_fn=self._survival_fn)
+        lines += survivability.render(survival)
         # The base58/EIP-55 typo note lives on the SEND verbs, where an address
         # is about to receive funds; a read of a token does not need it.
         holders_ok = holders is not None and getattr(holders, "available", False)
@@ -777,6 +794,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
                          "top_percent": holders.top_percent,
                          "top_percent_wallets": holders.top_percent_wallets}
                         if holders_ok else {"available": False}),
+            "survivability": survival,
         })
 
     @BaseTool.action(
@@ -804,13 +822,13 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         kind = (params.kind or "trending").strip().lower()
         if kind not in ("trending", "new"):
             return self._ar(error=f"kind {params.kind!r} must be 'trending' or 'new'")
-        try:
-            pools = self._discover(params.chain, kind) or []
-        except Exception as exc:
-            return self._ar(error=_discovery_error(params.chain, exc))
+        from tools.defi import discovery
+        got = discovery.read(params.chain, kind, discover_fn=self._discover)
+        if not got.available:
+            return _discovery_unavailable(got)
 
         kept, excluded = [], 0
-        for pool in pools:
+        for pool in got.pools:
             if (pool.liquidity_usd is not None
                     and pool.liquidity_usd < params.min_liquidity_usd):
                 excluded += 1
@@ -820,7 +838,9 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
                 break
         return self._ar(content="\n".join(_render_scan(
             kept, chain=params.chain, kind=kind, excluded=excluded,
-            floor=params.min_liquidity_usd)))
+            floor=params.min_liquidity_usd, read_count=len(got.pools))),
+            metadata={"discovery": discovery.read_metadata(
+                got, shown=len(kept), excluded=excluded)})
 
     @BaseTool.action(
         "PRICE HISTORY as candles. A 24h change figure cannot tell a steady "
@@ -1139,14 +1159,13 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             return self._ar(error=(
                 f"chain {params.chain!r} is not supported (this tier covers "
                 f"{', '.join(SUPPORTED_CHAINS)})"))
-        try:
-            pools = self._discover(params.chain, kind) or []
-        except Exception as exc:
-            logger.debug("discovery failed on %s (%s)", params.chain, exc)
-            return self._ar(error=_discovery_error(params.chain, exc))
+        from tools.defi import discovery
+        got = discovery.read(params.chain, kind, discover_fn=self._discover)
+        if not got.available:
+            return _discovery_unavailable(got)
 
         kept, excluded = [], 0
-        for pool in pools:
+        for pool in got.pools:
             # An UNKNOWN figure never fails a floor. A floor answers "is this
             # number too small"; it has no answer for "there is no number", and
             # treating the two the same is how a real candidate disappears
@@ -1165,8 +1184,12 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
 
         label = "newest pools" if kind == "new" else "trending pools"
         lines = [f"{label} on {params.chain} — {len(kept)} shown", "", caveat, ""]
-        if not kept:
-            lines.append("  (no pools matched)")
+        if not got.pools:
+            lines.append("  the indexer answered with ZERO pools for this chain — an "
+                         "empty answer from the provider, not a failed read.")
+        elif not kept:
+            lines.append(f"  the indexer returned {len(got.pools)} pool(s); none "
+                         f"passed your floors.")
         for pool in kept:
             token = pool.base_token or (
                 "UNKNOWN — the indexer named a base token this chain's address "
@@ -1189,7 +1212,8 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         lines += ["", "NOT SCREENED. Run token_info(chain, address) on any "
                       "candidate before you act on it — that is the verb that "
                       "checks honeypot behaviour and sell tax."]
-        return self._ar(content="\n".join(lines))
+        return self._ar(content="\n".join(lines), metadata={
+            "discovery": discovery.read_metadata(got, shown=len(kept), excluded=excluded)})
 
     async def _solana_portfolio(self, params: PortfolioParams):
         """Thin delegator kept for any out-of-tree caller that awaits it.

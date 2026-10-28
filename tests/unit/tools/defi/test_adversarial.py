@@ -51,7 +51,7 @@ async def test_typosquat_collision_returns_candidates_never_a_pick():
     """
     payload = json.loads((FX / "dexscreener_typosquat.json").read_text())
     tool = DefiDataTool(search_fn=lambda s: dexscreener.parse_search(payload))
-    out = _text(await tool.token_resolve(ResolveParams(symbol="AERO")))
+    out = _text(await tool.token_resolve(ResolveParams(chain="base", symbol="AERO")))
 
     assert "0x940181a94A35A4569E4529A3CDfB74e38FD98631" in out    # genuine
     assert "0xBAdBadbADBaDBADBadbADbaDBadBaDBADBadBAD0" in out    # squat
@@ -154,7 +154,7 @@ async def test_portfolio_reports_unknown_balance_as_unknown():
             chain=c, address=a, symbol="USDC", name="USD Coin", decimals=6,
             verified=True, metadata_changed=False, source="canonical"),
         price_fn=lambda c, a: PriceInfo(1.0, 1_000_000.0, 3, "high"))
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "unknown" in out.lower()
     assert "not zero" in out.lower()
 
@@ -184,7 +184,7 @@ async def test_seeded_thin_pool_cannot_inflate_the_total():
         holder="0x" + "22" * 20,
         balances_fn=lambda h, c, t: {USDC: 10_000_000, FAKE: 10 * 10 ** 18},
         identity_fn=identity_fn, price_fn=price_fn)
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
 
     assert "unvalued" in out.lower()
     assert "$10.00" in out, "the genuine USDC position is valued"
@@ -195,7 +195,7 @@ async def test_seeded_thin_pool_cannot_inflate_the_total():
 async def test_partial_coverage_says_tokens_may_be_invisible(monkeypatch):
     monkeypatch.delenv("ALCHEMY_API_KEY", raising=False)
     tool = DefiDataTool(holder="0x" + "22" * 20, balances_fn=lambda h, c, t: {})
-    out = _text(await tool.portfolio(PortfolioParams()))
+    out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "partial" in out.lower()
     assert "invisible" in out.lower()
 
@@ -219,7 +219,7 @@ async def test_whitespace_typosquat_symbols_are_visibly_distinct():
                   liquidity_usd=9_000_000.0, price_usd=1.0),
     ]
     tool = DefiDataTool(search_fn=lambda s: cands)
-    out = _text(await tool.token_resolve(ResolveParams(symbol="USDC")))
+    out = _text(await tool.token_resolve(ResolveParams(chain="base", symbol="USDC")))
     assert '"USDC  "' in out, "trailing whitespace must be visible in the output"
     # The padded symbol is NOT an exact match: the genuine one ranks first.
     assert out.index(USDC) < out.index(FAKE)
@@ -229,6 +229,6 @@ async def test_whitespace_typosquat_symbols_are_visibly_distinct():
 @pytest.mark.asyncio
 async def test_empty_resolve_does_not_claim_the_token_does_not_exist():
     tool = DefiDataTool(search_fn=lambda s: [])
-    out = _text(await tool.token_resolve(ResolveParams(symbol="USDC")))
+    out = _text(await tool.token_resolve(ResolveParams(chain="base", symbol="USDC")))
     assert "not in the top results" in out.lower()
     assert "no such token exists" not in out.lower().replace("not 'no such token exists'", "")

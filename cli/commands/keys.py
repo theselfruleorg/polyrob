@@ -88,8 +88,8 @@ class _CliDB:
 
 
 class _OwnerTier:
-    """The DEN-token tier gate on :meth:`APIKeyManager.generate_api_key` is a
-    platform-billing BETA control for multi-tenant SIWE users. On the owner's
+    """The tier gate on :meth:`APIKeyManager.generate_api_key` is a
+    platform-billing control for multi-tenant SIWE users. On the owner's
     OWN machine the owner IS the owner, so this stub always grants a tier — the
     same reason this seat needs no wallet-SIWE JWT. It touches no money gate, no
     forged/leaf/tainted refusal, and no pause.

@@ -1,6 +1,6 @@
 """W0 (token-management evaluation): the ``own_launch`` trust source.
 
-The real PNL is the instance's OWN Pons launch; the identity gate still called
+The real TKN is the instance's OWN Pons launch; the identity gate still called
 it "unverified" because the only trust sources were the canonical list and a
 CLI-only pin table. A token this instance launched or deployed now reads
 ``verified=True, source="own_launch"`` from the one resolver.
@@ -13,8 +13,8 @@ import pytest
 from core.wallet import token_provenance as tp
 from core.wallet.tokens import get_token_identity
 
-REAL = "0xbBa60AB93Fc409b1A34371CBF6c3173795Ed2c7e"
-FAKE = "0x357A04366240aa3c9d916Aa0F15c3033686C9007"
+REAL = "0x5555555555555555555555555555555555555555"
+FAKE = "0x3535353535353535353535353535353535353535"
 FACTORY = "0x1111111111111111111111111111111111111111"
 
 

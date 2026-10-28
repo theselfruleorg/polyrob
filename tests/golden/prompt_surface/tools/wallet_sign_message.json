@@ -1,0 +1,38 @@
+{
+  "function": {
+    "description": "Sign a login/challenge text you already have (SIWE, Sign-In With Solana) for the site in `origin`, which the text must name. Owner turns only; prefer wallet_sign_challenge.",
+    "name": "wallet_sign_message",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "default": "evm",
+          "description": "'evm' (EIP-191) or 'solana' (ed25519).",
+          "enum": [
+            "evm",
+            "solana"
+          ],
+          "type": "string"
+        },
+        "origin": {
+          "description": "The site the signature is for (host or https URL).",
+          "maxLength": 255,
+          "minLength": 3,
+          "type": "string"
+        },
+        "text": {
+          "description": "The exact text; it must name the site in `origin`.",
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "origin"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

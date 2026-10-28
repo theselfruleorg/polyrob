@@ -76,7 +76,11 @@ def apply_request_extras(request_params: Dict[str, Any], client: Any = None,
     """The ONE call the client makes before `chat.completions.create`: provider
     routing (`OPENROUTER_PROVIDER_SORT` / the per-session reroute) then the
     reasoning budget, both merged into `extra_body`. Kept here so the client
-    file stays under its size ceiling."""
+    file stays under its size ceiling. A subclass that is NOT OpenRouter (DeepSeek)
+    supplies its own ``request_extras`` and none of these blocks are sent."""
+    own = getattr(client, "request_extras", None)
+    if callable(own):
+        return own(request_params, max_tokens)
     from modules.llm.openrouter_routing import apply_provider_routing
     from modules.llm.prefix_stamp import stamp_client
     apply_provider_routing(request_params, client)

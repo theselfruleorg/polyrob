@@ -1,7 +1,7 @@
 """cronjob_show / cronjob_edit — amend a live job in place (2026-09-24).
 
 Why: the agent had only schedule/list/cancel, and list truncated the task to 60
-chars. Resizing the buyback rail to 0.05 forced a cancel + full re-type of the
+chars. Resizing the rebuy rail to 0.05 forced a cancel + full re-type of the
 task, and the rewrite dropped the reconcile gate and the row-write ordering.
 """
 import types
@@ -235,3 +235,37 @@ async def test_show_and_edit_name_a_job_firing_the_same_minute(tmp_path, owner_t
     assert "SAME minute" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
     res = await t.cronjob_show(CronShowAction(job_id=judge.id), execution_context=_ctx())
     assert "SAME minute" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_resending_a_current_value_is_not_an_edit(tmp_path, owner_turn):
+    """A call that changes nothing is refused with the way to add text. It used to
+    answer "Edited cron job: deliver" for a deliver the job already had, so an agent
+    looped on it (50 identical calls, 2026-10-28) and its new text never landed."""
+    t = _tool(tmp_path)
+    job = _job(t)
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, deliver="telegram"), _ctx())
+    assert res.error and "Nothing to change" in res.error and "old_text" in res.error
+    assert t._cron_service.store.get(job.id).task == RULES
+
+
+@pytest.mark.asyncio
+async def test_same_text_and_same_duration_are_not_edits(tmp_path, owner_turn):
+    t = _tool(tmp_path)
+    job = _job(t)
+    same = CronEditAction(job_id=job.id, old_text="Buy 0.1 ETH", new_text="Buy 0.1 ETH",
+                          max_duration_seconds=job.max_duration_seconds)
+    res = await t.cronjob_edit(same, _ctx())
+    assert res.error and "Nothing to change" in res.error
+
+
+@pytest.mark.asyncio
+async def test_a_real_change_beside_a_current_value_still_lands(tmp_path, owner_turn):
+    t = _tool(tmp_path)
+    job = _job(t)
+    res = await t.cronjob_edit(CronEditAction(
+        job_id=job.id, deliver="telegram", old_text="reconcile the ledger",
+        new_text="reconcile the ledger and the replies"), _ctx())
+    assert not res.error and "task" in res.extracted_content
+    assert "deliver" not in res.extracted_content
+    assert "and the replies" in t._cron_service.store.get(job.id).task

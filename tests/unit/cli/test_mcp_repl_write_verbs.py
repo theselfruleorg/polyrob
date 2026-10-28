@@ -29,7 +29,7 @@ def _run(ctx):
 
 
 def _recorder(seen, reply):
-    def _fake(user_id, args, **kw):
+    async def _fake(user_id, args, **kw):
         seen["call"] = (user_id, list(args))
         return reply
     return _fake
@@ -37,7 +37,7 @@ def _recorder(seen, reply):
 
 def test_add_delegates_to_the_shared_helper(monkeypatch):
     seen = {}
-    monkeypatch.setattr("core.mcp_admin.mcp_reply", _recorder(seen, "added it"))
+    monkeypatch.setattr("core.mcp_admin.mcp_reply_async", _recorder(seen, "added it"))
     ctx, out = _ctx(["add", "aave", "https://mcp.aave.com"])
     _run(ctx)
 
@@ -47,7 +47,7 @@ def test_add_delegates_to_the_shared_helper(monkeypatch):
 
 def test_remove_delegates_to_the_shared_helper(monkeypatch):
     seen = {}
-    monkeypatch.setattr("core.mcp_admin.mcp_reply", _recorder(seen, "gone"))
+    monkeypatch.setattr("core.mcp_admin.mcp_reply_async", _recorder(seen, "gone"))
     ctx, out = _ctx(["remove", "aave"])
     _run(ctx)
 
@@ -57,7 +57,7 @@ def test_remove_delegates_to_the_shared_helper(monkeypatch):
 
 def test_test_delegates_to_the_shared_helper(monkeypatch):
     seen = {}
-    monkeypatch.setattr("core.mcp_admin.mcp_reply", _recorder(seen, "answered"))
+    monkeypatch.setattr("core.mcp_admin.mcp_reply_async", _recorder(seen, "answered"))
     ctx, out = _ctx(["test", "aave"])
     _run(ctx)
 
@@ -66,7 +66,7 @@ def test_test_delegates_to_the_shared_helper(monkeypatch):
 
 def test_bare_and_list_keep_the_read_only_view(monkeypatch):
     """The existing status view must not regress into the admin renderer."""
-    monkeypatch.setattr("core.mcp_admin.mcp_reply",
+    monkeypatch.setattr("core.mcp_admin.mcp_reply_async",
                         lambda uid, a, **kw: pytest.fail("list must not go to the admin helper"))
     ctx, out = _ctx([])
     _run(ctx)

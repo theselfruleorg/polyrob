@@ -33,7 +33,7 @@ def _held(addr, qty, *, symbol="TOK", value=None, known=True, raw=1):
 
 def test_an_unrecorded_holding_is_caught():
     """The 2026-08-25 shape: the book is flat, the chain holds a position."""
-    report = diff([], [_held(BASECAT, 28.9, value=1.0), _held(BOTS, 442232.1, value=0.5)])
+    report = diff([], [_held(BASECAT, 28.9, value=1.0), _held(BOTS, 442232.1, value=5.0)])
     assert report.verdict == "DISAGREEMENT"
     assert len(report.unexplained) == 2
 
@@ -326,3 +326,14 @@ async def test_reconcile_values_holdings_concurrently_and_keeps_their_order(home
     dust_lines = [ln for ln in out.splitlines() if "dust/airdrop" in ln]
     addrs = [a for a in held if any(a in ln for ln in dust_lines)]
     assert addrs == sorted(held)
+
+
+def test_086_a_major_book_row_is_carried_not_compared_by_size():
+    """086 W0: a WETH/wSOL row carries the major's cost basis. Gas, wraps and
+    native-vs-wrapped arrival move its size, so the chain is not asked to back
+    it — but the row is never filed as unbacked."""
+    weth = "0x4200000000000000000000000000000000000006"
+    report = diff([RailPosition(address=weth, symbol="WETH", qty=0.03)], [],
+                  quote_addresses=[USDC, weth], major_addresses=[weth])
+    assert report.verdict == "CLEAN" and not report.unbacked
+    assert any("size not compared" in m for m in report.matched)

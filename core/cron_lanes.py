@@ -1,6 +1,6 @@
 """A cron LANE and the owner's stop of it (work order 0011: an owner stop is state).
 
-The owner used to stop a cron purpose ("no more buybacks") by cancelling one job
+The owner used to stop a cron purpose ("no more of those swaps") by cancelling one job
 and writing a prose rule into ``owner.md``. Nothing in code read that rule, so a
 new job in the same purpose was one model turn away. This module makes the stop
 a row the scheduler reads.
@@ -8,6 +8,9 @@ a row the scheduler reads.
 - :func:`job_lane` is the ONE lane rule (owner decision 2026-10-15): the job's
   first pinned skill (``payload.skills[0]``), else its rig (``payload.rig``),
   else ``""`` — no lane, so no stop applies. No explicit field, no text match.
+  086 W3: a job of a trading mandate (``payload.mandate``) is in the lane
+  ``mandate:<id>`` FIRST, so ``/job stop <exit job> --forever`` stops that one
+  mandate's jobs, never every future exit job of every mandate.
 - The stop lives in ``core.goal_suppressions`` (scope ``cron_lane``, the same
   table as ``/goal stop --forever``), in the ``goals.db`` beside ``cron.db``.
 - :func:`lane_gate` runs inside ``CronService.schedule`` over every pinned
@@ -56,9 +59,24 @@ class UnknownPinnedSkill(LaneStopped):
     skill. A subclass so every seat that catches :class:`LaneStopped` shows it."""
 
 
-def job_lane(payload: Optional[Dict[str, Any]]) -> str:
-    """The job's lane: first pinned skill, else its rig, else ``""``."""
+#: 086 W3: the lane prefix of a trading mandate's jobs.
+MANDATE_LANE_PREFIX = "mandate:"
+
+
+def mandate_lane(payload: Optional[Dict[str, Any]]) -> str:
+    """``mandate:<id>`` for a job of a trading mandate, else ``""``."""
     p = payload if isinstance(payload, dict) else {}
+    mid = str(p.get("mandate") or "").strip().lower()
+    return f"{MANDATE_LANE_PREFIX}{mid}" if mid else ""
+
+
+def job_lane(payload: Optional[Dict[str, Any]]) -> str:
+    """The job's lane: its mandate (``mandate:<id>``), else its first pinned
+    skill, else its rig, else ``""``."""
+    p = payload if isinstance(payload, dict) else {}
+    lane = mandate_lane(p)
+    if lane:
+        return lane
     skills = p.get("skills")
     if isinstance(skills, (list, tuple)) and skills:
         first = str(skills[0] or "").strip().lower()
@@ -131,7 +149,7 @@ def gated_lanes(payload: Optional[Dict[str, Any]]) -> List[str]:
     a stopped skill second does not get it past the stop."""
     p = payload if isinstance(payload, dict) else {}
     skills = p.get("skills")
-    out: List[str] = []
+    out: List[str] = [mandate_lane(p)] if mandate_lane(p) else []
     for v in (list(skills) if isinstance(skills, (list, tuple)) else []) + [p.get("rig")]:
         lane = str(v or "").strip().lower()
         if lane and lane not in out:
@@ -298,7 +316,8 @@ def lane_line(store, *, user_id: str, payload: Optional[Dict[str, Any]]) -> str:
 
 __all__ = [
     "LaneStopped", "OWNER_TURN_VIA", "PAUSE_SCOPE_BY", "UNREADABLE", "UnknownPinnedSkill",
-    "allow_lane", "check_pinned_skills", "gated_lanes", "job_lane", "lane_gate", "lane_line",
+    "MANDATE_LANE_PREFIX", "allow_lane", "check_pinned_skills", "gated_lanes", "job_lane",
+    "lane_gate", "lane_line", "mandate_lane",
     "lift_after_owner_create", "missing_pinned_skills", "missing_skills_notice",
     "schedule_notes", "scope_pause_note", "scope_pause_text", "stop_job", "stopped_lines",
 ]

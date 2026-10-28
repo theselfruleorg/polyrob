@@ -40,7 +40,9 @@ Never report “no replies” from a legacy page or an undecrypted thread. State
 X restricts automated accounts. Choose the route by relationship, not preference:
 
 - **Your own threads and your mentions** → `twitter_reply` works. Reply freely and
-  conversationally where someone engaged you first.
+  conversationally where someone engaged you first. A reply already threads to its
+  author, so do not open it with an `@handle`. Name a person only from the
+  `author_username` the read returned; when the read gives no author, name nobody.
 - **A stranger's thread you were NOT invited into** → BOTH cold `twitter_reply` AND cold
   `twitter_quote` are rejected for automated accounts (403: "you have not been mentioned or
   are not part of the conversation thread"). Do not burn calls re-trying either. To engage

@@ -1,7 +1,7 @@
 """071 W3 ratchet: the money skills name real verbs, never ask for hand
 arithmetic, and only call a money-capable chain an exit chain.
 
-The $7-vs-$6,780 PNL report (2026-09-29) was a figure the model converted
+The $7-vs-$6,780 TKN report (2026-09-29) was a figure the model converted
 itself. 071 T4–T6 found the skills still asked for it: FIFO lots and realized
 P&L "by hand" while the rail book keeps average cost, and an exit lane listing
 Optimism, which no swap can reach. These checks keep the text true.
@@ -19,7 +19,8 @@ SKILLS = sorted((ROOT / "data" / "prompts" / "skills").glob("*/SKILL.md"))
 MONEY_SKILLS = ("position-journal", "exits", "sizing-and-risk", "treasury-trading",
                 "post-trade-verify", "pre-trade-check", "trade-execution", "dca",
                 "stable-cash", "crypto-trading-safety", "robinhood-chain",
-                "defi-liquidity", "defi-bridge", "token-launch", "memecoin-scouting")
+                "defi-liquidity", "defi-bridge", "token-launch", "memecoin-scouting",
+                "trading-mandate")
 
 _NEGATION = re.compile(r"\b(never|not|no|don't|do not|without|instead of|stop)\b", re.I)
 _HAND_MATH = (

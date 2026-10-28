@@ -181,20 +181,21 @@ polyrob
 
 **Prefer a profile:** `polyrob profile create aria && polyrob -P aria` gives
 `aria` an isolated home (config, identity, memory, cron/goals) in one step —
-see [profiles.md](profiles.md). The manual recipe below still works and shows
-the underlying mechanics: the instance ID alone doesn't separate data, so give
-`aria` its own data home by running it from its own working directory:
+see [profiles.md](profiles.md). The manual recipe below shows the underlying
+mechanics. `POLYROB_INSTANCE_ID` alone doesn't separate data, and neither does the
+directory you launch from (the local data home is always `<POLYROB_HOME>/data`), so
+give `aria` its own home with `POLYROB_HOME`:
 
 ### Example: a second instance named `aria`
 
-1. Create a config for the new instance, from a dedicated directory:
+1. Create a home for `aria`:
 
    ```bash
-   mkdir aria-instance && cd aria-instance
+   export POLYROB_HOME=~/.polyrob-aria
    POLYROB_INSTANCE_ID=aria polyrob init
    ```
 
-2. Start the REPL as `aria` (from that same directory):
+2. Start the REPL as `aria` (with the same `POLYROB_HOME`):
 
    ```bash
    POLYROB_INSTANCE_ID=aria polyrob
@@ -205,6 +206,9 @@ the underlying mechanics: the instance ID alone doesn't separate data, so give
    ```bash
    POLYROB_INSTANCE_ID=aria polyrob run "compile a market summary"
    ```
+
+`POLYROB_DATA_DIR` moves only the data home; `POLYROB_HOME` moves the `.env` and
+the data home together.
 
 ### Running two instances simultaneously (server mode)
 
@@ -230,15 +234,16 @@ volume mount pointing to a different data directory.
 **Isolation today rides the data home, not the instance ID.** Memory, skills,
 cron jobs, the goal board, and the auth/API-key database are keyed by **user ID**
 and live in one shared `<data_home>` per process — none of them are currently
-partitioned by `POLYROB_INSTANCE_ID`. Two instances that share a data home (same
-working directory locally, or the same `POLYROB_DATA_DIR` on a server) read and
+partitioned by `POLYROB_INSTANCE_ID`. Two instances that share a data home (the
+same `POLYROB_HOME` locally, or the same `POLYROB_DATA_DIR` on a server) read and
 write the *same* memory, skills, cron jobs, and goal board — only their
-self-identity is separate. Give each instance its own data home (as shown above)
+self-identity is separate. The local CLI uses one data home whatever directory you
+launch it from. Give each instance its own data home (as shown above)
 for full separation.
 
 - **Separate memory, skills, cron/goal state, and auth DB** — requires a distinct
-  working directory (local/CLI) or a distinct `POLYROB_DATA_DIR` (server) per
-  instance.
+  `POLYROB_HOME` (or `-P <name>`) on the CLI, or a distinct `POLYROB_DATA_DIR` on a
+  server. A different working directory separates nothing.
 - **Separate SELF identity** — the agent's own evolving SELF docs *are* already
   instance-scoped within a shared data home
   (`<data_home>/identity/{instance_id}/user_{user_id}/`), so even instances that
