@@ -8,6 +8,10 @@ useDefault = true
 
 [allowlist]
 description = "Known-benign matches"
+# The first public commit (immutable history) carried a deployment's public
+# token-contract address in an env template; its only finding. The address is
+# refused in the tree by the scrub gate's identifier list.
+commits = ["f072daabaddae3f86829165a5984ede7471c410d"]
 paths = [
     # vendored minified library — hash-like strings are code, not secrets
     '''webview/static/js/ethers\.min\.js''',
