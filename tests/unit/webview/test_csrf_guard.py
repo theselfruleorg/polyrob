@@ -77,7 +77,7 @@ def test_a_machine_client_with_no_origin_and_no_referer_passes():
     """The telemetry push, the agent's stream POST, curl/CI. No browser can
     reach here: `Origin` is attached by the browser, not the page."""
     _guard(_req())
-    _guard(_req(authorization="Bearer rob_abc"))
+    _guard(_req(authorization="Bearer key_abc"))
 
 
 def test_a_port_mismatch_on_the_same_host_is_refused():

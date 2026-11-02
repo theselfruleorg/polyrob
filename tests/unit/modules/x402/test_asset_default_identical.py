@@ -29,7 +29,7 @@ def test_no_operator_row_means_every_path_resolves_usdc_base():
 async def test_a_default_invoice_row_is_shaped_exactly_as_before(x402_db):
     from modules.x402 import invoicing
     inv = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=2.5, purpose="p", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=2.5, purpose="p", db=x402_db)
     row = await x402_db.fetch_one(
         "SELECT * FROM x402_payment_requests WHERE id = ?", (inv["request_id"],))
     assert row["asset"] == "usdc"

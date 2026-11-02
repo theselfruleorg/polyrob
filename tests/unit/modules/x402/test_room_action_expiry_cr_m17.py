@@ -7,7 +7,7 @@ import pytest
 from modules.x402 import invoicing
 
 TREASURY = "0x" + "11" * 20
-ROB = "0x" + "bb" * 20
+DEMO = "0x" + "bb" * 20
 
 
 async def _mint(db, *, kind, status, deadline, stale=False):
@@ -20,8 +20,8 @@ async def _mint(db, *, kind, status, deadline, stale=False):
                asset_id,asset_address,asset_decimals,amount_raw,
                created_at,updated_at)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),{updated})""",
-        (rid, "0.5", 0.5, "rob", "robinhood", TREASURY, rid, deadline,
-         status, json.dumps(meta), "rob", ROB, 18, str(5 * 10 ** 18)))
+        (rid, "0.5", 0.5, "demo", "robinhood", TREASURY, rid, deadline,
+         status, json.dumps(meta), "demo", DEMO, 18, str(5 * 10 ** 18)))
     return rid
 
 

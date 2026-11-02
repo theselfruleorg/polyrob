@@ -10,6 +10,175 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-11-02
+
+### Added
+
+- `agent_status` names the running version, a pending deploy, this chat's model, provider and
+  reasoning level, the run's spend against its cap and the owner by kind; release notes read
+  `since_previous` (what changed since the previous deploy) and say how much a cut removed.
+- A FAQ guide page (`docs/guide/faq.md`), also the user-guide skill's `references/faq.md`; its troubleshooting
+  headings are the exact refusal and stop texts, generated from the code, each with who can act and the next step.
+- Each job and goal run record now carries `useful`, a `signal_source` (receipt, owner, judge, self, none)
+  and the patch generation of every loaded skill; `<previous-runs>` shows one track-record line per run
+  (up to five), and `insights` shows the 30-day useful/verified rate per lane.
+- `/model` switches the live chat's model with no restart on every owner seat: aliases, `default`, `reasoning=`, a price
+  card, live OpenRouter checks; `cron edit --model` / `goals edit --model`; `delegate_task(model=)` takes only models in use or cheaper.
+
+- `/send $<usd> <token> …` sends a dollar amount: the tool converts it at the spend-grade price (refused when there is none),
+  the quote shows the token count, and a `/send` card shows its USD value with a MISMATCH line against the `why`.
+- Cron: `cronjob_edit` `append_text`/`prepend_text`, `cronjob_run_now` (the schedule is kept), anchored `every 3d from <iso>`
+  schedules; a write shows the next 3 runs, a month-end note for a day-of-month step spec and the jobs that pin the same skill.
+- `owner_doc_manage` `replace_rule` replaces one active owner rule in place (the old text moves under Superseded); every
+  self/owner doc write reports the characters left and says to replace, not append, near the cap.
+- A turn's final reply that claims a job, skill, owner-doc or money change with no matching successful write gets one
+  correction step, then a "Not done: …" line; owner prompt: a standing programme's terms live only in its pinned skill.
+- `INTERACTIVE_MAX_STEPS` sets the step budget of an owner chat turn, `polyrob run`, the API and A2A.
+- `polyrob doctor` checks the durable-app and publish serving side: a certificate absent vs not readable, a
+  missing nginx include dir, an app image not pulled, a publish root nginx cannot read, an unset `PUBLISH_BASE_URL`.
+- `polyrob apps install`: durable apps for the detected layout (`/opt` or user-mode `~/.polyrob`) — a supervisor
+  unit without the wallet seed, the nginx include, a `static.<domain>` publish host; `--dry-run`; `sudo` lines.
+- `polyrob doctor` names a split data home (two `bot.db`, a CLI and a service that resolve different homes, a
+  user unit without `POLYROB_DATA_DIR`) as a CRITICAL headline item, and an env-file copy that holds a wallet key.
+- A pending skill proposal shows `new skill` or `update: +N / −M lines` with its description; `/pending <id>` and the tapped
+  `/pending_p_<hex>` open the whole item, a skill update as a diff against the live skill.
+
+### Changed
+
+- The shipped tree names no instance: copy says "the agent", examples use "Demo Coin"; MCP serve tools
+  are `polyrob_*` (rename callers of `rob_*`) and new API keys start `polyrob_` (old keys still work).
+- The hunt's discovery pre-screen lines are neutral defaults an install overrides under `screen.discovery`; unreadable
+  lines mark the count PARTIAL. Instance names and measured stories left the shipped code and skills.
+- The skill index cap is derived (library + packs + the tenant's own skills) and never cuts an authored skill; over its
+  token budget the lowest-priority shipped groups show as names only.
+- Trading presets: core ships `majors` and `dca` only, with no default (the intake asks);
+  `register_preset` and `<data_home>/trading_presets.json` add an install's presets and screen
+  lines; `Preset.doctrine_skill` replaces the hard preset→skill map; an unknown preset refuses.
+- Pack-only skills moved into their packs under the same id: `crypto-trading-safety` (markets),
+  `person-analyzer` and `project-analyzer` (discovery); `web-research` and `market-research-brief`
+  say "use the search tool you hold" and the AnySite/Perplexity order is a discovery-pack reference.
+- A lane's pinned skill outranks owner.md on its programme terms; a `skill_manage` change to it
+  drafts the retire of the owner.md line on that subject, and one approval decides both drafts.
+  Every pending draft names its author; the routing text has one source, gated per session.
+- The skill reviewer now runs after a goal or cron run with a receipt, owner or judge signal,
+  patches a loaded skill first and writes only drafts with one owner line; it never proposes
+  an owner or self document, and the inline reviewer is owner chat only.
+- The owner's first call is ~10,000 tokens smaller: the per-chain guidance renders once (on
+  `defi_trade.swap`), the environment block no longer repeats the loaded tools; a new golden seat
+  renders the server posture, and the prod seat runs with memory and the wallet ON.
+- The shipped trading, launch, bridge and liquidity skills speak in neutral, undated rules: no
+  default trading style, no deployment's chain, launchpad or token as the example, and each past
+  incident kept only as the rule it taught.
+- The skill curator ages skills by last use, spares new and pinned skills, never archives an owner-written
+  one, and proposes (never archives) when a skill does clearly worse on runs that load it.
+- Default limits raised: `INTERACTIVE_MAX_STEPS` 50 → 100 (owner chat, REPL — no separate REPL budget — CLI, API),
+  `CHAT_MAX_STEPS` 8 → 20, the self doc cap 12,000 → 20,000 characters; the loop breaker ends a degenerate turn early.
+- The loop detector escalates: a repeated identical call (same args, same result) is refused, then the run ends with
+  stop reason `loop`; a tool call rejected by validation counts as a failed step.
+- Owner continuity: a whole-session summary is written at every boundary (`/new`, idle/daily reset, drained restart);
+  the fresh-session tail keeps owner lines and replies first (40 rows, 6000 chars); owner recall skips `[unverified]` and >7-day rows.
+- Routines are visible: last outcome with its stop reason and the delivery target in `<operations>`, `cronjob_list/show`;
+  a failed owner-armed job tells the owner; the digest lists failures first and ask ages; `goal_cancel` withdraws an ask.
+- `APP_SERVICE_IMAGE` defaults to the public code-exec dev image (`nikolaik/python-nodejs:python3.11-nodejs20`,
+  one shared constant) instead of `polyrob-dev:latest`, which exists only where a private factory built it.
+
+### Fixed
+- Rooms: a member's replied-to text is one line on every seat (no forged owner line in the owner's turn); an
+  admin passes the member cooldown only with a room control verb; `pay-for-work`/`get-paid-for-work` are owner-only.
+- A pinned skill that resolves with no `rules.json` row (a preserved user-scope copy) loads instead of a silent skip.
+- Change claims: a time zone, file type or unit after a number is not a ticker; "paid attention" is not a payment.
+- `replace_rule` in a doc with no blank lines stops at the next heading; a pin refresh on recreate persists the
+  stored request, never a narrowed wake copy; a second queued `/model` switch that fails restores the first record.
+- `skill_manage` `patch` with `when` alone changes an existing skill's index line (≤ 60 chars); it worked only on `create`, so the
+  post-run reviewer repeated a malformed patch 5-7 times per run.
+- `/model reset` cancels a switch queued before it; a failed switch no longer leaves its own pin or reasoning level on a
+  session that was never pinned; `/model aliases` says when the owner's alias store could not be read (not an empty list).
+- A mandatory-reasoning model (`z-ai/glm-5.3`, `x-ai/grok-4`) no longer gets `reasoning: {enabled: false}` (OpenRouter
+  400s); an unlisted model that answers 400 "Reasoning is mandatory" is retried once without it and remembered.
+- Rooms: a member's line wakes a completed session and never re-threads a live answer; owner/admin verbs pass the
+  member cooldown; the newest 10 lines always ride as context; a member's file is named; files reach the forum topic.
+- A chat reply now shows the agent the whole replied-to message, the quoted part and any media kind (rooms,
+  DMs, contacts); before only its id survived. A forum topic message no longer counts as a reply to the topic root.
+- The prompt teaches memory per registered store (`session_search`, recall as evidence, the `memory`
+  field; skills and `owner.md` are not memory), names `agent_status` for self-facts, and says nothing
+  about memory when `MEMORY_BACKEND=none`; an owner chat reflects at session close.
+- The agent's live state (health, jobs, its model, the owner's style and rules, new skills) now
+  reaches it on every step where it changed, at the end of its context; a style setting applies
+  from the next step, and the skill index hides skills whose tools cannot load here.
+- A room or correspondent session no longer gets the schemas, money playbooks or host facts its gate
+  refuses (about 10K and 7K tokens a call), shows nothing as loadable there, and tool_search follows
+  the same seat; the room catalog updates when a chat turns public.
+- An operator setting the agent filed as an ask now closes by itself once the setting is in
+  effect, or after 14 days; it used to stay open on /asks forever.
+- Every tool refusal names who can act, the lever and whether a retry helps (one table); the catalog
+  marks tools a room or correspondent seat refuses, wallet-off and pack tools; goal/cron runs pin
+  the harness manual; no remedy prints a `POLYROB_OVERRIDES` line that drops the other members.
+- A proposed config line now merges into `POLYROB_OVERRIDES` (never drops a member); a preference
+  write names its effective value and a no-op; `preferences` reads work on every posture, credentials
+  masked; a bundle switch carries its risk; `/model <name> default` is a card.
+- After a `/model` switch, a provider fallback or a deploy the agent states the true model, provider,
+  cause and running version; the prompt no longer claims vision (each image turn says if this model
+  sees it), and a fallback rebuilds the prompt too.
+- A `/learn` skill is now recorded as written by the owner, so the curator never archives it; it
+  still lands as a pending draft. The owner recap, `/journey` and the daily digest now show each
+  curator proposal line once.
+- The user-guide skill takes code-owned facts from generated blocks (the posture-member rule and table,
+  the autonomy dial, the run limits, one config file per area that fits one tool result); a drift test
+  pins every verb, `polyrob` command and setting the hand-written guide names.
+- An approval refusal now says what happened — the owner declined, no ask was filed (and why), or an ask
+  waits — and names `/pending` only when an owner ask exists; each refusal is counted once, with its cause.
+- A run gets a notice at 80 % of its cost cap and a short last report at the cap; calls past a lowered
+  per-step cap are named, not dropped; a timed-out write says the effect may have happened.
+- The deploy stamps `.deployed_sha` before the service starts, so a session built during boot no
+  longer reports the previous commit; `.deployed_from` now records the `previous=` sha.
+- Telegram: a message with an attachment and no text no longer fails whole ("message text is empty"); the text leg is skipped and the file is sent.
+
+- A card wake no longer narrows the owner's session to 8 steps for good; a sub-agent (the background reviewer) no longer
+  saves its history or state as the session's, so a restart cannot bring the session back as the reviewer.
+- An owner turn that stops early (step limit, loop, failures, error) always tells the owner why, with the last error or the
+  agent's last report; a failed turn never re-sends an earlier turn's reply; harness sends are written to the owner thread.
+- A refused or empty `message` send is an error, not a success; a dead target says why and a one-failure mark ages out
+  after 7 days; ageing keeps the newest result of a repeated call; the LLM factory uses the per-call output cap.
+- Compaction runs when ageing leaves the context above the warn band and a cooldown stamp from an earlier turn no longer
+  blocks it; phase summaries from a run that stopped at the limit, in a loop or after failures are not saved to memory.
+- Cron `deliver: none` drops the sink instead of being stored; `polyrob job edit` goes through `CronService.edit`; a rate-limited
+  card push collapses to "N more cards wait in /cards"; a card cancel records the card id and its line.
+- The ship==tested gate (`app_service_deploy`, `hf_deploy`) reads a late tool called through `tool_call` by its
+  target name: a bridged green `coding_run_tests` now counts, and a bridged edit after it now blocks the deploy.
+- One data home for every process: unpinned, a non-root service reads `<polyrob home>/data` like the CLI,
+  `polyrob service install` pins `POLYROB_DATA_DIR`, and `bot.db` never opens empty while the other layout has one.
+- `polyrob update --apply` verifies with the new tree's own probe (`python -I -m cli.update.verify_probe`), so a
+  moved module no longer rolls every update back; `docs/guide/upgrading.md` gives the manual path from 1.3.x.
+- `polyrob update --apply` run as `sudo -u polyrob …` or through `bash -lc "…"` is no longer refused as a
+  running agent: the in-use guard reads only the executable position, through sudo, env and shell wrappers.
+- The updater's pip steps and the extras installer put `TMPDIR` on disk under the data home, so a small tmpfs
+  `/tmp` no longer fails an install with `Errno 122`; an operator's `TMPDIR` wins.
+- Custody with the seed in a readable env file: the refusal and `polyrob doctor` print the Docker sandbox steps
+  (env lines, `docker` group, `user@<uid>.service` restart), and doctor says whether the socket is reachable,
+  including a group the user manager does not hold yet.
+- The custody refusal no longer names `polyrob signer install` (no such command): it names the Docker sandbox
+  and `polyrob wallet export`; a test fails on any shipped `polyrob <command>` that does not resolve.
+- Durable apps: the per-app nginx stanza carries its TLS settings inline (ECDHE only, no dhparam) and
+  `listen 443 ssl http2`, so it passes `nginx -t` on a DNS-01 `certonly` box and on nginx 1.18/1.24.
+- `AGENT_BUILDER_MODE=ship` clamp: a wildcard certificate the agent's user cannot reach (certbot's 0700
+  `live/`) is reported as `not readable by <user>` with the `chmod 755` remedy, not as `no certificate`.
+
+### Removed
+
+- The builtin `treasury-trading` and `memecoin-scouting` skills and the `memecoin` preset (an
+  install's programme); their generic rules moved into `pre-trade-check` and `trade-execution`.
+- The builtin `robinhood-chain` skill (a venue playbook, not core doctrine).
+- The agent's `mcp_install` action, its catalog and `MCP_SELF_INSTALL_ENABLED`,
+  `MCP_INSTALL_CATALOG_FILE`, `MCP_INSTALL_ALLOWLIST`: the agent proposes `/mcp add` on a card.
+- `preferences(operation="contract_propose")`: `owner_doc_manage` is the one writer of owner.md
+  rules, and every owner.md draft is swept; the dead "apply now" rule branches are gone.
+- `MEMORY_SEARCH_TOOL` and the `memory_search` alias: `session_search` is the one search verb.
+- Recall consolidation and its `MEMORY_CONSOLIDATE` flag (off by default; its notes had no reader);
+  skills drop the redundant `polyrob-auto-activate: 'true'` line (absent means true).
+- `self_env` loses `git_pull`, `install_dep` and `patch_source` (the owner's `/update` covers them; their
+  proposal files had no reader), and the unused `core/capability_verdict.py` is gone; `/mcp add` now says
+  when the server is saved but the `mcp` tool is still off.
+
 ## [1.7.0] — 2026-10-29
 
 ### Added
@@ -46,6 +215,8 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ### Fixed
 
+- An unreadable or non-finite custom screen line makes the pool screen UNSCREENABLE and survivability PARTIAL (held at C);
+  one bad preset no longer drops the screen lines. The run reviewer has no owner/self doc writer, one per user.
 - The agent gets the true cause: a tool that cannot run is gated with its remedy, `load_tool` returns the
   recorded reason, the retry wall quotes the last error and resets per owner turn; `/mcp add` works.
 - `wallet_sign`: one call fetches (POST/GET), signs and submits with the challenge's cookie; an unsent signature

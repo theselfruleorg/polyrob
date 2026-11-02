@@ -17,7 +17,7 @@ async def _noop():
     return None
 
 
-def _fs_tool(user_id="rob", session_id="s1"):
+def _fs_tool(user_id="alice", session_id="s1"):
     t = object.__new__(FileSystem)
     t.logger = logging.getLogger("fs-artifacts")
     t.session_id = session_id
@@ -42,17 +42,17 @@ async def test_write_file_records_an_artifact(_pm, monkeypatch):
 
     await t.write_file(WriteFileAction(file_path="report.md", content="# findings\n"))
 
-    rows = get_artifact_ledger().list_for_session("rob", "s1")
+    rows = get_artifact_ledger().list_for_session("alice", "s1")
     assert len(rows) == 1
     assert rows[0].path.endswith("report.md")
     assert rows[0].bytes == len("# findings\n")
-    assert get_artifact_ledger().verify(rows[0].id, "rob") == "ok"
+    assert get_artifact_ledger().verify(rows[0].id, "alice") == "ok"
 
 
 @pytest.mark.asyncio
 async def test_recorded_artifact_is_scoped_to_the_writing_tenant(_pm, monkeypatch):
     monkeypatch.setattr(FileSystem, "ensure_initialized", lambda self: _noop(), raising=False)
-    await _fs_tool(user_id="rob").write_file(
+    await _fs_tool(user_id="alice").write_file(
         WriteFileAction(file_path="mine.md", content="x"))
 
     assert get_artifact_ledger().list_for_session("someone_else", "s1") == []
@@ -66,7 +66,7 @@ async def test_html_is_recorded_as_a_page(_pm, monkeypatch):
 
     await t.write_file(WriteFileAction(file_path="map.html", content="<html>ok</html>"))
 
-    rows = get_artifact_ledger().list_for_session("rob", "s1")
+    rows = get_artifact_ledger().list_for_session("alice", "s1")
     assert rows[0].kind == "page"
 
 
@@ -78,7 +78,7 @@ async def test_a_failed_write_records_nothing(_pm, monkeypatch):
     with pytest.raises(Exception):
         await t.write_file(WriteFileAction(file_path="../../escape.md", content="x"))
 
-    assert get_artifact_ledger().list_for_session("rob", "s1") == []
+    assert get_artifact_ledger().list_for_session("alice", "s1") == []
 
 
 # --------------------------------------------------------------------------- #
@@ -97,7 +97,7 @@ async def test_write_file_stamps_artifact_id_on_the_result(_pm, monkeypatch):
 
     res = await t.write_file(WriteFileAction(file_path="report.md", content="# findings\n"))
 
-    row = get_artifact_ledger().list_for_session("rob", "s1")[0]
+    row = get_artifact_ledger().list_for_session("alice", "s1")[0]
     assert isinstance(res, ActionResult)
     assert res.metadata == {"artifact_id": row.id}
     # The JSON success payload is preserved verbatim inside extracted_content.
@@ -118,4 +118,4 @@ async def test_write_file_without_user_id_returns_a_plain_string(_pm, monkeypatc
     res = await t.write_file(WriteFileAction(file_path="report.md", content="# findings\n"))
 
     assert isinstance(res, str)
-    assert get_artifact_ledger().list_for_session("rob", "s1") == []
+    assert get_artifact_ledger().list_for_session("alice", "s1") == []

@@ -14,7 +14,7 @@ class FakeAgentMail:
     def __init__(self):
         self.provisioned = False
         self.sent = []
-        self.address = "rob@agentmail.to"
+        self.address = "alice@agentmail.to"
 
     async def provision(self, instance_id, username=None):
         self.provisioned = True

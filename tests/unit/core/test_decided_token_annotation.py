@@ -1,6 +1,6 @@
 """An owner-bound text never asks for a tap the owner already gave.
 
-2026-10-17 01:52Z: Rob sent "Still waiting on your one tap …: /approve_p_a9d770";
+2026-10-17 01:52Z: the agent sent "Still waiting on your one tap …: /approve_p_a9d770";
 the owner had approved it at 10-16 17:16:53Z (owner_review promote event).
 """
 from core.self_evolution import annotate_decided_tokens, pending_tap_alias
@@ -20,7 +20,7 @@ def _token(kind="skill", item="promo-bounty"):
 def test_decided_token_is_rewritten():
     tok = _token()
     out = annotate_decided_tokens(f"Still waiting on your one tap: {tok}. Thanks",
-                                  user_id="rob", live_items=[], events=[_promote_event()])
+                                  user_id="alice", live_items=[], events=[_promote_event()])
     assert tok not in out
     assert "already approved 10-16 17:16Z" in out
     assert ". Thanks" in out
@@ -32,17 +32,17 @@ def test_live_token_is_untouched_even_with_an_old_decision():
     tok = _token()
     live = [{"kind": "skill", "id": "promo-bounty"}]  # re-proposed: same alias
     text = f"tap {tok}"
-    assert annotate_decided_tokens(text, user_id="rob", live_items=live,
+    assert annotate_decided_tokens(text, user_id="alice", live_items=live,
                                    events=[_promote_event()]) == text
 
 
 def test_unknown_token_is_untouched():
     text = "tap /approve_p_abcdef"
-    assert annotate_decided_tokens(text, user_id="rob", live_items=[], events=[]) == text
+    assert annotate_decided_tokens(text, user_id="alice", live_items=[], events=[]) == text
 
 
 def test_rejected_item_reads_rejected():
     tok = _token().replace("/approve_", "/reject_")
-    out = annotate_decided_tokens(f"or {tok}", user_id="rob", live_items=[],
+    out = annotate_decided_tokens(f"or {tok}", user_id="alice", live_items=[],
                                   events=[_promote_event(action="reject")])
     assert "already rejected" in out

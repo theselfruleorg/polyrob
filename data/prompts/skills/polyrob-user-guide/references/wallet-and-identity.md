@@ -18,9 +18,10 @@ auto-created — the owner opts into each explicitly on their own terminal.
   already set, it also offers to point it at the new address, so invoice
   earnings settle somewhere the agent can actually spend from — the offer is
   skipped when a recipient is already configured.
-  - `--from-mnemonic "<24 words>"` imports an existing BIP-39 mnemonic (bip44
-    scheme); `--from-seed "<raw seed>"` imports a pre-BIP44 raw seed (legacy
-    scheme) — the way to migrate an older install without changing its
+  - `--from-mnemonic ""` imports an existing BIP-39 mnemonic (bip44 scheme)
+    and `--from-seed ""` a pre-BIP44 raw seed (legacy scheme): the EMPTY value
+    asks for the secret with a hidden prompt, so it never reaches the shell
+    history — teach that form, never the words on the command line — the way to migrate an older install without changing its
     addresses. `--yes` accepts defaults non-interactively.
   - It refuses to run at all if a seed is already configured, so it can't
     silently rotate away from addresses that may hold funds.

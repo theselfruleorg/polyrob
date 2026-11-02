@@ -13,15 +13,15 @@ def test_project_root_is_workspace(tmp_path):
     proj = tmp_path / "myproj"
     proj.mkdir()
     pm = PathManager(
-        data_root=str(proj / ".rob" / "sessions"),
+        data_root=str(proj / ".polyrob" / "sessions"),
         workspace_is_project_root=True,
         project_root=str(proj),
     )
-    # workspace == the project folder, NOT a nested .rob/.../workspace
+    # workspace == the project folder, NOT a nested .polyrob/.../workspace
     assert pm.get_workspace_dir("s1", "local") == proj.resolve()
-    # session artifacts still live under the .rob data root
+    # session artifacts still live under the .polyrob data root
     sub = pm.get_subdir("s1", "feed", "local")
-    assert str(sub).startswith(str((proj / ".rob" / "sessions").resolve()))
+    assert str(sub).startswith(str((proj / ".polyrob" / "sessions").resolve()))
 
 
 def test_factory_returns_configured_manager(tmp_path):
@@ -61,8 +61,8 @@ def test_workspace_subdir_follows_the_project_root(tmp_path):
     proj.mkdir()
     pm = PathManager(data_root=str(tmp_path / "data"),
                      workspace_is_project_root=True, project_root=str(proj))
-    assert pm.get_subdir("s1", "workspace", "rob") == pm.get_workspace_dir("s1", "rob")
-    f = pm.create_file_path("s1", "workspace", "content_1_ab.json", user_id="rob")
+    assert pm.get_subdir("s1", "workspace", "alice") == pm.get_workspace_dir("s1", "alice")
+    f = pm.create_file_path("s1", "workspace", "content_1_ab.json", user_id="alice")
     assert f.parent == proj.resolve()
     # other session subdirs still live under the data root
-    assert str(pm.get_subdir("s1", "feed", "rob")).startswith(str((tmp_path / "data").resolve()))
+    assert str(pm.get_subdir("s1", "feed", "alice")).startswith(str((tmp_path / "data").resolve()))

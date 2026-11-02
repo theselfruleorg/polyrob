@@ -23,7 +23,8 @@ def skill_md(skill_id: str, rule: Optional[dict] = None, body: str = "") -> str:
         md["polyrob-triggers"] = encode_triggers(rule.get("triggers") or {})
         if "priority" in rule:
             md["polyrob-priority"] = str(rule["priority"])
-        md["polyrob-auto-activate"] = "true" if rule.get("auto_activate", True) else "false"
+        if not rule.get("auto_activate", True):    # absent = true (095 W8)
+            md["polyrob-auto-activate"] = "false"
         if rule.get("requires"):
             md["polyrob-requires"] = json.dumps(list(rule["requires"]), separators=(",", ":"))
     if md:

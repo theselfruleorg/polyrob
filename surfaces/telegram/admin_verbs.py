@@ -173,8 +173,13 @@ async def _config(c: AdminCall) -> str:
 
 
 async def _model(c: AdminCall) -> str:
-    from surfaces.telegram.prefs_ops import model_reply  # 080 D8
-    return model_reply(c.user_id, c.args)
+    from surfaces.telegram.prefs_ops import model_reply  # 080 D8, 094 live switch
+    from surfaces.telegram.status_ops import _seat_via
+    decision = getattr(c.result, "decision", None)
+    return await model_reply(c.task_agent, c.user_id, c.args,
+                             chat_key=getattr(decision, "session_key", None),
+                             session_id=getattr(decision, "session_id", None),
+                             seat=_seat_via(c.result))
 
 
 async def _usage(c: AdminCall) -> str:

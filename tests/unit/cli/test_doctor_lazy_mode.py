@@ -10,16 +10,16 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("LAZY_DEPS_MODE", raising=False)
 
 
-@pytest.mark.parametrize("rob_local", [False, True])
-def test_no_env_reports_trusted_in_both_contexts(rob_local):
-    line = optional_extras_line(rob_local=rob_local)
+@pytest.mark.parametrize("local_on", [False, True])
+def test_no_env_reports_trusted_in_both_contexts(local_on):
+    line = optional_extras_line(local_on=local_on)
     assert "LAZY_DEPS_MODE=trusted" in line
     assert "install on first use" in line
 
 
 def test_explicit_off_reports_pip_install(monkeypatch):
     monkeypatch.setenv("LAZY_DEPS_MODE", "off")
-    line = optional_extras_line(rob_local=True)
+    line = optional_extras_line(local_on=True)
     assert "LAZY_DEPS_MODE=off" in line
     assert "pip install 'polyrob[<extra>]'" in line
 
@@ -27,7 +27,7 @@ def test_explicit_off_reports_pip_install(monkeypatch):
 def test_retired_boolean_is_not_read(monkeypatch):
     # LAZY_DEPS_ENABLED was retired after 1.4; only LAZY_DEPS_MODE moves the mode.
     monkeypatch.setenv("LAZY_DEPS_ENABLED", "false")
-    assert "LAZY_DEPS_MODE=trusted" in optional_extras_line(rob_local=True)
+    assert "LAZY_DEPS_MODE=trusted" in optional_extras_line(local_on=True)
 
 
 def test_legacy_mode_is_reported(monkeypatch):

@@ -5,8 +5,7 @@ here, mirroring ``core/app_service/owner_ops.py``. Adding a second renderer is
 how a surface ends up confidently wrong; extend this instead.
 
 **Why this exists.** Until now the only way to give the agent a new MCP server
-was to edit ``config/mcp_config.json`` or ``MCP_INSTALL_CATALOG_FILE`` on the
-box. The owner's standing directive is that he can do anything from the chat,
+was to edit ``config/mcp_config.json`` on the box. The owner's standing directive is that he can do anything from the chat,
 and he is usually on a phone — so a capability reachable only from a shell is
 one he does not have. When Aave shipped an MCP server, "install it" was a
 support ticket to himself.
@@ -22,8 +21,8 @@ rule still lives in :class:`tools.mcp.user_mcp_service.UserMCPService`:
 * credentials encrypted at rest, per-tenant server cap, add rate limit.
 
 **Who may call it.** An owner acting from an authenticated seat IS the operator
-grant (034 §12). The agent cannot reach this module; its own install path is
-``mcp_install``, which is separately gated, catalog-bound and approval-bound.
+grant (034 §12). The agent cannot reach this module; it proposes a server with
+``propose_setting("/mcp add …")``, which the owner confirms on a card.
 An empty ``user_id`` is refused — there is no shared bucket.
 """
 from __future__ import annotations
@@ -181,9 +180,16 @@ async def perform_mcp_add(service: Any, user_id: str, server_id: str, url: str,
     kind = getattr(server, "server_type", None) or "auto"
     tools = getattr(result, "tools_discovered", None)
     tail = f", {tools} tools" if tools else ""
-    return MCPAdminResult(True, (
-        f"Added MCP server '{server_id}' ({kind}{tail}) — {url}\n"
-        f"The agent can use it from the next turn (load_tool mcp)."))
+    head = f"Added MCP server '{server_id}' ({kind}{tail}) — {url}\n"
+    # The saved row is not the lever: the `mcp` tool registers only when its
+    # gate is on (tools.mcp.config.mcp_gate_on, looked up by id — core may not
+    # import tools). No gate registered = the tool tier is absent = off.
+    from core.tool_gates import gate_on, remedy_text
+    if gate_on("mcp"):
+        return MCPAdminResult(True, head + "The agent can use it from the next turn (load_tool mcp).")
+    return MCPAdminResult(True, head + (
+        "It is saved, but the mcp tool is off on this deploy, so the agent cannot use it yet: "
+        + remedy_text("set_flag", flag="MCP_ENABLED") + " and restarts the service."))
 
 
 async def perform_mcp_remove(service: Any, user_id: str, server_id: str) -> MCPAdminResult:

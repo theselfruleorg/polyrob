@@ -14,6 +14,16 @@ import tools.controller.approval as approval
 
 
 @pytest.fixture(autouse=True)
+def _no_open_prompt():
+    """A timed-out prompt in an earlier test file holds the single-stdin flag
+    until its reader thread returns; start every ladder case with no prompt open."""
+    from tools.controller import approval_interactive
+    approval_interactive._stdin_in_flight.clear()
+    yield
+    approval_interactive._stdin_in_flight.clear()
+
+
+@pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     for k in ("AGENT_COMPUTE_POSTURE", "APPROVAL_REQUIRED_TOOLS", "APPROVAL_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
@@ -44,10 +54,9 @@ def test_posture_2_unions_compute_verbs(monkeypatch):
     _posture(monkeypatch, "2")
     actions, provider = approval.resolve_gated_actions()
     assert "shell_run" in actions
-    assert "self_env_install_dep" in actions
-    assert "self_env_patch_source" in actions
+    assert "self_env_restart_service" in actions
     # and the recommended coding/self-evolution defaults
-    assert "git_push" in actions and "mcp_install" in actions
+    assert "git_push" in actions and "mcp_install" not in actions
     # provider defaults to interactive (fail-closed to deny if it can't prompt)
     assert provider == "interactive_cli"
 
@@ -107,4 +116,4 @@ async def test_headless_provider_denies_on_eof():
         raise EOFError("no tty")
 
     prov = InteractiveCLIApprover(input_fn=_eof)
-    assert await prov.request("self_env_install_dep", {}, None) is False
+    assert not await prov.request("self_env_install_dep", {}, None)

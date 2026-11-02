@@ -43,7 +43,7 @@ import {
 } from "../static/app/agent.js";
 
 const COPY = {
-  name: "rob",
+  name: "nova",
   read_only: "0",
   unreachable: "That did not reach the console.",
   when_now: "just now",
@@ -52,7 +52,7 @@ const COPY = {
   when_day: "{count} d ago",
   // Overview
   ov_health_title: "Health",
-  ov_health_aside: "what Rob checks",
+  ov_health_aside: "what the agent checks",
   ov_health_unreadable: "I could not run the health check.",
   ov_health_unreadable_why: "Why",
   ov_health_ok_title: "Everything else is fine",
@@ -65,7 +65,7 @@ const COPY = {
   ov_identity_made: "Set on {when}",
   ov_identity_unreadable: "There is an avatar here, but I could not read its record.",
   ov_identity_unreadable_why: "Why",
-  ov_posture_title: "What Rob may do",
+  ov_posture_title: "What the agent may do",
   ov_posture_aside: "one rule per axis",
   ov_axis_local_title: "Treat this computer as yours alone?",
   ov_axis_local_why: "A single owner's tools.",
@@ -95,20 +95,20 @@ const COPY = {
   // Identity
   id_unreadable: "I could not read the identity.",
   id_unreadable_why: "Why",
-  id_face_title: "Rob's face",
+  id_face_title: "The agent's face",
   id_face_body: "One image, used everywhere.",
-  id_persona_title: "How Rob should behave",
+  id_persona_title: "How the agent should behave",
   id_persona_aside: "written by you",
   id_persona_empty: "You have not written a persona yet.",
-  id_learned_title: "What Rob has learned about itself",
+  id_learned_title: "What the agent has learned about itself",
   id_learned_aside: "approved by you",
   id_learned_empty: "Nothing yet.",
   id_edit: "Edit",
   id_edit_hint: "This is a proposal. It waits in review.",
   // Capabilities
-  cap_unreadable: "I could not read what Rob can do.",
+  cap_unreadable: "I could not read what the agent can do.",
   cap_unreadable_why: "Why",
-  cap_list_title: "Everything Rob can do",
+  cap_list_title: "Everything the agent can do",
   cap_list_aside: "{count} shown",
   cap_part_unreadable: "One list could not be read.",
   cap_part_unreadable_why: "Why",
@@ -123,7 +123,7 @@ const COPY = {
   cap_source_profile: "A helper you shaped",
   cap_source_mcp: "A connected service",
   cap_source_skill: "A procedure",
-  cap_source_kept: "Rob wrote it, you kept it",
+  cap_source_kept: "The agent wrote it, you kept it",
   cap_state_on: "on",
   cap_state_off: "off",
   cap_helpers_title: "Helpers",
@@ -133,20 +133,20 @@ const COPY = {
   cap_helpers_empty: "No helpers yet.",
   // Memory
   mem_forget: "Forget",
-  mem_notes_title: "What Rob remembers about you",
+  mem_notes_title: "What the agent remembers about you",
   mem_notes_aside: "your notes",
   mem_notes_unavailable: "My memory is not available right now.",
   mem_notes_unavailable_why: "Why",
   mem_notes_error: "I could not read your notes.",
   mem_notes_error_why: "Why",
   mem_notes_empty: "No notes yet.",
-  mem_add_open: "Tell Rob something to remember",
-  mem_recall_title: "What Rob works out on its own",
+  mem_add_open: "Tell the agent something to remember",
+  mem_recall_title: "What the agent works out on its own",
   mem_recall_aside: "separate",
-  mem_recall_error: "I could not read what Rob worked out.",
+  mem_recall_error: "I could not read what the agent worked out.",
   mem_recall_error_why: "Why",
   mem_recall_empty: "Nothing worked out yet.",
-  mem_kb_title: "What Rob has read",
+  mem_kb_title: "What the agent has read",
   mem_kb_aside: "{count} sources",
   mem_kb_unreadable: "I could not read the sources.",
   mem_kb_unreadable_why: "Why",
@@ -154,12 +154,12 @@ const COPY = {
   mem_kb_passages: "{count} passages",
   // Settings
   set_limits_title: "Money limits",
-  set_limits_aside: "Rob cannot go past these",
+  set_limits_aside: "The agent cannot go past these",
   set_limits_unreadable: "I could not read the limits.",
   set_limits_unreadable_why: "Why",
   set_limit_no_cap: "No daily cap is set.",
   set_limit_unknown: "The daily cap could not be read.",
-  set_limit_daily: "Most Rob can spend in a day is {cap}.",
+  set_limit_daily: "The most the agent can spend in a day is {cap}.",
   set_limit_used: "{used} of {cap} used today.",
   set_prefs_unreadable: "I could not read the settings.",
   set_prefs_unreadable_why: "Why",
@@ -196,8 +196,8 @@ function root() {
 describe("the copy crosses on data attributes", () => {
   it("copyFrom is a plain object of the dataset", () => {
     const node = document.createElement("div");
-    node.dataset.name = "rob";
-    expect(copyFrom(node).name).toBe("rob");
+    node.dataset.name = "nova";
+    expect(copyFrom(node).name).toBe("nova");
   });
 });
 
@@ -458,7 +458,7 @@ describe("Capabilities — one list from three stores", () => {
   it("renders the list plus the read-only helpers", () => {
     const r = root();
     expect(renderCapabilities(r, DATA, COPY, {})).toBe("capabilities");
-    expect(r.textContent).toContain("Everything Rob can do");
+    expect(r.textContent).toContain("Everything the agent can do");
     expect(r.textContent).toContain("Helpers");
     expect(r.textContent).toContain("researcher");
   });
@@ -526,7 +526,7 @@ describe("Settings — prefs grouped by intent, and the money limits", () => {
   const PREFS = { preferences: [
     { key: "notify.max_per_day", description: "Messages a day", value: 30, source: "user", applies: "notify" },
     { key: "notify.quiet", description: "Quiet hours", value: "", source: "default", applies: "notify" },
-    { key: "model.name", description: "Rob answers with", value: "flash", source: "user", applies: "model" },
+    { key: "model.name", description: "The agent answers with", value: "flash", source: "user", applies: "model" },
   ] };
   const LEDGER = { caps: { daily_cap_usd: 100, daily_used_usd: 12 } };
 
@@ -539,9 +539,9 @@ describe("Settings — prefs grouped by intent, and the money limits", () => {
   it("draws the money limits from the ledger caps and the grouped prefs", () => {
     const r = root();
     expect(renderSettings(r, PREFS, LEDGER, COPY)).toBe("settings");
-    expect(r.textContent).toContain("Most Rob can spend in a day is $100.00");
+    expect(r.textContent).toContain("The most the agent can spend in a day is $100.00");
     expect(r.textContent).toContain("Messages a day");
-    expect(r.textContent).toContain("Rob answers with");
+    expect(r.textContent).toContain("The agent answers with");
   });
 
   it("an unreadable ledger dashes the limits but still shows the prefs", () => {

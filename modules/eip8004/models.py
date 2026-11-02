@@ -99,7 +99,7 @@ class RegistrationFile(BaseModel):
     description: str = Field(..., description="Agent description")
     #: The agent's face. ⚠️ OMITTED (None) rather than guessed when there is
     #: nowhere public to serve it from — this field was hardcoded to a
-    #: `rob-logo.png` that does not exist anywhere in the tree, so every file
+    #: `<name>-logo.png` that does not exist anywhere in the tree, so every file
     #: ever served pointed at a 404. A broken link is worse than no link.
     image: Optional[str] = Field(None, description="Agent image URL")
     trustMode: str = Field(

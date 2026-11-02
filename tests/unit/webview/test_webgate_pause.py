@@ -11,7 +11,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
     import webview.pages as pages
-    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "rob")
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "alice")
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)

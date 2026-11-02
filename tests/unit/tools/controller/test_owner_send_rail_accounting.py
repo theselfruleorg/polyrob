@@ -39,7 +39,7 @@ class _Container:
 def _send(**kw):
     from tools.controller.message_send import perform_message_send
     base = dict(router=_Router(), allowlist=None,
-                owner_targets={"telegram": "100000001"}, user_id="rob",
+                owner_targets={"telegram": "100000001"}, user_id="alice",
                 surface="telegram", target="owner", text="the owner report",
                 container=_Container())
     base.update(kw)
@@ -59,7 +59,7 @@ def _home(tmp_path, monkeypatch):
 def _rail_rows(tmp_path):
     from core.event_log import TelemetryEventLog
     return TelemetryEventLog(str(tmp_path / "t.db")).query(kind="user_delivery",
-                                                           user_id="rob")
+                                                           user_id="alice")
 
 
 def test_owner_send_is_recorded_on_the_delivery_rail(tmp_path):

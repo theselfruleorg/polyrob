@@ -303,6 +303,9 @@ class TaskAgentLifecycleMixin:
         # Cleanup active orchestrators - full cleanup since we're shutting down
         for session_id, orchestrator in self._registry.items():
             try:
+                # L2: the closing chat episode at shutdown is the structured
+                # extract, never an aux-LLM call per session in sequence.
+                orchestrator._episode_extract_only = True
                 await orchestrator.cleanup(
                     preserve_workspace=True,
                     preserve_agents=False,  # Clear agents during shutdown

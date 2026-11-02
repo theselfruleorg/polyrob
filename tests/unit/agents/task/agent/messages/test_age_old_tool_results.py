@@ -100,10 +100,47 @@ def test_an_offload_pointer_is_kept_verbatim():
 
 
 def test_a_result_that_was_never_offloaded_says_so():
+	"""No file to read — and NO invitation to re-run (prod 2026-10-28: an aged
+	read was followed by 139 identical re-reads)."""
 	messages = _conversation(pairs=1) + [AIMessage(content=f"filler {i}") for i in range(6)]
 	aged = age_old_tool_results(messages, keep_recent=6)
 	body = aged[2].content
-	assert "never offloaded" in body and "re-run the tool" in body
+	assert "not saved to a file" in body
+	assert "re-run" not in body
+	assert "older" in body
+
+
+def _call(idx: int, name: str, args: dict, content: str) -> list:
+	call_id = f"call_{idx}"
+	return [
+		AIMessage(content=f"step {idx}", tool_calls=[{"id": call_id, "name": name, "args": args}]),
+		ToolMessage(content=content, tool_call_id=call_id),
+	]
+
+
+def test_the_newest_result_of_a_rerun_call_is_kept_whole():
+	"""A call the agent ran twice is one it needs: its NEWEST result keeps its
+	text even outside the tail; the older copy ages, and so does a one-off call."""
+	read = ("filesystem_read_file", {"path": "funding.md"})
+	messages = ([HumanMessage(content="go")]
+	            + _call(0, *read, f"FUNDING v1\n{BIG}")
+	            + _call(1, "web_fetch", {"url": "u"}, f"PAGE\n{BIG}")
+	            + _call(2, *read, f"FUNDING v2\n{BIG}")
+	            + [AIMessage(content=f"filler {i}") for i in range(6)])
+	aged = age_old_tool_results(messages, keep_recent=6)
+	assert AGED_RESULT_MARKER in aged[2].content        # the older copy
+	assert AGED_RESULT_MARKER in aged[4].content        # a one-off call
+	assert aged[6].content == messages[6].content       # the newest re-run result
+
+
+def test_args_order_does_not_split_the_key():
+	messages = ([HumanMessage(content="go")]
+	            + _call(0, "t", {"a": 1, "b": 2}, f"A\n{BIG}")
+	            + _call(1, "t", {"b": 2, "a": 1}, f"B\n{BIG}")
+	            + [AIMessage(content=f"filler {i}") for i in range(6)])
+	aged = age_old_tool_results(messages, keep_recent=6)
+	assert AGED_RESULT_MARKER in aged[2].content
+	assert aged[4].content == messages[4].content
 
 
 def test_the_pass_is_idempotent():

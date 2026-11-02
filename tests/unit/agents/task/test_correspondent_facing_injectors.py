@@ -19,6 +19,11 @@ class _MM:
     def push_ephemeral_message(self, msg):
         self.pushed.append(msg)
 
+    def update_state_delta(self, parts, baseline=False):
+        # 095 W4: one push per call that carries any part.
+        if any(parts.values()):
+            self.pushed.append(parts)
+
 
 class _Container:
     def get_service(self, name):
@@ -55,6 +60,7 @@ def _stubs(monkeypatch):
     monkeypatch.setattr(ed, "build_mission_continuity", AsyncMock(return_value=sentinel))
     monkeypatch.setattr(cont, "build_bridge_message", AsyncMock(return_value=sentinel))
     monkeypatch.setattr(live_health, "build_live_health_text", lambda *a, **k: "HEALTH")
+    monkeypatch.setattr(live_health, "build_operations_text", lambda *a, **k: "OPS")
     monkeypatch.delenv("LIVE_HEALTH_CONTEXT", raising=False)
     from core.config_policy import AutonomyConfig
     monkeypatch.setattr(AutonomyConfig, "continuity_bridge_enabled",
@@ -66,7 +72,7 @@ _CHAT_INJECTORS = [
     memory_prefetch.MemoryPrefetchMixin._maybe_prefetch_memory,
     memory_prefetch.MemoryPrefetchMixin._maybe_inject_episodic_digest,
     memory_prefetch.MemoryPrefetchMixin._maybe_inject_continuity_bridge,
-    live_health.LiveHealthMixin._maybe_inject_live_health,
+    live_health.LiveHealthMixin._maybe_update_state_delta,
 ]
 
 

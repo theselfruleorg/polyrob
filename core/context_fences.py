@@ -21,6 +21,7 @@ CONTROL_FENCE_TAGS = (
     "owner-thread",                 # core/surfaces/owner_thread.py render_block
     "group-context",                # core/surfaces/group_turn.py
     "addressed",                    # core/surfaces/group_turn.py (the member's ask)
+    "replying-to",                  # core/surfaces/reply_ref.py (the replied-to message)
     "untrusted_tool_result",        # core/security/untrusted_wrap.py
     "surface",                      # agents/task/agent/prompts.py
     "correspondent-message",        # agents/task/session/hitl_ingress.py
@@ -48,6 +49,7 @@ CONTROL_FENCE_TAGS = (
     "restart-note",                 # agents/task/runtime/run_as_session.py
     "live-health",                  # agents/task/agent/core/live_health.py
     "operations",                   # agents/task/agent/core/live_health.py
+    "state-delta",                  # agents/task/agent/message_manager/service.py
     "delegation-result",            # agents/task/agent/async_delegation.py
     "environment",                  # agents/task/agent/core/env_context.py
     "prior_summary_data",           # agents/task/agent/messages/compactor.py

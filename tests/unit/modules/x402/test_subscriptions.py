@@ -59,7 +59,7 @@ async def test_create_persists_active_row_with_defaults(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="payer@example.com", cron_job_id="job1", db=db)
         assert sub["id"].startswith("sub_")
         assert sub["status"] == subs.STATUS_ACTIVE
@@ -152,7 +152,7 @@ async def test_subscription_permits_work_by_status(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1", db=db)
         assert await subs.subscription_permits_work(sub["id"], db=db) is True
 
@@ -186,7 +186,7 @@ async def test_apply_settlement_extends_paid_through_once(tmp_path):
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         applied = await subs.apply_settlement(sub["id"], "req_1", db=db)
@@ -216,7 +216,7 @@ async def test_apply_settlement_reactivates_suspended_sub(tmp_path):
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             period_days=30, paid_through=now - 100000, db=db)
         await db.execute("UPDATE subscriptions SET status='suspended' WHERE id=?", (sub["id"],))
@@ -288,11 +288,11 @@ async def test_apply_settlement_matching_tenant_still_extends(tmp_path):
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+            user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
             subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -315,7 +315,7 @@ async def test_apply_settlement_permissive_when_invoice_row_unresolvable(tmp_pat
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         applied = await subs.apply_settlement(sub["id"], "req_never_invoiced", db=db)
@@ -351,7 +351,7 @@ async def test_apply_settlement_second_statement_failure_rolls_back_ledger(tmp_p
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
 
@@ -424,7 +424,7 @@ async def test_apply_settlement_cancelled_error_rolls_back_and_propagates(tmp_pa
     db = await _setup_db(tmp_path)
     now = int(time.time())
     sub = await subs.create_subscription(
-        user_id="rob", correspondent_surface="email",
+        user_id="alice", correspondent_surface="email",
         correspondent_address="a@x.com", cron_job_id="job1",
         period_days=30, paid_through=now, db=db)
 
@@ -482,7 +482,7 @@ async def test_apply_settlement_cancelled_error_no_stale_ledger_row(tmp_path, mo
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
 
@@ -529,12 +529,12 @@ async def test_needing_renewal_respects_lead_window_and_open_invoice(tmp_path):
         now = int(time.time())
         # Due: inside the 5-day lead window (paid_through in 2 days).
         due = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job_due",
             renewal_lead_days=5, paid_through=now + 2 * 86400, db=db)
         # Not due: paid_through far in the future.
         await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="b@x.com", cron_job_id="job_not_due",
             renewal_lead_days=5, paid_through=now + 20 * 86400, db=db)
 
@@ -544,7 +544,7 @@ async def test_needing_renewal_respects_lead_window_and_open_invoice(tmp_path):
         # Now attach an OPEN pending renewal invoice for `due` — it must drop
         # out of the needing-renewal set.
         await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=due["amount_usd"],
+            user_id="alice", session_id="", amount_usd=due["amount_usd"],
             purpose="renewal", subscription_id=due["id"], db=db)
         rows2 = await subs.subscriptions_needing_renewal(now=now, db=db)
         assert rows2 == []
@@ -558,7 +558,7 @@ async def test_needing_renewal_excludes_suspended_and_canceled(tmp_path):
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             renewal_lead_days=5, paid_through=now + 1, db=db)
         await db.execute("UPDATE subscriptions SET status='suspended' WHERE id=?", (sub["id"],))
@@ -573,7 +573,7 @@ async def test_to_grace_transitions_once_and_emits(tmp_path):
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             paid_through=now - 10, db=db)
         graced = await subs.subscriptions_to_grace(now=now, db=db)
@@ -596,12 +596,12 @@ async def test_to_suspend_transitions_active_or_grace_past_grace_window(tmp_path
         grace_days = 3
         # Still active, but so far past paid_through that grace is ALSO elapsed.
         overdue = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="a@x.com", cron_job_id="job1",
             grace_days=grace_days, paid_through=now - (grace_days + 1) * 86400, db=db)
         # Genuinely still within grace — must NOT be suspended yet.
         within_grace = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="b@x.com", cron_job_id="job2",
             grace_days=grace_days, paid_through=now - 1, db=db)
         await db.execute("UPDATE subscriptions SET status='grace' WHERE id=?", (within_grace["id"],))

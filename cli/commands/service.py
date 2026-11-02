@@ -148,6 +148,8 @@ def _write_systemd_unit() -> Path:
     env_lines = [f'Environment="POLYROB_HOME={_polyrob_home()}"']
     if profile:
         env_lines.append(f'Environment="POLYROB_PROFILE={profile}"')
+    else:
+        env_lines.append(f'Environment="POLYROB_DATA_DIR={_data_home()}"')
     unit.write_text(
         "[Unit]\n"
         "Description=POLYROB agent (chat surfaces + autonomy loops)\n"
@@ -174,6 +176,13 @@ def _write_systemd_unit() -> Path:
     return unit
 
 
+def _data_home() -> str:
+    """The data home this CLI reads, pinned into the unit (a profile pins its
+    own): without it the service and a later CLI could resolve two homes."""
+    from core.runtime_paths import resolve_data_home
+    return str(resolve_data_home())
+
+
 def _quote(arg: str) -> str:
     return f'"{arg}"' if " " in arg else arg
 
@@ -186,6 +195,8 @@ def _write_launchd_plist() -> Path:
     profile = _active_profile()
     if profile:
         env += f"    <key>POLYROB_PROFILE</key><string>{profile}</string>\n"
+    else:
+        env += f"    <key>POLYROB_DATA_DIR</key><string>{_data_home()}</string>\n"
     logs = Path(_polyrob_home()) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     plist.write_text(

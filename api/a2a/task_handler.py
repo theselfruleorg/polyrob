@@ -151,7 +151,7 @@ def _current_activity(session_id: str):
 # `agents/task/agent/session.py::get_user_status`, which dropped the same key).
 #
 # Note: "paused" was removed from SessionStatus - use cancelled for user interruption
-ROB_TO_A2A_STATE: Dict[str, A2ATaskState] = {
+INTERNAL_TO_A2A_STATE: Dict[str, A2ATaskState] = {
     "created": A2ATaskState.SUBMITTED,
     "initializing": A2ATaskState.WORKING,
     "running": A2ATaskState.WORKING,
@@ -166,12 +166,12 @@ ROB_TO_A2A_STATE: Dict[str, A2ATaskState] = {
 #: poller and the handler share (they used to keep two, and the streamer's
 #: included the non-existent "error").
 TERMINAL_SESSION_STATUSES = frozenset(
-    status for status, state in ROB_TO_A2A_STATE.items()
+    status for status, state in INTERNAL_TO_A2A_STATE.items()
     if A2ATaskState.is_terminal(state)
 )
 
 # Map A2A TaskState to POLYROB SessionStatus
-A2A_TO_ROB_STATE: Dict[A2ATaskState, str] = {
+A2A_TO_INTERNAL_STATE: Dict[A2ATaskState, str] = {
     A2ATaskState.SUBMITTED: "created",
     A2ATaskState.WORKING: "running",
     A2ATaskState.INPUT_REQUIRED: "suspended",
@@ -342,7 +342,7 @@ class A2ATaskHandler:
         Returns:
             Corresponding A2ATaskState
         """
-        return ROB_TO_A2A_STATE.get(
+        return INTERNAL_TO_A2A_STATE.get(
             status.lower() if status else "unknown",
             A2ATaskState.UNKNOWN
         )
@@ -356,7 +356,7 @@ class A2ATaskHandler:
         Returns:
             Corresponding POLYROB session status string
         """
-        return A2A_TO_ROB_STATE.get(state, "unknown")
+        return A2A_TO_INTERNAL_STATE.get(state, "unknown")
 
     # =========================================================================
     # Task Operations
@@ -531,8 +531,8 @@ class A2ATaskHandler:
         self._authorize_owner(session_info, task_id, user_id)
 
         # Map status to A2A state
-        rob_status = session_info.get("status", "unknown")
-        a2a_state = self._session_status_to_a2a_state(rob_status)
+        session_status = session_info.get("status", "unknown")
+        a2a_state = self._session_status_to_a2a_state(session_status)
 
         # Collect artifacts if completed
         artifacts = []
@@ -560,7 +560,7 @@ class A2ATaskHandler:
             artifacts=artifacts,
             metadata={
                 "session_id": task_id,
-                "internal_status": rob_status,
+                "internal_status": session_status,
                 "task": session_info.get("task"),
                 "created_at": session_info.get("created_at"),
                 "updated_at": session_info.get("updated_at"),

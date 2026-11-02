@@ -81,27 +81,27 @@ def test_delete_refuses_live_profile(env):
 def test_from_project_copies_identity_not_dbs(env, tmp_path):
     proj = tmp_path / "legacy"
     d = proj / ".polyrob"
-    (d / "identity" / "rob" / "user_owner").mkdir(parents=True)
-    (d / "identity" / "rob" / "user_owner" / "self.md").write_text("SELF\n")
+    (d / "identity" / "alice" / "user_owner").mkdir(parents=True)
+    (d / "identity" / "alice" / "user_owner" / "self.md").write_text("SELF\n")
     (d / "characters").mkdir()
-    (d / "characters" / "rob.character.json").write_text(json.dumps({"name": "Rob"}))
-    (d / ".env").write_text("POLYROB_INSTANCE_ID=rob\nANTHROPIC_API_KEY=sk-x\n")
+    (d / "characters" / "nova.character.json").write_text(json.dumps({"name": "Nova"}))
+    (d / ".env").write_text("POLYROB_INSTANCE_ID=alice\nANTHROPIC_API_KEY=sk-x\n")
     (d / "memory.db").write_text("NOT-COPIED-BY-DEFAULT")
 
-    result = create_profile("rob", from_project=str(proj))
+    result = create_profile("alice", from_project=str(proj))
     home = result["home"]
-    assert (home / "data" / "identity" / "rob" / "user_owner" / "self.md").read_text() == "SELF\n"
-    assert (home / "characters" / "rob.character.json").is_file()
+    assert (home / "data" / "identity" / "alice" / "user_owner" / "self.md").read_text() == "SELF\n"
+    assert (home / "characters" / "nova.character.json").is_file()
     env_text = (home / ".env").read_text()
-    assert "POLYROB_INSTANCE_ID=rob" in env_text  # identity key lifted, wins over default
+    assert "POLYROB_INSTANCE_ID=alice" in env_text  # identity key lifted, wins over default
     assert "ANTHROPIC_API_KEY" not in env_text  # provider keys are NOT identity
     assert not (home / "data" / "memory.db").exists()  # DBs only with --include-data
     # non-destructive: the legacy folder is byte-identical
     assert (d / "memory.db").read_text() == "NOT-COPIED-BY-DEFAULT"
-    assert (d / "identity" / "rob" / "user_owner" / "self.md").exists()
+    assert (d / "identity" / "alice" / "user_owner" / "self.md").exists()
 
 
-@pytest.mark.parametrize("line", ["BOT_INSTANCE_ID=rob", "BOT_OWNER_USER_ID=rob"])
+@pytest.mark.parametrize("line", ["BOT_INSTANCE_ID=alice", "BOT_OWNER_USER_ID=alice"])
 def test_from_project_refuses_a_retired_identity_alias(env, tmp_path, line):
     # 1.4: a legacy project that pins only BOT_INSTANCE_ID / BOT_OWNER_USER_ID
     # is refused before the profile exists, naming the rename.
@@ -110,9 +110,9 @@ def test_from_project_refuses_a_retired_identity_alias(env, tmp_path, line):
     (proj / ".polyrob").mkdir(parents=True)
     (proj / ".polyrob" / ".env").write_text(line + "\n")
     with pytest.raises(click.ClickException, match="POLYROB_"):
-        create_profile("rob", from_project=str(proj))
+        create_profile("alice", from_project=str(proj))
     from core.profiles import profiles_root
-    assert not (profiles_root() / "rob").exists()
+    assert not (profiles_root() / "alice").exists()
 
 
 def test_from_project_include_data_copies_dbs(env, tmp_path):
@@ -125,17 +125,17 @@ def test_from_project_include_data_copies_dbs(env, tmp_path):
 
 
 def test_clone_from_profile_gets_own_instance_id(env):
-    _run("create", "rob", "--no-alias")
-    p = env / "profiles" / "rob"
-    (p / ".env").write_text("POLYROB_INSTANCE_ID=rob\nPERSONALITY_DEFAULT_CHARACTER=rob\n")
-    (p / "characters" / "rob.character.json").write_text(json.dumps({"name": "Rob"}))
-    r = _run("create", "rob2", "--from", "rob", "--no-alias")
+    _run("create", "alice", "--no-alias")
+    p = env / "profiles" / "alice"
+    (p / ".env").write_text("POLYROB_INSTANCE_ID=alice\nPERSONALITY_DEFAULT_CHARACTER=nova\n")
+    (p / "characters" / "nova.character.json").write_text(json.dumps({"name": "Nova"}))
+    r = _run("create", "rob2", "--from", "alice", "--no-alias")
     assert r.exit_code == 0, r.output
     p2 = env / "profiles" / "rob2"
     env_text = (p2 / ".env").read_text()
     assert "POLYROB_INSTANCE_ID=rob2" in env_text  # a clone is a NEW instance
-    assert "PERSONALITY_DEFAULT_CHARACTER=rob" in env_text  # voice cloned
-    assert (p2 / "characters" / "rob.character.json").is_file()
+    assert "PERSONALITY_DEFAULT_CHARACTER=nova" in env_text  # voice cloned
+    assert (p2 / "characters" / "nova.character.json").is_file()
 
 
 def _assert_wrapper_command(text, profile_name):

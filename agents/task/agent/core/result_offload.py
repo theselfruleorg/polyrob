@@ -349,6 +349,17 @@ class ToolResultOffloadMixin:
 		except Exception:
 			return False
 
+	def _can_read_workspace(self) -> bool:
+		"""Does this session hold ``filesystem_read_file`` (the spill pointer's
+		read path)? Fail-open to True (the pre-095 wording)."""
+		try:
+			controller = getattr(self, 'controller', None)
+			if controller is None:
+				return True
+			return controller.get_action_details('filesystem_read_file') is not None
+		except Exception:
+			return True
+
 	def _spill_over_wire_cap(self, results: List[ActionResult], name_by_id=None) -> None:
 		"""A4: save every result over the wire cap to a workspace file, keep a
 		verbatim head (+ tail for exec tools) and NAME the real read path."""
@@ -382,7 +393,14 @@ class ToolResultOffloadMixin:
 			tail_ratio = 0.3 if self._is_exec_result(result, name_by_id) else 0.0
 			head_chars = budget * _CHARS_PER_TOKEN - int(budget * _CHARS_PER_TOKEN * tail_ratio)
 			resume_at = offset_of(head_chars)
-			if resume_at is not None:
+			if not self._can_read_workspace():
+				# X-23 (095 W2): this seat holds no file reader — name no call it
+				# cannot make.
+				way_out = (
+					f'the FULL output ({len(content):,} chars) is saved as "{content_file.name}", '
+					f'but this session cannot read files — ask the owner for the file'
+				)
+			elif resume_at is not None:
 				way_out = (
 					f'the FULL output ({len(content):,} chars) is saved in the workspace file '
 					f'"{content_file.name}" — read the rest with filesystem_read_file('

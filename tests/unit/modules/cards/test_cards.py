@@ -135,7 +135,7 @@ def test_avatar_falls_back_to_the_brand_mark(tmp_path, monkeypatch):
     # no instance avatar under this empty data home -> the default avatar (the
     # shipped brand mark), never a generated face, never raises.
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    path = cards._resolve_avatar_path("rob")
+    path = cards._resolve_avatar_path("alice")
     assert path is not None
     assert path.is_file()
     assert path.name == "polyrob-avatar-512.png"
@@ -144,7 +144,7 @@ def test_avatar_falls_back_to_the_brand_mark(tmp_path, monkeypatch):
 def test_with_no_default_either_the_card_uses_its_own_brand_mark(tmp_path, monkeypatch):
     monkeypatch.setattr("core.avatar.DEFAULT_AVATAR", tmp_path / "missing.png")
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    assert cards._resolve_avatar_path("rob").name == "polyrob-mark-256.png"
+    assert cards._resolve_avatar_path("alice").name == "polyrob-mark-256.png"
 
 
 def test_avatar_prefers_the_instance_avatar_when_set(tmp_path, monkeypatch):
@@ -152,16 +152,16 @@ def test_avatar_prefers_the_instance_avatar_when_set(tmp_path, monkeypatch):
     from core.avatar import set_avatar
     buf = io.BytesIO()
     Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, "PNG")
-    st = set_avatar(tmp_path, "rob", buf.getvalue(), source="file:face.png")
+    st = set_avatar(tmp_path, "alice", buf.getvalue(), source="file:face.png")
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    assert cards._resolve_avatar_path("rob") == st.path
+    assert cards._resolve_avatar_path("alice") == st.path
 
 
 def test_an_svg_avatar_falls_back_to_the_brand_mark(tmp_path, monkeypatch):
     from core.avatar import set_avatar
-    set_avatar(tmp_path, "rob", b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', source="x")
+    set_avatar(tmp_path, "alice", b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', source="x")
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    assert cards._resolve_avatar_path("rob").name == "polyrob-mark-256.png"
+    assert cards._resolve_avatar_path("alice").name == "polyrob-mark-256.png"
 
 
 def test_render_survives_missing_avatar_entirely(tmp_path, monkeypatch):
@@ -179,19 +179,19 @@ def test_a_usdc_card_is_unchanged(tmp_path, monkeypatch):
 
 
 def test_a_non_usdc_card_leads_with_the_token_amount(tmp_path, monkeypatch):
-    """⚠️ A ROB invoice rendered as "$0.50 USDC" tells the payer to send the
+    """⚠️ A DEMO invoice rendered as "$0.50 USDC" tells the payer to send the
     wrong asset — money they do not get back. The token amount leads because it
     is what they must actually send."""
     drawn = _spy_draw_text(monkeypatch)
-    invoice = dict(_INVOICE, amount_usd=0.5, asset="rob", chain="robinhood",
-                   asset_id="rob", asset_symbol="ROB",
+    invoice = dict(_INVOICE, amount_usd=0.5, asset="demo", chain="robinhood",
+                   asset_id="demo", asset_symbol="DEMO",
                    asset_address="0x" + "bb" * 20, asset_decimals=18,
                    amount_raw=7 * 10 ** 18)
     cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "c.png")
-    assert any("ROB" in str(t) for t in drawn)
+    assert any("DEMO" in str(t) for t in drawn)
     assert any(str(t).startswith("7 ") for t in drawn)
     assert any("≈ $0.5" in str(t) for t in drawn)
-    assert not any("USDC" in str(t) for t in drawn if "ROB" not in str(t)
+    assert not any("USDC" in str(t) for t in drawn if "DEMO" not in str(t)
                    and str(t).startswith("$"))
 
 
@@ -199,8 +199,8 @@ def test_a_sub_unit_token_amount_is_never_rounded_to_nothing(tmp_path, monkeypat
     """⚠️ The two-decimal money format rendered every memecoin price as $0.00.
     A payer who sends what the card shows would send nothing."""
     drawn = _spy_draw_text(monkeypatch)
-    invoice = dict(_INVOICE, amount_usd=0.01, asset_id="rob",
-                   asset_symbol="ROB", asset_address="0x" + "bb" * 20,
+    invoice = dict(_INVOICE, amount_usd=0.01, asset_id="demo",
+                   asset_symbol="DEMO", asset_address="0x" + "bb" * 20,
                    asset_decimals=18, amount_raw=1_234_000_000_000_000)
     cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "c.png")
     assert any("0.001234" in str(t) for t in drawn)

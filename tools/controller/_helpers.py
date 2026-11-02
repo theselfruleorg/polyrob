@@ -45,7 +45,8 @@ def make_denylist_hook(denied_action_names):
 
     def _hook(action_name, params, context):
         if action_name in denied:
-            return f"'{action_name}' is on the tool denylist"
+            from core.tool_gates import refusal_text
+            return refusal_text("denylist", action=action_name)
         return None
 
     return _hook
@@ -217,6 +218,46 @@ def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=
         result.metadata['skill_resources'] = list_skill_resources(skill_dir)
     if sha:
         result.metadata['skill_sha256'] = sha
+    return result
+
+
+def append_prerequisites(result: ActionResult, controller, skill_manager, user_id) -> ActionResult:
+    """095 W10 (IN-8): ``load_skill`` honours ``polyrob-requires`` the way a pin
+    does (``SkillManager.prerequisites_of`` — the same gates). A prerequisite
+    this session already holds is not sent again; each new one rides the same
+    result as its own ``<skill>`` block. Fail-open: the loaded skill stands."""
+    sid = (result.metadata or {}).get("skill_loaded") if not result.error else None
+    if not sid or skill_manager is None:
+        return result
+    try:
+        try:
+            tool_ids = controller.list_tools()
+        except Exception:
+            tool_ids = []
+        reqs = skill_manager.prerequisites_of(sid, user_id=user_id, tool_ids=tool_ids)
+    except Exception:
+        return result
+    activated = getattr(controller, "_activated_skills", None)
+    session = getattr(controller, "_session_skills", None)
+    added = []
+    for m in reqs:
+        if isinstance(activated, set) and m.skill_id in activated:
+            continue
+        if isinstance(session, dict):
+            session.setdefault(m.skill_id, m)
+        try:
+            skill_dir = skill_manager.resolve_skill_dir(m.skill_id, user_id)
+        except Exception:
+            skill_dir = None
+        sub = build_load_skill_result({m.skill_id: m}, m.skill_id, activated=activated,
+                                      skill_dir=skill_dir)
+        if sub.error:
+            continue
+        result.extracted_content += (f"\nPrerequisite of '{sid}' (polyrob-requires):\n"
+                                     + sub.extracted_content)
+        added.append(m.skill_id)
+    if added:
+        result.metadata["skill_prerequisites"] = added
     return result
 
 

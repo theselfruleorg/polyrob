@@ -10,7 +10,7 @@ from core.self_context_writer import SelfContextWriter
 
 
 def test_atomic_write_is_group_shared(tmp_path):
-    w = SelfContextWriter(tmp_path, "rob")
+    w = SelfContextWriter(tmp_path, "alice")
     target = tmp_path / "doc.md"
     w._atomic_write(target, "hello\n")
     assert target.read_text() == "hello\n"
@@ -18,7 +18,7 @@ def test_atomic_write_is_group_shared(tmp_path):
 
 
 def test_atomic_write_never_world_readable(tmp_path):
-    w = SelfContextWriter(tmp_path, "rob")
+    w = SelfContextWriter(tmp_path, "alice")
     target = tmp_path / "doc.md"
     w._atomic_write(target, "x")
     assert stat.S_IMODE(os.stat(target).st_mode) & 0o007 == 0

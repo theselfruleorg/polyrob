@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Posting, replying or sending DMs on X'
   polyrob-priority: '7'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["twitter","x_browser"]}'
   polyrob-version: '5'
 ---
@@ -67,8 +66,7 @@ X restricts automated accounts. Choose the route by relationship, not preference
 `twitter_post(text=…, poll_options=[2-4 choices], poll_duration_minutes=…)`
 creates a poll. **Read the answer with `twitter_poll_results(tweet_id)`** —
 options ranked by votes, shares, `voting_status` and the end time. Nothing else
-shows a poll's votes: the plain tweet read does not include the attachment, so
-before 2026-09-17 an agent could ask and never learn the answer.
+shows a poll's votes: the plain tweet read does not include the attachment.
 
 - Post the poll, RECORD the tweet id where the next run can find it (memory /
   ledger), and read the results AFTER `end_datetime` or once votes are in the

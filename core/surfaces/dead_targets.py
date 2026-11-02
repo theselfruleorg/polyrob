@@ -22,6 +22,10 @@ any send path yet" — it was the second that was stale):
   shim skip a dead target before sending and mark one on a classified failure.
   Both gated by ``DEAD_TARGET_REGISTRY``.
 - ``core/surfaces/dispatcher.py`` — revive-on-inbound clears the row.
+- A row marked by ONE failure ages out after ``SINGLE_FAILURE_TTL_S`` (the
+  target gets one more attempt; a second failure keeps it dead). A skipped send
+  says why: ``describe_dead_target`` rides ``SendReceipt.error`` to the
+  ``message`` tool's error.
 - 044 T21: when the dead target is a ROOM key, ``publish`` ALSO moves the room's
   allowlist row to ``left`` (``core/surfaces/room_keys.py::mark_room_left``), so
   the owner can see in ``/groups list`` that the bot was removed rather than
@@ -37,6 +41,39 @@ from typing import List, Optional
 from core.config_policy import dead_target_registry_enabled  # noqa: F401 (convenience re-export)
 
 logger = logging.getLogger(__name__)
+
+
+#: A target marked dead by ONE failure is trusted for this long, then it gets
+#: one more attempt: prod 2026-10-28 kept a live channel dead for two months on
+#: a single August ``chat_not_found``. A second failure (``fail_count`` 2) is a
+#: real signal and stays until an inbound message from the target clears it.
+SINGLE_FAILURE_TTL_S = 7 * 86400
+
+#: The live-row predicate (one bound parameter: the age-out cutoff).
+_LIVE = "NOT (fail_count <= 1 AND marked_at < ?)"
+
+
+def _cutoff() -> float:
+    return time.time() - SINGLE_FAILURE_TTL_S
+
+
+def describe_dead_target(row: Optional[dict]) -> str:
+    """The reason a send to a dead target did not happen, in one line: since
+    when, why, how often, and how the mark clears. '' for no row."""
+    if not row:
+        return ""
+    try:
+        since = time.strftime("%Y-%m-%d", time.gmtime(float(row.get("marked_at") or 0)))
+    except Exception:
+        since = "?"
+    n = int(row.get("fail_count") or 1)
+    clears = "it clears when that chat sends a message"
+    if n <= 1:
+        clears += f", or ages out {SINGLE_FAILURE_TTL_S // 86400} days after the mark"
+    return (f"dead target since {since}: {row.get('reason') or 'unknown'} "
+            f"({n} failed send{'s' if n != 1 else ''}) — nothing was sent; {clears}. "
+            "Check the address (a channel needs its @username or -100… id and the "
+            "bot as a member) and tell the owner if this target matters.")
 
 
 def _norm_addr(address: str) -> str:
@@ -89,27 +126,33 @@ class DeadTargetStore:
             (surface, _norm_addr(address), reason, time.time()),
         )
 
-    def is_dead(self, surface: str, address: str) -> bool:
-        """Return True iff ``(surface, address)`` is marked dead.
+    def get(self, surface: str, address: str) -> Optional[dict]:
+        """The live dead-target row for ``(surface, address)``, or None — an
+        aged-out single failure (``SINGLE_FAILURE_TTL_S``) is not live.
 
         Fail-open: ANY store error (corrupt db, missing file, locked) degrades
-        to False — a liveness check must never be able to block a send.
+        to None — a liveness check must never be able to block a send.
         """
         try:
             from core.sqlite_util import execute_retry
             row = execute_retry(
                 self._db,
-                "SELECT 1 FROM dead_targets WHERE surface=? AND address=?",
-                (surface, _norm_addr(address)),
+                "SELECT surface, address, reason, marked_at, fail_count FROM dead_targets "
+                f"WHERE surface=? AND address=? AND {_LIVE}",
+                (surface, _norm_addr(address), _cutoff()),
                 fetch="one",
             )
-            return bool(row)
+            return dict(row) if row else None
         except Exception as e:
             logger.warning(
                 "dead_targets: read failed for %s/%s (treating as alive): %s",
                 surface, address, e,
             )
-            return False
+            return None
+
+    def is_dead(self, surface: str, address: str) -> bool:
+        """Return True iff ``(surface, address)`` has a live dead mark (fail-open)."""
+        return self.get(surface, address) is not None
 
     def clear(self, surface: str, address: str) -> None:
         """Idempotent delete (revive-on-inbound). A no-op if never marked."""
@@ -127,8 +170,8 @@ class DeadTargetStore:
         from core.sqlite_util import execute_retry
         row = execute_retry(
             self._db,
-            "SELECT COUNT(*) AS n FROM dead_targets WHERE surface=?",
-            (surface,),
+            f"SELECT COUNT(*) AS n FROM dead_targets WHERE surface=? AND {_LIVE}",
+            (surface, _cutoff()),
             fetch="one",
         )
         return int(row["n"]) if row else 0
@@ -138,7 +181,8 @@ class DeadTargetStore:
         rows = execute_retry(
             self._db,
             "SELECT surface, address, reason, marked_at, fail_count FROM dead_targets "
-            "ORDER BY surface, address",
+            f"WHERE {_LIVE} ORDER BY surface, address",
+            (_cutoff(),),
             fetch="all",
         )
         return [

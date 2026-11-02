@@ -1,36 +1,12 @@
 {
   "tools": [
     {
-      "name": "agent_avatar",
-      "sha": "414a85c0b80e"
-    },
-    {
-      "name": "agent_status",
-      "sha": "729d3abd9f2d"
-    },
-    {
-      "name": "autonomy_control",
-      "sha": "1f2e50255e3a"
-    },
-    {
-      "name": "contact_history",
-      "sha": "cd5b9107df8e"
-    },
-    {
       "name": "defi_data_contract_read",
       "sha": "dae0db5291bc"
     },
     {
-      "name": "defi_data_discovery_count",
-      "sha": "045fedda3ca2"
-    },
-    {
       "name": "defi_data_lp_pool_info",
       "sha": "18f1635a2170"
-    },
-    {
-      "name": "defi_data_lp_positions",
-      "sha": "8dc7d76fcdad"
     },
     {
       "name": "defi_data_lp_quote",
@@ -39,10 +15,6 @@
     {
       "name": "defi_data_new_pools",
       "sha": "ea70e42b00bd"
-    },
-    {
-      "name": "defi_data_nft_holdings",
-      "sha": "9cb101ff1954"
     },
     {
       "name": "defi_data_nft_info",
@@ -57,28 +29,8 @@
       "sha": "ec53dbf2cefb"
     },
     {
-      "name": "defi_data_portfolio",
-      "sha": "011b50c4adfb"
-    },
-    {
-      "name": "defi_data_position_mark",
-      "sha": "bc6190df91df"
-    },
-    {
-      "name": "defi_data_positions",
-      "sha": "70e0105c7d62"
-    },
-    {
       "name": "defi_data_price",
       "sha": "978d8371ea5e"
-    },
-    {
-      "name": "defi_data_reconcile",
-      "sha": "6ade21472650"
-    },
-    {
-      "name": "defi_data_retire_row",
-      "sha": "47599677e2fb"
     },
     {
       "name": "defi_data_scan",
@@ -109,84 +61,20 @@
       "sha": "c314db246d3c"
     },
     {
-      "name": "defi_data_wallet_activity",
-      "sha": "89832867fe77"
-    },
-    {
-      "name": "defi_data_wallet_holdings",
-      "sha": "13069d122408"
-    },
-    {
-      "name": "delegate_task",
-      "sha": "99c7f57cb8f9"
-    },
-    {
       "name": "done",
       "sha": "d52ce43147c8"
-    },
-    {
-      "name": "insights",
-      "sha": "40a717ccaee9"
     },
     {
       "name": "load_skill",
       "sha": "1cf2893b4073"
     },
     {
-      "name": "load_tool",
-      "sha": "a7b2720e3dbc"
-    },
-    {
-      "name": "message",
-      "sha": "a477faab6c1f"
-    },
-    {
-      "name": "owner_ask",
-      "sha": "fff14dbc6121"
-    },
-    {
-      "name": "owner_doc_manage",
-      "sha": "d4315aebe58c"
-    },
-    {
-      "name": "preferences",
-      "sha": "ad8318905601"
-    },
-    {
-      "name": "present_choice",
-      "sha": "e65bf115d368"
-    },
-    {
-      "name": "propose_action",
-      "sha": "bb1c23b06a81"
-    },
-    {
-      "name": "propose_setting",
-      "sha": "6f27817332ef"
-    },
-    {
       "name": "read_skill_resource",
       "sha": "5157194c3386"
     },
     {
-      "name": "room_moderate",
-      "sha": "47c4b36dfcef"
-    },
-    {
-      "name": "room_read",
-      "sha": "9af7efe8d3e0"
-    },
-    {
-      "name": "self_context_manage",
-      "sha": "8977db1c077b"
-    },
-    {
       "name": "send_message",
       "sha": "5639154a5361"
-    },
-    {
-      "name": "skill_manage",
-      "sha": "1a9acba12d5a"
     },
     {
       "name": "task_todo_add",
@@ -215,10 +103,6 @@
     {
       "name": "tool_search",
       "sha": "7d8f9245f92d"
-    },
-    {
-      "name": "trade_mandate_propose",
-      "sha": "ff5dfd36d681"
     },
     {
       "name": "web_fetch_fetch_url",

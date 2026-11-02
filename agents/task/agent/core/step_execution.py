@@ -36,6 +36,41 @@ _FAST_ESCALATE = os.getenv("EMPTY_ACTION_FAST_ESCALATE", "true").strip().lower()
 _EMPTY_ACTION_ESCALATE_AT = 2 if _FAST_ESCALATE else 3
 
 
+def apply_step_cap(agent, actions: list) -> list:
+	"""The calls that run this step; the rest get a named "did NOT run" note.
+
+	095 W1d: the cap is the LOWER of the executor ceiling and the agent's
+	``max_actions_per_step`` (lowered by one on each parse error), so a call cut by
+	the reduced cap gets the same named note — never a silent drop."""
+	per_agent = getattr(agent, 'max_actions_per_step', None)
+	cap = MAX_TOOL_CALLS_PER_STEP
+	if isinstance(per_agent, int) and not isinstance(per_agent, bool):
+		cap = max(1, min(per_agent, MAX_TOOL_CALLS_PER_STEP))
+	if len(actions) <= cap:
+		return actions
+	agent.logger.warning(
+		f"⚠️ Tool limit: {len(actions)} actions requested, "
+		f"executing first {cap}, deferring {len(actions) - cap}"
+	)
+	deferred = actions[cap:]
+	reduced = (f" (this agent's cap, below the usual {MAX_TOOL_CALLS_PER_STEP}; "
+	           "each parse error lowers it by one)"
+	           if cap < MAX_TOOL_CALLS_PER_STEP else "")
+	# Inject deferral notice as ephemeral message for next step
+	names = [getattr(a, 'name', str(a)[:30]) for a in deferred]
+	agent.message_manager.push_ephemeral_message(
+		HumanMessage(content=(
+			f"⚠️ **Tool Call Limit Applied — {len(deferred)} call(s) did NOT run**\n\n"
+			f"A step executes at most {cap} tool calls{reduced}; these were NOT "
+			f"executed and have NO result:\n"
+			f"- {', '.join(names[:5])}"
+			f"{'...' if len(names) > 5 else ''}\n\n"
+			f"Call them again now, 1-{cap} at a time — do not assume they ran."
+		))
+	)
+	return actions[:cap]
+
+
 def _seat_of(orchestrator) -> Optional[str]:
 	"""``"terminal"`` when a foreground terminal of this process renders the session
 	(``bind_terminal_surface``), else None. Fail-closed to None — ``is True``, so a
@@ -119,6 +154,30 @@ class StepExecutionMixin:
 			f"Empty action response {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT} "
 			f"(cause: {cause})")
 		call_quality.emit_call_quality(self, cause)
+
+		# A REJECTED call (every call failed argument validation — a required arg
+		# missing — or named no action) is a failed step, not a tool-free planning
+		# turn: the model did call a tool. It used to draw "Planning turn noted",
+		# so the failure counter rose only every second rejected step (prod
+		# 2026-10-26: wallet_holdings without `chain`, 150 calls). The reason
+		# itself already reached the model (_push_rejected_tool_calls_feedback).
+		if cause in (call_quality.BAD_ARGS, call_quality.UNKNOWN_TOOL):
+			self._empty_action_counter = 0
+			self.state.increment_failures()
+			try:
+				reasons = list((self.controller.get_last_validation_errors() or {}).values())
+			except Exception:
+				reasons = []
+			detail = "; ".join(str(r)[:300] for r in reasons[:3]) or (
+				"the arguments failed validation" if cause == call_quality.BAD_ARGS
+				else "the action is not registered")
+			self._last_result = [ActionResult(
+				error=f"Tool call rejected before execution — it did NOT run: {detail}. "
+				      "Fix the arguments the error names (or pick an action that exists).",
+				include_in_memory=True)]
+			if self.tool_call_tracker:
+				self.tool_call_tracker.complete_step()
+			return False
 
 		# D1-a (seed resolution): tolerate a bounded number of tool-free "planning"
 		# turns. Instead of treating the very first empty response as an error,
@@ -411,8 +470,12 @@ class StepExecutionMixin:
 						make_control_message(loop_warning, MessageOrigin.INTERVENTION)
 					)
 
-					# Optional: Could halt after N consecutive loops
-					# For now: Non-blocking, agent gets feedback and can adjust
+			# The identical-call escalation: a call that already ran N times with the
+			# same result after a warning does not run again (LoopDetectionMixin).
+			blocked = self._loop_guard_check(model_output)
+			if blocked is not None:
+				self._last_result = blocked
+				return blocked
 
 			# CRITICAL FIX: Actually execute the actions through controller
 			execution_context = self._build_execution_context(browser_context)
@@ -431,29 +494,7 @@ class StepExecutionMixin:
 			# a whole extra LLM round trip (~60k input tokens) to re-request work the
 			# model had already decided on. 5 covers the common read-only fan-out while
 			# keeping a hard ceiling on single-step context growth.
-			actions_to_execute = model_output.action
-			deferred_actions = []
-
-			if len(actions_to_execute) > MAX_TOOL_CALLS_PER_STEP:
-				self.logger.warning(
-					f"⚠️ Tool limit: {len(actions_to_execute)} actions requested, "
-					f"executing first {MAX_TOOL_CALLS_PER_STEP}, deferring {len(actions_to_execute) - MAX_TOOL_CALLS_PER_STEP}"
-				)
-				deferred_actions = actions_to_execute[MAX_TOOL_CALLS_PER_STEP:]
-				actions_to_execute = actions_to_execute[:MAX_TOOL_CALLS_PER_STEP]
-
-				# Inject deferral notice as ephemeral message for next step
-				deferred_names = [getattr(a, 'name', str(a)[:30]) for a in deferred_actions]
-				self.message_manager.push_ephemeral_message(
-					HumanMessage(content=(
-						f"⚠️ **Tool Call Limit Applied — {len(deferred_actions)} call(s) did NOT run**\n\n"
-						f"A step executes at most {MAX_TOOL_CALLS_PER_STEP} tool calls; these were NOT "
-						f"executed and have NO result:\n"
-						f"- {', '.join(deferred_names[:5])}"
-						f"{'...' if len(deferred_names) > 5 else ''}\n\n"
-						f"Call them again now, 1-{MAX_TOOL_CALLS_PER_STEP} at a time — do not assume they ran."
-					))
-				)
+			actions_to_execute = apply_step_cap(self, model_output.action)
 
 			result = await self.controller.multi_act(
 				actions=actions_to_execute,

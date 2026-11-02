@@ -164,6 +164,18 @@ class SkillWriterMixin:
     def _pending_revision_path(self, uid: str, skill_id: str) -> Path:
         return self._user_root(uid) / ".pending" / skill_id / "REVISION.json"
 
+    def _pending_author(self, uid: str, skill_id: str) -> List[str]:
+        """The draft's author (095 W10, R9), or ``[]``. Read from the provenance
+        store the write recorded (``skill_usage.db``) — never from a file in the
+        skill's directory, which a shipped or imported skill could forge."""
+        try:
+            from modules.skills.skill_usage import get_skill_usage_store
+            row = get_skill_usage_store().get_provenance(skill_id, uid) or {}
+        except Exception:
+            return []
+        by = row.get("created_by") if isinstance(row, dict) else None
+        return [str(by)] if by else []
+
     def _read_pending_revision(self, uid: str, skill_id: str, content: str) -> str:
         """Read a pending version record; lazily backfill safe legacy drafts."""
         revision = self._content_revision(content)
@@ -716,8 +728,28 @@ class SkillWriterMixin:
                 "path": str(skill_file),
                 "revision": self._content_revision(body),
                 "bundled": skill_dir.name in self._bundled_ids(),
+                "by": self._pending_author(uid, skill_dir.name),
             })
         return out
+
+    def active_skill_text(self, skill_id: str, *, user_id: str) -> Optional[str]:
+        """The body a pending draft would REPLACE, or None for a new skill.
+
+        A bundled skill's active copy is the seeded one; a tenant skill's is its
+        own directory. Lets the owner review a change as a diff. Fail-open."""
+        uid = self._require_user(user_id)
+        if uid is None or not self.validate_skill_id(skill_id)[0]:
+            return None
+        files = [self._user_root(uid) / skill_id / "SKILL.md"]
+        root = self._seed_root()
+        if root is not None and skill_id in self._bundled_ids():
+            files.insert(0, root / skill_id / "SKILL.md")
+        for f in files:
+            try:
+                return self._read_skill_text(f)
+            except (OSError, UnicodeError, ValueError):
+                continue
+        return None
 
     def reject_pending_skill(self, skill_id: str, *, user_id: str) -> bool:
         """Discard a `.pending/` skill draft (owner rejects). Archive-never-delete;

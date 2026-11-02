@@ -104,7 +104,8 @@ from agents.task.agent.views import (
 )
 from agents.task.agent.core.run_budget import check_run_budget, snapshot_run_baseline
 from agents.task.runtime.stop_reason import StopReason, describe_stop_reason, done_stop_reason, set_stop
-from agents.task.agent.core.budget_notice import maybe_push_budget_notice
+from agents.task.agent.core.loop_detection import LoopDetectionMixin
+from agents.task.agent.core.budget_notice import maybe_push_budget_notice, maybe_push_dollar_notice
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -172,6 +173,11 @@ class RunLoopMixin:
 			# Track start time for metrics
 			start_time = time.time()
 			
+			# The turn's start in the action ledger: done() compares what the turn
+			# CLAIMS was changed with the writes after this point (runtime/change_claims.py).
+			from agents.task.runtime.change_claims import start_turn as _claims_start_turn
+			_claims_start_turn(self)
+
 			# Initialize step counter - will be managed by step() method
 			self.state.n_steps = 0  # Start at 0, will be incremented by step() method
 			# I-6: persist the run's step budget so in-context introspection
@@ -181,6 +187,7 @@ class RunLoopMixin:
 			self.state.stop_reason = None  # 083 WS-1: set by the exit that ends this run
 			self.state.exhausted_summary = None  # 083 WS-2: the last report at the step limit
 			self._budget_notice_sent = False  # 083 WS-5: the one 80 % step notice
+			self._dollar_notice_sent = False  # 095 W1d: the one 80 % dollar notice
 			# 083 WS-3: session spend at run start; the per-run cap compares the delta.
 			await snapshot_run_baseline(self)
 
@@ -188,6 +195,8 @@ class RunLoopMixin:
 			# per run() call, same lifetime as n_steps/max_steps above.
 			self._verify_nudge_count = 0
 			self._retry_wall_steps = 0  # 093 E3: wall-only steps in this run/turn
+			# The identical-call escalation is per run (LoopDetectionMixin).
+			LoopDetectionMixin._reset_loop_guard(self)
 
 			# Session-scoped setup (session-start telemetry + hierarchical memory)
 			# runs ONCE per session. Conversational turns (Conversation.respond with
@@ -440,9 +449,13 @@ class RunLoopMixin:
 					budget_halt = await check_run_budget(self)
 					if budget_halt is not None:
 						self.logger.warning(f"💸 {budget_halt}")
+						set_stop(self, StopReason.RUN_BUDGET)
+						# 095 W1d: the one bounded last report, BEFORE the terminal error
+						# item so the status reader still sees the honest error last.
+						from agents.task.agent.core.exhaustion_summary import run_budget_stop_report
+						budget_halt = await run_budget_stop_report(self, max_steps, budget_halt)
 						self.state.stopped = True
 						self._last_result = self.append_terminal_error_item(budget_halt)
-						set_stop(self, StopReason.RUN_BUDGET)
 						break
 
 					try:
@@ -459,6 +472,7 @@ class RunLoopMixin:
 					# step() (step.py: 85 % summarise, 95 % prune) — no second check here.
 
 					maybe_push_budget_notice(self, step_num, max_steps)  # 083 WS-5
+					maybe_push_dollar_notice(self)  # 095 W1d
 					# Execute one step with the correct step info
 					try:
 						await self.step(step_info=step_info)
@@ -550,6 +564,27 @@ class RunLoopMixin:
 						set_stop(self, StopReason.MONEY_INFRA)
 						break
 
+					# The identical-call escalation ended the run (LoopDetectionMixin):
+					# a warning and a block did not change the call. set_stop already
+					# named StopReason.LOOP; autonomous runs get the last report.
+					_loop_stop = LoopDetectionMixin._take_loop_stop(self)
+					if _loop_stop:
+						self.logger.error(f"LOOP STOP — ending the run: {_loop_stop}")
+						try:
+							from core.event_log import emit as _emit_event
+							from core.event_kinds import LOOP_STOP
+							_emit_event(LOOP_STOP, source="run_loop",
+							            user_id=str(getattr(self, "user_id", "") or ""),
+							            session_id=str(self.session_id),
+							            attrs={"reason": _loop_stop[:400], "step": step_num + 1})
+						except Exception:
+							pass
+						set_stop(self, StopReason.LOOP)
+						from agents.task.agent.core.exhaustion_summary import (
+							LOOP_SUMMARY_REQUEST, run_exhaustion_summary)
+						await run_exhaustion_summary(self, max_steps, request=LOOP_SUMMARY_REQUEST)
+						break
+
 					# R1: track consecutive reply-only steps. A reply-only step is one
 					# whose every result is a non-blocking user-facing reply (no tool
 					# ran); anything else (productive tool, planning turn, error, done)
@@ -566,7 +601,7 @@ class RunLoopMixin:
 						# and injected above — the HITL queue is now empty, so the harness's
 						# "pending input" resume would never fire and the message would sit
 						# unanswered at the history tail (2026-09-18 08:12Z: the owner's
-						# "Ok I meant 0.04…" correction landed on Rob's done() step and got
+						# "Ok I meant 0.04…" correction landed on the agent's done() step and got
 						# no reply). It earns the next step instead of dying with done().
 						if user_messages:
 							self.logger.info(
@@ -593,7 +628,12 @@ class RunLoopMixin:
 						# consecutive_failures (the 2-attempt cap is the bound).
 						from core.action_names import namespaced_action_name
 						_test_action = namespaced_action_name("coding", "run_tests")
-						if (AutonomyConfig.verify_before_done()
+						# The run's LAST step has no step left for a correction: a
+						# `continue` here fell out of the for-loop into the step-limit
+						# branch (a false MAX_STEPS, an exhaustion call, a step-limit
+						# notice). No nudge then; the claim check speaks at once.
+						_final_step = step_num >= max_steps - 1
+						if (not _final_step and AutonomyConfig.verify_before_done()
 								and self._verify_nudge_count < 2
 								and self._action_registered(_test_action)
 								and edited_since_last_test(self.orchestrator)
@@ -605,6 +645,13 @@ class RunLoopMixin:
 								"tests pass before you call done() again.",
 								origin=MessageOrigin.INTERVENTION,
 								source="verify_before_done")
+							continue
+
+						# A reply that says a job / skill / owner.md / payment was changed
+						# with no successful write of that kind this turn: one corrective
+						# step, then a short "not done" line to the user. Never a block.
+						from agents.task.runtime.change_claims import check_at_done
+						if await check_at_done(self, final=_final_step):
 							continue
 
 						# CO-F1: judge the FINAL answer, not an intermediate step. This
@@ -776,6 +823,11 @@ class RunLoopMixin:
 				else:
 					self.logger.warning(f"Task not completed after {self.state.n_steps-1} steps: "
 						f"{describe_stop_reason(self.state.stop_reason, self.state.n_steps - 1, max_steps)}")
+
+				# F7: the run's reflection summaries reach cross-session memory once,
+				# now that its stop reason is final (a max_steps / failures / loop run
+				# drops them).
+				await self._sync_reflection_summaries(self.state.n_steps)
 
 				# Save hierarchical memory session
 				if self.task_context_manager:

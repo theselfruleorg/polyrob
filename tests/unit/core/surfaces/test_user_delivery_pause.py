@@ -9,13 +9,13 @@ async def test_lifecycle_ping_is_held_while_paused(tmp_path, monkeypatch):
     from core import autonomy_control as ac
     from core.surfaces.user_delivery import deliver_user_message
     ac.pause(str(tmp_path), via="test")
-    out = await deliver_user_message(None, "rob", "▶ goal started", source="self_evolution",
+    out = await deliver_user_message(None, "alice", "▶ goal started", source="self_evolution",
                                      event_log=None)
     assert out == "paused"
-    out = await deliver_user_message(None, "rob", "ask: need a key", source="goal_blocked",
+    out = await deliver_user_message(None, "alice", "ask: need a key", source="goal_blocked",
                                      event_log=None)
     assert out == "paused"
-    out2 = await deliver_user_message(None, "rob", "credits dead", source="credit_sentinel",
+    out2 = await deliver_user_message(None, "alice", "credits dead", source="credit_sentinel",
                                       event_log=None)
     assert out2 != "paused"
 
@@ -35,11 +35,11 @@ async def test_held_ping_is_durably_recorded(tmp_path, monkeypatch):
     from core.surfaces.user_delivery import deliver_user_message
     ac.pause(str(tmp_path), scopes=("pings",), via="test")
     log = TelemetryEventLog(str(tmp_path / "t.db"))
-    out = await deliver_user_message(None, "rob", "▶ goal started", source="lifecycle",
+    out = await deliver_user_message(None, "alice", "▶ goal started", source="lifecycle",
                                      event_log=log)
     assert out == "paused"
-    assert log.query(kind="owner_notice", user_id="rob") == []
-    deliveries = log.query(kind="user_delivery", user_id="rob")
+    assert log.query(kind="owner_notice", user_id="alice") == []
+    deliveries = log.query(kind="user_delivery", user_id="alice")
     assert deliveries and deliveries[0]["attrs"]["outcome"] == "paused"
     assert deliveries[0]["attrs"]["text"] == "▶ goal started"
 
@@ -54,8 +54,8 @@ async def test_held_escalation_is_readable_in_missed(tmp_path, monkeypatch):
     from core.surfaces.user_delivery import deliver_user_message
     ac.pause(str(tmp_path), scopes=("pings",), via="test")
     log = TelemetryEventLog(str(tmp_path / "t.db"))
-    out = await deliver_user_message(None, "rob", "ask: need an API key",
+    out = await deliver_user_message(None, "alice", "ask: need an API key",
                                      source="goal_blocked", event_log=log)
     assert out == "paused"
-    notices = log.query(kind="owner_notice", user_id="rob")
+    notices = log.query(kind="owner_notice", user_id="alice")
     assert notices and "ask: need an API key" in (notices[0]["attrs"].get("text") or "")

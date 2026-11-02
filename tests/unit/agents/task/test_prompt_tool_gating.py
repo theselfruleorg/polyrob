@@ -70,9 +70,10 @@ def test_web_access_absent_when_no_web_tools():
 
 # ---------------------------------------------------------------- T1-06 vision
 
-def test_vision_section_gated_on_include_vision():
+def test_vision_section_never_claims_vision():
+    # 095 W1a (D5 a): the per-turn route note says it, from the CURRENT model.
     assert "YOU HAVE VISION" not in _render(include_vision=False)
-    assert "YOU HAVE VISION" in _render(include_vision=True)
+    assert "YOU HAVE VISION" not in _render(include_vision=True)
 
 
 def test_message_manager_forwards_include_vision_to_system_prompt():
@@ -119,3 +120,47 @@ def test_no_mcp_fallback_dropped_when_no_alternatives_loaded():
 def test_no_mcp_fallback_backcompat_without_tool_ids():
     c = _render()
     assert "MCP tools are not currently configured" in c
+
+
+# --- 095 W7/W9: agent_status named and the self-facts rule, gated on the registry ---
+
+def _using_tools(actions: str) -> str:
+    from agents.task.agent.prompts import SystemPrompt
+    content = SystemPrompt(actions, use_native_tools=True, tool_ids=[]).get_system_message().content
+    return content.split("<using-your-tools>")[1].split("</using-your-tools>")[0]
+
+
+def test_agent_status_and_the_self_facts_rule_when_registered():
+    text = _using_tools("- agent_status: x\n- preferences: y")
+    assert "e.g. agent_status" in text
+    assert "answer from `agent_status` / `preferences(get)`, never memory" in text
+
+
+def test_no_status_tool_no_self_facts_rule():
+    text = _using_tools("- foo: x")
+    assert "agent_status" not in text
+    assert "the status tool you have" in text
+    assert "never memory" not in text
+
+
+def test_a_seat_refused_action_leaves_the_prompt_index():
+    from pydantic import BaseModel
+    from tools.controller.registry.service import Registry
+
+    class P(BaseModel):
+        q: str = ""
+
+    reg = Registry()
+
+    @reg.action("Kept action.", param_model=P)
+    async def kept(params: P):
+        return None
+
+    @reg.action("Refused action.", param_model=P)
+    async def agent_status(params: P):
+        return None
+
+    reg.exclude_actions.append("agent_status")
+    assert "- kept:" in reg.get_prompt_action_index()
+    assert "agent_status" not in reg.get_prompt_action_index()
+    assert "agent_status" not in reg.get_prompt_description()

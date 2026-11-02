@@ -64,7 +64,7 @@ def captured(monkeypatch):
     return seen
 
 
-SYS = "You are ROB. Memory format: ...\n<security>...</security>"
+SYS = "You are NOVA. Memory format: ...\n<security>...</security>"
 MSGS = [
     {"role": "system", "content": SYS},
     {"role": "user", "content": "hi"},

@@ -52,7 +52,10 @@ def test_config_defaults(monkeypatch):
     assert c.app_service_egress_default() == "none"
     monkeypatch.setenv("APP_SERVICE_EGRESS_DEFAULT", "open")
     assert c.app_service_egress_default() == "open"
-    assert c.app_service_image() == "polyrob-dev:latest"
+    # The default is the pullable code-exec dev image (polyrob-dev:latest exists only
+    # where a private factory built it): one constant, read by both rails.
+    from core.container_hardening import DEV_IMAGE_DEFAULT
+    assert c.app_service_image() == DEV_IMAGE_DEFAULT == "nikolaik/python-nodejs:python3.11-nodejs20"
     monkeypatch.setenv("CODE_EXEC_DEV_IMAGE", "polyrob-dev:node-chromium")
     assert c.app_service_image() == "polyrob-dev:node-chromium"
     monkeypatch.setenv("APP_SERVICE_BASE_DOMAIN", "Apps.Example.Test.")

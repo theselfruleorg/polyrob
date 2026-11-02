@@ -25,15 +25,15 @@ def _text(m):
 
 def test_self_context_injected_into_llm_messages_not_system_prompt():
     mm = _mm()
-    mm.set_self_context_message("I am ROB, a careful operator.")
+    mm.set_self_context_message("I am NOVA, a careful operator.")
     msgs = mm.get_messages_for_llm()
 
     # System prompt must NOT contain the SOUL content (kept stable/cacheable).
-    assert "I am ROB, a careful operator." not in _text(msgs[0])
+    assert "I am NOVA, a careful operator." not in _text(msgs[0])
 
     blocks = [m for m in msgs if "self-context" in _text(m)]
     assert len(blocks) == 1
-    assert "I am ROB, a careful operator." in _text(blocks[0])
+    assert "I am NOVA, a careful operator." in _text(blocks[0])
     assert blocks[0].to_dict()["role"] == "user"
 
 
@@ -59,7 +59,7 @@ def test_set_empty_self_context_is_noop():
 def test_self_context_tokens_counted_in_foundation():
     mm = _mm()
     before = mm.get_total_tokens() if hasattr(mm, "get_total_tokens") else None
-    mm.set_self_context_message("I am ROB. " * 50)
+    mm.set_self_context_message("I am NOVA. " * 50)
     # token cost is tracked so compaction/overflow math sees it
     assert getattr(mm, "_self_context_tokens", 0) > 0
 
@@ -82,14 +82,14 @@ def test_self_context_loaded_from_disk_appears_in_foundation(tmp_path):
 
     idir = tmp_path / "identity"
     idir.mkdir()
-    (idir / "identity.md").write_text("I am ROB, operator-authored.")
+    (idir / "identity.md").write_text("I am NOVA, operator-authored.")
 
     mm = _mm()
     mm.set_self_context_message(load_self_context(tmp_path))
     msgs = mm.get_messages_for_llm()
     blocks = [m for m in msgs if "self-context" in _text(m)]
     assert len(blocks) == 1
-    assert "I am ROB, operator-authored." in _text(blocks[0])
+    assert "I am NOVA, operator-authored." in _text(blocks[0])
 
 
 def test_live_correspondent_turn_hides_already_pinned_owner_documents():

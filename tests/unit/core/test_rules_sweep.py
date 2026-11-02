@@ -17,7 +17,7 @@ RULE = "NO PUBLIC BUG-FIX REPORTS: never publish reports about bugs we fix."
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-	monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+	monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
 
 
 def _dbs(tmp_path, cron_tasks=(), goals=()):
@@ -39,7 +39,7 @@ def _dbs(tmp_path, cron_tasks=(), goals=()):
 
 def _run(tmp_path, rule=RULE, skills=(), **kw):
 	cron, gdb = _dbs(tmp_path, **kw)
-	return sweep(rule, user_id=UID, data_dir=str(tmp_path), instance_id="rob",
+	return sweep(rule, user_id=UID, data_dir=str(tmp_path), instance_id="alice",
 	             cron_db=cron, goals_db=gdb, skills=list(skills))
 
 
@@ -56,7 +56,7 @@ def test_agreeing_lines_are_not_hits(tmp_path):
 
 
 def test_skills_goals_and_owner_rules_are_swept(tmp_path):
-	w = OwnerDocWriter(tmp_path, instance_id="rob")
+	w = OwnerDocWriter(tmp_path, instance_id="alice")
 	w.propose("- Publish every bug fix report on X.\n", user_id=UID, created_by="user", pending=False)
 	res = _run(tmp_path, skills=[("rh-reporting", "Publish public reports of each bug fix.")],
 	           goals=[("Publish the public bug report thread", "ready"),
@@ -86,7 +86,7 @@ def test_render_is_advisory_and_names_the_precedence(tmp_path):
 
 def test_unprovided_skills_are_named_not_hidden(tmp_path):
 	cron, gdb = _dbs(tmp_path)
-	res = sweep(RULE, user_id=UID, data_dir=str(tmp_path), instance_id="rob",
+	res = sweep(RULE, user_id=UID, data_dir=str(tmp_path), instance_id="alice",
 	            cron_db=cron, goals_db=gdb, skills=None)
 	assert "skills" not in res["swept"]
 	assert any("skills: not provided" in n for n in res["notes"])

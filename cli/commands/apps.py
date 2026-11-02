@@ -197,3 +197,9 @@ def logs_cmd(slug, lines, user):
     from core.app_service.owner_ops import logs_tail
     click.echo(logs_tail(_data_dir(write=False), _tenant(user), slug, lines), nl=False)
     click.echo()
+
+
+# --- serving-side setup for THIS box's layout (system /opt or user-mode ~/.polyrob) ---
+from cli.commands.apps_install import install_cmd as _install_cmd  # noqa: E402
+
+apps.add_command(_install_cmd)

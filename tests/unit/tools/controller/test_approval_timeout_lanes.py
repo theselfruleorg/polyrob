@@ -90,13 +90,24 @@ def test_supervised_owner_queue_lane_passes_long_timeout(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_timeout_deny_message_teaches_the_one_shot_grant():
+    """095 W1b: the one-shot grant (and /pending) is taught only when an ask exists."""
     class _Never(approval.ApprovalProvider):
+        def __init__(self, ask_id=None):
+            self.ask_id = ask_id
+
         async def request(self, action_name, params, context) -> bool:
             import asyncio
+            if self.ask_id:
+                approval.note_pending_ask(self.ask_id)
             await asyncio.sleep(60)
             return True
 
-    hook = approval.make_approval_hook(_Never(), {"self_env_install_dep"}, timeout=0.01)
+    hook = approval.make_approval_hook(_Never("tap-abc"), {"self_env_install_dep"},
+                                       timeout=0.01)
     reason = await hook("self_env_install_dep", {}, None)
     assert reason is not None
-    assert "approve now" in reason or "still applies" in reason or "next identical" in reason
+    assert "next identical" in reason and "tap-abc" in reason and "/pending" in reason
+
+    hook = approval.make_approval_hook(_Never(), {"self_env_install_dep"}, timeout=0.01)
+    reason = await hook("self_env_install_dep", {}, None)
+    assert reason and "/pending" not in reason and "one-shot" not in reason

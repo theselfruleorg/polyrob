@@ -9,8 +9,8 @@ below.
 **Where the rules live now.** The owner's rules and facts are ONE document,
 `owner.md` (the owner RULES doc), injected into your identity context under an
 `## Owner facts` heading (the heading may carry an age, e.g.
-`## Owner facts (last write 2026-09-19; …)`). `preferences(operation=
-"contract_propose")` and `owner_doc_manage` both write it. No new
+`## Owner facts (last write <date>; …)`). `owner_doc_manage` is its one
+writer. No new
 `contract.md` is ever created; an older one may still show as
 `## Operating contract`.
 
@@ -64,23 +64,17 @@ propose writing them as plain files — always go through:
   `preferences(operation="set", key="approvals.require", value="<action1,
   action2>")` (union-merge — this only ADDS, never removes an existing
   gate). If it's more general prose ("always ask before anything
-  irreversible"), it is an operating rule instead:
-  `preferences(operation="contract_propose", text="...")`.
+  irreversible"), it is an operating rule instead: `owner_doc_manage`.
 - **Anything narrative/prose** that doesn't fit a typed preference (general
   operating philosophy, house rules, "always do X before Y") ->
-  `preferences(operation="contract_propose", text="...")`.
-
-⚠️ `contract_propose`'s `text` is the FULL body of `owner.md`, not one line.
-Start from the current doc (the `## Owner facts` section, or
-`owner_doc_manage(action="read")`), keep every existing line, and add the new
-rule. A line you leave out is retired (moved under `## Superseded`), never kept.
-To add one line, `owner_doc_manage(action="patch", …)` is the smaller write.
+  `owner_doc_manage` (`action="patch"` adds one line; `"update"` is the FULL
+  body — a line you leave out is retired under `## Superseded`).
 
 ## After the interview
 
 Tell the owner plainly what changed, using what each write returned:
 
-- A `contract_propose` or `owner_doc_manage` write is always queued as a
+- An `owner_doc_manage` write is always queued as a
   draft, on every turn — the result says so. Say it waits for the owner in
   `/pending`, where the owner activates it (or through the owner CLI).
 - A SAFE `set` (style) applies immediately. A GUARDED `set` (approvals,

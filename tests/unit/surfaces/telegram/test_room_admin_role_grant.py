@@ -59,7 +59,7 @@ def _run(agent, result):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     return tmp_path
 
@@ -101,7 +101,7 @@ def test_a_trailing_blocked_never_buys_a_member_grant(env):
     from core.surfaces.group_roles import GroupRoles
     import os
     GroupRoles(os.path.join(str(env), "surfaces.db")).grant(
-        "telegram", "-100", "123", "blocked", granted_by="rob")
+        "telegram", "-100", "123", "blocked", granted_by="alice")
     out = _run(_Agent(str(env)),
                _result("/groups role here 123 member blocked"))
     assert "Owner only" in out
@@ -118,7 +118,7 @@ def test_a_plain_member_may_grant_nothing(env):
 def test_the_owner_may_still_grant_admin(env):
     out = _run(_Agent(str(env)),
                _result("/groups role here 123 admin", chat_role="owner",
-                       user_id="rob"))
+                       user_id="alice"))
     assert "admin" in out and "🔒" not in out
     assert _role_of(env, "123") == "admin"
 

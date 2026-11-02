@@ -1,7 +1,7 @@
 """Sampling params go where the INSTALLED Anthropic SDK can actually carry them.
 
 ⚠️ The 2026-09-24 outage. With the OpenRouter seat latched by the credit
-sentinel, Rob's fallback reached `zai-coding` — an Anthropic-PROTOCOL seat — and
+sentinel, the agent's fallback reached `zai-coding` — an Anthropic-PROTOCOL seat — and
 every call died before it left the process:
 
     TypeError: AsyncMessages.create() got an unexpected keyword argument 'temperature'
@@ -15,7 +15,7 @@ to OpenRouter on 2026-09-16 and nothing exercised the path.
 
 The fix is NOT "drop temperature", because a third-party Anthropic-compatible
 endpoint still honours it on the wire; dropping it would silently re-sample every
-one of Rob's turns. Nor is it "always smuggle it in `extra_body`", because
+one of the agent's turns. Nor is it "always smuggle it in `extra_body`", because
 against the canonical API an unknown body field is a 400 rather than a default.
 So: drop it for `api.anthropic.com`, carry it in `extra_body` for everyone else,
 and decide which by asking the SDK function we are ABOUT TO CALL what it accepts

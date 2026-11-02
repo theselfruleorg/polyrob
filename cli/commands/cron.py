@@ -426,13 +426,17 @@ def show(job_id: str, user: Optional[str]):
 @click.option("--tools", default=None,
               help="Explicit toolset in payload.tools, comma-separated tool ids "
                    "(e.g. twitter,filesystem,task; 'none' clears it). Wins over --rig.")
+@click.option("--model", "model_name", default=None,
+              help="094: the model this job runs on (payload.model) — an alias (sonnet, glm, "
+                   "deepseek-pro …), <provider>/<model> or a model id; 'none' clears it. "
+                   "Wins over HEAVY_MODEL.")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @as_root_option
 def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
          priority: Optional[str], preempts: Optional[bool], rig: Optional[str],
          deliver: Optional[str], task_file: Optional[str],
          post_spacing_hours: Optional[float], tools: Optional[str],
-         user: Optional[str]):
+         model_name: Optional[str], user: Optional[str]):
     """Change a job's cap, schedule, priority, pre-emption, rig, tools, delivery
     or instruction in place (tenant-scoped); everything else on the job is kept.
     The cap ceiling is 1800 s."""
@@ -440,10 +444,11 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
     tenant = _tenant(user)
     if max_duration is None and schedule is None and priority is None \
             and rig is None and preempts is None and deliver is None and task_file is None \
-            and post_spacing_hours is None and tools is None:
+            and post_spacing_hours is None and tools is None and model_name is None:
         raise click.ClickException(
             "nothing to change: pass --max-duration, --schedule, --priority, "
-            "--preempts, --rig, --tools, --deliver, --post-spacing-hours and/or --task-file")
+            "--preempts, --rig, --tools, --model, --deliver, --post-spacing-hours "
+            "and/or --task-file")
     _tool_ids: Optional[list] = None
     if tools is not None and tools.strip().lower() not in ("none", "", "-"):
         from core.packs.index import first_party_tool_ids
@@ -454,36 +459,12 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
         if _bad:
             raise click.ClickException(
                 f"unknown tool id(s) {', '.join(_bad)} (valid: {', '.join(sorted(_valid))})")
-    job_id = _resolve_job_id(svc, job_id, _tenant(user))
-    if max_duration is not None:
-        if svc.store.set_max_duration(job_id, max_duration, user_id=tenant):
-            click.echo(f"{job_id}: max duration → {max_duration}s (from the next run)")
-        else:
-            raise click.ClickException(f"no job {job_id!r} for this tenant")
-    if schedule is not None:
-        if svc.store.set_schedule(job_id, schedule, user_id=tenant):
-            # C55: `svc.store.get(job_id)` carried no tenant, so the line that
-            # CONFIRMS the change read a row this tenant may not own.
-            _row = svc.store.get(job_id, user_id=tenant)
-            _next = _row.next_run_at if _row is not None else "unknown"
-            click.echo(f"{job_id}: schedule → {schedule!r}; next run {_next}")
-        else:
-            raise click.ClickException(f"could not re-time {job_id!r}: bad spec or no job for this tenant")
-    if priority is not None:
-        if svc.store.set_priority(job_id, priority, user_id=tenant):
-            click.echo(f"{job_id}: priority → {priority}")
-        else:
-            raise click.ClickException(f"could not set priority on {job_id!r}")
-    if preempts is not None:
-        # 057 WS-C (B7): priority ORDERS jobs within a tick; preempts INTERRUPTS
-        # work already running. Prod's SAFETY and WATCHER rails are read-only and
-        # money-class, so they pre-empted a running goal for nothing.
-        if svc.store.set_preempts(job_id, preempts, user_id=tenant):
-            click.echo(f"{job_id}: preempts → {str(bool(preempts)).lower()}")
-        else:
-            raise click.ClickException(f"could not set preempts on {job_id!r}")
+    job_id = _resolve_job_id(svc, job_id, tenant)
+    # Routines review 2026-10-29: ONE edit path. This verb wrote the store
+    # directly, so a CLI re-time left no CRON_EDITED audit row and skipped the
+    # service's checks (delivery allowlist, the recurrence floor, a live job).
+    updates: dict = {}
     if rig is not None:
-        from cron.rig_edit import set_job_rig
         from core.config_policy.rigs import is_rig, rig_names
         _clear = rig.strip().lower() in ("none", "", "-")
         if not _clear and not is_rig(rig):
@@ -491,44 +472,80 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
             raise click.ClickException(
                 f"unknown rig {rig!r} (valid rigs: {', '.join(rig_names())}, "
                 f"or 'none' to clear)")
-        if set_job_rig(svc.store, job_id, None if _clear else rig, user_id=_tenant(user)):
-            click.echo(f"{job_id}: rig → {'(cleared)' if _clear else rig.strip().lower()}")
-        else:
-            raise click.ClickException(f"could not set rig on {job_id!r} (no job for this tenant)")
+        updates["rig"] = None if _clear else rig.strip().lower()
     if deliver is not None:
-        from cron.delivery import allowed_targets
-        from cron.rig_edit import set_job_deliver
-        _drop = deliver.strip().lower() in ("none", "", "-")
-        if not _drop and deliver.strip().lower() not in allowed_targets():
-            raise click.ClickException(
-                f"unknown delivery target {deliver!r} (valid: {', '.join(allowed_targets())}, "
-                f"or 'none' to drop it)")
-        if set_job_deliver(svc.store, job_id, None if _drop else deliver, user_id=_tenant(user)):
-            click.echo(f"{job_id}: deliver → {'(dropped)' if _drop else deliver.strip().lower()}")
-        else:
-            raise click.ClickException(f"could not set deliver on {job_id!r} (no job for this tenant)")
+        updates["deliver"] = deliver  # 'none' drops it; CronService validates
+    if priority is not None:
+        updates["priority"] = priority
+    if preempts is not None:
+        # 057 WS-C (B7): priority ORDERS jobs within a tick; preempts INTERRUPTS
+        # work already running.
+        updates["preempts"] = bool(preempts)
     if post_spacing_hours is not None:
-        from cron.rig_edit import set_job_payload_key
-        _val = float(post_spacing_hours) or None
-        if set_job_payload_key(svc.store, job_id, "post_spacing_hours", _val, user_id=tenant):
-            click.echo(f"{job_id}: post spacing → {f'{_val:g} h' if _val else '(cleared)'}")
-        else:
-            raise click.ClickException(f"could not set post spacing on {job_id!r} (no job for this tenant)")
+        updates["post_spacing_hours"] = float(post_spacing_hours) or None
     if tools is not None:
-        from cron.rig_edit import set_job_payload_key
-        if set_job_payload_key(svc.store, job_id, "tools", _tool_ids, user_id=tenant):
-            click.echo(f"{job_id}: tools → {', '.join(_tool_ids) if _tool_ids else '(cleared)'}")
-        else:
-            raise click.ClickException(f"could not set tools on {job_id!r} (no job for this tenant)")
+        updates["tools"] = _tool_ids
+    if model_name is not None:
+        updates.update(_job_model_updates(model_name, tenant))
+    text = None
     if task_file is not None:
         with open(task_file, "r", encoding="utf-8") as fh:
             text = fh.read()
         if not text.strip():
             raise click.ClickException(f"{task_file}: empty — a job with no task is a cancel, not an edit")
-        if svc.store.set_task(job_id, text, user_id=_tenant(user)):
+    from cron.schedule import ScheduleError
+    try:
+        changed = svc.edit(job_id, user_id=tenant, via="cli", task=text,
+                           schedule_spec=schedule, max_duration_seconds=max_duration,
+                           payload_updates=updates or None)
+    except ScheduleError as e:
+        raise click.ClickException(f"{job_id}: {e}")
+    if not changed:
+        click.echo(f"{job_id}: nothing changed — every value is already the job's own")
+        return
+    row = svc.store.get(job_id, user_id=tenant)
+    p = (row.payload if row is not None else None) or {}
+    for field in changed:
+        if field == "max_duration_seconds":
+            click.echo(f"{job_id}: max duration → {max_duration}s (from the next run)")
+        elif field == "schedule":
+            click.echo(f"{job_id}: schedule → {schedule!r}; next run "
+                       f"{row.next_run_at if row is not None else 'unknown'}")
+            from cron.schedule import dom_step_note
+            note = dom_step_note(schedule)
+            if note:
+                click.echo(click.style(f"  {note}", fg="yellow"))
+        elif field == "task":
             click.echo(f"{job_id}: task → {len(text.strip())} chars from {task_file}")
+        elif field == "rig":
+            click.echo(f"{job_id}: rig → {p.get('rig') or '(cleared)'}")
+        elif field == "deliver":
+            click.echo(f"{job_id}: deliver → {p.get('deliver') or '(dropped)'}")
+        elif field == "post_spacing_hours":
+            _val = p.get("post_spacing_hours")
+            click.echo(f"{job_id}: post spacing → {f'{_val:g} h' if _val else '(cleared)'}")
+        elif field == "tools":
+            click.echo(f"{job_id}: tools → {', '.join(_tool_ids) if _tool_ids else '(cleared)'}")
+        elif field == "preempts":
+            click.echo(f"{job_id}: preempts → {str(bool(preempts)).lower()}")
+        elif field == "model":
+            click.echo(f"{job_id}: model → {p.get('model') or '(cleared: the default tiers)'}")
         else:
-            raise click.ClickException(f"could not set task on {job_id!r} (no job for this tenant)")
+            click.echo(f"{job_id}: {field} → {p.get(field)}")
+
+
+def _job_model_updates(model_name: str, tenant: str) -> dict:
+    """``payload.model`` (+ ``payload.provider`` off the operator's provider) for
+    ``--model``; ``none`` clears both. Validated like the chat ``/model``."""
+    if model_name.strip().lower() in ("none", "", "-"):
+        return {"model": None, "provider": None}
+    from agents.task.model_switch_service import resolve_job_model
+    pin, note = resolve_job_model(model_name, tenant)
+    if pin is None:
+        raise click.ClickException(note)
+    if note:
+        click.echo(click.style(f"  ⚠️ {note}", fg="yellow"))
+    return {"model": pin["model"], "provider": pin.get("provider")}
 
 
 def _stop(job_id: str, user: Optional[str], *, forever: bool = False,

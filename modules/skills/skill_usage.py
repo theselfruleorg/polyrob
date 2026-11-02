@@ -27,7 +27,54 @@ import threading
 from typing import Callable, Dict, List, Optional
 
 from core.identity import is_anonymous
-from core.sqlite_util import execute_retry, wal_connect
+from core.sqlite_util import execute_retry, init_schema
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS skill_provenance (
+    skill_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (skill_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS skill_usage (
+    skill_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    load_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at REAL,
+    PRIMARY KEY (skill_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS curator_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+CREATE TABLE IF NOT EXISTS skill_provenance_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'user',
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    before_sha TEXT,
+    after_sha TEXT,
+    archive_path TEXT,
+    absorbed_into TEXT,
+    pending INTEGER NOT NULL DEFAULT 0,
+    ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_skill_provenance_log_skill
+    ON skill_provenance_log (skill_id, scope, user_id, id);
+CREATE TABLE IF NOT EXISTS skill_install_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    resolved_sha TEXT,
+    approver TEXT NOT NULL,
+    ts REAL NOT NULL
+);
+"""
 
 
 class SkillUsageStore:
@@ -40,64 +87,16 @@ class SkillUsageStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        conn = wal_connect(self.db_path)
-        try:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS skill_provenance (
-                    skill_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    created_by TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    PRIMARY KEY (skill_id, user_id)
-                );
-                CREATE TABLE IF NOT EXISTS skill_usage (
-                    skill_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    load_count INTEGER NOT NULL DEFAULT 0,
-                    last_used_at REAL,
-                    PRIMARY KEY (skill_id, user_id)
-                );
-                CREATE TABLE IF NOT EXISTS curator_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                );
-                CREATE TABLE IF NOT EXISTS skill_provenance_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    skill_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    scope TEXT NOT NULL DEFAULT 'user',
-                    action TEXT NOT NULL,
-                    actor TEXT NOT NULL,
-                    before_sha TEXT,
-                    after_sha TEXT,
-                    archive_path TEXT,
-                    absorbed_into TEXT,
-                    pending INTEGER NOT NULL DEFAULT 0,
-                    ts REAL NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_skill_provenance_log_skill
-                    ON skill_provenance_log (skill_id, scope, user_id, id);
-                CREATE TABLE IF NOT EXISTS skill_install_audit (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    resolved_sha TEXT,
-                    approver TEXT NOT NULL,
-                    ts REAL NOT NULL
-                );
-                """
-            )
-            # 081 WS-4.2: the reviewed revision of an ACTIVE tenant skill lives
-            # here (it lived in the tenant rules.json). Added in place on an
-            # older db; NULL = no revision recorded here (see get_revision).
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(skill_provenance)")}
-            if "content_sha256" not in cols:
-                conn.execute("ALTER TABLE skill_provenance ADD COLUMN content_sha256 TEXT")
-            conn.commit()
-        finally:
-            conn.close()
+        # 081 WS-4.2: ``content_sha256`` = the reviewed revision of an ACTIVE
+        # tenant skill (it lived in the tenant rules.json); NULL = no revision
+        # recorded here (see get_revision). 095 W11: ``patch_generation`` counts
+        # the promoted revisions of a skill and ``last_patch_at`` dates the
+        # newest one. Added in place on an older db (the idempotent migration).
+        init_schema(self.db_path, _SCHEMA, columns={
+            "skill_provenance": (("content_sha256", "TEXT"),),
+            "skill_usage": (("patch_generation", "INTEGER NOT NULL DEFAULT 0"),
+                            ("last_patch_at", "REAL")),
+        })
 
     # --- provenance ----------------------------------------------------------
 
@@ -163,6 +162,45 @@ class SkillUsageStore:
             (skill_id, user_id, scope, action, actor, before_sha, after_sha,
              archive_path, absorbed_into, int(bool(pending)), self._now()),
         )
+        if action == "promote" and not pending:
+            self._bump_patch_generation(skill_id, user_id)
+
+    def _bump_patch_generation(self, skill_id: str, user_id: str) -> None:
+        """095 W11: a promoted revision is a new generation of the skill. A run
+        record joins its outcome to the generation it loaded. Fail-open: the
+        promote already landed, and a metric must never undo it."""
+        try:
+            now = self._now()
+            execute_retry(
+                self.db_path,
+                """INSERT INTO skill_usage
+                       (skill_id,user_id,load_count,patch_generation,last_patch_at)
+                   VALUES (?,?,0,1,?)
+                   ON CONFLICT(skill_id,user_id) DO UPDATE SET
+                       patch_generation=patch_generation+1,
+                       last_patch_at=excluded.last_patch_at""",
+                (skill_id, user_id, now),
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "skill %s: patch generation bump failed", skill_id, exc_info=True)
+
+    def patch_generations(self, skill_ids: List[str], user_id: str) -> Dict[str, int]:
+        """``{skill_id: patch_generation}`` for *skill_ids* (0 = never patched
+        here). Raises when the store cannot be read."""
+        ids = [str(s) for s in skill_ids or [] if str(s or "").strip()]
+        out = {s: 0 for s in ids}
+        if not ids:
+            return out
+        rows = execute_retry(
+            self.db_path,
+            "SELECT skill_id, patch_generation FROM skill_usage WHERE user_id=? "
+            "AND skill_id IN (%s)" % ",".join("?" * len(ids)),
+            (user_id, *ids), fetch="all") or []
+        for r in rows:
+            out[r["skill_id"]] = int(r["patch_generation"] or 0)
+        return out
 
     def list_changes(self, skill_id: str, user_id: Optional[str] = None, *,
                      scope: str = "user", limit: int = 50) -> List[Dict]:
@@ -200,7 +238,8 @@ class SkillUsageStore:
             (skill_id, user_id), fetch="one",
         )
         return dict(row) if row else {"skill_id": skill_id, "user_id": user_id,
-                                      "load_count": 0, "last_used_at": None}
+                                      "load_count": 0, "last_used_at": None,
+                                      "patch_generation": 0, "last_patch_at": None}
 
     def list_authored(self, user_id: Optional[str] = None,
                       created_by: Optional[List[str]] = None) -> List[Dict]:
@@ -325,6 +364,17 @@ def get_skill_usage_store(data_dir: Optional[str] = None) -> SkillUsageStore:
                     _STORE.db_path, want,
                 )
         return _STORE
+
+
+def existing_skill_usage_store() -> Optional[SkillUsageStore]:
+    """The store when its db already exists (or one is bound), else ``None`` —
+    a READ never creates the file (a run record must not birth a store)."""
+    with _STORE_LOCK:
+        if _STORE is not None:
+            return _STORE
+    from core.runtime_paths import data_home_db_path
+    path = os.path.abspath(data_home_db_path("skill_usage.db"))
+    return get_skill_usage_store() if os.path.exists(path) else None
 
 
 def reset_skill_usage_store() -> None:

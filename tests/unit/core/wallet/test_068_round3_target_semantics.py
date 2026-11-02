@@ -31,7 +31,7 @@ MEME = "MEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMEMe"
 
 
 def _ctx(chain="base", address=TARGET):
-    return SimpleNamespace(role="orchestrator", is_sub_agent=False, user_id="rob",
+    return SimpleNamespace(role="orchestrator", is_sub_agent=False, user_id="alice",
                            metadata={buy_target.METADATA_KEY: {"chain": chain,
                                                                "address": address}})
 

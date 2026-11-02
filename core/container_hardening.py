@@ -8,6 +8,11 @@ may not import ``tools``, and the supervisor runs in its own process.
 """
 from typing import List, Optional
 
+#: The python+node image the code-exec DEV container and an app container run in
+#: when no image is configured (``CODE_EXEC_DEV_IMAGE`` / ``APP_SERVICE_IMAGE``).
+#: Public and pullable on a fresh box — one constant so the two rails agree.
+DEV_IMAGE_DEFAULT = "nikolaik/python-nodejs:python3.11-nodejs20"
+
 
 def hardening_flags(
     *,

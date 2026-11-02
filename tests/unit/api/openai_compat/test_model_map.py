@@ -21,9 +21,9 @@ def test_bare_claude_maps_to_anthropic():
 def test_unknown_falls_back_to_default_provider(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    prov, model = map_model("rob-default")
+    prov, model = map_model("demo-default")
     assert prov in ("anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia")
-    assert model == "rob-default"
+    assert model == "demo-default"
 
 
 def test_non_provider_head_slug_falls_through_to_prefix():

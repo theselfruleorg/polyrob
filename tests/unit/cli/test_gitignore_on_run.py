@@ -1,6 +1,6 @@
 """T6 — `.polyrob/` is gitignored on `run`, not only `init`.
 
-`build_cli_container` calls `ensure_rob_gitignored` on every `polyrob run`/`rob chat`
+`build_cli_container` calls `ensure_rob_gitignored` on every `polyrob run`/`polyrob chat`
 (gated POLYROB_GITIGNORE_DOTROB, default on), so a bare CLI run inside a git repo
 doesn't leave `.polyrob/` showing in `git status` — no separate `init` required.
 

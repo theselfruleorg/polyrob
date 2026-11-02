@@ -17,7 +17,7 @@ EXIT_SPEC = {"verb": "defi_data.position_mark",
              "cancel_when": ["closed", "dust"]}
 
 
-def _job(payload, jid="x1", user="rob"):
+def _job(payload, jid="x1", user="alice"):
     return CronJob(id=jid, task="exit job", schedule_spec="15m", user_id=user,
                    next_run_at=None, payload=payload, max_duration_seconds=600)
 
@@ -57,11 +57,11 @@ def test_bad_shapes_are_refused(bad):
 
 def test_the_service_stores_the_exit_precheck(tmp_path):
     svc = CronService(CronJobStore(str(tmp_path / "cron.db")))
-    job = svc.schedule(task="exit job for MEME", schedule_spec="15m", user_id="rob",
+    job = svc.schedule(task="exit job for MEME", schedule_spec="15m", user_id="alice",
                        payload={"precheck": EXIT_SPEC, "mandate": "m1"})
     assert job.payload["precheck"]["cancel_when"] == ["closed", "dust"]
     with pytest.raises(ScheduleError):
-        svc.schedule(task="exit job for MEME", schedule_spec="15m", user_id="rob",
+        svc.schedule(task="exit job for MEME", schedule_spec="15m", user_id="alice",
                      payload={"precheck": dict(EXIT_SPEC, cancel_when=["nope"])})
 
 
@@ -144,7 +144,7 @@ async def test_runner_cancels_an_orphan_job_and_runs_no_model(tmp_path, monkeypa
     from cron.runner import make_agent_runner
     monkeypatch.setenv("CRON_RUN_LOOP", "true")
     svc = CronService(CronJobStore(cron_db_path(str(tmp_path))))
-    job = svc.schedule(task="exit job for MEME", schedule_spec="15m", user_id="rob",
+    job = svc.schedule(task="exit job for MEME", schedule_spec="15m", user_id="alice",
                        payload={"precheck": EXIT_SPEC, "mandate": "m1"},
                        )
 
@@ -157,7 +157,7 @@ async def test_runner_cancels_an_orphan_job_and_runs_no_model(tmp_path, monkeypa
         raise AssertionError("no model run on an orphan")
     monkeypatch.setattr("cron.runner._run_task_to_outcome", no_run)
     assert await make_agent_runner(_Agent(), data_dir=str(tmp_path))(job) is True
-    after = svc.store.get(job.id, user_id="rob")
+    after = svc.store.get(job.id, user_id="alice")
     assert after.status == "cancelled"
     assert (after.payload.get("stopped") or {}).get("via") == "orphan"
     rows = log.query(kind="cron_run")

@@ -41,7 +41,7 @@ class _Sio:
 def rig(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     import surfaces.telegram.harness as harness
     import webview.server as server
     import core.surfaces.user_delivery as ud
@@ -73,7 +73,7 @@ def test_send_go_answers_started_and_delivers_the_result_later(rig):
 
     async def _run():
         reply = await asyncio.wait_for(
-            maybe_handle_console_command(rig["agent"], "sess1", "rob",
+            maybe_handle_console_command(rig["agent"], "sess1", "alice",
                                          "/send 0.1 eth 0x" + "11" * 20 + " go"),
             timeout=2)
         # The request returned while the verb is still waiting on its receipt.
@@ -88,7 +88,7 @@ def test_send_go_answers_started_and_delivers_the_result_later(rig):
     asyncio.run(_run())
     assert rig["admin"] == ["/send"]
     user_id, text, kw = rig["notices"][0]
-    assert user_id == "rob" and "0xabc" in text
+    assert user_id == "alice" and "0xabc" in text
     assert kw.get("session_id") == "sess1"
     name, event, room = rig["sio"].emitted[0]
     assert name == "feed_update" and room == "session:sess1"
@@ -100,7 +100,7 @@ def test_a_quote_without_go_still_answers_inline(rig):
     from webview.console_commands import maybe_handle_console_command
     rig["release"].set()
     reply = asyncio.run(maybe_handle_console_command(
-        rig["agent"], "sess1", "rob", "/send 0.1 eth 0x" + "11" * 20))
+        rig["agent"], "sess1", "alice", "/send 0.1 eth 0x" + "11" * 20))
     assert "0xabc" in (reply or "")
     assert not rig["notices"] and not rig["sio"].emitted
 
@@ -111,7 +111,7 @@ def test_cold_open_delivers_only_the_owner_notice(rig):
 
     async def _run():
         reply = await maybe_handle_console_command(
-            rig["agent"], "", "rob", "/bridge 0.1 eth base robinhood go")
+            rig["agent"], "", "alice", "/bridge 0.1 eth base robinhood go")
         rig["release"].set()
         for _ in range(100):
             await asyncio.sleep(0.01)

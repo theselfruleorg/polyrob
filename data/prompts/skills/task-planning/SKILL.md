@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'A fuzzy goal needs a plan, or work to delegate'
   polyrob-priority: '4'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Task Planning

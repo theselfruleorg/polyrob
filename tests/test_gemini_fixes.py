@@ -363,7 +363,7 @@ async def test_h1_system_instruction_native_no_tools_path(gemini_client):
     so EVERY Gemini call without tools silently lost its system prompt. After the
     fix it is captured and passed via GenerativeModel(system_instruction=...).
     """
-    system_message = "You are ROB. Emit brain-state as JSON. Follow the contract."
+    system_message = "You are Nova. Emit brain-state as JSON. Follow the contract."
 
     mock_response = Mock()
     text_part = Mock(spec=['text'])

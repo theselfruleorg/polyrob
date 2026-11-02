@@ -29,7 +29,7 @@ def _block(board, goal):
 
 
 def test_create_ask_basic(board):
-    a = board.create_ask(user_id="rob", what="Grant Twitter write access",
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access",
                          why="X-growth objective needs twitter_post")
     assert a.kind == KIND_ASK
     assert a.status == ASK_OPEN
@@ -38,20 +38,20 @@ def test_create_ask_basic(board):
 
 
 def test_asks_never_dispatch(board):
-    board.create_ask(user_id="rob", what="Grant Twitter write access")
+    board.create_ask(user_id="alice", what="Grant Twitter write access")
     assert board.ready(limit=10) == []
 
 
 def test_create_ask_dedups_open_asks(board):
-    a1 = board.create_ask(user_id="rob", what="Grant Twitter write access")
-    a2 = board.create_ask(user_id="rob", what="Grant twitter WRITE access!")
+    a1 = board.create_ask(user_id="alice", what="Grant Twitter write access")
+    a2 = board.create_ask(user_id="alice", what="Grant twitter WRITE access!")
     assert a2.id == a1.id  # refreshed, not duplicated
-    assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 1
+    assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 1
 
 
 def test_create_ask_does_not_dedup_against_goals(board):
-    g = board.create(user_id="rob", title="Grant Twitter write access")
-    a = board.create_ask(user_id="rob", what="Grant Twitter write access")
+    g = board.create(user_id="alice", title="Grant Twitter write access")
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access")
     assert a.id != g.id
     assert a.kind == KIND_ASK
 
@@ -59,18 +59,18 @@ def test_create_ask_does_not_dedup_against_goals(board):
 def test_goal_creation_does_not_dedup_against_asks(board):
     # An auto-created ask ("Unblock goal: X") must never block the planner from
     # (re)creating a similar goal — dedup for goals excludes kind='ask'.
-    board.create_ask(user_id="rob", what="Post the OSS launch announcement thread")
-    g = board.create(user_id="rob", title="Post the OSS launch announcement thread")
+    board.create_ask(user_id="alice", what="Post the OSS launch announcement thread")
+    g = board.create(user_id="alice", title="Post the OSS launch announcement thread")
     assert g.kind == "goal"
 
 
 def test_fulfill_ask_unblocks_dependents(board):
-    g = board.create(user_id="rob", title="Post the OSS launch announcement thread")
+    g = board.create(user_id="alice", title="Post the OSS launch announcement thread")
     _block(board, g)
     assert board.get(g.id).status == STATUS_BLOCKED
-    a = board.create_ask(user_id="rob", what="Grant Twitter write access",
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access",
                          blocks_goal_ids=[g.id])
-    ok, unblocked = board.fulfill_ask(a.id, user_id="rob")
+    ok, unblocked = board.fulfill_ask(a.id, user_id="alice")
     assert ok is True and unblocked == 1
     refreshed = board.get(g.id)
     assert refreshed.status == STATUS_READY
@@ -81,11 +81,11 @@ def test_fulfill_ask_unblocks_dependents(board):
 def test_fulfill_ask_stamps_owner_unblocked_on_goal(board):
     """2026-07-14 night-2: without a fulfillment stamp the retry prompt shows only
     the old failure ledger and the agent gives up from memory without retrying."""
-    g = board.create(user_id="rob", title="Post the intro in the public group")
+    g = board.create(user_id="alice", title="Post the intro in the public group")
     _block(board, g)
-    a = board.create_ask(user_id="rob", what="Grant telegram posting",
+    a = board.create_ask(user_id="alice", what="Grant telegram posting",
                          blocks_goal_ids=[g.id])
-    ok, unblocked = board.fulfill_ask(a.id, user_id="rob")
+    ok, unblocked = board.fulfill_ask(a.id, user_id="alice")
     assert ok is True and unblocked == 1
     payload = board.get(g.id).payload or {}
     stamp = payload.get("owner_unblocked") or {}
@@ -94,16 +94,16 @@ def test_fulfill_ask_stamps_owner_unblocked_on_goal(board):
 
 
 def test_fulfill_ask_wrong_tenant_noop(board):
-    a = board.create_ask(user_id="rob", what="Grant Twitter write access")
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access")
     ok, unblocked = board.fulfill_ask(a.id, user_id="mallory")
     assert ok is False and unblocked == 0
     assert board.get(a.id).status == ASK_OPEN
 
 
 def test_fulfill_ask_skips_non_blocked_dependents(board):
-    g = board.create(user_id="rob", title="A goal that is still ready entirely")
-    a = board.create_ask(user_id="rob", what="Something", blocks_goal_ids=[g.id])
-    ok, unblocked = board.fulfill_ask(a.id, user_id="rob")
+    g = board.create(user_id="alice", title="A goal that is still ready entirely")
+    a = board.create_ask(user_id="alice", what="Something", blocks_goal_ids=[g.id])
+    ok, unblocked = board.fulfill_ask(a.id, user_id="alice")
     assert ok is True and unblocked == 0  # ready goal untouched
     assert board.get(g.id).status == STATUS_READY
 
@@ -136,11 +136,11 @@ def test_blocked_escalation_creates_ask(board, monkeypatch):
     from agents.task.goals.dispatcher import GoalDispatcher
     monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
-    g = board.create(user_id="rob", title="Post the OSS launch announcement thread")
+    g = board.create(user_id="alice", title="Post the OSS launch announcement thread")
     _block(board, g)
     d = GoalDispatcher(board, _Agent(_Sink()))
     asyncio.run(d._maybe_escalate_blocked(board.get(g.id)))
-    asks = board.asks(user_id="rob", status=ASK_OPEN)
+    asks = board.asks(user_id="alice", status=ASK_OPEN)
     assert len(asks) == 1
     assert g.id in (asks[0].payload or {}).get("blocks_goal_ids", [])
 
@@ -154,11 +154,11 @@ def test_blocked_escalation_ask_is_durable_even_when_push_flag_off(board, monkey
     monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "false")
     monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
     sink = _Sink()
-    g = board.create(user_id="rob", title="Post the OSS launch announcement thread")
+    g = board.create(user_id="alice", title="Post the OSS launch announcement thread")
     _block(board, g)
     d = GoalDispatcher(board, _Agent(sink))
     asyncio.run(d._maybe_escalate_blocked(board.get(g.id)))
-    asks = board.asks(user_id="rob", status=ASK_OPEN)
+    asks = board.asks(user_id="alice", status=ASK_OPEN)
     assert len(asks) == 1, "the ask must survive even when the owner push is off"
     assert g.id in (asks[0].payload or {}).get("blocks_goal_ids", [])
     assert sink.sent == [], "the push itself must stay suppressed under the flag/silent posture"

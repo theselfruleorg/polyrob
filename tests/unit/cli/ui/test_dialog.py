@@ -110,7 +110,7 @@ def test_step_is_message_only():
 # kimi-k2.6 (and other models) emit a tool-free planning turn whose CONTENT is
 # the brain-state — either wrapped in {"current_state": {...}} or as bare brain
 # keys, or as the Memory:/Next:/Reasoning: text echo. None of these are a chat
-# message; the dialog renderer must demote them, not print them as "rob".
+# message; the dialog renderer must demote them, not print them as "alice".
 
 _BRAIN_WRAPPED = (
     '{"current_state": {"evaluation_previous_goal": "N/A - starting fresh", '
@@ -171,7 +171,7 @@ def test_brain_planning_line_none_for_non_brain():
 
 # The latest kimi leak: brain JSON + trailing <|tool_call_end|> tokens (no begin
 # block). Without stripping, the trailing tokens make the JSON not end with "}",
-# so is_brain_state would miss it and the dump would render as a "rob" bubble.
+# so is_brain_state would miss it and the dump would render as a "alice" bubble.
 _BRAIN_WITH_STRAY_TOKENS = (
     '{"current_state": {"evaluation_previous_goal":"Success",'
     '"memory":"Reviewed the folder.","next_goal":"Deliver the review",'
@@ -238,7 +238,7 @@ def test_genuine_json_reply_is_not_brain_state():
 # --- OR-2: DeepSeek (non-native JSON-fallback) wraps brain JSON in a ```json ---
 # markdown fence. On a tool-free greeting the fenced brain-state was the model's
 # entire content; without fence-stripping, .startswith("{") fails so is_brain_state
-# returned False and the raw fenced JSON dumped as a "rob" bubble (headline leak).
+# returned False and the raw fenced JSON dumped as a "alice" bubble (headline leak).
 
 _BRAIN_FENCED = (
     "```json\n"

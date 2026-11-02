@@ -4,7 +4,7 @@ from agents.task.goals.context import build_goal_run_task, extract_outcome_line
 
 def _mk(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Draft memory-arch thread",
+    g = b.create(user_id="alice", title="Draft memory-arch thread",
                  body="Draft a 5-tweet thread.",
                  payload={"acceptance": "a draft file under project/drafts/"})
     return b, g
@@ -21,14 +21,14 @@ def test_task_contains_body_acceptance_outcome(tmp_path):
 
 def test_task_carries_the_body(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="One-off", body="Do a thing.")
+    g = b.create(user_id="alice", title="One-off", body="Do a thing.")
     t = build_goal_run_task(g)
     assert "Do a thing." in t
 
 
 def test_task_attempts_ledger_rides_into_retry_prompt(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Post intro", body="Post it.",
+    g = b.create(user_id="alice", title="Post intro", body="Post it.",
                  payload={"attempts": [{"ts": 100.0, "error": "BLOCKED: no telegram capability"}]})
     t = build_goal_run_task(g)
     assert "PREVIOUS ATTEMPT" in t
@@ -40,7 +40,7 @@ def test_task_owner_unblocked_overrides_failure_memory(tmp_path):
     blocker is FIXED — otherwise the agent declares BLOCKED from stale memory
     without retrying the real action."""
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Post intro", body="Post it.",
+    g = b.create(user_id="alice", title="Post intro", body="Post it.",
                  payload={"attempts": [{"ts": 100.0, "error": "BLOCKED: no telegram capability"}],
                           "owner_unblocked": {"ts": 200.0, "ask_id": "a1"}})
     t = build_goal_run_task(g)
@@ -53,7 +53,7 @@ def test_task_stale_owner_unblocked_keeps_failure_ledger(tmp_path):
     """A NEW failure after the fulfillment means the unblock note is stale —
     show the normal ledger again."""
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Post intro", body="Post it.",
+    g = b.create(user_id="alice", title="Post intro", body="Post it.",
                  payload={"attempts": [{"ts": 300.0, "error": "BLOCKED: still failing"}],
                           "owner_unblocked": {"ts": 200.0, "ask_id": "a1"}})
     t = build_goal_run_task(g)
@@ -69,7 +69,7 @@ def test_extract_outcome_line():
 
 def test_set_outcome_on_done_goal(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="t goal")
+    g = b.create(user_id="alice", title="t goal")
     b.claim(g.id, "w", ttl_seconds=60)
     b.record_success(g.id, result="OUTCOME: x", claim_token=b.get(g.id).claim_token)
     assert b.set_outcome(g.id, "x") is True

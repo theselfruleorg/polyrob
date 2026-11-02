@@ -4,6 +4,8 @@ Pure and tz-naive (local wall-clock) so it is deterministic and unit-testable �
 every entry point takes the reference time explicitly. Supported spec formats:
 
 - duration interval ............ ``30m``, ``2h``, ``1d``, ``45s`` (also ``every 15m``)
+- anchored interval ............ ``every 3d from 2026-10-26T06:59Z`` (fires at
+  anchor + k·interval; a fixed N-day cycle that never resets at month end)
 - one-shot ISO timestamp ....... ``2026-06-07T09:30:00``
 - 5-field cron ................. ``*/15 * * * *`` (min hour dom mon dow; dow 0/7=Sun)
 - every-phrase ................. ``every day 14:30``, ``every monday 09:00``
@@ -46,10 +48,18 @@ class Schedule:
     # POSIX day-of-month / day-of-week are OR'd when BOTH are restricted (not "*").
     dom_restricted: bool = False
     dow_restricted: bool = False
+    #: An anchored interval fires at ``anchor + k·interval`` (never drifts with
+    #: the run time, never resets at month end). None = from each run.
+    anchor: Optional[datetime] = None
 
     def next_run_after(self, after: datetime) -> Optional[datetime]:
         """Return the next fire time strictly after ``after`` (None if none)."""
         if self.kind == "interval":
+            if self.anchor is not None:
+                if after < self.anchor:
+                    return self.anchor
+                step = timedelta(seconds=self.interval_seconds)
+                return self.anchor + step * ((after - self.anchor) // step + 1)
             return after + timedelta(seconds=self.interval_seconds)
         if self.kind == "once":
             return self.once_at if self.once_at > after else None
@@ -75,6 +85,47 @@ class Schedule:
                 return dt
             dt += timedelta(minutes=1)
         return None
+
+
+def next_runs(schedule: Schedule, after: datetime, n: int = 3) -> List[datetime]:
+    """The next *n* fire times strictly after *after* (fewer for a one-shot)."""
+    out: List[datetime] = []
+    at = after
+    for _ in range(max(0, int(n))):
+        nxt = schedule.next_run_after(at)
+        if nxt is None:
+            break
+        out.append(nxt)
+        at = nxt
+    return out
+
+
+def dom_step_note(spec: str) -> str:
+    """A note for a 5-field cron whose DAY-OF-MONTH field steps (``*/3``,
+    ``2-31/3``), else ``""``. Such a step restarts on the 1st of every month,
+    so a "every 3 days" job fires on the 31st and again on the 1st (prod
+    2026-10-31/11-01). The anchored form keeps a fixed N-day cycle."""
+    fields = str(spec or "").split()
+    if len(fields) != 5 or "/" not in fields[2]:
+        return ""
+    step = fields[2].rsplit("/", 1)[1]
+    n = step if step.isdigit() else "N"
+    return (f"⚠ day-of-month step '{fields[2]}' restarts on the 1st of every month "
+            f"(a month with 31 days fires on the 31st AND the 1st), so it is not a "
+            f"fixed {n}-day cycle. For that, use 'every {n}d from <ISO time>' "
+            f"(e.g. 'every {n}d from 2026-10-26T18:00Z'); two jobs of one cycle share "
+            f"the anchor plus an offset.")
+
+
+def _parse_anchor(text: str) -> datetime:
+    try:
+        at = datetime.fromisoformat(text.strip().upper())
+    except ValueError:
+        raise ScheduleError(f"bad anchor time {text!r}: use an ISO time, "
+                            f"e.g. 2026-10-26T06:59Z")
+    if at.tzinfo is not None:  # naive LOCAL, like a one-shot (see parse_schedule)
+        at = at.astimezone().replace(tzinfo=None)
+    return at
 
 
 def parse_schedule(spec: str) -> Schedule:
@@ -113,6 +164,16 @@ def parse_schedule(spec: str) -> Schedule:
 
 
 def _parse_every(rest: str) -> Schedule:
+    # "every 3d from 2026-10-26T06:59Z" -> anchored interval
+    if " from " in f" {rest} ":
+        head, _, anchor = f" {rest} ".partition(" from ")
+        base = _parse_every(head.strip()) if head.strip() else None
+        if base is None or base.kind != "interval" or not anchor.strip():
+            raise ScheduleError(f"an anchored interval reads 'every <30m|2h|3d> from "
+                                f"<ISO time>', not every {rest!r}")
+        return Schedule(kind="interval", one_shot=False,
+                        interval_seconds=base.interval_seconds,
+                        anchor=_parse_anchor(anchor))
     # "every 15m" -> interval
     m = _DURATION_RE.match(rest)
     if m:

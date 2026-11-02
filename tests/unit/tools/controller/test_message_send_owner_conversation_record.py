@@ -55,7 +55,7 @@ def _autonomous(sid):
 def _send(container, target, text, sid, controller=None):
     return asyncio.run(perform_message_send(
         router=_Router(), allowlist=None, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target=target, text=text,
+        user_id="alice", surface="telegram", target=target, text=text,
         session_id=sid, container=container, controller=controller))
 
 
@@ -64,12 +64,12 @@ def test_autonomous_owner_send_is_recorded_in_the_owner_thread():
     _autonomous("sess-auto-1")
     res = _send(c, "owner", "the ask", "sess-auto-1")
     assert res["success"] is True and res["tier"] == "owner"
-    rows = ot.thread_recent(c, "rob", limit=5)
+    rows = ot.thread_recent(c, "alice", limit=5)
     assert [(r["via"], r["source"], r["session_id"]) for r in rows] == [("telegram", "message_tool", "sess-auto-1")]
     # never the correspondent store — the owner is not a correspondent
-    assert store.get("rob", "telegram", "100000001") is None
+    assert store.get("alice", "telegram", "100000001") is None
     # the cooldown guard's exact read path
-    assert ot.recent_outbound_bodies(c, "rob", 3600) == ["the ask"]
+    assert ot.recent_outbound_bodies(c, "alice", 3600) == ["the ask"]
 
 
 def test_owner_send_by_prefixed_address_is_owner_tier_and_recorded():
@@ -79,19 +79,19 @@ def test_owner_send_by_prefixed_address_is_owner_tier_and_recorded():
     _autonomous("sess-auto-2")
     res = _send(c, "telegram:100000001", "the ask", "sess-auto-2")
     assert res["success"] is True and res["tier"] == "owner"
-    assert len(ot.thread_recent(c, "rob", limit=5)) == 1
-    assert store.list("rob") == []
+    assert len(ot.thread_recent(c, "alice", limit=5)) == 1
+    assert store.list("alice") == []
 
 
 def test_interactive_owner_send_is_recorded_by_the_turn_latch():
     store, c = _env()
-    orch = type("O", (), {"container": c, "user_id": "rob", "session_id": "sess-int",
-                          "_chat_session_key": "agent:main:telegram:dm:1:rob",
+    orch = type("O", (), {"container": c, "user_id": "alice", "session_id": "sess-int",
+                          "_chat_session_key": "agent:main:telegram:dm:1:alice",
                           "_terminal_attached": False, "_public_session": False})()
     ctl = type("Ctl", (), {"orchestrator": orch})()
     res = _send(c, "owner", "a chat answer with a file", "sess-int", controller=ctl)
     assert res["success"] is True
-    rows = ot.thread_recent(c, "rob", limit=5)
+    rows = ot.thread_recent(c, "alice", limit=5)
     assert [(r["via"], r["source"]) for r in rows] == [("telegram", "reply")]
 
 
@@ -100,18 +100,18 @@ def test_repeat_owner_sends_accumulate_in_the_thread():
     _autonomous("sess-auto-3")
     for i in range(3):
         _send(c, "owner", f"ask {i}", "sess-auto-3")
-    assert len(ot.recent_outbound_bodies(c, "rob", 3600)) == 3
+    assert len(ot.recent_outbound_bodies(c, "alice", 3600)) == 3
 
 
 def test_legacy_owner_rows_are_adopted_on_the_first_owner_send():
     store, c = _env()
-    store.record_outbound("rob", "telegram", "100000001", "old digest", session_id="s0", now=1000.0)
-    store.record_outbound("rob", "telegram", "telegram:100000001", "old typed", session_id="s0", now=2000.0)
-    ot._ADOPTED.discard("rob")
+    store.record_outbound("alice", "telegram", "100000001", "old digest", session_id="s0", now=1000.0)
+    store.record_outbound("alice", "telegram", "telegram:100000001", "old typed", session_id="s0", now=2000.0)
+    ot._ADOPTED.discard("alice")
     _autonomous("sess-auto-4")
     _send(c, "owner", "new line", "sess-auto-4")
-    assert store.list("rob") == []
-    assert [r["body"] for r in ot.thread_recent(c, "rob", limit=5)] == ["old digest", "old typed", "new line"]
+    assert store.list("alice") == []
+    assert [r["body"] for r in ot.thread_recent(c, "alice", limit=5)] == ["old digest", "old typed", "new line"]
 
 
 def test_non_owner_send_unaffected_by_this_change():
@@ -119,15 +119,15 @@ def test_non_owner_send_unaffected_by_this_change():
     store, c = _env()
     tmp = tempfile.mkdtemp()
     allowlist = OutboundAllowlist(os.path.join(tmp, "a.db"))
-    allowlist.allow("rob", "telegram", "@some_promo_chat")
+    allowlist.allow("alice", "telegram", "@some_promo_chat")
     res = asyncio.run(perform_message_send(
         router=_Router(), allowlist=allowlist, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target="@some_promo_chat", text="hi",
+        user_id="alice", surface="telegram", target="@some_promo_chat", text="hi",
         session_id="sess-1", container=c))
     assert res["success"] is True
     assert res["tier"] != "owner"
-    assert store.outbound_count_since("rob", "telegram", "@some_promo_chat", 3600) == 1
-    assert ot.thread_recent(c, "rob", limit=5) is None
+    assert store.outbound_count_since("alice", "telegram", "@some_promo_chat", 3600) == 1
+    assert ot.thread_recent(c, "alice", limit=5) is None
 
 
 def test_send_failure_records_nothing():
@@ -139,7 +139,7 @@ def test_send_failure_records_nothing():
     _autonomous("sess-auto-5")
     res = asyncio.run(perform_message_send(
         router=_FailingRouter(), allowlist=None, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target="owner", text="the ask",
+        user_id="alice", surface="telegram", target="owner", text="the ask",
         session_id="sess-auto-5", container=c))
     assert res["success"] is False
-    assert ot.thread_recent(c, "rob", limit=5) is None
+    assert ot.thread_recent(c, "alice", limit=5) is None

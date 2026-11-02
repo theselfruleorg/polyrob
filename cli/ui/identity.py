@@ -1,6 +1,6 @@
 """The agent's display name for the chat UI — the resolved INSTANCE id.
 
-Chat bubbles (``● rob`` / ``rob:``), the activity line (``rob · working…``), the
+Chat bubbles (``● agent`` / ``agent:``), the activity line (``agent · working…``), the
 separator rule, and the streaming box all show the agent's OWN name. That name is
 the INSTANCE id (default ``polyrob``; set via ``POLYROB_INSTANCE_ID`` or the active
 profile), NOT a hardcoded string: an operator who renames the instance should see

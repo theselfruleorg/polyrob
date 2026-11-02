@@ -27,7 +27,7 @@ def _write(tmp_path, name, body):
 def test_record_captures_hash_and_size(ledger, tmp_path):
     path = _write(tmp_path, "report.md", "hello world")
 
-    row = ledger.record("rob", path, session_id="s1", goal_id="g1", kind="report")
+    row = ledger.record("alice", path, session_id="s1", goal_id="g1", kind="report")
 
     assert row.id
     assert row.bytes == 11
@@ -37,63 +37,63 @@ def test_record_captures_hash_and_size(ledger, tmp_path):
 
 def test_verify_reports_ok_missing_and_changed(ledger, tmp_path):
     path = _write(tmp_path, "a.md", "original")
-    row = ledger.record("rob", path, session_id="s1", goal_id="g1")
+    row = ledger.record("alice", path, session_id="s1", goal_id="g1")
 
-    assert ledger.verify(row.id, "rob") == "ok"
+    assert ledger.verify(row.id, "alice") == "ok"
 
     with open(path, "w") as f:
         f.write("tampered")
-    assert ledger.verify(row.id, "rob") == "changed"
+    assert ledger.verify(row.id, "alice") == "changed"
 
     os.remove(path)
-    assert ledger.verify(row.id, "rob") == "missing"
+    assert ledger.verify(row.id, "alice") == "missing"
 
 
 def test_verify_is_unknown_for_another_tenant(ledger, tmp_path):
     path = _write(tmp_path, "a.md", "x")
-    row = ledger.record("rob", path, session_id="s1", goal_id="g1")
+    row = ledger.record("alice", path, session_id="s1", goal_id="g1")
 
     assert ledger.get(row.id, "someone_else") is None
     assert ledger.verify(row.id, "someone_else") == "unknown"
 
 
 def test_list_for_goal_returns_only_that_goals_artifacts(ledger, tmp_path):
-    a = ledger.record("rob", _write(tmp_path, "a.md", "a"), session_id="s1", goal_id="g1")
-    ledger.record("rob", _write(tmp_path, "b.md", "b"), session_id="s1", goal_id="g2")
+    a = ledger.record("alice", _write(tmp_path, "a.md", "a"), session_id="s1", goal_id="g1")
+    ledger.record("alice", _write(tmp_path, "b.md", "b"), session_id="s1", goal_id="g2")
 
-    rows = ledger.list_for_goal("rob", "g1")
+    rows = ledger.list_for_goal("alice", "g1")
 
     assert [r.id for r in rows] == [a.id]
 
 
 def test_rewriting_a_path_updates_the_row_instead_of_duplicating(ledger, tmp_path):
     path = _write(tmp_path, "a.md", "v1")
-    first = ledger.record("rob", path, session_id="s1", goal_id="g1")
+    first = ledger.record("alice", path, session_id="s1", goal_id="g1")
 
     with open(path, "w") as f:
         f.write("v2 is longer")
-    second = ledger.record("rob", path, session_id="s1", goal_id="g1")
+    second = ledger.record("alice", path, session_id="s1", goal_id="g1")
 
     assert second.id == first.id
     assert second.bytes == 12
-    assert len(ledger.list_for_goal("rob", "g1")) == 1
-    assert ledger.verify(first.id, "rob") == "ok"
+    assert len(ledger.list_for_goal("alice", "g1")) == 1
+    assert ledger.verify(first.id, "alice") == "ok"
 
 
 def test_set_url_publishes_the_artifact(ledger, tmp_path):
-    row = ledger.record("rob", _write(tmp_path, "a.html", "<html>"), session_id="s1", goal_id="g1")
+    row = ledger.record("alice", _write(tmp_path, "a.html", "<html>"), session_id="s1", goal_id="g1")
 
-    ledger.set_url(row.id, "rob", "https://pub.example.com/a/")
+    ledger.set_url(row.id, "alice", "https://pub.example.com/a/")
 
-    assert ledger.get(row.id, "rob").url == "https://pub.example.com/a/"
+    assert ledger.get(row.id, "alice").url == "https://pub.example.com/a/"
 
 
 def test_set_url_refuses_another_tenant(ledger, tmp_path):
-    row = ledger.record("rob", _write(tmp_path, "a.html", "<html>"), session_id="s1", goal_id="g1")
+    row = ledger.record("alice", _write(tmp_path, "a.html", "<html>"), session_id="s1", goal_id="g1")
 
     assert ledger.set_url(row.id, "someone_else", "https://evil.example.com/") is False
-    assert ledger.get(row.id, "rob").url is None
+    assert ledger.get(row.id, "alice").url is None
 
 
 def test_record_of_a_missing_file_is_refused(ledger, tmp_path):
-    assert ledger.record("rob", str(tmp_path / "nope.md"), session_id="s1", goal_id="g1") is None
+    assert ledger.record("alice", str(tmp_path / "nope.md"), session_id="s1", goal_id="g1") is None

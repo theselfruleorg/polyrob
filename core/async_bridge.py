@@ -33,7 +33,7 @@ class _PersistentLoop:
                 self._loop = asyncio.new_event_loop()
                 self._thread = threading.Thread(
                     target=self._loop.run_forever,
-                    name="rob-async-bridge",
+                    name="polyrob-async-bridge",
                     daemon=True,
                 )
                 self._thread.start()

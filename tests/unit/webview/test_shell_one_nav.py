@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from tests.unit.webview.owner_session import authenticate_render_app
 
 PATHS = ["/", "/inbox", "/work", "/money", "/agent"]
-LABELS = ["Chat", "Inbox", "Work", "Money", "Rob"]
+LABELS = ["Chat", "Inbox", "Work", "Money", "Agent"]
 
 
 @pytest.fixture()

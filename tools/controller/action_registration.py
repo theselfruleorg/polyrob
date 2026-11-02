@@ -7,14 +7,15 @@ import os
 from typing import Any, Dict, List, Optional
 
 from core.env import bool_env as _bool_env
-from core.runtime_paths import data_dir_or_home
 
 from pydantic import BaseModel, Field
 
 from agents.task.loop_types.controller_types import ActionResult
 from tools.controller.views import DoneAction, SendMessageAction
 from tools.controller.doc_authoring import DocAuthoringMixin
+from tools.controller.preferences_action import PreferencesActionMixin
 from tools.controller._helpers import (
+	append_prerequisites,
 	build_load_skill_result,
 	build_session_search_hint,
 	forget_activated_skill,
@@ -51,7 +52,7 @@ from tools.controller.send_message_route import (  # noqa: E402
 )
 
 
-class ActionRegistrationMixin(DocAuthoringMixin):
+class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 	def _register_default_actions(self):
 		"""Register core 'done' action for task completion.
 
@@ -370,7 +371,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						_loaded_tool_ids = []
 					_gate_ok = True
 					try:
-						_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid)
+						_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid, third_party=getattr(self, '_third_party_seat', False) is True, absent=getattr(self, '_absent_tool_ids', None) or ())
 					except Exception:
 						_gate_ok = True  # fail-open on the gate check; path/tenant guards still apply
 					if _gate_ok and _skill_manager.resolve_skill_dir(sid, uid) is not None:
@@ -398,6 +399,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						)
 				except Exception:
 					pass
+			result = append_prerequisites(result, self, _skill_manager, uid)
 			if result.metadata and result.metadata.get('skill_loaded'):
 				self.logger.info(f"📖 Loaded skill on demand: {result.metadata['skill_loaded']}")
 				# W2-D: provenance/reuse metric — bumped at the closure (which has
@@ -407,15 +409,10 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					uid = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
 					if uid:
 						from modules.skills.skill_usage import get_skill_usage_store
-						# SK-F1: use the actually-resolved/loaded id
-						# (result.metadata['skill_loaded'] is always the
-						# stripped/unquoted sid -- set identically by
-						# build_load_skill_result on both the eager and
-						# disk-fallback paths), not the raw params.skill_id,
-						# so quote/whitespace-padded ids don't fragment
-						# curator metrics under two different keys. The enclosing
-						# `if ... get('skill_loaded')` guarantees this is truthy
-						# (D1: the old `or params.skill_id` fallback was dead).
+						# SK-F1: the resolved id (stripped/unquoted on both the
+						# eager and disk-fallback paths), not params.skill_id, so
+						# padded ids don't fragment curator metrics; the enclosing
+						# `if` guarantees it is truthy.
 						loaded_id = result.metadata['skill_loaded']
 						get_skill_usage_store().bump_load(loaded_id, uid)
 				except Exception:
@@ -530,11 +527,6 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		# false; deliberately NOT in the POLYROB_LOCAL safe group — explicit
 		# billing feature). Never creates a payment request itself.
 		self._register_usage_summary_action()
-
-		# T3-01: agent-initiated MCP install from the reviewed catalog, gated
-		# MCP_SELF_INSTALL_ENABLED (default false). Owner-in-the-loop: forged/leaf
-		# turns refused; approver is Deny-by-default unless APPROVAL_PROVIDER is set.
-		self._register_mcp_install_action()
 
 		# Task 5: gated `message` action (owner/allowlist -> MessageRouter send),
 		# gated MESSAGE_TOOL_ENABLED (default false; ON under POLYROB_LOCAL).
@@ -693,20 +685,6 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		@self.registry.action(_SEARCH_DESC, param_model=SessionSearchAction)
 		async def session_search(params: SessionSearchAction, execution_context=None) -> ActionResult:
 			return await _run_session_search(params, execution_context)
-
-		# W6: Reference exposes the same recall under both names. Register `memory_search`
-		# as a thin alias (default-on via MEMORY_SEARCH_TOOL) so prompts/tools that use
-		# either shape resolve. Same handler, same tenant scoping — zero new surface.
-		try:
-			from core.config_policy import AutonomyConfig
-			alias_on = AutonomyConfig.memory_search_tool()
-		except Exception:
-			alias_on = True
-		if alias_on:
-			@self.registry.action("Alias of session_search: the same handler and parameters. Prefer session_search.",
-			                      param_model=SessionSearchAction)
-			async def memory_search(params: SessionSearchAction, execution_context=None) -> ActionResult:
-				return await _run_session_search(params, execution_context)
 
 	def _register_recent_activity_action(self):
 		"""Register `recent_activity`: time-ordered recall of the agent's OWN runs
@@ -1024,7 +1002,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			return
 
 		from core.surfaces.catalog import surface_ids
-		from tools.controller.message_send import perform_message_action
+		from tools.controller.message_send import message_input_error, perform_message_action
 		from tools.controller.views import MessageTargetAction
 
 		@self.registry.action(
@@ -1034,6 +1012,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			param_model=MessageTargetAction,
 		)
 		async def message(params: MessageTargetAction, execution_context=None) -> ActionResult:
+			invalid = message_input_error(params.action, params.text, params.media_paths)
+			if invalid:  # an empty send is a bad call, refused before any gate reads it
+				return ActionResult(error=invalid, include_in_memory=True)
 			# Forged/untrusted/autonomous turns must not reach ARBITRARY targets;
 			# MESSAGE_AUTONOMOUS_ALLOWLISTED only forwards to the tier gate below.
 			refusal = _autonomous_message_refusal(execution_context, self)
@@ -1049,9 +1030,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			session_id = (getattr(execution_context, 'session_id', None)
 			              or getattr(self, 'session_id', '') or "")
 
-			# 2026-08-27 dedup-guard fix: refuse a repeat autonomous send to the
-			# owner within the cooldown window (checked against the durable
-			# conversation store, not the model's own elapsed-time claim).
+			# 2026-08-27: refuse a repeat autonomous owner send within the cooldown (durable store).
 			cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
 				execution_context, self, container=container, user_id=user_id, surface=surface,
 				target=target, owner_targets=owner_targets, text=params.text)
@@ -1117,371 +1096,6 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			from core.security.untrusted_wrap import wrap_untrusted
 			return ActionResult(extracted_content=wrap_untrusted(
 				f"{params.surface}:{params.address}", ctx), include_in_memory=True)
-
-	def _register_preferences_action(self):
-		"""Register the agent-callable `preferences` tool (owner-UX P2 T2), gated
-		PREFS_TOOL_ENABLED (default OFF; ON under POLYROB_LOCAL).
-
-		Lets the agent read/change the tenant's typed conversational preferences
-		(``core.prefs.PREF_SCHEMA``) and propose durable operating-contract rules —
-		the conversational front-end to what `/config` does in the CLI. Safety:
-
-		- SAFE-sensitivity keys write immediately via ``write_preference`` (the
-		  same writer `/config set` uses). GUARDED keys (budget/approval caps,
-		  the owner's protective ceilings) can NEVER be written directly by the
-		  agent — `set` instead quarantines a ``{user_id, key, value}`` proposal
-		  (``core.prefs.propose_pref_change``) that rides the SAME owner
-		  pending/approve pipeline as skills/self-context (Task 3's seam); the
-		  active value never changes until the owner reviews it.
-		- A forged/autonomous turn (self-wake or async-delegation-result
-		  re-entry, a sub-agent/leaf worker, or an autonomous goal/cron run — the
-		  SAME `_is_forged_or_autonomous_turn` check `skill_manage`/
-		  `self_context_manage` use) has `set` refused OUTRIGHT, before anything
-		  is validated or written — unlike skills/self-context, a SAFE
-		  preference's `set` has no quarantine step of its own (it applies
-		  immediately), so provenance-tagging alone would not be a safe
-		  mitigation here. `list`/`get` are unaffected (a background turn can
-		  still read its own effective config).
-		- `contract_propose` follows the skill_manage/self_context_manage
-		  create/patch idiom instead: it is NOT refused for a forged turn, but
-		  `created_by` is forced to `PROVENANCE_BACKGROUND`, which makes the
-		  RULES writer quarantine unconditionally (never active) — the owner
-		  promotes with `/pending`. Since 035 P1-7 it records into `owner.md`.
-		  A model-written rule is always a draft (``_rules_immediate`` is
-		  False), on a genuine owner turn too: the owner confirms it.
-		- A leaf/sub-agent additionally never sees this tool at all — it is
-		  excluded from the child's registry via
-		  `tools.controller.delegation.delegation_exclusions_for_child`
-		  (defence-in-depth on top of the runtime check above).
-		- A correspondent-tainted session is denied the WHOLE action (including
-		  `list`/`get`) by the pre-tool-call correspondent gate
-		  (`agents/task/agent/core/correspondent_gate.py`), the same way
-		  `skill_manage`/`self_context_manage` are.
-
-		Registered in this module — no `from __future__ import annotations`
-		(registry-closure introspection).
-		"""
-		try:
-			from core.config_policy import prefs_tool_enabled
-			if not prefs_tool_enabled():
-				return
-		except Exception:
-			return
-
-		from typing import Literal as _Literal
-
-		class PreferencesAction(BaseModel):
-			operation: _Literal["list", "get", "set", "explain", "contract_propose"]
-			key: Optional[str] = Field(
-				None, description="Preference key — REQUIRED for get/explain/set (e.g. "
-				"key='style.verbosity'); an env flag name (e.g. 'TWITTER_ENABLED') works for explain only")
-			value: Optional[str] = Field(
-				None, description="set only: new value (str; coerced per the key's type)")
-			text: Optional[str] = Field(
-				None, description="contract_propose ONLY: full operating-contract body. "
-				"NOT used by explain/get/set — those take `key`.")
-
-		@self.registry.action(
-			"Manage your typed conversational preferences (approvals, budget caps, "
-			"goal quotas, digest/delivery settings, reply style, session defaults) and "
-			"propose durable operating rules. operation='list' shows every preference "
-			"(effective value/source/applies); operation='get' with `key` shows one; "
-			"operation='explain' with `key` shows the full provenance chain for ANY "
-			"setting (preference or env flag) — use it to answer 'why is X off?'. "
-			"operation='set' with `key`+`value` changes one — SAFE keys apply "
-			"immediately (per their `applies` granularity: live/next-turn/next-session); "
-			"GUARDED keys (budget/approval ceilings) are NEVER changed directly by you — "
-			"`set` instead queues a proposal for the owner to review (see /pending). "
-			"operation='contract_propose' with `text` records a durable operating "
-			"rule/constraint in the owner's RULES doc as a draft: it is not in force "
-			"until the owner confirms it (see /pending).",
-			param_model=PreferencesAction,
-		)
-		async def preferences(params: PreferencesAction, execution_context=None) -> ActionResult:
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-			if not user_id:
-				return ActionResult(error="preferences requires a user (tenant scope).",
-				                    include_in_memory=True)
-
-			_cfg = getattr(getattr(self, 'container', None), 'config', None)
-			data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
-			from core.instance import resolve_instance_id
-			instance_id = resolve_instance_id()
-
-			from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, display_effective, unknown_pref_error
-
-			if params.operation == "list":
-				lines: list = []
-				by_group: dict = {}
-				for key in sorted(PREF_SCHEMA):
-					by_group.setdefault(key.split(".", 1)[0], []).append(key)
-				for group in sorted(by_group):
-					lines.append(f"[{group}]")
-					for key in by_group[group]:
-						spec = PREF_SCHEMA[key]
-						value, source = display_effective(key, user_id, data_dir, instance_id)
-						tag = " [guarded]" if spec.sensitivity == SENSITIVITY_GUARDED else ""
-						lines.append(f"  {key} = {value}   ({source}, applies: {spec.applies}){tag}")
-					lines.append("")
-				return ActionResult(extracted_content="\n".join(lines).rstrip(),
-				                    include_in_memory=True)
-
-			if params.operation == "explain":
-				# 018 P4: read-only provenance for ANY setting — pref OR catalog
-				# env flag — via the config service (secrets masked there; the
-				# scrubber below is defence-in-depth). Answers "why is X off?"
-				# with the chain instead of a guess.
-				if not params.key:
-					return ActionResult(
-						error="explain requires `key` (the setting name), e.g. "
-						      "operation='explain', key='TWITTER_ENABLED'. "
-						      "`text` is only for contract_propose.",
-						include_in_memory=True)
-				try:
-					from core import config_service
-					info = config_service.explain(params.key, user_id=user_id,
-					                              home_dir=data_dir)
-				except KeyError:
-					return ActionResult(error=config_service.unknown_key_message(params.key),
-					                    include_in_memory=True)
-				out = [f"{info.key} = {info.effective}   ({info.source})"  # 093 A4 ↓
-				       + (f" · {info.gate_effective}" if info.gate_effective else ""),
-				       f"namespace: {info.namespace} | kind: {info.kind} | "
-				       f"applies: {info.applies} | enforcement: {info.enforcement}"]
-				if info.description:
-					out.append(info.description)
-				if info.chain:
-					out.append("provenance (highest wins):")
-					out.extend(f"  {s.origin}: {s.value}" for s in info.chain)
-				from core.secret_scrub import scrub_secret_shapes
-				return ActionResult(extracted_content=scrub_secret_shapes("\n".join(out)),
-				                    include_in_memory=True)
-
-			if params.operation == "get":
-				if not params.key:
-					return ActionResult(error="get requires `key`.", include_in_memory=True)
-				spec = PREF_SCHEMA.get(params.key)
-				if spec is None:
-					err = unknown_pref_error(params.key)
-					return ActionResult(error=err, include_in_memory=True)
-				value, source = display_effective(params.key, user_id, data_dir, instance_id)
-				out = [f"{params.key} = {value}   ({source})", f"applies: {spec.applies}"]
-				if spec.description:
-					out.append(spec.description)
-				if spec.sensitivity == SENSITIVITY_GUARDED:
-					out.append("sensitivity: guarded — changing this queues a proposal "
-					           "for owner review, it is never applied directly")
-				return ActionResult(extracted_content="\n".join(out), include_in_memory=True)
-
-			# set / contract_propose are the write operations. `is_forged` is computed
-			# once and applied DIFFERENTLY per operation, because they have different
-			# quarantine shapes:
-			#   - `set` on a SAFE key writes the ACTIVE preferences.toml immediately —
-			#     there is no pending/promote step to fall back on, so a forged turn
-			#     is refused OUTRIGHT (owner must be in the loop before anything
-			#     changes). A GUARDED key never writes active state either way.
-			#   - `contract_propose` (035 P1-7: writes the RULES doc) is allowed to
-			#     PROPOSE on a forged turn, just forced to PROVENANCE_BACKGROUND,
-			#     which makes the writer quarantine unconditionally. A genuine
-			#     owner turn queues a draft too (`_rules_immediate` is False);
-			#     the owner confirms it.
-			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
-
-			_self_mod_ev = self_mod_emitter(
-				execution_context, self, user_id,
-				kind="pref", source="preferences", created_by="agent")
-
-			if params.operation == "set":
-				if is_forged:
-					return ActionResult(
-						error=("preferences: set is not permitted for forged/autonomous "
-						      "turns (the owner must be in the loop)."),
-						include_in_memory=True)
-				if not params.key or params.value is None:
-					return ActionResult(error="set requires `key` and `value`.",
-					                    include_in_memory=True)
-				spec = PREF_SCHEMA.get(params.key)
-				if spec is None:
-					err = unknown_pref_error(params.key, params.value)
-					return ActionResult(error=err, include_in_memory=True)
-
-				if spec.sensitivity == SENSITIVITY_GUARDED:
-					from core.prefs import propose_pref_change
-					ok, result = propose_pref_change(user_id, params.key, params.value,
-					                                 data_dir, instance_id=instance_id)
-					if not ok:
-						return ActionResult(error=result, include_in_memory=True)
-					_self_mod_ev("propose", result, pending=True)
-					return ActionResult(
-						extracted_content=(
-							f"'{params.key}' is guarded — queued for owner review "
-							f"(proposal {result}) — review with /pending."),
-						include_in_memory=True)
-
-				from core.prefs import write_preference, load_preferences
-				ok, err = write_preference(data_dir, user_id, params.key, params.value,
-				                           instance_id=instance_id)
-				if not ok:
-					return ActionResult(error=err, include_in_memory=True)
-				_self_mod_ev("set", params.key, pending=False)
-				coerced = load_preferences(data_dir, user_id, instance_id).get(params.key)
-				return ActionResult(
-					extracted_content=f"Set {params.key} = {coerced} (applies: {spec.applies}).",
-					include_in_memory=True)
-
-			# contract_propose — 035 P1-7: FOLDED INTO RULES. Body (and the why) in
-			# `doc_authoring.perform_rules_propose`; no NEW contract.md is created.
-			if not params.text:
-				return ActionResult(error="contract_propose requires `text`.",
-				                    include_in_memory=True)
-			from tools.controller.doc_authoring import perform_rules_propose
-			res, result = perform_rules_propose(
-				params.text, user_id=user_id, data_dir=data_dir,
-				instance_id=instance_id, is_forged=is_forged)
-			if res.ok:
-				_self_mod_ev("contract_propose", user_id, pending=bool(res.pending),
-				            created_by=("background_review" if is_forged else "agent"))
-			return result
-
-	def _register_mcp_install_action(self):
-		"""Register the agent-callable `mcp_install` action (T3-01/W4-1).
-
-		Wires the previously-orphaned tools/mcp/self_install.py::perform_mcp_install
-		pipeline (gate → allowlist → screen → approve → add_server → persist).
-		Safety posture:
-		- action only registered when MCP_SELF_INSTALL_ENABLED=true (default OFF);
-		- a forged/leaf/autonomous turn can never install (owner in the loop);
-		- the approver is resolved EXPLICITLY: Deny-by-default unless the operator
-		  set APPROVAL_PROVIDER — the enable flag alone never silently auto-approves;
-		- only NAMED, reviewed catalog entries install (builtins + the operator's
-		  MCP_INSTALL_CATALOG_FILE, T3-03) — never an agent-written config;
-		- persisted via the tenant-scoped user_mcp_service row (T3-04), NEVER the
-		  global config/mcp_config.json; stdio entries stay session-only;
-		- direct {server}_{tool} actions re-registered post-install (T3-05) so the
-		  new tools are callable the SAME session;
-		- every attempt writes an event_log audit row.
-		Registered in this module — no `from __future__ import annotations`
-		(registry-closure introspection).
-		"""
-		try:
-			from tools.mcp.self_install import self_install_enabled
-			if not self_install_enabled():
-				return
-		except Exception:
-			return
-
-		from typing import Literal as _Literal
-
-		class MCPInstallAction(BaseModel):
-			action: _Literal["list", "install"] = "install"
-			server_id: Optional[str] = None
-
-		@self.registry.action(
-			"Install a vetted MCP server from the reviewed catalog to gain new tools "
-			"this session. action='list' shows the installable catalog; "
-			"action='install' with server_id installs one (owner approval required). "
-			"Only named catalog entries can be installed — never an arbitrary config.",
-			param_model=MCPInstallAction,
-		)
-		async def mcp_install(params: MCPInstallAction, execution_context=None) -> ActionResult:
-			import os as _os
-
-			from tools.mcp.catalog import MCPCatalog
-			from tools.mcp.self_install import perform_mcp_install
-
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None) or ""
-			session_id = (getattr(execution_context, 'session_id', None)
-			              or getattr(self, 'session_id', '') or "")
-			catalog = MCPCatalog()
-
-			def _audit(server_id: str, outcome: str, **extra):
-				try:
-					from core.event_log import event_log_enabled, get_event_log
-					if event_log_enabled():
-						get_event_log().record(
-							"mcp_install", user_id=user_id, session_id=session_id,
-							source="mcp_install", server_id=server_id, outcome=outcome,
-							**extra)
-				except Exception:
-					pass
-
-			if params.action == "list":
-				lines = ["Installable MCP servers (reviewed catalog):"]
-				for sid in catalog.ids():
-					e = catalog.get(sid)
-					lines.append(f"- {sid} [{e.trust}] ({e.transport}): {e.description}")
-				return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
-
-			if not params.server_id:
-				return ActionResult(error="install requires `server_id` (see action='list').",
-				                    include_in_memory=True)
-
-			# Owner in the loop: a self-wake/delegated/autonomous turn never installs.
-			if _is_forged_or_autonomous_turn(execution_context, self):
-				_audit(params.server_id, "refused_forged_turn")
-				return ActionResult(
-					extracted_content=(
-						"mcp_install: not permitted for forged/autonomous turns — ask the "
-						"owner to install it (the owner must be in the loop for new tools)."),
-					include_in_memory=True)
-
-			# The MCP subsystem must be loaded this session to host the new server.
-			mcp_info = (self._tools or {}).get("mcp")
-			mcp_tool = getattr(mcp_info, "instance", None) if mcp_info else None
-			server_manager = getattr(mcp_tool, "server_manager", None) if mcp_tool else None
-			if server_manager is None:
-				_audit(params.server_id, "refused_no_mcp_tool")
-				return ActionResult(
-					error="mcp_install: the mcp tool is not loaded this session "
-					      "(tool_ids must include 'mcp').",
-					include_in_memory=True)
-
-			# Explicit approver: Deny-by-default unless the operator opted into a
-			# provider — MCP_SELF_INSTALL_ENABLED alone never silently auto-approves.
-			from tools.controller.approval import (
-				DenyByDefaultApprover, get_approval_provider_or_deny)
-			_prov_name = (_os.getenv("APPROVAL_PROVIDER") or "").strip()
-			provider = (get_approval_provider_or_deny(_prov_name)
-			            if _prov_name else DenyByDefaultApprover())
-
-			ok, msg = await perform_mcp_install(
-				params.server_id,
-				catalog=catalog,
-				server_manager=server_manager,
-				approve=provider.request,
-				persist=None,  # tenant-scoped persist handled below (T3-04)
-				context=execution_context,
-			)
-			if not ok:
-				_audit(params.server_id, "failed", reason=msg)
-				return ActionResult(error=msg, include_in_memory=True)
-
-			# T3-05: surface the new server's tools as direct actions THIS session.
-			try:
-				await self._register_mcp_tools_as_direct_actions(mcp_tool)
-			except Exception as e:
-				self.logger.debug(f"mcp_install: direct-action re-register skipped: {e}")
-
-			# T3-04: persist tenant-scoped (url transports only — user_mcp_service
-			# blocks stdio by design; a stdio entry stays session-only).
-			persisted = False
-			entry = catalog.get(params.server_id)
-			try:
-				ums = (self.container.get_service("user_mcp_service")
-				       if getattr(self, "container", None) else None)
-				if ums is not None and entry is not None and entry.url:
-					res = await ums.add_server(
-						user_id, params.server_id, entry.url,
-						server_type=entry.transport if entry.transport in ("sse", "http", "streamable_http") else "auto",
-						display_name=entry.description or params.server_id,
-					)
-					persisted = bool(getattr(res, "success", False))
-			except Exception as e:
-				self.logger.debug(f"mcp_install: tenant persist skipped: {e}")
-
-			_audit(params.server_id, "installed", persisted=persisted)
-			tail = " Persisted for future sessions." if persisted else " Session-only (not persisted)."
-			return ActionResult(extracted_content=msg + tail, include_in_memory=True)
 
 	def _register_insights_action(self):
 		"""Delegates to tools/controller/insights_action.py (ratchet extraction)."""
@@ -1693,18 +1307,16 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				return None
 
 			async def _build_child_llm(m, p):
-				"""Build an isolated child LLM for model `m` (+ optional provider `p`).
-
-				Returns (llm, error_message) — error_message is None on success.
-				Isolated so the child never shares the parent's cached HTTP client.
-				"""
+				"""(isolated child LLM for `m`/`p`, error or None); the model must pass the 094 allowlist."""
 				parent_agent = _resolve_parent_agent()
 				build_fn = getattr(parent_agent, '_create_llm_from_config_async', None) if parent_agent else None
 				if build_fn is None:
 					return None, f"Could not build sub-agent model '{m}': parent agent unavailable"
-				cfg = {"model": m}
-				if p:
-					cfg["provider"] = p
+				from agents.task.model_switch_service import child_model_refusal
+				refusal = await child_model_refusal(parent_agent, m, p)
+				if refusal:
+					return None, f"Sub-agent model {refusal}"
+				cfg = {"model": m, **({"provider": p} if p else {})}
 				try:
 					child_llm = await build_fn(cfg, isolated=True)
 				except Exception as e:

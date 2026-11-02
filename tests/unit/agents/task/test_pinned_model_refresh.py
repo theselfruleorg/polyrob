@@ -93,3 +93,50 @@ async def test_recreate_builds_the_llm_on_the_new_pin_and_persists_it(tmp_path, 
     stored = agent.session_manager.get_session_info(sid)
     assert stored["request"]["model"] == "z-ai/glm-5.3-flash"
     assert stored["operator_pin"] == {"provider": "openrouter", "model": "z-ai/glm-5.3-flash"}
+
+
+@pytest.mark.asyncio
+async def test_a_narrowed_wake_copy_never_reaches_the_store_on_a_pin_refresh(tmp_path, monkeypatch):
+    """A wake into a finished session hands a narrowed copy; the pin refresh persists
+    over the STORED request, so the owner's task and budget survive."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from agents.task.agent.session import SessionManager
+    from agents.task_agent_lite import TaskAgent
+    from core.config import BotConfig
+    from core.container import DependencyContainer
+
+    for k, v in NEW.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("CHAT_PROVIDER", raising=False)
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+    config = BotConfig()
+    agent = TaskAgent(config=config, container=DependencyContainer.get_instance(config))
+    agent.session_manager = SessionManager(base_dir=str(tmp_path))
+    agent.task_available, agent._initialized = True, True
+    sid = agent.session_manager.create_session("owner-chat", user_id="u1")
+    stored_info = _info("deepseek/deepseek-v4.1-flash")
+    stored_info["request"] = {**stored_info["request"], "task": "owner task", "max_steps": 100}
+    agent.session_manager.update_session_metadata(sid, stored_info)
+    info = {"user_id": "u1", "task": "hi", "creator": "owner", **stored_info,
+            "request": {**stored_info["request"], "task": "[cards-reply] narrowed",
+                        "max_steps": 20, "original_task": "owner task"}}
+
+    orch = MagicMock()
+    orch.initialize = AsyncMock()
+    orch.create_agent = AsyncMock(return_value=MagicMock(
+        message_manager=None, hitl_manager=None, task_context_manager=None))
+    monkeypatch.setattr("agents.task.agent.orchestrator.SessionOrchestrator",
+                        MagicMock(return_value=orch))
+    get_llm = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(agent, "_get_llm_for_request", get_llm)
+    monkeypatch.setattr(agent, "_rebind_recreated_chat", MagicMock())
+    monkeypatch.setattr(agent, "register_orchestrator", MagicMock())
+
+    await agent._recreate_orchestrator(sid, info)
+    req = get_llm.await_args.args[0]
+    assert (req["provider"], req["model"]) == ("openrouter", "z-ai/glm-5.3-flash")
+    stored = agent.session_manager.get_session_info(sid)
+    assert stored["request"]["model"] == "z-ai/glm-5.3-flash"
+    assert stored["request"]["task"] == "owner task" and stored["request"]["max_steps"] == 100
+    assert "original_task" not in stored["request"]

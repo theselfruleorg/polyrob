@@ -111,9 +111,10 @@ def test_owner_instructions_name_only_enabled_lanes(monkeypatch):
     monkeypatch.setattr(cp.AutonomyConfig, "self_context_writable", staticmethod(lambda: False))
     text = _text()
     assert "<owner-instructions>" in text
-    assert "`preferences`" in text
-    assert "owner_doc_manage" not in text
-    assert "self_context_manage" not in text
+    block = text.split("<owner-instructions>", 1)[1].split("</owner-instructions>", 1)[0]
+    assert "`preferences`" in block
+    assert "owner_doc_manage" not in block
+    assert "self_context_manage" not in block
 
 
 # --- F11 ----------------------------------------------------------------------
@@ -134,7 +135,7 @@ def test_large_content_matches_the_offload_path():
 
 
 def test_status_examples_follow_the_loaded_tools():
-    assert "e.g. goal_list" in _text(tool_ids=["goal"])
+    assert "goal_list" in _text(tool_ids=["goal"])  # 095 W7: agent_status may precede it
     assert "goal_list" not in _text(tool_ids=["filesystem"])
 
 

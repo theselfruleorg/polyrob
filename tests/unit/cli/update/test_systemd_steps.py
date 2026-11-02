@@ -62,9 +62,9 @@ def test_parse_unit_files_skips_bare_template_keeps_instances():
     out = (
         "polyrob.service     enabled  enabled\n"
         "polyrob@.service    disabled -\n"
-        "polyrob@rob.service enabled  enabled\n"
+        "polyrob@alice.service enabled  enabled\n"
     )
-    assert _parse_unit_files(out) == ["polyrob.service", "polyrob@rob.service"]
+    assert _parse_unit_files(out) == ["polyrob.service", "polyrob@alice.service"]
 
 
 def test_wheel_steps_use_this_install_interpreter_not_path_pip():

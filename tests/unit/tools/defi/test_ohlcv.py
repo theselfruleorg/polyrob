@@ -161,7 +161,7 @@ async def test_timeframe_is_passed_through():
     assert seen["timeframe"] == "day" and seen["limit"] == 30
 
 
-# --- 2026-09-19 (Rob's self-review ask #3): Robinhood Chain pools are bytes32 ids ----
+# --- 2026-09-19 (the agent's self-review ask #3): Robinhood Chain pools are bytes32 ids ----
 # Singleton-style AMMs on Robinhood Chain identify a pool by a 32-byte id, and that
 # is what the indexer returns as the pool "address". The path validator treated a
 # pool id as "an address on its chain" (20 bytes), so every RH candle read — the

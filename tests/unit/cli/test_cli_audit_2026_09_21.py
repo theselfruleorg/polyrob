@@ -188,7 +188,7 @@ def test_owner_approve_distinguishes_ambiguity_from_absence(tmp_path, monkeypatc
 
 def test_deploy_token_refuses_uri_on_an_evm_chain():
     from cli.commands.wallet import wallet_cmd
-    res = _run(wallet_cmd, ["deploy-token", "ROB", "1000", "Rob", "Coin",
+    res = _run(wallet_cmd, ["deploy-token", "DEMO", "1000", "Demo", "Coin",
                             "--chain", "base", "--uri", "https://x/y.json"])
     assert res.exit_code != 0
     assert "SOLANA only" in res.output
@@ -196,7 +196,7 @@ def test_deploy_token_refuses_uri_on_an_evm_chain():
 
 def test_deploy_token_refuses_solana_decimals_above_nine():
     from cli.commands.wallet import wallet_cmd
-    res = _run(wallet_cmd, ["deploy-token", "ROB", "1000", "Rob", "Coin",
+    res = _run(wallet_cmd, ["deploy-token", "DEMO", "1000", "Demo", "Coin",
                             "--chain", "solana", "--decimals", "18"])
     assert res.exit_code != 0
     assert "clamped silently" in res.output

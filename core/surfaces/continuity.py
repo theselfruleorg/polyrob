@@ -1,36 +1,21 @@
-"""Idle-reset continuity bridge (Task 6, 2026-07-03).
+"""Session-boundary continuity bridge.
 
 Seeds a short "last time we were discussing X" foundation message into a FRESH chat
 session, sourced from the prior chat episode's summary for the same ``thread_key`` —
-so continuity survives an idle/daily reset. The bridge is literally "recall my last
-episode for this chat key": a consumer of the episodic store (Tasks 1-2), not a
-second summary system.
+so continuity survives ``/new``, the idle/daily reset and a restart. The bridge is
+literally "recall my last episode for this chat key": a consumer of the episodic
+store, not a second summary system.
 
-Deviation from the original brief (documented, not an oversight)
-------------------------------------------------------------------
-The brief additionally sketched a ``write_closing_episode`` helper called from
-``core/surfaces/dispatcher.py``'s ``if fresh:`` branch, writing a closing episode for
-the OUTGOING session at the reset boundary (with no summary available there — routing
-code isn't a summarizer). That write is deliberately NOT implemented:
-
-``SqliteMemoryProvider.record_episode`` upserts
-``ON CONFLICT(user_id, session_id) DO UPDATE SET summary=excluded.summary`` —
-keyed by ``(user_id, session_id)``, NOT ``thread_key``. Task 6 Part A (see
-``agents/task/session/cleanup.py``) already writes a REAL H-MEM-derived summary for
-that same ``session_id`` when the session is actually torn down. In the common case
-the old session has already been LRU/idle-evicted (cleanup already ran, already wrote
-a good summary) by the time a new inbound message triggers ``fresh`` for its
-thread_key — so a dispatcher-side null-summary write would land AFTER and CLOBBER the
-good one via that same upsert. Rather than add cross-site write-ordering/locking to
-make a second write site safe, this bridge is written from exactly ONE place
-(cleanup()), which is also the only place a real summary is available.
-
-Known limitation (v1, acceptable): a session that is still resident — not yet
-LRU/idle-evicted, so its cleanup() (and therefore its summary-bearing episode) hasn't
-run yet — will not bridge on the very next reset boundary for its thread_key; the
-bridge only starts working once that session's cleanup episode has landed. Task 5's
-broader "recent activity" digest still covers that window ("what did you do"), just
-not the more specific "what were we just discussing".
+The episode is written by ONE method, ``SessionOrchestrator.write_chat_episode``
+(``agents/task/session/cleanup.py``), at every boundary that ends an owner chat:
+eviction, ``/new`` (``TaskAgent.unbind_chat``), the reset (``TaskAgent.
+close_previous_chat_episode``: the structured extract is awaited before the new
+session starts, so its first step finds the row; the aux-LLM summary upgrades
+the row in the background) and a process stop (``write_open_chat_episodes``). Its
+summary covers the whole session — decisions, standing instructions, open
+promises, what was done (``agents/task/session/chat_episode.py``). The episode
+row is upserted on ``(user_id, session_id)``, so a later boundary of the same
+session replaces its account; a boundary with nothing new writes nothing.
 """
 from __future__ import annotations
 

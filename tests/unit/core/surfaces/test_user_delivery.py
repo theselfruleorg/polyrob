@@ -86,11 +86,11 @@ def test_prefers_user_directory_resolution():
 
 
 def test_owner_fallback_for_non_numeric_tenant(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "dana")
     monkeypatch.setattr("core.instance.resolve_owner_telegram_id", lambda *a, **k: "555")
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
-    assert _deliver(c, "rob", "blocker: x402 store unavailable", event_log=ev) == "sent"
+    assert _deliver(c, "dana", "blocker: x402 store unavailable", event_log=ev) == "sent"
     assert sink.sent[0][0] == "555"
 
 
@@ -369,7 +369,7 @@ def test_attachment_paths_recorded_in_delivery_event():
 # outbound_open_send 2). From 17:33Z onward EVERYTHING was capped for 12h —
 # 99 goal completions (with their 021 deliverables), 2 daily digests, and, at
 # 01:38:15Z, the credit sentinel's own "autonomy paused" notice. The owner
-# messaged Rob at 02:35Z with no idea it had stopped.
+# messaged the agent at 02:35Z with no idea it had stopped.
 #
 # Two lanes fix that class: a CRITICAL lane that the cap cannot touch, and a
 # reserved slice that low-value chatter may not consume.
@@ -589,7 +589,7 @@ def test_terminal_attached_autonomous_session_still_routes():
 
 
 def test_non_owner_tenant_never_falls_back_to_owner_chat(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda: "dana")
     monkeypatch.setattr("core.instance.resolve_owner_telegram_id", lambda *a, **k: "555")
     monkeypatch.setenv("OWNER_EMAIL", "owner@example.com")
     from core.surfaces.owner_address import owner_address

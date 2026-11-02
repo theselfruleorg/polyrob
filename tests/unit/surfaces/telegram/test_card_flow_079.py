@@ -142,7 +142,7 @@ def test_a_cancel_tap_is_recorded_in_words(env):
     reply = _run(agent, f"/send 1 native to {ADDR} on ethereum")
     _run(agent, f"/card_{reply.card_id}_no")
     ins = [r["body"] for r in _rows(agent) if r["direction"] == "in"]
-    assert any(b.startswith("(cancelled the card:") for b in ins)
+    assert f"(cancelled card {reply.card_id}: {cards.store().get(reply.card_id).line})" in ins
 
 
 def test_tap_line_leaves_an_unknown_card_alone(store):

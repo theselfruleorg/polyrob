@@ -24,7 +24,7 @@ DEN_REPLY = ("@EmilyWhale — dev's heads-down working, so DMs get read when he 
 def ctrl():
     sid = "sess-den-cron-1"
     autonomy_marker.mark_autonomous(sid)
-    yield SimpleNamespace(session_id=sid, orchestrator=SimpleNamespace(user_id="rob"),
+    yield SimpleNamespace(session_id=sid, orchestrator=SimpleNamespace(user_id="alice"),
                           logger=logging.getLogger("t"))
     autonomy_marker._SESSIONS.pop(sid, None)
 

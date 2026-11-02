@@ -48,14 +48,21 @@ ExactSupply = Annotated[
     WithJsonSchema({"type": "string"})]
 
 
-def _chain_field_description(verb: str) -> str:
+def _chain_field_description(verb: str, *, full: bool = False) -> str:
+    """The ``chain`` field of a ``defi_trade`` verb. The per-chain guidance
+    (``chains.chain_guidance()``, ~800 tokens) renders ONCE, on ``swap``
+    (``full=True``) — every verb of the family ships in the same ``tools[]``, so
+    the other verbs point at it instead of repeating it (095 P0.1)."""
     from core.wallet import chains
-    return (f"Chain to {verb} on — CHOOSE IT DELIBERATELY, because the same "
+    head = (f"Chain to {verb} on — CHOOSE IT DELIBERATELY, because the same "
             f"address is a different token on a different chain. Chains that "
             f"can move value: {', '.join(chains.money_chains())}. Gas differs "
             f"by orders of magnitude, so a cent-scale trade can cost more in "
             f"gas on ethereum than it is worth, while base is a fraction of a "
-            f"cent. Full guidance:\n{chains.chain_guidance()}")
+            f"cent.")
+    if full:
+        return f"{head} Full guidance:\n{chains.chain_guidance()}"
+    return f"{head} Per-chain guidance: the `chain` parameter of defi_trade.swap."
 
 
 class TransferParams(BaseModel):
@@ -81,7 +88,7 @@ class TransferParams(BaseModel):
 
 
 class ApproveParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("approve on"))
+    chain: ChainName = Field(..., description=_chain_field_description("approve"))
     token: str = Field(..., description="CONTRACT ADDRESS of the token to approve (0x…)")
     spender: str = Field(..., description="Address being granted the allowance (0x…)")
     amount: float = Field(..., gt=0, description=(
@@ -98,7 +105,7 @@ class ApproveParams(BaseModel):
 
 
 class RevokeParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("revoke on"))
+    chain: ChainName = Field(..., description=_chain_field_description("revoke"))
     token: str = Field(..., description="CONTRACT ADDRESS of the token (0x…)")
     spender: str = Field(..., description="Address whose allowance is set to ZERO (0x…)")
     dry_run: bool = Field(True, description="TRUE simulates only. Set false to sign.")
@@ -135,7 +142,7 @@ class RegisterAgentParams(BaseModel):
 
 
 class SetAgentUriParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("update the agent URI on"))
+    chain: ChainName = Field(..., description=_chain_field_description("update the agent URI"))
     agent_id: int = Field(..., ge=0, description="Your existing agentId (tokenId).")
     max_spend_usd: float = Field(default=10.0, gt=0)
     dry_run: bool = True
@@ -152,7 +159,7 @@ class NftRevokeParams(BaseModel):
 
 
 class WrapParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("wrap native on"))
+    chain: ChainName = Field(..., description=_chain_field_description("wrap native"))
     amount: float = Field(..., gt=0, description=(
         "Human amount of NATIVE to wrap (e.g. 0.0012 ETH -> 0.0012 WETH)."))
     max_spend_usd: float = Field(..., gt=0, description=(
@@ -164,7 +171,7 @@ class WrapParams(BaseModel):
 
 
 class UnwrapParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("unwrap on"))
+    chain: ChainName = Field(..., description=_chain_field_description("unwrap"))
     amount: float = Field(..., gt=0, description=(
         "Human amount of WRAPPED native to turn back into gas "
         "(e.g. 0.0012 WETH -> 0.0012 ETH)."))
@@ -197,7 +204,7 @@ class TradePlan(BaseModel):
     invalidation: str = Field(..., min_length=3, max_length=400,
                               description="What, if seen, proves the thesis wrong.")
     preset: str = Field(..., min_length=2, max_length=40,
-                        description="The mandate preset this entry follows (memecoin | majors).")
+                        description="The mandate preset this entry follows (its name).")
 
 
 _PLAN_DESC = ("Your entry plan {thesis, confidence, invalidation, preset}. REQUIRED for "
@@ -206,7 +213,7 @@ _PLAN_DESC = ("Your entry plan {thesis, confidence, invalidation, preset}. REQUI
 
 
 class SwapParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("swap on"))
+    chain: ChainName = Field(..., description=_chain_field_description("swap", full=True))
     token_in: str = Field(..., description=(
         "CONTRACT ADDRESS of the token you are selling (0x…), or the literal "
         "'native' to spend the chain's gas asset (ETH/SOL/etc) directly. A "
@@ -253,11 +260,11 @@ class SolanaSwapParams(BaseModel):
 
 
 class DeployTokenParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("deploy on"))
+    chain: ChainName = Field(..., description=_chain_field_description("deploy"))
     name: str = Field(..., description=(
-        "Token name, e.g. 'Rob Coin'. Max 64 characters, printable ASCII only."))
+        "Token name, e.g. 'Demo Coin'. Max 64 characters, printable ASCII only."))
     symbol: str = Field(..., description=(
-        "Ticker, e.g. 'ROB'. Max 16 characters, printable ASCII only."))
+        "Ticker, e.g. 'DEMO'. Max 16 characters, printable ASCII only."))
     supply: ExactSupply = Field(..., gt=0, description=(
         "TOTAL supply in WHOLE units, minted in full to the agent wallet. There "
         "is no mint function, so this is the supply forever. A string of digits, "
@@ -283,7 +290,7 @@ class DeployTokenParams(BaseModel):
 
 
 class DeployContractParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("deploy on"))
+    chain: ChainName = Field(..., description=_chain_field_description("deploy"))
     bytecode: str = Field(..., description=(
         "COMPILED creation bytecode (init code), 0x-prefixed hex. NOT Solidity "
         "source — nothing here compiles. To mint an ordinary fixed-supply token, "
@@ -312,11 +319,11 @@ class DeployContractParams(BaseModel):
 
 class SolanaDeployTokenParams(BaseModel):
     name: str = Field("", description=(
-        "Token name, e.g. 'Rob Coin'. Written ON-CHAIN via Token-2022 metadata, "
+        "Token name, e.g. 'Demo Coin'. Written ON-CHAIN via Token-2022 metadata, "
         "so every explorer and wallet shows it. Defaults to the symbol. Max 64 "
         "characters, printable ASCII only."))
     symbol: str = Field(..., description=(
-        "Ticker, e.g. 'ROB'. Written ON-CHAIN alongside the name. Max 16 "
+        "Ticker, e.g. 'DEMO'. Written ON-CHAIN alongside the name. Max 16 "
         "characters, printable ASCII only."))
     uri: str = Field("", description=(
         "Optional https:// or ipfs:// URI of a JSON metadata file "
@@ -339,7 +346,7 @@ class SolanaDeployTokenParams(BaseModel):
 
 
 class LpAddParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position on"))
+    chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position"))
     protocol: str = Field("v3", description=(
         "'v3', or 'v4' for a new FULL-RANGE position on a Pons graduated pool "
         "(token_a/token_b = 'native' + the Pons token; needs an ERC-20 allowance "
@@ -369,7 +376,7 @@ class LpAddParams(BaseModel):
 
 
 class LpCollectParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position on"))
+    chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position"))
     protocol: str = Field("v3", description="'v3' only.")
     token_id: int = Field(..., ge=0, description="Your position NFT id.")
     max_spend_usd: float = Field(5.0, gt=0, allow_inf_nan=False, description="Maximum gas fee in USD.")
@@ -384,7 +391,7 @@ class LpRemoveParams(LpCollectParams):
 
 
 class CallParams(BaseModel):
-    chain: ChainName = Field(..., description=_chain_field_description("call on"))
+    chain: ChainName = Field(..., description=_chain_field_description("call"))
     to: str = Field(..., description="CONTRACT ADDRESS being called (0x…)")
     calldata: str = Field(..., description=(
         "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the "

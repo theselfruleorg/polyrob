@@ -1,6 +1,6 @@
 """071 W0 — "check this address" works, on any chain, for any wallet.
 
-The trigger: a chat user asked Rob to check a Solana wallet. No verb could
+The trigger: a chat user asked the agent to check a Solana wallet. No verb could
 read a third-party address, the refusal pointed at a parameter that did not
 exist, and the token verbs' schema said "0x… only". These tests pin the fix.
 """
@@ -170,7 +170,7 @@ async def test_wallet_holdings_reads_an_evm_wallet(no_wallet):
     text = res.extracted_content or ""
     assert not res.error, res.error
     assert f"holdings for {EVM_WALLET} (chain base)" in text
-    assert "  ETH 0.500000 (unpriced — not counted in the total)" in text
+    assert "  ETH (gas + buying power) 0.500000 (unpriced — not counted in the total)" in text
 
 
 @pytest.mark.asyncio

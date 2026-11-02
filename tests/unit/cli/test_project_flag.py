@@ -1,4 +1,4 @@
-"""`rob --project <path>` sets POLYROB_PROJECT_DIR before any subcommand builds a
+"""`polyrob --project <path>` sets POLYROB_PROJECT_DIR before any subcommand builds a
 container — the launch-in-a-folder ergonomic (Claude-Code style)."""
 
 import os

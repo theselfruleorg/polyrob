@@ -1,4 +1,4 @@
-"""rob telegram — token resolution contract.
+"""polyrob telegram — token resolution contract.
 
 The command orchestrates a live polling loop (build container -> install bus ->
 build harness -> poll), which is integration-verified. The unit-testable contract

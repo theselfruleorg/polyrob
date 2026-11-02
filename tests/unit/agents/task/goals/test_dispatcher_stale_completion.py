@@ -40,7 +40,7 @@ def board(tmp_path):
 @pytest.mark.asyncio
 async def test_stale_completion_skips_outcome_and_self_wake(board, monkeypatch):
     monkeypatch.setenv("GOAL_SELF_WAKE_ENABLED", "true")  # prove the SKIP, not just the gate
-    g = board.create(user_id="rob", title="do it")
+    g = board.create(user_id="alice", title="do it")
     board.claim(g.id, "w", ttl_seconds=60)
     agent = _CancellingAgent(board)
     d = GoalDispatcher(board, agent)

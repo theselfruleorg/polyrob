@@ -76,7 +76,7 @@ def test_decide_approved_wakes_the_originating_session():
             return True
 
     async def _run():
-        ok, msg = decide_tool_approval(_Board(), "tap-9", user_id="rob",
+        ok, msg = decide_tool_approval(_Board(), "tap-9", user_id="alice",
                                        approved=True, task_agent=_Agent())
         await asyncio.sleep(0)  # let the fire-and-forget task run
         return ok, msg
@@ -110,7 +110,7 @@ def test_decide_rejected_never_wakes():
             return True
 
     async def _run():
-        return decide_tool_approval(_Board(), "tap-9", user_id="rob",
+        return decide_tool_approval(_Board(), "tap-9", user_id="alice",
                                     approved=False, task_agent=_Agent())
 
     asyncio.run(_run())
@@ -127,5 +127,5 @@ def test_decide_without_agent_still_works_sync():
         def decide_ask(self, rid, *, user_id, approved, answer=None):
             return True, "ok"
 
-    ok, _ = decide_tool_approval(_Board(), "tap-1", user_id="rob", approved=True)
+    ok, _ = decide_tool_approval(_Board(), "tap-1", user_id="alice", approved=True)
     assert ok is True

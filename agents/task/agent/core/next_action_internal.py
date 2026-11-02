@@ -1558,8 +1558,6 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 				# (see line ~3565). Do NOT add duplicate capture_llm_request() here as it causes
 				# double counting in stats (50 steps → 100 LLM usage entries).
 
-				# Cut the number of actions to max_actions_per_step
-				parsed.action = parsed.action[: self.max_actions_per_step]
 				self._log_response(parsed)
 
 				# Post-response vision verification (extracted → _verify_vision_post_response, P7).

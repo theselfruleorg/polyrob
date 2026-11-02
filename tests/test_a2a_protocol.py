@@ -3,7 +3,7 @@
 Tests cover:
 - Agent Card generation and discovery
 - Task lifecycle (create, get, send, cancel)
-- State mapping between ROB and A2A
+- State mapping between POLYROB and A2A
 - Streaming events
 - A2A Client functionality
 """
@@ -20,7 +20,7 @@ from api.a2a.models import (
     JSONRPCResponse, TextPart
 )
 from api.a2a.task_handler import (
-    A2ATaskHandler, ROB_TO_A2A_STATE, A2A_TO_ROB_STATE
+    A2ATaskHandler, INTERNAL_TO_A2A_STATE, A2A_TO_INTERNAL_STATE
 )
 from api.a2a.agent_card import build_agent_card, AgentSkill, AgentCard
 
@@ -121,22 +121,22 @@ class TestStateMappings:
     """Tests for status/state mappings."""
 
     def test_rob_to_a2a_state_mapping(self):
-        """Test ROB session status maps correctly to A2A task state."""
-        assert ROB_TO_A2A_STATE["created"] == A2ATaskState.SUBMITTED
-        assert ROB_TO_A2A_STATE["running"] == A2ATaskState.WORKING
-        assert ROB_TO_A2A_STATE["completed"] == A2ATaskState.COMPLETED
-        assert ROB_TO_A2A_STATE["suspended"] == A2ATaskState.INPUT_REQUIRED
-        assert ROB_TO_A2A_STATE["failed"] == A2ATaskState.FAILED
-        assert ROB_TO_A2A_STATE["cancelled"] == A2ATaskState.CANCELED
+        """Test POLYROB session status maps correctly to A2A task state."""
+        assert INTERNAL_TO_A2A_STATE["created"] == A2ATaskState.SUBMITTED
+        assert INTERNAL_TO_A2A_STATE["running"] == A2ATaskState.WORKING
+        assert INTERNAL_TO_A2A_STATE["completed"] == A2ATaskState.COMPLETED
+        assert INTERNAL_TO_A2A_STATE["suspended"] == A2ATaskState.INPUT_REQUIRED
+        assert INTERNAL_TO_A2A_STATE["failed"] == A2ATaskState.FAILED
+        assert INTERNAL_TO_A2A_STATE["cancelled"] == A2ATaskState.CANCELED
 
     def test_a2a_to_rob_state_mapping(self):
-        """Test A2A task state maps correctly to ROB session status."""
-        assert A2A_TO_ROB_STATE[A2ATaskState.SUBMITTED] == "created"
-        assert A2A_TO_ROB_STATE[A2ATaskState.WORKING] == "running"
-        assert A2A_TO_ROB_STATE[A2ATaskState.COMPLETED] == "completed"
-        assert A2A_TO_ROB_STATE[A2ATaskState.INPUT_REQUIRED] == "suspended"
-        assert A2A_TO_ROB_STATE[A2ATaskState.FAILED] == "failed"
-        assert A2A_TO_ROB_STATE[A2ATaskState.CANCELED] == "cancelled"
+        """Test A2A task state maps correctly to POLYROB session status."""
+        assert A2A_TO_INTERNAL_STATE[A2ATaskState.SUBMITTED] == "created"
+        assert A2A_TO_INTERNAL_STATE[A2ATaskState.WORKING] == "running"
+        assert A2A_TO_INTERNAL_STATE[A2ATaskState.COMPLETED] == "completed"
+        assert A2A_TO_INTERNAL_STATE[A2ATaskState.INPUT_REQUIRED] == "suspended"
+        assert A2A_TO_INTERNAL_STATE[A2ATaskState.FAILED] == "failed"
+        assert A2A_TO_INTERNAL_STATE[A2ATaskState.CANCELED] == "cancelled"
 
     def test_terminal_states(self):
         """Test terminal state detection."""

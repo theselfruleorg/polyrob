@@ -454,7 +454,7 @@ class OpenAIClient(LLMClient):
             return None
         import hashlib
         digest = hashlib.sha256(f"{self.model_type}|{system}".encode("utf-8")).hexdigest()[:32]
-        return f"rob-{digest}"
+        return f"polyrob-{digest}"
 
     async def _generate_with_tools(
         self,

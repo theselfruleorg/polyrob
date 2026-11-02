@@ -15,7 +15,7 @@ from agents.task.agent.skill_manager import SkillManager
 
 
 TRADING_RULES = {
-    "treasury-trading": {"priority": 1, "auto_activate": True,
+    "trade-execution": {"priority": 1, "auto_activate": True,
                          "triggers": {"tool_ids": ["defi_trade", "defi_data"]}},
     "web-research": {"priority": 5, "auto_activate": True,
                      "triggers": {"tool_ids": ["web_fetch"]}},
@@ -37,17 +37,17 @@ def _index(sm, tools):
 
 
 def test_money_playbook_hidden_when_no_declared_tool_is_loaded(monkeypatch):
-    assert "treasury-trading" not in _index(_manager(monkeypatch), ["filesystem", "task"])
+    assert "trade-execution" not in _index(_manager(monkeypatch), ["filesystem", "task"])
 
 
 def test_money_playbook_listed_when_the_money_tool_is_granted(monkeypatch):
-    assert "treasury-trading" in _index(_manager(monkeypatch),
+    assert "trade-execution" in _index(_manager(monkeypatch),
                                         ["defi_trade", "defi_data", "task"])
 
 
 def test_read_only_session_still_gets_the_screens(monkeypatch):
     """`defi_data` is read-only (no money capability)."""
-    assert "treasury-trading" in _index(_manager(monkeypatch), ["defi_data", "task"])
+    assert "trade-execution" in _index(_manager(monkeypatch), ["defi_data", "task"])
 
 
 def test_a_skill_with_no_money_tool_is_unaffected(monkeypatch):
@@ -71,11 +71,11 @@ def test_the_venue_safety_skill_follows_the_venue_tools():
     sm = SkillManager()
     assert "crypto-trading-safety" in _index(sm, ["polymarket", "task"])
     onchain = _index(sm, ["defi_trade", "defi_data", "task"])
-    assert "treasury-trading" in onchain and "crypto-trading-safety" not in onchain
+    assert "trade-execution" in onchain and "crypto-trading-safety" not in onchain
 
 
 def test_a_pin_loads_even_without_its_tools(monkeypatch):
     """A pin is explicit intent; only the index and `requires` are gated."""
     sm = _manager(monkeypatch)
-    got = sm.get_pinned_skills(seeded_skill_ids=["treasury-trading"], tool_ids=["task"])
-    assert [m.skill_id for m in got] == ["treasury-trading"]
+    got = sm.get_pinned_skills(seeded_skill_ids=["trade-execution"], tool_ids=["task"])
+    assert [m.skill_id for m in got] == ["trade-execution"]

@@ -23,7 +23,7 @@ def _v140_home(root: Path) -> Path:
     con.close()
     (legacy / "database" / "bot.db-wal").write_bytes(b"")
     (legacy / "characters").mkdir()
-    (legacy / "characters" / "rob.json").write_text("{}")
+    (legacy / "characters" / "alice.json").write_text("{}")
     sqlite3.connect(legacy / "artifacts.db").close()
     (legacy / "artifacts.db-wal").write_bytes(b"")
     sqlite3.connect(home / "goals.db").close()  # a 1.4.0 store already at <home>
@@ -58,7 +58,7 @@ def test_head_config_opens_the_v140_bot_db_with_its_rows(tmp_path, server_env):
     assert db == home.resolve() / "database" / "bot.db"
     assert (home / "database" / "bot.db-wal").exists()  # siblings moved together
     assert _rows(db) == [("owner",)]
-    assert (home / "characters" / "rob.json").is_file()
+    assert (home / "characters" / "alice.json").is_file()
     assert (home / "artifacts.db").is_file() and (home / "artifacts.db-wal").exists()
     assert not (home / "data" / "database").exists()
     assert "moved" in (legacy_tree_doctor_line(home) or "moved")
@@ -96,7 +96,7 @@ def test_an_empty_destination_dir_is_not_a_collision(tmp_path):
     (home / "characters").mkdir()
     converge_legacy_data_tree(home)
     assert _rows(home / "database" / "bot.db") == [("owner",)]
-    assert (home / "characters" / "rob.json").is_file()
+    assert (home / "characters" / "alice.json").is_file()
 
 
 def test_a_concurrent_second_caller_is_a_no_op(tmp_path):

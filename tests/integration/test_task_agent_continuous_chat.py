@@ -107,6 +107,7 @@ class TestTaskAgentContinuousChat:
         # Mock orchestrator and agent
         mock_agent = MagicMock()
         mock_agent.agent_id = "test_agent"
+        mock_agent._is_sub_agent = False  # the main agent (a sub-agent never saves the session)
         mock_agent.message_manager = MagicMock()
         mock_agent.message_manager.save_to_disk = MagicMock()
 
@@ -145,6 +146,7 @@ class TestTaskAgentContinuousChat:
         # Mock orchestrator with agent
         mock_agent = MagicMock()
         mock_agent.agent_id = "test_agent"
+        mock_agent._is_sub_agent = False  # the main agent (a sub-agent never saves the session)
         mock_agent.message_manager = MagicMock()
         mock_agent.message_manager.save_to_disk = MagicMock()
 
@@ -183,6 +185,7 @@ class TestTaskAgentContinuousChat:
         # Mock orchestrator with slow execution
         mock_agent = MagicMock()
         mock_agent.agent_id = "test_agent"
+        mock_agent._is_sub_agent = False  # the main agent (a sub-agent never saves the session)
         mock_agent.message_manager = MagicMock()
         mock_agent.message_manager.save_to_disk = MagicMock()
 

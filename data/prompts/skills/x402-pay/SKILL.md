@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Paying for an API over x402'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["x402_pay"]}'
   polyrob-version: '3'
 ---

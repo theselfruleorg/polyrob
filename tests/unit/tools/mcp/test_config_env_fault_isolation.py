@@ -12,13 +12,13 @@ def _http_server(url):
 
 
 def test_missing_secret_drops_only_affected_server(monkeypatch):
-    monkeypatch.delenv("ROB_TEST_MISSING_SECRET", raising=False)
-    monkeypatch.setenv("ROB_TEST_PRESENT", "https://present.example")
+    monkeypatch.delenv("POLYROB_TEST_MISSING_SECRET", raising=False)
+    monkeypatch.setenv("POLYROB_TEST_PRESENT", "https://present.example")
     cfg = MCPConfig(
         enabled=True,
         servers={
-            "good": _http_server("${ROB_TEST_PRESENT}"),
-            "bad": _http_server("${ROB_TEST_MISSING_SECRET}"),
+            "good": _http_server("${POLYROB_TEST_PRESENT}"),
+            "bad": _http_server("${POLYROB_TEST_MISSING_SECRET}"),
         },
     )
     resolved = resolve_config_environment_variables(cfg)
@@ -29,7 +29,7 @@ def test_missing_secret_drops_only_affected_server(monkeypatch):
 
 
 def test_all_present_resolves_all(monkeypatch):
-    monkeypatch.setenv("ROB_TEST_A", "https://a.example")
-    cfg = MCPConfig(enabled=True, servers={"a": _http_server("${ROB_TEST_A}")})
+    monkeypatch.setenv("POLYROB_TEST_A", "https://a.example")
+    cfg = MCPConfig(enabled=True, servers={"a": _http_server("${POLYROB_TEST_A}")})
     resolved = resolve_config_environment_variables(cfg)
     assert resolved.servers["a"].url == "https://a.example"

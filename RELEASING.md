@@ -7,7 +7,12 @@ publisher is configured, and attaches the artifacts to a GitHub Release.
 
 ## Prepare the release PR
 
-Choose a Semantic Versioning number and update these files together:
+Choose the version: the default is the NEXT PATCH (`1.7.0` -> `1.7.1`), and a
+release is cut often, from a small, evaluated batch. A minor or major step is
+taken only when the owner asks for it. A patch that removes a flag, a tool or
+an action says so under "Upgrade notes" in its release notes.
+
+Update these files together:
 
 - `pyproject.toml`: project version — the ONLY version literal. `core/version.py`
   derives it (its fallback is `0+unknown`, never a release), and

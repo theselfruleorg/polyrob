@@ -119,9 +119,9 @@ def test_set_schedule_recomputes_next_run(tmp_path):
     from datetime import datetime
     from cron.jobs import CronJob, CronJobStore
     s = CronJobStore(str(tmp_path / "c.db"))
-    s.add(CronJob(id="j1", task="SAFETY", schedule_spec="0 */2 * * *", user_id="rob",
+    s.add(CronJob(id="j1", task="SAFETY", schedule_spec="0 */2 * * *", user_id="alice",
                   next_run_at=datetime(2026, 9, 19, 6, 0)))
-    ok = s.set_schedule("j1", "20 */2 * * *", now=datetime(2026, 9, 19, 5, 50), user_id="rob")
+    ok = s.set_schedule("j1", "20 */2 * * *", now=datetime(2026, 9, 19, 5, 50), user_id="alice")
     assert ok
     j = s.get("j1")
     assert j.schedule_spec == "20 */2 * * *"
@@ -133,9 +133,9 @@ def test_set_priority_merges_payload(tmp_path):
     from datetime import datetime
     from cron.jobs import CronJob, CronJobStore, is_money_job
     s = CronJobStore(str(tmp_path / "c.db"))
-    s.add(CronJob(id="j1", task="EXIT", schedule_spec="0 * * * *", user_id="rob",
+    s.add(CronJob(id="j1", task="EXIT", schedule_spec="0 * * * *", user_id="alice",
                   next_run_at=datetime(2026, 9, 19, 6, 0), payload={"deliver": "telegram"}))
-    assert s.set_priority("j1", "money", user_id="rob")
+    assert s.set_priority("j1", "money", user_id="alice")
     j = s.get("j1")
     assert j.payload == {"deliver": "telegram", "priority": "money"} and is_money_job(j)
     assert not s.set_priority("j1", "urgent")  # unknown class refused

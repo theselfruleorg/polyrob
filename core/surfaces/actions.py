@@ -71,6 +71,8 @@ def _label_for(token: str) -> str:
     verb, arg = parse_tappable(token)
     if verb is None:
         return token
+    if verb == "/pending":   # a read of ONE item, never a decision
+        return f"Show {arg}"
     word = "Approve" if verb == "/approve" else "Reject"
     return f"{word} all" if arg == "all" else f"{word} {arg}"
 
@@ -93,7 +95,8 @@ def actions_from_text(text: str) -> List["object"]:
         if token in seen or not is_action_command(token) or _whole_queue(token):
             continue
         seen.add(token)
-        style = "primary" if token.startswith("/approve") else "danger"
+        style = ("primary" if token.startswith("/approve")
+                 else "default" if token.startswith("/pending") else "danger")
         out.append(Action(label=_label_for(token), command=token, style=style))
         if len(out) >= MAX_ACTIONS:
             break

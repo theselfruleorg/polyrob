@@ -1,6 +1,6 @@
 """093 WS-G — the 402Mob incident shape (prod 2026-10-28) as a regression case.
 
-Rob called ``wallet_sign_challenge`` 12x with no ``submit_url`` and then told the owner
+The agent called ``wallet_sign_challenge`` 12x with no ``submit_url`` and then told the owner
 "my sign tool only signs — it never returns the challenge body". The tool description,
 the NOT-SENT result and the refusal must each say that the tool itself fills the submit
 body from the challenge, show the challenge's real keys and a filled example body, and

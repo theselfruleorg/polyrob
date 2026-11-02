@@ -28,7 +28,7 @@ def test_blocked_escalation_sends_on_the_goal_blocked_source(monkeypatch):
     import core.self_evolution as se
     monkeypatch.setattr(se, "push_owner_message", _fake_push)
 
-    goal = Goal(id="g1", user_id="rob", title="ship the thing",
+    goal = Goal(id="g1", user_id="alice", title="ship the thing",
                 status="blocked", last_failure_error="need an owner decision")
     agent = SimpleNamespace(container=SimpleNamespace())
 

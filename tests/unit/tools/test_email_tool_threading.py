@@ -22,7 +22,7 @@ class _FakeSMTP:
 
 def _tool():
     tool = object.__new__(EmailTool)
-    tool.config = type("C", (), {"gmail_email": "rob@selfrule.org"})()
+    tool.config = type("C", (), {"gmail_email": "alice@example.org"})()
     tool._enabled = True
     tool.smtp_connection = _FakeSMTP()
     import logging
@@ -39,7 +39,7 @@ async def test_send_email_ex_mints_and_returns_message_id():
     tool = _tool()
     mid = await tool.send_email_ex("john@acme.com", "Hello", "body text")
     assert mid and mid.startswith("<") and mid.endswith(">")
-    assert "selfrule.org" in mid
+    assert "example.org" in mid
     sent = tool.smtp_connection.messages[0]
     assert sent["Message-ID"] == mid
     assert sent["To"] == "john@acme.com"

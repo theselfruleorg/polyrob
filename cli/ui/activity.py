@@ -3,7 +3,7 @@
 While ``Conversation.respond()`` runs (10–300s!), the user needs exactly ONE
 calm, live signal that the agent is working — not a stream of step blocks:
 
-    ⠋ rob · working · 2 tools · step 3 · 12s
+    ⠋ agent · working · 2 tools · step 3 · 12s
 
 ``ActivityLine`` owns that line as a transient Rich ``Live``:
 
@@ -133,7 +133,7 @@ class ActivityLine:
     # ------------------------------------------------------------------
 
     def compose_text(self) -> str:
-        """``rob · working · → navigate · 2 tools · step 3 · 12s``."""
+        """``agent · working · → navigate · 2 tools · step 3 · 12s``."""
         with self._lock:
             steps, tools, current = self._steps, self._tools, self._current
         sep = f" {ICONS.bullet} "

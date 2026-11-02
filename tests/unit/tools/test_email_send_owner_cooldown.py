@@ -15,7 +15,7 @@ from tools.email_tool import EmailSendAction, EmailTool
 
 
 class _Ctx:
-    def __init__(self, is_sub_agent=False, role="orchestrator", user_id="rob", session_id="s1"):
+    def __init__(self, is_sub_agent=False, role="orchestrator", user_id="alice", session_id="s1"):
         self.is_sub_agent = is_sub_agent
         self.role = role
         self.user_id = user_id
@@ -89,9 +89,10 @@ async def test_autonomous_send_refused_within_cooldown(monkeypatch):
         EmailSendAction(to="owner@example.com", subject="Board", body="report"),
         execution_context=_AUTONOMOUS_CTX)
 
-    assert "contact_history" in (res.extracted_content or "")
+    assert "contact_history" in (res.error or "")  # a refused send is an error
+    assert not res.extracted_content
     assert not sent  # never reached send_email_ex
-    assert store.calls == [("rob", "email", "owner@example.com", 7200)]
+    assert store.calls == [("alice", "email", "owner@example.com", 7200)]
 
 
 @pytest.mark.asyncio

@@ -61,7 +61,8 @@ HOLDINGS_VERBS: tuple = (
 #: tap). The per-tx and daily caps bind it and are shown first.
 SEND_VERBS: tuple = (
     Verb("/send", "money",
-         "Send native value or a token to an address: a quote, then `go`",
+         "Send native value or a token to an address: a quote, then `go`. "
+         "A bare amount is tokens; `$22` is dollars, which the agent converts",
          background="Send"),
 )
 

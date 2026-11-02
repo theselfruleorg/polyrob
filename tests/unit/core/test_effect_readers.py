@@ -26,7 +26,7 @@ def home(tmp_path, monkeypatch):
 
 
 def _write(effect, *, tool="twitter", action="twitter_post", autonomous=True,
-           outcome="ok", user_id="rob", ts=None):
+           outcome="ok", user_id="alice", ts=None):
     from core.effects import record_external_write
     record_external_write(effect=effect, tool=tool, action=action,
                           autonomous=autonomous, outcome=outcome, user_id=user_id)
@@ -47,7 +47,7 @@ def _tool():
     return t
 
 
-def _ctx(user_id="rob"):
+def _ctx(user_id="alice"):
     from agents.task.loop_types.execution_context import ActionExecutionContext
     return ActionExecutionContext(session_id="s", user_id=user_id)  # role leaf
 
@@ -71,7 +71,7 @@ async def test_another_producers_social_write_never_cross_blocks(home):
 @pytest.mark.asyncio
 async def test_a_legacy_social_write_row_still_counts(home):
     from core.event_kinds import SOCIAL_WRITE
-    el.get_event_log().record(SOCIAL_WRITE, user_id="rob", source="twitter_tool")
+    el.get_event_log().record(SOCIAL_WRITE, user_id="alice", source="twitter_tool")
     assert await _tool()._social_cooldown_block("twitter_thread", _ctx())
 
 
@@ -79,7 +79,7 @@ async def test_a_legacy_social_write_row_still_counts(home):
 
 def _violation(home):
     from core.status_snapshot import build_status_snapshot
-    snap = build_status_snapshot("rob", data_dir=str(home), include_money=False)
+    snap = build_status_snapshot("alice", data_dir=str(home), include_money=False)
     v = [h for h in snap.health if h.key == "pause_violation"]
     return v[0].text if v else ""
 
@@ -112,13 +112,13 @@ def test_a_write_before_the_pause_is_not_a_violation(home):
 
 def test_outward_counts_and_line(home):
     from core.effects import outward_counts, outward_line
-    assert outward_counts("rob", 0) == {}               # no store: nothing recorded
+    assert outward_counts("alice", 0) == {}               # no store: nothing recorded
     _write("social")
     _write("social", user_id="")                         # untenanted single-owner row
     _write("comms", tool="email", action="email_send")
     _write("social", user_id="someone-else")
     _write("money", outcome="error")
-    counts = outward_counts("rob", 0)
+    counts = outward_counts("alice", 0)
     assert counts == {"social": 2, "comms": 1}
     assert outward_line(counts) == "posted 2 · messaged 1"
     assert outward_line(None) == "unavailable (event log unreadable)"
@@ -131,14 +131,14 @@ async def test_digest_carries_the_outward_line(home, monkeypatch):
     monkeypatch.setattr(d, "_ledger", lambda u, days: {})
     monkeypatch.setattr(d, "_health_lines", lambda u, dd: [])
     _write("public", tool="publish", action="publish")
-    text = await d.compose_digest("rob", data_dir=str(home))
+    text = await d.compose_digest("alice", data_dir=str(home))
     assert "• Outward: published 1" in text
 
 
 def test_activity_feed_renders_the_envelope():
     from webview.activity import normalize_db_event, summarize
     row = {"id": 1, "ts": 1.0, "kind": "external_write", "effect": "social",
-           "user_id": "rob", "session_id": "s",
+           "user_id": "alice", "session_id": "s",
            "attrs": '{"tool":"twitter","action":"twitter_post","target":"open",'
                     '"outcome":"denied","autonomous":true}'}
     ev = normalize_db_event("telemetry", row)

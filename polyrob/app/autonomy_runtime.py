@@ -430,7 +430,7 @@ def _build_x402_expiry_watch():
 
 def _build_settlement_watcher(task_agent):
     # Lazy server-tier import — only executes when X402_INVOICE_ENABLED is on,
-    # so a rob-core-only environment never touches modules.x402.
+    # so a core-only environment never touches modules.x402.
     from modules.x402.settlement_watcher import build_settlement_watcher
     watcher = build_settlement_watcher(task_agent)
     # 046 T1: the room-action branch of `_notify` needs a CONTAINER to reach the
@@ -1098,7 +1098,7 @@ def _service_role() -> str:
                 return token
             return "unknown"
         base = os.path.basename(prog).lower()
-        if base.startswith("polyrob") or base == "rob":
+        if base.startswith("polyrob"):
             return "repl"          # a bare `polyrob` opens the chat REPL
         if base == "main.py":
             return "api"
@@ -1278,7 +1278,7 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     #
     # 043 T3: stamped with the PID (and a descriptive role) because the reader
     # used to take the newest row from ANY process. On a box where the owner
-    # opens a `rob` REPL beside the service — exactly what local mode is for —
+    # opens a `polyrob` REPL beside the service — exactly what local mode is for —
     # the REPL's row is newer and names ITS loops, silently redefining what the
     # SERVICE is expected to be running. The pid is what lets the reader union
     # the live processes instead of trusting whoever wrote last.

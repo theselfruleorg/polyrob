@@ -5,8 +5,7 @@ license: MIT
 metadata:
   polyrob-when: 'Researching a topic across several web sources'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
-  polyrob-version: '2'
+  polyrob-version: '3'
 ---
 # Web Research
 
@@ -19,11 +18,8 @@ comparing options where the answer isn't already known.
 
 ## Workflow
 1. **Decompose** the question into 2–4 concrete sub-queries.
-2. **Search broad, then targeted.** Prefer `perplexity` for synthesis
-   (`perplexity_search`); use the `anysite` tool for structured sources —
-   `anysite_describe(search=<keyword>)` to list endpoints, then
-   `anysite_describe(endpoint=<path>)` for its params, then
-   `anysite_api(endpoint=<path>, params={...})`. Never guess an endpoint path.
+2. **Search broad, then targeted** with the search tool you hold (a search or
+   structured-data tool from a pack names its own steps in its skills).
    To READ a specific URL you already have, use `web_fetch_fetch_url(url=…)` →
    markdown; fast, no browser. Only fall back to the `browser` tool when a page
    needs login/clicks or is a JS-rendered shell that `web_fetch` can't read.
@@ -36,6 +32,6 @@ comparing options where the answer isn't already known.
 6. **State confidence and gaps** — what you couldn't verify, and what would close it.
 
 ## Notes
-- `perplexity` needs an API key; if it's absent, say so and use `anysite`/`web_fetch`.
+- If no search tool is loaded, say so and work from `web_fetch` on known URLs.
 - `web_fetch` is the cheapest way to read a known URL; reach for `browser` only when interaction or JS-rendering is required.
 - Don't pull whole huge pages into context — extract the relevant passages.

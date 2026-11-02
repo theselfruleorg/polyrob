@@ -9,6 +9,7 @@ from core.money import mandate_gate as mg
 from core.money.authorize import SpendIntent, authorize_spend
 from core.money.mandate_gate import ClosedTrade, entry_refusal, evaluate_breakers
 from core.open_positions import PositionDelta, apply_delta
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 MEME = "0xb200000000000000000000ea8625786a776539fb"
 MEME2 = "0xb200000000000000000000b344cb4a1e8bd51968"
@@ -24,7 +25,7 @@ def paths(tmp_path):
 def mandate(paths):
     mpath, _ = paths
     m = tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=10.0, chains=["base", "solana"],
-                  slots=2, path=mpath, now=T0)
+                  slots=2, path=mpath, now=T0, preset="longtail")
     # Full tickets: the stage cap has its own test below.
     return tm.set_stage(m.id, "normal", path=mpath, now=T0)
 
@@ -32,7 +33,7 @@ def mandate(paths):
 def test_an_entry_costs_at_most_the_stage_ticket(paths):
     mpath, _ = paths
     m = tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=10.0, chains=["base"], path=mpath,
-                  now=T0)                                    # probe: $1 tickets
+                  now=T0, preset="longtail")                                    # probe: $1 tickets
     assert "probe stage" in _ref(m, paths, usd=1.2)
     assert _ref(m, paths, usd=1.05) is None                  # within the tolerance
     assert _ref(m, paths, usd=None) is None
@@ -146,7 +147,7 @@ def test_unknown_basis_counts_as_a_full_ticket(mandate, paths):
 def test_daily_entries(paths):
     mpath, _ = paths
     m = tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=100.0, chains=["base"], path=mpath,
-                  now=T0, breakers={"max_entries_per_day": 2})
+                  now=T0, breakers={"max_entries_per_day": 2}, preset="longtail")
     m = tm.set_stage(m.id, "normal", path=mpath, now=T0)
     tm.record_entry(m.id, chain="base", token="a", path=mpath, now=T0 + 10)
     assert _ref(m, paths) is None
@@ -225,7 +226,7 @@ def test_kernel_fails_closed_when_the_probe_raises(kernel, monkeypatch):
 
 def _m(**kw):
     d = dict(id="m", user_id="u", status="active", budget_usd=100.0, chains=("base",),
-             preset="memecoin", ticket_usd=3.0, slots=8, actor=tm.OWNER_SEAT,
+             preset="longtail", ticket_usd=3.0, slots=8, actor=tm.OWNER_SEAT,
              created_at=0.0, updated_at=0.0)
     d.update(kw)
     return tm.Mandate(**d)
@@ -339,7 +340,7 @@ def test_svm_turn_gate_refuses_a_mandate_entry(kernel, monkeypatch, paths):
     import core.wallet.authority as wa
     monkeypatch.setattr(wa, "turn_refusal", lambda ctx: None)
     tool = DefiTradeTool.__new__(DefiTradeTool)
-    m = tm.create("u9", actor=tm.OWNER_SEAT, budget_usd=10, chains=["solana"], path=paths[0])
+    m = tm.create("u9", actor=tm.OWNER_SEAT, budget_usd=10, chains=["solana"], path=paths[0], preset="longtail")
     tm.latch(m.id, "breaker:daily_loss", path=paths[0])
     ctx = types.SimpleNamespace(user_id="u9", role="orchestrator", is_sub_agent=False,
                                 metadata={"mandate": m.id})

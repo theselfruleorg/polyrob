@@ -2,7 +2,7 @@
 
 The HTTP endpoints POST/GET/DELETE ``/api/auth/api-keys`` (``api/auth_endpoints.py``)
 mint, list and revoke the API keys that authenticate the A2A and OpenAI-compat
-surfaces over ``X-API-KEY: rob_…`` — but every one of them requires
+surfaces over ``X-API-KEY: <key>`` — but every one of them requires
 ``request.state.user_id``, a wallet-SIWE JWT the headless prod console never
 mints. So an owner running a headless box had no way to create a key at all.
 This is that seat.
@@ -145,7 +145,7 @@ def _manager_and_db(*, write: "bool | None" = None):
 def keys():
     """Create, list and revoke API keys for the A2A / OpenAI-compat surfaces.
 
-    The keys authenticate over ``X-API-KEY: rob_…`` against the SAME store the
+    The keys authenticate over ``X-API-KEY: <key>`` against the SAME store the
     API server reads — the ADMIN data home (``cli/_admin_home.py``, the 031
     rule), so a key minted in an SSH shell on a deployed box lands where the
     running service validates it (C7) and is usable immediately.
@@ -209,7 +209,7 @@ def create_cmd(name, expires_days):
 @click.argument("prefix")
 @as_root_option
 def revoke_cmd(prefix):
-    """Revoke the key with PREFIX (the 12-char `rob_…` shown by `list`)."""
+    """Revoke the key with PREFIX (the 12-char prefix shown by `list`)."""
     mgr, db = _manager_and_db(write=True)
     try:
         ok = asyncio.run(mgr.revoke_key(_owner_user_id(), prefix))

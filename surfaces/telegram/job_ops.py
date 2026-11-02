@@ -168,7 +168,8 @@ def _new(svc, user_id: str, rest: List[str], via: str) -> str:
 
 
 def _edit(svc, user_id: str, rest: List[str], via: str) -> str:
-    usage = "Usage: /job edit <id> schedule <when> · /job edit <id> what <new text>"
+    usage = ("Usage: /job edit <id> schedule <when> · /job edit <id> what <new text> · "
+             "`/job edit <id> grant tools=a,b`")
     if len(rest) < 3:
         return usage
     job, err = _resolve(svc, user_id, rest[0])

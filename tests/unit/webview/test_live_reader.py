@@ -1,7 +1,7 @@
 """``/api/webgate/live`` — what is in progress RIGHT NOW (2026-09-16 audit, B1).
 
 Work › Now used to count only running GOALS and background delegations, so a
-console beside an agent whose whole day is CRON runs said "Rob is not running
+console beside an agent whose whole day is CRON runs said "The agent is not running
 anything right now." while a run was mid-flight. This reader names every live
 actor the stores can prove — running goals, running cron jobs (the CAS in
 ``cron/jobs.py`` marks a job ``running`` for the length of its run) and the live
@@ -26,15 +26,15 @@ def _stores(tmp_path, *, pid=None):
     con = sqlite3.connect(data / "goals.db")
     con.execute("""CREATE TABLE goals (id TEXT PRIMARY KEY, user_id TEXT, title TEXT,
                    kind TEXT DEFAULT 'goal', status TEXT, started_at REAL, session_id TEXT)""")
-    con.execute("INSERT INTO goals VALUES ('g1','rob','Engage the den','goal','running',1000.0,'s-goal')")
-    con.execute("INSERT INTO goals VALUES ('g2','rob','Queued thing','goal','ready',NULL,NULL)")
+    con.execute("INSERT INTO goals VALUES ('g1','alice','Engage the forum','goal','running',1000.0,'s-goal')")
+    con.execute("INSERT INTO goals VALUES ('g2','alice','Queued thing','goal','ready',NULL,NULL)")
     con.execute("INSERT INTO goals VALUES ('g3','other','Not mine','goal','running',1000.0,NULL)")
     con.commit(); con.close()
     con = sqlite3.connect(data / "cron.db")
     con.execute("""CREATE TABLE cron_jobs (id TEXT PRIMARY KEY, task TEXT, user_id TEXT,
                    status TEXT, last_run_at TEXT)""")
-    con.execute("INSERT INTO cron_jobs VALUES ('c1','SCOUT-ENTRY run (24/7)' || char(10) || 'second line','rob','running','2026-09-16T03:00:00')")
-    con.execute("INSERT INTO cron_jobs VALUES ('c2','Digest','rob','scheduled',NULL)")
+    con.execute("INSERT INTO cron_jobs VALUES ('c1','SCAN run (24/7)' || char(10) || 'second line','alice','running','2026-09-16T03:00:00')")
+    con.execute("INSERT INTO cron_jobs VALUES ('c2','Digest','alice','scheduled',NULL)")
     con.execute("INSERT INTO cron_jobs VALUES ('c3','Theirs','other','running',NULL)")
     con.commit(); con.close()
     con = sqlite3.connect(data / "session_registry.db")
@@ -45,7 +45,7 @@ def _stores(tmp_path, *, pid=None):
     con.execute("INSERT INTO active_sessions VALUES ('s-theirs', ?, 'active', '{}', 'x', 'y', 'b')", (me,))
     con.commit(); con.close()
     root = tmp_path / "sessions"
-    for user, sid, status, task in (("rob", "s-live", "running", "EXIT-MONITOR run"),
+    for user, sid, status, task in (("alice", "s-live", "running", "MONITOR run"),
                                     ("other", "s-theirs", "running", "not mine")):
         d = root / user / sid
         d.mkdir(parents=True)
@@ -56,14 +56,14 @@ def _stores(tmp_path, *, pid=None):
 
 def test_live_body_names_every_running_actor_for_the_tenant(tmp_path, monkeypatch):
     data, root = _stores(tmp_path)
-    body = mod._live_body("rob", data, root)
+    body = mod._live_body("alice", data, root)
     assert [g["id"] for g in body["goals"]] == ["g1"]
-    assert body["goals"][0]["title"] == "Engage the den" and body["goals"][0]["since"] == 1000.0
+    assert body["goals"][0]["title"] == "Engage the forum" and body["goals"][0]["since"] == 1000.0
     assert [c["id"] for c in body["cron"]] == ["c1"]
-    assert body["cron"][0]["task"] == "SCOUT-ENTRY run (24/7)"  # one line, this tenant's
+    assert body["cron"][0]["task"] == "SCAN run (24/7)"  # one line, this tenant's
     assert isinstance(body["cron"][0]["since"], float)
     assert [s["session_id"] for s in body["sessions"]] == ["s-live"]
-    assert body["sessions"][0]["task"] == "EXIT-MONITOR run"
+    assert body["sessions"][0]["task"] == "MONITOR run"
     assert body["sessions"][0]["status"] == "running"
     assert body["count"] == 3
     assert body["unreadable"] == []
@@ -74,7 +74,7 @@ def test_live_body_names_every_running_actor_for_the_tenant(tmp_path, monkeypatc
 def test_live_body_names_a_missing_store_never_a_confident_zero(tmp_path):
     data = tmp_path / "empty"
     data.mkdir()
-    body = mod._live_body("rob", str(data), str(tmp_path / "nowhere"))
+    body = mod._live_body("alice", str(data), str(tmp_path / "nowhere"))
     assert body["goals"] is None and body["cron"] is None
     # 080 WS-4: no session registry yet = nothing has ever run — EMPTY, not
     # unreadable. The two stores that did not answer keep the count a floor.
@@ -85,13 +85,13 @@ def test_live_body_names_a_missing_store_never_a_confident_zero(tmp_path):
 
 def test_live_body_drops_a_dead_owner_pid(tmp_path):
     data, root = _stores(tmp_path, pid=2**22 - 7)  # almost certainly not alive
-    body = mod._live_body("rob", data, root)
+    body = mod._live_body("alice", data, root)
     assert body["sessions"] == []
 
 
 def test_live_route_scopes_to_the_effective_tenant(tmp_path, monkeypatch):
     data, root = _stores(tmp_path)
-    monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "rob")
+    monkeypatch.setattr("webview.pages._effective_user_id", lambda request: "alice")
     monkeypatch.setattr(mod.webgate, "data_dir", lambda: data)
     monkeypatch.setattr(mod, "_sessions_root", lambda: root)
     app = FastAPI()
@@ -99,7 +99,7 @@ def test_live_route_scopes_to_the_effective_tenant(tmp_path, monkeypatch):
     resp = TestClient(app).get("/api/webgate/live")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["count"] == 3 and body["user_id"] == "rob"
+    assert body["count"] == 3 and body["user_id"] == "alice"
     assert body["partial"] is False and body["unreadable"] == []
 
 
@@ -107,7 +107,7 @@ def test_live_count_feeds_the_head_line(tmp_path, monkeypatch):
     data, root = _stores(tmp_path)
     monkeypatch.setattr(mod.webgate, "data_dir", lambda: data)
     monkeypatch.setattr(mod, "_sessions_root", lambda: root)
-    monkeypatch.setattr(mod, "_tenant", lambda request: ("rob", None))
+    monkeypatch.setattr(mod, "_tenant", lambda request: ("alice", None))
     assert mod._live_count(object()) == (3, False)
     # A tenant the shell cannot name is 0 in-progress and PARTIAL (the zero is
     # "I could not look", not "nothing is running"), never a crash.
@@ -124,14 +124,14 @@ def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
     app = FastAPI()
     app.include_router(mod.router)
     html = TestClient(app).get("/work").text
-    assert "Rob is running, 2 in progress." in html
+    assert "The agent is running, 2 in progress." in html
     monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
     import core.status_loops as loops
     monkeypatch.setattr(loops, "autonomy_idle_reason", lambda: None)
-    assert "Rob is running. Nothing needs you." in TestClient(app).get("/work").text
+    assert "The agent is running. Nothing needs you." in TestClient(app).get("/work").text
     # 080: nothing running and both loops off — the head says idle and why.
     monkeypatch.setattr(loops, "autonomy_idle_reason", lambda: "autonomy is off")
-    assert "Rob is idle: autonomy is off." in TestClient(app).get("/work").text
+    assert "The agent is idle: autonomy is off." in TestClient(app).get("/work").text
 
 
 def test_head_line_says_the_count_is_a_floor_when_a_store_refused(monkeypatch):
@@ -143,7 +143,7 @@ def test_head_line_says_the_count_is_a_floor_when_a_store_refused(monkeypatch):
     monkeypatch.setattr(mod, "_live_count", lambda request: (2, True))
     app = FastAPI()
     app.include_router(mod.router)
-    assert "Rob is running, 2+ in progress." in TestClient(app).get("/work").text
+    assert "The agent is running, 2+ in progress." in TestClient(app).get("/work").text
 
 
 def test_head_route_renders_the_same_two_lines_as_the_shell(monkeypatch):
@@ -155,7 +155,7 @@ def test_head_route_renders_the_same_two_lines_as_the_shell(monkeypatch):
     app = FastAPI()
     app.include_router(mod.api_router)
     body = TestClient(app).get("/api/webgate/head").json()
-    assert body == {"headline": "Rob is running, 1 in progress.",
+    assert body == {"headline": "The agent is running, 1 in progress.",
                     "waiting_line": "Nothing needs you.",
                     "badge": "", "aria": "", "partial": False}
 
@@ -188,8 +188,8 @@ def test_shell_offers_logout_only_where_a_login_exists(monkeypatch):
 def test_live_metadata_failure_is_named(tmp_path):
     from pathlib import Path
     data, root = _stores(tmp_path)
-    (Path(root) / 'rob' / 's-live' / 'status.json').write_text('broken')
-    body = mod._live_body('rob', data, root)
+    (Path(root) / 'alice' / 's-live' / 'status.json').write_text('broken')
+    body = mod._live_body('alice', data, root)
     assert body['sessions'][0]['status'] is None
     assert any(line.startswith('session:s-live:status:')
                for line in body['unreadable'])

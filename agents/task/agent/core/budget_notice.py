@@ -1,10 +1,14 @@
-"""The one step-budget notice at 80 % (083 WS-5).
+"""The one step-budget notice at 80 % (083 WS-5), and the one dollar-budget
+notice at 80 % of the per-run cost cap (095 W1d).
 
 The state message shows ``Current step: N`` with no denominator, so the model
 does not ration its work against a number it cannot change. Instead it gets ONE
 notice, on the ephemeral rail, when the run reaches 80 % of its step cap:
 save durable progress, then continue. The "one turn to report" sentence is only
 said where the 083 WS-2 last-report turn really runs (``summary_turn_applies``).
+
+The dollar notice uses the same pattern with its own sent-flag
+(``_dollar_notice_sent``); it reads the spend the dollar gate already measured.
 
 Fail-open: any error leaves the step untouched.
 """
@@ -45,4 +49,34 @@ def maybe_push_budget_notice(agent: Any, step_num: int, max_steps: int) -> bool:
         return True
     except Exception:
         logger.debug("budget notice: push failed (the step runs without it)", exc_info=True)
+        return False
+
+
+def dollar_notice_text(spent: float, cap: float, report_turn: bool) -> str:
+    text = (
+        f"This run has spent ${spent:.2f} of its ${cap:.2f} cost budget. Save durable "
+        "progress now, then continue; do not stop because of this notice."
+    )
+    return text + (_REPORT_SENTENCE if report_turn else "")
+
+
+def maybe_push_dollar_notice(agent: Any) -> bool:
+    """Push the dollar notice once per run at >= 80 % of the per-run cap. True when pushed.
+
+    Reads the spend that ``check_run_budget`` measured at the top of this step
+    (``_run_spend_seen``) — no second probe."""
+    try:
+        if getattr(agent, "_dollar_notice_sent", False):
+            return False
+        seen = getattr(agent, "_run_spend_seen", None)
+        if not seen or seen[1] <= 0 or seen[0] < 0.8 * seen[1]:
+            return False
+        agent._dollar_notice_sent = True
+        from agents.task.agent.core.exhaustion_summary import summary_turn_applies
+        text = dollar_notice_text(seen[0], seen[1], summary_turn_applies(agent))
+        agent.message_manager.push_ephemeral_message(
+            make_control_message(text, MessageOrigin.GUIDANCE))
+        return True
+    except Exception:
+        logger.debug("dollar notice: push failed (the step runs without it)", exc_info=True)
         return False

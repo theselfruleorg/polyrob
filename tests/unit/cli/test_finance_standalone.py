@@ -22,9 +22,9 @@ def test_render_finance_standalone_empty_db_says_unknown_not_zero(tmp_path):
     is three guesses printed as one answer."""
     db_path = tmp_path / "bot.db"
     sqlite3.connect(str(db_path)).close()  # valid but empty — both money legs absent
-    out = render_finance(user_id="rob", days=7, db_path=str(db_path))
+    out = render_finance(user_id="alice", days=7, db_path=str(db_path))
     assert "finance" in out
-    assert "tenant rob" in out
+    assert "tenant alice" in out
     assert "unavailable" in out.lower()
     assert "unknown, not zero" in out.lower()
     assert " or " not in out.lower()   # no disjunction
@@ -35,12 +35,12 @@ def test_render_finance_standalone_no_db_names_a_verb_not_a_flag(tmp_path):
     """C48: standalone with no bot.db resolved says the store does not exist and
     names the VERB that creates it — never an env flag (`X402_INVOICE_ENABLED`
     was in this line) and never a disjunction."""
-    out = render_finance(user_id="rob", days=7, db_path=None, standalone=True)
+    out = render_finance(user_id="alice", days=7, db_path=None, standalone=True)
     assert "unavailable" in out.lower()
     assert "unknown, not zero" in out.lower()
     assert "polyrob run" in out
     assert "X402_INVOICE_ENABLED" not in out
-    assert "tenant rob" in out
+    assert "tenant alice" in out
 
 
 def test_render_finance_standalone_present_tables_zero_is_honest(tmp_path):
@@ -58,9 +58,9 @@ def test_render_finance_standalone_present_tables_zero_is_honest(tmp_path):
         await db.close()
 
     asyncio.run(setup())
-    out = render_finance(user_id="rob", days=7, db_path=str(db_path))
+    out = render_finance(user_id="alice", days=7, db_path=str(db_path))
     assert "finance" in out
-    assert "tenant rob" in out
+    assert "tenant alice" in out
     # inbound table present => not the "no data yet" empty-state; income renders
     # (terminology is income/spend — "earned" is retired).
     assert "income" in out.lower()

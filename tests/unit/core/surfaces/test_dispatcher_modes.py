@@ -106,9 +106,9 @@ async def test_off_mode_denies_even_the_owner(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_wake_word_triggers_without_a_mention(tmp_path):
-    _set(tmp_path, "chat.wake_words", ["hey rob"])
+    _set(tmp_path, "chat.wake_words", ["hey alice"])
     c = _container(tmp_path)
-    d = await route_inbound(c, _group_inbound("hey Rob, what is the time?", user="u1",
+    d = await route_inbound(c, _group_inbound("hey Alice, what is the time?", user="u1",
                                               mentions_bot=False))
     assert d.kind == RouteKind.TASK_AGENT
     d2 = await route_inbound(c, _group_inbound("nothing to see", user="u2",

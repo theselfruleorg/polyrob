@@ -80,7 +80,7 @@ async def test_reject_before_timeout_resolves_false(provider, board):
     assert len(asks) == 1
     board.decide_ask(asks[0].id, user_id="u1", approved=False)
     result = await asyncio.wait_for(task, timeout=2)
-    assert result is False
+    assert not result and result.kind == "denied_by_owner"
 
 
 @pytest.mark.asyncio
@@ -173,7 +173,7 @@ async def test_retry_against_open_ask_reuses_it_and_does_not_renotify(provider, 
 async def test_leaf_turn_denied_without_creating_an_ask(provider, board):
     ctx = _ctx(role="leaf", is_sub_agent=True)
     result = await provider.request("x402_request", {"amount_usd": 5}, ctx)
-    assert result is False
+    assert not result and result.kind == "not_created" and not result.pending_id
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -181,7 +181,7 @@ async def test_leaf_turn_denied_without_creating_an_ask(provider, board):
 async def test_forged_turn_kind_denied_without_creating_an_ask(provider, board):
     ctx = _ctx(metadata={"turn_kind": "self_wake"})
     result = await provider.request("x402_request", {"amount_usd": 5}, ctx)
-    assert result is False
+    assert not result
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -269,7 +269,7 @@ async def test_forged_probe_exception_denies_fail_closed(provider, board, monkey
     # ask and polls forever, so the wait_for would time out instead.
     result = await asyncio.wait_for(
         provider.request("x402_request", {"amount_usd": 5}, ctx), timeout=0.4)
-    assert result is False
+    assert not result
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -307,7 +307,8 @@ def autonomous_goal_turn(monkeypatch):
 async def test_an_autonomous_goal_run_CREATES_an_ask_instead_of_dead_ending(
         provider, board, autonomous_goal_turn):
     result = await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
-    assert result is False, "it may ask, never self-approve"
+    assert not result, "it may ask, never self-approve"
+    assert result.kind == "pending" and result.pending_id
     asks = board.asks(user_id="u1", status=ASK_OPEN)
     assert len(asks) == 1, "the owner must have something to press"
     assert asks[0].payload.get("tool_name") == "defi_trade_bridge"
@@ -322,7 +323,7 @@ async def test_an_autonomous_goal_run_does_not_hold_a_dispatcher_slot(
     result = await asyncio.wait_for(
         provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx()),
         timeout=1.5)
-    assert result is False
+    assert not result
 
 
 @pytest.mark.asyncio
@@ -332,7 +333,7 @@ async def test_an_owner_grant_is_REDEEMABLE_by_the_next_autonomous_run(
     denial sat ABOVE _consume_grant, so an approval the owner had already given
     could never be spent by the run it was given for."""
     params = {"usd": 91.37}
-    assert await provider.request("defi_trade_bridge", params, _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_bridge", params, _goal_ctx()))
     ask = board.asks(user_id="u1", status=ASK_OPEN)[0]
     ok, _ = board.decide_ask(ask.id, user_id="u1", approved=True)
     assert ok is True
@@ -351,7 +352,7 @@ async def test_the_grant_is_still_one_shot_for_an_autonomous_run(
     board.decide_ask(ask.id, user_id="u1", approved=True)
 
     assert await provider.request("defi_trade_bridge", params, _goal_ctx()) is True
-    assert await provider.request("defi_trade_bridge", params, _goal_ctx()) is False, (
+    assert not (await provider.request("defi_trade_bridge", params, _goal_ctx())), (
         "a second execution must not ride one approval")
 
 
@@ -361,8 +362,8 @@ async def test_a_grant_for_DIFFERENT_params_is_not_redeemable(
     await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
     ask = board.asks(user_id="u1", status=ASK_OPEN)[0]
     board.decide_ask(ask.id, user_id="u1", approved=True)
-    assert await provider.request("defi_trade_bridge", {"usd": 910.0},
-                                  _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_bridge", {"usd": 910.0},
+                                  _goal_ctx()))
 
 
 @pytest.mark.asyncio
@@ -372,7 +373,7 @@ async def test_a_rejected_ask_leaves_nothing_to_redeem(
     await provider.request("defi_trade_bridge", params, _goal_ctx())
     ask = board.asks(user_id="u1", status=ASK_OPEN)[0]
     board.decide_ask(ask.id, user_id="u1", approved=False)
-    assert await provider.request("defi_trade_bridge", params, _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_bridge", params, _goal_ctx()))
 
 
 # --- the origins this must NOT open ------------------------------------------------
@@ -383,8 +384,8 @@ async def test_a_leaf_is_still_denied_with_no_ask(provider, board, monkeypatch):
                         lambda ctx, _s: True)
     monkeypatch.setattr("tools.controller.action_registration._is_autonomous_goal_turn",
                         lambda ctx, _s: False)
-    assert await provider.request("defi_trade_bridge", {"usd": 5},
-                                  _ctx(role="leaf", is_sub_agent=True)) is False
+    assert not (await provider.request("defi_trade_bridge", {"usd": 5},
+                                  _ctx(role="leaf", is_sub_agent=True)))
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -395,7 +396,7 @@ async def test_a_self_wake_is_still_denied_with_no_ask(provider, board, monkeypa
     monkeypatch.setattr("tools.controller.action_registration._is_autonomous_goal_turn",
                         lambda ctx, _s: False)
     ctx = _ctx(metadata={"turn_kind": "self_wake"})
-    assert await provider.request("defi_trade_bridge", {"usd": 5}, ctx) is False
+    assert not (await provider.request("defi_trade_bridge", {"usd": 5}, ctx))
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -408,7 +409,7 @@ async def test_a_goal_detector_that_RAISES_keeps_the_denial(provider, board, mon
     def _boom(ctx, _s):
         raise RuntimeError("marker store unreadable")
     monkeypatch.setattr("tools.controller.action_registration._is_autonomous_goal_turn", _boom)
-    assert await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()))
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -418,7 +419,7 @@ async def test_a_tainted_autonomous_run_is_still_denied_with_no_ask(
     """Correspondent taint outranks the goal lane — a third party's reply must not
     be able to make the owner's phone buzz with a money ask."""
     provider.set_taint_probe(lambda: True)
-    assert await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()))
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -484,7 +485,7 @@ async def test_a_missing_goal_mapping_still_creates_the_ask(
     def _boom(sid):
         raise RuntimeError("marker gone")
     monkeypatch.setattr("core.autonomy_marker.goal_for_session", _boom)
-    assert await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_bridge", {"usd": 5}, _goal_ctx()))
     assert len(board.asks(user_id="u1", status=ASK_OPEN)) == 1
 
 
@@ -591,8 +592,8 @@ async def test_a_CHANGED_intent_still_needs_its_own_approval(
 
     for changed in ({**base, "amount": 0.36}, {**base, "recipient": "0xEVIL"},
                     {**base, "to_chain": "ethereum"}, {**base, "token_out": "weth"}):
-        assert await provider.request("defi_trade_bridge", {"usd": 91.0},
-                                      _goal_ctx(), hash_params=changed) is False, changed
+        assert not (await provider.request("defi_trade_bridge", {"usd": 91.0},
+                                      _goal_ctx(), hash_params=changed)), changed
 
 
 @pytest.mark.asyncio
@@ -807,13 +808,13 @@ def test_decide_tool_approval_carries_the_owner_answer(board):
     """A27 (2026-09-21): `/approve <id> <text>` on a tool-approval ask keeps
     the owner's words on the ask and on the unblocked goal's stamp."""
     from tools.controller.approval_queue import decide_tool_approval
-    g = board.create(user_id="rob", title="Post the launch thread")
+    g = board.create(user_id="alice", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?",
         claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?",
         claim_token=board.get(g.id).claim_token)
-    a = board.create_ask(user_id="rob", what="Which key?", blocks_goal_ids=[g.id])
-    ok, msg = decide_tool_approval(board, a.id, user_id="rob", approved=True,
+    a = board.create_ask(user_id="alice", what="Which key?", blocks_goal_ids=[g.id])
+    ok, msg = decide_tool_approval(board, a.id, user_id="alice", approved=True,
                                    answer=" the sandbox key ")
     assert ok, msg
     assert board.get(a.id).payload["answer"] == "the sandbox key"
@@ -918,9 +919,9 @@ async def test_a_goal_run_that_cannot_sign_raises_no_ask(provider, board, autono
     was told 'running it now; the result follows', and no result ever came."""
     monkeypatch.setenv("DEFI_AUTONOMOUS_TURN_TRADING", "false")
     monkeypatch.setenv("DEFI_MONITOR_EXITS", "false")
-    assert await provider.request("defi_trade_swap", {"max_spend_usd": 900.0},
-                                  _goal_ctx()) is False
-    assert await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx()) is False
+    assert not (await provider.request("defi_trade_swap", {"max_spend_usd": 900.0},
+                                  _goal_ctx()))
+    assert not await provider.request("defi_trade_bridge", {"usd": 91.37}, _goal_ctx())
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 

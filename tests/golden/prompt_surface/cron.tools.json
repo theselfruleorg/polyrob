@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "729d3abd9f2d"
+      "sha": "a537b675a8de"
     },
     {
       "name": "anysite_api",
@@ -134,15 +134,19 @@
     },
     {
       "name": "cronjob_edit",
-      "sha": "c76144282bc0"
+      "sha": "bf34d0b6ceff"
     },
     {
       "name": "cronjob_list",
       "sha": "74312efe0bdb"
     },
     {
+      "name": "cronjob_run_now",
+      "sha": "5e06266754e4"
+    },
+    {
       "name": "cronjob_schedule",
-      "sha": "ac9e4bce6c7c"
+      "sha": "b894eb97c2d3"
     },
     {
       "name": "cronjob_show",
@@ -178,7 +182,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "8b543916e069"
+      "sha": "05c1fe29edcb"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -206,7 +210,7 @@
     },
     {
       "name": "goal_cancel",
-      "sha": "c02104f7fee8"
+      "sha": "ac4e5aa2da7a"
     },
     {
       "name": "goal_create",
@@ -266,11 +270,11 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "d4315aebe58c"
+      "sha": "2c72779ffd6d"
     },
     {
       "name": "preferences",
-      "sha": "ad8318905601"
+      "sha": "266de197b9b5"
     },
     {
       "name": "present_choice",
@@ -278,11 +282,7 @@
     },
     {
       "name": "propose_action",
-      "sha": "bb1c23b06a81"
-    },
-    {
-      "name": "propose_setting",
-      "sha": "6f27817332ef"
+      "sha": "8adf404efe07"
     },
     {
       "name": "read_skill_resource",
@@ -298,7 +298,7 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "8977db1c077b"
+      "sha": "7d5aee19c522"
     },
     {
       "name": "send_message",
@@ -306,7 +306,7 @@
     },
     {
       "name": "skill_manage",
-      "sha": "1a9acba12d5a"
+      "sha": "816a947f06b5"
     },
     {
       "name": "task_todo_add",
@@ -342,7 +342,7 @@
     },
     {
       "name": "trade_mandate_propose",
-      "sha": "ff5dfd36d681"
+      "sha": "a10e0c5bdc0d"
     },
     {
       "name": "web_fetch_fetch_url",

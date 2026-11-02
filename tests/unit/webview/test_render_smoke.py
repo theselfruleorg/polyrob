@@ -69,10 +69,10 @@ def test_index_page_shows_console_display_name(monkeypatch):
 
 
 def test_index_page_honors_console_name_override(monkeypatch):
-    monkeypatch.setenv("POLYROB_CONSOLE_NAME", "Rob Console")
+    monkeypatch.setenv("POLYROB_CONSOLE_NAME", "Nova Console")
     server = _reload_server(monkeypatch, multitenant=False)
     html = _layout_html(server)
-    assert "Rob Console" in html
+    assert "Nova Console" in html
     assert "POLYROB Console" not in html
 
 

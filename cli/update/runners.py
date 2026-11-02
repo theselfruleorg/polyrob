@@ -153,8 +153,23 @@ def build_runners(
         return wanted[0]
     def _pip_install() -> None:
         # A private, unpredictable directory prevents shared-/tmp link attacks.
-        with tempfile.TemporaryDirectory(prefix="polyrob-update-") as staging:
-            _install_into(Path(staging) / "dependencies.txt")
+        # It sits on disk under the data home: pip unpacks every wheel into
+        # TMPDIR, and a small tmpfs /tmp fails the install with Errno 122.
+        from core.runtime_paths import install_tmp_dir
+        root = install_tmp_dir()
+        with tempfile.TemporaryDirectory(prefix="polyrob-update-",
+                                         dir=str(root) if root else None) as staging:
+            old_tmp = os.environ.get("TMPDIR")
+            if root is not None:
+                os.environ["TMPDIR"] = staging
+            try:
+                _install_into(Path(staging) / "dependencies.txt")
+            finally:
+                if root is not None:
+                    if old_tmp is None:
+                        os.environ.pop("TMPDIR", None)
+                    else:
+                        os.environ["TMPDIR"] = old_tmp
 
     def _install_into(deps_file: Path) -> None:
         notes: List[str] = []
@@ -225,6 +240,13 @@ def build_runners(
     def verify() -> None:
         # New code must at least import cleanly (the release smoke check).
         _run([py, "-m", "pip", "check"], repo)
+        # The NEW tree says what to probe (cli/update/verify_probe.py): a list
+        # hardcoded in this (old) updater goes stale when a module moves — the
+        # 1.3.x list named utils.gif_utils and rolled back every update to ≥1.5.
+        if (repo / "cli" / "update" / "verify_probe.py").is_file():
+            _run([py, "-I", "-m", "cli.update.verify_probe"], repo)
+            return
+        # Fallback for a target tree without the probe module.
         # 058: the import probe covers the surfaces whose dependency moved to an
         # extra — a bare `import core, cli.polyrob` passed happily on an install
         # that had lost one of them.

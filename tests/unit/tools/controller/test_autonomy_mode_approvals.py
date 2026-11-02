@@ -29,7 +29,7 @@ from agents.task.loop_types.controller_types import ActionResult
 def _clean_env(monkeypatch):
     for k in ("AGENT_COMPUTE_POSTURE", "APPROVAL_REQUIRED_TOOLS", "APPROVAL_PROVIDER",
               "POLYROB_TOOL_DENYLIST", "PAYMENT_APPROVAL_MODE",
-              "AUTONOMY_MODE", "POLYROB_LOCAL", "ROB_LOCAL", "POLYROB_OWNER_USER_ID"):
+              "AUTONOMY_MODE", "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID"):
         monkeypatch.delenv(k, raising=False)
     constants._refreeze_compute_posture_for_tests()
     approval._refreeze_approval_flags_for_tests()
@@ -39,7 +39,7 @@ def _clean_env(monkeypatch):
     # so we must delenv first to prevent test-set values from polluting frozen globals.
     for k in ("AGENT_COMPUTE_POSTURE", "APPROVAL_REQUIRED_TOOLS", "APPROVAL_PROVIDER",
               "POLYROB_TOOL_DENYLIST", "PAYMENT_APPROVAL_MODE",
-              "AUTONOMY_MODE", "POLYROB_LOCAL", "ROB_LOCAL", "POLYROB_OWNER_USER_ID"):
+              "AUTONOMY_MODE", "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID"):
         monkeypatch.delenv(k, raising=False)
     constants._refreeze_compute_posture_for_tests()
     approval._refreeze_approval_flags_for_tests()
@@ -51,7 +51,7 @@ def _enable_full(monkeypatch):
     tests/unit/agents/task/test_autonomy_mode.py)."""
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     constants.reset_autonomy_mode_warnings()
 
 
@@ -60,7 +60,7 @@ def _posture2(monkeypatch):
     constants._refreeze_compute_posture_for_tests()
 
 
-def _make_controller(tmp_path, user_id="rob", tainted=False):
+def _make_controller(tmp_path, user_id="alice", tainted=False):
     import agents.task.agent.service  # noqa: F401 — avoid controller<->orchestrator import cycle
     from tools.controller.service import Controller
 
@@ -74,7 +74,7 @@ def _make_controller(tmp_path, user_id="rob", tainted=False):
 
 def _owner_ctx():
     return ActionExecutionContext(
-        session_id="s1", user_id="rob", role="orchestrator", is_sub_agent=False)
+        session_id="s1", user_id="alice", role="orchestrator", is_sub_agent=False)
 
 
 class _SpyProvider(approval.ApprovalProvider):
@@ -103,7 +103,7 @@ def test_auto_notify_provider_registered():
 @pytest.mark.asyncio
 async def test_auto_notify_provider_allows():
     provider = approval.get_approval_provider(
-        "auto_notify", user_id="rob", home_dir="/tmp")
+        "auto_notify", user_id="alice", home_dir="/tmp")
     assert await provider.request("shell_run", {"cmd": "ls"}, None) is True
 
 
@@ -113,7 +113,7 @@ async def test_auto_notify_provider_allows():
 def test_autonomous_mode_defaults_provider_auto_notify(monkeypatch, tmp_path):
     _enable_full(monkeypatch)
     _posture2(monkeypatch)  # would default interactive_cli today
-    _gates, provider = approval.effective_approval_state("rob", tmp_path)
+    _gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "auto_notify"
 
 
@@ -123,14 +123,14 @@ def test_autonomous_mode_explicit_provider_still_wins(monkeypatch, tmp_path):
     _posture2(monkeypatch)
     monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
     approval._refreeze_approval_flags_for_tests()
-    _gates, provider = approval.effective_approval_state("rob", tmp_path)
+    _gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "deny"
 
 
 def test_supervised_mode_unchanged(monkeypatch, tmp_path):
     """AUTONOMY_MODE unset -> posture-2 default stays interactive_cli (byte-identical)."""
     _posture2(monkeypatch)
-    _gates, provider = approval.effective_approval_state("rob", tmp_path)
+    _gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "interactive_cli"
 
 
@@ -147,15 +147,14 @@ def test_supervised_mode_resolve_gated_actions_unchanged(monkeypatch):
 
 
 def test_always_gated_verbs_membership():
-    """Verified against real registered action names: the four self_env_* verbs
-    (tools/self_env/tool.py) + mcp_install (action_registration.py). self_modify /
+    """Verified against real registered action names: the self_env_restart_service verb
+    (tools/self_env/tool.py). self_modify /
     tool_manage are aspirational tokens kept for defense-in-depth (they already sit
     in DEFAULT_APPROVAL_REQUIRED_TOOLS + the correspondent-gate high-impact set)."""
     assert approval._ALWAYS_GATED_VERBS == frozenset({
         "self_modify",
-        "self_env_install_dep", "self_env_patch_source",
-        "self_env_restart_service", "self_env_git_pull",
-        "mcp_install", "tool_manage",
+        "self_env_restart_service",
+        "tool_manage",
         "x_browser_x_signup_start",
         "x_browser_x_post", "x_browser_x_reply", "x_browser_x_dm",
         # 073 W2: a DANGEROUS shell command waits for the owner even under
@@ -167,12 +166,11 @@ def test_always_gated_verbs_membership():
 def test_always_gated_verbs_stay_owner_queued(monkeypatch, tmp_path):
     _enable_full(monkeypatch)
     _posture2(monkeypatch)
-    gates, provider = approval.effective_approval_state("rob", tmp_path)
+    gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "auto_notify"
     queued, reported = approval.autonomous_gating_lanes(gates)
-    for verb in ("self_modify", "self_env_install_dep", "self_env_patch_source",
-                 "self_env_restart_service", "self_env_git_pull",
-                 "mcp_install", "tool_manage"):
+    for verb in ("self_modify", "self_env_restart_service",
+                 "tool_manage"):
         assert verb in queued, verb
         assert verb not in reported, verb
     # 073 W2 supersedes corrections item 5: shell_run is owner-queued, but the
@@ -185,8 +183,8 @@ def test_owner_pref_pin_still_tightens(monkeypatch, tmp_path):
     """approvals.require additions land in the owner-queued lane even under
     autonomous mode."""
     _enable_full(monkeypatch)
-    write_preference(tmp_path, "rob", "approvals.require", ["twitter_post"])
-    gates, provider = approval.effective_approval_state("rob", tmp_path)
+    write_preference(tmp_path, "alice", "approvals.require", ["twitter_post"])
+    gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert gates.get("twitter_post") == "pref"
     queued, reported = approval.autonomous_gating_lanes(gates)
     assert "twitter_post" in queued and "twitter_post" not in reported
@@ -197,8 +195,8 @@ def test_owner_provider_pref_tightens_over_auto_notify(monkeypatch, tmp_path):
     _PROVIDER_ORDER ladder — the pref wins over the mode default."""
     _enable_full(monkeypatch)
     _posture2(monkeypatch)
-    write_preference(tmp_path, "rob", "approvals.provider", "deny")
-    _gates, provider = approval.effective_approval_state("rob", tmp_path)
+    write_preference(tmp_path, "alice", "approvals.provider", "deny")
+    _gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "deny"
 
 
@@ -220,12 +218,12 @@ async def test_tool_auto_notify_hook_notifies_and_audits(monkeypatch):
         lambda *a, **k: audited.append(a))
 
     hook = approval_queue.make_tool_auto_notify_hook(object(), {"shell_run"})
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
     ok = ActionResult(extracted_content="ok")
 
     await hook("shell_run", {"cmd": "ls"}, ok, ctx)
     assert len(notified) == 1 and len(audited) == 1
-    assert notified[0][0] == "rob"
+    assert notified[0][0] == "alice"
     assert "shell_run" in notified[0][1]
     assert "AUTONOMY_MODE=autonomous" in notified[0][1]
 
@@ -241,7 +239,7 @@ async def test_tool_auto_notify_hook_skips_ungated_and_errored(monkeypatch):
         "tools.controller.approval_queue._push_owner_notification", _fake_notify)
 
     hook = approval_queue.make_tool_auto_notify_hook(object(), {"shell_run"})
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
 
     await hook("read_file", {}, ActionResult(extracted_content="ok"), ctx)
     await hook("shell_run", {}, ActionResult(error="boom"), ctx)
@@ -260,7 +258,7 @@ async def test_tool_auto_notify_hook_suppressed_on_taint(monkeypatch):
 
     hook = approval_queue.make_tool_auto_notify_hook(
         object(), {"shell_run"}, taint_probe=lambda: True)
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
     await hook("shell_run", {"cmd": "ls"}, ActionResult(extracted_content="ok"), ctx)
     assert notified == []
 
@@ -280,7 +278,7 @@ async def test_tool_auto_notify_hook_raising_taint_probe_fails_closed(monkeypatc
 
     hook = approval_queue.make_tool_auto_notify_hook(
         object(), {"shell_run"}, taint_probe=_boom)
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
     await hook("shell_run", {"cmd": "ls"}, ActionResult(extracted_content="ok"), ctx)
     assert notified == []
 
@@ -296,10 +294,10 @@ async def test_two_lane_wiring_queued_verb_routes_owner_queue(tmp_path, monkeypa
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
-    reason = await c._run_pre_tool_call_hooks("self_env_patch_source", {}, None)
+    reason = await c._run_pre_tool_call_hooks("self_env_restart_service", {}, None)
 
     assert reason is None  # the spy (owner_queue lane) approved
-    assert ("self_env_patch_source", {}) in _SpyProvider.calls
+    assert ("self_env_restart_service", {}) in _SpyProvider.calls
 
 
 @pytest.mark.asyncio
@@ -312,9 +310,9 @@ async def test_two_lane_wiring_queued_verb_denied_when_owner_queue_denies(
     _SpyProvider.outcome = False
 
     c = _make_controller(tmp_path)
-    reason = await c._run_pre_tool_call_hooks("self_env_patch_source", {}, None)
+    reason = await c._run_pre_tool_call_hooks("self_env_restart_service", {}, None)
 
-    assert reason is not None and "self_env_patch_source" in reason
+    assert reason is not None and "self_env_restart_service" in reason
 
 
 @pytest.mark.asyncio
@@ -339,7 +337,7 @@ async def test_two_lane_wiring_reported_verb_allowed_and_notifies(tmp_path, monk
     assert _SpyProvider.calls == []
 
     # Post: one owner notification for the successful run.
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
     await c._run_post_tool_call_hooks(
         "git_push", {}, ActionResult(extracted_content="ok"), ctx)
     assert len(notified) == 1 and "git_push" in notified[0][1]
@@ -366,7 +364,7 @@ def test_payment_tools_excluded_from_generic_reported_lane_wiring(tmp_path, monk
 
     # Precondition: without the Controller-level exclusion, the pure lane split
     # WOULD put x402_request in `reported` — proving the fix is load-bearing.
-    gates, provider = approval.effective_approval_state("rob", tmp_path)
+    gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "auto_notify"
     assert "x402_invoice_x402_request" in gates
     _queued_raw, reported_raw = approval.autonomous_gating_lanes(gates)
@@ -432,7 +430,7 @@ async def test_payment_tools_generic_lane_does_not_double_notify(tmp_path, monke
         "tools.controller.approval_queue._push_owner_notification", _fake_notify)
 
     c = _make_controller(tmp_path)
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
     result = ActionResult(extracted_content="ok", metadata={
         "request_id": "inv_abc123", "amount_usd": 5.0, "purpose": "consulting"})
     await c._run_post_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, result, ctx)
@@ -460,7 +458,7 @@ async def test_supervised_wiring_still_single_lane(tmp_path, monkeypatch):
     reason = await c._run_pre_tool_call_hooks("git_push", {}, None)
     assert reason is not None and "git_push" in reason
 
-    ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
+    ctx = types.SimpleNamespace(user_id="alice", session_id="s1")
     await c._run_post_tool_call_hooks(
         "git_push", {}, ActionResult(extracted_content="ok"), ctx)
     assert notified == []
@@ -542,7 +540,7 @@ def test_money_spend_flags_default_false_under_full_autonomy_and_not_mode_govern
     from tools.x402 import x402_client_enabled
 
     assert x402_client_enabled() is False
-    wallet_cfg = load_wallet_config(os.environ, user_id="rob", home_dir=None)
+    wallet_cfg = load_wallet_config(os.environ, user_id="alice", home_dir=None)
     assert wallet_cfg.enabled is False
 
     for venue in ("hyperliquid", "polymarket"):

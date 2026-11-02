@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX sh
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    for k in ("AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL", "SHELL_BACKEND",
+    for k in ("AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "SHELL_BACKEND",
               "CODE_EXEC_SSH_HOST", "CODE_EXEC_SSH_USER", "CODE_EXEC_SSH_SANDBOXED",
               "CODE_EXEC_SSH_KEY"):
         monkeypatch.delenv(k, raising=False)

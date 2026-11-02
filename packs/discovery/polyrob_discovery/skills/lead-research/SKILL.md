@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Finding and qualifying sales leads'
   polyrob-priority: '6'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["anysite"]}'
   polyrob-version: '1'
 ---

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Vetting a skill before you install or trust it'
   polyrob-priority: '4'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Skill Security Review

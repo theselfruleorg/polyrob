@@ -29,12 +29,12 @@ class _Controller:
         self.registry = _Registry()
         self.container = type("C", (), {
             "config": type("Cfg", (), {"data_dir": str(data_dir)})()})()
-        self.user_id = "rob"
+        self.user_id = "alice"
         self.orchestrator = type("O", (), {"workspace_dir": workspace})()
 
 
 def _ctx():
-    return type("Ctx", (), {"user_id": "rob", "role": "orchestrator",
+    return type("Ctx", (), {"user_id": "alice", "role": "orchestrator",
                             "is_sub_agent": False, "session_id": "s",
                             "metadata": {}})()
 
@@ -42,7 +42,7 @@ def _ctx():
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 64
 
 
-def _write_pfp(home, instance="rob"):
+def _write_pfp(home, instance="alice"):
     from core.avatar import set_avatar
     return set_avatar(home, instance, PNG, source="file:face.png").path
 
@@ -51,7 +51,7 @@ def _write_pfp(home, instance="rob"):
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AVATAR_TOOL_ENABLED", "true")
-    monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "alice")
     return tmp_path
 
 
@@ -80,7 +80,7 @@ async def test_it_reports_its_avatar_and_where_it_came_from(home):
 async def test_an_unreadable_record_is_not_reported_as_absent(home):
     from core.avatar import avatar_dir
     _write_pfp(home)
-    (avatar_dir(home, "rob") / "avatar.json").write_text("{broken")
+    (avatar_dir(home, "alice") / "avatar.json").write_text("{broken")
     c = _Controller(home)
     fn, model = _action(c)
     res = await fn(model(), _ctx())
@@ -188,7 +188,7 @@ async def test_set_from_a_workspace_file_on_an_owner_turn(home, tmp_path, monkey
     res = await fn(model(set_from="new.png"), _ctx())
     assert res.error is None, res.error
     from core.avatar import load_avatar
-    st = load_avatar(home, "rob")
+    st = load_avatar(home, "alice")
     assert st.is_set and st.source == "file:new.png"
     assert st.path.read_bytes() == PNG + b"new"
     # set_from writes the slot only; it must not claim the profile photos changed
@@ -210,7 +210,7 @@ async def test_set_from_a_path_outside_the_workspace_is_refused(home, tmp_path, 
         res = await fn(model(set_from=ref), _ctx())
         assert res.error and "refused" in res.error
     from core.avatar import load_avatar
-    assert load_avatar(home, "rob").is_default  # unchanged
+    assert load_avatar(home, "alice").is_default  # unchanged
 
 
 @pytest.mark.asyncio
@@ -225,7 +225,7 @@ async def test_set_from_is_refused_on_a_non_owner_turn(home, tmp_path):
     res = await fn(model(set_from="new.png"), ctx)
     assert res.error and "denied" in res.error
     from core.avatar import load_avatar
-    assert load_avatar(home, "rob").is_default  # unchanged
+    assert load_avatar(home, "alice").is_default  # unchanged
 
 
 @pytest.mark.asyncio

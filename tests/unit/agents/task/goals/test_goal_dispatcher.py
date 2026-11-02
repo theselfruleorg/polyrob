@@ -492,7 +492,7 @@ async def test_completed_goal_pushes_result_to_owner(tmp_path, monkeypatch):
         deliver_self_wake = None  # isolate the owner-push path
 
     disp = GoalDispatcher(board, _Agent())
-    goal = board.create(user_id="rob", title="Post the announcement")
+    goal = board.create(user_id="alice", title="Post the announcement")
     # The owner-completion push moved out of _self_wake (agent re-entry only) into
     # _notify_owner_done (decoupled, GOAL_NOTIFY_ON_DONE) — 2026-07-08.
     await disp._notify_owner_done(goal, "sess-1", "Posted the thread — 3 tweets.")

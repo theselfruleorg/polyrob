@@ -47,7 +47,7 @@ APPROVE_HINT = "/apps approve {slug}  ·  console → Apps"
 
 class DeployParams(BaseModel):
     slug: str = Field(..., description="Public address label: lowercase letters, digits and "
-                                       "single hyphens (e.g. 'rob-status'). The app is served at "
+                                       "single hyphens (e.g. 'demo-status'). The app is served at "
                                        "https://<slug>.<base-domain>/ once the owner approves it.")
     dir: str = Field(..., description="Workspace-relative directory holding the app (the tested "
                                       "tree is snapshotted from here).")

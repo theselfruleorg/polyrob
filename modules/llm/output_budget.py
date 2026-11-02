@@ -30,7 +30,9 @@ Defaults: ``AUTONOMOUS_MAX_OUTPUT_TOKENS=0`` = off, byte-identical.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +75,33 @@ def apply_output_budget(llm: Any, cap: int) -> int:
     return cap
 
 
+#: 095 W1d: an output cap for the calls inside :func:`bounded_output` only — a
+#: context variable, not a client stamp, because the client is shared per
+#: provider and a concurrent sub-agent on it must not inherit the bound.
+_CALL_CAP: ContextVar[int] = ContextVar("polyrob_call_output_cap", default=0)
+
+
+@contextmanager
+def bounded_output(cap: int) -> Iterator[None]:
+    """Narrow the output ceiling of the calls inside to *cap* (this task only)."""
+    token = _CALL_CAP.set(cap if isinstance(cap, int) and cap > 0 else 0)
+    try:
+        yield
+    finally:
+        _CALL_CAP.reset(token)
+
+
 def output_token_cap(client: Any, default_cap: int) -> int:
     """The per-request output ceiling: ``LLM_MAX_OUTPUT_TOKENS`` narrowed by this
-    session's autonomous budget, if one was stamped."""
+    session's autonomous budget, if one was stamped, and by a
+    :func:`bounded_output` scope."""
     from core.env import int_env
     cap = int_env("LLM_MAX_OUTPUT_TOKENS", default_cap)
     if cap <= 0:
         cap = default_cap
+    call_cap = _CALL_CAP.get()
+    if call_cap > 0:
+        cap = min(cap, call_cap)
     # Only an int counts. `int(x)` on an arbitrary object is a trap — a MagicMock
     # answers 1, which would silently pin every request to a 1-token ceiling.
     raw = getattr(client, _ATTR, 0)

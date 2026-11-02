@@ -222,7 +222,7 @@ def test_a_gated_name_on_a_money_server_runs():
 
 
 def test_reregistering_after_an_install_adds_no_second_ask(monkeypatch):
-    """mcp_install re-runs the registrar on the same Controller: the existing
+    """A later MCP load re-runs the registrar on the same Controller: the existing
     money actions are skipped, so one call still asks the owner once."""
     provider = _Provider(True)
     import tools.controller.approval as approval

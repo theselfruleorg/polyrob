@@ -14,10 +14,10 @@ from tools.defi.trade_params import DeployTokenParams, SolanaDeployTokenParams
 
 @pytest.mark.parametrize("name", [
     "Rоb Coin",          # Cyrillic o — a homoglyph
-    "Rob⁦Coin",          # bidi isolate (the old filter missed it)
-    "Rob\u0085Coin",          # C1 control
-    "Rob Coin",          # no-break space
-    "Rob \U0001F680",         # emoji
+    "Demo⁦Coin",          # bidi isolate (the old filter missed it)
+    "Demo\u0085Coin",          # C1 control
+    "Demo Coin",          # no-break space
+    "Demo \U0001F680",         # emoji
     "山羊",           # CJK: not ASCII, refused under D6
 ])
 def test_a_non_ascii_name_refuses_on_both_rails(name):
@@ -29,10 +29,10 @@ def test_a_non_ascii_name_refuses_on_both_rails(name):
         V._validate_metadata_text(SimpleNamespace(name="", symbol=name[:16]))
 
 
-@pytest.mark.parametrize("name", ["Rob Coin", "R-2 $ROB! (v1.0) ~#", "A"])
+@pytest.mark.parametrize("name", ["Demo Coin", "R-2 $DEMO! (v1.0) ~#", "A"])
 def test_an_ordinary_ascii_name_still_mints(name):
-    T.encode_constructor_args(name=name, symbol="ROB", decimals=18, supply_raw=1)
-    V._validate_metadata_text(SimpleNamespace(name=name, symbol="ROB"))
+    T.encode_constructor_args(name=name, symbol="DEMO", decimals=18, supply_raw=1)
+    V._validate_metadata_text(SimpleNamespace(name=name, symbol="DEMO"))
 
 
 # -- exact supply -----------------------------------------------------------
@@ -190,10 +190,10 @@ async def test_the_telegram_retry_hint_carries_the_exact_supply(monkeypatch):
         seen["supply"] = params.supply
         return SimpleNamespace(error=None, extracted_content="dry run ok")
     monkeypatch.setattr(dv, "perform_deploy_token", _fake)
-    out = await token_ops.deploy_reply("owner", ["ROB", "1234567", "Rob", "Coin",
+    out = await token_ops.deploy_reply("owner", ["DEMO", "1234567", "Demo", "Coin",
                                                  "on", "base"])
     assert seen["supply"] == Decimal(1234567)
-    assert "/deploy ROB 1234567 Rob Coin on base go" in out
+    assert "/deploy DEMO 1234567 Demo Coin on base go" in out
     assert "e+06" not in out
 
 
@@ -206,11 +206,11 @@ async def test_the_evm_approval_text_shows_the_exact_supply_and_the_name_in_repr
     monkeypatch.setenv("DEFI_DEPLOY_ENABLED", "true")
     tool, _ = _tool()
     res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1234567,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1234567,
         max_spend_usd=5.0, dry_run=True))
     assert res.error is None, res.error
     text = res.extracted_content
-    assert "'ROB' ('Rob Coin')" in text
+    assert "'DEMO' ('Demo Coin')" in text
     assert "supply:   1234567 whole units" in text
     assert "e+06" not in text
 
@@ -219,7 +219,7 @@ def test_the_cli_confirmation_shows_the_exact_supply():
     from click.testing import CliRunner
     from cli.commands.wallet import wallet_cmd
     res = CliRunner().invoke(
-        wallet_cmd, ["deploy-token", "ROB", "1234567", "Rob", "Coin",
+        wallet_cmd, ["deploy-token", "DEMO", "1234567", "Demo", "Coin",
                      "--chain", "base", "--execute"], input="n\n")
     assert "fixed supply of 1234567 on base" in res.output
     assert "e+06" not in res.output
@@ -228,7 +228,7 @@ def test_the_cli_confirmation_shows_the_exact_supply():
 def test_the_cli_refuses_a_supply_that_is_not_a_number():
     from click.testing import CliRunner
     from cli.commands.wallet import wallet_cmd
-    res = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "lots", "Rob",
+    res = CliRunner().invoke(wallet_cmd, ["deploy-token", "DEMO", "lots", "Demo",
                                              "--chain", "base"])
     assert res.exit_code != 0
     assert "SUPPLY" in res.output or "supply" in res.output
@@ -260,7 +260,7 @@ async def test_deploy_parses_and_the_retry_hint_round_trips(
     monkeypatch.setattr(dv, "perform_deploy_token", _fake)
     monkeypatch.setattr(sv, "perform_solana_deploy_token", _fake)
     extra = ["on", chain]
-    out = await token_ops.deploy_reply("owner", ["ROB", typed, "Rob", "Coin"] + extra)
+    out = await token_ops.deploy_reply("owner", ["DEMO", typed, "Demo", "Coin"] + extra)
     assert seen == [expected], out
     # The owner taps / pastes the hint: it re-parses to the SAME supply.
     out2 = await token_ops.deploy_reply("owner", _hint_args(out))
@@ -283,30 +283,30 @@ def test_a_launchpad_name_uses_the_same_ascii_rule():
     from tools.launchpad import pons
     creator = "0x" + "11" * 20
     with pytest.raises(ValueError, match="printable ASCII"):
-        pons.build_launch(terms=_terms(), name="R\u043eb", symbol="ROB",
+        pons.build_launch(terms=_terms(), name="D\u0435mo", symbol="DEMO",
                           creator=creator)
     with pytest.raises(ValueError, match="printable ASCII"):
-        pons.build_launch(terms=_terms(), name="Rob", symbol="R\u2066B",
+        pons.build_launch(terms=_terms(), name="Demo", symbol="DE\u2066MO",
                           creator=creator)
-    pons.build_launch(terms=_terms(), name="Rob Coin", symbol="ROB",
+    pons.build_launch(terms=_terms(), name="Demo Coin", symbol="DEMO",
                       creator=creator)
 
 
 def test_solana_mints_the_validated_stripped_text():
     name, symbol = V._validate_metadata_text(
-        SimpleNamespace(name="  Rob Coin ", symbol=" ROB "))
-    assert (name, symbol) == ("Rob Coin", "ROB")
+        SimpleNamespace(name="  Demo Coin ", symbol=" DEMO "))
+    assert (name, symbol) == ("Demo Coin", "DEMO")
     assert V._validate_metadata_text(
-        SimpleNamespace(name="   ", symbol="ROB")) == ("ROB", "ROB")
+        SimpleNamespace(name="   ", symbol="DEMO")) == ("DEMO", "DEMO")
 
 
 def test_the_cli_refuses_a_non_ascii_name_before_the_confirm_and_quotes_the_name():
     from click.testing import CliRunner
     from cli.commands.wallet import wallet_cmd
-    res = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "1,000,000",
+    res = CliRunner().invoke(wallet_cmd, ["deploy-token", "DEMO", "1,000,000",
                                           "Rоb", "--chain", "base", "--execute"], input="y\n")
     assert res.exit_code != 0 and "printable ASCII" in res.output
     assert "Proceed?" not in res.output
-    ok = CliRunner().invoke(wallet_cmd, ["deploy-token", "ROB", "1,000,000",
-                                         "Rob", "Coin", "--chain", "base", "--execute"], input="n\n")
-    assert "'ROB' ('Rob Coin') with a fixed supply of 1000000" in ok.output
+    ok = CliRunner().invoke(wallet_cmd, ["deploy-token", "DEMO", "1,000,000",
+                                         "Demo", "Coin", "--chain", "base", "--execute"], input="n\n")
+    assert "'DEMO' ('Demo Coin') with a fixed supply of 1000000" in ok.output

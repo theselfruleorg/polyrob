@@ -70,7 +70,7 @@
     {
       "name": "/goal",
       "group": "work",
-      "help": "Add, show, retry, pause, or stop one goal",
+      "help": "Add, show, retry, grant, pause, or stop one goal",
       "aliases": []
     },
     {
@@ -88,7 +88,7 @@
     {
       "name": "/job",
       "group": "work",
-      "help": "Add, change, pause, resume, run now, or stop one scheduled job",
+      "help": "Add, change, grant, pause, resume, run, or stop one scheduled job",
       "aliases": []
     },
     {
@@ -196,7 +196,7 @@
     {
       "name": "/send",
       "group": "money",
-      "help": "Send native value or a token to an address: a quote, then `go`",
+      "help": "Send native value or a token to an address: a quote, then `go`. A bare amount is tokens; `$22` is dollars, which the agent converts",
       "aliases": []
     },
     {
@@ -402,7 +402,7 @@
     {
       "name": "/model",
       "group": "set up",
-      "help": "The model I run on, where that choice comes from, and how to change it",
+      "help": "The model this chat runs on — switch it live, set your default, pick reasoning",
       "aliases": []
     },
     {

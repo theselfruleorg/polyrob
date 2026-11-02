@@ -100,7 +100,7 @@ export function rowNode(session, copy) {
     when.dataset.created = session?.created_iso || session?.created || "";
     meta.appendChild(when);
   }
-  // 043 A32: a session whose live orchestrator runs in Rob's OWN process, not
+  // 043 A32: a session whose live orchestrator runs in the agent's OWN process, not
   // this console. GET /api/webgate/chats — the ONE catalog since A12 deleted
   // the full-tree /api/sessions — annotates it `runtime:"agent"` (+owner_pid);
   // the chip says so, because a row that looks ordinary hides that the console

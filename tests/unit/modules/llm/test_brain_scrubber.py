@@ -1,6 +1,6 @@
 """Tests for modules.llm.brain_scrubber — the shared brain-state stripper.
 
-OR-7 (live multi-provider round, 2026-06): ROB instructs every model to emit its
+OR-7 (live multi-provider round, 2026-06): POLYROB instructs every model to emit its
 brain-state as a ``{"current_state": {...}}`` JSON object in the text-content
 field. On a streaming provider that content reaches the single stream funnel
 (hitl_manager.stream_output → CLI / WebView / API). The old guard

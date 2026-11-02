@@ -242,7 +242,7 @@ $ polyrob
 /help                    the grouped command list; /help <verb> explains one
 /status                  health first, then session, goals, loops, wallet
 /usage [days]            AI cost by kind of work, job, model and day
-/model <provider> <model>  swap the model live and persist it as the default
+/model <name> [default]    swap the model live (sonnet, glm, deepseek-pro …); default = keep it
 /memory [search <query>]   the memory provider, or recall across sessions
 /tools                   the agent's registered tools
 /goals                   the goal board summary

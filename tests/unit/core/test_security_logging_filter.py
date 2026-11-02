@@ -20,7 +20,7 @@ before this test file existed (there was NO test coverage for it at all):
 3. **Pattern drift vs the SSOT** (``core/secret_patterns.py`` — already shared by
    ``core/secret_scrub.py`` and ``cli/ui/secrets.py``). The filter hand-rolled its
    own regex list instead of importing the SSOT; PEM blocks, ``sk-``/``pk-``/``rk-``
-   provider keys (any length), ``rob_...`` POLYROB API keys, and AWS ``AKIA...``
+   provider keys (any length), ``polyrob_...`` POLYROB API keys (and the legacy short prefix), and AWS ``AKIA...``
    access-key IDs all passed through completely unredacted.
 
 The acceptance test is ``test_secret_never_reaches_log_file_via_args_or_exception``:
@@ -149,7 +149,8 @@ def test_filter_scrubs_exception_traceback_text():
         ("BEARER", "Authorization: Bearer abcd1234efgh5678ijkl"),
         ("KV (prefixed env-var shape)", "MY_SERVICE_API_KEY=abcdef0123456789zzzz"),
         ("PROVIDER_KEY (sk-/pk-/rk-, any length)", "sk-abcdefghijklmnopqrstuvwx"),
-        ("POLYROB_KEY (rob_...)", "rob_abcdefghijklmnopqrstuvwx"),
+        ("POLYROB_KEY (polyrob_...)", "polyrob_abcdefghijklmnopqrstuvwx"),
+        ("POLYROB_KEY (legacy prefix)", "rob_abcdefghijklmnopqrstuvwx"),
         ("AWS access-key id (AKIA...)", "AKIAIOSFODNN7EXAMPLE"),
     ],
 )

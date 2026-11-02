@@ -106,6 +106,8 @@ def named_truncation(
 PAGING_WAY_OUT = "use offset/limit to read more"
 #: 2026-10-13 review A4: the way out when the tool has NO paging parameters —
 #: "use offset/limit" sent the model to params that do not exist.
+#: 095 W2 (HI-15): an error text is cut to its head; there is nothing to page.
+ERROR_WAY_OUT = "the error text was cut to its head; act on what it says"
 NO_PAGING_WAY_OUT = ("this tool has no offset/limit and the rest was not saved; "
                      "narrow the request (a filter, a smaller page, a query) to see more")
 

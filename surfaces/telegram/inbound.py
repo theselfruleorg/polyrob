@@ -108,6 +108,73 @@ def _detect_bot_mention(msg: dict, text: str, bot_username: Optional[str],
     return hit or is_reply_to_bot(msg, bot_username=bot_username, bot_id=bot_id)
 
 
+#: Message fields that carry an attachment, in the order a reply names them.
+_REPLY_MEDIA_FIELDS = ("photo", "video", "animation", "document", "audio", "voice",
+                       "video_note", "sticker", "poll", "location", "venue",
+                       "contact", "dice")
+
+
+def _origin_name(origin: dict) -> str:
+    """A ``MessageOrigin``'s display name (``external_reply`` / ``forward_origin``)."""
+    user = origin.get("sender_user") or {}
+    chat = origin.get("sender_chat") or origin.get("chat") or {}
+    if user.get("username"):
+        return f"@{user['username']}"
+    return str(user.get("first_name") or origin.get("sender_user_name")
+               or chat.get("title") or "")
+
+
+def extract_reply_ref(msg: dict, reply_msg: Optional[dict] = None, *,
+                      bot_username: Optional[str] = None,
+                      bot_id: Optional[int] = None):
+    """The message ``msg`` replies to, as a :class:`ReplyRef`, or None.
+
+    Telegram sends the replied-to message WHOLE (``reply_to_message``: text or
+    caption, sender, attachments), the speaker's selected part (``quote``) and,
+    for a reply to a message in another chat, ``external_reply``. All three were
+    dropped here before: only the id survived, so the agent answered a reply
+    without the message it was about.
+    """
+    from core.surfaces.reply_ref import ReplyRef
+    if not isinstance(msg, dict):
+        return None
+    if reply_msg is None:
+        reply_msg = msg.get("reply_to_message") or {}
+    quote = str((msg.get("quote") or {}).get("text") or "")
+    external = msg.get("external_reply") or {}
+    if reply_msg:
+        frm = reply_msg.get("from") or {}
+        sender_chat = reply_msg.get("sender_chat") or {}
+        if frm.get("username"):
+            name = f"@{frm['username']}"
+        else:
+            name = str(frm.get("first_name") or sender_chat.get("title") or "")
+        sender_id = "" if sender_chat else str(frm.get("id") or "")
+        from_self = bool(frm.get("is_bot")) and (
+            (bot_id is not None and frm.get("id") == bot_id)
+            or (bool(bot_username)
+                and str(frm.get("username") or "").lower() == str(bot_username).lower()))
+        media_kind = next((f for f in _REPLY_MEDIA_FIELDS if reply_msg.get(f)), "")
+        ref = ReplyRef(
+            message_id=str(reply_msg.get("message_id") or ""),
+            sender_name=name, sender_id=sender_id, from_self=from_self,
+            text=str(reply_msg.get("text") or reply_msg.get("caption") or ""),
+            quote=quote, media_kind=media_kind,
+            forwarded=is_forwarded(reply_msg))
+    elif external:
+        # A reply to a message in ANOTHER chat: Telegram gives its origin and
+        # attachments, never its text — the quote is all the words there are.
+        ref = ReplyRef(
+            message_id=str(external.get("message_id") or ""),
+            sender_name=_origin_name(external.get("origin") or {}),
+            text="", quote=quote,
+            media_kind=next((f for f in _REPLY_MEDIA_FIELDS if external.get(f)), ""),
+            external=True)
+    else:
+        return None
+    return None if ref.empty else ref
+
+
 def build_inbound_message(update: dict, user_directory: Any,
                           bot_username: Optional[str] = None,
                           bot_id: Optional[int] = None) -> Optional[InboundMessage]:
@@ -187,8 +254,15 @@ def build_inbound_message(update: dict, user_directory: Any,
     mentions_bot = None
     reply_to = None
     reply_msg = msg.get("reply_to_message") or {}
+    # ⚠️ In a forum, Telegram sets `reply_to_message` on EVERY topic message to
+    # the topic's root (the `forum_topic_created` service message). That is the
+    # topic, not a reply — a real reply inside a topic names its own message.
+    if reply_msg.get("forum_topic_created") is not None:
+        reply_msg = {}
     if reply_msg.get("message_id") is not None:
         reply_to = str(reply_msg["message_id"])
+    reply_ref = extract_reply_ref(msg, reply_msg, bot_username=bot_username,
+                                  bot_id=bot_id)
     # 044 T9: _chat_type now differentiates group/supergroup/channel (it used to
     # collapse every non-private type to "group"); mention detection must fire for
     # every ROOM, not just the literal "group" value.
@@ -208,6 +282,7 @@ def build_inbound_message(update: dict, user_directory: Any,
         mentions_bot=mentions_bot,
         sender_is_bot=sender_is_bot(msg),
         forwarded=forwarded,
+        reply_ref=reply_ref,
     )
 
 

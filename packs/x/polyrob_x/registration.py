@@ -6,10 +6,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 #: The 057 WS-A credential verdict for the X API tool (``tools.tool_disclosure``).
-TWITTER_CREDENTIAL_GATE = (
-    "twitter_api",
-    "the X API refused this account (402 — credits). The owner must top up, or "
-    "the browser rail (x_browser) carries the post instead.")
+TWITTER_CREDENTIAL_GATE = ("twitter_api", "api-credits")
 
 
 def register_twitter_tool(force: bool = False) -> bool:

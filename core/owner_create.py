@@ -163,6 +163,7 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
     payload: Dict[str, Any] = dict(extra_payload or {})
     _normalize_target_in(payload)
     payload["actor"] = OWNER_ACTOR  # 085 W8 A4: the dispatch re-check reads it
+    payload["armed_by"] = OWNER_ACTOR  # who owns the job (core.cron_outcome.agent_armed)
     named_tools = _clean_tools(tools)
     if named_tools:
         payload["tools"] = named_tools

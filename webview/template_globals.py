@@ -38,7 +38,7 @@ def _console_nav() -> list:
     try:
         from webview.copy import t
         from webview.pages_new import NAV
-        # The shell's own words (nav.*: "Chat", "Rob"), not the route keys.
+        # The shell's own words (nav.*: "Chat", "Agent"), not the route keys.
         return [{"href": item["href"], "label": t(f"nav.{item['key']}")} for item in NAV]
     except Exception:  # the shell is optional; a nav we cannot build is no nav
         return []

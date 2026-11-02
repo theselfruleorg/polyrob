@@ -27,7 +27,7 @@ def test_battery_covers_every_documented_shape():
         "bearer": "Authorization: Bearer abcdef123456789",
         "kv": "OPENAI_API_KEY=supersecretvalue123",
         "provider": "sk-abcdefghijklmnop123456",
-        "rob": "rob_abcdefghijklmnop1234",
+        "alice": "polyrob_abcdefghijklmnop1234",
         "aws": "AKIAABCDEFGHIJKLMNOP",
         "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyb2IifQ.c2ln",
         # S10: the API key is the URL PATH — no `=`, no prefix, no Bearer.

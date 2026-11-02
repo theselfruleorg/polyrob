@@ -1,6 +1,6 @@
 """A cron run opens with the owner rules NEWER than the job's own text.
 
-Prod 2026-10-05: at 17:56 the owner said "Approve posts with me"; Rob wrote it
+Prod 2026-10-05: at 17:56 the owner said "Approve posts with me"; the agent wrote it
 to owner.md. At 18:01 the PROMO cron run had that rule in its foundation
 context and posted anyway — its task text said "post one; no owner message on
 a routine slot", and the model followed the job. A rule the owner sets after a

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Reading, converting or organizing local files and data'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-version: '1'
 ---
 # File & Data Ops

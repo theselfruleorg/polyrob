@@ -81,6 +81,14 @@ def maybe_reroute(agent: Any, count: int) -> bool:
             logger.warning(
                 "%d consecutive LLM timeouts — routing this session by latency "
                 "for the rest of the run (LLM_TIMEOUT_REROUTE)", count)
+            # 095 W2 (HI-15): one model-visible line, so the model knows why.
+            try:
+                from modules.llm.messages import MessageOrigin, make_control_message
+                agent.message_manager.push_ephemeral_message(make_control_message(
+                    f"[routing] {count} model calls in a row timed out; this run now "
+                    "routes by latency. Keep each step small.", MessageOrigin.INTERVENTION))
+            except Exception:
+                logger.debug("reroute note skipped", exc_info=True)
             return True
     except Exception:  # pragma: no cover - defensive
         logger.debug("timeout reroute skipped", exc_info=True)

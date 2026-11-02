@@ -14,7 +14,7 @@ def test_goal_ev_records_to_event_log(tmp_path, monkeypatch):
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: test_log)
 
     from agents.task.goals import dispatcher
-    goal = SimpleNamespace(id="g1", user_id="rob", title="Post the announcement")
+    goal = SimpleNamespace(id="g1", user_id="alice", title="Post the announcement")
 
     dispatcher._goal_ev(goal, "started")
     dispatcher._goal_ev(goal, "done", session_id="s1", spend_usd=0.02, steps=7)
@@ -26,7 +26,7 @@ def test_goal_ev_records_to_event_log(tmp_path, monkeypatch):
     assert outcomes == {"started", "done", "blocked"}
     done = [r for r in rows if r["attrs"]["outcome"] == "done"][0]
     assert done["attrs"]["steps"] == 7
-    assert done["user_id"] == "rob"
+    assert done["user_id"] == "alice"
     assert done["attrs"]["goal_id"] == "g1"
     assert done["source"] == "goal"
 

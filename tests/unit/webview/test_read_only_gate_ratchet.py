@@ -234,7 +234,7 @@ def test_a_read_only_console_cannot_mint_an_api_key(monkeypatch):
     from fastapi import HTTPException
     from webview import webgate
     monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
-    for path in ("/api/auth/api-keys", "/api/auth/api-keys/rob_abc"):
+    for path in ("/api/auth/api-keys", "/api/auth/api-keys/key_abc"):
         with pytest.raises(HTTPException) as exc:
             _run(webgate.read_only_guard(_guard_request("POST", path)))
         assert exc.value.status_code == 403, path

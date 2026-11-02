@@ -73,7 +73,7 @@ def test_the_chat_sentences_are_byte_identical_to_the_pre_split_wording(_no_stor
     only thing that was supposed to change was the CLI's."""
     assert adm.status(None, "telegram", "-100") == (
         "Paid actions are not enabled in telegram:-100. Set a price "
-        "(/paid price mute 0.50), an asset (/paid asset rob), then "
+        "(/paid price mute 0.50), an asset (/paid asset demo), then "
         "/paid enable.")
     assert adm._max_dur_hint("mute") == (
         " Longest mute: /groups set here paid_mute_max_duration <e.g. 24h>.")

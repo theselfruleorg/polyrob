@@ -9,12 +9,12 @@ GENERATED from the three SSOTs, so it cannot drift from them:
   next to ``REMEDIES`` (the remedy text the agent reads in a tool result);
 * ``core/verbs.py`` — the help line of every owner verb the table names.
 
-The skill is PINNED for owner chat seats
-(``agents/task/agent/core/construction.py::owner_seat_skill_ids``). ⚠️ Never
+The skill is PINNED for owner chat seats and goal/cron runs
+(``agents/task/agent/core/seat_skills.py::owner_seat_skill_ids``). ⚠️ Never
 rename the skill id ``harness-manual``: a pin names it.
 
     python devtools/gen_harness_manual.py            # rewrite the skill
-    x    # exit 1 if stale
+    python devtools/gen_harness_manual.py --check    # exit 1 if stale
 
 ``tests/unit/core/test_093_remedy_actors.py`` fails until you re-run it after a
 change to ``REMEDY_ACTORS`` or a named verb's help line.
@@ -35,9 +35,8 @@ license: MIT
 metadata:
   polyrob-when: 'A tool you need is missing, gated or refuses'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-version: '1'
-  polyrob-generated: 'devtools/gen_harness_manual.py from core/tool_gates.py REMEDY_ACTORS + core/verbs.py; do not edit'
+  polyrob-generated: 'devtools/gen_harness_manual.py from core/tool_gates.py REMEDY_ACTORS + REFUSAL_KINDS + core/verbs.py; do not edit'
 ---"""
 
 # The owner-seat prompt rule (data/prompts/system/harness.md) already says
@@ -47,10 +46,18 @@ RULES = """# Harness manual
 
 - Never name a cause you did not read from a tool result.
 - Never advise a restart unless the remedy says restart.
-- An operator fix is never a card: `propose_setting` files it; say "this needs
-  the operator; I filed it as #N".
+- An operator fix is never a card: on an owner turn `propose_setting` files it
+  (say "this needs the operator; I filed it as #N"); on a goal/cron run raise ONE
+  `owner_ask`.
 
 ## Gate — who · when · fix"""
+
+REFUSALS_HEAD = "\n## Refusal — who · when · lever · retry"
+
+
+class _Placeholders(dict):
+    def __missing__(self, name):
+        return "the remedy it names" if name == "lever" else f"<{name}>"
 
 
 def _verbs_named(actors) -> list:
@@ -72,10 +79,19 @@ def render() -> str:
         rows.append(f"- {label}: {a.who} · {a.when} · {a.verb}")
     used = [REMEDY_ACTORS[k] for k in ("load_tool",) + tuple(STATUS_REASONS)]
     # Every verb the table names must be a real owner verb (drift fails --check).
+    # 095 W2: the run-time table (a hook's refusal), one line per kind.
+    from core.tool_gates import REFUSAL_KINDS
+    refusals = [REFUSALS_HEAD]
+    for kind, row in REFUSAL_KINDS.items():
+        a = row.actor
+        lever = a.verb.format_map(_Placeholders())
+        refusals.append(f"- {kind}: {a.who} · {a.when} · {lever} · "
+                        f"{'retry' if row.retryable else 'no retry'}")
+        used.append(a)
     missing = [n for n in _verbs_named(used) if verb_for(n) is None]
     if missing:
-        raise SystemExit(f"REMEDY_ACTORS names unknown verbs: {missing}")
-    return "\n".join([FRONTMATTER, RULES, *rows]) + "\n"
+        raise SystemExit(f"REMEDY_ACTORS/REFUSAL_KINDS name unknown verbs: {missing}")
+    return "\n".join([FRONTMATTER, RULES, *rows, *refusals]) + "\n"
 
 
 def main(argv) -> int:

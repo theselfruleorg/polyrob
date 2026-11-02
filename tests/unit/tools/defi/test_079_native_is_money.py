@@ -78,21 +78,22 @@ def test_every_chain_row_sets_a_fee_reserve_in_coin_units():
 
 def test_evm_native_row_is_valued_and_counted():
     text, md = _evm("base", 0.140662)
-    assert ("  ETH 0.140662 ($351.66) — 0.138662 spendable above a 0.002 ETH "
+    assert ("  ETH (gas + buying power) 0.140662 ($351.66) — 0.138662 spendable above a 0.002 ETH "
             "fee reserve.") in text
     assert "total incl. native: $351.66 (native $351.66 + tokens $0.00)" in text
     assert "  tokens (confidently valued only): $0.00" in text
     assert md["native_usd"] == pytest.approx(351.655)
 
 
-def test_robinhood_native_is_labelled_buying_power():
+def test_every_evm_native_is_labelled_buying_power():
+    # No chain is special: the native coin pays gas and buys on every chain.
     text, _ = _evm("robinhood", 0.140662)
     assert "  ETH (gas + buying power) 0.140662 ($351.66)" in text
 
 
 def test_unpriced_native_is_named_and_not_counted():
     text, md = _evm("base", 0.5, priced=False)
-    assert "ETH 0.500000 (unpriced — not counted in the total)" in text
+    assert "ETH (gas + buying power) 0.500000 (unpriced — not counted in the total)" in text
     assert "total incl. native: $0.00 — ETH unpriced, not counted" in text
     assert md["native_usd"] is None
 

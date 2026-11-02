@@ -4,7 +4,7 @@ import types
 from modules.llm.prefix_stamp import compute_stamps, read_stamps, stamp_client
 
 
-def _req(system="You are Rob.", tools=None):
+def _req(system="You are Nova.", tools=None):
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": "go"}]
     r = {"model": "m", "messages": msgs}
     if tools is not None:
@@ -15,7 +15,7 @@ def _req(system="You are Rob.", tools=None):
 def test_same_bytes_same_stamp_different_bytes_different_stamp():
     a = compute_stamps(_req(tools=[{"type": "function", "function": {"name": "x"}}]))
     b = compute_stamps(_req(tools=[{"type": "function", "function": {"name": "x"}}]))
-    c = compute_stamps(_req(system="You are Rob. Today is 2026-09-20.", tools=[{"type": "function", "function": {"name": "x"}}]))
+    c = compute_stamps(_req(system="You are Nova. Today is 2026-09-20.", tools=[{"type": "function", "function": {"name": "x"}}]))
     d = compute_stamps(_req(tools=[{"type": "function", "function": {"name": "y"}}]))
     assert a == b and len(a["prefix_sha"]) == 12 and len(a["tools_sha"]) == 12
     assert a["prefix_sha"] != c["prefix_sha"] and a["tools_sha"] == c["tools_sha"]
@@ -48,13 +48,13 @@ def test_stamps_ride_the_client_and_read_back_through_the_adapter():
 
 def test_anthropic_shaped_params_yield_a_prefix_sha():
     """Anthropic puts the system prompt in a top-level `system` key."""
-    out = compute_stamps({"model": "claude", "system": "You are Rob.",
+    out = compute_stamps({"model": "claude", "system": "You are Nova.",
                           "messages": [{"role": "user", "content": "go"}],
                           "tools": [{"name": "x"}]})
     assert len(out["prefix_sha"]) == 12 and len(out["tools_sha"]) == 12
     # the SAME text through the OpenAI shape hashes identically — one prefix
     # identity across providers, not one per transport.
-    assert out["prefix_sha"] == compute_stamps(_req(system="You are Rob."))["prefix_sha"]
+    assert out["prefix_sha"] == compute_stamps(_req(system="You are Nova."))["prefix_sha"]
 
 
 def test_anthropic_block_list_system_is_hashed_stably():
@@ -67,15 +67,15 @@ def test_anthropic_block_list_system_is_hashed_stably():
 
 
 def test_responses_api_instructions_are_the_prefix():
-    out = compute_stamps({"model": "gpt", "instructions": "You are Rob.",
+    out = compute_stamps({"model": "gpt", "instructions": "You are Nova.",
                           "input": [{"role": "user", "content": "go"}]})
-    assert out["prefix_sha"] == compute_stamps(_req(system="You are Rob."))["prefix_sha"]
+    assert out["prefix_sha"] == compute_stamps(_req(system="You are Nova."))["prefix_sha"]
 
 
 def test_explicit_system_argument_wins():
     out = compute_stamps({"messages": [{"role": "system", "content": "ignored"}]},
-                         system="You are Rob.")
-    assert out["prefix_sha"] == compute_stamps(_req(system="You are Rob."))["prefix_sha"]
+                         system="You are Nova.")
+    assert out["prefix_sha"] == compute_stamps(_req(system="You are Nova."))["prefix_sha"]
 
 
 def test_a_request_with_no_prefix_anywhere_is_still_silent():

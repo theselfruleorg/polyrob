@@ -29,13 +29,13 @@ def _home(tmp_path, monkeypatch):
               "EIP8004_IDENTITY_REGISTRY"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "demo")
     return tmp_path
 
 
 def _record(home, **over):
     from core.instance import erc8004_record_path
-    p = erc8004_record_path(home, "rob")
+    p = erc8004_record_path(home, "demo")
     p.parent.mkdir(parents=True, exist_ok=True)
     doc = {"chain": "base", "chain_id": 8453, "registry": REGISTRY,
            "agent_id": 42, "tx_hash": "0x" + "ab" * 32,
@@ -100,7 +100,7 @@ def test_a_corrupt_record_does_not_claim_anything(_home):
     """⚠️ Fail to `local`. An unreadable record is not evidence of a
     registration, and claiming one on a broken file is the worst outcome."""
     from core.instance import erc8004_record_path
-    p = erc8004_record_path(_home, "rob")
+    p = erc8004_record_path(_home, "demo")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("{ not json")
     reg = build_registration_file("https://example.test")
@@ -126,9 +126,9 @@ def test_a_record_missing_its_tx_hash_claims_nothing(_home):
 
 def test_the_record_is_written_only_with_a_confirmed_receipt(_home):
     from core.instance import load_erc8004_record, save_erc8004_record
-    save_erc8004_record(_home, "rob", chain="base", chain_id=8453,
+    save_erc8004_record(_home, "demo", chain="base", chain_id=8453,
                         registry=REGISTRY, agent_id=42, tx_hash="0x" + "cd" * 32)
-    rec = load_erc8004_record(_home, "rob")
+    rec = load_erc8004_record(_home, "demo")
     assert rec["agent_id"] == 42 and rec["registered_at"]
 
 
@@ -137,10 +137,10 @@ def test_saving_without_a_tx_hash_is_refused(_home):
     transaction is an assertion, and we already have a field for those."""
     from core.instance import save_erc8004_record
     with pytest.raises(ValueError):
-        save_erc8004_record(_home, "rob", chain="base", chain_id=8453,
+        save_erc8004_record(_home, "demo", chain="base", chain_id=8453,
                             registry=REGISTRY, agent_id=42, tx_hash=None)
 
 
 def test_an_absent_record_reads_as_none_not_a_crash(_home):
     from core.instance import load_erc8004_record
-    assert load_erc8004_record(_home, "rob") is None
+    assert load_erc8004_record(_home, "demo") is None

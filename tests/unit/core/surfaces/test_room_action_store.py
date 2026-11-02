@@ -14,7 +14,7 @@ def store(tmp_path):
 def _offer(**kw):
     base = dict(offer_id="off_1", surface="telegram", chat_id="-100123",
                 verb="mute", target_user_id="9911", target_name="someone",
-                duration_sec=3600, price_usd=0.50, asset_id="rob",
+                duration_sec=3600, price_usd=0.50, asset_id="demo",
                 amount_raw="1000000000000000000", requester_id="2277",
                 invoice_id="", status="pending", reason="",
                 created_at=time.time(), settled_at=0.0, applied_at=0.0,

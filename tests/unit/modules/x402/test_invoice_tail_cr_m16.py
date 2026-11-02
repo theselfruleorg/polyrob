@@ -52,7 +52,7 @@ def test_raw_tail_is_worth_less_than_a_cent_and_respects_the_step():
 @pytest.mark.asyncio
 async def test_created_evm_invoice_is_not_a_round_amount(x402_db):
     inv = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=5.0, purpose="a", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=5.0, purpose="a", db=x402_db)
     row = await x402_db.fetch_one(
         "SELECT amount_usd, amount_raw FROM x402_payment_requests WHERE id=?",
         (inv["request_id"],))

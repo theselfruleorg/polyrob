@@ -86,7 +86,7 @@ def _store(path: str) -> Optional[str]:
 
 def collect_self_evolution(user_id: str, *, data_dir: str,
                            instance_id: str) -> List[Item]:
-    """Quarantined proposals Rob wrote and will not apply until a person looks.
+    """Quarantined proposals the agent wrote and will not apply until a person looks.
 
     ⚠️ ``core.self_evolution.list_pending`` swallows each pipeline's own read
     failure internally (it logs and contributes nothing), so a partially broken
@@ -221,7 +221,7 @@ def collect_asks(user_id: str, *, data_dir: str) -> List[Item]:
 
 
 def collect_apps(user_id: str, *, data_dir: str) -> List[Item]:
-    """Apps Rob built and stopped on, waiting for an address to go live at.
+    """Apps the agent built and stopped on, waiting for an address to go live at.
 
     ``list_by_status`` is instance-wide; the tenant filter is applied here.
     """

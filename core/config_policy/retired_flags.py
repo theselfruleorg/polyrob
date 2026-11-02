@@ -36,7 +36,6 @@ from typing import Mapping, Optional
 #: permanent and the line can be deleted).
 RETIRED_FLAGS: dict[str, str] = {
     # legacy aliases — set the canonical name instead
-    "ROB_LOCAL": "POLYROB_LOCAL",
     "WEBGATE_MULTITENANT": "POLYROB_POSTURE=multitenant",
     "OWNER_SURFACES": "OWNER_SURFACE",
     "BOT_INSTANCE_ID": "POLYROB_INSTANCE_ID",
@@ -84,6 +83,15 @@ RETIRED_FLAGS: dict[str, str] = {
     "TOOL_SCHEMA_STABLE_ORDER": "",
     "TOOL_USAGE_TELEMETRY": "",
     "TX_NOTIFY_ENABLED": "",
+    # 095 W8 — recall consolidation is deleted (its notes had no reader)
+    "MEMORY_CONSOLIDATE": "",
+    # 095 W9 — `memory_search` was a pure alias of `session_search`; one search verb
+    "MEMORY_SEARCH_TOOL": "",
+    # 095 W10 — the agent's mcp_install action and its catalog are deleted; the
+    # agent proposes `/mcp add` on a card instead
+    "MCP_SELF_INSTALL_ENABLED": "/mcp add",
+    "MCP_INSTALL_CATALOG_FILE": "/mcp add",
+    "MCP_INSTALL_ALLOWLIST": "/mcp add",
     # 080 WS-6 — rails, objectives, streams and the objective planner are
     # deleted; a recurring need is a cron job (`polyrob cron`, `/cron`)
     "GOAL_PLANNER_ENABLED": "",
@@ -125,7 +133,7 @@ class RetiredFlagError(RuntimeError):
 
 #: Boolean aliases: only a TRUE value ever changed behaviour, so a false one
 #: (``WEBGATE_MULTITENANT=false``) is merely a stale line, never a refusal.
-_BOOLEAN_ALIASES = frozenset({"WEBGATE_MULTITENANT", "ROB_LOCAL"})
+_BOOLEAN_ALIASES = frozenset({"WEBGATE_MULTITENANT"})
 
 
 def _set(env: Mapping[str, str], name: str) -> bool:

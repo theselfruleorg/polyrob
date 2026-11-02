@@ -13,7 +13,7 @@ import pytest
 from agents.task.agent.core.construction import AgentConstructionMixin
 from core.surfaces.chat_policy import set as set_pol
 
-_OWNER = "rob"
+_OWNER = "alice"
 
 
 class _Probe(AgentConstructionMixin):

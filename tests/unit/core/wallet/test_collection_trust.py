@@ -61,7 +61,7 @@ def fake_rpc(*, erc721=True, max_supply=6551, archive=True, pruned_empty=False):
 
 @pytest.fixture(autouse=True)
 def _stores(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     store = str(tmp_path / "wallet" / R.OWNER_PINS_NAME)
     monkeypatch.setattr(R, "owner_pins_path", lambda data_home=None: store)
     monkeypatch.setattr(R, "REGISTRY_FILE", str(tmp_path / "etc" / "agent_nft_collections.json"))
@@ -70,7 +70,7 @@ def _stores(tmp_path, monkeypatch):
 
 
 def _owner():
-    return owner_seat_ctx("rob")
+    return owner_seat_ctx("alice")
 
 
 def test_quote_reads_only_and_prints_the_typed_confirm_line(_stores):
@@ -92,7 +92,7 @@ def test_go_pins_without_capabilities_and_the_registry_reads_it(_stores):
 
 
 def test_the_agent_cannot_trust(_stores):
-    leaf = types.SimpleNamespace(user_id="rob", role="leaf", is_sub_agent=False, metadata={})
+    leaf = types.SimpleNamespace(user_id="alice", role="leaf", is_sub_agent=False, metadata={})
     ok, msg = ct.trust(leaf, "robinhood", COLL, rpc=fake_rpc())
     assert not ok and "denied" in msg and R.profiles() == ()
     stranger = owner_seat_ctx("mallory")
@@ -164,13 +164,13 @@ def test_the_chat_seat_quotes_a_card_line_then_pins_on_go(_stores, monkeypatch):
     from core.surfaces.cards import confirm_line_in
     from surfaces.telegram.nft_ops import nft_reply
     monkeypatch.setattr(ct, "_rpc_for", lambda chain: fake_rpc())
-    refused = asyncio.run(nft_reply("rob", ["trust", COLL]))
+    refused = asyncio.run(nft_reply("alice", ["trust", COLL]))
     assert "Name the network" in refused and "no default network" in refused
     args = ["trust", COLL, "on", "robinhood"]
-    quote = asyncio.run(nft_reply("rob", args))
+    quote = asyncio.run(nft_reply("alice", args))
     assert confirm_line_in("/nft", args, quote) == args
     assert R.profiles() == ()
-    done = asyncio.run(nft_reply("rob", args + ["go"]))
+    done = asyncio.run(nft_reply("alice", args + ["go"]))
     assert "Trusted" in done and R.profiles()[0].address == COLL
 
 

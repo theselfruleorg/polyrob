@@ -18,6 +18,7 @@ shipped code rather than the commit message:
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from api.api_key_auth import API_KEY_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ def test_siwe_verify_is_503_with_the_remedy_not_a_500(monkeypatch):
 
 @pytest.mark.parametrize("method,path", [
     ("get", "/api/auth/api-keys"),
-    ("delete", "/api/auth/api-keys/rob_abc123"),
+    ("delete", "/api/auth/api-keys/" + API_KEY_PREFIX + "abc123"),
 ])
 def test_listing_and_revoking_keys_refuse_an_anonymous_caller(
         method, path, monkeypatch):
@@ -386,7 +387,7 @@ def test_the_api_key_middleware_sits_outside_the_fallback_and_never_refuses(
     # BaseHTTPMiddleware, so the key validator must come BEFORE it.
     assert names.index("APIKeyAuthMiddleware") < names.index("BaseHTTPMiddleware")
     # And it refuses nothing: an unknown key on a public path is still served.
-    resp = _real_app.get("/health", headers={"X-API-KEY": "rob_" + "z" * 40})
+    resp = _real_app.get("/health", headers={"X-API-KEY": API_KEY_PREFIX + "z" * 40})
     assert resp.status_code in (200, 503)  # never 401
 
 

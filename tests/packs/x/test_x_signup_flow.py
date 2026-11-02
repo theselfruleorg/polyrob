@@ -91,7 +91,7 @@ class FakeDriver:
 
 
 class Identity:
-    name = "Rob"
+    name = "Nova"
     dob = "2000-01-01"
     handle = "robbot"
     disclosure = "Automated account (bot) operated by Owner."

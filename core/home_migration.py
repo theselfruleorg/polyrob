@@ -74,7 +74,7 @@ def migrate_identity_instance_once(data_home=None) -> None:
     as :func:`migrate_rob_home_once`.
 
     Runs ONLY when the default instance id is in effect: an explicit
-    ``POLYROB_INSTANCE_ID`` (e.g. prod pinning ``rob``)
+    ``POLYROB_INSTANCE_ID`` (e.g. a deploy that pins the legacy id)
     keeps reading its own tree and needs no copy.
     """
     try:

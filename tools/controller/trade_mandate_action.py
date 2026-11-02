@@ -14,7 +14,7 @@ gates: refused in a room, for a leaf/sub-agent, in a session a correspondent
 drives, and for a tenant that is not the owner. An autonomous run may propose it
 too (the card waits in the owner's /cards); it starts nothing by itself.
 """
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -26,8 +26,8 @@ def register_trade_mandate_action(controller) -> None:
         budget_usd: float = Field(..., gt=0, description="The owner's allocation, USD.")
         chains: List[str] = Field(..., min_length=1, max_length=6,
                                   description="Networks to trade on, e.g. ['solana'].")
-        preset: Literal["memecoin", "majors", "dca"] = Field(
-            "memecoin", description="The style; its numbers come from the preset.")
+        preset: str = Field(..., min_length=1, max_length=40,
+                            description="The preset the owner chose; no default.")
         ticket_usd: Optional[float] = Field(None, gt=0,
                                             description="Only if the owner named one.")
         slots: Optional[int] = Field(None, ge=1, le=50,

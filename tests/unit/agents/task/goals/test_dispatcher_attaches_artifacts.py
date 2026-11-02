@@ -82,13 +82,13 @@ class _FakeBoard:
 
     def record_failure(self, gid, error=None, session_id=None, claim_token=None):
         self.failures.append((gid, error)); self._status = STATUS_READY
-        return Goal(id=gid, user_id="rob", title="t", status=STATUS_READY)
+        return Goal(id=gid, user_id="alice", title="t", status=STATUS_READY)
 
     def block_from_ready(self, gid, *, error):
         self.blocked.append((gid, error)); self._status = STATUS_BLOCKED; return True
 
     def get(self, gid):
-        return Goal(id=gid, user_id="rob", title="t", status=self._status)
+        return Goal(id=gid, user_id="alice", title="t", status=self._status)
 
     def set_outcome(self, gid, outcome):
         self.outcomes.append((gid, outcome)); return True
@@ -105,18 +105,18 @@ def produced(tmp_path):
     """A file the run wrote, already recorded by the write choke point."""
     p = tmp_path / "round4-evidence.md"
     p.write_text("the decoded 402 challenge")
-    get_artifact_ledger().record("rob", str(p), session_id="sess-art", kind="report")
+    get_artifact_ledger().record("alice", str(p), session_id="sess-art", kind="report")
     return p
 
 
 def test_successful_run_attributes_its_artifacts(produced):
     disp = GoalDispatcher(_FakeBoard(), _TaskAgent(done_text="wrote the evidence file"))
-    goal = Goal(id="g-success", user_id="rob", title="x402 Round 4",
+    goal = Goal(id="g-success", user_id="alice", title="x402 Round 4",
                 payload={"tools": ["filesystem"]})
 
     asyncio.run(disp._run_goal(goal))
 
-    rows = get_artifact_ledger().list_for_goal("rob", "g-success")
+    rows = get_artifact_ledger().list_for_goal("alice", "g-success")
     assert [r.path for r in rows] == [str(produced)]
 
 
@@ -124,12 +124,12 @@ def test_run_that_never_called_done_still_attributes_its_artifacts(produced):
     """Out of steps is not "produced nothing" — the evidence must survive the failure."""
     board = _FakeBoard()
     disp = GoalDispatcher(board, _TaskAgent(done_text=None))
-    goal = Goal(id="g-outofsteps", user_id="rob", title="x402 Round 4",
+    goal = Goal(id="g-outofsteps", user_id="alice", title="x402 Round 4",
                 payload={"tools": ["filesystem"]})
 
     asyncio.run(disp._run_goal(goal))
 
     assert board.failures, "the run should be recorded as a failure"
-    rows = get_artifact_ledger().list_for_goal("rob", "g-outofsteps")
+    rows = get_artifact_ledger().list_for_goal("alice", "g-outofsteps")
     assert [r.path for r in rows] == [str(produced)], \
         "a failed run's artifacts must still be attributed, else a retry restarts blind"

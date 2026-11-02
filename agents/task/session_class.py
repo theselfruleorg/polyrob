@@ -240,7 +240,7 @@ class RegimePolicy:
 
     __slots__ = ("pin_initial_task", "latest_owner_turn_wins", "demote_automation_recall",
                  "recall_own_runs_first", "owner_memory", "run_record",
-                 "child_owner_brief", "model_tier")
+                 "child_owner_brief", "model_tier", "review_after_run", "reflect_on_close")
 
     def __init__(self, *, pin_initial_task: bool, latest_owner_turn_wins: bool,
                  demote_automation_recall: bool, recall_own_runs_first: bool,
@@ -264,6 +264,14 @@ class RegimePolicy:
         self.child_owner_brief = child_owner_brief
         #: the model tier (``core.runtime_config.MODEL_TIERS``); set below the table.
         self.model_tier = "default"
+        #: 095 W13: the background reviewer runs AFTER a run of this kind ends
+        #: (outside its step budget), when the run record carries a trusted
+        #: outcome signal (``background_review.review_after_run_due``). The
+        #: inline per-turn reviewer is owner chat only. Set below the table.
+        self.review_after_run = False
+        #: 095 W9 (IN-7): consolidate this session's findings at close (one aux call)
+        #: even when the REFLECTION_ON_SESSION_CLOSE posture member is off.
+        self.reflect_on_close = False
 
 
 REGIME_POLICY = {
@@ -304,6 +312,18 @@ del _regime
 for _regime in REGIMES:
     REGIME_POLICY[_regime].model_tier = "inherit" if _regime == CHILD else "default"
 del _regime
+
+
+# 095 W13 column: a goal or cron run is reviewed after it ends; never a leaf, a
+# room or a correspondent session (third-party text never becomes a skill).
+for _regime in (CRON, GOAL):
+    REGIME_POLICY[_regime].review_after_run = True
+del _regime
+
+
+# 095 W9 column: an owner chat's short turns rarely reach the per-step reflection
+# threshold, so its close-time reflection follows the regime (owner memory).
+REGIME_POLICY[OWNER_CHAT].reflect_on_close = True
 
 
 def regime_model_for(regime: str, payload, provider, env=None):

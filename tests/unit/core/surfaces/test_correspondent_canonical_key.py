@@ -10,10 +10,10 @@ from core.surfaces.dead_targets import DeadTargetStore
 def test_at_handle_and_bare_handle_are_one_binding(tmp_path):
     reg = CorrespondentRegistry(str(tmp_path / "c.db"))
     reg.seed(surface="telegram", address="@ExampleGroup", session_id="s1",
-             user_id="rob", require_approval=False)
+             user_id="alice", require_approval=False)
     assert reg.seed(surface="telegram", address="t.me/examplegroup", session_id="s2",
-                    user_id="rob", require_approval=False) == STATE_ACTIVE
-    rows = reg.list(user_id="rob")
+                    user_id="alice", require_approval=False) == STATE_ACTIVE
+    rows = reg.list(user_id="alice")
     assert [r["address"] for r in rows] == ["examplegroup"]
 
 
@@ -25,10 +25,10 @@ def _legacy_registry(path):
     conn.execute("PRAGMA user_version = 0")
     now = time.time()
     conn.execute("INSERT INTO correspondents VALUES (?,?,?,?,?,?,?,?,?)",
-                 ("telegram", "@examplegroup", "", "s-old", "rob", STATE_ACTIVE, "owner",
+                 ("telegram", "@examplegroup", "", "s-old", "alice", STATE_ACTIVE, "owner",
                   now - 100, now - 100))
     conn.execute("INSERT INTO correspondents VALUES (?,?,?,?,?,?,?,?,?)",
-                 ("telegram", "examplegroup", "", "s-new", "rob", STATE_PENDING, "owner",
+                 ("telegram", "examplegroup", "", "s-new", "alice", STATE_PENDING, "owner",
                   now, now))
     conn.commit(); conn.close()
 
@@ -37,13 +37,13 @@ def test_legacy_spellings_collapse_and_the_approved_binding_wins(tmp_path):
     path = tmp_path / "legacy.db"
     _legacy_registry(path)
     reg = CorrespondentRegistry(str(path))
-    rows = reg.list(user_id="rob")
+    rows = reg.list(user_id="alice")
     assert len(rows) == 1
     assert rows[0]["address"] == "examplegroup"
     assert rows[0]["state"] == STATE_ACTIVE and rows[0]["session_id"] == "s-old"
     # idempotent: reopening does not touch it again
     CorrespondentRegistry(str(path))
-    assert len(reg.list(user_id="rob")) == 1
+    assert len(reg.list(user_id="alice")) == 1
 
 
 def test_dead_target_marked_as_at_handle_is_found_bare(tmp_path):

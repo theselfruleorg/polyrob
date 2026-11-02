@@ -23,7 +23,7 @@ from cron.jobs import CronJob
 
 
 def _job(payload=None):
-    return CronJob(id="j-room", task="report", schedule_spec="30m", user_id="rob",
+    return CronJob(id="j-room", task="report", schedule_spec="30m", user_id="alice",
                    next_run_at=None, one_shot=False, skip_memory=True,
                    max_duration_seconds=180, payload=payload or {}, created_at=None)
 

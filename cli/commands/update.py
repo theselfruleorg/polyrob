@@ -77,7 +77,7 @@ def _parse_unit_files(output: str) -> list:
     polyrob@.service` is invalid (no instance name), and since the manual steps
     are one `&&` chain, including it would abort the chain BEFORE `git pull` —
     the update would silently do nothing (the exact U3 failure class this
-    function exists to prevent). Live instances ("polyrob@rob.service") pass.
+    function exists to prevent). Live instances ("polyrob@scout.service") pass.
     """
     units = []
     for line in output.splitlines():

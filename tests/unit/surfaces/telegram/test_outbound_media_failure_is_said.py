@@ -92,3 +92,31 @@ def test_nothing_extra_is_said_when_the_media_lands(png):
                           media=[{"kind": "image", "path": png}])
     asyncio.run(surface.send(msg))
     assert not any("could not attach" in t for t in bot.sent_text)
+
+
+def test_a_file_only_message_sends_the_file_not_an_empty_text(png):
+    """A message with media and no text must not try to send empty text — the Bot
+    API refuses it ("message text is empty") and the attachment was lost with it."""
+    from core.surfaces.envelopes import OutboundMessage
+    bot = _Bot()
+    surface = TelegramSurface(bot)
+    msg = OutboundMessage(session_key="agent:main:telegram:dm:1:u", text="",
+                          media=[{"kind": "image", "path": png}])
+    result = asyncio.run(surface.send(msg))
+    assert result.success
+    assert bot.sent_text == []  # no empty-text message was attempted
+
+
+def test_a_forum_topic_reply_sends_its_file_into_the_topic(png):
+    """The text landed in the topic, its attachment in General."""
+    seen = {}
+
+    class _B(_Bot):
+        async def send_photo(self, chat_id, file, **kw):
+            seen.update(kw)
+            return type("M", (), {"message_id": 2})()
+
+    surface = TelegramSurface(_B())
+    asyncio.run(surface._send_media("-100", [{"kind": "image", "path": png}], None,
+                                    thread_id="42"))
+    assert seen.get("message_thread_id") == 42

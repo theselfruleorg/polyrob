@@ -3,7 +3,7 @@
 **The definition, and it is a definition with teeth.** An Inbox item is
 
     a durable record, for this tenant, blocked on an owner decision,
-    that Rob cannot resolve alone.
+    that the agent cannot resolve alone.
 
 All four tests must hold. The two that are easiest to lose are the last two:
 
@@ -74,7 +74,7 @@ KIND_UNREADABLE = "unreadable"
 class Item:
     """One row of the Inbox.
 
-    ``blocking`` is the question "does Rob stop until a person answers". It is
+    ``blocking`` is the question "does the agent stop until a person answers". It is
     what ``count`` counts, and it is the only thing that does.
 
     ``expires_at``/``created_at`` are epoch seconds; ``None``/``0.0`` mean the

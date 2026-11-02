@@ -59,7 +59,7 @@ async def api_cards(request: Request):
 @router.get("/api/webgate/cards/pickers")
 async def api_card_pickers(request: Request):
     """What the send/swap form offers to pick: the chains where value may move,
-    the tokens Rob trusts (by chain), and the addresses earlier confirmed sends
+    the tokens the agent trusts (by chain), and the addresses earlier confirmed sends
     went to. A source that cannot be read is an empty list plus its name in
     ``unreadable`` — never a silent gap."""
     from core.surfaces import cards

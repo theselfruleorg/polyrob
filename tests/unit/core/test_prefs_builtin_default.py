@@ -23,7 +23,7 @@ def home(tmp_path):
 def _clean_env(monkeypatch):
     # Keys under test must have their env flags unset so the fallback path runs.
     for var in ("GOAL_DAILY_QUOTA", "GOAL_NOTIFY_ON_DONE", "SELF_WAKE_ENABLED",
-                "POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_POSTURE",
+                "POLYROB_LOCAL", "AUTONOMY_POSTURE",
                 "AUTONOMY_ENABLED", "AUTONOMY_MODE"):
         monkeypatch.delenv(var, raising=False)
 

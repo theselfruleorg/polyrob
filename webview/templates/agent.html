@@ -38,7 +38,7 @@
       </nav>
 
       {# Overview — health leads, then the face, then the posture axes, then
-         what Rob is connected to. Drawn by agent.js from /api/webgate/doctor +
+         what the agent is connected to. Drawn by agent.js from /api/webgate/doctor +
          /avatar.json; the posture axes render from the data attributes below. #}
       <div data-pane="overview">
         <div id="agent-ov-health"></div>
@@ -47,7 +47,7 @@
         <div id="agent-ov-connected"></div>
       </div>
 
-      {# Identity — the persona you wrote (read-only) and what Rob has learned
+      {# Identity — the persona you wrote (read-only) and what the agent has learned
          about itself (a reviewable change). Drawn from /api/webgate/identity;
          an edit posts /api/webgate/self-context and lands in review. #}
       <div data-pane="identity" hidden>
@@ -65,7 +65,7 @@
         <div id="agent-capabilities"></div>
       </div>
 
-      {# Memory — what Rob remembers about you (add/forget here), what it works
+      {# Memory — what the agent remembers about you (add/forget here), what it works
          out on its own, and what it has read. Drawn from /api/webgate/memory/search
          + /api/webgate/knowledge/kb; add posts /api/webgate/memory, forget deletes it. #}
       <div data-pane="memory" hidden>

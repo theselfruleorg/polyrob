@@ -36,7 +36,83 @@ NEAR_DUP_JACCARD = 0.8
 #: Rows shorter than this many distinct words are never merged.
 NEAR_DUP_MIN_WORDS = 4
 
+#: F7 (prod review 2026-10-29): an owner-chat recall reads only EPISODIC rows
+#: from the last N days, unless the owner's message names an older date. 96 %
+#: of prod rows were older than two weeks, and a "did we pay?" question got
+#: 10-14 rows. A durable fact (an address, a handle, a contract id, a
+#: preference) has no age limit (review M5).
+OWNER_RECALL_MAX_AGE_DAYS = 7
+#: The marker of an episodic row: an account of what one run did (the phase
+#: summaries ``memory_writer`` / the close drain write, ``task_context_manager``).
+#: Only such a row ages out of an owner-chat recall; any other row is a fact.
+EPISODIC_MARK = "[phase-summary:"
+#: A row whose content starts with this marker is a claim the run could not
+#: check (``memory_writer`` / ``reflection_service``). An owner chat never
+#: gets it as recall.
+UNVERIFIED_MARK = "[unverified]"
+
 _WORD = re.compile(r"\w+", re.UNICODE)
+_MONTH_NAMES = ("january", "february", "march", "april", "may", "june", "july",
+                "august", "september", "october", "november", "december")
+#: A month word is the full name or its 3-letter (or "sept") abbreviation —
+#: never a prefix ("marketing", "decks" and "junk" are not months).
+_MONTHS = {**{n: i for i, n in enumerate(_MONTH_NAMES, 1)},
+           **{n[:3]: i for i, n in enumerate(_MONTH_NAMES, 1)}, "sept": 9}
+_ISO_DATE = re.compile(r"\b(20\d\d)-(\d{1,2})-(\d{1,2})\b")
+#: A bare ``10-14`` / ``10/14`` is a date only after a day word ("on 10-14",
+#: "since 10/14"): "send 1/2 of the balance" and "post 3-4 tweets" are not.
+_MM_DD = re.compile(r"\b(?:on|since|from|before|after|until|till|by)\s+"
+                    r"(\d{1,2})[-/](\d{1,2})(?![\w./-])", re.IGNORECASE)
+_MON_DAY = re.compile(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b")
+_DAY_MON = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([A-Za-z]{3,9})\b")
+
+
+def is_episodic(content: str) -> bool:
+    """True for a row that is an account of one run (it ages out of an
+    owner-chat recall); False for a durable fact."""
+    return EPISODIC_MARK in (content or "")
+
+
+def _named_dates(text: str, year: int):
+    """(month, day, year) triples a free-text message names. Pure, best-effort."""
+    for y, m, d in _ISO_DATE.findall(text):
+        yield int(m), int(d), int(y)
+    for m, d in _MM_DD.findall(text):
+        yield int(m), int(d), year
+    for mon, d in _MON_DAY.findall(text):
+        if mon.lower() in _MONTHS:
+            yield _MONTHS[mon.lower()], int(d), year
+    for d, mon in _DAY_MON.findall(text):
+        if mon.lower() in _MONTHS:
+            yield _MONTHS[mon.lower()], int(d), year
+
+
+def strip_unverified(content: str) -> str:
+    """``content`` without its ``[unverified]`` lines ("" when none is left)."""
+    lines = [ln for ln in (content or "").split("\n")
+             if not ln.lstrip().startswith(UNVERIFIED_MARK)]
+    return "\n".join(lines).strip()
+
+
+def names_older_date(query: str, *, max_age_days: float,
+                     now: Optional[float] = None) -> bool:
+    """True when ``query`` names a calendar date older than ``max_age_days``
+    ("2026-10-14", "on 10-14", "Oct 14", "14 October"). A date with no year is
+    read in the current year. The owner asked about that day, so recall must
+    not cut it away."""
+    now = time.time() if now is None else now
+    year = time.localtime(now).tm_year
+    cutoff = now - float(max_age_days) * 86400.0
+    import datetime as _dt
+    for m, d, y in _named_dates(query or "", year):
+        try:
+            _dt.date(y, m, d)          # a real calendar day (no 2-30, no 13-01)
+            ts = time.mktime((y, m, d, 23, 59, 59, 0, 0, -1))
+        except (OverflowError, ValueError):
+            continue
+        if ts < cutoff:
+            return True
+    return False
 
 
 def recency_weight(ts: Optional[int], *, now: Optional[float] = None) -> float:

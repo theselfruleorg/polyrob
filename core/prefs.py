@@ -72,7 +72,7 @@ class PrefSpec:
     type: str                       # bool|int|float|str|list|enum
     sensitivity: str                # safe|guarded
     merge: str                      # override|min|union|narrow_list|and|stricter_provider|stricter_policy
-    applies: str                    # live|next-turn|next-session|restart
+    applies: str                    # live|next-step|next-turn|next-session|restart
     env_flag: str | None = None
     enum_values: tuple[str, ...] = ()
     min_value: float | None = None
@@ -213,17 +213,17 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
           description="Proactive messages/day; the pref WINS unless the operator "
                       "set USER_DELIVERY_DAILY_CAP, in which case that is a "
                       "ceiling and effective = min(pref, env)"),
-    _spec("style.verbosity", "enum", SENSITIVITY_SAFE, "override", "next-turn",
+    _spec("style.verbosity", "enum", SENSITIVITY_SAFE, "override", "next-step",
           enum_values=("terse", "normal", "detailed"),
           enforcement=ENFORCEMENT_ADVISORY,
           description="Reply verbosity (rendered into the SELF_CONTEXT style line; "
                       "'detailed' also appends the run's done() record to "
                       "goal/cron reports)"),
-    _spec("style.language", "str", SENSITIVITY_SAFE, "override", "next-turn",
+    _spec("style.language", "str", SENSITIVITY_SAFE, "override", "next-step",
           enforcement=ENFORCEMENT_ADVISORY,
           description="Preferred reply language name/tag (letters/hyphens, "
                       "max 32 chars), e.g. 'en' or 'en-GB'"),
-    _spec("style.tone", "str", SENSITIVITY_SAFE, "override", "next-turn",
+    _spec("style.tone", "str", SENSITIVITY_SAFE, "override", "next-step",
           enforcement=ENFORCEMENT_ADVISORY,
           description="Free-text tone hint (threat-scanned at write, capped 200 chars; "
                       "rendered into the SELF_CONTEXT style line)"),
@@ -231,10 +231,10 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
           default_display=True,
           description="Show the agent's avatar in web views (identity page)"),
     _spec("session.toolset", "str", SENSITIVITY_GUARDED, "override", "next-session",
-          "POLYROB_AGENT_TOOLSET", description="Default toolset for new sessions"),
+          "POLYROB_AGENT_TOOLSET", description="Default toolset for new terminal (CLI) sessions only"),
     _spec("session.persona", "str", SENSITIVITY_GUARDED, "override", "next-session",
           "POLYROB_PERSONA",
-          description="Default persona (template key or literal text; threat-scanned)"),
+          description="Default persona for terminal (CLI) sessions only (template key or literal text; threat-scanned)"),
     _spec("autonomy.self_wake", "bool", SENSITIVITY_SAFE, "and", "next-session",
           "SELF_WAKE_ENABLED",
           description="Self-wake loop; pref can only disable (consumed by "
@@ -308,7 +308,7 @@ CHAT_PREF_SCHEMA: dict[str, PrefSpec] = dict((
     _spec("chat.wake_words", "list", SENSITIVITY_SAFE, "override", "next-turn",
           default_display=[],
           description="Extra case-insensitive regex patterns that address the "
-                      "agent in this room without an @mention, e.g. ['hey rob']. "
+                      "agent in this room without an @mention, e.g. ['hey agent']. "
                       "Matched with re.search anywhere in the line, so anchor a "
                       "whole word with \\b (['\\brob\\b']) or 'problem' wakes it. "
                       "At most 10 patterns, each at most 64 chars"),

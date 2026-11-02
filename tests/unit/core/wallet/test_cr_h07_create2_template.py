@@ -42,7 +42,7 @@ def _c2_deltas(address, **kw):
 async def test_deploy_token_refuses_a_vanity_address():
     tool, _ = _tool()
     res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000,
         max_spend_usd=5.0, vanity="ab", dry_run=True))
     assert res.error and "CREATE2 factory" in res.error
 
@@ -52,7 +52,7 @@ async def test_deploy_token_declares_the_holder_mint():
     captured = []
     tool, _ = _tool(captured=captured)
     res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000,
         max_spend_usd=5.0, dry_run=True))
     assert res.error is None, res.error
     assert captured[0].expected_holder_mint_raw == 1_000 * 10 ** 18

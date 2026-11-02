@@ -190,7 +190,7 @@ def test_verdict_short_circuits_on_size_and_old_mtime(monkeypatch, tmp_path):
     ledger = artmod.get_artifact_ledger()
     f = tmp_path / "r.md"
     f.write_text("hello")
-    art = ledger.record("rob", str(f), session_id="s", kind="report")
+    art = ledger.record("alice", str(f), session_id="s", kind="report")
     calls = []
     monkeypatch.setattr(artmod, "hash_file", lambda p: calls.append(p) or ("x", 5))
     os.utime(f, (art.created_at - 60, art.created_at - 60))

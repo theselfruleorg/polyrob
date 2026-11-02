@@ -24,7 +24,8 @@ cannot wait for a person; ``owner_ask`` is the durable question for that).
 """
 import asyncio
 import logging
-from typing import List, Optional
+import re
+from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -114,11 +115,9 @@ def _group_for(user_id: str, session_id: str) -> Optional[str]:
 
 async def _deliver(controller, user_id: str, card, session_id: str) -> str:
     from core.surfaces import cards
-    from core.surfaces.user_delivery import deliver_user_message
     try:
-        return await deliver_user_message(
-            getattr(controller, "container", None), user_id, cards.render_text(card),
-            source="action_card", session_id=session_id or None, card_id=card.card_id)
+        return await cards.push(getattr(controller, "container", None), user_id, card,
+                                session_id=session_id or None)
     except Exception as e:
         logger.warning("action card delivery failed: %s", e)
         return "failed"
@@ -184,6 +183,82 @@ def _send_precheck(words) -> Optional[str]:
     except Exception:
         poisoned = None
     return poisoned
+
+
+#: The spend-grade price a /send card is valued at when it is proposed (None =
+#: ``tools.defi.price_sources.spend_price``, the send rail's own price).
+_SEND_PRICE_FN = None
+#: How long a proposal waits for that price; past it the card says "not priced".
+_SEND_PRICE_TIMEOUT_S = 15.0
+#: A dollar figure in ``why`` this many times off the command's value is flagged.
+_MISMATCH_FACTOR = 10.0
+_WHY_DOLLARS = re.compile(r"\$\s?([0-9][0-9,]*(?:\.[0-9]+)?)")
+
+
+def _why_dollars(why: str) -> List[float]:
+    out = []
+    for m in _WHY_DOLLARS.finditer(why or ""):
+        try:
+            v = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        if v > 0:
+            out.append(v)
+    return out
+
+
+async def _send_value(words, why: str) -> Tuple[Optional[str], str]:
+    """``(refusal, card lines)`` for a /send proposal: the token amount AND its
+    USD value at the spend-grade price, read NOW, so "22 tokens = $0.05" is
+    visible before the tap (prod 2026-10-28). A ``$`` amount is converted by the
+    ONE parser's converter (``send_order.resolve_usd``); with no spend-grade
+    price it is refused — the card could never quote. A ``why`` whose dollar
+    figures are all >10x off the value gets a warning line, never a refusal."""
+    if not words or words[0].lower() != "/send":
+        return None, ""
+    from tools.defi import send_order
+    order, err = send_order.parse(words[1:])
+    if err or order is None:
+        return None, ""
+    try:
+        px = await asyncio.wait_for(
+            asyncio.to_thread(send_order.unit_price, order["chain"], order["token"],
+                              _SEND_PRICE_FN), timeout=_SEND_PRICE_TIMEOUT_S)
+    except Exception as e:   # a slow or failed read: the quote prices it on the tap
+        logger.info("propose_action: /send not priced at proposal time: %s", e)
+        if order.get("usd") is not None:
+            return None, (f"Value: ${order['usd']:,.2f} in tokens — the price could not "
+                          f"be read now; the quote converts it and shows the count.")
+        return None, (f"Value: {send_order.fmt_tokens(order['amount'])} tokens — not priced "
+                      f"now; the quote shows the value.")
+    if order.get("usd") is not None:
+        if px is None:
+            return send_order.NO_PRICE_FOR_USD.format(usd=order["usd"]), ""
+        order, _, _ = send_order.resolve_usd(order, lambda c, a: px)
+        value = order["usd"]
+        line = (f"Value: ${value:,.2f} = {send_order.fmt_tokens(order['amount'])} tokens "
+                f"at {send_order.fmt_price(px)} (spend-grade, now; the quote re-converts).")
+    elif px is None:
+        line = (f"Value: {send_order.fmt_tokens(order['amount'])} tokens — NO "
+                f"spend-grade price, so the USD value is not verified.")
+        stated = _why_dollars(why)
+        if stated:   # review L3: the micro-cap case is exactly where this bites
+            line += (f"\n⚠️ MISMATCH RISK: the reason names ${max(stated):,.2f}, but this "
+                     f"command is a TOKEN count ({send_order.fmt_tokens(order['amount'])}) "
+                     f"with no verified price — check the count before you confirm.")
+        return None, line
+    else:
+        value = order["amount"] * px
+        line = (f"Value: {send_order.fmt_tokens(order['amount'])} tokens = "
+                f"{send_order.fmt_price(value) if value > 0 else '$0.00'} "
+                f"at {send_order.fmt_price(px)} (spend-grade, now).")
+    stated = _why_dollars(why)
+    if stated and value > 0 and min(max(d, value) / min(d, value)
+                                     for d in stated) > _MISMATCH_FACTOR:
+        line += (f"\n⚠️ MISMATCH: the reason names ${max(stated):,.2f} but this command "
+                 f"is worth {send_order.fmt_price(value)}. A bare number is a TOKEN count — for dollars "
+                 f"write `$` (e.g. `/send $22 …`).")
+    return None, line
 
 
 def register_card_actions(controller) -> None:
@@ -274,7 +349,10 @@ def register_card_actions(controller) -> None:
     class ProposeAction(BaseModel):
         command: str = Field(..., min_length=3, max_length=600, description=(
             "The owner money verb and its arguments, WITHOUT `go`, exactly as the owner "
-            "would type it, e.g. `/send 0.5 native to 0xAbc… on base`, `/swap 0.1 native "
+            "would type it, e.g. `/send 0.5 native to 0xAbc… on base`. A bare /send "
+            "amount is a TOKEN count; for a dollar amount write `$`: `/send $22 0xToken… "
+            "to 0xAbc… on base` (the tool converts at the spend-grade price — never "
+            "convert yourself). `/swap 0.1 native "
             "to 0xToken… on base`, `/bridge solana base "
             "0.9`, `/pay https://api.x/y 0.10`, `/claim 0xToken…`."))
         why: str = Field("", max_length=600, description="One line: why you propose it.")
@@ -310,6 +388,10 @@ def register_card_actions(controller) -> None:
         if dead:
             return ActionResult(error=(f"propose_action: this /send could not quote, so "
                                        f"no card was made: {dead}"), include_in_memory=True)
+        refused, value_line = await _send_value(words, params.why)
+        if refused:
+            return ActionResult(error=(f"propose_action: this /send could not quote, so "
+                                       f"no card was made: {refused}"), include_in_memory=True)
         from core.surfaces import cards
         clash = _open_sends_to(cards, user_id, words)
         unlisted = [c for c in clash if c.card_id not in params.replaces]
@@ -322,8 +404,9 @@ def register_card_actions(controller) -> None:
         sid = _session_id(controller, execution_context)
         group_id = _group_for(user_id, sid)
         try:
+            body = (value_line + "\n" + params.why).strip() if value_line else params.why
             card = cards.proposal_card(user_id, words[0] if words else "", words[1:],
-                                       why=params.why, session_id=sid or None,
+                                       why=body, session_id=sid or None,
                                        group_id=group_id)
         except ValueError as e:
             return ActionResult(error=f"propose_action: {e}", include_in_memory=True)
@@ -349,7 +432,8 @@ def register_card_actions(controller) -> None:
                  else "in the owner's /cards list (no live chat reached)")
         return ActionResult(
             extracted_content=(f"Proposed card {card.card_id} is {where}: {card.line}. "
-                               f"NOTHING was sent or spent. The owner taps 'Get a quote', then "
+                               + (f"{value_line} " if value_line else "")
+                               + f"NOTHING was sent or spent. The owner taps 'Get a quote', then "
                                f"Confirm. Do not say it is done, queued or pending approval."
                                + (" When the owner has decided every card you raised, you are "
                                   "woken with each card's outcome — do not ask the owner to "

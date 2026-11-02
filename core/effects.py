@@ -187,8 +187,8 @@ def effect_pause_refusal(effect: str, tool_id: Optional[str], action: str,
     dec = allows(kind, data_dir)
     if dec.allowed:
         return None
-    return (f"'{action}' is an autonomous {effect} write and autonomy is "
-            f"{dec.reason}. Resume with `/resume` when you want it back.")
+    from core.tool_gates import refusal_text
+    return refusal_text("paused", action=action, effect=effect, state=dec.reason)
 
 
 # --- flags -------------------------------------------------------------------------

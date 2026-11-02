@@ -65,6 +65,10 @@ class InboundMessage:
                                             # third-party DATA (already wrapped by the
                                             # surface), never a COMMAND and never a
                                             # pending decision or stop phrase.
+    reply_ref: Optional[object] = None      # the message this one REPLIES to
+                                            # (core.surfaces.reply_ref.ReplyRef),
+                                            # filled from the platform's own copy
+                                            # of it; None = not a reply / unknown
 
 
 #: ``Action.style`` values a renderer may map to a button colour.

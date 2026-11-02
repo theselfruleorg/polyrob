@@ -111,7 +111,7 @@ is done or it hits a step or budget limit.
 | `-m, --model` / `-p, --provider` | Model and provider for this run |
 | `-t, --tools` | Comma-separated tool ids; takes precedence over `--toolset` |
 | `--toolset` | `minimal`, `safe`, `default`, `research`, `trading_research`, `coding`, `development`, `browser`, `social`, `full`, `earn` |
-| `--max-steps` | Maximum steps (default 50) |
+| `--max-steps` | Maximum steps (default `INTERACTIVE_MAX_STEPS`, 100) |
 | `--plain` / `-v, --verbose` | Plain output / debug logging on the console |
 
 `--verbose` raises the console level only; `bot.log` follows `LOG_LEVEL`.
@@ -199,7 +199,7 @@ you connect one.
 ```bash
 polyrob keys create --name automation [--expires-days 30]
 polyrob keys list
-polyrob keys revoke rob_…
+polyrob keys revoke <key-prefix>
 ```
 
 These keys authenticate the A2A and OpenAI-compatible API surfaces through the
@@ -403,7 +403,7 @@ polyrob job edit <id> --max-duration 1800     # raise/lower a job's hard cap (�
 polyrob job edit <id> --schedule "every day 09:00" --tools a,b --rig NAME --deliver telegram
 polyrob job pause <id>                        # the job's own state: shown as paused, no next run
 polyrob job resume <id>
-polyrob job run <id>                          # run it on the next scheduler pass
+polyrob job run <id>                          # run it on the next scheduler pass (its schedule is kept)
 polyrob job stop <id>                         # end it for good (the job records who stopped it)
 polyrob job stop <id> --forever [--reason TEXT]   # also stop its lane: no new job in it except by you
 polyrob job allow <lane>                      # re-arm a lane stopped with --forever
@@ -417,11 +417,16 @@ When the scheduler is off, the terminal, Telegram and this console print the
 same sentence and the one command that turns it on.
 
 Schedule specs: a duration (`30m`), `every monday 09:00`, a 5-field cron
-expression, or an ISO timestamp for a one-shot.
+expression, an ISO timestamp for a one-shot, or a fixed N-day cycle
+`every 3d from 2026-10-26T18:00Z` (that time, then every 3 days). A
+day-of-month step such as `0 18 */3 * *` restarts on the 1st of every month,
+so it fires on the 31st and again on the 1st; `job edit` says so when you set one.
 
 `job edit` also takes `--priority money|ops`, `--preempts/--no-preempts`,
 `--task-file` and `--post-spacing-hours`; `--tools none` clears an explicit
-toolset. `prune` deletes CANCELLED jobs older than the cutoff and nothing else —
+toolset. It goes through the same checks and audit record as a chat or agent
+edit: an unknown delivery target or a schedule faster than 5 minutes is
+refused, a stopped job cannot be edited, and an edit that changes nothing says so. `prune` deletes CANCELLED jobs older than the cutoff and nothing else —
 a live, failed or completed job is never removed — and `--dry-run` lists exactly
 the rows the delete would take.
 
@@ -547,7 +552,7 @@ polyrob workers approve <id>         # a worker the agent proposed
 polyrob workers remove <id>          # archived, never destroyed
 ```
 
-Each one is a named, reusable helper that Rob dispatches by name. In the REPL,
+Each one is a named, reusable helper that the agent dispatches by name. In the REPL,
 `/workers stop <run-id>` and `/workers steer <run-id> <text>` act on a running one.
 
 ### `polyrob tools`
@@ -588,7 +593,7 @@ in the resident REPL.
 `status`, `update [--with-deps]`, `render <file>`. The isolated browser service a
 custody deployment connects to: `install` creates the service user, installs
 Chromium, writes the unit, the browser data directory and the egress rules, and
-starts it. `cdp` runs it on Rob's host; `server` runs a Playwright server on a second host that Rob
+starts it. `cdp` runs it on the agent's host; `server` runs a Playwright server on a second host that the agent
 reaches over `BROWSER_WSS_URL`. `update` re-installs Chromium for the current
 Playwright pin. See [self-hosting.md](self-hosting.md).
 
@@ -648,7 +653,7 @@ could not look, which is not the same as "you own nothing".
 
 **`wallet pin-token`** records that one address IS the symbol on that network: the
 token reads as verified, and a swap refuses any other contract that calls itself
-that symbol there. A new pin replaces the old one. Rob has no verb for this;
+that symbol there. A new pin replaces the old one. The agent has no verb for this;
 `/wallet trust <chain> <address> [SYMBOL] go` in chat writes the same store.
 
 **`wallet submissions`** lists sends that never resolved. Any row there blocks
@@ -845,7 +850,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/asks [list]` | Open asks — what the agent needs from you to unblock work |
 | `/fulfill <id> [answer]` | Mark an ask fulfilled and unblock its goals; the words after the id are your answer, carried into the goal's retry prompt |
 | `/missed [n]` | Messages the delivery rail could not send live |
-| `/cards [<id> ok\|no\|re\|1-6]` | Open action cards: confirm a quote, refresh it, cancel it, or answer Rob's question. Typing a decision's token (`/card_<id>_ok`) is the same as tapping its button. Once you have decided every card the agent raised, it continues by itself with each card's outcome |
+| `/cards [<id> ok\|no\|re\|1-6]` | Open action cards: confirm a quote, refresh it, cancel it, or answer the agent's question. Typing a decision's token (`/card_<id>_ok`) is the same as tapping its button. Once you have decided every card the agent raised, it continues by itself with each card's outcome |
 
 **work**
 
@@ -872,7 +877,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/settle <id> [tx-hash]` | Attest an invoice as paid |
 | `/pay <url> [max_usd] [go] [id=<name>]` | Pay for one x402 resource (GET only, USDC on Base), up to the price you name; without `go` it only reads the price |
 | `/check <address> [chain]` · `/check <TICKER>` | Read any wallet or token: a wallet's holdings, or a token's identity, price, safety screen and holders |
-| `/send <amount> <native\|token-address> to <address> on <chain> [max <usd>] [go]` | Send native value or a token to an address; quotes unless you add `go`. The quote is an action card: `/card_<id>_ok` sends exactly that quote, at most the quote + 5%. Your own send passes the autonomous ceiling and the pause; the per-transaction and daily caps still bind |
+| `/send <amount>\|$<usd> <native\|token-address> to <address> on <chain> [max <usd>] [go]` | Send native value or a token to an address; a bare amount is a token count, `$22` is dollars converted at the spend-grade price (refused when the token has none). Quotes unless you add `go`. The quote is an action card: `/card_<id>_ok` sends exactly that quote, at most the quote + 5%. Your own send passes the autonomous ceiling and the pause; the per-transaction and daily caps still bind |
 | `/swap <amount> <native\|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]` | Swap one token for another; the quote (route, minimum out, value, caps) is an action card, and Confirm swaps at most the quote + 5%. `/send` or `/swap` alone builds the order step by step: type the numbered card token for each choice |
 | `/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]` | Move value between networks: ETH/native or USDC in; native, WETH or USDC out. Quotes unless you add `go` |
 | `/deploy <SYMBOL> <supply> <name…> on <chain> [go]` | Deploy a fixed-supply token; quotes unless you add `go` |
@@ -936,7 +941,7 @@ Inside the REPL every command starts with `/`. `/help` lists them grouped;
 | `/config [list [group]\|get KEY\|set KEY VALUE [--confirm]\|explain KEY\|search QUERY\|check]` | View and change preferences and flags |
 | `/prefs [all]` | The settings you have set |
 | `/auth` | Provider credentials and how to connect one |
-| `/model <provider> <model>` | Swap the session model live and persist it as the default; also `<provider>/<model>` or an alias |
+| `/model [<name> [default] [reasoning=<level>] \| reset [default] \| aliases \| alias <name> <provider>/<model>]` | Swap this session's model live (`<name>` = an alias like `sonnet`, `glm`, `deepseek-pro`, or `<provider>/<model>`); `default` also saves it for new sessions and chats; a much pricier model asks for `go`; bare `/model` opens the picker |
 | `/toolset [name]` | List toolsets, or set the default for new sessions |
 | `/persona [name-or-text]` | List personas, or set the default for new sessions |
 | `/profile` | The active named profile and its homes |

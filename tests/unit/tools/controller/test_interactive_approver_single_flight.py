@@ -50,5 +50,5 @@ def test_second_concurrent_prompt_denies_instead_of_racing_stdin():
         return r1, r2
 
     r1, r2 = asyncio.run(scenario())
-    assert r2 is False   # second prompt denied — did not spawn a competing reader
+    assert not r2 and r2.reason == "busy"   # second prompt denied — did not spawn a competing reader
     assert r1 is True    # first eventually approved

@@ -1,7 +1,7 @@
 """Task 9: the autonomy budget gate is removed, not merely disabled.
 
 `AUTONOMY_BUDGET_USD` was a $10/day RATE ceiling that cannot protect a finite
-balance — Rob was under it every single day while the OpenRouter balance went
+balance — the agent was under it every single day while the OpenRouter balance went
 to zero and the agent died. It also gated on the now-deleted MERGED ledger
 number (Task 8), so an x402 wallet payment ate the agent's compute budget.
 

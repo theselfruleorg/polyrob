@@ -14,7 +14,7 @@ from cron import remedy_streak as rs
 BLOCKED = "owner must run `polyrob x-account capture-session`"
 
 
-def _job(job_id="job1", user="rob"):
+def _job(job_id="job1", user="alice"):
     return types.SimpleNamespace(id=job_id, user_id=user,
                                  task="X OUTREACH — daily round")
 
@@ -24,7 +24,7 @@ def home(tmp_path):
     return str(tmp_path)
 
 
-def _open_asks(home, user="rob"):
+def _open_asks(home, user="alice"):
     return GoalBoard(f"{home}/goals.db").asks(user_id=user, status=ASK_OPEN)
 
 
@@ -91,7 +91,7 @@ def test_after_the_ask_is_answered_a_new_streak_asks_again(home):
     job = _job()
     for _ in range(3):
         ask = rs.observe(job, BLOCKED, data_dir=home)
-    GoalBoard(f"{home}/goals.db").fulfill_ask(ask.id, user_id="rob")
+    GoalBoard(f"{home}/goals.db").fulfill_ask(ask.id, user_id="alice")
     assert _open_asks(home) == []
     rs.observe(job, None, data_dir=home)
     for _ in range(2):

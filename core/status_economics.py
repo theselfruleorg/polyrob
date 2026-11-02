@@ -252,7 +252,7 @@ def compute_economics(rows: List[Dict[str, Any]], window_sec: int,
 #: How a run kind (an ``episodes.kind`` or a usage row's ``regime``) reads on a
 #: seat. One word per concept (``core/copy/glossary.py``).
 KIND_WORDS = {"owner_chat": "chat", "chat": "chat", "cron": "scheduled jobs",
-              "goal": "goals", "autonomous": "Rob's own initiative", "room": "groups",
+              "goal": "goals", "autonomous": "the agent's own initiative", "room": "groups",
               "correspondent": "people", "child": "helpers", "unattributed": "other"}
 _RUN_KINDS = ("cron", "goal")
 

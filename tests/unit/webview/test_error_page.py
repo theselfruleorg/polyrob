@@ -69,7 +69,7 @@ def test_an_unknown_page_is_the_error_page_not_json(client):
     assert "Check the address and try again." in text
     assert soup.select_one('a.action-link[href="/"]').get_text(strip=True) == "Go to Chat"
     assert "SYSTEM ERROR" not in resp.text and "RETURN TO HOME" not in resp.text
-    assert soup.title.get_text(strip=True) == "Something went wrong – Rob"
+    assert soup.title.get_text(strip=True) == "Something went wrong – POLYROB"
 
 
 def test_an_unknown_api_path_is_still_json(client):
@@ -108,5 +108,6 @@ def test_the_layout_nav_says_the_shell_words(client):
     """The pages outside the shell carry the same nav words as the shell."""
     soup = _soup(client.get("/no-such-page"))
     labels = [a.get_text(strip=True) for a in soup.select(".terminal-nav a, nav a")]
-    assert "Chat" in labels and "Rob" in labels
-    assert "New" not in labels and "Agent" not in labels
+    from webview.copy import t
+    assert t("nav.new") in labels and t("nav.agent") in labels
+    assert "New" not in labels

@@ -4,13 +4,13 @@ The REPL wraps its loop in ``prompt_toolkit.patch_stdout()``. A Rich ``Live``
 (the ``ActivityLine`` "thinking" spinner and the streaming ``ResponseBox``)
 emits cursor-up / erase-line escapes with no trailing newline; prompt_toolkit's
 ``StdoutProxy`` line-buffers and independently owns the cursor → the transient
-erase never lands → stacked ``rob · thinking · 0s`` / ``· 11s`` lines + stray
+erase never lands → stacked ``agent · thinking · 0s`` / ``· 11s`` lines + stray
 ``\`` artifacts (the live screenshot bug).
 
 Fix: ``RichRenderer(live_allowed=False)`` (set by the REPL) keeps the activity
 line dormant and the response box in buffer-only mode, so the pinned
 ``bottom_toolbar`` is the sole in-flight indicator and the finalized answer is
-printed exactly once as a newline-terminated block. ``rob run`` (no
+printed exactly once as a newline-terminated block. ``polyrob run`` (no
 patch_stdout) keeps ``live_allowed=True`` for the activity line only.
 """
 
@@ -65,7 +65,7 @@ def test_repl_turn_start_does_not_open_activity_live():
 
 
 def test_one_shot_turn_start_still_opens_activity_live():
-    """rob run (no patch_stdout) keeps the live activity line — unchanged."""
+    """polyrob run (no patch_stdout) keeps the live activity line — unchanged."""
     console, _ = _tty_console()
     r = _renderer(console, live_allowed=True)
     r.on_turn_start("do work")
@@ -131,7 +131,7 @@ def test_repl_turn_start_prints_working_notice():
 
 
 def test_one_shot_turn_start_prints_no_working_notice():
-    """rob run uses the live activity line — no static working notice."""
+    """polyrob run uses the live activity line — no static working notice."""
     console, buf = _tty_console()
     r = _renderer(console, live_allowed=True)
     r.on_turn_start("do work")

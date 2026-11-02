@@ -70,22 +70,22 @@ def test_denied_does_not_send():
     tmp = tempfile.mkdtemp(); router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="555", text="hi", action="send"))
+        user_id="alice", surface="telegram", target="555", text="hi", action="send"))
     assert res["success"] is False and res["tier"] == "denied" and router.sent == []
 
 def test_owner_sends():
     tmp = tempfile.mkdtemp(); router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send"))
+        user_id="alice", surface="telegram", target="999", text="hi", action="send"))
     assert res["success"] is True and res["tier"] == "owner" and router.sent[0] == ("telegram","999","hi")
 
 def test_allowlisted_sends():
-    tmp = tempfile.mkdtemp(); al = _al(tmp); al.allow("rob","telegram","555")
+    tmp = tempfile.mkdtemp(); al = _al(tmp); al.allow("alice","telegram","555")
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=al, owner_targets={"telegram":"999"},
-        user_id="rob", surface="telegram", target="555", text="hi", action="send"))
+        user_id="alice", surface="telegram", target="555", text="hi", action="send"))
     assert res["success"] is True and res["tier"] == "allowlisted"
 
 
@@ -99,7 +99,7 @@ def test_owner_alias_resolves_to_real_owner_target():
     tmp = tempfile.mkdtemp(); router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="owner", text="hi", action="send"))
+        user_id="alice", surface="telegram", target="owner", text="hi", action="send"))
     assert res["success"] is True and res["tier"] == "owner"
     assert router.sent[0] == ("telegram", "999", "hi")
 
@@ -108,7 +108,7 @@ def test_owner_alias_case_and_whitespace_insensitive():
     tmp = tempfile.mkdtemp(); router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target=" Owner ", text="hi", action="send"))
+        user_id="alice", surface="telegram", target=" Owner ", text="hi", action="send"))
     assert res["success"] is True and res["tier"] == "owner"
 
 
@@ -119,7 +119,7 @@ def test_owner_alias_falls_back_to_denied_when_no_owner_target_for_surface():
     tmp = tempfile.mkdtemp(); router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={},
-        user_id="rob", surface="telegram", target="owner", text="hi", action="send"))
+        user_id="alice", surface="telegram", target="owner", text="hi", action="send"))
     assert res["success"] is False and res["tier"] == "denied" and router.sent == []
 
 
@@ -132,7 +132,7 @@ def test_media_path_outside_workspace_is_rejected_and_router_not_called(monkeypa
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=[str(outside)], session_id="sess1"))
     assert res["success"] is False
     assert "media" in res["error"].lower()
@@ -144,7 +144,7 @@ def test_media_path_traversal_component_is_rejected(monkeypatch, tmp_path):
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=["../../etc/passwd"], session_id="sess1"))
     assert res["success"] is False
     assert router.sent == []
@@ -153,13 +153,13 @@ def test_media_path_traversal_component_is_rejected(monkeypatch, tmp_path):
 def test_media_path_inside_workspace_is_sent_to_router(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     from agents.task.path import pm
-    ws = pm().get_workspace_dir("sess1", "rob")
+    ws = pm().get_workspace_dir("sess1", "alice")
     inside = Path(ws) / "card.png"
     inside.write_bytes(b"x")
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=[str(inside)], session_id="sess1"))
     assert res["success"] is True
     assert router.sent[0] == ("telegram", "999", "hi")
@@ -171,13 +171,13 @@ def test_media_path_inside_workspace_is_sent_to_router(monkeypatch, tmp_path):
 def test_media_on_nonmedia_surface_carries_honest_note_and_still_sends_text(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     from agents.task.path import pm
-    ws = pm().get_workspace_dir("sess1", "rob")
+    ws = pm().get_workspace_dir("sess1", "alice")
     inside = Path(ws) / "card.png"
     inside.write_bytes(b"x")
     tmp = tempfile.mkdtemp(); router = _Router(media_out=set())  # no surface supports media
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=[str(inside)], session_id="sess1"))
     assert res["success"] is True
     assert res["tier"] == "owner"
@@ -191,7 +191,7 @@ def test_no_media_paths_keeps_legacy_shape(monkeypatch, tmp_path):
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send"))
+        user_id="alice", surface="telegram", target="999", text="hi", action="send"))
     assert res["success"] is True
     assert "note" not in res
     assert router.media_sent[0] is None
@@ -258,7 +258,7 @@ def test_forged_and_nonallowlisted_refusals_hold_with_media_paths(monkeypatch, t
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="555", text="hi", action="send",
+        user_id="alice", surface="telegram", target="555", text="hi", action="send",
         media_paths=["card.png"], session_id="sess1"))
     assert res["success"] is False and res["tier"] == "denied" and router.sent == []
 
@@ -269,13 +269,13 @@ def test_media_oversize_file_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     monkeypatch.setenv("MESSAGE_MEDIA_MAX_MB", "0.001")  # 1 KB cap (message-tool cap)
     from agents.task.path import pm
-    ws = pm().get_workspace_dir("sess1", "rob")
+    ws = pm().get_workspace_dir("sess1", "alice")
     big = Path(ws) / "big.bin"
     big.write_bytes(b"x" * 4096)
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=[str(big)], session_id="sess1"))
     assert res["success"] is False
     assert "cap" in res["error"].lower()
@@ -285,13 +285,13 @@ def test_media_oversize_file_is_rejected(monkeypatch, tmp_path):
 def test_media_secret_shaped_file_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     from agents.task.path import pm
-    ws = pm().get_workspace_dir("sess1", "rob")
+    ws = pm().get_workspace_dir("sess1", "alice")
     env_file = Path(ws) / "polyrob.env"
     env_file.write_text("OPENAI_API_KEY=sk-secret")
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=[str(env_file)], session_id="sess1"))
     assert res["success"] is False
     assert "secret" in res["error"].lower()
@@ -305,13 +305,13 @@ def test_media_send_result_acknowledges_attachment(monkeypatch, tmp_path):
     must NAME the attached files."""
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     from agents.task.path import pm
-    ws = pm().get_workspace_dir("sess1", "rob")
+    ws = pm().get_workspace_dir("sess1", "alice")
     inside = Path(ws) / "note.md"
     inside.write_text("hello")
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         media_paths=[str(inside)], session_id="sess1"))
     assert res["success"] is True
     assert res.get("media_attached") == ["note.md"]
@@ -322,7 +322,7 @@ def test_no_media_send_has_no_media_attached_key(monkeypatch, tmp_path):
     tmp = tempfile.mkdtemp(); router = _Router(media_out={"telegram"})
     res = asyncio.run(perform_message_send(
         router=router, allowlist=_al(tmp), owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi", action="send",
+        user_id="alice", surface="telegram", target="999", text="hi", action="send",
         session_id="sess1"))
     assert res["success"] is True
     assert "media_attached" not in res

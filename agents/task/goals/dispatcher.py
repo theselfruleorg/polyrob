@@ -35,7 +35,7 @@ def _goal_ev(goal, outcome: str, reason: Optional[str] = None, **extra) -> None:
     """T4-03: emit a goal_run event to the durable event log (fail-open).
 
     Goal runs previously wrote only the episodes table, never the event_log, so
-    `polyrob telemetry` — the tool built to answer "what ran?" — showed cron and
+    `/telemetry` — the tool built to answer "what ran?" — showed cron and
     self-wake but not the goals that did most of the autonomous work. Mirror _cron_ev
     so goal lifecycle rides the same uniform autonomy/governance stream."""
     try:
@@ -511,6 +511,14 @@ class GoalDispatcher(GoalRunMixin):
                 logger.info("goal dispatch: reconciled %d stranded waiting goal(s)", reconciled)
         except Exception:
             logger.debug("waiting-goal reconciliation skipped", exc_info=True)
+        # 095 W8 (SC-11): an operator config_change ask closes once its setting
+        # is in effect (or expires) — it used to stay open forever.
+        try:
+            settled = self.board.close_settled_config_asks()
+            if settled:
+                logger.info("goal dispatch: closed %d settled config_change ask(s)", settled)
+        except Exception:
+            logger.debug("config_change ask sweep skipped", exc_info=True)
 
         if not AutonomyConfig.goals_enabled():
             return 0
@@ -564,7 +572,7 @@ class GoalDispatcher(GoalRunMixin):
             return 0  # a human is mid-turn; don't run a goal in the shared workspace
         # 057 WS-C (A5, R3's two-homes class): `is_interactive_busy` is an IN-PROCESS
         # counter, so an owner turn live in ANOTHER process (the Telegram surface, the
-        # console, a `rob` REPL) was invisible here and a goal could start writing the
+        # console, a `polyrob` REPL) was invisible here and a goal could start writing the
         # shared workspace underneath it. The turn marker is the cross-process fact the
         # deploy waiter and the cron tick already read; the dispatcher now reads it too.
         _turn = read_turn_marker()
@@ -582,7 +590,7 @@ class GoalDispatcher(GoalRunMixin):
             if not lock.acquire():
                 return 0
         # C2: gate the dispatch decision behind the cross-process workspace lock too,
-        # so a 2nd `rob` process doesn't start goals in the shared CWD while another
+        # so a 2nd `polyrob` process doesn't start goals in the shared CWD while another
         # process's REPL is mid-turn. Non-blocking; defer the tick if contended.
         from core.interactive_gate import workspace_turn_lock
         _ws_lock = workspace_turn_lock(timeout=0)
@@ -1221,7 +1229,7 @@ class GoalDispatcher(GoalRunMixin):
         live only inside ``_self_wake``, so with self-wake off, completed goals told
         no one — the observed "goals never report completions" gap. ``push_owner_message``
         delivers to the owner's Telegram if a sink+chat exist, else persists a durable
-        ``owner_notice`` (visible via ``polyrob telemetry`` / the digest, per T4-04), so
+        ``owner_notice`` (visible via ``/telemetry`` / the digest, per T4-04), so
         the owner is reliably informed either way. Fail-open. Returns whether told."""
         owner_told = False
         try:

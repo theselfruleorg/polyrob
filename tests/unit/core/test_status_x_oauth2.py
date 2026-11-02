@@ -20,7 +20,7 @@ def _store(tmp_path, keys):
 
 def test_an_open_verdict_says_relogin_needed_with_its_since_and_remedy(tmp_path, monkeypatch):
     monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
-    _store(tmp_path, ["rob|x_oauth2"])  # a record exists, but the login is dead
+    _store(tmp_path, ["alice|x_oauth2"])  # a record exists, but the login is dead
     cv.record_rejection("x_oauth2", "", code="relogin_needed",
                         remedy="/x login (or `polyrob x-account oauth-login`)")
     line, state = ss.x_oauth2_line(str(tmp_path))
@@ -38,7 +38,7 @@ def test_the_verdict_without_a_remedy_still_names_the_command(tmp_path):
 
 def test_a_stored_login_with_no_verdict_is_fine(tmp_path, monkeypatch):
     monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
-    _store(tmp_path, ["rob|x", "rob|x_oauth2"])
+    _store(tmp_path, ["alice|x", "alice|x_oauth2"])
     line, state = ss.x_oauth2_line(str(tmp_path))
     assert state == "stored"
     assert "re-login" not in line
@@ -46,7 +46,7 @@ def test_a_stored_login_with_no_verdict_is_fine(tmp_path, monkeypatch):
 
 def test_a_browser_only_store_is_not_an_oauth2_login(tmp_path, monkeypatch):
     monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
-    _store(tmp_path, ["rob|x"])
+    _store(tmp_path, ["alice|x"])
     line, state = ss.x_oauth2_line(str(tmp_path))
     assert state == "none"
     assert "none" in line
@@ -70,7 +70,7 @@ def test_a_static_env_token_is_named_as_short_lived(tmp_path, monkeypatch):
 def test_the_identity_section_carries_the_line(tmp_path, monkeypatch):
     monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
     cv.record_rejection("x_oauth2", "", code="relogin_needed")
-    sec = ss._identity_section("rob", str(tmp_path))
+    sec = ss._identity_section("alice", str(tmp_path))
     assert sec.data["x_oauth2"] == "relogin_needed"
     assert any(l.startswith("X login (OAuth 2.0, DMs): re-login needed") for l in sec.lines)
 
@@ -86,7 +86,7 @@ def test_the_verdict_is_a_warn_health_item_with_the_remedy():
 
 def test_a_cleared_verdict_leaves_no_line(tmp_path, monkeypatch):
     monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
-    _store(tmp_path, ["rob|x_oauth2"])
+    _store(tmp_path, ["alice|x_oauth2"])
     cv.record_rejection("x_oauth2", "", code="relogin_needed")
     cv.clear_rejection("x_oauth2", "")
     _, state = ss.x_oauth2_line(str(tmp_path))
@@ -100,7 +100,7 @@ def test_a_store_written_after_the_refusal_is_named(tmp_path, monkeypatch):
     import os
     import time
     cv.record_rejection("x_oauth2", "", code="relogin_needed")
-    _store(tmp_path, ["rob|x_oauth2"])
+    _store(tmp_path, ["alice|x_oauth2"])
     later = time.time() + 5
     os.utime(tmp_path / ".x_session.json", (later, later))
     line, state = ss.x_oauth2_line(str(tmp_path))

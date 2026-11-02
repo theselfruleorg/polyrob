@@ -22,7 +22,7 @@ FAKE = "0x3535353535353535353535353535353535353535"
 
 def _ctx(target=None):
     meta = {"money_target": target} if target else {}
-    return types.SimpleNamespace(user_id="rob", metadata=meta, role="orchestrator",
+    return types.SimpleNamespace(user_id="alice", metadata=meta, role="orchestrator",
                                  is_sub_agent=False)
 
 

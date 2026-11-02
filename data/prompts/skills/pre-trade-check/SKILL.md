@@ -5,10 +5,9 @@ license: MIT
 metadata:
   polyrob-when: 'Measuring a trade before you send it'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-requires: '["token-identity"]'
-  polyrob-version: '3'
+  polyrob-version: '4'
 ---
 # Pre-Trade Check — measure before you commit
 
@@ -64,6 +63,27 @@ on `swap_quote` or `swap` yet. You measure it with a second quote (step 3).
    majors 30–50 bps, long tail 100–300 bps. Pass it as `slippage_bps`.
 7. **Decide the ticket** with `sizing-and-risk`, and the exit with `exits`,
    BEFORE you execute. An entry without a declared exit is not ready.
+
+What each chain can do (money or read-only, its gas asset): `references/chains.md`.
+
+## Reading a route
+
+Swaps try Uniswap V3 first where it exists, then a DEX aggregator that reaches
+the other venues (Aerodrome, the V2 forks, V4 and the rest). A pool being off-V3
+is not a reason a token is unbuyable: quote it. `swap_quote` asks the SAME
+providers `swap` will, so a clean quote means a reachable trade.
+
+- **A route refusal is still a stop.** Do not improvise a raw contract call.
+- **The refusal names one of two facts.** "no route … asked: …" means nothing
+  pools it — a real finding. "could not complete the route lookup …
+  UNAVAILABLE" means a provider errored or rate-limited; the lookup did not
+  finish. Never write "this token is unreachable" from the second one; retry it.
+- **NO ROUTE on a held position is that token's fact, not a stop.** A rugged or
+  illiquid token returns NO ROUTE on every venue. On a real re-quote, record its
+  value as UNKNOWN with the date (not $0 — a failed lookup is not proof it is
+  worthless), re-quote it at most once a day, stop escalating it, and keep taking
+  new screened entries within the caps. Never pause every entry until each
+  position has an exit route.
 
 ## Refuse the trade yourself when
 

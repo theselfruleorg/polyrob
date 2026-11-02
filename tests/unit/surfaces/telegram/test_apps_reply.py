@@ -48,10 +48,10 @@ def test_the_seat_reaches_the_audit_trail(monkeypatch):
     monkeypatch.setattr(
         apps_ops, "__doc__", apps_ops.__doc__)      # no-op, keeps linters quiet
 
-    apps_ops.apps_reply("rob", "/tmp", ["approve", "slug"])
+    apps_ops.apps_reply("alice", "/tmp", ["approve", "slug"])
     assert seen["via"] == "telegram"                # the default is unchanged
 
-    apps_ops.apps_reply("rob", "/tmp", ["approve", "slug"], via="repl")
+    apps_ops.apps_reply("alice", "/tmp", ["approve", "slug"], via="repl")
     assert seen["via"] == "repl"
 
 
@@ -70,6 +70,6 @@ def test_every_deciding_verb_carries_the_seat(monkeypatch):
     for verb in ("approve", "reject", "kill"):
         monkeypatch.setattr(core_ops, verb, _record(verb))
     for verb in ("approve", "reject", "kill"):
-        apps_ops.apps_reply("rob", "/tmp", [verb, "slug"], via="console")
+        apps_ops.apps_reply("alice", "/tmp", [verb, "slug"], via="console")
     assert seen == [("approve", "console"), ("reject", "console"),
                     ("kill", "console")]

@@ -79,7 +79,7 @@ class TestPerformMessageSendWiring:
         # still goes out '@'-shaped.
         result = asyncio.run(perform_message_send(
             router=router, allowlist=self._Allowlist({"t.me/examplegroup"}),
-            owner_targets={}, user_id="rob",
+            owner_targets={}, user_id="alice",
             surface="telegram", target="t.me/examplegroup", text="hi"))
         assert result["success"] is True
         assert result["tier"] == "allowlisted"
@@ -91,7 +91,7 @@ class TestPerformMessageSendWiring:
         from tools.controller.message_send import perform_message_send
         router = self._Router()
         result = asyncio.run(perform_message_send(
-            router=router, allowlist=None, owner_targets={}, user_id="rob",
+            router=router, allowlist=None, owner_targets={}, user_id="alice",
             surface="telegram", target="someotherbot", text="hi"))
         assert result["success"] is False
         assert "bot" in result["error"]

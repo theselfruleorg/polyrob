@@ -3,7 +3,6 @@ import annotations`` — the action closures' Pydantic param models are introspe
 by the Registry (the agent-upgrades-wave4 / GLM param_model landmine)."""
 import logging
 import os
-import re
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -12,34 +11,16 @@ from pydantic import BaseModel, Field
 from tools.base_tool import BaseTool
 from agents.task.loop_types.controller_types import ActionResult
 
-# Conservative pip requirement-spec shape. Dependency changes are proposals only;
-# a trusted updater resolves and installs a reviewed lock delta.
-_PKG_SPEC_RE = re.compile(r"^[A-Za-z0-9._+\-\[\],]+(?:[=<>!~]=?[A-Za-z0-9._*+!,<>=]*)?$")
-_EXACT_PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]*(?:\[[A-Za-z0-9._+\-]+\])?==[A-Za-z0-9][A-Za-z0-9._+\-!]*$")
 _READ_CAP = 100_000  # bytes returned by read_source
-
-
-class InstallDepParams(BaseModel):
-    package: str = Field(..., description="A single pip requirement spec, e.g. 'flask==3.0.0'.")
 
 
 class ReadSourceParams(BaseModel):
     path: str = Field(..., description="Path (relative to the install tree) to read.")
 
 
-class PatchSourceParams(BaseModel):
-    path: str = Field(..., description="Path (relative to the install tree) to edit.")
-    old_string: str = Field(..., description="Exact unique string to replace.")
-    new_string: str = Field(..., description="Replacement string.")
-
-
 class RestartParams(BaseModel):
     reason: str = Field("", max_length=300,
                         description="One line for the owner: why a restart is needed now.")
-
-
-class GitPullParams(BaseModel):
-    pass
 
 
 class SelfEnvTool(BaseTool):
@@ -103,9 +84,7 @@ class SelfEnvTool(BaseTool):
         from core.path_safety import is_within_root
         if not is_within_root(target, root):
             return None, f"path escapes the install tree: {rel_path}"
-        # The `.git` dir is out of bounds: a patched `.git/config` (fsmonitor/hooksPath/
-        # ext:: origin) executes code at self_env_git_pull time, sidestepping the git
-        # RCE guard and the restart approval.
+        # The `.git` dir is out of bounds (remote URLs and hooks are not agent reading).
         if ".git" in target.parts:
             return None, f"refusing to touch the .git directory: {rel_path}"
         # WS-7 hard-deny: never let self_env touch the frozen security flags / secrets.
@@ -145,37 +124,7 @@ class SelfEnvTool(BaseTool):
                           f"(core/llm_auth/): {rel_path}")
         return target, None
 
-    @staticmethod
-    def _proposal_store():
-        from core.maintenance_proposals import MaintenanceProposalStore
-        return MaintenanceProposalStore.from_runtime()
-
     # --- verbs ---------------------------------------------------------------
-
-    @BaseTool.action(
-        "Propose one exact pinned dependency for trusted maintenance review (does not install it)",
-        param_model=InstallDepParams,
-    )
-    async def self_env_install_dep(self, params: InstallDepParams, execution_context=None):
-        if not self._allowed(execution_context):
-            return self._deny()
-        pkg = (params.package or "").strip()
-        if (not pkg or pkg.startswith("-") or not _PKG_SPEC_RE.fullmatch(pkg)
-                or not _EXACT_PIN_RE.fullmatch(pkg)):
-            return ActionResult(error=f"invalid package spec (a package name, not a pip flag): {params.package!r}")
-        try:
-            proposal = self._proposal_store().propose_dependency(
-                package=pkg, user_id=getattr(execution_context, "user_id", ""),
-                session_id=getattr(execution_context, "session_id", ""))
-        except Exception as exc:
-            self._emit(action="install_dep", item_id=pkg, ok=False, execution_context=execution_context)
-            return ActionResult(error=f"dependency proposal failed: {exc}")
-        self._emit(action="install_dep", item_id=proposal["proposal_id"], ok=True,
-                   execution_context=execution_context, proposed=True)
-        return ActionResult(extracted_content=(
-            f"Dependency proposal `{proposal['proposal_id']}` recorded for `{pkg}`. "
-            "No package was installed; a trusted updater must resolve a locked environment, "
-            "validate it, and apply the approved digest."), include_in_memory=True)
 
     @BaseTool.action(
         "Read a source file from the agent's install tree (confined; secrets denied)",
@@ -200,57 +149,6 @@ class SelfEnvTool(BaseTool):
         self._emit(action="read_source", item_id=params.path, ok=True,
                    execution_context=execution_context)
         return ActionResult(extracted_content=text)
-
-    @BaseTool.action(
-        "Propose a unique source replacement for trusted maintenance review (does not edit live code)",
-        param_model=PatchSourceParams,
-    )
-    async def self_env_patch_source(self, params: PatchSourceParams, execution_context=None):
-        if not self._allowed(execution_context):
-            return self._deny()
-        target, err = self._confine(params.path)
-        if err:
-            self._emit(action="patch_source", item_id=params.path, ok=False,
-                       execution_context=execution_context, reason="confine_denied")
-            return ActionResult(error=err)
-        try:
-            from core.security.confined_read import read_confined_bytes
-            content = read_confined_bytes(target, self._install_root(), 512 * 1024).decode("utf-8")
-            count = content.count(params.old_string)
-            if count == 0:
-                return ActionResult(error=f"old_string not found in {params.path}")
-            if count > 1:
-                return ActionResult(error=f"old_string is not unique in {params.path} ({count} matches)")
-            candidate = content.replace(params.old_string, params.new_string)
-            proposal = self._proposal_store().propose_source_patch(
-                path=target.relative_to(self._install_root()).as_posix(), base_content=content,
-                candidate_content=candidate, user_id=getattr(execution_context, "user_id", ""),
-                session_id=getattr(execution_context, "session_id", ""))
-        except Exception as e:
-            self._emit(action="patch_source", item_id=params.path, ok=False,
-                       execution_context=execution_context)
-            return ActionResult(error=f"patch failed: {e}")
-        self._emit(action="patch_source", item_id=proposal["proposal_id"], ok=True,
-                   execution_context=execution_context, proposed=True)
-        return ActionResult(extracted_content=(
-            f"Source patch proposal `{proposal['proposal_id']}` recorded for `{params.path}` "
-            f"(base `{proposal['base_sha256']}`, candidate `{proposal['candidate_sha256']}`). "
-            "Live code is unchanged; a trusted updater must verify and apply these exact bytes."),
-            include_in_memory=True)
-
-    @BaseTool.action(
-        "Explain that repository updates require the trusted update supervisor",
-        param_model=GitPullParams,
-    )
-    async def self_env_git_pull(self, params: GitPullParams, execution_context=None):
-        if not self._allowed(execution_context):
-            return self._deny()
-        self._emit(action="git_pull", item_id="", ok=False, execution_context=execution_context,
-                   reason="trusted_updater_required")
-        return ActionResult(error=("git pull is not available to the running agent. "
-                                   "Updates go through the trusted update path — the owner sends "
-                                   "/update (or runs `polyrob update --apply`), which snapshots, "
-                                   "migrates, verifies, restarts and rolls back on failure."))
 
     @BaseTool.action(
         "Ask for a restart of your own background service (e.g. a setting that only "

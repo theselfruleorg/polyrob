@@ -67,7 +67,7 @@ async def test_sub_agent_author_is_quarantined_even_review_off(monkeypatch, tmp_
     )
     res = await action.function(params, execution_context=ctx)
     assert res.extracted_content and "pending review" in res.extracted_content
-    # 2026-10-14: "saved (pending review)" read as done — Rob told the owner a
+    # 2026-10-14: "saved (pending review)" read as done — the agent told the owner a
     # promo-bounty rule was "Fixed" while it sat in .pending. Say it is inert.
     assert "NOT YET IN EFFECT" in res.extracted_content
     assert "saved (pending review)" not in res.extracted_content

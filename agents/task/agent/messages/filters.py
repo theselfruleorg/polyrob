@@ -152,9 +152,11 @@ def _aged_body(content: str) -> str:
 		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars dropped from the context to make "
 		        f"room; the full result is on disk — {pointer.group(0).strip()}]")
 	else:
-		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars dropped from the context to make "
-		        f"room; this result was never offloaded to the workspace, so there is no file to "
-		        f"read — re-run the tool if you still need it]")
+		# No "re-run the tool" here: that line invited re-read loops (prod
+		# 2026-10-28: one aged read, then 139 identical re-reads).
+		note = (f"{AGED_RESULT_MARKER} {len(content):,} chars of this older result dropped from "
+		        f"the context to make room; it was not saved to a file — use what you noted "
+		        f"from it]")
 	body = f"{head}\n{note}" if head else note
 	if open_tag:
 		return f"{open_tag}\n{body}\n{close_tag}"
@@ -180,6 +182,37 @@ def _tool_call_names(messages: List[BaseMessage]) -> Dict[str, str]:
 			if cid and name:
 				names[str(cid)] = str(name)
 	return names
+
+
+def _newest_rerun_results(messages: List[BaseMessage]) -> set:
+	"""``tool_call_id``s of the NEWEST result of every call (tool + args) the agent
+	made more than once. A call the agent re-ran is data it needs; ageing that copy
+	too is how one aged read became a re-read loop. A one-off call ages normally."""
+	import json
+	key_of: Dict[str, str] = {}
+	for msg in messages:
+		if not isinstance(msg, AIMessage):
+			continue
+		for call in getattr(msg, "tool_calls", None) or []:
+			if not isinstance(call, dict):
+				call = {k: getattr(call, k, None) for k in ("id", "name", "args")}
+			cid, name = call.get("id"), call.get("name")
+			if not (cid and name):
+				continue
+			try:
+				args = json.dumps(call.get("args") or {}, sort_keys=True, default=str)
+			except Exception:
+				args = repr(call.get("args"))
+			key_of[str(cid)] = f"{name}:{args}"
+	newest: Dict[str, str] = {}
+	count: Dict[str, int] = {}
+	for msg in messages:
+		if isinstance(msg, ToolMessage):
+			key = key_of.get(str(getattr(msg, "tool_call_id", "") or ""))
+			if key:
+				newest[key] = str(msg.tool_call_id)
+				count[key] = count.get(key, 0) + 1
+	return {cid for key, cid in newest.items() if count[key] > 1}
 
 
 def _is_young(stamp: Optional[str], now) -> bool:
@@ -226,6 +259,9 @@ def age_old_tool_results(messages: List[BaseMessage],
 
 	A ``load_skill`` result (``SKILL_RESULT_PREFIX``) is never aged (D4).
 
+	The newest result of a call the agent ran more than once (same tool + args)
+	keeps its full text (``_newest_rerun_results``).
+
 	A money verb's result younger than ``MONEY_RESULT_PROTECT_SECONDS`` keeps its
 	full text (079 W7). *timestamps* runs parallel to *messages* (ISO strings,
 	the ``ManagedMessage`` metadata); a missing one counts as young.
@@ -239,6 +275,7 @@ def age_old_tool_results(messages: List[BaseMessage],
 		return list(messages)
 	protected = max(0, len(messages) - max(0, int(keep_recent)))
 	names = _tool_call_names(messages)
+	rerun = _newest_rerun_results(messages)
 	out: List[BaseMessage] = []
 	for idx, msg in enumerate(messages):
 		content = getattr(msg, "content", None)
@@ -246,6 +283,7 @@ def age_old_tool_results(messages: List[BaseMessage],
 		if (idx < protected and isinstance(msg, ToolMessage) and isinstance(content, str)
 				and len(content) > limit and AGED_RESULT_MARKER not in content
 				and not content.startswith(SKILL_RESULT_PREFIX)
+				and str(getattr(msg, "tool_call_id", "") or "") not in rerun
 				and not _money_protected(msg, names, stamp, now)):
 			aged = copy.copy(msg)
 			aged.content = _aged_body(content)

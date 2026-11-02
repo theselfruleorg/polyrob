@@ -48,7 +48,8 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from core.lazy_views import lazy_module_getattr, view
-from tools.controller.approval import ApprovalProvider, register_approval_provider
+from tools.controller.approval import (ApprovalOutcome, ApprovalProvider, not_created,
+                                      note_pending_ask, register_approval_provider)
 
 logger = logging.getLogger(__name__)
 
@@ -472,8 +473,12 @@ def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
     msgs: List[str] = []
     ok_n = fail_n = 0
     held: List[str] = []
+    decided: set = set()
     for it in list(pending.items):
         kind, item_id = it.get("kind", ""), it.get("id")
+        if f"{kind}:{item_id}" in decided:
+            continue  # 095 W10: the second half of a linked pair, decided with the first
+        decided.update({f"{kind}:{item_id}", it.get("linked") or ""})
         # M08: a bulk APPROVE skips a money ask or a guarded setting change. A
         # bulk REJECT may take everything EXCEPT a token-identity question:
         # rejecting one untrusts each candidate, the real contract included
@@ -786,7 +791,7 @@ async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
         await _push_owner_notification(
             getattr(task_agent, "container", None), user_id,
             f"⚠️ Approved {tool} [{ask_id[:8]}], but its text was too long to store, so "
-            "it was not sent. Ask Rob to send it again.")
+            "it was not sent. Ask the agent to send it again.")
         return True
     if not board.consume_ask_grant(ask_id):
         return True          # the waiting run (or another drain) sent it
@@ -799,7 +804,7 @@ async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
         getattr(task_agent, "container", None), user_id,
         (f"✅ Approved {tool} sent (once, with the approved text): {text}" if ok
          else f"⚠️ Approved {tool} was NOT sent: {text}. The approval is used up; ask "
-              "Rob to send it again."))
+              "the agent to send it again."))
     return True
 
 
@@ -1160,7 +1165,7 @@ class OwnerQueueApprover(ApprovalProvider):
 
     async def request(self, action_name: str, params: Dict[str, Any], context: Any,
                       *, hash_params: Optional[Dict[str, Any]] = None,
-                      wait_in_goal_run: bool = False) -> bool:
+                      wait_in_goal_run: bool = False) -> Any:
         """Ask the owner. ``params`` is what he SEES; ``hash_params`` is what the
         grant is keyed on, when the two must differ.
 
@@ -1180,7 +1185,7 @@ class OwnerQueueApprover(ApprovalProvider):
         from core.money.authority import owner_refusal
         from core.money.classify import money_action
         if money_action(action_name) and owner_refusal(user_id):
-            return False
+            return not_created("money_owner")
         session_id = getattr(context, "session_id", None) or ""
 
         # Defense in depth: a forged/leaf/sub-agent/autonomous-reentry turn never
@@ -1222,10 +1227,7 @@ class OwnerQueueApprover(ApprovalProvider):
                 "owner_queue: forged/leaf/autonomous turn denied for '%s' "
                 "(no ask created)", action_name,
             )
-            from core.security.refusals import record_refusal
-            record_refusal("approval_denied", tool=action_name, user_id=user_id,
-                           detail="owner_queue: no ask")
-            return False
+            return not_created("forged")  # the hook records it, once
 
         # fix pass 1 (Finding 1): defense in depth — a correspondent-TAINTED turn
         # must never earn a queued owner ask/notification either. Without this, a
@@ -1252,14 +1254,14 @@ class OwnerQueueApprover(ApprovalProvider):
                     "owner_queue: correspondent-tainted turn denied for '%s' "
                     "(no ask created)", action_name,
                 )
-                return False
+                return not_created("tainted")
 
         try:
             board = self._board()
         except Exception:
             logger.error("owner_queue: asks store unavailable — denying '%s'",
                          action_name, exc_info=True)
-            return False
+            return not_created("store_down")
 
         norm_params = _normalize_params(params)
         req_hash = compute_request_hash(
@@ -1339,6 +1341,7 @@ class OwnerQueueApprover(ApprovalProvider):
                 blocks_goal_ids=[] if _outbound else _blocked_goal_ids(session_id),
                 force=True,  # exact-hash dedup above already did the real work
             )
+        note_pending_ask(tap_display_id(ask.id))
         if created_new:
             # 030 WS-E1: a human grant card (amount/target/purpose + deadline +
             # the one-shot-grant explainer), never a raw JSON dump.
@@ -1377,18 +1380,19 @@ class OwnerQueueApprover(ApprovalProvider):
                 "slot (ask %s); the next run redeems the grant", action_name, ask.id)
             if action_name in _outbound_write_tools():
                 _poller_gone(board, ask.id)
-            return False
+            return ApprovalOutcome("pending", pending_id=tap_display_id(ask.id))
 
         self._active_polls += 1
         try:
             while True:
                 row = board.get(ask.id)
                 if row is None:
-                    return False
+                    return not_created("store_down")
                 if row.status != "open":
-                    approved = (row.payload or {}).get("decision") == "approved"
-                    if not approved:
-                        return False  # rejected — no grant to consume
+                    said = (row.payload or {}).get("decision")
+                    if said != "approved":  # no grant to consume
+                        return (ApprovalOutcome("denied_by_owner") if said == "rejected"
+                                else not_created("closed"))
                     # H4: an IN-BAND decision (owner approved while we were still
                     # polling) must CONSUME the one-shot grant right here — exactly
                     # as the post-timeout redemption path (`_consume_grant`) does.
@@ -1410,7 +1414,7 @@ class OwnerQueueApprover(ApprovalProvider):
                             "owner_queue: in-band grant consume raised — denying "
                             "(fail-closed) for %s (hash=%s)", action_name, req_hash,
                             exc_info=True)
-                        return False
+                        return not_created("store_down")
                     if consumed:
                         logger.info(
                             "owner_queue: in-band approval consumed one-shot grant "
@@ -1426,7 +1430,7 @@ class OwnerQueueApprover(ApprovalProvider):
                     logger.info(
                         "owner_queue: in-band grant already consumed elsewhere for "
                         "%s (hash=%s) — denying duplicate", action_name, req_hash)
-                    return False
+                    return not_created("duplicate")
                 await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             # The caller's timeout ended the wait (the X post: "waiting for the

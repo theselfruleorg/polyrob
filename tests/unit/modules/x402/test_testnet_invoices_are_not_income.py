@@ -37,7 +37,7 @@ async def _db(tmp_path):
 
 async def _mint(db, **kw):
     return await invoicing.create_payment_request(
-        user_id="rob", session_id="s1", amount_usd=1.0, purpose="work", db=db, **kw)
+        user_id="alice", session_id="s1", amount_usd=1.0, purpose="work", db=db, **kw)
 
 
 def test_devnet_asset_on_the_solana_name_is_not_income():
@@ -76,7 +76,7 @@ async def test_a_testnet_rail_mints_a_marked_invoice_that_is_not_income(
     db = await _db(tmp_path)
     try:
         inv = await _mint(db)
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert rows[0]["chain"] == "base-sepolia"
         meta = await db.fetch_one(
             "SELECT json_extract(metadata, '$.testnet') AS t FROM x402_payment_requests "
@@ -121,7 +121,7 @@ def test_listing_names_the_chain_and_marks_a_test_network(monkeypatch):
         ]
 
     class _Ctx:
-        user_id = "rob"
+        user_id = "alice"
         session_id = "s"
 
     monkeypatch.setattr(invoicing, "list_payment_requests", fake_list)

@@ -1,0 +1,378 @@
+# FAQ
+
+Short answers to the questions owners ask most. Each answer names the verb to
+send or the page that holds the detail. It does not repeat a default value,
+because a default can change. For the live value, send `/status` in chat, or
+run `polyrob doctor --flags` in a terminal. `/help` lists every chat verb.
+
+The second part, [Troubleshooting](#troubleshooting), uses the exact text your
+agent shows when it refuses something or stops. Paste the text you see and find
+the heading that matches it.
+
+---
+
+## Setup and models
+
+**How do I install and set it up?**
+Run `polyrob setup` in a terminal. The wizard makes you the owner and connects
+an AI provider and the chat apps you want. See [getting-started.md](getting-started.md).
+
+**Where do I put my API key?**
+Run `polyrob auth add` in a terminal, or send `/auth` in the terminal chat.
+`polyrob config path` shows which env file your agent reads. See
+[configuration.md](configuration.md#keys).
+
+**Which AI providers are supported?**
+See [configuration.md](configuration.md#4-providers-and-models).
+`polyrob model list` shows what this install can use.
+
+**How do I switch the model?**
+Send `/model` in chat. It switches this chat at once, sets your default, and
+picks the reasoning level. In a terminal: `polyrob model`.
+
+**How do I connect a server that gives my agent new abilities?**
+Send `/mcp` in chat to add, remove or test one; `/help mcp` shows how.
+
+**How do I uninstall?**
+Run `polyrob uninstall`. See [getting-started.md](getting-started.md#removing-it).
+
+## Cost and limits
+
+**What did my AI use cost?**
+Send `/usage`: the AI cost by kind of work, job, model and day.
+
+**Can I limit the AI cost of a job or a goal?**
+Yes. A run that works without you stops at its AI cost limit
+(`AUTONOMOUS_RUN_BUDGET_USD`) and at its step limit; one chat has its own limit
+(`RUN_BUDGET_USD`). A run that stops there says why (see
+[Why did you not reply?](#why-did-you-not-reply)). Change a limit with
+`polyrob config set NAME value` in a terminal.
+
+## Jobs, goals and permissions
+
+**How do I let it work on its own?**
+Run `polyrob autonomy on` in a terminal; `polyrob autonomy status` shows each
+setting. In the terminal chat, send `/autonomy on`. See
+[configuration.md](configuration.md#6-the-autonomy-dial).
+
+**What may you do on your own right now?**
+Send `/mode`. It shows the effective permissions and how to change them.
+
+**How do I schedule a daily job?**
+Send `/job new <when> <what>`; `/jobs` lists the scheduled jobs. `/help job`
+shows every option.
+
+**My scheduled job never runs. Why?**
+Scheduled jobs need the scheduler. Its switch is set only with
+`polyrob config set CRON_ENABLED true` (a plain `CRON_ENABLED=true` line in the
+env file is ignored), or by the permission level that includes it. Then send
+`/restart`. `/jobs` shows the next run and the last outcome of each job.
+
+**How do I add a goal?**
+Send `/goal new <what>`; `/goals` shows the board.
+
+**Why did my goal stop or get blocked?**
+Send `/goal show <id>`: it states the stop reason in words. Each reason is under
+[Why did you not reply?](#why-did-you-not-reply). `/asks` lists what your agent
+needs from you to continue.
+
+**How do I let a goal or a scheduled job trade, or use another ability?**
+Send `/goal grant <id>` or `/job edit <id> grant` with the abilities it may use.
+Money keeps its own limits.
+
+**How do I stop everything now?**
+Send `/pause`; `/resume` lifts it. See
+[owner-controls.md](owner-controls.md#stop-everything).
+
+**What runs tonight?**
+Send `/jobs` and `/goals`.
+
+**What changed in the last update?**
+Ask your agent: it reads the release notes of the version it runs. See
+[upgrading.md](upgrading.md).
+
+**How do I update or restart you?**
+Send `/update` or `/restart` in chat; your agent finishes its current work
+first. In a terminal: `polyrob update --apply` or `polyrob service restart`. See
+[operate-the-service.md](operate-the-service.md).
+
+**How do I roll back an update?**
+Run `polyrob update --rollback` in a terminal.
+
+## Decisions and money
+
+**How do I approve what you suggest?**
+Send `/inbox` (or `/pending`), then `/approve <id>` or `/reject <id>`. See
+[owner-controls.md](owner-controls.md#approving-what-the-agent-proposes).
+
+**How do I answer an approval question in the terminal?**
+Type one of `/once`, `/session`, `/always`, `/deny` or `/never`. Plain text is
+chat, never a decision.
+
+**Where is my wallet, and how do I fund it?**
+Send `/wallet`: addresses, network and limits. Create a wallet with
+`polyrob wallet init` in a terminal. See [payments.md](payments.md).
+
+**Show me the private key.**
+Your agent never sees or prints it. Only you can export it, with
+`polyrob wallet export` in your own terminal.
+
+**How do I raise a spend limit?**
+Send `/wallet` (it sets the spend-without-asking limit), or run
+`polyrob wallet set-cap` in a terminal. See
+[payments.md](payments.md#1-the-safety-model-read-first).
+
+**Send 0.1 ETH to an address.**
+Send `/send`: you get a quote, then you confirm it.
+
+**Why was a token buy refused?**
+Send `/why`: it lists the last refusals and the reason for each.
+`/check <token>` shows what the token is.
+
+## Memory and rules
+
+**What do you remember about me?**
+Your rules and facts are in the owner doc, which your agent reads in every
+chat; ask it to show the doc. `/thread` shows your chat history across every
+app. In the terminal chat, `/memory` searches what it recalls.
+
+**Forget something about me.**
+No verb deletes one remembered fact. What exists:
+- A fact in the owner doc: ask your agent to remove it. The change is a draft
+  in `/pending` until you approve it.
+- Recall stored under one scope: `polyrob owner memory scopes list` shows the
+  scopes, and `polyrob owner memory scopes purge <label>` deletes everything in
+  one scope.
+- With `MEMORY_TOOL_ENABLED` on, the `memory` notes ability can remove one of
+  your agent's own notes.
+
+**Add a rule ("always ask before posting").**
+Tell your agent the rule. It writes a draft of the owner doc; the rule applies
+after you approve it in `/pending`.
+
+## Skills
+
+**How do I add a skill?**
+Run `polyrob skill install <source>` in a terminal; `/skills` in chat shows
+what your agent can load. See [skills.md](skills.md#two-ways-to-add-a-new-skill).
+
+**How do I teach you a new way to do something?**
+Send `/learn <description>` in the terminal chat; the draft skill waits for
+your review.
+
+## Chat apps and people
+
+**How do I connect Telegram?**
+Run `polyrob setup` (the chat apps section), then `polyrob telegram` or
+`polyrob gateway`. See [getting-started.md](getting-started.md).
+
+**How do I connect X, or renew the X login?**
+Send `/x login` (with the X pack installed). See
+[x-twitter.md](x-twitter.md#renewing-the-login-from-your-phone-x-login).
+
+**Can you have your own email address?**
+Yes: set `EMAIL_PROVIDER` to `agentmail` (or set `AGENTMAIL_API_KEY`), and your
+agent creates its own inbox. See [the settings reference](../CONFIGURATION.md).
+
+**Why are you silent in my group?**
+Your agent answers in a group only when group chat is on and the group is
+allowed. Group chat is set only with
+`polyrob config set GROUP_CHAT_ENABLED true`. Then allow the group with
+`/groups`. See [groups.md](groups.md#prerequisites).
+
+**Who else can talk to you?**
+Only you steer your agent. A person it wrote to first can answer; that
+person's messages are data, never instructions. `/allowlist` shows who it may
+message. See [security-model.md](security-model.md).
+
+**Does my data leave the machine?**
+Only the calls to the AI providers and the services you connect. See
+[security-model.md](security-model.md#1-threat-model--who-and-what-is-untrusted).
+
+**How do I run a second agent?**
+Run `polyrob profile create <name>`, then `polyrob -P <name>`. See
+[configuration.md](configuration.md#a-named-profile-is-a-whole-separate-home).
+
+**Where are the docs?**
+At https://polyrob.dev/docs.html. These pages are its source.
+
+---
+
+## Troubleshooting
+
+`/why` lists the last refusals with the reason for each; `/missed` lists the
+messages that were not delivered live. The headings below come from the code
+that writes these texts, so they match what you see. A word in braces, such as
+`{action}`, is the part that changes.
+
+<!-- BEGIN GENERATED troubleshooting -->
+
+### Why did you not reply?
+
+A run that ends without finishing records one stop reason. In your chat
+the turn then ends with a notice that starts `⚠️ My turn ended early:`;
+a goal or a job states the same words in its record (`/goal show <id>`,
+`/jobs`), with the steps used. The headings are those words.
+
+#### finished with done()
+
+`done` (no notice in chat). The run finished. If no answer reached you, a delivery limit or a pause held it. Next: `/missed`.
+
+#### paused to wait for a reply
+
+`awaiting_reply` (no notice in chat). A question to you is open; the run waits for your answer. Next: answer in this chat, or `/inbox`.
+
+#### stopped at the step limit
+
+`max_steps`. The run used every step it may take. Next: say continue in this chat; for a goal, `/goal retry <id>`.
+
+#### stopped after too many consecutive failed steps
+
+`failures`. Too many steps in a row failed, so the run stopped. Next: `/status`, then `/why` for the refusals.
+
+#### stopped by a fatal error
+
+`error`. An error that a retry cannot fix ended the run. Next: `/status`.
+
+#### stopped because no step finished within the stall timeout
+
+`stall`. A provider or a tool did not answer in time. Next: `/status`, then say continue.
+
+#### stopped by the run cost budget
+
+`run_budget`. The run reached its AI cost limit. Next: `/usage`.
+
+#### stopped after a money verb failed for a host reason (nothing was sent)
+
+`money_infra`. A money step failed on the host side. Nothing was sent. Next: `/status`, then `/book`.
+
+#### ended after reply-only steps
+
+`conversational_exit` (no notice in chat). The run ended after it replied; the reply was the answer. Next: `/missed` if none came.
+
+#### stopped by a stop control
+
+`control` (no notice in chat). A stop control ended the run: a pause or a stop on that run. Next: `/status`; `/resume` lifts a pause.
+
+#### cancelled
+
+`cancelled` (no notice in chat). The run was cancelled, for example by `/cancel`. Next: send the task again.
+
+#### cut by the wall-clock cap
+
+`wall_clock`. The run reached its time limit. Next: for a goal, `/goal retry <id>`.
+
+#### stopped because it repeated the same tool call
+
+`loop`. The same tool call repeated, so the harness stopped the run. Next: say continue with a hint, or `/why`.
+
+### Refusals
+
+The text you see when the agent refuses an action. `/why` lists the
+recent ones.
+
+#### You declined '{action}'.
+
+`approval:denied_by_owner` — who can act: you; what changes it: none — final; a retry can help: no.
+
+#### '{action}' waits for your answer: /pending {pending_id}.
+
+`approval:pending` — who can act: you; what changes it: /pending {pending_id}; a retry can help: yes.
+
+#### '{action}' timed out; the ask is still in /pending {pending_id}.
+
+`approval:timeout` — who can act: you; what changes it: /pending {pending_id}; a retry can help: yes.
+
+#### approval denied for '{action}' (timeout): nobody answered and no owner ask was filed; {remedy}
+
+`approval:timeout_no_ask` — who can act: you; what changes it: {lever}; a retry can help: yes.
+
+#### approval denied for '{action}' (error: approval provider crashed): the owner was not asked; {remedy}
+
+`approval:crashed` — who can act: the operator (an env setting, then a restart); what changes it: the approval provider; a retry can help: yes.
+
+#### approval denied for '{action}': the approval provider refused without asking the owner; {remedy}
+
+`approval:refused` — who can act: you; what changes it: {lever}; a retry can help: no.
+
+#### approval denied for '{action}': this turn may not ask the owner (not the owner's own turn); only the owner, from his own chat, can run it
+
+`approval_not_created:forged` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+
+#### approval denied for '{action}': this turn carries a correspondent's message, so it may not ask the owner; only the owner, from his own chat, can run it
+
+`approval_not_created:tainted` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+
+#### approval denied for '{action}': the approvals store could not be read, so the owner was not asked; retry later
+
+`approval_not_created:store_down` — who can act: the agent; what changes it: retry later; a retry can help: yes.
+
+#### approval denied for '{action}': this deploy's approval provider asks no one and denies every gated call; the operator sets APPROVAL_PROVIDER
+
+`approval_not_created:no_provider` — who can act: the operator (an env setting, then a restart); what changes it: APPROVAL_PROVIDER; a retry can help: no.
+
+#### approval denied for '{action}': a money verb needs the bound owner identity and this caller is not the owner
+
+`approval_not_created:money_owner` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+
+#### approval denied for '{action}': another approval prompt is already open; it needs an answer first, then retry
+
+`approval_not_created:busy` — who can act: you; what changes it: the owner answers the open prompt; a retry can help: yes.
+
+#### approval denied for '{action}': the owner's one approval was already used by an identical call; nothing more ran
+
+`approval_not_created:duplicate` — who can act: the agent; what changes it: none — final; a retry can help: no.
+
+#### approval denied for '{action}': the ask was closed without an approval; retry to ask again
+
+`approval_not_created:closed` — who can act: the agent; what changes it: retry to ask again; a retry can help: yes.
+
+#### '{action}' is not available in a group chat: this session speaks into a public room and can only read and reply. Only the owner, from his private chat with me, can do it
+
+`seat:room` — who can act: you; what changes it: the owner runs it from his private chat; a retry can help: no.
+
+#### '{action}' is blocked: the latest input is untrusted correspondent DATA, so no high-impact action runs on this turn; it needs the owner's own message
+
+`seat:correspondent` — who can act: you; what changes it: the owner's own message (or he runs it from his chat); a retry can help: no.
+
+#### refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an autonomous run this instance does not admit) cannot move funds
+
+`money:forged_text` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+
+#### refused: a forged/autonomous turn — this autonomous run cannot move funds because unattended money is not armed on this instance
+
+`money:autonomous_unarmed` — who can act: the operator (an env setting, then a restart); what changes it: the money regime and DEFI_AUTONOMOUS_TURN_TRADING; a retry can help: no.
+
+#### refused by the money gate: {why}
+
+`money:gate` — who can act: you; what changes it: the owner's caps or his one-shot approval; a retry can help: no.
+
+#### '{action}' is on the tool denylist
+
+`denylist` — who can act: you; what changes it: the owner's approvals.deny preference (/prefs) or POLYROB_TOOL_DENYLIST; a retry can help: no.
+
+#### '{action}' is an autonomous {effect} write and autonomy is {state}; only the owner resumes it
+
+`paused` — who can act: you; what changes it: /resume; a retry can help: no.
+
+#### '{action}' is an unclassified {effect} write (EXTERNAL_WRITE_STRICT), so it does not run until a code change classifies it
+
+`strict_code_change` — who can act: a code change; what changes it: a row in core/effects.py WRITE_ACTIONS or NON_WRITE_ACTIONS; a retry can help: no.
+
+#### you made the SAME call {attempts} times in this turn and it failed each time. Last error: {last_error} — The tool is not broken, locked or blocked: this limit counts only your identical call, and only the owner's next message resets it. Change the parameter the last error names, or stop and tell the owner that last error. Do not repeat this call
+
+`retry_wall` — who can act: the agent; what changes it: change the call, or the owner's next message; a retry can help: no.
+
+#### refused: this command {reason} in an unattended goal run; {why}. No owner is present on a goal run to approve it. Do it another way, or leave it for an owner turn
+
+`unattended:goal` — who can act: you; what changes it: an owner turn; a retry can help: no.
+
+#### refused: this command {reason} in an unattended cron run; {why}. No owner is present on a cron run to approve it. Do it another way, or leave it for an owner turn
+
+`unattended:cron` — who can act: you; what changes it: an owner turn; a retry can help: no.
+
+#### refused: this command {reason} in an unattended run; {why}. Do it another way, or leave it for an owner turn
+
+`unattended:run` — who can act: you; what changes it: an owner turn; a retry can help: no.
+
+<!-- END GENERATED troubleshooting -->

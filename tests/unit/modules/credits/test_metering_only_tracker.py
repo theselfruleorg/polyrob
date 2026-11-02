@@ -42,7 +42,7 @@ def test_metering_only_records_usage_without_deduction():
     db = _FakeDB()
     tracker = _tracker(db, None)
     rec = asyncio.run(tracker.record_llm_usage(
-        user_id="rob", session_id="s1", agent_id="a1",
+        user_id="alice", session_id="s1", agent_id="a1",
         model="deepseek-v3.2", provider="openrouter",
         input_tokens=1000, output_tokens=200,
     ))
@@ -60,7 +60,7 @@ def test_metering_only_never_raises_insufficient_credits(monkeypatch):
     tracker = _tracker(db, None)
     # would raise via _deduct_from_balance if the deduction leg ran
     rec = asyncio.run(tracker.record_llm_usage(
-        user_id="rob", session_id="s1", agent_id="a1",
+        user_id="alice", session_id="s1", agent_id="a1",
         model="gpt-5", provider="openai",
         input_tokens=50000, output_tokens=10000,
     ))
@@ -107,13 +107,13 @@ def test_metering_fk_selfheal_creates_profile_and_retries():
     db = _FKHealDB()
     tracker = _tracker(db, None)
     rec = asyncio.run(tracker.record_llm_usage(
-        user_id="rob", session_id="s1", agent_id="a1",
+        user_id="alice", session_id="s1", agent_id="a1",
         model="deepseek-v3.2", provider="openrouter",
         input_tokens=1000, output_tokens=200,
     ))
     assert rec is not None
     profile_inserts = [p for sql, p in db.executed if "INTO user_profiles" in sql]
-    assert profile_inserts == [("rob", "local:rob")]
+    assert profile_inserts == [("alice", "local:alice")]
     usage_attempts = [sql for sql, _ in db.executed if "INTO usage_records" in sql]
     assert len(usage_attempts) == 2, "one failed attempt + one successful retry"
 
@@ -123,7 +123,7 @@ def test_metering_fk_selfheal_gives_up_when_profile_insert_fails():
     tracker = _tracker(db, None)
     with pytest.raises(Exception, match="(?i)foreign key"):
         asyncio.run(tracker.record_llm_usage(
-            user_id="rob", session_id="s1", agent_id="a1",
+            user_id="alice", session_id="s1", agent_id="a1",
             model="deepseek-v3.2", provider="openrouter",
             input_tokens=10, output_tokens=5,
         ))
@@ -158,7 +158,7 @@ def test_non_fk_db_error_propagates_without_heal():
     tracker = _tracker(db, None)
     with pytest.raises(Exception, match="locked"):
         asyncio.run(tracker.record_llm_usage(
-            user_id="rob", session_id="s1", agent_id="a1",
+            user_id="alice", session_id="s1", agent_id="a1",
             model="deepseek-v3.2", provider="openrouter",
             input_tokens=10, output_tokens=5,
         ))

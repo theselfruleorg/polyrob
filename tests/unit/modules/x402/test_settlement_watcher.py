@@ -36,7 +36,7 @@ async def test_settled_invoice_wakes_session_exactly_once(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_7", amount_usd=4.0,
+            user_id="alice", session_id="sess_7", amount_usd=4.0,
             purpose="consulting", db=db)
         await invoicing.settle_payment_request(inv["request_id"],
                                                transaction_hash="0xfeed", db=db)
@@ -46,7 +46,7 @@ async def test_settled_invoice_wakes_session_exactly_once(tmp_path):
         assert out["settled_notified"] == 1
         assert len(agent.wakes) == 1
         sid, uid, text, meta = agent.wakes[0]
-        assert sid == "sess_7" and uid == "rob"
+        assert sid == "sess_7" and uid == "alice"
         assert inv["request_id"] in text and "SETTLED" in text
         assert meta["kind_hint"] == "payment_settled"
         # second tick: nothing to notify
@@ -64,7 +64,7 @@ async def test_dropped_wake_still_marks_notified(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="gone", amount_usd=1.0, purpose="p", db=db)
+            user_id="alice", session_id="gone", amount_usd=1.0, purpose="p", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         agent = _WakeAgent(result=False)
         out = await SettlementWatcher(agent, db=db).tick_once()
@@ -113,7 +113,7 @@ async def test_correspondent_linked_settlement_delivers_as_data(tmp_path, monkey
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_c", amount_usd=3.0, purpose="svc", db=db,
+            user_id="alice", session_id="sess_c", amount_usd=3.0, purpose="svc", db=db,
             correspondent_ref={"surface": "email", "address": "x@y.z", "thread_id": ""})
         await invoicing.settle_payment_request(inv["request_id"],
                                                transaction_hash="0xabc", db=db)
@@ -135,7 +135,7 @@ async def test_correspondent_inactive_falls_back_to_self_wake(tmp_path, monkeypa
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_c", amount_usd=3.0, purpose="svc", db=db,
+            user_id="alice", session_id="sess_c", amount_usd=3.0, purpose="svc", db=db,
             correspondent_ref={"surface": "email", "address": "x@y.z"})
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         agent = _CorrAgent(corr_state=None)  # registry resolves to no active row
@@ -152,7 +152,7 @@ async def test_correspondent_access_disabled_uses_self_wake(tmp_path, monkeypatc
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_c", amount_usd=3.0, purpose="svc", db=db,
+            user_id="alice", session_id="sess_c", amount_usd=3.0, purpose="svc", db=db,
             correspondent_ref={"surface": "email", "address": "x@y.z"})
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         agent = _CorrAgent(corr_state="active")
@@ -168,7 +168,7 @@ async def test_tick_expires_stale_invoices(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=1.0, purpose="p",
+            user_id="alice", session_id="s", amount_usd=1.0, purpose="p",
             expiry_hours=0.1, db=db)
         import time as _time
         real_time = _time.time
@@ -216,7 +216,7 @@ async def test_expired_correspondent_active_delivers_data_once(tmp_path, monkeyp
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_exp_c", amount_usd=2.0, purpose="svc",
+            user_id="alice", session_id="sess_exp_c", amount_usd=2.0, purpose="svc",
             expiry_hours=0.1, db=db,
             correspondent_ref={"surface": "email", "address": "x@y.z", "thread_id": ""})
         _expire_soon(monkeypatch)
@@ -234,7 +234,7 @@ async def test_expired_correspondent_active_delivers_data_once(tmp_path, monkeyp
         # the owner ALSO gets a durable notification, regardless of the
         # session-side correspondent delivery
         assert len(owner_calls) == 1
-        assert owner_calls[0]["user_id"] == "rob"
+        assert owner_calls[0]["user_id"] == "alice"
         assert inv["request_id"] in owner_calls[0]["text"]
 
         # second tick: exactly-once claim — no re-delivery on either rail
@@ -252,7 +252,7 @@ async def test_expired_no_correspondent_self_wake_and_owner_notice(tmp_path, mon
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_exp_w", amount_usd=3.5, purpose="report",
+            user_id="alice", session_id="sess_exp_w", amount_usd=3.5, purpose="report",
             expiry_hours=0.1, db=db)
         _expire_soon(monkeypatch)
         agent = _WakeAgent()
@@ -261,12 +261,12 @@ async def test_expired_no_correspondent_self_wake_and_owner_notice(tmp_path, mon
         assert out["expired_notified"] == 1
         assert len(agent.wakes) == 1
         sid, uid, text, meta = agent.wakes[0]
-        assert sid == "sess_exp_w" and uid == "rob"
+        assert sid == "sess_exp_w" and uid == "alice"
         assert "EXPIRED" in text and inv["request_id"] in text
         assert meta["kind_hint"] == "payment_expired"
         # plus exactly one owner notification over the delivery rail
         assert len(owner_calls) == 1
-        assert owner_calls[0]["user_id"] == "rob"
+        assert owner_calls[0]["user_id"] == "alice"
     finally:
         await db.close()
 
@@ -277,7 +277,7 @@ async def test_expired_self_wake_disabled_still_marks_and_notifies_owner(tmp_pat
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="gone", amount_usd=1.0, purpose="p",
+            user_id="alice", session_id="gone", amount_usd=1.0, purpose="p",
             expiry_hours=0.1, db=db)
         _expire_soon(monkeypatch)
         agent = _WakeAgent(result=False)  # SELF_WAKE off / non-resident -> dropped
@@ -300,9 +300,9 @@ async def test_settled_row_not_expiry_woken_and_expired_row_not_settlement_woken
     db = await _setup_db(tmp_path)
     try:
         settled_inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_settled", amount_usd=1.0, purpose="a", db=db)
+            user_id="alice", session_id="s_settled", amount_usd=1.0, purpose="a", db=db)
         expired_inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_expired", amount_usd=1.0, purpose="b",
+            user_id="alice", session_id="s_expired", amount_usd=1.0, purpose="b",
             expiry_hours=0.1, db=db)
         await invoicing.settle_payment_request(settled_inv["request_id"], db=db)
         _expire_soon(monkeypatch)
@@ -330,7 +330,7 @@ async def test_tick_with_no_expired_rows_is_noop(tmp_path, monkeypatch):
     try:
         # a pending, not-yet-expired invoice must not trigger expiry escalation
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=1.0, purpose="p",
+            user_id="alice", session_id="s", amount_usd=1.0, purpose="p",
             expiry_hours=10.0, db=db)
         agent = _WakeAgent()
         out = await SettlementWatcher(agent, db=db).tick_once()

@@ -1,10 +1,10 @@
-"""Always-on validator for self-service ``rob_xxx`` API keys (B2).
+"""Always-on validator for self-service API keys (B2).
 
 The keys minted by ``POST /api/auth/api-keys`` had exactly ONE validator:
 ``AuthenticationMiddleware._validate_api_key``. That middleware is only mounted
 when ``API_SECRET``/``ADMIN_TOKEN`` is set (``api/app.py``), so on the default
 deployment a freshly minted key authenticated nothing — the agent card
-advertised ``X-API-KEY: rob_xxx…`` as the *recommended* scheme for machine
+advertised ``X-API-KEY: <key>`` as the *recommended* scheme for machine
 callers and every such call 401'd.
 
 This middleware is registered UNCONDITIONALLY. It validates against the
@@ -30,7 +30,9 @@ from utils.bounded_collections import BoundedDict
 logger = logging.getLogger(__name__)
 
 #: Prefix every self-service key carries (``modules/auth/api_key_manager``).
-API_KEY_PREFIX = "rob_"
+API_KEY_PREFIX = "polyrob_"
+#: Keys issued before 2026-10-31 keep working; nothing issues this prefix any more.
+LEGACY_API_KEY_PREFIX = "rob_"
 
 #: Seconds a validated key stays cached. Short: a revoked key must stop working
 #: without a restart, and the DB lookup is one indexed row.
@@ -87,11 +89,11 @@ def looks_like_api_key(value: Optional[str]) -> bool:
     Deliberately narrow: this middleware must never try to interpret the
     operator SERVICE token or a JWT that happens to arrive in the same header.
     """
-    return bool(value) and value.startswith(API_KEY_PREFIX) and len(value) >= 32
+    return bool(value) and value.startswith((API_KEY_PREFIX, LEGACY_API_KEY_PREFIX)) and len(value) >= 32
 
 
 def extract_api_key(request: Request) -> Optional[str]:
-    """The ``rob_xxx`` key on this request, from ``X-API-KEY`` or a Bearer token."""
+    """The self-service key on this request, from ``X-API-KEY`` or a Bearer token."""
     header = request.headers.get("X-API-KEY")
     if looks_like_api_key(header):
         return header
@@ -154,7 +156,7 @@ async def validate_api_key(api_key: str) -> Optional[Dict[str, Any]]:
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
-    """Authenticate a ``rob_xxx`` key on every request, ENABLE_AUTH or not."""
+    """Authenticate a self-service key on every request, ENABLE_AUTH or not."""
 
     def __init__(self, app):
         super().__init__(app)

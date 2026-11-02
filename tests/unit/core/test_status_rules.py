@@ -18,7 +18,7 @@ UID = "u1"
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-	monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+	monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
 
 
 def _keys(sec):
@@ -44,7 +44,7 @@ def test_a_fresh_install_is_quiet(tmp_path):
 
 
 def test_active_and_superseded_rules_are_counted(tmp_path):
-	w = OwnerDocWriter(tmp_path, instance_id="rob")
+	w = OwnerDocWriter(tmp_path, instance_id="alice")
 	w.propose("- Rule A\n- Rule B\n", user_id=UID, created_by="user", pending=False)
 	w.propose("- Rule A\n- Rule C\n", user_id=UID, created_by="user", pending=False)
 	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
@@ -54,7 +54,7 @@ def test_active_and_superseded_rules_are_counted(tmp_path):
 
 
 def test_a_pending_rule_is_named_as_not_in_effect(tmp_path):
-	w = OwnerDocWriter(tmp_path, instance_id="rob")
+	w = OwnerDocWriter(tmp_path, instance_id="alice")
 	w.propose("- Never post bug-fix reports.\n", user_id=UID, created_by="agent", pending=True)
 	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
 	assert "rule_pending" in _keys(sec)
@@ -65,7 +65,7 @@ def test_a_pending_rule_is_named_as_not_in_effect(tmp_path):
 def test_written_but_not_loaded_is_critical(tmp_path, monkeypatch):
 	import modules.memory.task.threat_scan as ts
 	monkeypatch.setattr(ts, "is_identity_suspicious", lambda _t: True)
-	root = self_tier_root(tmp_path, UID, "rob")
+	root = self_tier_root(tmp_path, UID, "alice")
 	root.mkdir(parents=True, exist_ok=True)
 	(root / "owner.md").write_text("- a rule the identity scan flags\n")
 	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
@@ -74,7 +74,7 @@ def test_written_but_not_loaded_is_critical(tmp_path, monkeypatch):
 
 def test_an_over_cap_owner_doc_is_named_as_truncated(tmp_path):
 	"""2026-10-11: over the cap loads the head (it used to drop every rule)."""
-	root = self_tier_root(tmp_path, UID, "rob")
+	root = self_tier_root(tmp_path, UID, "alice")
 	root.mkdir(parents=True, exist_ok=True)
 	(root / "owner.md").write_text("- " + "x" * (OWNER_DOC_MAX_CHARS + 10))  # a direct-FS over-cap write
 	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
@@ -95,7 +95,7 @@ def test_rail_prose_is_measured(tmp_path):
 def test_a_truncated_soul_doc_is_named(tmp_path):
 	from core.instance import SELF_CONTEXT_PER_DOC_MAX_CHARS
 	d = tmp_path / "identity"; d.mkdir()
-	(d / "identity.md").write_text("I am Rob. " * (SELF_CONTEXT_PER_DOC_MAX_CHARS // 5))
+	(d / "identity.md").write_text("I am Nova. " * (SELF_CONTEXT_PER_DOC_MAX_CHARS // 5))
 	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
 	assert "rules_soul_truncated" in _keys(sec)
 

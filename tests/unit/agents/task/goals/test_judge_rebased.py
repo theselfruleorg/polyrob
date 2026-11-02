@@ -97,7 +97,7 @@ def _mk(verdict, monkeypatch, *, self_wake_on=False):
     if self_wake_on:
         monkeypatch.setenv("GOAL_SELF_WAKE_ENABLED", "true")
     llm = _JudgeLLM(verdict)
-    orch = _orch("Posted the thread!\nOUTCOME: https://x.com/rob/status/1", llm)
+    orch = _orch("Posted the thread!\nOUTCOME: https://x.com/alice/status/1", llm)
     board = _Board()
     disp = GoalDispatcher(board, _task_agent(orch))
     return llm, board, disp

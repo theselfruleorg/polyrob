@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Finding X accounts or conversations to engage'
   polyrob-priority: '6'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["anysite","twitter"]}'
   polyrob-version: '3'
 ---

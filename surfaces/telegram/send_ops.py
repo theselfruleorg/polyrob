@@ -30,12 +30,9 @@ from core.surfaces.cards import GO_WORDS as _GO
 from tools.defi.send_order import (  # noqa: F401  (the one parser, re-exported)
     _EVM_ADDR, _NATIVE, _SOL_ADDR, ANYWAY, USAGE, _checksum_ok, _native_on, parse,
 )
+from tools.defi.send_order import PRICE_ROOM as _PRICE_ROOM  # noqa: F401  (swap_ops)
 
 logger = logging.getLogger(__name__)
-
-#: A quote is re-priced at send time; the declared bound leaves this much room
-#: for the price to move between the two (the bridge's own tolerance).
-_PRICE_ROOM = 1.05
 
 
 def _first_send_line(user_id: str, to: str) -> str:
@@ -174,8 +171,28 @@ def _render(result) -> str:
     return body
 
 
+async def _resolve_usd(tool, order: dict):
+    """``(order, conversion line, refusal)`` — a ``$`` amount turned into tokens
+    at the send rail's own spend-grade price (``tool._price``), off the loop."""
+    import asyncio
+    from tools.defi import send_order
+    if order.get("usd") is None:
+        return order, "", None
+    price = getattr(tool, "_price", None)
+    try:
+        out, px, why = await asyncio.to_thread(send_order.resolve_usd, order, price)
+    except Exception as exc:
+        logger.warning("/send $ conversion failed", exc_info=True)
+        return None, "", (f"❌ The price read for the dollar amount failed ({exc}), so "
+                          f"I cannot turn ${order['usd']:,.2f} into tokens. Nothing was "
+                          f"sent. Try again, or give a token amount.")
+    if why:
+        return None, "", "❌ " + why
+    return out, send_order.usd_line(out, px), None
+
+
 async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = None) -> str:
-    """``/send <amount> <native|token> to <address> on <chain> [go]``."""
+    """``/send <amount|$usd> <native|token> to <address> on <chain> [go]``."""
     if not user_id:
         return "Only the owner can send from the wallet."
     if not args:
@@ -202,6 +219,13 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
         return ("❌ The wallet is not readable, so I cannot hold this send to a "
                 "cap. Nothing was sent.")
     caps = _caps_line(tool)
+    # A `$` amount: the tool converts it (never the model), and the quote shows
+    # the token count and the price. The typed words keep `$…`: a Confirm
+    # re-converts at the then price, held to the bound the quote showed.
+    typed_order = order
+    order, usd_note, why = await _resolve_usd(tool, order)
+    if why:
+        return why + "\n" + caps
 
     # Always quote first: the value the send will be held to comes from the
     # simulation, never from a number typed or guessed.
@@ -211,7 +235,7 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
         logger.warning("/send quote failed", exc_info=True)
         return f"❌ The quote did not run: {exc}. Nothing was sent."
     if getattr(quote, "error", None) or "DRY RUN" not in (quote.extracted_content or ""):
-        return _render(quote) + "\n" + caps
+        return usd_note + _render(quote) + "\n" + caps
     usd = _simulated_usd(quote)
     from core.wallet.tx_guard_steps.value import UNVERIFIED_MARK
     unverified = UNVERIFIED_MARK in (quote.extracted_content or "")
@@ -221,22 +245,27 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
         # token … allow with extra confirm"). No `go` line here: the next step
         # is a second quote that carries `anyway`, and only ITS Confirm sends.
         head = ("❌ Nothing was sent. " if order["go"] else "")
-        return (head + _owner_words(_render(quote)) + "\n" + caps
+        return (head + usd_note + _owner_words(_render(quote)) + "\n" + caps
                 + _first_send_line(user_id, order["to"])
                 + "\n⚠️ EXTRA CHECK: this token's value is NOT VERIFIED. Send it only "
                   "if you know what it is and the amount is right.\n"
                 + f"To continue: /send {' '.join(typed + [ANYWAY])}")
     if not order["go"]:
         if usd is None:
-            return (_owner_words(_render(quote)) + "\n" + caps
-                    + f"\nTo send it: /send {' '.join(args)} go")
+            line = (_confirm_args(args, typed_order, min(cap, order["max_usd"]))
+                    if order.get("usd") is not None else args)
+            return (usd_note + _owner_words(_render(quote)) + "\n" + caps
+                    + f"\nTo send it: /send {' '.join(line)} go")
         bound = (min(cap, order["max_usd"]) if order.get("max_usd") is not None
                  else min(cap, round(usd * _PRICE_ROOM + 0.01, 2)))
-        return (_owner_words(_render(quote)) + "\n" + caps
+        basis = ("the dollars you named + 5%" if order.get("usd") is not None
+                 and typed_order.get("max_usd") is None
+                 else "your max" if typed_order.get("max_usd") is not None
+                 else "the quote + 5% for the price to move")
+        return (usd_note + _owner_words(_render(quote)) + "\n" + caps
                 + _first_send_line(user_id, order["to"])
-                + f"  bound: the send may be worth at most ${bound:,.2f} "
-                  f"(the quote + 5% for the price to move)\n"
-                + f"\nTo send it: /send {' '.join(_confirm_args(args, order, bound))} go")
+                + f"  bound: the send may be worth at most ${bound:,.2f} ({basis})\n"
+                + f"\nTo send it: /send {' '.join(_confirm_args(args, typed_order, bound))} go")
 
     if usd is None and not unverified:
         return ("❌ The quote carried no simulated value, so I cannot bound the "
@@ -249,7 +278,7 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
         # be worth: the guard refuses a send that simulates above it.
         bound = min(cap, order["max_usd"])
         if usd is not None and usd > bound:
-            return (f"❌ The price moved: the send now simulates at ${usd:,.2f}, "
+            return (usd_note + f"❌ The price moved: the send now simulates at ${usd:,.2f}, "
                     f"above the ${bound:,.2f} you confirmed. Nothing was sent. "
                     f"Quote it again: /send "
                     f"{' '.join(w for w in args if w.lower() not in _GO)}\n" + caps)
@@ -259,7 +288,7 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
         logger.warning("/send failed", exc_info=True)
         return (f"❌ The send raised before a result: {exc}. Check /book before "
                 "trying again — assume nothing about what happened.")
-    return _render(sent) + "\n" + caps
+    return usd_note + _render(sent) + "\n" + caps
 
 
 async def send_verb(*, user_id: str, data_dir: str, args: List[str],

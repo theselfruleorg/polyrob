@@ -156,8 +156,10 @@ def test_render_block_defangs_and_caps():
     big = [{"direction": "out", "ts": i, "via": "t", "source": "x", "session_id": "s",
             "body": "x" * 300} for i in range(40)]
     out = ot.render_block(big, kind="tail")
-    assert len(out) <= ot.BLOCK_MAX_CHARS + 100
+    assert len(out) <= ot.TAIL_BLOCK_MAX_CHARS + 100
     assert "earlier lines omitted" in out
+    out = ot.render_block(big, kind="delta")
+    assert len(out) <= ot.BLOCK_MAX_CHARS + 100
 
 
 def test_adopt_legacy_owner_rows_folds_both_spellings(container, tmp_path):
@@ -202,8 +204,8 @@ def test_bare_container_without_data_dir_gets_no_store(tmp_path):
 def test_canonical_owner_addr_strips_same_surface_prefix():
     assert canonical_owner_addr("telegram", "telegram:100000001") == "100000001"
     assert canonical_owner_addr("telegram", "100000001") == "100000001"
-    assert canonical_owner_addr("telegram", "@Rob") == "rob"
-    assert canonical_owner_addr("email", "email:Rob@X.com") == "rob@x.com"
+    assert canonical_owner_addr("telegram", "@Alice") == "alice"
+    assert canonical_owner_addr("email", "email:Alice@X.com") == "alice@x.com"
     # a prefix naming ANOTHER surface is not stripped
     assert canonical_owner_addr("email", "telegram:123") == "telegram:123"
 

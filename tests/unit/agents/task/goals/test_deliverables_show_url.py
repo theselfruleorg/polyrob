@@ -11,9 +11,9 @@ from agents.task.goals.deliverables import deliverable_line_for
 
 def test_a_published_file_is_reported_by_its_url():
     line = deliverable_line_for("index.html", "1.2 KB",
-                                url="https://pub.example.com/rob-status/")
+                                url="https://pub.example.com/demo-status/")
 
-    assert "https://pub.example.com/rob-status/" in line
+    assert "https://pub.example.com/demo-status/" in line
     assert "server-only" not in line
 
 

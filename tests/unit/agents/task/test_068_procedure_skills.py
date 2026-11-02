@@ -16,8 +16,6 @@ SKILLS = Path(__file__).resolve().parents[4] / "data" / "prompts" / "skills"
 MONEY = ["defi_trade", "defi_data", "x402_pay", "cronjob", "task"]
 
 SPLIT = {
-    "memecoin-scouting": "scan for fresh memecoin pairs and check the top holders",
-    "robinhood-chain": "should I hunt on robinhood chain today",
     "defi-bridge": "bridge ETH from base to robinhood",
     "token-launch": "launch a token on the launchpad with a creator tax",
     "defi-liquidity": "add liquidity to the uniswap v3 pool",
@@ -36,7 +34,7 @@ TARGETS = {
     "dca": "set up a dca into ETH every week",
 }
 
-ALL_MONEY = set(TARGETS) | set(SPLIT) | {"treasury-trading", "crypto-trading-safety"}
+ALL_MONEY = set(TARGETS) | set(SPLIT) | {"crypto-trading-safety"}
 VENUE = ["polymarket", "hyperliquid", "polymarket_data", "hyperliquid_data"]
 
 
@@ -54,7 +52,7 @@ def test_every_money_skill_is_an_index_line_for_a_money_session():
     assert ALL_MONEY <= ids, ALL_MONEY - ids
 
 
-@pytest.mark.parametrize("pin", ["treasury-trading", "dca", "memecoin-scouting"])
+@pytest.mark.parametrize("pin", ["dca", "trade-execution"])
 def test_a_pinned_doctrine_carries_identity_and_pre_trade(pin):
     """Codex A1: a trading doctrine without the procedures it assumes."""
     ids = _pinned([pin], MONEY + VENUE)
@@ -62,7 +60,7 @@ def test_a_pinned_doctrine_carries_identity_and_pre_trade(pin):
 
 
 def test_prerequisites_are_bounded_and_marked():
-    got = SkillManager().get_pinned_skills(seeded_skill_ids=["treasury-trading"], tool_ids=MONEY)
+    got = SkillManager().get_pinned_skills(seeded_skill_ids=["trade-execution"], tool_ids=MONEY)
     prereq = [m for m in got if m.trigger_type == "prerequisite"]
     assert len(prereq) <= SkillManager.MAX_PREREQUISITES
     assert all(m.match_reasons[0].startswith("requires:") for m in prereq)
@@ -82,7 +80,7 @@ def test_prerequisites_respect_their_own_tool_gate():
     assert "token-identity" in ids
 
 
-@pytest.mark.parametrize("sid", sorted(set(TARGETS) | set(SPLIT) | {"treasury-trading"}))
+@pytest.mark.parametrize("sid", sorted(set(TARGETS) | set(SPLIT)))
 def test_skill_shape(sid):
     text = (SKILLS / sid / "SKILL.md").read_text(encoding="utf-8")
     assert re.search(rf"^name: {re.escape(sid)}$", text, re.M)
@@ -134,15 +132,15 @@ def test_a_user_disabled_prerequisite_stays_disabled():
     off = copy.deepcopy(sm0.skill_rules["token-identity"])
     off["auto_activate"] = False
     sm = _manager_with({}, user_rules={"token-identity": off})
-    ids = _pinned(["treasury-trading"], sm=sm, user_id="u1")
+    ids = _pinned(["trade-execution"], sm=sm, user_id="u1")
     assert "token-identity" not in ids and "pre-trade-check" in ids, ids
     ids = _pinned(["token-identity"], sm=sm, user_id="u1")
     assert "token-identity" in ids
 
 
 @pytest.mark.parametrize("path", [
-    "data/prompts/skills/treasury-trading/SKILL.md",
-    "data/prompts/skills/crypto-trading-safety/SKILL.md",
+    "data/prompts/skills/trade-execution/SKILL.md",
+    "packs/markets/polyrob_markets/skills/crypto-trading-safety/SKILL.md",
     "packs/markets/polyrob_markets/skills/hyperliquid-trading/SKILL.md",
     "packs/markets/polyrob_markets/skills/polymarket-trading/SKILL.md",
 ])
@@ -153,8 +151,10 @@ def test_doctrine_and_venue_skills_have_missing_tool_fallbacks(path):
 
 def test_no_generally_loaded_skill_asserts_a_standing_mandate():
     """N4: the owner's standing authority is a posture fact, not a skill fact."""
-    for sid in ("treasury-trading", "crypto-trading-safety"):
-        text = (SKILLS / sid / "SKILL.md").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[4]
+    for path in (SKILLS / "trading-mandate" / "SKILL.md",
+                 root / "packs/markets/polyrob_markets/skills/crypto-trading-safety/SKILL.md"):
+        text = path.read_text(encoding="utf-8")
         assert "has granted a standing authority" not in text.lower()
         assert "has granted a standing" not in text.lower()
 
@@ -196,13 +196,14 @@ def test_every_shipped_body_fits_the_pin_budget():
     assert big == {}, f"move detail to references/: {big}"
 
 
-def test_treasury_trading_states_no_route_in_its_head_and_keeps_its_references():
-    body = dict(_bodies())["treasury-trading"]
-    head = body[:body.index("## If a tool is missing")]
-    assert "NO ROUTE is one token's fact, not a stop" in head
-    assert "keep taking new screened entries" in head
-    refs = SKILLS / "treasury-trading" / "references"
-    for name in ("chains.md", "executing.md", "nfts.md", "learning-the-meta.md"):
-        assert (refs / name).is_file(), name
-        assert f"`{name}`" in head or f"references/{name}" in body, name
-
+def test_the_generic_trading_rules_live_in_the_procedure_skills():
+    """095 B1: the instance's programme skills left core; their generic rules
+    (NO ROUTE, routing, anti-dust, executing) live in the procedure skills."""
+    bodies = dict(_bodies())
+    assert "treasury-trading" not in bodies and "memecoin-scouting" not in bodies
+    pre, exe = bodies["pre-trade-check"], bodies["trade-execution"]
+    assert "NO ROUTE on a held position is that token's fact, not a stop" in pre
+    assert "keep taking" in pre and "could not complete the route lookup" in pre
+    assert "Tokens you did not buy" in exe and "Verify a payee address in full" in exe
+    assert (SKILLS / "trade-execution" / "references" / "nfts.md").is_file()
+    assert "references/nfts.md" in exe

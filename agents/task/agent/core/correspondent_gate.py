@@ -178,6 +178,8 @@ def build_tool_resolver(controller: Any) -> Callable[[str], Optional[str]]:
 # could never answer the very correspondent it was talking to via `email_send`, only
 # via the generic `message(surface="email", ...)` action.
 _REPLY_ACTIONS = frozenset({"message", "email_send"})
+#: The tools that own a reply action (095 W2 seat probe).
+_REPLY_TOOLS = frozenset({"message", "email"})
 
 
 def _param(params: Any, key: str) -> Any:
@@ -232,7 +234,7 @@ def build_reply_allowed(
     Denies unless ``CORRESPONDENT_REPLY_ENABLED`` (default OFF) AND the tenant has
     sent fewer than ``CORRESPONDENT_REPLY_MAX_ROUNDS`` outbound messages to that
     address in the last 24h (counted from the ConversationStore). Fail-CLOSED —
-    if the budget can't be verified, the reply stays blocked (the owner can
+    if the budget can't be verified, the reply stays blocked (the owner may
     always unblock by replying).
     """
     def _allowed(surface: str, address: str) -> bool:
@@ -269,7 +271,7 @@ def build_correspondent_gate(controller, orchestrator):
     """The correspondent gate over *orchestrator*'s taint (the policy chain,
     ``tools/controller/policy_chain.py``, registers it in its order)."""
     from core.security.taints import correspondent_probe
-    return make_correspondent_gate_hook(
+    hook = make_correspondent_gate_hook(
         correspondent_probe(orchestrator),
         resolve_tool=build_tool_resolver(controller),
         get_taint_sources=lambda: set(getattr(orchestrator, "_correspondent_taint_sources", None) or ()),
@@ -277,6 +279,17 @@ def build_correspondent_gate(controller, orchestrator):
             lambda: getattr(orchestrator, "container", None),
             lambda: getattr(orchestrator, "user_id", "") or ""),
     )
+
+    def _seat_denies(tool_id: str) -> Optional[str]:
+        """095 W2: "correspondent" on a correspondent's session for a high-impact
+        tool (the reply tool excepted: the scoped reply may use it)."""
+        if not getattr(orchestrator, "_correspondent_session", False) is True:
+            return None
+        if str(tool_id or "") in _REPLY_TOOLS:
+            return None
+        return "correspondent" if is_high_impact_call(tool_id, tool_id) else None
+    hook.seat_denies = _seat_denies
+    return hook
 
 
 def make_correspondent_gate_hook(
@@ -332,12 +345,12 @@ def make_correspondent_gate_hook(
                 except Exception as e:  # fail-closed: exemption probe never opens
                     logger.debug("scoped-reply exemption probe failed (deny): %s", e)
             from core.security.refusals import record_refusal
+            from core.tool_gates import refusal_text
             record_refusal("correspondent_taint", tool=action_name,
                            user_id=getattr(context, "user_id", None) or "",
-                           session_id=getattr(context, "session_id", None) or "")
-            return (f"'{action_name}' is blocked: the latest input is untrusted "
-                    f"correspondent DATA — owner confirmation is required before a "
-                    f"high-impact action.")
+                           session_id=getattr(context, "session_id", None) or "",
+                           kind="seat:correspondent")
+            return refusal_text("seat:correspondent", action=action_name)
         return None
     return _hook
 

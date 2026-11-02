@@ -1,7 +1,7 @@
 """Owner ⇄ instance user_id alias (owner-instance identity model, 2026-07-03).
 
 An authenticated Telegram *owner* must operate as the instance OWNER principal
-(e.g. ``rob``) rather than the surface-hashed ``u_…`` id, so the owner's chat
+(e.g. ``alice``) rather than the surface-hashed ``u_…`` id, so the owner's chat
 shares the same tenant as autonomy (goals / memory / SELF docs). Only telegram is
 aliased: its sender ids are platform-authenticated. Email ``From:`` / WhatsApp are
 forgeable and are NEVER aliased (AGENTS.md keeps owner-by-email OFF in v1).
@@ -16,7 +16,7 @@ from core.instance import (
 )
 
 OWNER_TG = "100000001"
-OWNER_ENV = {"POLYROB_OWNER_USER_ID": "rob", "POLYROB_OWNER_TELEGRAM_ID": OWNER_TG}
+OWNER_ENV = {"POLYROB_OWNER_USER_ID": "alice", "POLYROB_OWNER_TELEGRAM_ID": OWNER_TG}
 
 
 # --- resolve_owner_email (E3: SSOT for the configured owner email) ------------
@@ -63,13 +63,13 @@ def test_owner_tg_none_when_unset():
 
 def test_owner_tg_ignores_non_numeric():
     # A raw tg id is numeric; a non-numeric value is not a usable chat id.
-    assert resolve_owner_telegram_id(env={"POLYROB_OWNER_TELEGRAM_ID": "rob"}) is None
+    assert resolve_owner_telegram_id(env={"POLYROB_OWNER_TELEGRAM_ID": "alice"}) is None
 
 
 # --- owner_surface_alias (telegram-only) --------------------------------------
 
 def test_owner_telegram_sender_aliases_to_principal():
-    assert owner_surface_alias(OWNER_TG, "telegram", env=OWNER_ENV) == "rob"
+    assert owner_surface_alias(OWNER_TG, "telegram", env=OWNER_ENV) == "alice"
 
 
 def test_owner_surface_alias_equals_resolve_owner_principal():
@@ -117,7 +117,7 @@ def test_alias_is_not_moved_by_a_named_instance():
 
 def test_no_alias_without_owner_tg_id():
     # Principal bound but no owner tg id configured -> cannot identify the owner sender.
-    env = {"POLYROB_OWNER_USER_ID": "rob"}
+    env = {"POLYROB_OWNER_USER_ID": "alice"}
     assert owner_surface_alias(OWNER_TG, "telegram", env=env) is None
 
 
@@ -128,5 +128,5 @@ def test_no_alias_for_empty_raw_id():
 
 def test_alias_via_single_allowed_id_binding():
     # Owner tg identified via a single-entry ALLOWED_TELEGRAM_USER_IDS.
-    env = {"POLYROB_OWNER_USER_ID": "rob", "ALLOWED_TELEGRAM_USER_IDS": OWNER_TG}
-    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == "rob"
+    env = {"POLYROB_OWNER_USER_ID": "alice", "ALLOWED_TELEGRAM_USER_IDS": OWNER_TG}
+    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == "alice"

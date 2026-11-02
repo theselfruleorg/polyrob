@@ -7,7 +7,7 @@ from modules.credits import balances as B
 @pytest.fixture(autouse=True)
 def _bind_owner(monkeypatch):
     # CR-M07: the treasury probe answers only for the bound owner.
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
 
 def test_treasury_probe_refuses_a_non_owner_tenant(monkeypatch):
@@ -24,7 +24,7 @@ def test_treasury_probe_refuses_a_non_owner_tenant(monkeypatch):
     monkeypatch.setattr("core.wallet.onchain.balances", lambda a, c: (1.0, 50.0))
     assert asyncio.run(B.treasury_balance_usd("u_stranger")) is None
     assert reads == []  # the operator wallet was never read
-    assert asyncio.run(B.treasury_balance_usd("rob")) == 50.0
+    assert asyncio.run(B.treasury_balance_usd("alice")) == 50.0
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,7 @@ async def test_ledger_include_balances_false_never_probes(monkeypatch):
         return 5.0
     monkeypatch.setattr(B, "provider_balance_usd", spy)
 
-    led = await build_ledger("rob", days=1, db=FakeDB())
+    led = await build_ledger("alice", days=1, db=FakeDB())
     assert called == []
     assert led["runtime"]["provider_balance_usd"] is None
 
@@ -101,7 +101,7 @@ async def test_treasury_balance_returns_usdc_figure(monkeypatch):
     monkeypatch.setattr(factory_mod, "get_agent_wallet", lambda: _FakeWallet("0xabc"))
     monkeypatch.setattr(onchain_mod, "balances", lambda addr, chain, timeout=4.0: (0.5, 12.34))
 
-    assert await B.treasury_balance_usd("rob") == 12.34
+    assert await B.treasury_balance_usd("alice") == 12.34
 
 
 @pytest.mark.asyncio
@@ -109,7 +109,7 @@ async def test_treasury_balance_none_when_wallet_missing(monkeypatch):
     import core.wallet.factory as factory_mod
 
     monkeypatch.setattr(factory_mod, "get_agent_wallet", lambda: None)
-    assert await B.treasury_balance_usd("rob") is None
+    assert await B.treasury_balance_usd("alice") is None
 
 
 @pytest.mark.asyncio
@@ -117,7 +117,7 @@ async def test_treasury_balance_none_when_address_missing(monkeypatch):
     import core.wallet.factory as factory_mod
 
     monkeypatch.setattr(factory_mod, "get_agent_wallet", lambda: _FakeWallet(None))
-    assert await B.treasury_balance_usd("rob") is None
+    assert await B.treasury_balance_usd("alice") is None
 
 
 @pytest.mark.asyncio
@@ -130,7 +130,7 @@ async def test_treasury_balance_none_when_probe_returns_none_none(monkeypatch):
     monkeypatch.setattr(factory_mod, "get_agent_wallet", lambda: _FakeWallet("0xabc"))
     monkeypatch.setattr(onchain_mod, "balances", lambda addr, chain, timeout=4.0: (None, None))
 
-    assert await B.treasury_balance_usd("rob") is None
+    assert await B.treasury_balance_usd("alice") is None
 
 
 @pytest.mark.asyncio
@@ -141,7 +141,7 @@ async def test_treasury_balance_none_when_probe_raises(monkeypatch):
         raise RuntimeError("wallet factory exploded")
     monkeypatch.setattr(factory_mod, "get_agent_wallet", boom)
 
-    assert await B.treasury_balance_usd("rob") is None
+    assert await B.treasury_balance_usd("alice") is None
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_treasury_balance_runs_onchain_call_off_event_loop(monkeypatch):
     monkeypatch.setattr(factory_mod, "get_agent_wallet", lambda: _FakeWallet("0xabc"))
     monkeypatch.setattr(onchain_mod, "balances", fake_balances)
 
-    bal = await B.treasury_balance_usd("rob")
+    bal = await B.treasury_balance_usd("alice")
     assert bal == 5.0
     assert seen_threads, "onchain_balances was never called"
     assert seen_threads[0] is not main_thread, (
@@ -189,9 +189,9 @@ async def test_build_ledger_include_balances_true_populates_both_fields(monkeypa
 
     monkeypatch.setattr(B, "treasury_balance_usd", fake_treasury)
     monkeypatch.setattr(B, "provider_balance_usd", fake_provider)
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")  # CR-M07: owner-only
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")  # CR-M07: owner-only
 
-    led = await build_ledger("rob", days=1, db=FakeDB(), include_balances=True)
+    led = await build_ledger("alice", days=1, db=FakeDB(), include_balances=True)
     assert led["treasury"]["balance_usd"] == 12.34
     assert led["runtime"]["provider_balance_usd"] == 5.67
 
@@ -221,7 +221,7 @@ async def test_treasury_balance_includes_solana_usdc(monkeypatch):
     monkeypatch.setattr(sol_mod, "token_balances",
                         lambda owner: {
                             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 2_500_000})
-    assert await B.treasury_balance_usd("rob") == 12.5
+    assert await B.treasury_balance_usd("alice") == 12.5
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ async def test_a_failed_solana_read_makes_the_total_unknown_not_evm_only(monkeyp
     monkeypatch.setattr(onchain_mod, "balances",
                         lambda addr, chain, timeout=4.0: (0.5, 10.0))
     monkeypatch.setattr(sol_mod, "token_balances", lambda owner: None)
-    assert await B.treasury_balance_usd("rob") is None
+    assert await B.treasury_balance_usd("alice") is None
 
 
 @pytest.mark.asyncio
@@ -251,4 +251,4 @@ async def test_no_solana_address_keeps_the_evm_figure_complete(monkeypatch):
                         lambda: _DualWallet("0xabc", None))
     monkeypatch.setattr(onchain_mod, "balances",
                         lambda addr, chain, timeout=4.0: (0.5, 10.0))
-    assert await B.treasury_balance_usd("rob") == 10.0
+    assert await B.treasury_balance_usd("alice") == 10.0

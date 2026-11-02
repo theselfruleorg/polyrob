@@ -39,7 +39,7 @@ const COPY = {
   receipt_waiting: "Waiting for your answer. {elapsed} so far.",
   receipt_failed: "This did not finish. It failed after {elapsed} and {steps}.",
   receipt_ended: "Stopped after {elapsed} and {steps}, without a final word.",
-  turn_failed: "This chat failed before Rob could answer.",
+  turn_failed: "This chat failed before the agent could answer.",
   steps_none: "no steps",
   steps_one: "1 step",
   steps_many: "{count} steps",
@@ -132,7 +132,7 @@ describe("the transcript", () => {
     const notes = thread.querySelectorAll('.note[data-command-reply="1"]');
     expect(notes.length).toBe(1);
     expect(notes[0].textContent).toBe("Sent 0.1 ETH.");
-    expect(thread.querySelector(".turn.turn-rob")).toBe(null);
+    expect(thread.querySelector(".turn.turn-agent")).toBe(null);
   });
 
   it("draws one action row, and running→done updates it in place", () => {
@@ -166,7 +166,7 @@ describe("the transcript", () => {
     tx.apply({ type: "user_message", timestamp: 1, data: { text: "go" } });
     tx.apply({ type: "tool_result", data: { call_id: "c1", narration: "Working" } });
     tx.apply({ type: "agent_message", timestamp: 2, data: { text: "On it." } });
-    const said = thread.querySelector(".turn-rob .said");
+    const said = thread.querySelector(".turn-agent .said");
     expect(said.textContent).toContain("On it.");
     const receipt = thread.querySelector(".receipt");
     expect(receipt.hidden).toBe(false);
@@ -195,7 +195,7 @@ describe("the transcript", () => {
     tx.apply({ type: "user_message", timestamp: 1, data: { text: "go" } });
     tx.apply({ type: "agent_message", timestamp: 2, data: { text: "Same line." } });
     tx.apply({ type: "agent_message", timestamp: 3, data: { text: "Same line." } });
-    const paras = thread.querySelectorAll(".turn-rob .said p");
+    const paras = thread.querySelectorAll(".turn-agent .said p");
     expect(paras.length).toBe(1);
   });
 
@@ -242,7 +242,7 @@ describe("the transcript", () => {
     tx.apply({ type: "tool_result", data: { call_id: "c1", narration: "a" } });
     tx.apply({ type: "user_message", timestamp: 2, data: { text: "two" } });
     tx.apply({ type: "tool_result", data: { call_id: "c2", narration: "b" } });
-    expect(thread.querySelectorAll(".turn-rob").length).toBe(2);
+    expect(thread.querySelectorAll(".turn-agent").length).toBe(2);
   });
 });
 
@@ -281,7 +281,7 @@ describe("the backfill order", () => {
     expect(turns.length).toBe(4);
     expect(turns[0].classList.contains("turn-person")).toBe(true);
     expect(turns[0].textContent).toContain("question one");
-    expect(turns[1].classList.contains("turn-rob")).toBe(true);
+    expect(turns[1].classList.contains("turn-agent")).toBe(true);
     expect(turns[1].textContent).toContain("did a thing");
     expect(turns[1].textContent).toContain("answer one");
     expect(turns[2].classList.contains("turn-person")).toBe(true);
@@ -322,9 +322,9 @@ describe("narration survives the untyped tool_execution", () => {
 });
 
 // A32 — a Steer that comes back 409 is an HONEST STATE, not a failure. The
-// session is live in Rob's OWN process, not this console, so the console cannot
+// session is live in the agent's OWN process, not this console, so the console cannot
 // steer it. The transcript renders the copy line (with owner_pid + a retry
-// hint) once, as a `.note` — never a `.turn-rob` failure bubble, never a
+// hint) once, as a `.note` — never a `.turn-agent` failure bubble, never a
 // confident $0.00-shaped lie about the pid.
 describe("the 409 remote-session state", () => {
   let thread;
@@ -332,7 +332,7 @@ describe("the 409 remote-session state", () => {
   const COPY_409 = {
     ...COPY,
     live_at_agent:
-      "This chat is live in Rob's own process (pid {pid}), so I cannot steer it. Try again in a moment.",
+      "This chat is live in the agent's own process (pid {pid}), so I cannot steer it. Try again in a moment.",
   };
   beforeEach(() => {
     thread = makeThread();
@@ -352,7 +352,7 @@ describe("the 409 remote-session state", () => {
     expect(note.textContent).toContain("4242"); // the owner_pid
     expect(note.textContent).toContain("Try again"); // the retry hint
     // It is a state, not the agent speaking or a failure.
-    expect(thread.querySelector(".turn-rob")).toBe(null);
+    expect(thread.querySelector(".turn-agent")).toBe(null);
     expect(note.textContent).not.toContain("{pid}");
   });
 
@@ -605,8 +605,8 @@ describe("controller verbs and turn closing", () => {
       tool(T0, "a", "read_file"),
       { type: "agent_message", timestamp: T0 + 2, data: { text: "Here it is." } },
     ]);
-    const rob = thread.querySelector(".turn-rob");
-    const kids = [...rob.children];
+    const agentTurn = thread.querySelector(".turn-agent");
+    const kids = [...agentTurn.children];
     const actsAt = kids.findIndex((k) => k.querySelector(".act"));
     const saidAt = kids.findIndex((k) => k.classList.contains("said"));
     const receiptAt = kids.findIndex((k) => k.classList.contains("receipt"));
@@ -621,7 +621,7 @@ describe("controller verbs and turn closing", () => {
       { type: "task_complete", timestamp: T0 + 3, data: {} },
       tool(T0 + 10, "b", "read_file"),
     ]);
-    const turns = thread.querySelectorAll(".turn-rob");
+    const turns = thread.querySelectorAll(".turn-agent");
     expect(turns.length).toBe(2);
     expect(turns[0].querySelector(".receipt").textContent).toContain("Done in 3s with 1 step.");
     expect(turns[0].querySelectorAll(".receipt button").length).toBe(0);
@@ -634,7 +634,7 @@ describe("controller verbs and turn closing", () => {
       tool(T0, "a", "read_file", { success: undefined }),
       { type: "user_message", timestamp: T0 + 5, data: { text: "two" } },
     ]);
-    const receipt = thread.querySelector(".turn-rob .receipt");
+    const receipt = thread.querySelector(".turn-agent .receipt");
     expect(receipt.querySelectorAll("button").length).toBe(0);
     expect(receipt.textContent).toBe("5s and 1 step before your message.");
   });
@@ -699,7 +699,7 @@ describe("status words", () => {
     tx.apply(status(T0 + 2, "failed"));
     const lines = thread.querySelectorAll(".note.is-failed");
     expect(lines.length).toBe(1);
-    expect(lines[0].textContent).toBe("This chat failed before Rob could answer.");
+    expect(lines[0].textContent).toBe("This chat failed before the agent could answer.");
     expect(tx.lastStatus).toBe("failed");
   });
 
@@ -718,17 +718,17 @@ describe("status words", () => {
   it("a failed status inside a turn closes it as failed", () => {
     const tx = new Transcript(thread, COPY, { sessionId: "s1", now });
     tx.applyAll([step(T0, "a"), status(T0 + 3, "failed"), step(T0 + 9, "b")]);
-    const turns = thread.querySelectorAll(".turn-rob");
+    const turns = thread.querySelectorAll(".turn-agent");
     expect(turns.length).toBe(2);
     const first = turns[0].querySelector(".receipt");
     expect(first.textContent).toBe("This did not finish. It failed after 3s and 1 step.");
     expect(first.querySelectorAll("button").length).toBe(0);
-    // Rob drew a turn, so no "failed before Rob could answer" line.
+    // the agent drew a turn, so no "failed before the agent could answer" line.
     expect(thread.querySelector(".note.is-failed")).toBe(null);
   });
 });
 
-// 070 W0.8 — a follow-up typed while Rob works is the owner's bubble, drawn once.
+// 070 W0.8 — a follow-up typed while the agent works is the owner's bubble, drawn once.
 describe("follow-ups during a run", () => {
   let thread;
   const T0 = 1790000000;
@@ -828,7 +828,7 @@ describe("a late cost belongs to the turn it paid for", () => {
       { type: "llm_request", timestamp: T0 + 3, data: { cost_estimate: 0.013 } },
       { type: "user_message", timestamp: T0 + 60, data: { text: "next" } },
     ]);
-    expect(thread.querySelectorAll(".turn-rob").length).toBe(1);
+    expect(thread.querySelectorAll(".turn-agent").length).toBe(1);
     expect(thread.querySelector(".receipt").textContent).toBe("Done in 2s with 1 step. Cost $0.01.");
   });
 });

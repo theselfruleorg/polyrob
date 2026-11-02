@@ -1,4 +1,4 @@
-"""P1: prominent session info + polyrob/rob framework-instance naming.
+"""P1: prominent session info + polyrob framework vs instance naming.
 
 Two surfaces:
 - the startup banner gains an OPT-IN third line (framework · instance · user ·
@@ -41,7 +41,7 @@ def test_banner_session_info_line_surfaces_polyrob_and_instance():
         tool_ids=["task"],
         session_id="s",
         framework="polyrob",
-        instance_id="rob",
+        instance_id="carol",
         user_id="local",
         memory_backend="sqlite",
         autonomy_on=True,
@@ -50,7 +50,7 @@ def test_banner_session_info_line_surfaces_polyrob_and_instance():
     assert len(lines) == 3
     third = lines[2]
     assert "polyrob" in third
-    assert "instance rob" in third
+    assert "instance carol" in third
     assert "user local" in third
     assert "memory sqlite" in third
     assert "autonomy on" in third
@@ -105,7 +105,7 @@ def test_session_command_renders_identity_snapshot():
     cmd.handler(ctx)
     out = buf.getvalue()
     assert "polyrob" in out          # framework
-    assert "rob" in out              # default instance
+    assert "instance   polyrob" in out  # default instance
     assert "local" in out            # user
     assert "ab7ab48c" in out         # session id
     assert "glm-5.2" in out          # model
@@ -163,11 +163,11 @@ def test_session_owner_line_names_a_bound_owner(monkeypatch):
 
 
 def test_session_owner_line_marks_an_owner_that_is_the_instance(monkeypatch):
-    """Prod's shape: owner `rob` bound on instance `rob` — named, and marked so it
+    """Prod's shape: owner `carol` bound on instance `carol` — named, and marked so it
     does not read as a second, distinct human owner."""
     _unbind(monkeypatch)
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "carol")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "carol")
     ctx, buf = _session_ctx(state=SessionState(), session_id="s1", user_id="local")
     build_default_registry().lookup("session").handler(ctx)
     out = buf.getvalue()

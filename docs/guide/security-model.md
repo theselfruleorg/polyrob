@@ -133,7 +133,7 @@ set (`core/verb_policy.py`) the Controller unions in automatically at
 `AGENT_COMPUTE_POSTURE >= 2`. The durable `owner_queue` provider makes this
 remotely-approvable and restart-surviving. Under `AUTONOMY_MODE=autonomous` most
 approvals become allow-audit-notify; the verbs marked `always_queued` there
-(self-modification, `mcp_install`, a dangerous shell command) stay on the owner
+(self-modification, a dangerous shell command) stay on the owner
 queue.
 
 What it stops: a gated action executing without an explicit approval decision,
@@ -232,20 +232,20 @@ wallet signer below is the lever that moves the key out of that process.
 
 `WALLET_SIGNER` (default `local`) decides where signatures come from:
 
-- `local` — Rob's own process holds the seed and signs. Every gate above runs in
+- `local` — the agent's own process holds the seed and signs. Every gate above runs in
   that process.
-- `shadow` — Rob still signs, and also asks `polyrob-signer` for a verdict on the
+- `shadow` — the agent still signs, and also asks `polyrob-signer` for a verdict on the
   same intent. The verdict is logged and counted in the `custody` status section;
   it never blocks a send.
-- `remote` — Rob holds no key; a seed that reaches it is dropped. The signer runs
+- `remote` — the agent holds no key; a seed that reaches it is dropped. The signer runs
   as its own OS user behind a Unix socket that checks the connecting UID, re-runs
   `tx_guard` on its own pinned RPC against the hard limits in `signer.toml`, keeps
   its own spend record, and only then signs. Above its hard limit the owner
   approves on the box, as root.
 
-Under `shadow` and `remote` the signer's limits are the envelope: Rob lowers its own
+Under `shadow` and `remote` the signer's limits are the envelope: the agent lowers its own
 matching limits to them, so a raise from chat stops at the signer's limit. This is
-the one place in this section where a gate does not share Rob's process.
+the one place in this section where a gate does not share the agent's process.
 Set-up and cut-over: [payments.md](payments.md).
 
 ### The on-chain transaction guard (`core/wallet/tx_guard.py`)
@@ -285,9 +285,9 @@ rather than by a plain on/off flag:
   a leaf or sub-agent, not a forged self-wake or delegation-result turn.
   `SHELL_TOOLS_ENABLED` defaults ON at posture ≥ 1 and OFF below it. Commands run
   in the session's container, or on the host at posture 3 (§3d).
-- **`self_env`** (`install_dep`, `read_source`, `patch_source`, `git_pull`,
-  `restart_service`) — the agent patching and restarting itself, as distinct
-  verbs, never raw bash. Every verb asks `compute_posture_allows(ctx, 2)` **and**
+- **`self_env`** (`read_source`, `restart_service`) — the agent reading its own
+  source and asking for its own restart, as distinct verbs, never raw bash
+  (updates are the owner's `/update`). Every verb asks `compute_posture_allows(ctx, 2)` **and**
   is approval-gated: at posture ≥ 2 the Controller unions `shell_run` and every
   `self_env_*` verb into the gated set and defaults the approval provider to
   interactive. Each call emits a `self_modification` audit event.
@@ -411,12 +411,12 @@ env with no custody secret. Two things refuse every host child
 `key_isolation_gap` (a key is held and the non-dumpable hardening did not hold), and
 the owner's `SECURITY_SETTINGS` row `host_exec_under_custody=refuse`.
 
-That isolation does not cover a file. A host child runs as Rob's own OS user,
+That isolation does not cover a file. A host child runs as the agent's own OS user,
 so it can read every file that user can read. A local `polyrob wallet init` writes
 the seed to `~/.polyrob/.env` (0600, the same user), so a local wallet's key is
 **not** isolated from host children unless the signer holds it. For that case
 (`core/security/host_execution.py::model_code_host_refusal`): when an env file
-Rob's user can read holds a wallet key, the children that run code the model wrote
+the agent's user can read holds a wallet key, the children that run code the model wrote
 refuse on the host — `run_tests`, `run_code` and the posture-3 host shell. The
 files checked are every env file this process loaded at start and every env file
 it wrote a wallet key into (`polyrob wallet init`, `polyrob config set`). Each check
@@ -431,7 +431,7 @@ production shape: `wallet.env`, root-owned 0600) and an install with no wallet s
 no change. The env copies in an old `polyrob update` snapshot
 (`<data home>/snapshots/*/config/`) are checked too: a seed moved to the signer can
 still sit there. That refusal names its own fix — delete the old snapshot once you
-no longer need to roll back to it, or use a sandbox backend; Rob never edits a
+no longer need to roll back to it, or use a sandbox backend; the agent never edits a
 snapshot, so a restore keeps the seed. A backup you made elsewhere is not checked.
 
 Servers always require a sandbox backend for `run_code`. Under a remote signer a
@@ -484,7 +484,7 @@ admits a turn only when ALL hold:
 
 1. `compute_posture_allows(ctx, 3)` — the owner's own, non-delegated, non-forged turn;
 2. `POLYROB_LOCAL` is on;
-3. `model_code_host_refusal` passes (key isolation holds, no env file Rob's
+3. `model_code_host_refusal` passes (key isolation holds, no env file the agent's
    user can read holds a wallet key — see §3a — and the owner's
    `host_exec_under_custody` row allows it);
 4. the turn was typed at a foreground terminal of this process (`polyrob` or

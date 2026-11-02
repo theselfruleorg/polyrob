@@ -2,7 +2,7 @@
 
 The three standing owner asks (X browser session, the anysite user-search
 degradation of 2026-09-18 19:48–22:30Z, the rejected Gmail password) each
-resurfaced as Rob's blocked goals because no seat said them. Now: an absent X
+resurfaced as the agent's blocked goals because no seat said them. Now: an absent X
 login session while X_BROWSER_ENABLED=true is a WARN with the ceremony named;
 the anysite tool records a `rail_probe` event per call and three consecutive
 empty answers on the user-search endpoint are a WARN; the SMTP rejection is a
@@ -36,7 +36,7 @@ def test_x_session_absent_is_a_warn_only_when_the_rail_is_enabled(monkeypatch, t
 def test_x_session_present_is_reported_ok(tmp_path, monkeypatch):
     from core import status_snapshot as ss
     monkeypatch.setenv("X_BROWSER_ENABLED", "true")
-    (tmp_path / ".x_session.json").write_text(json.dumps({"rob|x": "b64"}))
+    (tmp_path / ".x_session.json").write_text(json.dumps({"alice|x": "b64"}))
     sec = _sec()
     ss._x_session_line(sec, str(tmp_path))
     assert any("X login session: stored" in l for l in sec.lines)
@@ -45,13 +45,13 @@ def test_x_session_present_is_reported_ok(tmp_path, monkeypatch):
 
 def test_oauth2_only_store_is_not_a_browser_session(tmp_path, monkeypatch):
     """Prod 2026-09-19 10:34Z: `.x_session.json` held only the API OAuth2 token
-    (`rob|x_oauth2`); status said "stored" while x_browser refused with "no X
+    (`alice|x_oauth2`); status said "stored" while x_browser refused with "no X
     session stored". The line must read the (user, "x") KEY the browser rail
     reads, not "file non-empty" — a confident-wrong status line is the class
     the status SSOT forbids."""
     from core import status_snapshot as ss
     monkeypatch.setenv("X_BROWSER_ENABLED", "true")
-    (tmp_path / ".x_session.json").write_text(json.dumps({"rob|x_oauth2": "b64"}))
+    (tmp_path / ".x_session.json").write_text(json.dumps({"alice|x_oauth2": "b64"}))
     sec = _sec()
     ss._x_session_line(sec, str(tmp_path))
     assert any("X login session: none" in l for l in sec.lines)

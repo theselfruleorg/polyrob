@@ -81,7 +81,7 @@ async function requestJson(method, url, payload, { fetcher, headers } = {}) {
 }
 
 /** The console's own words for a refusal the server sends only as a code
- *  (070 E.31): a busy 429 (`code: "busy"`) reads "Rob is busy. …", from
+ *  (070 E.31): a busy 429 (`code: "busy"`) reads "The agent is busy. …", from
  *  `#shell-copy`. `null` when the code has no console words. */
 export function codeAnswer(body, doc = (typeof document !== 'undefined' ? document : null)) {
   if (!body || body.code !== 'busy') return null;

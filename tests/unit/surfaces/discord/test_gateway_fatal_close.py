@@ -98,7 +98,7 @@ def test_probe_fails_without_message_content_intent(monkeypatch):
 
     async def fake_http_json(method, url, **kw):
         if url.endswith("/users/@me"):
-            return 200, {"username": "rob"}, ""
+            return 200, {"username": "alice"}, ""
         return 200, {"flags": 0}, ""
 
     monkeypatch.setattr(probe_mod, "http_json", fake_http_json)
@@ -113,7 +113,7 @@ def test_probe_ok_with_message_content_intent(monkeypatch, flags):
 
     async def fake_http_json(method, url, **kw):
         if url.endswith("/users/@me"):
-            return 200, {"username": "rob"}, ""
+            return 200, {"username": "alice"}, ""
         return 200, {"flags": flags}, ""
 
     monkeypatch.setattr(probe_mod, "http_json", fake_http_json)

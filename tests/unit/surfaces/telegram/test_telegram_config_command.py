@@ -48,7 +48,7 @@ def _cmd(command, text, user="alice"):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "carol")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     # D38: preferences live under `prefs_home_dir()` — the resolved DATA HOME —
     # not under a container's `config.data_dir`. Pointing only the container at
@@ -131,7 +131,7 @@ async def test_config_list_matches_prefs_reply_verbatim(env):
 @pytest.mark.asyncio
 async def test_config_written_pref_shows_pref_source(env):
     from core.prefs import write_preference
-    ok, err = write_preference(str(env), "alice", "style.verbosity", "terse", instance_id="rob")
+    ok, err = write_preference(str(env), "alice", "style.verbosity", "terse", instance_id="carol")
     assert ok, err
     out = await act_on_inbound(_Agent(str(env)), _cmd("/config", "/config"))
     assert "style.verbosity = terse (pref)" in out
@@ -146,7 +146,7 @@ async def test_config_set_safe_key_writes_immediately(env):
         _Agent(str(env)), _cmd("/config", "/config set style.verbosity terse"))
     assert "style.verbosity" in out
     assert "terse" in out
-    assert load_preferences(str(env), "alice", instance_id="rob").get("style.verbosity") == "terse"
+    assert load_preferences(str(env), "alice", instance_id="carol").get("style.verbosity") == "terse"
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_config_set_guarded_key_does_not_write(env):
     assert "guarded" in out.lower()
     assert "pending" in out.lower()
     # never written directly from a bare Telegram message
-    assert load_preferences(str(env), "alice", instance_id="rob").get("outbound.policy") is None
+    assert load_preferences(str(env), "alice", instance_id="carol").get("outbound.policy") is None
 
 
 @pytest.mark.asyncio
@@ -176,7 +176,7 @@ async def test_config_set_guarded_key_queues_proposal(env):
     from core.prefs import list_pending_pref_changes
     await act_on_inbound(
         _Agent(str(env)), _cmd("/config", "/config set outbound.policy open"))
-    items = list_pending_pref_changes("alice", str(env), instance_id="rob")
+    items = list_pending_pref_changes("alice", str(env), instance_id="carol")
     assert any(it["id"] == "outbound.policy" for it in items)
 
 

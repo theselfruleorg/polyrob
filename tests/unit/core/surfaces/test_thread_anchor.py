@@ -22,11 +22,11 @@ def test_anchor_inherits_active_state_and_resolves_exactly():
     reg.seed(surface="email", address="john@acme.com", session_id="sess-1",
              user_id="t1", require_approval=False)
     state = reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                                   thread_id="<mid-1@rob>", session_id="sess-1",
+                                   thread_id="<mid-1@demo>", session_id="sess-1",
                                    user_id="t1")
     assert state == "active"
     row = reg.resolve(surface="email", address="john@acme.com",
-                      thread_id="<mid-1@rob>")
+                      thread_id="<mid-1@demo>")
     assert row is not None and row["session_id"] == "sess-1"
 
 
@@ -36,11 +36,11 @@ def test_anchor_disambiguates_two_sessions_to_same_address():
     reg.seed(surface="email", address="john@acme.com", session_id="sess-1",
              user_id="t1", require_approval=False)
     reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                           thread_id="<mid-1@rob>", session_id="sess-1", user_id="t1")
+                           thread_id="<mid-1@demo>", session_id="sess-1", user_id="t1")
     reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                           thread_id="<mid-2@rob>", session_id="sess-2", user_id="t1")
-    r1 = reg.resolve(surface="email", address="john@acme.com", thread_id="<mid-1@rob>")
-    r2 = reg.resolve(surface="email", address="john@acme.com", thread_id="<mid-2@rob>")
+                           thread_id="<mid-2@demo>", session_id="sess-2", user_id="t1")
+    r1 = reg.resolve(surface="email", address="john@acme.com", thread_id="<mid-1@demo>")
+    r2 = reg.resolve(surface="email", address="john@acme.com", thread_id="<mid-2@demo>")
     assert r1["session_id"] == "sess-1"
     assert r2["session_id"] == "sess-2"
 
@@ -48,11 +48,11 @@ def test_anchor_disambiguates_two_sessions_to_same_address():
 def test_anchor_without_base_row_is_refused():
     reg = _reg()
     state = reg.seed_thread_anchor(surface="email", address="stranger@x.com",
-                                   thread_id="<mid@rob>", session_id="s",
+                                   thread_id="<mid@demo>", session_id="s",
                                    user_id="t1")
     assert state is None
     assert reg.resolve(surface="email", address="stranger@x.com",
-                       thread_id="<mid@rob>") is None
+                       thread_id="<mid@demo>") is None
 
 
 def test_anchor_inherits_pending_state_not_routable():
@@ -60,11 +60,11 @@ def test_anchor_inherits_pending_state_not_routable():
     reg.seed(surface="email", address="john@acme.com", session_id="sess-1",
              user_id="t1", require_approval=True)  # pending
     state = reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                                   thread_id="<mid-1@rob>", session_id="sess-1",
+                                   thread_id="<mid-1@demo>", session_id="sess-1",
                                    user_id="t1")
     assert state == "pending"
     assert reg.resolve(surface="email", address="john@acme.com",
-                       thread_id="<mid-1@rob>") is None
+                       thread_id="<mid-1@demo>") is None
 
 
 def test_thread_rows_do_not_consume_the_daily_cap():
@@ -73,7 +73,7 @@ def test_thread_rows_do_not_consume_the_daily_cap():
              user_id="t1", require_approval=False)
     for i in range(5):
         reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                               thread_id=f"<mid-{i}@rob>", session_id="s1",
+                               thread_id=f"<mid-{i}@demo>", session_id="s1",
                                user_id="t1")
     assert reg.count_seeds_since(user_id="t1", since_secs=86400) == 1, (
         "structural thread anchors must not eat the NEW-correspondent cap")
@@ -84,7 +84,7 @@ def test_anchor_is_idempotent():
     reg.seed(surface="email", address="john@acme.com", session_id="s1",
              user_id="t1", require_approval=False)
     s1 = reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                                thread_id="<mid-1@rob>", session_id="s1", user_id="t1")
+                                thread_id="<mid-1@demo>", session_id="s1", user_id="t1")
     s2 = reg.seed_thread_anchor(surface="email", address="john@acme.com",
-                                thread_id="<mid-1@rob>", session_id="s1", user_id="t1")
+                                thread_id="<mid-1@demo>", session_id="s1", user_id="t1")
     assert s1 == s2 == "active"

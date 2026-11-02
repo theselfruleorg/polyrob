@@ -8,6 +8,8 @@ new code.
 from core.schedule import (  # noqa: F401 — re-exported by name
     Schedule,
     ScheduleError,
+    dom_step_note,
+    next_runs,
     parse_schedule,
     _expand,
     _parse_cron,

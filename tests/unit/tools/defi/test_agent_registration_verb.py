@@ -98,7 +98,7 @@ def test_a_normal_registration_file_fits_comfortably(tmp_path, monkeypatch):
     from modules.eip8004.registration import build_registration_file
     from tools.defi.agent_registration import build_agent_uri
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
     doc = build_registration_file("http://localhost:9000").model_dump(exclude_none=True)
     uri = build_agent_uri(doc, base_url=None)
     assert len(uri) < 8000, f"a plain registration file should be small: {len(uri)}"

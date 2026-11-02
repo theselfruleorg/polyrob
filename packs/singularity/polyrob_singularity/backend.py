@@ -81,7 +81,7 @@ class SingularityBackend(RemoteSandboxBackend):
             except Exception:
                 logger.debug("singularity backend: no session workspace", exc_info=True)
         if self._tmp is None:
-            self._tmp = tempfile.mkdtemp(prefix="rob_singularity_")
+            self._tmp = tempfile.mkdtemp(prefix="polyrob_singularity_")
         return self._tmp
 
     def isolation_flags(self, workdir_host: str) -> List[str]:

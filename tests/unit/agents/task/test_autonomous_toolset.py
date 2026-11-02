@@ -9,7 +9,7 @@ from agents.task import constants
 def _enable_full(monkeypatch):
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     constants.reset_autonomy_mode_warnings()
 
 

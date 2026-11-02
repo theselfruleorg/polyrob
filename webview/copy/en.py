@@ -10,7 +10,7 @@ from rule 3 of the 040 interface design and the 043 copy decisions:
 * **No machine names in default copy.** No flag, no function, no proposal id,
   no session hash. All of it stays one disclosure away, never on the first
   screen.
-* **First person.** Rob speaks as itself: *I could not read your Base wallet*,
+* **First person.** The agent speaks as itself: *I could not read your Base wallet*,
   not *the wallet read failed*.
 * **Monospace is for values only**, which is a template decision, not a copy
   one — so no value is ever baked into a sentence here. Numbers arrive as
@@ -27,7 +27,7 @@ STRINGS = {
     "shell.search": "Open your chats",
     # 070 E.7: the chats button has a visible word beside its ⌘K hint.
     "shell.chats": "Chats",
-    "shell.title": "{page} – Rob",
+    "shell.title": "{page} – POLYROB",
 
     # The five destinations. Five is the ceiling for a bottom bar, so this list
     # is a mobile-viability constraint and not a matter of taste.
@@ -35,7 +35,7 @@ STRINGS = {
     "nav.inbox": "Inbox",
     "nav.work": "Work",
     "nav.money": "Money",
-    "nav.agent": "Rob",
+    "nav.agent": "Agent",
 
     # The badge is aria-hidden; these are what a screen reader announces, so
     # they must never be more certain than the list behind them.
@@ -54,31 +54,31 @@ STRINGS = {
     ),
 
     # --- the head truth: the pause half ------------------------------------- #
-    # One sentence made of real numbers, in Rob's voice. It is the first line of
+    # One sentence made of real numbers, in the agent's voice. It is the first line of
     # every screen, so it is the one line that may never be confidently wrong.
     "shell.logout": "Log out",
-    "shell.state.running": "Rob is running.",
+    "shell.state.running": "The agent is running.",
     # The in-progress count (running goals + cron runs + live sessions, from the
     # ONE live reader). Absent when nothing is measured as running — never a 0.
-    "shell.state.running_busy": "Rob is running, {count} in progress.",
+    "shell.state.running_busy": "The agent is running, {count} in progress.",
     # 080: not paused, nothing running, and the scheduler and the goal loop
     # are both off — "running" would promise work that nothing will start.
-    "shell.state.idle": "Rob is idle: {why}.",
-    "shell.state.paused": "Rob is paused.",
-    "shell.state.paused_until": "Rob is paused until {until}.",
+    "shell.state.idle": "The agent is idle: {why}.",
+    "shell.state.paused": "The agent is paused.",
+    "shell.state.paused_until": "The agent is paused until {until}.",
     # The pause record is read fail-CLOSED: unreadable IS paused, because that
     # is what the runtime then does. Say both halves.
     "shell.state.paused_unreadable": (
-        "Rob is paused to be safe. It could not read its pause setting."
+        "The agent is paused to be safe. It could not read its pause setting."
     ),
-    "shell.state.unknown": "Rob's state is not known right now.",
+    "shell.state.unknown": "The agent's state is not known right now.",
     # A pause of everything with no end says since when (070 E.7).
-    "shell.state.paused_since": "Rob is paused since {when}.",
+    "shell.state.paused_since": "The agent is paused since {when}.",
     # A pause has SCOPES (031). A scoped pause rendered as a full stop is the
     # one line that may never be confidently wrong: every other seat says
     # "trading only", so this one may not say "everything".
-    "shell.state.paused_scoped": "Rob is paused for {what}.",
-    "shell.state.paused_scoped_until": "Rob is paused for {what} until {when}.",
+    "shell.state.paused_scoped": "The agent is paused for {what}.",
+    "shell.state.paused_scoped_until": "The agent is paused for {what} until {when}.",
 
     # When a pause ends. A bare clock reads as "in a few minutes" when it is
     # really tomorrow morning, so the day is part of the answer.
@@ -117,15 +117,15 @@ STRINGS = {
     # raw reason never reaches the row text; it rides in the tooltip only.
     "chats.part_missing": "Part of this chat is missing.",
 
-    # WHO started it. The difference between a chat you had and a run Rob
+    # WHO started it. The difference between a chat you had and a run the agent
     # started by itself at four in the morning; a list that cannot tell them
     # apart is a list you stop opening.
     "chats.creator_owner": "you",
     "chats.creator_cli": "you, in the terminal",
     "chats.creator_api": "this console or an app",
     "chats.creator_cron": "a scheduled job",
-    "chats.creator_goal": "Rob, working on a goal",
-    "chats.creator_correspondent": "someone Rob wrote to",
+    "chats.creator_goal": "The agent, working on a goal",
+    "chats.creator_correspondent": "someone the agent wrote to",
     "chats.creator_unknown": "not known",
 
     # Three states, and an unrecognised status is UNKNOWN rather than one of
@@ -139,7 +139,7 @@ STRINGS = {
     "chats.status_waiting": "Waiting for you",
     "chats.status_failed": "Did not finish",
 
-    # A32 — a row whose live session runs in Rob's own process, not this
+    # A32 — a row whose live session runs in the agent's own process, not this
     # console. It can be watched from here but not steered from here, and the
     # chip says so rather than letting the row look ordinary.
     "chats.live_at_agent": "Watch only",
@@ -196,7 +196,7 @@ STRINGS = {
     # holding three positions and no seat could have shown the owner otherwise.
     # Everything here is drawn client-side by money.js from GET /api/webgate/book.
     "money.sub": (
-        "What Rob holds, what it has moved, what it earns, and what running it "
+        "What the agent holds, what it has moved, what it earns, and what running it "
         "costs you. The book comes first, because that is where a wrong number "
         "costs real money."
     ),
@@ -231,15 +231,15 @@ STRINGS = {
     # a disagreement or an unverified verdict never reads as agreement.
     "money.book.clean": "The ledger and the chains agree.",
     "money.book.disagreement":
-        "Rob's ledger and a chain disagree about what it holds.",
+        "The agent's ledger and a chain disagree about what it holds.",
     "money.book.unverified": "I could not verify the book on every chain.",
     "money.book.no_ledger":
-        "Rob has not written down a ledger to check against yet.",
+        "The agent has not written down a ledger to check against yet.",
     "money.book.checked": "Checked {when}.",
     "money.book.recheck": "Check again",
 
     # The positions the ledger claims, beside the chain's reading.
-    "money.book.holds_title": "What Rob holds",
+    "money.book.holds_title": "What the agent holds",
     "money.book.holds_count": "{count} positions",
     "money.book.col_position": "Position",
     "money.book.col_chain": "Chain",
@@ -249,12 +249,12 @@ STRINGS = {
     # FE3: `entry` is the TOTAL cost basis, not a unit price.
     "money.book.entry_at": "cost {price}",
     "money.book.no_positions":
-        "Rob has not written down a position on any chain it can read.",
+        "The agent has not written down a position on any chain it can read.",
     "money.book.total_label": "Positions, at today's prices",
     "money.book.total_excludes": "not counted here: {chains}",
 
     # W1: the positions that wait on an owner decision, a position's
-    # lifecycle, the one-symbol-two-contracts warning, and the tokens Rob
+    # lifecycle, the one-symbol-two-contracts warning, and the tokens the agent
     # trusts. Every button asks before it acts.
     "money.book.tracked_title": "Waiting on your decision",
     "money.book.tracked_aside": "the identity check reads these",
@@ -263,7 +263,7 @@ STRINGS = {
     "money.book.cost": "cost {price}",
     "money.book.no_cost": "no cost recorded",
     "money.book.collision": "One symbol, more than one contract",
-    "money.tokens.title": "Tokens Rob trusts",
+    "money.tokens.title": "Tokens the agent trusts",
     "money.tokens.aside": "a buy of any other contract is checked first",
     "money.tokens.src_canonical": "the chain registry",
     "money.tokens.src_own_launch": "our own launch",
@@ -276,7 +276,7 @@ STRINGS = {
     "money.tokens.writeoff": "Write off",
     "money.tokens.unquarantine": "Undo quarantine",
     "money.tokens.confirm_trust": "Trust {address} on {chain}? Buys of it then pass the identity check.",
-    "money.tokens.confirm_untrust": "Mark {address} on {chain} not trusted? Rob will never buy it.",
+    "money.tokens.confirm_untrust": "Mark {address} on {chain} not trusted? The agent will never buy it.",
     "money.tokens.confirm_writeoff": "Write off {address} on {chain}? The loss is its recorded cost; nothing is sold.",
     "money.tokens.confirm_unquarantine": "Undo the quarantine of {address} on {chain}?",
     "money.tokens.form_chain": "Chain",
@@ -286,10 +286,10 @@ STRINGS = {
     "money.tokens.bad_action": "There is no such token action.",
     "money.tokens.need_address": "Name the chain and the contract address.",
 
-    # The chains Rob checked, with the cache age. An unreadable chain is dashed
+    # The chains the agent checked, with the cache age. An unreadable chain is dashed
     # with its reason, never a zero that reads like an empty wallet. Spendable
     # balances live under Cash.
-    "money.book.chains_title": "The chains Rob checked",
+    "money.book.chains_title": "The chains the agent checked",
     "money.book.chains_age": "last read {when}",
     "money.book.chain_read": "Read in full.",
     "money.book.chain_unread": "I could not read this chain.",
@@ -299,16 +299,16 @@ STRINGS = {
     "money.book.run_title": "The trading run",
     "money.book.run_aside": "lives in Work",
     "money.book.run_body": (
-        "Everything Rob trades lands under Moves; anything it needs from you "
+        "Everything the agent trades lands under Moves; anything it needs from you "
         "lands in the Inbox."
     ),
     "money.book.run_watch": "Watch it in Work",
 
     # No wallet, on-chain sight off, or nothing to read: the one true thing and
     # the one action, never an empty table and three zeroes.
-    "money.book.empty_title": "Rob has no wallet yet.",
+    "money.book.empty_title": "The agent has no wallet yet.",
     "money.book.empty_body": (
-        "Give Rob a wallet and it can hold positions, trade within the limits "
+        "Give the agent a wallet and it can hold positions, trade within the limits "
         "you set, be paid for work, and show you the book. Until then this page "
         "has nothing true to say."
     ),
@@ -329,9 +329,9 @@ STRINGS = {
     "money.book.when_day": "{count} d ago",
 
     # -------------------------------------------------------------- Money › Moves
-    # In flight (open bridges), recent moves (wallet_spend), and what Rob has
+    # In flight (open bridges), recent moves (wallet_spend), and what the agent has
     # made (creations). Every row that can be linked names its origin chain.
-    "money.moves.loading": "Reading what Rob has moved.",
+    "money.moves.loading": "Reading what the agent has moved.",
     "money.moves.inflight_title": "In flight",
     "money.moves.inflight_aside": "{count} still moving",
     "money.moves.inflight_empty": "Nothing is bridging right now.",
@@ -340,18 +340,18 @@ STRINGS = {
     "money.moves.bridge_route": "{origin} to {dest}",
     "money.moves.bridge_line": "{amount}, sent {age} ago and not landed yet.",
     "money.moves.bridge_safe": (
-        "Rob will not send it again — a bridge sent twice pays twice — and it "
+        "The agent will not send it again — a bridge sent twice pays twice — and it "
         "is 'in flight', never 'failed', until it lands or you are told."
     ),
     "money.moves.onchain": "See it on-chain",
     "money.moves.recent_title": "Recent moves",
-    "money.moves.recent_empty": "Rob has not moved anything yet.",
+    "money.moves.recent_empty": "The agent has not moved anything yet.",
     "money.moves.recent_unreadable": "I could not read the recent moves.",
     "money.moves.recent_unreadable_why": "Why it failed",
     "money.moves.recent_partial": "{count} row(s) could not be read, so this may be incomplete.",
     "money.moves.recent_note": (
-        "A quote Rob asked for but did not send is not a move. Who decided each "
-        "move — Rob under a limit, or you — is not on the record yet."
+        "A quote the agent asked for but did not send is not a move. Who decided each "
+        "move — the agent under a limit, or you — is not on the record yet."
     ),
     "money.moves.col_when": "When",
     "money.moves.col_what": "What",
@@ -359,10 +359,10 @@ STRINGS = {
     "money.moves.col_amount": "Amount",
     "money.moves.no_amount": "a permission, not a spend",
     "money.moves.amount_unknown": "not recorded",
-    "money.moves.made_title": "What Rob has made",
+    "money.moves.made_title": "What the agent has made",
     "money.moves.made_aside": "{count} on-chain",
-    "money.moves.made_empty": "Rob has not deployed or launched anything.",
-    "money.moves.made_unreadable": "I could not read what Rob has made.",
+    "money.moves.made_empty": "The agent has not deployed or launched anything.",
+    "money.moves.made_unreadable": "I could not read what the agent has made.",
     "money.moves.made_unreadable_why": "Why it failed",
     "money.moves.made_partial": "{count} row(s) could not be read, so this may be incomplete.",
     "money.moves.col_token": "What",
@@ -401,14 +401,14 @@ STRINGS = {
     "money.wallet.unaccounted_body": "A submitted transaction has not been accounted for. Resolve it before allowing another spend.",
     "money.cash.income_what": "Income",
     "money.cash.spent_what": "Spent",
-    "money.cash.whose": "Rob's own money, last {days} days",
+    "money.cash.whose": "The agent's own money, last {days} days",
     "money.cash.paid_invoices": "Paid invoices",
     "money.cash.waiting": "Waiting to be paid",
     "money.cash.balance_now": "In the treasury now",
     "money.cash.net": "Left after income and spend",
     "money.cash.no_sum": (
-        "Income and Spent are Rob's money as cash flow. Open positions are on "
-        "the Book, not here. Neither is added to the cost of running Rob below, "
+        "Income and Spent are the agent's money as cash flow. Open positions are on "
+        "the Book, not here. Neither is added to the cost of running the agent below, "
         "and there is no single number that combines them — there is nothing "
         "sensible to net a compute bill against."
     ),
@@ -416,11 +416,11 @@ STRINGS = {
     # pending invoice, so it belongs to neither book — and the console was the
     # one seat that never said it, while the terminal ledger always has.
     "money.cash.refund_due": (
-        "{amount} is owed back across {count} payment(s) Rob took and did not "
+        "{amount} is owed back across {count} payment(s) the agent took and did not "
         "deliver on. Settle or refund each one from the terminal."
     ),
-    "money.cash.runtime_title": "What it costs you to run Rob",
-    "money.cash.runtime_aside": "your money, not Rob's",
+    "money.cash.runtime_title": "What it costs you to run the agent",
+    "money.cash.runtime_aside": "your money, not the agent's",
     "money.cash.runtime_window": "Last {days} days",
     "money.cash.runtime_total": "Since the start",
     "money.cash.runtime_calls": "over {count} model calls",
@@ -433,11 +433,11 @@ STRINGS = {
     "money.cash.dash_why": "this reading is not trustworthy right now",
 
     # ----------------------------------------------------------- Money › Invoices
-    # Who owes Rob money, and the A20 machine-income gap said on the page.
+    # Who owes the agent money, and the A20 machine-income gap said on the page.
     "money.invoices.loading": "Reading the invoices.",
-    "money.invoices.title": "Who owes Rob money",
+    "money.invoices.title": "Who owes the agent money",
     "money.invoices.aside": "{amount} outstanding",
-    "money.invoices.empty": "No one owes Rob money yet.",
+    "money.invoices.empty": "No one owes the agent money yet.",
     "money.invoices.unreadable": "I could not read the invoices.",
     "money.invoices.unreadable_why": "Why it failed",
     "money.invoices.col_who": "Who",
@@ -452,13 +452,13 @@ STRINGS = {
     "money.invoices.settle_done": "marked paid",
     "money.invoices.settle_failed": "The console could not reach the server.",
     "money.invoices.note": (
-        "Rob watches the treasury address and marks an invoice paid on its own "
+        "The agent watches the treasury address and marks an invoice paid on its own "
         "when the money arrives. You only step in to chase or to write one off."
     ),
     "money.invoices.machine_title": "Machine payments are not counted here yet.",
     "money.invoices.machine_body": (
         "Payments a machine makes per request land under the payer's name, not "
-        "yours, so this page can undercount what Rob earned. The money is not "
+        "yours, so this page can undercount what the agent earned. The money is not "
         "lost; the page cannot see it until that is fixed."
     ),
 
@@ -471,13 +471,13 @@ STRINGS = {
     "money.limits.no_cap": "No daily cap is set — aggregate spend is unbounded.",
     "money.limits.unknown": "The daily cap could not be read.",
     "money.limits.unknown_why": "Why",
-    "money.limits.body": "The limits Rob spends within live in Agent, where you set them.",
+    "money.limits.body": "The limits the agent spends within live in Agent, where you set them.",
     "money.limits.link": "Open Agent",
 
-    "agent.title": "Rob",
+    "agent.title": "Agent",
 
     # What the Agent destination's write actions say back (043 AB2). An edit to
-    # what Rob has learned about itself is always a proposal you review, never a
+    # what the agent has learned about itself is always a proposal you review, never a
     # change it makes to itself unwatched; a note it keeps is plainer still.
     "agent.identity.saved": "I saved that as a proposal for you to review.",
     "agent.identity.empty": "There was nothing to save.",
@@ -503,7 +503,7 @@ STRINGS = {
     # Six tabs of one screen (043 WS-AF1). Everything below the subnav is drawn
     # client-side by agent.js from the tenant-scoped Agent readers; the four
     # posture axes ride as data and render once, one plain sentence per axis.
-    "agent.sub": "Who Rob is, what it can do, and the rules it runs under.",
+    "agent.sub": "Who the agent is, what it can do, and the rules it runs under.",
     "agent.tab_overview": "Overview",
     "agent.tab_identity": "Identity",
     "agent.tab_capabilities": "Abilities",
@@ -517,9 +517,9 @@ STRINGS = {
     "agent.when_day": "{count} d ago",
 
     # Overview — the ranked health block leads, then the face, then the
-    # posture axes, then what Rob is connected to.
+    # posture axes, then what the agent is connected to.
     "agent.ov_health_title": "Health",
-    "agent.ov_health_aside": "what Rob checks, and what needs you",
+    "agent.ov_health_aside": "what the agent checks, and what needs you",
     "agent.ov_health_unreadable": "I could not run the health check.",
     "agent.ov_health_unreadable_why": "Why",
     "agent.ov_health_ok_title": "Everything else is fine",
@@ -527,18 +527,18 @@ STRINGS = {
     "agent.ov_report_link": "See the full health report",
     "agent.ov_unverified": "I could not check: {sources}",
     "agent.ov_identity_no_avatar": "No avatar set. Set one with `polyrob avatar set <image>`.",
-    "agent.ov_posture_title": "What Rob may do",
-    "agent.ov_posture_aside": "How Rob is set up to act",
+    "agent.ov_posture_title": "What the agent may do",
+    "agent.ov_posture_aside": "How the agent is set up to act",
     "agent.ov_axis_local_title": "Treat this computer as yours alone?",
     "agent.ov_axis_local_why": "Turns on abilities for one owner. Never on a shared server.",
     "agent.ov_axis_mode_title": "Act without asking first?",
-    "agent.ov_axis_mode_why": "Money and changes to Rob itself always ask first.",
+    "agent.ov_axis_mode_why": "Money and changes to the agent itself always ask first.",
     "agent.ov_axis_loop_title": "Start work on its own?",
     "agent.ov_axis_loop_why":
-        "Rob starts goals, wakes itself and keeps its own schedule.",
+        "The agent starts goals, wakes itself and keeps its own schedule.",
     "agent.ov_axis_compute_title": "Use the computer it runs on?",
     "agent.ov_axis_compute_why": "Run commands, install things, restart itself.",
-    "agent.ov_axis_compute_locked": "Set when Rob starts. It cannot change while Rob runs.",
+    "agent.ov_axis_compute_locked": "Set when the agent starts. It cannot change while the agent runs.",
     "agent.ov_axis_builder_title": "Publish apps and pages?",
     "agent.ov_axis_builder_why": "Put what it builds online. Never money, never the computer, never a secret.",
     "agent.ov_connected_title": "Connected to",
@@ -570,25 +570,25 @@ STRINGS = {
     "agent.memory_backend.local_vector": "On this computer, with search",
     "agent.memory_backend.none": "Off",
 
-    # Identity — the persona you wrote (read-only, frozen) and what Rob has
+    # Identity — the persona you wrote (read-only, frozen) and what the agent has
     # learned about itself (a reviewable change; an edit lands in review, never live).
     "agent.id_loading": "Reading the identity.",
     "agent.id_unreadable": "I could not read the identity.",
     "agent.id_unreadable_why": "Why",
-    "agent.id_face_title": "Rob's face",
+    "agent.id_face_title": "The agent's face",
     "agent.id_face_body": (
-        "Rob's avatar is one image, used everywhere: this console, chat, its "
+        "The agent's avatar is one image, used everywhere: this console, chat, its "
         "accounts and its identity on the network. Set or change it with "
         "`polyrob avatar set <image>` (a file, a URL, or an NFT)."
     ),
-    "agent.id_persona_title": "How Rob should behave",
+    "agent.id_persona_title": "How the agent should behave",
     "agent.id_persona_aside": "written by you",
     "agent.id_persona_empty": "You have not written a persona yet.",
     "agent.id_persona_unreadable": "I could not read the persona, so it is not shown.",
-    "agent.id_learned_title": "What Rob has learned about itself",
-    "agent.id_learned_aside": "written by Rob, approved by you",
-    "agent.id_learned_empty": "Rob has not written anything about itself yet.",
-    "agent.id_learned_unreadable": "I could not read what Rob has learned, so you cannot edit it here.",
+    "agent.id_learned_title": "What the agent has learned about itself",
+    "agent.id_learned_aside": "written by the agent, approved by you",
+    "agent.id_learned_empty": "The agent has not written anything about itself yet.",
+    "agent.id_learned_unreadable": "I could not read what the agent has learned, so you cannot edit it here.",
     "agent.id_edit": "Edit",
     "agent.id_edit_hint": (
         "This is a proposal. It waits in review, and it never takes effect until "
@@ -601,10 +601,10 @@ STRINGS = {
 
     # Capabilities — skills, tools and connected services as one list, plus the
     # read-only helpers.
-    "agent.cap_loading": "Reading what Rob can do.",
-    "agent.cap_unreadable": "I could not read what Rob can do.",
+    "agent.cap_loading": "Reading what the agent can do.",
+    "agent.cap_unreadable": "I could not read what the agent can do.",
     "agent.cap_unreadable_why": "Why",
-    "agent.cap_list_title": "Everything Rob can do",
+    "agent.cap_list_title": "Everything the agent can do",
     "agent.cap_list_aside": "{count} shown",
     "agent.cap_part_unreadable": "One list could not be read.",
     "agent.cap_part_unreadable_why": "Why",
@@ -619,55 +619,55 @@ STRINGS = {
     "agent.cap_source_profile": "A helper you shaped",
     "agent.cap_source_mcp": "A connected service",
     "agent.cap_source_skill": "A procedure",
-    "agent.cap_source_kept": "Rob wrote it, you kept it",
+    "agent.cap_source_kept": "The agent wrote it, you kept it",
     "agent.cap_state_on": "on",
     "agent.cap_state_off": "off",
     "agent.cap_helpers_title": "Helpers",
     "agent.cap_helpers_aside": "workers you can read",
     "agent.cap_helpers_unreadable": "I could not read the helpers.",
     "agent.cap_helpers_unreadable_why": "Why",
-    "agent.cap_helpers_empty": "Rob has no named helpers yet.",
+    "agent.cap_helpers_empty": "The agent has no named helpers yet.",
     "agent.cap_chip_all": "Everything",
     "agent.cap_chip_on": "On",
     "agent.cap_chip_off": "Off",
     "agent.cap_chip_money": "Spends money",
     "agent.cap_chip_helpers": "Never for helpers",
-    "agent.cap_search": "Search everything Rob can do",
+    "agent.cap_search": "Search everything the agent can do",
 
-    # Memory — your notes (add and forget here), what Rob works out on its own,
+    # Memory — your notes (add and forget here), what the agent works out on its own,
     # and what it has read.
-    "agent.mem_loading": "Reading what Rob remembers.",
+    "agent.mem_loading": "Reading what the agent remembers.",
     "agent.mem_forget": "Forget",
     "agent.mem_forgotten": "I forgot that note.",
     "agent.mem_forget_failed": "I could not forget that note.",
-    "agent.mem_notes_title": "What Rob remembers about you",
+    "agent.mem_notes_title": "What the agent remembers about you",
     "agent.mem_notes_aside": "most recent notes; older notes are not included in this search",
     "agent.mem_notes_unavailable": "My memory is not available right now.",
     "agent.mem_notes_unavailable_why": "Why",
     "agent.mem_notes_error": "I could not read your notes.",
     "agent.mem_notes_error_why": "Why",
-    "agent.mem_notes_empty": "Rob has no notes about you yet.",
-    "agent.mem_add_open": "Tell Rob something to remember",
-    "agent.mem_add_title": "Tell Rob something to remember",
+    "agent.mem_notes_empty": "The agent has no notes about you yet.",
+    "agent.mem_add_open": "Tell the agent something to remember",
+    "agent.mem_add_title": "Tell the agent something to remember",
     "agent.mem_add_aside": "it keeps this one as you type it",
     "agent.mem_add_save": "Remember this",
     "agent.mem_add_cancel": "Cancel",
     "agent.mem_add_hint": (
-        "This goes into your notes, kept on this machine. Rob keeps it word for "
+        "This goes into your notes, kept on this machine. The agent keeps it word for "
         "word and can use it in every chat from now on."
     ),
     "agent.mem_add_done": "I saved that to my notes.",
     "agent.mem_add_failed": "I could not save that.",
-    "agent.mem_recall_title": "What Rob works out on its own",
+    "agent.mem_recall_title": "What the agent works out on its own",
     "agent.mem_recall_aside": "separate from your notes",
-    "agent.mem_recall_error": "I could not read what Rob worked out.",
+    "agent.mem_recall_error": "I could not read what the agent worked out.",
     "agent.mem_recall_error_why": "Why",
-    "agent.mem_recall_empty": "Rob has not worked anything out yet.",
-    "agent.mem_kb_title": "What Rob has read",
+    "agent.mem_recall_empty": "The agent has not worked anything out yet.",
+    "agent.mem_kb_title": "What the agent has read",
     "agent.mem_kb_aside": "{count} sources",
     "agent.mem_kb_unreadable": "I could not read the sources.",
     "agent.mem_kb_unreadable_why": "Why",
-    "agent.mem_kb_empty": "Rob has not read any sources yet.",
+    "agent.mem_kb_empty": "The agent has not read any sources yet.",
     "agent.mem_kb_passages": "{count} passages",
     "agent.mem_search": "Search recall and recent notes",
 
@@ -675,12 +675,12 @@ STRINGS = {
     # the money limits gathered here from the ledger.
     "agent.set_loading": "Reading the settings.",
     "agent.set_limits_title": "Money limits",
-    "agent.set_limits_aside": "Rob cannot go past these",
+    "agent.set_limits_aside": "The agent cannot go past these",
     "agent.set_limits_unreadable": "I could not read the limits.",
     "agent.set_limits_unreadable_why": "Why",
     "agent.set_limit_no_cap": "No daily cap is set. Spend is unbounded.",
     "agent.set_limit_unknown": "The daily cap could not be read.",
-    "agent.set_limit_daily": "Most Rob can spend in a day is {cap}.",
+    "agent.set_limit_daily": "The most the agent can spend in a day is {cap}.",
     "agent.set_limit_used": "{used} of {cap} used today.",
     "agent.set_prefs_unreadable": "I could not read the settings.",
     "agent.set_prefs_unreadable_why": "Why",
@@ -738,7 +738,7 @@ STRINGS = {
     "work.create.tools_shape": "The tools must be a list of names.",
 
     "work.sub": (
-        "Everything Rob has done, newest first — the work it starts itself, "
+        "Everything the agent has done, newest first — the work it starts itself, "
         "your chats, the scheduled jobs, the money, the messages it sent you, "
         "and what it changed about itself."
     ),
@@ -750,13 +750,13 @@ STRINGS = {
     "work.log.class_cron": "Scheduled job",
     "work.log.class_money": "Money",
     "work.log.class_message": "Messages to you",
-    "work.log.class_system": "Rob itself",
+    "work.log.class_system": "The agent itself",
     "work.log.class_tool": "Tools it used",
 
-    # The diagnostics switch — the lines Rob writes for itself, off by default.
+    # The diagnostics switch — the lines the agent writes for itself, off by default.
     "work.log.diagnostics": "Show diagnostics",
     "work.log.diagnostics_why": (
-        "The lines Rob writes for itself — ticks, skips, retries, locks. Off, "
+        "The lines the agent writes for itself — ticks, skips, retries, locks. Off, "
         "because they are about the machine, not about you."
     ),
 
@@ -787,8 +787,8 @@ STRINGS = {
     # is counted from status_counts, never from the dispatcher's order.
     "work.now.section_now": "Now",
     "work.now.section_next": "Next",
-    "work.now.loading": "Reading what Rob is doing.",
-    "work.now.empty_now": "Rob is not running anything right now.",
+    "work.now.loading": "Reading what the agent is doing.",
+    "work.now.empty_now": "The agent is not running anything right now.",
     # The live actors the board alone cannot show (2026-09-16 audit, B1): a cron
     # job mid-run and a session the shared registry knows is alive.
     "work.now.cron_title": "A scheduled run is in progress.",
@@ -799,7 +799,7 @@ STRINGS = {
     "work.now.empty_next": "Nothing is waiting its turn.",
     # 080 F-5: drawn ABOVE the stored goals, never instead of them.
     "work.now.disabled": (
-        "Rob's own work is switched off — the goals below are stored, but "
+        "The agent's own work is switched off — the goals below are stored, but "
         "nothing will run them until it is on."
     ),
     "work.now.unreadable": "I could not read the goal board.",
@@ -812,7 +812,7 @@ STRINGS = {
     "work.now.drop": "Drop it",
     "work.now.retry": "Try it again",
     "work.now.resume": "Resume",
-    "work.now.helper_lead": "A helper is doing part of this for Rob.",
+    "work.now.helper_lead": "A helper is doing part of this for the agent.",
     "work.now.helper_body": (
         "Helpers cannot spend money or change your files. It reports back when "
         "it is done."
@@ -862,14 +862,14 @@ STRINGS = {
     "work.schedule.unreachable": "The console could not reach the server.",
 
     # -------------------------------------------------------------- Work › Apps
-    # Everything Rob built you can open, in three tiers by reach: online app
+    # Everything the agent built you can open, in three tiers by reach: online app
     # services, published pages/files with a link, and files still in a chat
     # folder. Nothing built is the empty state — but only when every store
     # answered and every one was empty.
-    "work.apps.loading": "Reading what Rob has built.",
+    "work.apps.loading": "Reading what the agent has built.",
     "work.apps.online_title": "Online",
     "work.apps.online_aside": "{count} in all",
-    "work.apps.online_empty": "Rob has not put an app online yet.",
+    "work.apps.online_empty": "The agent has not put an app online yet.",
     "work.apps.online_unreadable": "I could not read the app registry.",
     "work.apps.online_unreadable_why": "Why it failed",
     "work.apps.online_open": "Open it",
@@ -880,7 +880,7 @@ STRINGS = {
     "work.apps.status_unhealthy": "Online but not answering.",
     "work.apps.status_failed": "It stopped after repeated failures.",
     "work.apps.status_stopped": "You took this down. The code is still here.",
-    "work.apps.status_paused": "Paused. It will go back online when Rob resumes.",
+    "work.apps.status_paused": "Paused. It will go back online when the agent resumes.",
     "work.apps.published_title": "Published",
     "work.apps.published_aside": "pages and files with a link",
     "work.apps.published_empty": "Nothing is published with a link yet.",
@@ -898,23 +898,23 @@ STRINGS = {
     "work.apps.col_kind": "Kind",
     "work.apps.made_note": (
         "These live in the folder of the chat that made them. Publishing one "
-        "gives it a link anyone can open; Rob asks you before it does that."
+        "gives it a link anyone can open; the agent asks you before it does that."
     ),
-    "work.apps.empty_title": "Rob has not built anything yet.",
+    "work.apps.empty_title": "The agent has not built anything yet.",
     "work.apps.empty_body": (
         "Ask it to build something and it will appear here — a running app with "
-        "its own address, a page with a link, or a file you can open. Rob always "
+        "its own address, a page with a link, or a file you can open. The agent always "
         "asks before it puts anything on the public internet."
     ),
-    "work.apps.empty_action": "Ask Rob to build something",
+    "work.apps.empty_action": "Ask the agent to build something",
 
     # ------------------------------------------------------------------- Inbox
     # An Inbox item is a durable record, for this tenant, blocked on an owner
-    # decision, that Rob cannot resolve alone. All four tests must hold — which
+    # decision, that the agent cannot resolve alone. All four tests must hold — which
     # is why a late invoice is listed and NOT counted: the settlement watcher
     # closes that one on its own, so it is not a decision.
     "inbox.sub": (
-        "What is blocking Rob first, then what expires soonest. It keeps working "
+        "What is blocking the agent first, then what expires soonest. It keeps working "
         "on everything else while these wait."
     ),
     "inbox.pill_none": "nothing waiting",
@@ -926,7 +926,7 @@ STRINGS = {
     "inbox.not_blocking.title": "Not blocking",
     "inbox.not_blocking.aside": "listed, not counted",
 
-    # Card grammar: what Rob wants, why, what yes costs, what no costs, and how
+    # Card grammar: what the agent wants, why, what yes costs, what no costs, and how
     # long it has waited. Every card answers all five.
     "inbox.waiting_for": "Waiting for {age}.",
     "inbox.expires_in": "Expires in {age}.",
@@ -1024,17 +1024,17 @@ STRINGS = {
     ),
 
     # -------------------------------------------------------------------- chat
-    # The frame speaks about Rob in the third person ("Rob is running") because
-    # it is the product describing the agent. Rob speaks about itself in the
+    # The frame speaks about the agent in the third person ("The agent is running") because
+    # it is the product describing the agent. The agent speaks about itself in the
     # first person. The mockups do exactly this, and the split is the point.
     "chat.title": "Chat",
-    # 070 W0.12: a run that Rob or a job started is not a chat with you.
+    # 070 W0.12: a run that the agent or a job started is not a chat with you.
     "chat.run_head.cron": "A scheduled job started this run. It is not a chat with you.",
-    "chat.run_head.goal": "Rob started this run for one of its goals. It is not a chat with you.",
-    "chat.run_head.correspondent": "Someone who writes to Rob started this run.",
+    "chat.run_head.goal": "The agent started this run for one of its goals. It is not a chat with you.",
+    "chat.run_head.correspondent": "Someone who writes to the agent started this run.",
     "chat.run_head.task": "What it was asked to do",
-    "chat.composer.label": "Message Rob",
-    "chat.composer.placeholder": "Ask Rob, or tell it what to do",
+    "chat.composer.label": "Message the agent",
+    "chat.composer.placeholder": "Ask the agent, or tell it what to do",
     "chat.composer.placeholder_busy": "Add something while it works",
     "chat.composer.hint": "Type a slash for commands.",
     "chat.send": "Send",
@@ -1055,7 +1055,7 @@ STRINGS = {
     "chat.act.failed": "An action did not finish",
 
     # The cold open is the one place the design spends its boldness: one true
-    # sentence made of real numbers, in Rob's voice. No model picker, no tool
+    # sentence made of real numbers, in the agent's voice. No model picker, no tool
     # checkboxes, no step slider.
     "chat.open.sub": (
         "Ask me anything, or tell me what to do. You can say it in plain words, "
@@ -1087,8 +1087,8 @@ STRINGS = {
     "chat.open.income_some": "{amount} came in",
     # 070 W0.13: the console process has no language model (until the seat).
     "chat.open.no_model": (
-        "Rob cannot answer from this console yet. Your text is still here. "
-        "Talk to Rob on Telegram or in the terminal."
+        "The agent cannot answer from this console yet. Your text is still here. "
+        "Talk to the agent on Telegram or in the terminal."
     ),
     "chat.open.starters_label": "Things you could ask",
 
@@ -1111,9 +1111,9 @@ STRINGS = {
     # that never wrote a closing event: it ended without a final word. Never
     # "Working for …" forever (070 E.13). {elapsed} ends at its last event.
     "chat.receipt.ended": "Stopped after {elapsed} and {steps}, without a final word.",
-    # A run that failed before Rob drew anything. The reason is not in the feed
+    # A run that failed before the agent drew anything. The reason is not in the feed
     # yet; the wave-1 turn record carries it.
-    "chat.turn_failed": "This chat failed before Rob could answer.",
+    "chat.turn_failed": "This chat failed before the agent could answer.",
     "chat.receipt.steps_none": "no steps",
     "chat.receipt.steps_one": "1 step",
     "chat.receipt.steps_many": "{count} steps",
@@ -1121,12 +1121,12 @@ STRINGS = {
     # A cost the transcript has not read yet says so, never a confident $0.00.
     "chat.receipt.cost_unknown": "Cost not known yet.",
 
-    # A32 — a Steer that came back 409: this chat is live in Rob's OWN process,
+    # A32 — a Steer that came back 409: this chat is live in the agent's OWN process,
     # not this console, so the console cannot steer it from here. It is an honest
     # state, not a failure — it names the process, tells you to watch below, and
     # gives the retry hint. {pid} is the owning worker's process id.
     "chat.live_at_agent": (
-        "This chat is live in Rob's own process (pid {pid}), so I cannot steer "
+        "This chat is live in the agent's own process (pid {pid}), so I cannot steer "
         "it from this console. Watch it below, and try again in a moment, or "
         "steer it from the terminal."
     ),
@@ -1161,7 +1161,7 @@ STRINGS = {
     # the session that LAST wrote a path — hence "from this chat". The folder
     # behind the chat (on a server, the one shared project folder) is a link.
     "workpane.files_aside": "from this chat",
-    "workpane.files_note": "Rob asks you before it sends or publishes a file.",
+    "workpane.files_note": "The agent asks you before it sends or publishes a file.",
     "workpane.files_empty": "No files yet.",
     "workpane.files_unreadable": "I could not load this chat's files.",
     # One Files source failed while the other read fine. Naming which one is what
@@ -1173,7 +1173,7 @@ STRINGS = {
         "I cannot tell which of these files are finished."
     ),
     "workpane.tier_ready": "Ready for you",
-    "workpane.tier_working": "Rob's working files",
+    "workpane.tier_working": "The agent's working files",
     "workpane.tier_given": "From you",
     "workpane.show_all": "Show all {count}",
     "workpane.shared_link": "Browse the shared folder ({count})",
@@ -1230,21 +1230,21 @@ STRINGS.update({"chats.more": "Load older chats"})
 # seat a person can actually reach, never a flag.
 STRINGS.update({
     # A2 — the pause headline names a control; this is that control.
-    "shell.pause": "Pause Rob",
-    "shell.resume": "Resume Rob",
-    "shell.pause_label": "Pause or resume Rob's own work",
+    "shell.pause": "Pause the agent",
+    "shell.resume": "Resume the agent",
+    "shell.pause_label": "Pause or resume the agent's own work",
     "shell.pause_unreachable": "That did not go through. Try again.",
     # A32 — the activity room refused this seat; say so instead of going quiet.
     "shell.live_refused": "Live updates are off here. Reload the page to try again.",
     # 070 E.31: the server refuses with a code; these are the console's words.
     "shell.live_busy": "Too many reconnects. Live updates start again in a minute.",
-    "shell.busy": "Rob is busy. Try again in a minute.",
+    "shell.busy": "The agent is busy. Try again in a minute.",
 
     # ------------------------------------------- the owner sign-in (070 E.32)
     # A page outside the shell (own_ops and multitenant; local has none). The
     # server passes a KEY for each error, never a sentence.
-    "login.title": "Sign in – Rob",
-    "login.heading": "Sign in to Rob",
+    "login.title": "Sign in – POLYROB",
+    "login.heading": "Sign in to POLYROB",
     "login.username": "Username",
     "login.password": "Password",
     "login.submit": "Sign in",
@@ -1254,11 +1254,11 @@ STRINGS.update({
 
     # ---------------------------------------------- the error page (070 E.34)
     # One plain lead per status class; the raw detail sits behind "Show details".
-    "error.title": "Something went wrong – Rob",
+    "error.title": "Something went wrong – POLYROB",
     "error.heading": "Something went wrong.",
     "error.not_found": "This page does not exist.",
     "error.forbidden": "You cannot open this page.",
-    "error.server": "Something broke on Rob's side. Try again in a minute.",
+    "error.server": "Something broke on the agent's side. Try again in a minute.",
     "error.other": "This page could not open.",
     "error.details": "Show details",
     "error.hint_chat": "This chat may have been deleted.",
@@ -1266,7 +1266,7 @@ STRINGS.update({
     "error.repair": "Try to repair this chat",
     "error.home": "Go to Chat",
 
-    # A1 — Rob's face on Agent, read from the one avatar slot (core/avatar.py).
+    # A1 — the agent's face on Agent, read from the one avatar slot (core/avatar.py).
     "agent.ov_identity_default": "The default polyrob mark. Set your own with `polyrob avatar set <image>`.",
     "agent.ov_identity_source": "Set from {source}",
     "agent.ov_identity_made": "Set on {when}",
@@ -1381,7 +1381,7 @@ STRINGS.update({
     "work.board.origin_granted": "Granted by you: {name}",
     "work.board.origin_granted_any": "Granted by you",
     "work.board.origin_asked": "You asked for it in a chat",
-    "work.board.origin_self": "Rob started it",
+    "work.board.origin_self": "The agent started it",
     "work.board.origin_legacy": "Not recorded who started it",
     "work.board.added": "added {elapsed} ago",
     "work.board.changed": "last change {elapsed} ago",

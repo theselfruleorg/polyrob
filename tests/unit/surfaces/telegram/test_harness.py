@@ -61,7 +61,7 @@ class _FakeTaskAgent:
     def unbind_chat(self, session_key):
         self.unbound = getattr(self, "unbound", [])
         self.unbound.append(session_key)
-    def _extract_chat_reply(self, session_id):
+    def _extract_chat_reply(self, session_id, since=None):
         # Mirror TaskAgent._extract_chat_reply: the agent's REAL last reply, NOT
         # run_session's generic status string. Tests set ``ta.reply``.
         return getattr(self, "reply", "")
@@ -122,11 +122,11 @@ async def test_owner_task_session_gets_goal_and_mission_toolset(monkeypatch):
     """THE FIX: the OWNER's interactive session is created with a toolset that includes
     `goal` (+ mission tools) so it can introspect its board via goal_list instead of
     reading the sandbox filesystem and hallucinating 'goal database is empty'."""
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     ta = _FakeTaskAgent()
     spawned = []
     await act_on_inbound(
-        ta, _result(RouteKind.TASK_AGENT, text="review your goals", user="rob"),
+        ta, _result(RouteKind.TASK_AGENT, text="review your goals", user="alice"),
         spawn=spawned.append,
     )
     tool_ids = ta.created[0]["kwargs"].get("tool_ids")
@@ -138,7 +138,7 @@ async def test_owner_task_session_gets_goal_and_mission_toolset(monkeypatch):
 async def test_non_owner_task_session_keeps_default_toolset(monkeypatch):
     """A non-owner sender must NOT get the goal/twitter toolset (tenant least-privilege);
     tool_ids override is None so the conservative SessionRequest default stands."""
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     ta = _FakeTaskAgent()
     spawned = []
     await act_on_inbound(

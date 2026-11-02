@@ -55,7 +55,7 @@ async def _deliver_with(agent):
 
     async def deliver(m):
         sent.append(m)
-    await harness._run_and_deliver(agent, "rob", "sess-1", deliver)
+    await harness._run_and_deliver(agent, "alice", "sess-1", deliver)
     return sent
 
 

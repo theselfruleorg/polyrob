@@ -63,7 +63,7 @@ async def test_claim_refuses_a_non_owner():
 @pytest.mark.asyncio
 async def test_claim_with_no_token_explains_itself():
     from surfaces.telegram.claim_ops import claim_reply
-    out = await claim_reply("rob", [])
+    out = await claim_reply("alice", [])
     assert "Usage: /claim" in out
     # The escrow credits an ADDRESS, not a token — say so before he runs it.
     assert "ADDRESS" in out
@@ -82,11 +82,11 @@ async def test_claim_is_a_dry_run_until_go(monkeypatch):
 
     monkeypatch.setattr("tools.launchpad.tool.LaunchpadTool.launchpad_claim", _fake)
     from surfaces.telegram.claim_ops import claim_reply
-    out = await claim_reply("rob", ["0xabc"])
+    out = await claim_reply("alice", ["0xabc"])
     assert seen == {"dry_run": True, "token": "0xabc"}
     assert "Add `go` to claim it" in out
 
-    await claim_reply("rob", ["0xabc", "go"])
+    await claim_reply("alice", ["0xabc", "go"])
     assert seen["dry_run"] is False
 
 
@@ -98,7 +98,7 @@ async def test_claim_never_reads_an_empty_report_as_success(monkeypatch):
 
     monkeypatch.setattr("tools.launchpad.tool.LaunchpadTool.launchpad_claim", _fake)
     from surfaces.telegram.claim_ops import claim_reply
-    assert "do NOT retry" in await claim_reply("rob", ["0xabc"])
+    assert "do NOT retry" in await claim_reply("alice", ["0xabc"])
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ async def test_nft_usage_says_a_transfer_always_needs_approval():
     """An NFT is unpriceable, so the caps cannot bound it — the owner does.
     The seat must not imply his caps are the protection here."""
     from surfaces.telegram.nft_ops import USAGE, nft_reply
-    out = await nft_reply("rob", [])
+    out = await nft_reply("alice", [])
     # 069 v4 A4: no words = the agent NFTs this treasury owns (off here), then the usage
     assert out.endswith(USAGE) and "AGENT_NFT_ENABLED" in out
     assert "ALWAYS comes to you for approval" in out
@@ -136,7 +136,7 @@ async def test_nft_transfer_is_a_dry_run_until_go(monkeypatch):
 
     monkeypatch.setattr("tools.defi.trade_tool.DefiTradeTool.nft_transfer", _fake)
     from surfaces.telegram.nft_ops import nft_reply
-    out = await nft_reply("rob", ["transfer", "0xc", "7", "0xdead", "on", "base"])
+    out = await nft_reply("alice", ["transfer", "0xc", "7", "0xdead", "on", "base"])
     assert seen == {"dry_run": True, "token_id": 7, "to": "0xdead", "chain": "base"}
     assert "Add `go` to send it" in out and "irreversible" in out
 
@@ -144,13 +144,13 @@ async def test_nft_transfer_is_a_dry_run_until_go(monkeypatch):
 @pytest.mark.asyncio
 async def test_nft_info_needs_a_whole_token_id():
     from surfaces.telegram.nft_ops import nft_reply
-    assert "whole number" in await nft_reply("rob", ["info", "0xc", "seven", "on", "base"])
+    assert "whole number" in await nft_reply("alice", ["info", "0xc", "seven", "on", "base"])
 
 
 @pytest.mark.asyncio
 async def test_an_unknown_nft_verb_names_the_vocabulary():
     from surfaces.telegram.nft_ops import nft_reply
-    out = await nft_reply("rob", ["frobnicate"])
+    out = await nft_reply("alice", ["frobnicate"])
     assert "Unknown /nft verb" in out and "revoke" in out
 
 
@@ -181,7 +181,7 @@ def test_dapp_empty_state_is_honest_about_what_it_read(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     _armed_store(tmp_path)
     from surfaces.telegram.dapp_ops import dapp_reply
-    out = dapp_reply("rob", ["list"])
+    out = dapp_reply("alice", ["list"])
     assert "No web page has been armed" in out
     assert "DURABLE record" in out
 
@@ -190,14 +190,14 @@ def test_dapp_revoke_needs_an_id(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     _armed_store(tmp_path)
     from surfaces.telegram.dapp_ops import dapp_reply
-    assert "Usage: /dapp revoke" in dapp_reply("rob", ["revoke"])
+    assert "Usage: /dapp revoke" in dapp_reply("alice", ["revoke"])
 
 
 def test_dapp_revoke_of_an_unknown_session_says_so(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     _armed_store(tmp_path)
     from surfaces.telegram.dapp_ops import dapp_reply
-    out = dapp_reply("rob", ["revoke", "nope"])
+    out = dapp_reply("alice", ["revoke", "nope"])
     assert "No dapp session" in out
 
 
@@ -209,18 +209,18 @@ def test_dapp_revoke_marks_the_row_and_says_what_it_cannot_do(tmp_path, monkeypa
     from core.dapp_session_store import DappSessionStore
     import core.dapp_session_store as store_mod
     store = DappSessionStore(str(tmp_path / "dapp_sessions.db"))
-    store.save("s1", "rob", {"origin": "https://x", "chain": "base",
+    store.save("s1", "alice", {"origin": "https://x", "chain": "base",
                              "spent_usd": 1.0, "sent": [], "refused": []})
     monkeypatch.setattr(store_mod, "get_dapp_session_store",
                         lambda db_path=None: store)
     from surfaces.telegram.dapp_ops import dapp_reply
-    assert "https://x" in dapp_reply("rob", ["list"])
-    out = dapp_reply("rob", ["revoke", "s1"])
+    assert "https://x" in dapp_reply("alice", ["list"])
+    out = dapp_reply("alice", ["revoke", "s1"])
     assert "revoked in my durable record" in out
     assert "may not stop one mid-flight" in out
-    assert store.get("s1", "rob").revoked is True
+    assert store.get("s1", "alice").revoked is True
     # Idempotent, and honest about being a no-op the second time.
-    assert "already revoked" in dapp_reply("rob", ["revoke", "s1"])
+    assert "already revoked" in dapp_reply("alice", ["revoke", "s1"])
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ async def test_identity_refuses_a_non_owner(tmp_path):
 @pytest.mark.asyncio
 async def test_identity_usage_warns_that_registration_is_permanent(tmp_path):
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), [])
+    out = await identity_reply("alice", str(tmp_path), [])
     assert "permanent" in out and "NOT repeatable" in out
 
 
@@ -256,7 +256,7 @@ async def test_identity_register_refuses_when_one_already_exists(tmp_path, monke
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (42, None))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["register", "on", "base", "go"])
+    out = await identity_reply("alice", str(tmp_path), ["register", "on", "base", "go"])
     assert "already registered as agentId" in out and "42" in out
     assert not called, "a second registration must never reach the rail"
 
@@ -276,7 +276,7 @@ async def test_identity_register_refuses_when_it_cannot_tell(tmp_path, monkeypat
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (None, "record unreadable"))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["register", "on", "base", "go"])
+    out = await identity_reply("alice", str(tmp_path), ["register", "on", "base", "go"])
     assert "I will not register" in out
     assert not called
 
@@ -294,7 +294,7 @@ async def test_identity_register_is_a_dry_run_until_go(tmp_path, monkeypatch):
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (None, None))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["register", "on", "base"])
+    out = await identity_reply("alice", str(tmp_path), ["register", "on", "base"])
     assert seen["dry_run"] is True
     assert "Add `go` to mint it" in out and "Permanent" in out
 
@@ -304,7 +304,7 @@ async def test_set_uri_without_a_registration_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr("surfaces.telegram.identity_ops._existing_registration",
                         lambda data_dir: (None, None))
     from surfaces.telegram.identity_ops import identity_reply
-    out = await identity_reply("rob", str(tmp_path), ["set-uri", "on", "base"])
+    out = await identity_reply("alice", str(tmp_path), ["set-uri", "on", "base"])
     assert "no registration on record" in out
 
 
@@ -322,14 +322,14 @@ def test_contacts_never_creates_the_store_it_reads(tmp_path):
     printing an empty list that reads as "nobody"."""
     import os
     from surfaces.telegram.contacts_ops import contacts_reply
-    out = contacts_reply("rob", str(tmp_path), [])
+    out = contacts_reply("alice", str(tmp_path), [])
     assert "no conversation record on this box yet" in out
     assert not os.path.exists(os.path.join(str(tmp_path), "conversations.db"))
 
 
 def test_contacts_half_an_address_is_refused_with_both_halves_named(tmp_path):
     from surfaces.telegram.contacts_ops import contacts_reply
-    out = contacts_reply("rob", str(tmp_path), ["email"])
+    out = contacts_reply("alice", str(tmp_path), ["email"])
     assert "both halves" in out
 
 
@@ -337,12 +337,12 @@ def test_contacts_lists_then_renders_one_transcript(tmp_path):
     from core.surfaces.conversations import ConversationStore
     import os
     store = ConversationStore(os.path.join(str(tmp_path), "conversations.db"))
-    store.record_outbound("rob", "email", "a@b.com", "are you there?")
-    store.record_inbound("rob", "email", "a@b.com", "yes I am")
+    store.record_outbound("alice", "email", "a@b.com", "are you there?")
+    store.record_inbound("alice", "email", "a@b.com", "yes I am")
     from surfaces.telegram.contacts_ops import contacts_reply
-    listing = contacts_reply("rob", str(tmp_path), [])
+    listing = contacts_reply("alice", str(tmp_path), [])
     assert "email:a@b.com" in listing
-    one = contacts_reply("rob", str(tmp_path), ["email", "a@b.com"])
+    one = contacts_reply("alice", str(tmp_path), ["email", "a@b.com"])
     assert "yes I am" in one
     # ⚠️ A third party's words are DATA, framed as such.
     assert "untrusted" in one
@@ -354,5 +354,5 @@ def test_contacts_is_tenant_scoped(tmp_path):
     store = ConversationStore(os.path.join(str(tmp_path), "conversations.db"))
     store.record_inbound("someone-else", "email", "x@y.com", "not yours")
     from surfaces.telegram.contacts_ops import contacts_reply
-    out = contacts_reply("rob", str(tmp_path), [])
+    out = contacts_reply("alice", str(tmp_path), [])
     assert "x@y.com" not in out

@@ -130,7 +130,7 @@ async def run_reply(user_id: str, data_dir: str, sessions_root: str,
         return (f"{label} cannot be controlled from here: no live run holds it. "
                 "Nothing was changed.")
     if state == "pending":
-        return f"{label}: {word} requested. Rob does it at the next step."
+        return f"{label}: {word} requested. The agent does it at the next step."
     out = f"{_DONE[state]}: {label}."
     if state == "paused" and row["kind"] in ("goal", "job"):
         out += " Its time limit keeps counting, so a long pause can end the run."

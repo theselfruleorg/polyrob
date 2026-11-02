@@ -21,7 +21,7 @@ USDC_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 
 def _ctx(target=None):
-    return types.SimpleNamespace(user_id="rob", role="orchestrator", is_sub_agent=False,
+    return types.SimpleNamespace(user_id="alice", role="orchestrator", is_sub_agent=False,
                                  metadata={"turn_kind": None, "money_target": target})
 
 
@@ -149,11 +149,11 @@ def test_owner_create_normalizes_and_refuses():
         def create(self, **kw):
             seen.update(kw)
             return kw
-    create_goal(_Board(), user_id="rob", title="rebuy",
+    create_goal(_Board(), user_id="alice", title="rebuy",
                 extra_payload={"target_token": {"chain": "robinhood", "address": REAL.lower()}})
     assert seen["payload"]["target_token"]["address"] == REAL
     with pytest.raises(ValueError):
-        create_goal(_Board(), user_id="rob", title="rebuy",
+        create_goal(_Board(), user_id="alice", title="rebuy",
                     extra_payload={"target_token": {"chain": "robinhood", "address": "0x1"}})
 
 

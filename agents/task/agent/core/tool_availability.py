@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 
 from core.tool_capabilities import TOOL_CAPABILITIES, gate_disclosure_map
-from core.config_policy.members import set_line
 from core.tool_gates import remedy_text
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ def _compute_limbs() -> dict:
 def compute_gate(tool: str) -> tuple:
     """(gate, tier, remedy) for a compute tool, naming the limb that is ACTUALLY unmet.
 
-    Rob's self-review 2026-09-19 #2: prod ran ``AGENT_COMPUTE_POSTURE=1`` with
+    The agent's self-review 2026-09-19 #2: prod ran ``AGENT_COMPUTE_POSTURE=1`` with
     ``CODE_EXEC_ENABLED=false`` and the note still said "owner raises
     AGENT_COMPUTE_POSTURE" — a remedy the deploy already satisfied, so the owner could
     not act on it. A disabled tool whose named remedy is already met must name the
@@ -73,8 +72,7 @@ def compute_gate(tool: str) -> tuple:
         if not limbs[limb]:
             return (f"{flag_name}=false (posture {posture} already met)",
                     "disabled",
-                    remedy_text("compute_flag", flag=flag_name,
-                                set_flag=set_line(flag_name, "true")))
+                    remedy_text("compute_flag", flag=flag_name))
         return (f"{flag_name}=true, posture {posture}", "loadable",
                 remedy_text("compute_session"))
     except Exception:
@@ -96,6 +94,14 @@ def grantable_autonomous_tools() -> list:
         return []
 
 
+def _money_goal_clause(tools) -> str:
+    """SK-16 (095 W2): a money goal asked for on an owner turn is a card, not a
+    goal you write (085 W3, ``tools/goal_tools.py``)."""
+    if not any("money" in TOOL_CAPABILITIES.get(t, ()) for t in tools or ()):
+        return ""
+    return " On an owner turn a money goal becomes a card for the owner."
+
+
 def build_tool_availability_note(loaded_tool_ids, *, can_create_goals: bool = True,
                                  catalog_pinned: bool = False) -> str:
     """The <tool-availability> system-prompt block. '' when disabled or on any error.
@@ -112,7 +118,9 @@ def build_tool_availability_note(loaded_tool_ids, *, can_create_goals: bool = Tr
             return ""
         try:
             return ("<tool-availability>\nGoals you create carry their OWN tools: "
-                    + ", ".join(sorted(grantable_autonomous_tools())) + ".\n</tool-availability>")
+                    + ", ".join(sorted(grantable_autonomous_tools())) + "."
+                    + _money_goal_clause(grantable_autonomous_tools())
+                    + "\n</tool-availability>")
         except Exception:
             return ""
     try:
@@ -140,7 +148,8 @@ def build_tool_availability_note(loaded_tool_ids, *, can_create_goals: bool = Tr
         lines.append("Reserved tools are owner-only by design; their absence never blocks "
                      "other work."
                      + (" Goals you create carry their OWN tools: "
-                        + ", ".join(sorted(grantable)) + "." if can_create_goals else ""))
+                        + ", ".join(sorted(grantable)) + "." + _money_goal_clause(grantable)
+                        if can_create_goals else ""))
         lines.append("</tool-availability>")
         return "\n".join(lines)
     except Exception:

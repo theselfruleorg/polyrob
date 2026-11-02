@@ -540,6 +540,8 @@ class ErrorRecoveryMixin:
 				self.adopt_active_llm(
 					fallback_llm, fallback_model,
 					resolve_serving_provider(fallback_llm, fallback_model))
+				self._refresh_after_model_change(
+					"fallback", original_model, reason=original_error_type)
 
 				self.logger.info(f"✅ Switched LLM: {original_model} → {self.model_name}")
 
@@ -547,7 +549,7 @@ class ErrorRecoveryMixin:
 				self._emit_fallback_success_telemetry(
 					original_provider=current_provider,
 					original_model=original_model,
-					fallback_provider=self._get_provider_from_model(self.model_name),
+					fallback_provider=self.llm_provider,
 					fallback_model=self.model_name,
 					original_error_type=original_error_type,
 					total_attempts=len(self.state.llm_providers_failed) + 1,

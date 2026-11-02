@@ -140,11 +140,12 @@ def _number(word: str) -> Optional[float]:
 
 def parse_start_args(args: Sequence[str]) -> Dict[str, Any]:
     """``/trade start`` words -> draft fields. ``key=value`` words
-    (``budget=150 chains=solana,robinhood preset=memecoin ticket=3 slots=8``, plus
+    (``budget=150 chains=solana,base preset=majors ticket=3 slots=8``, plus
     any tunable breaker such as ``daily_loss_pct=8``) or bare words: the first
     number is the allocation, a preset name is the preset, anything else names
     chains. Raises :class:`MandateError`."""
-    from core.trading_presets import PRESETS, TUNABLE
+    from core.trading_presets import TUNABLE, all_presets
+    presets = all_presets()
     out: Dict[str, Any] = {}
     chains: List[str] = []
     breakers: Dict[str, Any] = {}
@@ -178,7 +179,7 @@ def parse_start_args(args: Sequence[str]) -> Dict[str, Any]:
         n = _number(word)
         if n is not None and "budget_usd" not in out:
             out["budget_usd"] = n
-        elif word.lower() in PRESETS:
+        elif word.lower() in presets:
             out["preset"] = word.lower()
         elif n is None and word.lower() not in ("and", "with", "on", "usd"):
             chains += [c for c in word.replace("+", ",").split(",") if c.strip()]

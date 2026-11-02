@@ -54,7 +54,8 @@ def test_dotenv_seed_in_a_readable_file_is_a_gap(custody, monkeypatch):
     assert ce.custody_secret_sources() == {"AGENT_WALLET_MASTER_SEED": f"dotenv:{path}"}
     assert ce.readable_custody_file() == str(path)
     why = he.model_code_host_refusal()
-    assert why and "polyrob signer install" in why and "sandbox" in why
+    assert why and "polyrob wallet export" in why and "Docker sandbox" in why
+    assert "polyrob signer" not in why
     assert SEED not in why and str(path) not in why
 
 
@@ -179,7 +180,7 @@ def test_local_run_code_refuses_on_the_host_and_names_the_fix(custody, monkeypat
     assert sandbox_guard.require_sandbox_or_none("local_subprocess") is None
     _dotenv_seed(monkeypatch, custody)
     why = sandbox_guard.require_sandbox_or_none("local_subprocess")
-    assert why and "polyrob signer install" in why and "on this server" not in why
+    assert why and "Docker sandbox" in why and "on this server" not in why
     # a sandbox backend is the way out
     assert sandbox_guard.require_sandbox_or_none("docker") is None
 
@@ -193,7 +194,7 @@ def test_host_shell_refuses_under_the_file_gap(custody, monkeypatch):
     assert he.host_shell_refusal(ctx) is None
     _dotenv_seed(monkeypatch, custody)
     why = he.host_shell_refusal(ctx)
-    assert why and "polyrob signer install" in why
+    assert why and "Docker sandbox" in why
 
 
 def _owner_turn(monkeypatch):
@@ -226,7 +227,7 @@ async def test_probe_conftest_that_opens_the_env_file_never_runs(custody, monkey
         pytest.fail("a backend was built under the file gap")
     monkeypatch.setattr(CodingTool, "_get_code_exec_backend", _no_backend)
     res = await _coding_tool(work).run_tests(RunTestsParams())
-    assert res.error and "polyrob signer install" in res.error
+    assert res.error and "Docker sandbox" in res.error
     assert not marker.exists()
 
 
@@ -259,7 +260,7 @@ async def test_run_code_refuses_under_the_file_gap(custody, monkeypatch):
     t = object.__new__(CodeExecutionTool)
     t.logger = logging.getLogger("code-exec-test")
     res = await t.run_code(RunCodeParams(language="python", code="print(1)"))
-    assert res.error and "polyrob signer install" in res.error
+    assert res.error and "Docker sandbox" in res.error
 
 
 # -- an old `polyrob update` snapshot copy ------------------------------------
@@ -297,7 +298,7 @@ def test_the_live_env_file_wins_the_remedy_over_a_snapshot(custody, monkeypatch)
     _snapshot(custody / "data", f"AGENT_WALLET_MASTER_SEED={SEED}\n")
     _dotenv_seed(monkeypatch, custody)
     why = he.model_code_host_refusal()
-    assert "polyrob signer install" in why and "delete that old snapshot" not in why
+    assert "polyrob wallet export" in why and "delete that old snapshot" not in why
 
 
 def test_update_context_and_the_gap_share_one_snapshot_root(tmp_path):

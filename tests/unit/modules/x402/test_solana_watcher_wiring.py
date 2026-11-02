@@ -148,7 +148,7 @@ def test_an_unknown_chain_family_is_evm_not_a_crash():
 
 
 # --------------------------------------------------------------------------
-# An invoice must be able to NAME its chain (found by rob-dev-aa, 2026-08-26)
+# An invoice must be able to NAME its chain (found by an internal review, 2026-08-26)
 #
 # `create_payment_request` read the chain from GLOBAL config, so there was no
 # way to request a Solana invoice at all: every row came out `chain_family="evm"`

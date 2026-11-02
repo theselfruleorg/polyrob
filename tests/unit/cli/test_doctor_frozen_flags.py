@@ -14,7 +14,7 @@ from cli.commands.doctor import flags_report
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for var in ("AUTONOMY_MODE", "AUTONOMY_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL",
+    for var in ("AUTONOMY_MODE", "AUTONOMY_POSTURE", "POLYROB_LOCAL",
                 "AGENT_COMPUTE_POSTURE", "PAYMENT_APPROVAL_MODE"):
         monkeypatch.delenv(var, raising=False)
 

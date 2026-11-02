@@ -3,7 +3,7 @@
 Writes stable, line-oriented plain text to a file-like stream.  Same
 three-layer composition as the Rich renderer, in degraded-chat form:
 
-- **Dialog** (always): ``› {text}`` user echo, ``rob:`` indented message
+- **Dialog** (always): ``› {text}`` user echo, ``agent:`` indented message
   blocks (full text, never truncated), ``error: …`` lines (including a failed
   session's ``error_message``).
 - **Activity**: one ``(N steps · M tools · X tok · $C · Ts)`` line per
@@ -97,7 +97,7 @@ class PlainRenderer(Renderer):
         self._write(text)
 
     def _write_bubble(self, text: str) -> None:
-        """Write the agent's message as a ``rob:`` chat block.
+        """Write the agent's message as an ``agent:`` chat block.
 
         Multi-line text is preserved and indented so the message reads as a
         block, not buried in a tool-arg line.

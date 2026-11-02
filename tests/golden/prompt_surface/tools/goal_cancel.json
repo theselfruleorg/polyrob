@@ -11,7 +11,7 @@
           "type": "boolean"
         },
         "goal_id": {
-          "description": "The goal id to stop.",
+          "description": "The goal id to stop (or an ask id to withdraw an ask no longer needed).",
           "type": "string"
         }
       },

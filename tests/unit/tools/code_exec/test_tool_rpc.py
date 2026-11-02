@@ -204,7 +204,7 @@ def test_every_allowlisted_tool_passes_the_capability_policy():
               "knowledge_kb_list": "knowledge", "filesystem_read_file": "filesystem",
               "filesystem_write_file": "filesystem", "filesystem_append_file": "filesystem",
               "filesystem_list_directory": "filesystem", "shell_run": "shell",
-              "memory_search": None, "session_search": None}
+              "session_search": None}
     for action, tid in owners.items():
         if tid is not None:
             assert tid in TOOL_CAPABILITIES
@@ -344,3 +344,10 @@ def test_prelude_goes_after_future_imports():
     out = subprocess.run([sys.executable, "-I", "-c", wrapped], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "ok True"
+
+
+def test_the_memory_search_rpc_name_runs_session_search():
+    """095 W9: the `memory_search` action alias is gone; a script's
+    polyrob_tools.memory_search keeps working through session_search."""
+    rows = {t.alias: t for t in tool_rpc.RPC_TOOLS}
+    assert rows["memory_search"].action == "session_search"

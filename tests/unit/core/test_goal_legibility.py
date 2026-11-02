@@ -46,7 +46,7 @@ def test_owner_seat_creates_are_stamped(tmp_path):
     from agents.task.goals.board import GoalBoard
     from core.owner_create import create_goal
     b = GoalBoard(str(tmp_path / "goals.db"))
-    g = create_goal(b, user_id="rob", title="From the console")
+    g = create_goal(b, user_id="alice", title="From the console")
     assert origin(g) == "OWNER"
 
 
@@ -56,8 +56,8 @@ def test_cli_goals_create_is_stamped(tmp_path, monkeypatch):
     import cli.commands.goals as goals_cmd
     b = GoalBoard(str(tmp_path / "goals.db"))
     monkeypatch.setattr(goals_cmd, "_get_board", lambda: b)
-    monkeypatch.setattr(goals_cmd, "_owner_tenant", lambda: "rob")
+    monkeypatch.setattr(goals_cmd, "_owner_tenant", lambda: "alice")
     r = CliRunner().invoke(goals_cmd.goals, ["create", "From the terminal"])
     assert r.exit_code == 0, r.output
-    [g] = b.list_recent(user_id="rob", limit=5)
+    [g] = b.list_recent(user_id="alice", limit=5)
     assert origin(g) == "OWNER"

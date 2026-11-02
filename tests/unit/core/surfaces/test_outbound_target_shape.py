@@ -1,7 +1,7 @@
 """C8 (2026-09-15 prod review): a target of the wrong SHAPE for its surface.
 
 Prod's dead-target registry held exactly four rows, and one of them was
-`telegram / rob@example.org / chat_not_found` — an EMAIL address sent to
+`telegram / alice@example.org / chat_not_found` — an EMAIL address sent to
 the Bot API. The other three were the same channel under three spellings
 (`examplegroup`, `t.me/examplegroup`, and the normalized `@examplegroup`),
 which is one broken relationship counted three times.
@@ -18,7 +18,7 @@ from core.surfaces.outbound_target import (
 
 
 @pytest.mark.parametrize("target", [
-    "rob@example.org", "someone@gmail.com", " owner@example.co.uk ",
+    "alice@example.org", "someone@gmail.com", " owner@example.co.uk ",
 ])
 def test_an_email_address_is_refused_on_telegram(target):
     why = wrong_surface_target_reason("telegram", target)
@@ -61,22 +61,22 @@ def test_conversation_store_collapses_the_three_spellings(tmp_path):
     arrives under any spelling resolves to the history we already have."""
     from core.surfaces.conversations import ConversationStore
     store = ConversationStore(str(tmp_path / "c.db"))
-    store.record_outbound("rob", "telegram", "@examplegroup", "first")
-    store.record_outbound("rob", "telegram", "t.me/examplegroup", "second")
-    store.record_outbound("rob", "telegram", "ExampleGroup", "third")
-    assert len(store.list("rob")) == 1
+    store.record_outbound("alice", "telegram", "@examplegroup", "first")
+    store.record_outbound("alice", "telegram", "t.me/examplegroup", "second")
+    store.record_outbound("alice", "telegram", "ExampleGroup", "third")
+    assert len(store.list("alice")) == 1
     for spelling in ("examplegroup", "@examplegroup", "t.me/examplegroup"):
-        conv = store.get("rob", "telegram", spelling)
+        conv = store.get("alice", "telegram", spelling)
         assert conv is not None, spelling
-    assert store.outbound_count_since("rob", "telegram", "examplegroup", 3600) == 3
+    assert store.outbound_count_since("alice", "telegram", "examplegroup", 3600) == 3
 
 
 def test_an_email_address_is_not_mangled_by_the_normalizer(tmp_path):
     from core.surfaces.conversations import ConversationStore
     store = ConversationStore(str(tmp_path / "c.db"))
-    store.record_outbound("rob", "email", "Rob@Example.org", "hi")
-    assert store.get("rob", "email", "rob@example.org") is not None
-    assert store.list("rob")[0]["address"] == "rob@example.org"
+    store.record_outbound("alice", "email", "Alice@Example.org", "hi")
+    assert store.get("alice", "email", "alice@example.org") is not None
+    assert store.list("alice")[0]["address"] == "alice@example.org"
 
 
 # --- round-2: the spellings ALREADY on disk must collapse too ---------------
@@ -99,7 +99,7 @@ def _legacy_store(tmp_path):
     for i, addr in enumerate(["examplegroup", "@examplegroup", "t.me/examplegroup"]):
         conn.execute("INSERT INTO conversations (user_id, surface, address, created_at,"
                      " updated_at, last_outbound_ts) VALUES (?,?,?,?,?,?)",
-                     ("rob", "telegram", addr, 1.0, 1.0 + i, 1.0 + i))
+                     ("alice", "telegram", addr, 1.0, 1.0 + i, 1.0 + i))
         cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute("INSERT INTO conversation_messages (conversation_id, direction,"
                      " ts, body) VALUES (?,?,?,?)", (cid, "out", 1.0 + i, f"msg {i}"))
@@ -112,12 +112,12 @@ def test_pre_existing_split_rows_are_merged_on_open(tmp_path):
     from core.surfaces.conversations import ConversationStore
     path = _legacy_store(tmp_path)
     store = ConversationStore(str(path))              # reopen: migration runs
-    convs = store.list("rob")
+    convs = store.list("alice")
     assert len(convs) == 1, f"three spellings must merge, got {[c['address'] for c in convs]}"
     assert convs[0]["address"] == "examplegroup"
-    history = store.history("rob", "telegram", "@examplegroup", limit=10)
+    history = store.history("alice", "telegram", "@examplegroup", limit=10)
     assert len(history) == 3, "no message may be lost in the merge"
-    assert store.outbound_count_since("rob", "telegram", "t.me/examplegroup", 10**12) == 3
+    assert store.outbound_count_since("alice", "telegram", "t.me/examplegroup", 10**12) == 3
 
 
 def test_the_merge_is_idempotent(tmp_path):
@@ -125,14 +125,14 @@ def test_the_merge_is_idempotent(tmp_path):
     path = _legacy_store(tmp_path)
     ConversationStore(str(path))
     store = ConversationStore(str(path))
-    assert len(store.list("rob")) == 1
-    assert len(store.history("rob", "telegram", "examplegroup", limit=10)) == 3
+    assert len(store.list("alice")) == 1
+    assert len(store.history("alice", "telegram", "examplegroup", limit=10)) == 3
 
 
 def test_an_address_needing_no_change_is_untouched(tmp_path):
     from core.surfaces.conversations import ConversationStore
     path = tmp_path / "c.db"
     s1 = ConversationStore(str(path))
-    s1.record_outbound("rob", "email", "owner@example.com", "hi")
+    s1.record_outbound("alice", "email", "owner@example.com", "hi")
     s2 = ConversationStore(str(path))
-    assert [c["address"] for c in s2.list("rob")] == ["owner@example.com"]
+    assert [c["address"] for c in s2.list("alice")] == ["owner@example.com"]

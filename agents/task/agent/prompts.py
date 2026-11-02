@@ -216,30 +216,34 @@ class SystemPrompt:
 		return _p("subtask_delegation")
 
 	def _get_vision_section(self) -> str:
-		"""Generate the vision section — CAN-see or CANNOT-see, never silence.
+		"""The image rule — never a claim about THIS model's eyes.
 
-		2026-09-13: ``include_vision=False`` used to render an empty string "to save
-		tokens". That left a blind model (prod runs glm-5 via zai-coding, declared
-		``supports_vision=False``) with no instruction at all, while
-		``modules/llm/adapters.py`` quietly swapped the image for an ``[IMAGE]``
-		placeholder — exactly the setup for narrating a picture it never saw. The
-		owner's call was honest refusal: say plainly that you cannot see it.
+		095 W1a (D5 a): the prompt is frozen, the model is not (a ``/model`` switch,
+		a provider fallback). So the prompt states no "you can / cannot see"; each
+		image turn carries a route note from the CURRENT model's capability
+		(``core.surfaces.inbound_attachments.image_route_note``, added in
+		``guidance.py``). The honest-refusal rule (owner, 2026-09-13) stays here.
 		"""
-		if not self.include_vision:
-			return _p("vision.off")
-		# T1-11: only name the browser action when the browser is actually loaded —
-		# the prohibition is meaningless (and advertises a missing tool) without it.
-		return _p("vision.on", browser_dont=(_p("vision.browser_dont")
-		                                     if self.include_browser_tools else ""))
+		# T1-11: only name the browser action when the browser is actually loaded.
+		return _p("vision.route", browser_dont=(_p("vision.browser_dont")
+		                                        if self.include_browser_tools else ""))
 
 	def input_format(self) -> str:
 		return _p("input_format")
 
+	def _registered_actions(self):
+		"""The action names this session registered, read from the action list the
+		controller rendered (native index ``- name: …`` / JSON dump ``{name: …``) —
+		the registry the tool schemas come from. None when it names none (a test)."""
+		import re
+		text = getattr(self, "action_descriptions", "") or ""
+		return set(re.findall(r"^(?:- |\{)([a-z][a-z0-9_]*): ", text, re.M)) or None
+
 	def _get_memory_system_content(self) -> str:
-		"""The <memory-system> section — rendered by ``prompt_memory`` (E-A11 moved
-		it out so the backend gate did not grow this file)."""
+		"""The <memory-system> body ("" with no memory backend) — rendered by
+		``prompt_memory`` (E-A11 moved it out; 095 W9 gates each line)."""
 		from agents.task.agent.prompt_memory import memory_system_content
-		return memory_system_content()
+		return memory_system_content(self._registered_actions())
 
 	def _get_communication_content(self) -> str:
 		"""Get communication section content.
@@ -357,14 +361,28 @@ class SystemPrompt:
 		          wire=_wire)
 
 	def _status_tool_examples(self) -> str:
-		"""F11: name goal_list / recent_activity only when this session has them."""
+		"""F11 / 095 W7: name agent_status / goal_list / recent_activity only when
+		this session has them."""
+		from agents.task.agent.prompt_memory import _recent_activity_registerable, _registered
+		registered = self._registered_actions()
 		names = []
+		if _registered(registered, "agent_status", lambda: True):
+			names.append("agent_status")
 		if self._has_tool("goal"):
 			names.append("goal_list")
-		if "`recent_activity`" in self._get_memory_system_content():
+		if _registered(registered, "recent_activity", _recent_activity_registerable):
 			names.append("recent_activity")
 		return (_p("using_your_tools.status_named", names=", ".join(names)) if names
 		        else _p("using_your_tools.status_generic"))
+
+	def _self_facts_line(self) -> str:
+		"""095 W7 (R11): self-facts come from the harness, never from memory."""
+		from agents.task.agent.prompt_memory import _registered
+		registered = self._registered_actions()
+		tools = [t for name, t in (("agent_status", "`agent_status`"),
+		                           ("preferences", "`preferences(get)`"))
+		         if _registered(registered, name, lambda: True)]
+		return _p("using_your_tools.self_facts", tools=" / ".join(tools)) if tools else ""
 
 	def _get_tools_section(self) -> str:
 		"""Get consolidated tool capabilities section with XML tags.
@@ -381,7 +399,8 @@ class SystemPrompt:
 		# goal tool → it read the filesystem instead of calling the tool) and "I can't
 		# do voice" (denying a configured capability). No per-session interpolation.
 		sections.append("<using-your-tools>\n"
-		                + _p("using_your_tools", status_tools=self._status_tool_examples())
+		                + _p("using_your_tools", status_tools=self._status_tool_examples(),
+		                     self_facts=self._self_facts_line())
 		                + "\n</using-your-tools>")
 
 		# MCP Tools — one stable section per session (see _get_mcp_section docstring)
@@ -559,18 +578,37 @@ class SystemPrompt:
 
 		Static text => prompt-cache-stable.
 		"""
+		parts = self._owner_route_parts()
+		parts = (["head"] + parts + ["tail"]) if parts else []
+		return "\n".join(_p(f"owner_instructions.{k}") for k in parts)
+
+	def _owner_route_parts(self) -> list:
+		"""The routing bullets this session can act on (095 W10, X-8/SC-10): each
+		bullet only when ITS action is registered here — the session's own tool
+		set, not the flags — and the flag only for a caller that does not know
+		its registry. Never name a lane this session cannot write."""
+		from agents.task.agent.prompt_memory import _registered
 		try:
 			from core.config_policy import AutonomyConfig, prefs_tool_enabled
-			prefs_on = prefs_tool_enabled()
-			owner_doc_on = AutonomyConfig.owner_doc_writable()
-			self_ctx_on = AutonomyConfig.self_context_writable()
+			flags = {"prefs": prefs_tool_enabled, "owner_doc": AutonomyConfig.owner_doc_writable,
+			         "programme": AutonomyConfig.skills_writable,
+			         "self_doc": AutonomyConfig.self_context_writable}
 		except Exception:
-			prefs_on = owner_doc_on = self_ctx_on = False
-		# F7: each bullet only when ITS tool's flag is on — never name a lane
-		# this session cannot write.
-		parts = ["head"] + [k for k, on in (("prefs", prefs_on), ("owner_doc", owner_doc_on),
-		                                    ("self_doc", self_ctx_on)) if on] + ["tail"]
-		return "\n".join(_p(f"owner_instructions.{k}") for k in parts)
+			return []
+		registered = self._registered_actions()
+		actions = (("prefs", "preferences"), ("owner_doc", "owner_doc_manage"),
+		           ("programme", "skill_manage"), ("self_doc", "self_context_manage"))
+		out = []
+		for part, action in actions:
+			try:
+				# `preferences` registers read-only on every posture: `set` needs the flag too.
+				on = (_registered(registered, action, flags[part])
+				      and (part != "prefs" or bool(flags[part]())))
+			except Exception:
+				on = False
+			if on:
+				out.append(part)
+		return out
 
 	def _get_security_content(self) -> str:
 		"""UP-06: teach the model that <untrusted_tool_result> content is DATA.
@@ -660,14 +698,8 @@ class SystemPrompt:
 		if UNTRUSTED_TOOL_RESULT_WRAP:
 			optional_sections += f"\n<security>\n{self._get_security_content()}\n</security>\n"
 		# 035 P1-9: route an owner instruction to the lane that can enforce it.
-		# Per-session stable (flag-derived), so prompt caching is unaffected.
-		try:
-			from core.config_policy import AutonomyConfig, prefs_tool_enabled
-			_routing_on = (AutonomyConfig.owner_doc_writable()
-			               or AutonomyConfig.self_context_writable()
-			               or prefs_tool_enabled())
-		except Exception:
-			_routing_on = False
+		# Per-session stable (registry-derived), so prompt caching is unaffected.
+		_routing_on = bool(self._owner_route_parts())
 		# B-14: only where the owner speaks — not a room, a correspondent, a leaf
 		# or an autonomous run (there a decision is an owner_ask).
 		if _routing_on and self._owner_facing() and not self.autonomous:
@@ -728,10 +760,13 @@ class SystemPrompt:
 
 		_actions = self._get_actions_section()
 		actions_section = f"\n<available-actions>\n{_actions}\n</available-actions>\n" if _actions else ""
+		# 095 W9: no memory backend => no <memory-system> section and no identity claim.
+		_memory = self._get_memory_system_content()
+		_memory_section = f"<memory-system>\n{_memory}\n</memory-system>\n\n" if _memory else ""
 		AGENT_PROMPT = f"""<system-prompt>
 
 <identity>
-{_p("identity")}
+{_p("identity", memory=_p("identity.memory") if _memory else "")}
 {model_specific_instructions}{persona_section}
 </identity>
 
@@ -739,11 +774,7 @@ class SystemPrompt:
 {self._get_response_format_content()}
 </response-format>
 
-<memory-system>
-{self._get_memory_system_content()}
-</memory-system>
-
-<tool-capabilities>
+{_memory_section}<tool-capabilities>
 {self._get_tools_section()}
 </tool-capabilities>
 
@@ -975,7 +1006,9 @@ Interactive elements from current page:
 					# Errors are shorter - we don't need full stack traces, just the key info
 					from agents.task.robust_parse_config import RobustParseConfig
 					if len(result.error) > RobustParseConfig.MAX_ERROR_LENGTH:
-						rendered_error = '...' + result.error[-RobustParseConfig.MAX_ERROR_LENGTH:]
+						# 095 W2 (HI-15): the cut is named, with its size.
+						rendered_error = (f'[first {len(result.error) - RobustParseConfig.MAX_ERROR_LENGTH:,} chars of the error cut] '
+						                  + result.error[-RobustParseConfig.MAX_ERROR_LENGTH:])
 					else:
 						rendered_error = result.error
 					rendered_error = maybe_wrap_result_content(result, rendered_error)

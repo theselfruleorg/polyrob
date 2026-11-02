@@ -106,9 +106,9 @@ def test_a_room_with_paid_off_says_so(on, tmp_path):
 def test_member_help_carries_the_price_the_cap_and_the_usage(on, tmp_path):
     text = room_actions.render_member_help(_Container(str(tmp_path)),
                                            surface="telegram", chat_id="-1",
-                                           agent_name="Rob")
+                                           agent_name="Nova")
     # The default policy (loaded from an empty data dir) grants only `help`.
-    assert text.startswith("Rob here")
+    assert text.startswith("Nova here")
     assert "/help" in text
 
 

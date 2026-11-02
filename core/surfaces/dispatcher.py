@@ -527,12 +527,23 @@ async def _route_inbound_impl(
             _chat = str(getattr(inbound.identity.source, "chat_id", "") or "")
             _sender = inbound.identity.raw_user_id or user_id
             _is_bot = getattr(inbound, "sender_is_bot", False)
+            # The per-member cooldown bounds TURNS. The owner's or an admin's
+            # slash verb (`/cancel`, `/mute here 1h`) is the control plane —
+            # typed seconds after a bad answer is exactly when it is needed,
+            # and refusing it silently left the room with no way to stop.
+            # An admin's pass covers only the room control verbs: any other slash
+            # text is a paid turn and keeps the member cooldown.
+            _role = getattr(inbound.identity, "chat_role", None)
+            _control = bool(_slash) and (
+                tier == AccessTier.OWNER or _role == "owner"
+                or (_role == "admin" and _command_token(text)
+                    in _GROUP_ADMIN_COMMANDS))
             if caps is not None:
                 if _is_bot and not mentioned:
                     return RouteDecision(RouteKind.DENIED, session_key, silent=True,
                                          reason="bot_loop_guard", tier=tier.value)
                 ok, why = caps.may_trigger(_surf, _chat, _sender, is_bot=_is_bot)
-                if not ok:
+                if not ok and not _control:
                     logger.info("route_inbound: room trigger refused (%s) %s:%s",
                                why, _surf, _chat)
                     return RouteDecision(RouteKind.DENIED, session_key, silent=True,
@@ -601,7 +612,7 @@ async def _route_inbound_impl(
                 # The trigger is spent either way — a member who STARTS the room
                 # session consumed a turn exactly as one who continues it, so the
                 # per-chat cap and per-member cooldown must count both.
-                if caps is not None:
+                if caps is not None and not _control:
                     caps.record_trigger(_surf, _chat, _sender, is_bot=_is_bot)
                 # 044 T18 fix round 1 (Critical 1a): an ADMIN's own control-verb
                 # line is a COMMAND, never a room turn — `/groups mode|tail`
@@ -664,7 +675,9 @@ async def _route_inbound_impl(
             # still wins over it — the owner's control plane has to keep working
             # from inside a room — which is why this is a flag, not a return.
             _room_owner_turn = True
-            if caps is not None:
+            if caps is not None and not _slash:
+                # A control verb is not a turn: it must not start the cooldown
+                # that refuses the owner's next real line.
                 caps.record_trigger(_surf, _chat, _sender, is_bot=_is_bot)
             # 044 I1: the owner's own room TURN is capped too (a room's budget is
             # the room's, not a per-speaker one) — but only the turn. His COMMAND

@@ -5,7 +5,7 @@ At ``OWNER_DOC_MAX_CHARS = 1600`` the doc was a FORGETTING mechanism. Prod,
 
     07:18:02 Owner-facts doc rejected: owner-facts doc is 1695/1600 chars …
     07:19:11 Owner-facts doc rejected: owner-facts doc is 1612/1600 chars …
-    07:19:39 owner-doc rob written (pending)
+    07:19:39 owner-doc alice written (pending)
 
 It only fit by deleting text from the 09-17 and 09-18 rules; their enforcement
 anchors ("self-test #11 + cron 41370b02653a") are gone from prod's owner.md.
@@ -45,13 +45,13 @@ def test_an_over_cap_doc_loads_truncated_not_blocked(tmp_path):
     """2026-10-11: the read side used to BLOCK an over-cap doc, so one extra char
     dropped every owner rule. It now loads the head with a TRUNCATED banner."""
     from core.instance import self_tier_root
-    root = self_tier_root(tmp_path, "rob", "rob")
+    root = self_tier_root(tmp_path, "alice", "alice")
     root.mkdir(parents=True, exist_ok=True)
     from core.instance import OWNER_DOC_MAX_CHARS
     line = "Owner prefers short answers.\n"
     (root / "owner.md").write_text(line * (OWNER_DOC_MAX_CHARS // len(line) + 10),
                                    encoding="utf-8")
-    loaded = load_owner_doc(tmp_path, "rob", "rob")
+    loaded = load_owner_doc(tmp_path, "alice", "alice")
     assert "[BLOCKED" not in loaded and "TRUNCATED" in loaded
     (root / "owner.md").write_text("Owner prefers short answers.\n", encoding="utf-8")
-    assert "short answers" in load_owner_doc(tmp_path, "rob", "rob")
+    assert "short answers" in load_owner_doc(tmp_path, "alice", "alice")

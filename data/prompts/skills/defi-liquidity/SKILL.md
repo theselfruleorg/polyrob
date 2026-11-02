@@ -1,17 +1,14 @@
 ---
 name: defi-liquidity
-description: 'Uniswap v3 liquidity positions with the lp verbs: reading positions, pricing a deposit, adding, removing and collecting, the fee unit, and why a Pons graduation pool is different.'
+description: 'Uniswap v3 liquidity positions with the lp verbs: reading positions, pricing a deposit, adding, removing and collecting, the fee unit, and why a pool that a launchpad made is different.'
 license: MIT
 metadata:
   polyrob-when: 'Uniswap v3 liquidity: add, remove, collect fees'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '2'
 ---
 # DeFi Liquidity — Uniswap v3 positions
-
-Part of the `treasury-trading` playbook, split out.
 
 ## Liquidity
 
@@ -29,14 +26,16 @@ rail — label it as a terminal command). Fee is in millionths:
 3000 means 0.3%, not 3000 bps. Amounts are human token units; max_spend_usd bounds
 the sum of deposit legs (or gas for remove/collect). Native is accepted on add;
 withdrawals return wrapped native. A new pool needs an explicit initial_price
-in token_b per token_a. A token still on a Pons curve requires fragment=true
-before creating a separate market.
+in token_b per token_a. A token still on a launchpad curve requires
+fragment=true before creating a separate market.
 
-Pons graduation creates a v4 pool whose LP fee is zero. Its hook collects the
-swap tax and pays creator escrow; the launch locker position cannot be withdrawn.
-Adding another position there provides depth, not LP income: a full-range
-position sells your token to buyers as they buy. `lp_pool_info`/`lp_quote` with
-`protocol='v4'` read that pool (token_a='native', token_b=the Pons token), and
+A launchpad's own liquidity venue is different from a plain pool. When a token
+graduates from the curve of the launchpad the `launchpad` tool supports, it gets
+a v4 pool whose LP fee is zero. Its hook collects the swap tax and pays creator
+escrow; the launch locker position cannot be withdrawn. Adding another position
+there provides depth, not LP income: a full-range position sells your token to
+buyers as they buy. `lp_pool_info`/`lp_quote` with `protocol='v4'` read that
+pool (token_a='native', token_b=the launched token), and
 `defi_data.pool_metrics` gives its depth, one-buy impact and code-hash check.
 A v4 add is `lp_add(protocol='v4', range='full')` — a NEW position only, in
 three steps: the owner's one ERC-20 `approve_token(token, spender=Permit2)`, then
@@ -61,4 +60,4 @@ verb with a raw `call`, a browser dapp, or another agent.
 
 ## Related
 
-`treasury-trading`, `trade-execution`.
+`token-launch`, `trade-execution`.

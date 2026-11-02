@@ -105,7 +105,7 @@ polyrob config check
   `polyrob wallet nft …` and `polyrob identity register|set-uri` need `--chain <chain>`;
   without it they stop with a usage error. In chat, `/deploy`, `/identity` and `/nft`
   need `on <chain>`. Every `defi_trade`, `defi_data`, `dapp_browser` and `agent_nft`
-  verb Rob calls needs `chain` too — so name the network in the text of a job, a
+  verb the agent calls needs `chain` too — so name the network in the text of a job, a
   goal or a skill that used to rely on the default.
 - **The NFT holder tier is gone.** A user on the `holder` tier moves to `free_access`
   at the next start (a migration). The admin `verify-token` endpoint and the
@@ -119,7 +119,7 @@ polyrob config check
 
 ### Upgrading to 1.6
 
-- **One step limit and one spend limit for every run Rob starts by itself.** Goal,
+- **One step limit and one spend limit for every run the agent starts by itself.** Goal,
   scheduled-job, delegated and helper runs stop at `AUTONOMOUS_MAX_STEPS` (default 150)
   and at `AUTONOMOUS_RUN_BUDGET_USD` (default $2.00, `0` turns it off) of spend; the
   spend of a helper a run starts counts toward its run.
@@ -167,6 +167,34 @@ replacement.
   `tools.controller.registry.views` is `registry_views`. `agents.task.goals.autonomy_marker`
   is `core.autonomy_marker`. A pack imports host names from `polyrob.sdk` only.
 
+#### If `--apply` rolls back on 1.3.x: the manual path
+
+The updater that drives an update is the version you already run. Up to 1.6 its verify
+step imported a fixed module list, and the 1.3.x list names `utils.gif_utils`, which
+moved. So `polyrob update --apply` from 1.3.x to 1.5 or later fails verify and rolls
+back every time. Newer updaters ask the new code what to check
+(`python -I -m cli.update.verify_probe`), so this happens once. Stop the service, then
+run these steps as the install's own user, from the checkout (`~/.polyrob/src` on a
+managed install) with the install's venv active:
+
+```bash
+systemctl --user stop polyrob.service          # or: polyrob service stop
+mkdir -p ~/.polyrob/tmp && export TMPDIR=~/.polyrob/tmp   # a small tmpfs /tmp fails pip
+git fetch --tags && git checkout --detach refs/tags/v<version>
+python core/lock_closure.py deps --lock requirements.lock --pyproject pyproject.toml \
+  --extras "<your extras, comma-separated>" -o polyrob-deps.txt
+pip install --require-hashes --prefer-binary -r polyrob-deps.txt
+pip install --no-deps --no-build-isolation -e .
+python -m migrations.migrate upgrade
+python -I -m cli.update.verify_probe            # exit 0 = healthy
+systemctl --user start polyrob.service
+```
+
+A plain `polyrob update` prints the same install line with the extras this
+install carries. If the probe fails,
+go back with `git checkout --detach refs/tags/v<old version>` and repeat the two pip
+steps. Every later update can use `polyrob update --apply` again.
+
 ### The unbound owner tenant is `local`
 
 POLYROB used to have four resolvers answering "who owns this install?", and they only
@@ -199,7 +227,7 @@ under a different tenant. What moves:
 - the wallet ceiling preferences (`budget.wallet_*`) a console wrote.
 
 An install that used `polyrob owner …` after adopting an instance name (for example
-`POLYROB_INSTANCE_ID=rob` with no owner declared) is in this case too: **an instance id
+`POLYROB_INSTANCE_ID=scout` with no owner declared) is in this case too: **an instance id
 is no longer read as an owner tenant.**
 
 **Remedy.** Choose one:

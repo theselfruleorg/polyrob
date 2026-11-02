@@ -71,7 +71,7 @@ def paused(tmp_path, monkeypatch):
 async def test_a_held_reply_for_a_dead_session_still_records_the_tenant(
         paused, monkeypatch):
     store, ev = _Store(), _EvLog()
-    registry = _Registry({"user_id": "rob", "session_id": "old"})
+    registry = _Registry({"user_id": "alice", "session_id": "old"})
     agent = _Agent(_Container({"conversation_store": store,
                                "correspondent_registry": registry}))
     monkeypatch.setattr("core.event_log.event_log_enabled", lambda: True)
@@ -82,8 +82,8 @@ async def test_a_held_reply_for_a_dead_session_still_records_the_tenant(
 
     assert ok is False                       # held, as designed
     assert registry.asked == [("email", "them@acme.com")]
-    assert store.rows and store.rows[0][0] == "rob"
-    assert any(e["kind"] == "owner_notice" and e["user_id"] == "rob"
+    assert store.rows and store.rows[0][0] == "alice"
+    assert any(e["kind"] == "owner_notice" and e["user_id"] == "alice"
                for e in ev.events)
 
 

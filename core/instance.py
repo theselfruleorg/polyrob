@@ -1,6 +1,6 @@
 """Bot instance identity abstraction (polyrob framework / instance finalization).
 
-polyrob is the *framework*; a named bot like ``rob`` is one *instance* of it. This
+polyrob is the *framework*; a named bot like ``mybot`` is one *instance* of it. This
 module is the inert skeleton for that distinction:
 
 - ``AgentIdentity`` / ``BotInstance`` — frozen config objects resolved once at
@@ -35,7 +35,7 @@ from core.identity import LocalIdentity, is_anonymous
 
 logger = logging.getLogger(__name__)
 
-#: The framework name. ``polyrob`` is the *framework*; a named bot like ``rob``
+#: The framework name. ``polyrob`` is the *framework*; a named bot like ``mybot``
 #: is one *instance* of it (see module docstring). Surfaced in the CLI banner /
 #: ``/session`` so the framework↔instance distinction is legible.
 FRAMEWORK_NAME = "polyrob"
@@ -61,7 +61,8 @@ SELF_CONTEXT_TOTAL_MAX_CHARS = 60000
 # ⚠️ 2026-10-02: was 2200; prod sat at 2149/2200 and refused the owner's
 # house-style rule ("we need to fix stupid small limits", /dev 18:50Z).
 # ⚠️ 2026-10-04: 6000 → 12000 (owner /dev 16:06Z, "at least 2x").
-SELF_DOC_MAX_CHARS = 12000
+# ⚠️ 2026-10-29: 12000 → 20000 (prod self.md at 11,720/12,000; owner: extend low limits).
+SELF_DOC_MAX_CHARS = 20000
 
 # The bounded owner-facts doc (agent-maintained, per-(instance,user)) — durable
 # facts/preferences about the OWNER (a USER.md-equivalent). Terser than SELF so it
@@ -659,8 +660,8 @@ def owner_label(env: Optional[Mapping[str, str]] = None) -> str:
         return UNPAIRED_OWNER_LABEL
     if bound == resolve_instance_id(env):
         # ⚠️ NOT "auto-derived" any more: reaching this branch now requires an
-        # EXPLICIT binding that happens to equal the instance id (prod binds
-        # owner `rob` on instance `rob`). Saying "auto-derived" here would be the
+        # EXPLICIT binding that happens to equal the instance id (a deploy can bind
+        # owner `mybot` on instance `mybot`). Saying "auto-derived" here would be the
         # confident-and-wrong shape this helper exists to remove.
         return f"{bound} (this instance's own tenant)"
     return bound
@@ -691,7 +692,7 @@ def owner_awareness_line(
     # the same expression started emitting "You act on behalf of OWNER local." on every
     # unbound install — the self-reference this suppression exists to avoid. An
     # explicitly-bound owner that equals the instance id is still the agent itself
-    # (prod binds POLYROB_OWNER_USER_ID=rob on instance rob), so that stays suppressed.
+    # (a deploy can bind POLYROB_OWNER_USER_ID=mybot on instance mybot), so that stays suppressed.
     bound = resolve_owner_principal(env, default_to_instance=False)
     owner_clause = (
         f"You act on behalf of OWNER {bound}. "

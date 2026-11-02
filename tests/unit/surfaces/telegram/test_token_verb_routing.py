@@ -39,7 +39,7 @@ async def test_the_verb_is_documented(verb):
 @pytest.mark.parametrize("reply_fn", [token_ops.launch_reply, token_ops.deploy_reply])
 @pytest.mark.asyncio
 async def test_a_non_owner_is_refused(reply_fn):
-    assert "Only the owner" in await reply_fn(None, ["ROB"])
+    assert "Only the owner" in await reply_fn(None, ["DEMO"])
 
 
 @pytest.mark.asyncio
@@ -51,7 +51,7 @@ async def test_launch_with_no_arguments_explains_itself():
 
 @pytest.mark.asyncio
 async def test_deploy_with_too_few_arguments_explains_itself():
-    out = await token_ops.deploy_reply(OWNER, ["ROB"])
+    out = await token_ops.deploy_reply(OWNER, ["DEMO"])
     assert "Usage: /deploy" in out
     assert "does NOT make the token tradable" in out
 
@@ -59,13 +59,13 @@ async def test_deploy_with_too_few_arguments_explains_itself():
 @pytest.mark.asyncio
 async def test_a_bad_buy_amount_is_refused_before_anything_runs():
     assert "positive number" in await token_ops.launch_reply(
-        OWNER, ["ROB", "Rob", "Coin", "buy", "lots"])
+        OWNER, ["DEMO", "Demo", "Coin", "buy", "lots"])
 
 
 @pytest.mark.asyncio
 async def test_a_bad_supply_is_refused_before_anything_runs():
     assert "positive number" in await token_ops.deploy_reply(
-        OWNER, ["ROB", "-5", "Rob", "Coin", "on", "base"])
+        OWNER, ["DEMO", "-5", "Demo", "Coin", "on", "base"])
 
 
 @pytest.mark.asyncio
@@ -80,10 +80,10 @@ async def test_launch_quotes_by_default(monkeypatch):
                                   "extracted_content": "quoted"})()
 
     monkeypatch.setattr("tools.launchpad.tool.LaunchpadTool", lambda *a, **k: _Tool())
-    out = await token_ops.launch_reply(OWNER, ["ROB", "Rob", "Coin", "buy", "0.05"])
+    out = await token_ops.launch_reply(OWNER, ["DEMO", "Demo", "Coin", "buy", "0.05"])
     assert captured["params"].dry_run is True
-    assert captured["params"].symbol == "ROB"
-    assert captured["params"].name == "Rob Coin"
+    assert captured["params"].symbol == "DEMO"
+    assert captured["params"].name == "Demo Coin"
     assert captured["params"].buy_amount == 0.05
     # A genuine owner turn: not forged, not a sub-agent.
     assert captured["ctx"].is_sub_agent is False
@@ -100,7 +100,7 @@ async def test_go_executes_and_drops_the_retry_hint(monkeypatch):
             return type("R", (), {"error": None, "extracted_content": "sent"})()
 
     monkeypatch.setattr("tools.launchpad.tool.LaunchpadTool", lambda *a, **k: _Tool())
-    out = await token_ops.launch_reply(OWNER, ["ROB", "Rob", "Coin", "go"])
+    out = await token_ops.launch_reply(OWNER, ["DEMO", "Demo", "Coin", "go"])
     assert captured["params"].dry_run is False
     assert captured["params"].buy_amount == 0.0
     assert "Add `go`" not in out
@@ -115,11 +115,11 @@ async def test_deploy_parses_the_chain_and_the_name(monkeypatch):
         return type("R", (), {"error": None, "extracted_content": "quoted"})()
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
-    await token_ops.deploy_reply(OWNER, ["ROB", "1000000000", "Rob", "Coin",
+    await token_ops.deploy_reply(OWNER, ["DEMO", "1000000000", "Demo", "Coin",
                                    "on", "robinhood"])
     assert captured["params"].chain == "robinhood"
     assert captured["params"].supply == 1_000_000_000
-    assert captured["params"].name == "Rob Coin"
+    assert captured["params"].name == "Demo Coin"
     assert captured["params"].dry_run is True
 
 
@@ -131,7 +131,7 @@ async def test_an_empty_report_is_flagged_as_a_bug_not_a_success(monkeypatch):
         return type("R", (), {"error": None, "extracted_content": ""})()
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
-    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob", "on", "base"])
+    out = await token_ops.deploy_reply(OWNER, ["DEMO", "1000", "Nova", "on", "base"])
     assert "That is a bug" in out
     assert "do NOT retry" in out
 
@@ -149,9 +149,9 @@ async def test_deploy_routes_to_the_SOLANA_verb(monkeypatch):
         return type("R", (), {"error": None, "extracted_content": "quoted"})()
 
     monkeypatch.setattr("tools.defi.spl_deploy_verb.perform_solana_deploy_token", _spl)
-    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000000000", "Rob", "Coin",
+    out = await token_ops.deploy_reply(OWNER, ["DEMO", "1000000000", "Demo", "Coin",
                                          "on", "solana"])
-    assert captured["params"].symbol == "ROB"
+    assert captured["params"].symbol == "DEMO"
     assert captured["params"].decimals == 9
     assert "on solana go" in out
 
@@ -165,7 +165,7 @@ async def test_a_vanity_prefix_reaches_the_EVM_verb(monkeypatch):
         return type("R", (), {"error": None, "extracted_content": "quoted"})()
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
-    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob", "on", "base",
+    out = await token_ops.deploy_reply(OWNER, ["DEMO", "1000", "Nova", "on", "base",
                                                "vanity", "b0b"])
     assert captured["params"].vanity == "b0b"
     assert "vanity b0b go" in out
@@ -175,7 +175,7 @@ async def test_a_vanity_prefix_reaches_the_EVM_verb(monkeypatch):
 async def test_vanity_is_refused_on_solana_with_the_reason():
     """A Solana mint address is a keypair, not a hash of its code — there is
     nothing to mine against."""
-    out = await token_ops.deploy_reply(OWNER, ["ROB", "1000", "Rob", "on", "solana",
+    out = await token_ops.deploy_reply(OWNER, ["DEMO", "1000", "Nova", "on", "solana",
                                          "vanity", "b0b"])
     assert "nothing to mine against" in out
 
@@ -231,7 +231,7 @@ async def test_deploy_accepts_decimals_on_an_evm_chain(monkeypatch):
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "Coin", "on", "base", "decimals", "6"])
+        OWNER, ["DEMO", "1000", "Demo", "Coin", "on", "base", "decimals", "6"])
     assert captured["params"].decimals == 6
     assert "decimals 6" in out
 
@@ -246,7 +246,7 @@ async def test_deploy_accepts_decimals_on_solana(monkeypatch):
 
     monkeypatch.setattr("tools.defi.spl_deploy_verb.perform_solana_deploy_token", _spl)
     await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "on", "solana", "decimals", "6"])
+        OWNER, ["DEMO", "1000", "Nova", "on", "solana", "decimals", "6"])
     assert captured["params"].decimals == 6
 
 
@@ -262,7 +262,7 @@ async def test_deploy_accepts_a_salt(monkeypatch):
 
     monkeypatch.setattr("tools.defi.deploy_verb.perform_deploy_token", _perform)
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "on", "base", "salt", "0xfeed"])
+        OWNER, ["DEMO", "1000", "Nova", "on", "base", "salt", "0xfeed"])
     assert captured["params"].salt == "0xfeed"
     assert "salt 0xfeed" in out
 
@@ -270,19 +270,19 @@ async def test_deploy_accepts_a_salt(monkeypatch):
 @pytest.mark.asyncio
 async def test_salt_and_vanity_together_are_refused_as_ambiguous():
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "on", "base", "salt", "0xfeed", "vanity", "b0b"])
+        OWNER, ["DEMO", "1000", "Nova", "on", "base", "salt", "0xfeed", "vanity", "b0b"])
     assert "not both" in out
 
 
 @pytest.mark.asyncio
 async def test_salt_is_refused_on_solana_with_the_reason():
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "on", "solana", "salt", "0xfeed"])
+        OWNER, ["DEMO", "1000", "Nova", "on", "solana", "salt", "0xfeed"])
     assert "nothing to commit to" in out
 
 
 @pytest.mark.asyncio
 async def test_a_non_numeric_decimals_is_refused_before_anything_runs():
     out = await token_ops.deploy_reply(
-        OWNER, ["ROB", "1000", "Rob", "decimals", "many"])
+        OWNER, ["DEMO", "1000", "Nova", "decimals", "many"])
     assert "whole number" in out

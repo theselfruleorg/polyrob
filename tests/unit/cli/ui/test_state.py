@@ -173,15 +173,15 @@ def test_last_step_sub_agent_tracks_step_identity():
     s = _make_state()
     assert s.last_step_sub_agent is False
     # Register the main agent.
-    s.update(AgentRegistration(agent_id="main_1", agent_name="rob"))
+    s.update(AgentRegistration(agent_id="main_1", agent_name="alice"))
     # A main-agent step.
-    s.update(Step(step=1, raw={"data": {"agent_name": "rob"}}))
+    s.update(Step(step=1, raw={"data": {"agent_name": "alice"}}))
     assert s.last_step_sub_agent is False
     # A sub-agent step flips the flag.
     s.update(Step(step=2, raw={"data": {"agent_name": "leaf_42"}}))
     assert s.last_step_sub_agent is True
     # Back to a main-agent step resets it.
-    s.update(Step(step=3, raw={"data": {"agent_name": "rob"}}))
+    s.update(Step(step=3, raw={"data": {"agent_name": "alice"}}))
     assert s.last_step_sub_agent is False
 
 

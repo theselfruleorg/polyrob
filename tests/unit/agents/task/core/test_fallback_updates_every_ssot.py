@@ -27,12 +27,24 @@ class _MM:
         self.provider_name = None
         self.recalibrated_for = None
         self.identity = None
+        self.identity_calls = []
+        self.prompt_rebuilds = 0
+        self.anchor_resets = []
 
     def recalibrate_for_model(self, model):
         self.recalibrated_for = model
 
-    def set_runtime_identity(self, model, provider):
+    def set_runtime_identity(self, model, provider, switched_from=None, cause=None,
+                             reason=None, at=None):
         self.identity = (model, provider)
+        self.identity_calls.append((model, provider, switched_from, cause, reason))
+
+    def rebuild_system_prompt(self, use_native_tools=None):
+        self.prompt_rebuilds += 1
+        return True
+
+    def reset_usage_anchor(self, reason=""):
+        self.anchor_resets.append(reason)
 
 
 class _Logger:
@@ -97,6 +109,9 @@ def test_adopt_updates_every_ssot_swap_model_documents():
     assert a.message_manager.model_name == "claude-x"
     assert a.message_manager.provider_name == "anthropic"
     assert a.message_manager.recalibrated_for == "claude-x"
+    # 095 W1a: the identity line is the caller's ONE refresh, not adopt's.
+    assert a.message_manager.identity is None
+    a._refresh_after_model_change("fallback", "gpt-5", reason="LLMRateLimitError")
     assert a.message_manager.identity == ("claude-x", "anthropic")
     assert a.reconciled_for == "anthropic"
 
@@ -154,3 +169,80 @@ def test_both_fallback_handlers_use_the_shared_adopter():
         "a fallback handler is setting self.llm directly again — that skips "
         "llm_provider and message_manager.llm"
     )
+
+
+# --- 095 W1a: one refresh for every model change ------------------------------------ #
+
+def test_fallback_rebuilds_family_note():
+    """X-2: a fallback rebuilds the system prompt (model-family note, JSON action
+    list) and drops the usage anchor, like the owner's swap does."""
+    a = _Agent()
+    a.adopt_active_llm("anthropic-client", "claude-x", "anthropic")
+    a._refresh_after_model_change("fallback", "gpt-5", reason="LLMConnectionError")
+    assert a.message_manager.prompt_rebuilds == 1
+    assert a.message_manager.anchor_resets == ["model change (fallback)"]
+
+
+def test_fallback_never_says_owner_switched():
+    """SK-14/HI-12: the identity line after a fallback names the failover and its
+    reason — never "The owner switched you"."""
+    from agents.task.agent.message_manager.service import MessageManager
+    from agents.task.agent.prompts import SystemPrompt
+    mm = MessageManager(llm=None, task="t", action_descriptions="x",
+                        system_prompt_class=SystemPrompt, max_input_tokens=100000)
+    mm.set_runtime_identity("claude-x", "anthropic", switched_from="gpt-5",
+                            cause="fallback", reason="LLMRateLimitError")
+    text = mm._runtime_identity_message.content
+    assert "The owner switched" not in text
+    assert 'failed over from "gpt-5"' in text and "LLMRateLimitError" in text
+    mm.set_runtime_identity("m2", "openrouter", switched_from="m1", cause="api")
+    assert "The owner switched" not in mm._runtime_identity_message.content
+    mm.set_runtime_identity("m2", "openrouter", switched_from="m1", cause="owner")
+    assert 'The owner switched you to it from "m1"' in mm._runtime_identity_message.content
+
+
+def test_fallback_callers_share_the_refresh():
+    """Every fallback site calls the shared refresh with cause=fallback, and each
+    restore after a failed fallback refreshes too."""
+    import inspect
+    from agents.task.agent.core import error_recovery, llm_runner
+    from agents.task.session import execution
+    runner = inspect.getsource(llm_runner)
+    assert runner.count('_refresh_after_model_change("fallback"') == 1
+    assert runner.count('_refresh_after_model_change(\n\t\t\t\t\t\t"fallback"') == 1
+    assert runner.count('_refresh_after_model_change("restore")') == 2
+    assert "_get_provider_from_model(fallback_model)" not in runner
+    assert '"fallback", original_model, reason=original_error_type' in inspect.getsource(error_recovery)
+    assert 'agent._refresh_after_model_change(' in inspect.getsource(execution)
+
+
+def test_one_identity_write_per_swap():
+    """X-11: swap_model writes the identity line ONCE (adopt no longer writes it)."""
+    import asyncio
+    a = _Agent()
+
+    async def build(cfg, isolated=False):
+        return "anthropic-client"
+
+    a._create_llm_from_config_async = build
+    a._provision_compaction_llm = lambda: None
+    r = asyncio.run(a.swap_model("anthropic", "claude-x", cause="owner"))
+    assert r["ok"]
+    assert a.message_manager.identity_calls == [
+        ("claude-x", "anthropic", "gpt-5", "owner", None)]
+
+
+def test_vision_follows_swap_and_fallback():
+    """SK-1: vision is re-resolved from the CONFIGURED value on every model change:
+    a blind model clears it, a vision model restores it, and the manager's route
+    note input follows."""
+    a = _Agent()
+    a._configured_use_vision = True
+    a.use_vision = True
+    a.message_manager._include_vision = True
+    a._extract_model_name = lambda llm: llm
+    a._check_vision_support = lambda name: name != "blind-client"
+    a.adopt_active_llm("blind-client", "glm-5", "zai")
+    assert a.use_vision is False and a.message_manager._include_vision is False
+    a.adopt_active_llm("seeing-client", "gpt-5", "openai")
+    assert a.use_vision is True and a.message_manager._include_vision is True

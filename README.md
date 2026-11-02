@@ -83,7 +83,7 @@ and the trading and wallet safety procedures.
 One agent core, many front doors:
 
 - **Terminal** — run `polyrob` to talk to the agent: live tool transcripts, secret-scrubbed output, resumable sessions, and about a hundred slash commands (`/inbox`, `/jobs`, `/goals`, `/model`, `/memory`, `/usage`, `/pause`, `/autonomy`, `/config`; the full list is in [docs/guide/cli.md](docs/guide/cli.md)).
-- **Web console** — five clear destinations for Chat, Inbox, Work, Money, and Rob (the agent itself). Watch live work, resolve approvals, manage standing jobs and apps, reconcile the agent's ledger, and change its capabilities from one owner surface.
+- **Web console** — five clear destinations for Chat, Inbox, Work, Money, and Agent (the agent itself). Watch live work, resolve approvals, manage standing jobs and apps, reconcile the agent's ledger, and change its capabilities from one owner surface.
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
 - **MCP server** — expose polyrob to Claude Desktop, Cursor, or any MCP client as a read-only tool provider (`POST /mcp`, off by default) — it's an MCP client *and* server.
@@ -117,7 +117,7 @@ the CLI and API, so a decision made in one surface is visible in the others.
     </td>
     <td width="50%" valign="top">
       <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/agent-control.png" alt="POLYROB Agent view showing autonomy controls, capabilities, and health" width="100%"><br>
-      <strong>Rob</strong> — inspect identity, memory, capabilities, health, and the rules that bound autonomous action.
+      <strong>Agent</strong> — inspect identity, memory, capabilities, health, and the rules that bound autonomous action.
     </td>
   </tr>
   <tr>
@@ -308,7 +308,7 @@ and `polyrob update` (self-update with snapshot, guarded migration, verify and *
 | Capability | Detail |
 |---|---|
 | Terminal | `polyrob` opens the agent — live tool transcripts, ~100 slash commands, resumable sessions |
-| Web console | Chat, Inbox, Work, Money, and Rob over a real-time Socket.IO surface |
+| Web console | Chat, Inbox, Work, Money, and Agent over a real-time Socket.IO surface |
 | REST API | session lifecycle + mid-run guidance injection + SSE streaming |
 | OpenAI-compatible | drop-in `/v1/chat/completions` + `/v1/models` |
 | A2A protocol | Agent Card discovery, JSON-RPC, SSE — agent-to-agent delegation |
@@ -489,6 +489,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/packs.md](docs/guide/packs.md) | Packs — the index, install, enable/disable, the kill list, third-party rules |
 | [docs/guide/api.md](docs/guide/api.md) | REST + A2A + OpenAI-compatible API |
 | [docs/guide/configuration.md](docs/guide/configuration.md) | Configuring the agent — providers, memory, the autonomy dial, tools, surfaces, preferences |
+| [docs/guide/faq.md](docs/guide/faq.md) | FAQ — short answers, and troubleshooting by the exact refusal or stop text you see |
 | [docs/guide/owner-controls.md](docs/guide/owner-controls.md) | Stop, pause and resume from any seat; approvals and the inbox |
 | [docs/guide/conversation.md](docs/guide/conversation.md) | One conversation across phone, console and terminal — what rolls when a session rolls |
 | [docs/guide/groups.md](docs/guide/groups.md) | Group chats (rooms) — allowlist, roles, per-chat policy, the room service job |

@@ -175,7 +175,7 @@ def test_the_failure_path_pays_a_credit_and_the_text_promises_no_refund():
 
     row = Offer(offer_id="o", surface="telegram", chat_id="-1", verb="mute",
                 target_user_id="9", target_name="S", duration_sec=60,
-                price_usd=1.0, asset_id="rob", amount_raw="1",
+                price_usd=1.0, asset_id="demo", amount_raw="1",
                 requester_id="2", invoice_id="i", status="paid", reason="",
                 created_at=time.time())
     res = room_actions._credit(None, _Store(), row, "bot lost admin", 1.0)

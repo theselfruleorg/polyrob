@@ -3,7 +3,7 @@
 What a person met on opening this console was a FORM — a model picker, a grid
 of tool checkboxes and a max-steps slider — before a single word had been
 exchanged. The 2026-09-12 audit called it what it was: "the cold open is a
-config form". It is now one true sentence made of real numbers, in Rob's voice,
+config form". It is now one true sentence made of real numbers, in the agent's voice,
 four things you could ask, and a place to type.
 
 **The sentence is the hard part, and it is the whole point.** Its numbers come

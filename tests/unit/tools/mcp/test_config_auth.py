@@ -38,14 +38,14 @@ def test_auth_block_accepted_and_preserved_verbatim():
 # --- ${VAR} resolution inside auth ----------------------------------------------
 
 def test_var_in_auth_client_secret_resolves(monkeypatch):
-    monkeypatch.setenv("ROB_TEST_OAUTH_SECRET", "s3cr3t-value")
+    monkeypatch.setenv("POLYROB_TEST_OAUTH_SECRET", "s3cr3t-value")
     cfg = MCPConfig(
         enabled=True,
         servers={
             "svc": _http_server(auth={
                 "provider": "generic_oauth2",
                 "client_id": "cid",
-                "client_secret": "${ROB_TEST_OAUTH_SECRET}",
+                "client_secret": "${POLYROB_TEST_OAUTH_SECRET}",
                 "auth_url": "https://idp.example/authorize",
                 "token_url": "https://idp.example/token",
             }),
@@ -58,7 +58,7 @@ def test_var_in_auth_client_secret_resolves(monkeypatch):
 
 
 def test_var_in_auth_scopes_list_resolves(monkeypatch):
-    monkeypatch.setenv("ROB_TEST_OAUTH_SCOPE", "custom.scope")
+    monkeypatch.setenv("POLYROB_TEST_OAUTH_SCOPE", "custom.scope")
     cfg = MCPConfig(
         enabled=True,
         servers={
@@ -66,7 +66,7 @@ def test_var_in_auth_scopes_list_resolves(monkeypatch):
                 "client_id": "cid",
                 "auth_url": "https://idp.example/authorize",
                 "token_url": "https://idp.example/token",
-                "scopes": ["read", "${ROB_TEST_OAUTH_SCOPE}"],
+                "scopes": ["read", "${POLYROB_TEST_OAUTH_SCOPE}"],
             }),
         },
     )
@@ -83,14 +83,14 @@ def test_no_auth_block_resolves_cleanly():
 # --- fault isolation: a missing ${VAR} in auth drops ONLY that server ----------
 
 def test_missing_auth_var_drops_only_affected_server(monkeypatch):
-    monkeypatch.delenv("ROB_TEST_MISSING_OAUTH_SECRET", raising=False)
+    monkeypatch.delenv("POLYROB_TEST_MISSING_OAUTH_SECRET", raising=False)
     cfg = MCPConfig(
         enabled=True,
         servers={
             "good": _http_server(url="https://good.example"),
             "bad": _http_server(url="https://bad.example", auth={
                 "client_id": "cid",
-                "client_secret": "${ROB_TEST_MISSING_OAUTH_SECRET}",
+                "client_secret": "${POLYROB_TEST_MISSING_OAUTH_SECRET}",
                 "auth_url": "https://idp.example/authorize",
                 "token_url": "https://idp.example/token",
             }),
@@ -102,20 +102,20 @@ def test_missing_auth_var_drops_only_affected_server(monkeypatch):
 
 
 def test_missing_auth_var_in_one_server_does_not_affect_other_auth_server(monkeypatch):
-    monkeypatch.delenv("ROB_TEST_MISSING_OAUTH_SECRET2", raising=False)
-    monkeypatch.setenv("ROB_TEST_PRESENT_OAUTH_SECRET", "present-value")
+    monkeypatch.delenv("POLYROB_TEST_MISSING_OAUTH_SECRET2", raising=False)
+    monkeypatch.setenv("POLYROB_TEST_PRESENT_OAUTH_SECRET", "present-value")
     cfg = MCPConfig(
         enabled=True,
         servers={
             "good_auth": _http_server(url="https://good.example", auth={
                 "client_id": "cid",
-                "client_secret": "${ROB_TEST_PRESENT_OAUTH_SECRET}",
+                "client_secret": "${POLYROB_TEST_PRESENT_OAUTH_SECRET}",
                 "auth_url": "https://idp.example/authorize",
                 "token_url": "https://idp.example/token",
             }),
             "bad_auth": _http_server(url="https://bad.example", auth={
                 "client_id": "cid",
-                "client_secret": "${ROB_TEST_MISSING_OAUTH_SECRET2}",
+                "client_secret": "${POLYROB_TEST_MISSING_OAUTH_SECRET2}",
                 "auth_url": "https://idp.example/authorize",
                 "token_url": "https://idp.example/token",
             }),

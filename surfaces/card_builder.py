@@ -98,7 +98,7 @@ def _holder(wallet, chain: str) -> Optional[str]:
 
 
 def _trusted(user_id: str, chain: str) -> List[Tuple[str, str]]:
-    """``[(label, address)]`` — the tokens Rob trusts on ``chain``."""
+    """``[(label, address)]`` — the tokens the agent trusts on ``chain``."""
     try:
         from core.open_positions import open_positions_db_path
         from core.runtime_paths import resolve_data_home

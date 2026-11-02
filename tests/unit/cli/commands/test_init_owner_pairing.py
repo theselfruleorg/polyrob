@@ -16,10 +16,10 @@ def _env_after(tmp_path, monkeypatch, args):
 
 def test_init_non_interactive_writes_owner_and_instance(tmp_path, monkeypatch):
     env = _env_after(tmp_path, monkeypatch,
-                     ["--no-prompt", "--owner", "rob", "--instance-id", "rob",
+                     ["--no-prompt", "--owner", "carol", "--instance-id", "carol",
                       "--openai-key", "sk-test"])
-    assert "POLYROB_OWNER_USER_ID=rob" in env
-    assert "POLYROB_INSTANCE_ID=rob" in env
+    assert "POLYROB_OWNER_USER_ID=carol" in env
+    assert "POLYROB_INSTANCE_ID=carol" in env
 
 
 def test_init_owner_flag_alone_backfills_instance(tmp_path, monkeypatch):

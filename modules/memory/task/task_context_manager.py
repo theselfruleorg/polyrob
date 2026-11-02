@@ -697,7 +697,7 @@ class TaskContextManager(BaseComponent):
         return ok
 
     def close_session_and_drain(
-        self, session_id: str, user_id: Optional[str] = None
+        self, session_id: str, user_id: Optional[str] = None, reflect_on_close: bool = False
     ) -> Tuple[bool, List[str]]:
         """Close and save a session; return (ok, cross_session_findings).
 
@@ -713,6 +713,9 @@ class TaskContextManager(BaseComponent):
         loop uses. (The event-loop-blocking half of the bug is fixed at the call site
         by running this whole method under asyncio.to_thread; the metering deadlock is
         fixed in reflection_service._meter.)
+
+        ``reflect_on_close`` (095 W9): the caller's regime asks for the close-time
+        reflection even when the posture member is off (owner chat).
 
         Returns:
             (True, drained_findings) on success; (False, []) if the session is absent
@@ -738,7 +741,8 @@ class TaskContextManager(BaseComponent):
             # for the autonomous workload (short cron/goal sessions never reach the
             # 25/step threshold).
             n_findings = self._memories_since_reflection.get(session_id, 0)
-            if (self.reflection_enabled and self.reflection_on_session_close
+            if (self.reflection_enabled
+                    and (self.reflection_on_session_close or reflect_on_close)
                     and 0 < self.reflection_session_close_threshold <= n_findings):
                 try:
                     phase = getattr(session_data.memory, "current_phase", "discovery")

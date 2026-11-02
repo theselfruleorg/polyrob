@@ -92,7 +92,7 @@ def _cmd(command, text, user="alice", session_id=None):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "carol")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     # D38: `/prefs` reads `prefs_home_dir()` (the resolved DATA HOME), not the
     # container's `config.data_dir` — the two differ on a deployed box, which is
@@ -297,7 +297,7 @@ async def test_goals_summary_with_seeded_rows(env):
 async def test_prefs_shows_written_pref_with_pref_source(env):
     from core.prefs import write_preference
     ok, err = write_preference(str(env), "alice", "style.verbosity", "terse",
-                               instance_id="rob")
+                               instance_id="carol")
     assert ok, err
 
     out = await act_on_inbound(_Agent(str(env)), _cmd("/prefs", "/prefs"))

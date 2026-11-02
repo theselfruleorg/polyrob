@@ -117,7 +117,7 @@ def service_token_header() -> str:
     """The header the api tier reads the OPERATOR service token from.
 
     ⚠️ Read from ``api.auth_constants.SERVICE_TOKEN_HEADER``, never spelled
-    here: ``X-API-KEY`` now routes to the per-user ``rob_xxx`` validator, and
+    here: ``X-API-KEY`` now routes to the per-user API-key validator, and
     the old spelling is accepted for one more release only.
     """
     try:

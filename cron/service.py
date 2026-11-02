@@ -98,15 +98,12 @@ def duplicate_job_text(job) -> str:
 
 
 def last_outcome(job) -> str:
-    """The last run's outcome and time, e.g. "done 10-13 08:00"; "never run"."""
-    rec = (getattr(job, "payload", None) or {}).get("last_outcome") or {}
-    at = rec.get("at") or ""
-    when = at[5:16].replace("T", " ") if at else ""
-    if rec.get("outcome"):
-        return f"{rec['outcome']} {when}".strip()
-    if getattr(job, "last_run_at", None):
-        return f"ran {job.last_run_at.strftime('%m-%d %H:%M')}"
-    return "never run"
+    """The last run's outcome, time and (when it did not finish) why, e.g.
+    "done 10-13 08:00", "failed 10-28 18:05 (stopped at the step limit)",
+    "never run" — ``core.cron_outcome.outcome_text``, the one renderer."""
+    from core.cron_outcome import outcome_text
+    return outcome_text((getattr(job, "payload", None) or {}).get("last_outcome"),
+                        getattr(job, "last_run_at", None))
 
 
 def next_run_text(job) -> str:
@@ -148,6 +145,28 @@ def parse_new_job_args(tokens: List[str]) -> "tuple[str, str]":
         return when, " ".join(words[n:]).strip()
     raise ScheduleError("I could not read a schedule at the start "
                         "(e.g. 30m, 'every monday 09:00', '0 9 * * *')")
+
+
+#: The words that DROP a job's delivery sink (the job then reports only through
+#: its own sends). Stored verbatim, 'none' was a target nothing could reach.
+_NO_DELIVER = ("", "none", "-", "off", "null")
+
+
+def normalized_deliver(value: Any) -> Optional[str]:
+    """The ONE delivery-sink validator ``schedule`` and ``edit`` share: a target
+    from ``cron.delivery.allowed_targets()`` (lowercased), or None for no sink.
+    Raises ScheduleError for an unknown target, naming the valid ones."""
+    if value is None:
+        return None
+    target = str(value).strip().lower()
+    if target in _NO_DELIVER:
+        return None
+    from cron.delivery import allowed_targets
+    if target not in allowed_targets():
+        raise ScheduleError(
+            f"unknown delivery target {value!r}; valid: "
+            f"{', '.join(allowed_targets())}, or 'none'")
+    return target
 
 
 def _checked_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -243,6 +262,10 @@ class CronService:
         """
         schedule = parse_schedule(schedule_spec)  # raises ScheduleError
         payload = _checked_payload(dict(payload or {}))  # W9: read_verb, pause_windows
+        if "deliver" in payload:  # one delivery validator for schedule and edit
+            deliver = normalized_deliver(payload.pop("deliver"))
+            if deliver:
+                payload["deliver"] = deliver
         now = self._now()
         next_run = schedule.next_run_after(now)
         if next_run is None:
@@ -365,6 +388,8 @@ class CronService:
 
     def edit(self, job_id: str, *, user_id: str, via: str = "",
              old_text: Optional[str] = None, new_text: Optional[str] = None,
+             append_text: Optional[str] = None, prepend_text: Optional[str] = None,
+             task: Optional[str] = None,
              schedule_spec: Optional[str] = None,
              max_duration_seconds: Optional[int] = None,
              payload_updates: Optional[Dict[str, Any]] = None) -> List[str]:
@@ -376,6 +401,12 @@ class CronService:
         row-write ordering that way. The task is therefore PATCHED, never
         replaced: ``old_text`` must occur exactly once and is swapped for
         ``new_text``; everything else in the prose survives byte-for-byte.
+
+        ``append_text`` / ``prepend_text`` add a passage at the end / start
+        with no verbatim copy of the task (2026-10-28: a flash model could not
+        copy a 2-5 KB passage, so the step it promised the owner never landed).
+        ``task`` replaces the whole text — an OWNER seat's typed text only
+        (``polyrob job edit --task-file``, ``/job edit <id> task``).
 
         Validates EVERY requested change before writing any (raises
         ScheduleError with the reason); ``payload_updates`` merges one key at a
@@ -395,20 +426,34 @@ class CronService:
                                if current.get(k) != v}
         if max_duration_seconds is not None and int(max_duration_seconds) == job.max_duration_seconds:
             max_duration_seconds = None
-        new_task = None
+        if payload_updates and "deliver" in payload_updates:
+            payload_updates = {**payload_updates,
+                               "deliver": normalized_deliver(payload_updates["deliver"])}
+            if current.get("deliver") == payload_updates["deliver"]:
+                payload_updates.pop("deliver")
+        text = job.task
+        if task is not None:
+            if old_text is not None or new_text is not None:
+                raise ScheduleError("pass either the whole new task or old_text/new_text, not both")
+            text = task.strip()
         if old_text is not None or new_text is not None:
             if not old_text:
-                raise ScheduleError("a task edit needs old_text (the exact passage to replace)")
-            count = job.task.count(old_text)
+                raise ScheduleError("a task edit needs old_text (the exact passage to replace); "
+                                    "to ADD a step, pass append_text or prepend_text instead")
+            count = text.count(old_text)
             if count != 1:
                 raise ScheduleError(
                     f"old_text occurs {count} times in the task; it must match exactly once "
-                    f"(copy it from cronjob_show, and include more context if it repeats)")
-            new_task = job.task.replace(old_text, new_text or "", 1)
-            if not new_task.strip():
-                raise ScheduleError("the edit would leave an empty task; cancel the job instead")
-            if new_task == job.task:
-                new_task = None
+                    f"(copy it from cronjob_show, and include more context if it repeats; "
+                    f"to ADD a step, use append_text or prepend_text)")
+            text = text.replace(old_text, new_text or "", 1)
+        if prepend_text and prepend_text.strip():
+            text = f"{prepend_text.strip()}\n\n{text.lstrip()}"
+        if append_text and append_text.strip():
+            text = f"{text.rstrip()}\n\n{append_text.strip()}"
+        if not text.strip():
+            raise ScheduleError("the edit would leave an empty task; cancel the job instead")
+        new_task = None if text == job.task else text
         if schedule_spec is not None:
             schedule = parse_schedule(schedule_spec)  # raises ScheduleError
             now = self._now()
@@ -435,13 +480,6 @@ class CronService:
                 raise ScheduleError(
                     f"the job recurs faster than {MIN_INTERVAL_SECONDS // 60} minutes; only a "
                     f"read or write job may — change the schedule in the same edit")
-        target = (payload_updates or {}).get("deliver")
-        if target is not None:
-            from cron.delivery import allowed_targets
-            if target not in allowed_targets():
-                raise ScheduleError(
-                    f"unknown delivery target {target!r}; valid: "
-                    f"{', '.join(allowed_targets())}, or 'none'")
         changed: List[str] = []
         if new_task is not None and self.store.set_task(job_id, new_task, user_id=user_id):
             changed.append("task")
@@ -461,6 +499,12 @@ class CronService:
             if "task" in changed:
                 extra["old_text"] = (old_text or "")[:500]
                 extra["new_text"] = (new_text or "")[:500]
+                if append_text:
+                    extra["append_text"] = append_text[:500]
+                if prepend_text:
+                    extra["prepend_text"] = prepend_text[:500]
+                if task is not None:
+                    extra["replaced_chars"] = len(task.strip())
             if "schedule" in changed:
                 extra["schedule_spec"] = schedule_spec
             self._audit(CRON_EDITED, user_id=user_id, via=via, job_id=job_id, **extra)

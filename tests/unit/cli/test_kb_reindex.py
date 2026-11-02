@@ -30,7 +30,7 @@ def home(tmp_path, monkeypatch):
     for i, name in enumerate(["brief.md", "exit-run-log.md", "shot.png",
                               "backup.md.bak", "gone.md"]):
         con.execute("INSERT INTO artifacts VALUES (?,?,?,?)",
-                    (str(i), "rob", "sess-123", str(docs / name)))
+                    (str(i), "alice", "sess-123", str(docs / name)))
     con.commit()
     con.close()
 
@@ -40,7 +40,7 @@ def home(tmp_path, monkeypatch):
 
 
 def test_dry_run_names_what_it_would_index_and_changes_nothing(home):
-    result = CliRunner().invoke(kb, ["reindex", "--user", "rob", "--dry-run"])
+    result = CliRunner().invoke(kb, ["reindex", "--user", "alice", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert "5 registered · 1 to index" in result.output
@@ -56,7 +56,7 @@ def test_it_says_so_when_there_is_no_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("KB_ENABLED", "1")
 
-    result = CliRunner().invoke(kb, ["reindex", "--user", "rob", "--dry-run"])
+    result = CliRunner().invoke(kb, ["reindex", "--user", "alice", "--dry-run"])
 
     assert result.exit_code == 2
     assert "no artifact registry" in result.output
@@ -66,7 +66,7 @@ def test_it_refuses_when_the_kb_is_off(home, monkeypatch):
     monkeypatch.setenv("KB_ENABLED", "false")
     monkeypatch.setenv("POLYROB_LOCAL", "0")
 
-    result = CliRunner().invoke(kb, ["reindex", "--user", "rob", "--dry-run"])
+    result = CliRunner().invoke(kb, ["reindex", "--user", "alice", "--dry-run"])
 
     assert result.exit_code == 2
     assert "KB disabled" in result.output
@@ -85,7 +85,7 @@ def test_the_ingest_carries_each_row_s_own_session(home, monkeypatch):
     import tools.kb_autoingest as ai
     monkeypatch.setattr(ai, "ingest_artifact", fake_ingest)
 
-    result = CliRunner().invoke(kb, ["reindex", "--user", "rob"])
+    result = CliRunner().invoke(kb, ["reindex", "--user", "alice"])
 
     assert result.exit_code == 0, result.output
     assert len(seen) == 1

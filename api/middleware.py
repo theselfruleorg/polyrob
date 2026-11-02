@@ -383,7 +383,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             else:
                 # Non-JWT bearer token: it carries no signature we can verify
                 # against the secret, so the ONLY way it can authenticate is as a
-                # real DB-backed API key (e.g. `Authorization: Bearer rob_xxx`).
+                # real DB-backed API key (e.g. `Authorization: Bearer <api-key>`).
                 # SECURITY: never mint an identity from the token itself — the old
                 # code computed an HMAC, discarded it, and returned
                 # {user_id: token[:8], authenticated: True}, a full bypass.

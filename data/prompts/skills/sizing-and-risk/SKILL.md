@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Deciding how much to put into a trade'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '5'
 ---
@@ -50,7 +49,7 @@ to buy. The code bounds the worst case; you choose the size under it.
    mid cap ≤5%, small cap ≤2%, micro cap or meme ≤0.5%. All memes together are
    ONE correlated bucket.
 3. **Inside a mandate, the preset sizes the ticket:** the tier's rung on the
-   preset ladder (`treasury-trading`; the tier ceiling comes from
+   preset ladder (the preset's doctrine skill; the tier ceiling comes from
    `token_info`'s survivability line), capped by the mandate's stage ticket
    (probe, small or normal). The mandate's allocation already is the bucket,
    so the percent caps above are for a trade outside a mandate. If the ticket
@@ -70,7 +69,7 @@ one trips. You do not compute a P&L to check one, and you never release one —
 …`), and `/trade release` is the owner's. Exits and stops keep running while a
 breaker is on — a breaker blocks entries, never exits.
 
-On the memecoin preset most tickets are expected to go to zero, so a losing
+On a high-variance preset most tickets are expected to go to zero, so a losing
 streak is the strategy, not a signal: judge the book over a run of tickets,
 never the single trade. A position's own stop and time stop (`exits`) are
 exits, not breakers, and they keep running.
@@ -78,9 +77,9 @@ exits, not breakers, and they keep running.
 ## Units — the costliest mistake
 
 Every amount has a token, a decimals value, and a USD value. Say all three
-before a send ("50,000 EXMPL = $0.83 at $0.0000166"). An agent once meant to send
-52,439 tokens and sent 52,439,283 — 5% of the supply — after a restart lost its
-state. If the USD value surprises you, stop.
+before a send ("50,000 EXMPL = $0.83 at $0.0000166"). A display amount read as
+raw units, or raw units read as a display amount, is wrong by the decimals
+factor — a thousand times or more. If the USD value surprises you, stop.
 
 ## If a tool is missing
 
@@ -92,5 +91,4 @@ measure anything — say so and stop. Never work around a missing verb with a ra
 
 ## Related
 
-`trading-mandate`, `pre-trade-check`, `exits`, `position-journal`,
-`treasury-trading`.
+`trading-mandate`, `pre-trade-check`, `exits`, `position-journal`.

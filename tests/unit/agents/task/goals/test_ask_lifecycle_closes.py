@@ -19,52 +19,52 @@ def board(tmp_path):
 
 
 def _blocked_goal_with_ask(board, title="ship the thing"):
-    g = board.create(user_id="rob", title=title)
+    g = board.create(user_id="alice", title=title)
     board.block_from_ready(g.id, error="needs an owner decision")
-    board.create_ask(user_id="rob", what=f"Unblock goal: {title}",
+    board.create_ask(user_id="alice", what=f"Unblock goal: {title}",
                      why="repeated failures", blocks_goal_ids=[g.id])
     return g
 
 
 def test_ask_closes_when_its_only_blocked_goal_succeeds(board):
     g = _blocked_goal_with_ask(board)
-    assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 1
+    assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 1
 
-    closed = board.close_asks_for_goal("rob", g.id, reason="goal_done")
+    closed = board.close_asks_for_goal("alice", g.id, reason="goal_done")
 
     assert closed == 1
-    assert board.asks(user_id="rob", status=ASK_OPEN) == []
-    obsolete = board.asks(user_id="rob", status=ASK_OBSOLETE)
+    assert board.asks(user_id="alice", status=ASK_OPEN) == []
+    obsolete = board.asks(user_id="alice", status=ASK_OBSOLETE)
     assert len(obsolete) == 1
     assert (obsolete[0].payload or {}).get("decision") == "obsolete"
 
 
 def test_an_ask_blocking_two_goals_stays_open_until_both_resolve(board):
-    a = board.create(user_id="rob", title="goal a")
-    b = board.create(user_id="rob", title="goal b")
-    board.create_ask(user_id="rob", what="Grant the x402_pay tool",
+    a = board.create(user_id="alice", title="goal a")
+    b = board.create(user_id="alice", title="goal b")
+    board.create_ask(user_id="alice", what="Grant the x402_pay tool",
                      why="two goals need it", blocks_goal_ids=[a.id, b.id])
 
-    assert board.close_asks_for_goal("rob", a.id, reason="goal_done") == 0
-    assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 1
+    assert board.close_asks_for_goal("alice", a.id, reason="goal_done") == 0
+    assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 1
 
-    assert board.close_asks_for_goal("rob", b.id, reason="goal_done") == 1
-    assert board.asks(user_id="rob", status=ASK_OPEN) == []
+    assert board.close_asks_for_goal("alice", b.id, reason="goal_done") == 1
+    assert board.asks(user_id="alice", status=ASK_OPEN) == []
 
 
 def test_closing_never_crosses_tenants(board):
     g = _blocked_goal_with_ask(board)
 
     assert board.close_asks_for_goal("someone_else", g.id, reason="goal_done") == 0
-    assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 1
+    assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 1
 
 
 def test_an_owner_answered_ask_is_not_reopened_or_reclosed(board):
     g = _blocked_goal_with_ask(board)
-    ask = board.asks(user_id="rob", status=ASK_OPEN)[0]
-    board.fulfill_ask(ask.id, user_id="rob")
+    ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
+    board.fulfill_ask(ask.id, user_id="alice")
 
-    assert board.close_asks_for_goal("rob", g.id, reason="goal_done") == 0
+    assert board.close_asks_for_goal("alice", g.id, reason="goal_done") == 0
 
 
 def test_a_still_blocked_goal_keeps_its_ask(board):
@@ -72,7 +72,7 @@ def test_a_still_blocked_goal_keeps_its_ask(board):
     g = _blocked_goal_with_ask(board)
 
     assert board.get(g.id).status == STATUS_BLOCKED
-    assert board.close_asks_for_goal("rob", g.id, reason="goal_cancelled") == 1
+    assert board.close_asks_for_goal("alice", g.id, reason="goal_cancelled") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -80,23 +80,23 @@ def test_a_still_blocked_goal_keeps_its_ask(board):
 # ---------------------------------------------------------------------------
 
 def test_record_success_closes_the_goals_ask(board):
-    g = board.create(user_id="rob", title="ship the thing")
-    board.create_ask(user_id="rob", what="Unblock goal: ship the thing",
+    g = board.create(user_id="alice", title="ship the thing")
+    board.create_ask(user_id="alice", what="Unblock goal: ship the thing",
                      why="repeated failures", blocks_goal_ids=[g.id])
     board.claim(g.id, "w1", ttl_seconds=60)
 
     board.record_success(g.id, session_id="s1", result="shipped",
         claim_token=board.get(g.id).claim_token)
 
-    assert board.asks(user_id="rob", status=ASK_OPEN) == [], \
+    assert board.asks(user_id="alice", status=ASK_OPEN) == [], \
         "a goal that succeeded must not leave the owner an open question about it"
 
 
 def test_cancel_closes_the_goals_ask(board):
-    g = board.create(user_id="rob", title="ship the thing")
-    board.create_ask(user_id="rob", what="Unblock goal: ship the thing",
+    g = board.create(user_id="alice", title="ship the thing")
+    board.create_ask(user_id="alice", what="Unblock goal: ship the thing",
                      why="repeated failures", blocks_goal_ids=[g.id])
 
-    board.cancel(g.id, user_id="rob")
+    board.cancel(g.id, user_id="alice")
 
-    assert board.asks(user_id="rob", status=ASK_OPEN) == []
+    assert board.asks(user_id="alice", status=ASK_OPEN) == []

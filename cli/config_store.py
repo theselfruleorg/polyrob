@@ -1,6 +1,6 @@
 """Persistent CLI preferences (roadmap P3).
 
-A tiny JSON store so `rob model set-default` survives across invocations without
+A tiny JSON store so `polyrob model set-default` survives across invocations without
 touching the server/env config. The path is overridable via ``POLYROB_CLI_CONFIG``
 (used for test isolation); otherwise it defaults to ``~/.polyrob/cli.json``.
 """

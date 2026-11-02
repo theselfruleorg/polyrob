@@ -13,7 +13,7 @@ def _record():
         usage={"records": 2, "total_tokens": 100},
         provenance={"source": "export"},
         messages=[
-            {"type": "SystemMessage", "content": "you are rob"},
+            {"type": "SystemMessage", "content": "you are alice"},
             {"type": "HumanMessage", "content": "send hi", "origin": "USER"},
             {"type": "AIMessage", "content": "sending now",
              "tool_calls": [{"id": "c1", "function": {

@@ -16,7 +16,7 @@ from core.config_service import post_write_notes, set_value
 def _isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
-    for var in ("GOALS_ENABLED", "AUTONOMY_MODE", "POLYROB_LOCAL", "ROB_LOCAL",
+    for var in ("GOALS_ENABLED", "AUTONOMY_MODE", "POLYROB_LOCAL",
                 "POLYROB_OWNER_USER_ID", "POLYROB_OWNER_EMAIL",
                 "POLYROB_OWNER_TELEGRAM_ID"):
         monkeypatch.delenv(var, raising=False)

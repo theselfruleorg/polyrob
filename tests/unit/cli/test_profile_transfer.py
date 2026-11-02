@@ -25,7 +25,7 @@ def env(monkeypatch, tmp_path):
     return home
 
 
-def _seed_profile(home, name="rob"):
+def _seed_profile(home, name="alice"):
     p = home / "profiles" / name
     (p / "characters").mkdir(parents=True)
     (p / "data").mkdir()
@@ -34,7 +34,7 @@ def _seed_profile(home, name="rob"):
     (p / ".env").write_text(f"ANTHROPIC_API_KEY={_FAKE_KEY}\n")
     (p / "auth.json").write_text('{"token": "secret"}')
     (p / "wallet" / "seed.txt").write_text("abandon abandon abandon")
-    (p / "characters" / "rob.character.json").write_text('{"name": "Rob"}')
+    (p / "characters" / "nova.character.json").write_text('{"name": "Nova"}')
     (p / "data" / "notes.md").write_text(f"my key is {_FAKE_KEY} ok\n")
     return p
 
@@ -46,13 +46,13 @@ def _member_names(archive):
 
 def test_export_excludes_credentials_and_scrubs(env, tmp_path):
     p = _seed_profile(env)
-    out = tmp_path / "rob.tar.gz"
-    result = export_profile("rob", out)
+    out = tmp_path / "alice.tar.gz"
+    result = export_profile("alice", out)
     names = _member_names(out)
     assert not any(n.endswith(".env") for n in names)
     assert not any("auth.json" in n for n in names)
     assert not any("wallet" in n for n in names)
-    assert "rob/characters/rob.character.json" in names
+    assert "alice/characters/nova.character.json" in names
     # planted fake key never appears raw anywhere in the archive
     with tarfile.open(out, "r:gz") as tar:
         blob = b"".join(tar.extractfile(m).read()
@@ -67,24 +67,24 @@ def test_export_excludes_credentials_and_scrubs(env, tmp_path):
 def test_import_roundtrip_and_stability(env, tmp_path):
     _seed_profile(env)
     out1 = tmp_path / "rob1.tar.gz"
-    export_profile("rob", out1)
+    export_profile("alice", out1)
     result = import_profile(out1, name="rob2")
     p2 = result["home"]
-    assert (p2 / "characters" / "rob.character.json").is_file()
+    assert (p2 / "characters" / "nova.character.json").is_file()
     assert "POLYROB_INSTANCE_ID=rob2" in (p2 / ".env").read_text()  # re-pinned
     out2 = tmp_path / "rob2.tar.gz"
     export_profile("rob2", out2)
     strip = lambda names, top: sorted(n.split("/", 1)[1] for n in names if "/" in n)
-    assert strip(_member_names(out1), "rob") == strip(_member_names(out2), "rob2")
+    assert strip(_member_names(out1), "alice") == strip(_member_names(out2), "rob2")
 
 
 def test_import_refuses_existing_profile(env, tmp_path):
     import click
     _seed_profile(env)
-    out = tmp_path / "rob.tar.gz"
-    export_profile("rob", out)
+    out = tmp_path / "alice.tar.gz"
+    export_profile("alice", out)
     with pytest.raises(click.ClickException, match="already exists"):
-        import_profile(out)  # 'rob' is already there
+        import_profile(out)  # 'alice' is already there
 
 
 def test_import_refuses_traversal_archive(env, tmp_path):
@@ -92,7 +92,7 @@ def test_import_refuses_traversal_archive(env, tmp_path):
     evil = tmp_path / "evil.tar.gz"
     with tarfile.open(evil, "w:gz") as tar:
         data = b"pwned"
-        info = tarfile.TarInfo("rob/../../outside.txt")
+        info = tarfile.TarInfo("alice/../../outside.txt")
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
     with pytest.raises(click.ClickException, match="traversal"):
@@ -104,7 +104,7 @@ def test_import_refuses_symlink_member(env, tmp_path):
     import click
     evil = tmp_path / "link.tar.gz"
     with tarfile.open(evil, "w:gz") as tar:
-        info = tarfile.TarInfo("rob/link")
+        info = tarfile.TarInfo("alice/link")
         info.type = tarfile.SYMTYPE
         info.linkname = "/etc/passwd"
         tar.addfile(info)
@@ -117,9 +117,9 @@ def test_export_excludes_symlinks(env, tmp_path):
     secret_src = tmp_path / "outside.txt"
     secret_src.write_text("outside content")
     (p / "data" / "linked.txt").symlink_to(secret_src)
-    out = tmp_path / "rob.tar.gz"
-    export_profile("rob", out)
-    assert "rob/data/linked.txt" not in _member_names(out)
+    out = tmp_path / "alice.tar.gz"
+    export_profile("alice", out)
+    assert "alice/data/linked.txt" not in _member_names(out)
     assert (p / "data" / "linked.txt").is_symlink()  # live profile untouched
 
 
@@ -132,7 +132,7 @@ def test_export_refuses_hardlinks(env, tmp_path):
     os.link(outside, p / "data" / "linked.txt")
     archive = tmp_path / "export.tar.gz"
     with pytest.raises(shutil.Error, match="single-link"):
-        export_profile("rob", archive)
+        export_profile("alice", archive)
     assert not archive.exists()
 
 
@@ -140,15 +140,15 @@ def test_export_is_private_and_cannot_replace_an_existing_target(env, tmp_path):
     import stat
     _seed_profile(env)
     archive = tmp_path / 'private.tar.gz'
-    export_profile('rob', archive)
+    export_profile('alice', archive)
     assert stat.S_IMODE(archive.stat().st_mode) == 0o600
     prior = archive.read_bytes()
     with pytest.raises(FileExistsError):
-        export_profile('rob', archive)
+        export_profile('alice', archive)
     assert archive.read_bytes() == prior
     link = tmp_path / 'linked.tar.gz'
     link.symlink_to(archive)
     with pytest.raises(FileExistsError):
-        export_profile('rob', link)
+        export_profile('alice', link)
     assert archive.read_bytes() == prior
     assert not list(tmp_path.glob('.export-*.tmp'))

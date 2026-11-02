@@ -161,7 +161,7 @@ def _owner_of(action_name, resolved):
 def test_public_profile_gates_every_owner_injector():
     src = (REPO / "agents/task/agent/core").glob("*.py")
     joined = "\n".join(p.read_text() for p in src)
-    for needle in ("load_owner_doc(", "_maybe_prefetch_memory", "_maybe_inject_live_health",
+    for needle in ("load_owner_doc(", "_maybe_prefetch_memory", "_live_health_part",
                    "_maybe_inject_episodic_digest", "_load_project_context",
                    # 044 I5 / I3: the <environment> block and the autonomous
                    # continuity bridge were the two injectors with no guard.

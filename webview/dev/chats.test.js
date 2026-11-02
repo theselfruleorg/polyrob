@@ -34,8 +34,8 @@ const COPY = {
   creator_cli: "you, in the terminal",
   creator_api: "this console or an app",
   creator_cron: "a scheduled job",
-  creator_goal: "Rob, working on a goal",
-  creator_correspondent: "someone Rob wrote to",
+  creator_goal: "The agent, working on a goal",
+  creator_correspondent: "someone the agent wrote to",
   creator_unknown: "not known",
   status_running: "Working",
   status_done: "Done",
@@ -97,7 +97,7 @@ describe("creator", () => {
   it("names who started the session", () => {
     expect(creatorLabel({ creator: "owner" }, COPY)).toBe("you");
     expect(creatorLabel({ creator: "cron" }, COPY)).toBe("a scheduled job");
-    expect(creatorLabel({ creator: "goal" }, COPY)).toBe("Rob, working on a goal");
+    expect(creatorLabel({ creator: "goal" }, COPY)).toBe("The agent, working on a goal");
   });
 
   it("says it cannot name an unknown one rather than inventing a label", () => {
@@ -242,7 +242,7 @@ describe("the copy crosses from Python on data attributes", () => {
 describe("the live@agent chip (043 A32)", () => {
   const CHIP = { ...COPY, live_at_agent: "Watch only" };
 
-  it("renders the chip for a session live in Rob's own process", () => {
+  it("renders the chip for a session live in the agent's own process", () => {
     const node = rowNode(
       { id: "x", task: "t", status: "running", runtime: "agent", owner_pid: 4242 },
       CHIP,

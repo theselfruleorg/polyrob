@@ -16,20 +16,20 @@ def _env(monkeypatch, tmp_path):
         monkeypatch.delenv(var, raising=False)
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(str(tmp_path / "home"))).upsert(PaymentAsset(
-        asset_id="rob", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="ROB", rail="onchain_scan", source="operator"))
+        asset_id="demo", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="DEMO", rail="onchain_scan", source="operator"))
 
 
 @pytest.mark.asyncio
 async def test_two_different_assets_at_the_same_usd_price_do_not_collide(x402_db):
-    """⚠️ A ROB invoice at $1 and a USDC invoice at $1 are already unambiguous
+    """⚠️ A DEMO invoice at $1 and a USDC invoice at $1 are already unambiguous
     on-chain — they arrive from different contracts. Jittering one because of
     the other moves a quoted price for no reason."""
     a = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=1.0, purpose="a", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=1.0, purpose="a", db=x402_db)
     b = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=1.0, purpose="b",
-        chain="robinhood", asset_id="rob", amount_raw=10 ** 18, db=x402_db)
+        user_id="alice", session_id="s", amount_usd=1.0, purpose="b",
+        chain="robinhood", asset_id="demo", amount_raw=10 ** 18, db=x402_db)
     assert a["amount_usd"] == 1.0
     assert b["amount_usd"] == 1.0, "jitter moved a price across assets"
 
@@ -37,9 +37,9 @@ async def test_two_different_assets_at_the_same_usd_price_do_not_collide(x402_db
 @pytest.mark.asyncio
 async def test_two_invoices_in_the_SAME_asset_still_jitter_apart(x402_db):
     a = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=1.0, purpose="a", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=1.0, purpose="a", db=x402_db)
     b = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=1.0, purpose="b", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=1.0, purpose="b", db=x402_db)
     assert a["amount_usd"] != b["amount_usd"]
     assert a["amount_raw"] != b["amount_raw"]
 
@@ -49,7 +49,7 @@ async def test_the_unique_index_carries_the_asset(x402_db):
     """The CROSS-process backstop must match the in-process dedupe's key, or
     two workers disagree about what a collision is."""
     await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=2.0, purpose="a", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=2.0, purpose="a", db=x402_db)
     rows = await x402_db.fetch_all(
         "SELECT name, sql FROM sqlite_master WHERE type='index' "
         "AND name LIKE 'idx_x402_requests_pending_amount%'")
@@ -72,9 +72,9 @@ async def test_a_different_kind_still_gets_its_OWN_amount(x402_db):
     Uniqueness must be asserted over exactly the set the matcher searches.
     """
     a = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=3.0, purpose="a", db=x402_db)
+        user_id="alice", session_id="s", amount_usd=3.0, purpose="a", db=x402_db)
     b = await invoicing.create_payment_request(
-        user_id="rob", session_id="s", amount_usd=3.0, purpose="b",
+        user_id="alice", session_id="s", amount_usd=3.0, purpose="b",
         kind="room_action", extra_metadata={"room_action": {"offer_id": "o"}},
         db=x402_db)
     assert a["amount_raw"] != b["amount_raw"]
@@ -95,7 +95,7 @@ async def test_two_pinned_raw_room_offers_never_share_an_amount(x402_db):
     raws = []
     for i in range(3):
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=0.5,
+            user_id="alice", session_id="s", amount_usd=0.5,
             purpose=f"mute {i}", amount_raw=500_000, kind="room_action",
             extra_metadata={"room_action": {"offer_id": f"o{i}"}}, db=x402_db)
         raws.append(int(inv["amount_raw"]))

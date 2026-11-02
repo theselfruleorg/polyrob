@@ -51,7 +51,7 @@ def _cmd(command, text, user="alice"):
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 64
 
 
-def _write_pfp(home, instance="rob"):
+def _write_pfp(home, instance="carol"):
     from core.avatar import set_avatar
     return set_avatar(home, instance, PNG, source="file:face.png").path
 
@@ -59,7 +59,7 @@ def _write_pfp(home, instance="rob"):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "carol")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
@@ -83,7 +83,7 @@ async def test_it_is_refused_for_a_non_owner(env):
 async def test_it_reports_the_avatar_and_its_source(env):
     _write_pfp(env)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar"))
-    assert "rob" in out
+    assert "carol" in out
     assert "set (file:face.png)" in out
 
 
@@ -108,7 +108,7 @@ async def test_no_avatar_at_all_is_honest_and_names_the_set_command(env, monkeyp
 async def test_an_unreadable_record_is_not_reported_as_absent(env):
     from core.avatar import avatar_dir
     _write_pfp(env)
-    (avatar_dir(env, "rob") / "avatar.json").write_text("{broken")
+    (avatar_dir(env, "carol") / "avatar.json").write_text("{broken")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar"))
     assert "unreadable" in out and "not set" not in out
 
@@ -123,7 +123,7 @@ async def test_set_from_a_url_replaces_the_image(env, monkeypatch):
     monkeypatch.setattr(avatar_sources, "image_from_url", _fake)
     out = await act_on_inbound(_Agent(str(env)),
                                _cmd("/avatar", "/avatar set https://x.test/a.png"))
-    st = load_avatar(env, "rob")
+    st = load_avatar(env, "carol")
     assert st.is_set and st.source == "url:https://x.test/a.png"
     assert "set (url:https://x.test/a.png)" in out
     assert "polyrob avatar push" in out  # the profile photos do not follow on their own
@@ -141,7 +141,7 @@ async def test_a_refused_image_leaves_the_old_one(env, monkeypatch):
     out = await act_on_inbound(_Agent(str(env)),
                                _cmd("/avatar", "/avatar set https://x.test/a.txt"))
     assert "NOT changed" in out
-    assert load_avatar(env, "rob").source == "file:face.png"
+    assert load_avatar(env, "carol").source == "file:face.png"
 
 
 @pytest.mark.asyncio
@@ -150,7 +150,7 @@ async def test_clear_empties_the_slot(env):
     _write_pfp(env)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar clear"))
     assert "cleared" in out
-    assert load_avatar(env, "rob").is_default
+    assert load_avatar(env, "carol").is_default
 
 
 def test_set_runs_off_the_poll_loop():
@@ -207,7 +207,7 @@ async def test_a_change_is_refused_from_a_room(env, monkeypatch, line):
     _write_pfp(env)
     out = await act_on_inbound(_Agent(str(env)), _room_cmd(line))
     assert "not available from a group chat" in out
-    assert load_avatar(env, "rob").source == "file:face.png"
+    assert load_avatar(env, "carol").source == "file:face.png"
 
 
 @pytest.mark.asyncio
@@ -222,5 +222,5 @@ async def test_the_read_in_a_room_posts_no_photo_into_the_room(env, monkeypatch)
     monkeypatch.setattr("surfaces.telegram.harness._send_photo_best_effort", _photo)
     _write_pfp(env)
     out = await act_on_inbound(_Agent(str(env)), _room_cmd("/avatar"))
-    assert "rob" in out
+    assert "carol" in out
     assert sent == []

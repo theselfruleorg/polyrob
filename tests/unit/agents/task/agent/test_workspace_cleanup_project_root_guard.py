@@ -24,7 +24,7 @@ def _reset_pm():
     reset_path_manager()
 
 
-def _old_session(session_id, user_id="rob"):
+def _old_session(session_id, user_id="alice"):
     stale = (datetime.now() - timedelta(days=30)).isoformat()
     return {"session_id": session_id, "user_id": user_id,
             "status": "completed", "updated_at": stale}
@@ -68,7 +68,7 @@ def test_cleanup_still_removes_a_per_session_workspace(tmp_path):
     mgr._sessions = {"sess-a": _old_session("sess-a")}
 
     from agents.task.path import pm
-    ws = pm().get_workspace_dir("sess-a", "rob")
+    ws = pm().get_workspace_dir("sess-a", "alice")
     (ws / "scratch.txt").write_text("throwaway")
 
     cleaned = mgr.cleanup_old_workspaces(max_age_days=7)

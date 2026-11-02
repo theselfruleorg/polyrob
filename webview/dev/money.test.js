@@ -54,12 +54,12 @@ import {
 
 const COPY = {
   clean: "The ledger and the chains agree.",
-  disagreement: "Rob's ledger and a chain disagree about what it holds.",
+  disagreement: "The agent's ledger and a chain disagree about what it holds.",
   unverified: "I could not verify the book on every chain.",
-  no_ledger: "Rob has not written down a ledger to check against yet.",
+  no_ledger: "The agent has not written down a ledger to check against yet.",
   checked: "Checked {when}.",
   recheck: "Check again",
-  holds_title: "What Rob holds",
+  holds_title: "What the agent holds",
   holds_count: "{count} positions",
   col_position: "Position",
   col_chain: "Chain",
@@ -67,20 +67,20 @@ const COPY = {
   col_worth: "Worth now",
   col_since: "Since entry",
   entry_at: "cost {price}",
-  no_positions: "Rob has not written down a position on any chain it can read.",
+  no_positions: "The agent has not written down a position on any chain it can read.",
   total_label: "Positions, at today's prices",
   total_excludes: "not counted here: {chains}",
-  chains_title: "The chains Rob checked",
+  chains_title: "The chains the agent checked",
   chains_age: "last read {when}",
   chain_read: "Read in full.",
   chain_unread: "I could not read this chain.",
   chain_unread_why: "Why",
   run_title: "The trading run",
   run_aside: "lives in Work",
-  run_body: "Everything Rob trades lands under Moves.",
+  run_body: "Everything the agent trades lands under Moves.",
   run_watch: "Watch it in Work",
-  empty_title: "Rob has no wallet yet.",
-  empty_body: "Give Rob a wallet and it can show you the book.",
+  empty_title: "The agent has no wallet yet.",
+  empty_body: "Give the agent a wallet and it can show you the book.",
   empty_why: "Why",
   loading: "Reading the book.",
   unreadable: "I could not read the book.",
@@ -220,9 +220,9 @@ describe("an unreadable chain is a dashed group; the total names what it exclude
     expect(base.classList.contains("is-unknown")).toBe(true);
     expect(base.textContent).toContain(COPY.chain_unread);
     expect(base.textContent).toContain("the Base node did not answer");
-    const rob = section.querySelector('[data-chain="robinhood"]');
-    expect(rob.classList.contains("is-unknown")).toBe(false);
-    expect(rob.textContent).toContain(COPY.chain_read);
+    const rh = section.querySelector('[data-chain="robinhood"]');
+    expect(rh.classList.contains("is-unknown")).toBe(false);
+    expect(rh.textContent).toContain(COPY.chain_read);
   });
 
   it("the total sums only the readable chain and names what it left out", () => {
@@ -332,18 +332,18 @@ const MV = {
   mv_inflight_unreadable_why: "Why it failed",
   mv_bridge_route: "{origin} to {dest}",
   mv_bridge_line: "{amount}, sent {age} ago and not landed yet.",
-  mv_bridge_safe: "Rob will not send it again — a bridge sent twice pays twice — and it is 'in flight', never 'failed'.",
+  mv_bridge_safe: "The agent will not send it again — a bridge sent twice pays twice — and it is 'in flight', never 'failed'.",
   mv_onchain: "See it on-chain",
-  mv_recent_title: "Recent moves", mv_recent_empty: "Rob has not moved anything yet.",
+  mv_recent_title: "Recent moves", mv_recent_empty: "The agent has not moved anything yet.",
   mv_recent_unreadable: "I could not read the recent moves.",
   mv_recent_unreadable_why: "Why it failed",
   mv_recent_partial: "{count} row(s) could not be read.",
-  mv_recent_note: "A quote Rob asked for but did not send is not a move.",
+  mv_recent_note: "A quote the agent asked for but did not send is not a move.",
   mv_col_when: "When", mv_col_what: "What", mv_col_chain: "Chain", mv_col_amount: "Amount",
   mv_no_amount: "a permission, not a spend", mv_amount_unknown: "not recorded",
-  mv_made_title: "What Rob has made", mv_made_aside: "{count} on-chain",
-  mv_made_empty: "Rob has not deployed or launched anything.",
-  mv_made_unreadable: "I could not read what Rob has made.",
+  mv_made_title: "What the agent has made", mv_made_aside: "{count} on-chain",
+  mv_made_empty: "The agent has not deployed or launched anything.",
+  mv_made_unreadable: "I could not read what the agent has made.",
   mv_made_unreadable_why: "Why it failed",
   mv_made_partial: "{count} row(s) could not be read.",
   mv_col_token: "What", mv_col_address: "Address", mv_col_cost: "Cost",
@@ -409,7 +409,7 @@ describe("Moves › recent moves — honest per cell, never a silent drop", () =
   });
 });
 
-describe("Moves › what Rob has made — unavailable is not 'nothing made'", () => {
+describe("Moves › what the agent has made — unavailable is not 'nothing made'", () => {
   const now = Date.now();
   it("renders a creation with its address and a link", () => {
     const tr = creationRow({ action: "deploy_token", chain: "base",
@@ -449,11 +449,11 @@ describe("renderMoves draws all three tiers, each failing on its own", () => {
 
 const CASH = {
   cash_income_what: "Income", cash_spent_what: "Spent",
-  cash_whose: "Rob's own money, last {days} days",
+  cash_whose: "The agent's own money, last {days} days",
   cash_paid_invoices: "Paid invoices", cash_waiting: "Waiting to be paid",
   cash_balance_now: "USDC in the treasury now", cash_net: "Left after income and spend",
   cash_no_sum: "there is no single number that combines them",
-  cash_runtime_title: "What it costs you to run Rob", cash_runtime_aside: "your money, not Rob's",
+  cash_runtime_title: "What it costs you to run the agent", cash_runtime_aside: "your money, not the agent's",
   cash_runtime_window: "Last {days} days", cash_runtime_total: "Since the start",
   cash_runtime_calls: "over {count} model calls",
   cash_provider_left: "Left with your provider",
@@ -589,16 +589,16 @@ describe("Cash — the owner wallet is wired as a read-only identity", () => {
 });
 
 const INV = {
-  inv_title: "Who owes Rob money", inv_aside: "{amount} outstanding",
-  inv_empty: "No one owes Rob money yet.",
+  inv_title: "Who owes the agent money", inv_aside: "{amount} outstanding",
+  inv_empty: "No one owes the agent money yet.",
   inv_unreadable: "I could not read the invoices.", inv_unreadable_why: "Why it failed",
   inv_col_who: "Who", inv_col_for: "For", inv_col_amount: "Amount", inv_col_state: "State",
   inv_state_pending: "unpaid", inv_state_completed: "paid", inv_state_expired: "expired",
   inv_late: "{count} days late", inv_settle: "Mark paid",
   inv_settle_done: "marked paid", inv_settle_failed: "The console could not reach the server.",
-  inv_note: "Rob watches the treasury address.",
+  inv_note: "The agent watches the treasury address.",
   inv_machine_title: "Machine payments are not counted here yet.",
-  inv_machine_body: "so this page can undercount what Rob earned.",
+  inv_machine_body: "so this page can undercount what the agent earned.",
 };
 
 describe("Invoices — typed state, the A20 note, and an owner settle", () => {
@@ -658,7 +658,7 @@ const LIM = {
   lim_title: "Today's spend limit", lim_used: "{used} of {cap} used today",
   lim_left: "{left} left", lim_no_cap: "No daily cap is set — aggregate spend is unbounded.",
   lim_unknown: "The daily cap could not be read.", lim_unknown_why: "Why",
-  lim_body: "The limits Rob spends within live in Agent.", lim_link: "Open Agent",
+  lim_body: "The limits the agent spends within live in Agent.", lim_link: "Open Agent",
 };
 
 describe("Limits — today's used/limit from the ledger, and a link to Agent", () => {

@@ -72,7 +72,7 @@ class SettingInfo:
     description: str
     effective: object         # display-safe (secrets masked)
     source: str
-    applies: str              # live|next-turn|next-session|restart
+    applies: str              # live|next-step|next-turn|next-session|restart
     sensitivity: str          # safe|guarded|flag
     enforcement: str          # enforced|advisory
     secret: bool
@@ -706,9 +706,57 @@ def _set_pref(key: str, value, user_id, home_dir, confirm: bool) -> SetResult:
     ok, err = write_preference(home_dir, user_id, key, value)
     if not ok:
         return SetResult(False, "invalid", err)
+    from core.prefs_hooks import notify  # 095 W4: a live agent re-reads it
+    notify("prefs")
     path = preferences_path(home_dir, user_id)
-    return SetResult(True, "written", f"set {key} (applies: {spec.applies})",
-                     store=str(path), applies=spec.applies)
+    message, notes = pref_written_report(key, value, user_id, home_dir)
+    return SetResult(True, "written", message, store=str(path),
+                     applies=spec.applies, notes=notes)
+
+
+def pref_written_report(key: str, value, user_id, home_dir) -> tuple:
+    """095 W1c (SC-3): ``(message, notes)`` after a SAFE preference write — the
+    value in force, when it applies, and why a higher layer keeps the write from
+    doing anything (min-merge above env, and-merge on OFF). A READ: the agent's
+    ``preferences`` action renders its own write through it (it never reaches
+    :func:`set_value`, 024 §2.6)."""
+    from core.prefs import PREF_SCHEMA, display_effective
+    spec = PREF_SCHEMA[key]
+    try:
+        shown, source = display_effective(key, user_id, home_dir)
+    except Exception:  # noqa: BLE001 — the write is done; the read is a courtesy
+        logger.debug("config_service: effective value unreadable for %s", key, exc_info=True)
+        shown, source = "unknown", "unread"
+    notes = tuple(n for n in (_pref_noop(spec, key, value),) if n)
+    message = f"set {key}: effective {shown} ({source}; applies: {spec.applies})"
+    return "\n".join((message, *notes)), notes
+
+
+def _pref_noop(spec, key: str, value) -> Optional[str]:
+    """Why a written SAFE preference changes nothing today, or None: the
+    min-merge rule (``prefs._min_merge_noop``) and its and-merge twin (a pref
+    that turns ON a key whose operator flag is OFF)."""
+    from core.prefs import _builtin_default, _min_merge_noop, validate_pref
+    ok, coerced, _err = validate_pref(key, value)
+    if not ok:
+        return None
+    if spec.merge == "min":
+        why = _min_merge_noop(key, coerced)
+        return f"saved, but no effect now: {why}" if why else None
+    if spec.merge != "and" or coerced is not True or not spec.env_flag:
+        return None
+    from core.config_policy.members import flag_raw
+    raw = flag_raw(spec.env_flag)
+    if raw is not None:
+        ok, env_on, _err = validate_pref(key, raw)
+        env_on = env_on if ok else None
+    else:
+        builtin = _builtin_default(spec)
+        env_on = builtin[0] if builtin else None
+    if env_on is not False:
+        return None
+    return (f"saved, but no effect now: {key} can only turn {spec.env_flag} OFF, and "
+            f"{spec.env_flag} is off; turning it on is an operator change")
 
 
 def _set_flag(key: str, value: str, scope: str, *, surface: str = "local",

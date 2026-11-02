@@ -72,7 +72,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _result(text, *, user_id="rob", raw_user_id=None, chat_role=None,
+def _result(text, *, user_id="alice", raw_user_id=None, chat_role=None,
             chat_type="dm", chat_id="555"):
     source = SessionSource(surface_id="telegram", chat_id=chat_id, chat_type=chat_type)
     identity = Identity(user_id=user_id, source=source,
@@ -93,7 +93,7 @@ ROOM = "-1002002374383"
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("ROOM_ACTIONS_ENABLED", "true")
@@ -118,7 +118,7 @@ def test_a_bare_chat_key_is_accepted_as_the_guide_documents(agent, env):
     assert "paid_ban_max_duration" in out
 
     from core.surfaces import chat_policy
-    p = chat_policy.load(str(env), "rob", "telegram", ROOM)
+    p = chat_policy.load(str(env), "alice", "telegram", ROOM)
     assert p.paid_ban_max_duration == "6h"
 
 
@@ -127,7 +127,7 @@ def test_a_prefixed_key_still_works_unchanged(agent, env):
                        ["set", "telegram", ROOM, "chat.paid_mute_usd", "0.10"])
     assert "❌" not in out
     from core.surfaces import chat_policy
-    assert chat_policy.load(str(env), "rob", "telegram", ROOM).paid_mute_usd == 0.10
+    assert chat_policy.load(str(env), "alice", "telegram", ROOM).paid_mute_usd == 0.10
 
 
 def test_a_genuinely_unknown_key_is_still_refused(agent, env):
@@ -145,7 +145,7 @@ def test_use_binds_a_room_and_here_then_works_in_a_dm(agent, env):
                        ["set", "here", "paid_mute_usd", "0.25"])
     assert "❌" not in out
     from core.surfaces import chat_policy
-    assert chat_policy.load(str(env), "rob", "telegram", ROOM).paid_mute_usd == 0.25
+    assert chat_policy.load(str(env), "alice", "telegram", ROOM).paid_mute_usd == 0.25
 
 
 def test_use_with_no_binding_still_explains_itself(agent, env):
@@ -174,7 +174,7 @@ def test_being_in_a_room_always_beats_the_focus(agent, env):
     assert "-1009999" in out
 
     from core.surfaces import chat_policy
-    assert chat_policy.load(str(env), "rob", "telegram", ROOM).paid_mute_usd != 0.99
+    assert chat_policy.load(str(env), "alice", "telegram", ROOM).paid_mute_usd != 0.99
 
 
 # --- /paid from a DM -------------------------------------------------------
@@ -196,7 +196,7 @@ def test_paid_price_from_a_dm_writes_the_focused_room(agent, env):
     groups_reply(agent, _result("/groups use x"), ["use", "telegram", ROOM])
     paid_reply(agent, _result("/paid price mute 0.10"), ["price", "mute", "0.10"])
     from core.surfaces import chat_policy
-    assert chat_policy.load(str(env), "rob", "telegram", ROOM).paid_mute_usd == 0.10
+    assert chat_policy.load(str(env), "alice", "telegram", ROOM).paid_mute_usd == 0.10
 
 
 # --- the thing that must NOT widen ----------------------------------------
@@ -213,7 +213,7 @@ def test_a_non_owner_cannot_administer_a_room_by_focusing_it(agent, env):
     assert "🔒" in out
 
     from core.surfaces import chat_policy
-    assert chat_policy.load(str(env), "rob", "telegram", ROOM).paid_mute_usd != 9.99
+    assert chat_policy.load(str(env), "alice", "telegram", ROOM).paid_mute_usd != 9.99
 
 
 def test_the_focus_is_per_user_not_global(agent, env):

@@ -16,8 +16,7 @@ from core.env import bool_env as _core_bool_env, int_env as _core_int_env, float
 # writable-skills + background-review, cron run-loop+delivery, durable goal board,
 # and the curator. SINGLE SOURCE OF TRUTH for the falsey-set semantics, mirroring
 # reflection_llm_enabled_default() above. All loops default-OFF + fail-open except
-# MEMORY_SEARCH_TOOL (read-only, tenant-scoped) and CRON_RUN_LOOP (fixes a live bug
-# where cron built a session but never ran the agent loop).
+# CRON_RUN_LOOP (fixes a live bug where cron built a session but never ran the agent loop).
 
 from core.env import _FALSEY  # noqa: E402 — the ONE falsey set, re-exported by name
 

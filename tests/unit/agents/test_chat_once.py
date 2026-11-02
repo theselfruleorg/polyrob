@@ -46,7 +46,7 @@ def _bare_taskagent():
 def test_chat_once_returns_assistant_reply_not_ack():
     ta = _bare_taskagent()
     orch = MagicMock()
-    orch.agents = {"a1": _agent_with_reply("Hello, I'm Rob!")}
+    orch.agents = {"a1": _agent_with_reply("Hello, I'm Nova!")}
     ta._registry.get.return_value = orch
 
     created = {}
@@ -64,7 +64,7 @@ def test_chat_once_returns_assistant_reply_not_ack():
     ta.session_manager.get_session_info.return_value = {"id": "sess-1", "user_id": "u1"}
 
     reply = asyncio.run(ta.chat_once("u1", "hi", chat_id="c1"))
-    assert reply == "Hello, I'm Rob!"
+    assert reply == "Hello, I'm Nova!"
     assert reply != "Session completed successfully"
 
 
@@ -419,7 +419,7 @@ def test_chat_once_swaps_model_for_reused_session():
     asyncio.run(ta.chat_once(
         "u1", "hi", chat_id="c1", provider="anthropic", model="claude-sonnet-4-5",
     ))
-    agent.swap_model.assert_awaited_once_with("anthropic", "claude-sonnet-4-5")
+    agent.swap_model.assert_awaited_once_with("anthropic", "claude-sonnet-4-5", cause="api")
 
 
 def test_chat_once_swap_happens_before_the_turn_runs():
@@ -428,7 +428,7 @@ def test_chat_once_swap_happens_before_the_turn_runs():
     agent.model_name = "gpt-5"
     agent.llm_provider = "openai"
 
-    async def fake_swap(provider, model):
+    async def fake_swap(provider, model, cause=None):
         order.append("swap")
         return {"ok": True}
 
@@ -483,7 +483,7 @@ def test_chat_once_falsy_provider_still_swaps_when_model_differs():
     asyncio.run(ta.chat_once(
         "u1", "hi", chat_id="c1", provider=None, model="claude-sonnet-4-5",
     ))
-    agent.swap_model.assert_awaited_once_with(None, "claude-sonnet-4-5")
+    agent.swap_model.assert_awaited_once_with(None, "claude-sonnet-4-5", cause="api")
 
 
 def test_chat_once_swap_failure_logs_and_continues():
@@ -496,7 +496,7 @@ def test_chat_once_swap_failure_logs_and_continues():
     reply = asyncio.run(ta.chat_once(
         "u1", "hi", chat_id="c1", provider="anthropic", model="claude-sonnet-4-5",
     ))
-    agent.swap_model.assert_awaited_once_with("anthropic", "claude-sonnet-4-5")
+    agent.swap_model.assert_awaited_once_with("anthropic", "claude-sonnet-4-5", cause="api")
     assert reply == "hi"  # turn still completes on the (unchanged) current model
 
 
@@ -529,7 +529,7 @@ def test_chat_once_swap_raising_does_not_500_and_turn_proceeds():
     reply = asyncio.run(ta.chat_once(
         "u1", "hi", chat_id="c1", provider="anthropic", model="claude-sonnet-4-5",
     ))
-    agent.swap_model.assert_awaited_once_with("anthropic", "claude-sonnet-4-5")
+    agent.swap_model.assert_awaited_once_with("anthropic", "claude-sonnet-4-5", cause="api")
     assert reply == "hi"  # turn still completes on the unchanged current model
 
 

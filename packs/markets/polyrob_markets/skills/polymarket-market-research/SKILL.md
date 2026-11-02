@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Reading Polymarket markets and prices'
   polyrob-priority: '5'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["polymarket_data"]}'
   polyrob-version: '2'
 ---

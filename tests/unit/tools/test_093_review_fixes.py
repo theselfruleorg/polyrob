@@ -44,7 +44,7 @@ def _file(board, line_cmd, monkeypatch):
     monkeypatch.setattr("tools.controller.owner_ask_action._board", lambda c: board)
     p = classify(line_cmd)
     assert p.outcome == OPERATOR, p.reason
-    return asyncio.run(sa._file_for_operator(SimpleNamespace(), "rob", "s1", p, "why"))
+    return asyncio.run(sa._file_for_operator(SimpleNamespace(), "alice", "s1", p, "why"))
 
 
 def test_two_different_operator_lines_are_two_asks(monkeypatch):
@@ -135,7 +135,7 @@ def test_a_grant_card_names_the_tools_it_replaces(tmp_path):
     gdb = goals_db_path(str(tmp_path))
     con = sqlite3.connect(gdb)
     con.execute("CREATE TABLE IF NOT EXISTS goals (id TEXT, user_id TEXT, kind TEXT, payload TEXT)")
-    con.execute("INSERT INTO goals VALUES ('abc123ff', 'rob', 'goal', ?)",
+    con.execute("INSERT INTO goals VALUES ('abc123ff', 'alice', 'goal', ?)",
                 (json.dumps({"tools": ["email", "browser"]}),))
     con.commit(); con.close()
     ctl = SimpleNamespace(container=SimpleNamespace(config=SimpleNamespace(data_dir=str(tmp_path))))
@@ -143,9 +143,9 @@ def test_a_grant_card_names_the_tools_it_replaces(tmp_path):
     orig = rp.container_data_home
     rp.container_data_home = lambda c: str(tmp_path)
     try:
-        assert _current_tools(ctl, "rob", "/goal", "abc123") == ["email", "browser"]
+        assert _current_tools(ctl, "alice", "/goal", "abc123") == ["email", "browser"]
         assert _current_tools(ctl, "other", "/goal", "abc123") is None
-        assert _current_tools(ctl, "rob", "/job", "abc123") is None   # no cron db
+        assert _current_tools(ctl, "alice", "/job", "abc123") is None   # no cron db
     finally:
         rp.container_data_home = orig
     assert cron_db_path(str(tmp_path))
@@ -177,7 +177,7 @@ def _ctl(sid="s-review-093"):
 
 
 def _ctx(sid="s-review-093", **kw):
-    base = dict(user_id="rob", role="orchestrator", is_sub_agent=False, session_id=sid,
+    base = dict(user_id="alice", role="orchestrator", is_sub_agent=False, session_id=sid,
                 metadata={})
     base.update(kw)
     return SimpleNamespace(**base)
@@ -185,7 +185,7 @@ def _ctx(sid="s-review-093", **kw):
 
 @pytest.fixture
 def _owner(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
 
 
 def test_the_view_suggests_propose_setting_only_on_an_owner_turn(_owner):
@@ -231,7 +231,7 @@ def test_the_view_never_suggests_propose_setting_for_a_money_gate(monkeypatch):
 
 def test_mcp_servers_names_the_line_that_works():
     from core.tool_gates import REMEDIES, REMEDY_ACTORS
-    assert REMEDY_ACTORS["mcp_servers"].verb == "POLYROB_OVERRIDES=MCP_ENABLED=true"
+    assert REMEDY_ACTORS["mcp_servers"].verb == "polyrob config set MCP_ENABLED true"
     assert "/mcp add <id> <https-url>" in REMEDIES["mcp_servers"]
     assert "as the agent's user" in REMEDIES["backend-unavailable"]
 
@@ -246,6 +246,17 @@ def test_every_remedy_text_names_the_actor_its_row_names():
             assert who == "operator-env", (key, who)
         if who == "operator-env":
             assert not text.startswith("owner "), key
+    # 095 W2: every credential-gate row (core + a pack's register_credential_gate)
+    # names a REMEDIES key, so its text is held to the same row.
+    from tools.tool_disclosure import CREDENTIAL_GATED_TOOLS
+    try:
+        from polyrob_x.registration import TWITTER_CREDENTIAL_GATE
+        rows = list(CREDENTIAL_GATED_TOOLS.values()) + [TWITTER_CREDENTIAL_GATE]
+    except ImportError:
+        rows = list(CREDENTIAL_GATED_TOOLS.values())
+    for _kind, key in rows:
+        assert key in REMEDIES, key
+        assert REMEDY_ACTORS[key].who == "operator-env", key
 
 
 def test_every_operator_env_flag_named_by_a_remedy_is_not_seat_writable():

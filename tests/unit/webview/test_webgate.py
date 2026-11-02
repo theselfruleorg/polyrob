@@ -184,8 +184,8 @@ def test_console_display_name_default(webgate):
 
 
 def test_console_display_name_env_override(webgate, monkeypatch):
-    monkeypatch.setenv("POLYROB_CONSOLE_NAME", "Rob Console")
-    assert webgate.console_display_name() == "Rob Console"
+    monkeypatch.setenv("POLYROB_CONSOLE_NAME", "Nova Console")
+    assert webgate.console_display_name() == "Nova Console"
 
 
 def test_branding_config_defaults(webgate):

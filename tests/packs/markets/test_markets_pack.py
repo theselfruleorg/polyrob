@@ -96,15 +96,14 @@ def test_the_routers_mount_under_the_pack_prefix():
 def test_pack_skills_carry_their_rules_and_left_the_builtin_library():
     from agents.task.agent.skill_manager import SkillManager
     ids = {"polymarket-market-research", "polymarket-portfolio-review", "polymarket-trading",
-           "hyperliquid-market-data", "hyperliquid-account-review", "hyperliquid-trading"}
+           "hyperliquid-market-data", "hyperliquid-account-review", "hyperliquid-trading",
+           "crypto-trading-safety"}
     sm = SkillManager()
     sm._ensure_rules_loaded()
     assert ids <= sm._pack_rule_ids
     base = REPO / "data" / "prompts" / "skills"
     for sid in ids:
         assert not (base / sid).exists(), sid
-    # The safety doctrine also covers the on-chain treasury rail: it stays in core.
-    assert (base / "crypto-trading-safety" / "SKILL.md").is_file()
 
 
 _DISABLED = """

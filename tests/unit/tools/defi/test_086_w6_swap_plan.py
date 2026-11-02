@@ -12,6 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
+
 from tools.defi.trade_params import SolanaSwapParams, SwapParams
 from tools.defi.trade_tool import DefiTradeTool
 
@@ -99,7 +101,7 @@ def _active_mandate(tmp_path, monkeypatch):
     monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", lambda c, t: True)
     monkeypatch.setattr(to, "_is_forged_or_autonomous_turn", lambda c, t: True)
     monkeypatch.setattr(wa, "turn_refusal", lambda ctx: None)
-    m = tm.create("owner", actor=tm.OWNER_SEAT, budget_usd=10, chains=["solana"], path=mpath)
+    m = tm.create("owner", actor=tm.OWNER_SEAT, budget_usd=10, chains=["solana"], path=mpath, preset="longtail")
     return SimpleNamespace(user_id="owner", session_id="s", role="orchestrator",
                            is_sub_agent=False, metadata={"mandate": m.id})
 

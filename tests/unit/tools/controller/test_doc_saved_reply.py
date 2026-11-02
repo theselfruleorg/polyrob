@@ -31,7 +31,7 @@ def _assert_tappable(body: str, kind: str, uid: str) -> None:
     """The decision token in the reply must be one Telegram-linkable `/word` that
     the router resolves back to THIS item.
 
-    ⚠️ This test used to pin ``/approve owner_doc:rob``. Telegram auto-links
+    ⚠️ This test used to pin ``/approve owner_doc:alice``. Telegram auto-links
     exactly one token of ``[A-Za-z0-9_]`` and never sends the argument, so that
     string's only tappable half did nothing: on 2026-09-20 the owner tapped three
     times in eight minutes, promoted nothing, and the rule sat inert for 27 hours.
@@ -47,7 +47,7 @@ def _assert_tappable(body: str, kind: str, uid: str) -> None:
     assert resolve_pending_target(arg, types.SimpleNamespace(items=[item])) == item
 
 
-def _ctx(uid="rob"):
+def _ctx(uid="alice"):
     return types.SimpleNamespace(user_id=uid, is_sub_agent=False,
                                  role="orchestrator", metadata={})
 
@@ -65,7 +65,7 @@ async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_
         execution_context=_ctx())
     body = res.extracted_content or ""
     assert "NOT YET IN EFFECT" in body
-    _assert_tappable(body, "self_context", "rob")
+    _assert_tappable(body, "self_context", "alice")
     assert "saved (pending review" not in body
 
 
@@ -82,4 +82,4 @@ async def test_owner_doc_reply_states_inertness_and_command(monkeypatch, tmp_pat
         execution_context=_ctx())
     body = res.extracted_content or ""
     assert "NOT YET IN EFFECT" in body
-    _assert_tappable(body, "owner_doc", "rob")
+    _assert_tappable(body, "owner_doc", "alice")

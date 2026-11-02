@@ -18,12 +18,12 @@ def _tool(tmp_path):
     return t
 
 
-def _ctx(session_id="owner-sess", user_id="rob"):
+def _ctx(session_id="owner-sess", user_id="alice"):
     return SimpleNamespace(session_id=session_id, parent_session_id=None, user_id=user_id)
 
 
 def _done(board, title, priority=5):
-    g = board.create(user_id="rob", title=title, priority=priority, force=True)
+    g = board.create(user_id="alice", title=title, priority=priority, force=True)
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_success(g.id, result="ok", claim_token=board.get(g.id).claim_token)
     return g
@@ -38,8 +38,8 @@ def test_goal_list_defaults_to_live_goals_newest_first(tmp_path):
     b = t._goal_board
     for i in range(120):
         _done(b, f"old finished work {i}")
-    older_live = b.create(user_id="rob", title="older live goal", priority=5, force=True)
-    stream_leg = b.create(user_id="rob", title="Treasury: manage open positions",
+    older_live = b.create(user_id="alice", title="older live goal", priority=5, force=True)
+    stream_leg = b.create(user_id="alice", title="Treasury: manage open positions",
                           priority=2, force=True, payload={"stream": "treasury-trading"})
 
     r = run(t.goal_list(GoalListAction(), _ctx()))

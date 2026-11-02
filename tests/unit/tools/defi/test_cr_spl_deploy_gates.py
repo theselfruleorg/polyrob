@@ -56,7 +56,7 @@ def _clean_sim(raw_tx, owner):
 
 
 def _params(**kw):
-    base = dict(name="Rob Probe", symbol="RPROBE", supply=1_000_000_000,
+    base = dict(name="Demo Probe", symbol="RPROBE", supply=1_000_000_000,
                 decimals=9, uri="", max_spend_usd=5.0, dry_run=False)
     base.update(kw)
     return SolanaDeployTokenParams(**base)

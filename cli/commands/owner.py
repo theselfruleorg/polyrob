@@ -336,7 +336,7 @@ def _instance_id() -> str:
 
     Before this, `polyrob owner pending` on the production box resolved the right
     home under instance "polyrob" (the default) while the service runs instance
-    "rob", and printed a confident "no pending proposals" over four real ones —
+    "<name>", and printed a confident "no pending proposals" over four real ones —
     under a note assuring the owner it had used the deployed home. Never
     re-implement resolution here; the seam is `core.admin_data_home`.
     """
@@ -1458,7 +1458,7 @@ def groups_service(surface, chat_id, every, max_replies):
 # DM pairing (POLYROB_REQUIRE_PAIRING) — 3.11/O5, 2026-07-14 review.
 # core/pairing.py issues one-time codes to unknown senders; these commands are
 # the operator-side approval path that previously DIDN'T EXIST (the docstring
-# pointed at a phantom `rob pair approve`). Same PairingStore + data home the
+# pointed at a phantom `polyrob pair approve`). Same PairingStore + data home the
 # surface dispatcher uses.
 # ---------------------------------------------------------------------------
 

@@ -50,6 +50,19 @@ def _h_pending(ctx: CommandContext) -> None:
     instance_id = admin_instance()
 
     args = list(ctx.args or [])
+    # A tapped `/pending_p_<hex>` (or `/pending p-<hex>`): ONE item's full
+    # review — a skill update as a diff against the live skill.
+    if len(args) == 1 and args[0].lower().startswith(self_evolution.PENDING_ALIAS_PREFIX):
+        from tools.controller.approval_queue import all_pending, resolve_pending_target
+        match = resolve_pending_target(args[0], all_pending(
+            user_id=uid, home_dir=home_dir, instance_id=instance_id))
+        if match is None or match.get("kind") not in self_evolution.PENDING_KIND_LABELS:
+            ctx.emit(f"No pending proposal '{args[0]}' — see /pending.", title="pending")
+            return
+        ok, body = self_evolution.review(match["kind"], str(match["id"]), user_id=uid,
+                                         home_dir=home_dir, instance_id=instance_id)
+        ctx.emit(body, title=f"pending {match['kind']}:{match['id']}" if ok else "pending")
+        return
     # 035 P1-10: `/pending approve all` / `/pending reject all`.
     if len(args) == 2 and args[0].lower() in ("approve", "promote", "reject") \
             and args[1].lower() == "all":

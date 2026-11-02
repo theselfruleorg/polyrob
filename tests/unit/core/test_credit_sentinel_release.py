@@ -3,7 +3,7 @@
 ⚠️ 2026-09-24. OpenRouter went to −$0.14 at 06:22Z and the sentinel latched it
 for six hours. That window is right when nobody is watching — it is one paid
 probe per window instead of a permanent halt. But when the owner tops the
-account up at 09:30, the reason for the latch is GONE and Rob still sits dead
+account up at 09:30, the reason for the latch is GONE and the agent still sits dead
 until 12:22Z for no reason at all.
 
 The documented remedy was `rm <data>/CREDIT_SENTINEL`, which is wrong in a way

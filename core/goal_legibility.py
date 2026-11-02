@@ -87,7 +87,7 @@ def origin(goal: Any) -> str:
 
 
 def origin_tag(goal: Any) -> str:
-    """The bracketed board tag, e.g. ``[granted: treasury-trading]``."""
+    """The bracketed board tag, e.g. ``[granted: trading-mandate]``."""
     o = origin(goal)
     tag = ORIGIN_TAG[o]
     if o == ORIGIN_GRANTED:

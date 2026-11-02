@@ -104,9 +104,7 @@ async def test_child_leaves_the_shared_findings_queue_to_its_parent(monkeypatch)
         h.logger = logging.getLogger("rg-child")
         return h
 
-    await host(True)._save_step_to_memory(step_number=1, brain_state={"memory": "x"},
-                                          actions=[], results=[])
+    await host(True)._sync_reflection_summaries(1)     # the run-end drain (F7)
     assert drained == [] and synced == [] and queue == ["a finding"]
-    await host(False)._save_step_to_memory(step_number=1, brain_state={"memory": "x"},
-                                           actions=[], results=[])
+    await host(False)._sync_reflection_summaries(1)
     assert synced == ["a finding"]

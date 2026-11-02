@@ -1,7 +1,7 @@
 """043 C5 — the Inbox composition, held to its own definition.
 
 An Inbox item is *a durable record, for this tenant, blocked on an owner
-decision, that Rob cannot resolve alone* (043 §1.3). All four tests must hold,
+decision, that the agent cannot resolve alone* (043 §1.3). All four tests must hold,
 and the two that are easiest to lose are the last two: an informational card is
 **listed and not counted**, and a source that could not be read is a **named
 entry**, never an omission and never a zero.

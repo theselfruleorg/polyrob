@@ -1,6 +1,6 @@
 """A goal whose acceptance is the goal board itself is refused at create.
 
-2026-10-17 02:02–02:13Z: Rob made 5 "record row" goals ("A durable goal row
+2026-10-17 02:02–02:13Z: the agent made 5 "record row" goals ("A durable goal row
 exists that names … Verified by goal_show read-back"). The completion judge
 failed every one, which bred Unblock asks and more goals (~100 calls of churn).
 """

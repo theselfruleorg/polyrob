@@ -317,11 +317,11 @@ a.entry:hover{ border-left-color:var(--running) }
   padding:var(--s3) var(--s4); font-size:var(--t-small); line-height:var(--line-height-relaxed);
   margin-left:auto; max-width:min(640px,86%); width:fit-content; white-space:pre-wrap;
 }
-.turn-rob .said{
+.turn-agent .said{
   max-width:var(--measure); font-size:var(--t-small); line-height:var(--line-height-relaxed);
   color:var(--ink-2); border-left:3px solid var(--running); padding-left:var(--s3);
 }
-.turn-rob .said p + p{ margin-top:var(--s3) }
+.turn-agent .said p + p{ margin-top:var(--s3) }
 
 /* narrated action: one line, human-phrased, collapsed */
 .act{
@@ -428,7 +428,7 @@ a.entry:hover{ border-left-color:var(--running) }
   font-family:var(--mono); font-size:var(--t-micro); color:var(--ink-3);
   border-top:1px dashed var(--rule); padding:var(--s3) var(--s4); margin-top:var(--s5);
 }
-/* A run that failed before Rob answered (transcript.js _failedLine). */
+/* A run that failed before the agent answered (transcript.js _failedLine). */
 .note.is-failed{ border-left:2px solid var(--stopped); padding-left:var(--s3) }
 /* The one link to the folder behind a chat, and its capped list (070 W0.15). */
 .folder-browse{ margin-top:var(--s3) }

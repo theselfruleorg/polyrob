@@ -103,10 +103,10 @@ describe("the answer", () => {
 describe("070 E.31 — a busy 429 has console words", () => {
   it("a busy 429 maps to the busy line", async () => {
     const { serverAnswer, codeAnswer } = await import("../static/app/http.js");
-    document.body.innerHTML = '<div id="shell-copy" data-busy="Rob is busy. Try again in a minute."></div>';
+    document.body.innerHTML = '<div id="shell-copy" data-busy="The agent is busy. Try again in a minute."></div>';
     const body = { success: false, code: "busy", error: "Rate limit exceeded", retry_after: 60 };
-    expect(codeAnswer(body)).toBe("Rob is busy. Try again in a minute.");
-    expect(serverAnswer(body, "fallback")).toBe("Rob is busy. Try again in a minute.");
+    expect(codeAnswer(body)).toBe("The agent is busy. Try again in a minute.");
+    expect(serverAnswer(body, "fallback")).toBe("The agent is busy. Try again in a minute.");
     expect(serverAnswer({ error: "other" }, "fallback")).toBe("other");
   });
 });

@@ -107,7 +107,7 @@ groups set <surface> <chat_id> <key> <value>` (`unset`/`-` clears it back to def
 | `chat.verbosity` | `terse`/`normal`/`detailed` | tenant default | Reply verbosity, this room only |
 | `chat.tone` | str, ≤200 chars | tenant default | Free-text tone hint, this room only |
 | `chat.language` | str, ≤32 chars | tenant default | Reply language, e.g. `en` or `pt-BR` |
-| `chat.wake_words` | list, ≤10 patterns, ≤64 chars each | `[]` | Case-insensitive regexes that address the bot without an `@mention`; anchor a whole word with `\b` (`\brob\b`), or `rob` also wakes on `problem` |
+| `chat.wake_words` | list, ≤10 patterns, ≤64 chars each | `[]` | Case-insensitive regexes that address the bot without an `@mention`; anchor a whole word with `\b` (`\bnova\b`), or `nova` also wakes on `supernova` |
 | `chat.context_lines` | int, 0-100 | `30` | How many unanswered ledger lines the agent is shown per turn |
 | `chat.reply_cap_per_hour` | int, 0-200 | `20` | Overrides `GROUP_REPLY_CAP_PER_HOUR` for this room |
 | `chat.member_cooldown_sec` | int, 0-600 | `20` | Overrides `GROUP_MEMBER_COOLDOWN_SEC` for this room |
@@ -131,6 +131,11 @@ Being **addressed** — an `@mention`, a reply to one of the agent's own message
 at every mode but `active`. **The owner is not exempt**: he is a person in a room full
 of other people, and an agent that answered his every aside would both interrupt the
 room and bill him for it.
+
+When an addressed line is a **reply** to another message — a member's, the agent's own,
+or a forward — the agent sees that whole message (and the part the speaker quoted) with
+the line, as quoted context, never as an instruction. A message in a forum topic is not a
+reply to the topic's first message.
 
 - **`mention`** (default) — answer an addressed line from anyone, the owner included.
 - **`active`** — also answer a line the agent judges worth answering even when nobody
@@ -204,10 +209,9 @@ list can only grow by adding a guard, never by flipping a flag.
   and its verbs stay denied even if `GROUP_TURN_TOOLS` names it.
 - **Deferred execution** — no `goal_create`, `goal_cancel`, `cronjob_schedule`,
   `cronjob_edit`, `cronjob_cancel`, `skill_manage`, `self_context_manage`, `preferences`,
-  `owner_doc_manage`, `load_tool`, `tool_manage_install`, `mcp_install`,
-  `self_modify`. A room turn cannot plant something a later owner-tenant run
+  `owner_doc_manage`, `load_tool`, `tool_manage_install`, `self_modify`. A room turn cannot plant something a later owner-tenant run
   would execute, and it cannot widen its own rig.
-- **Cross-session recall** — no `session_search`, `memory_search`, `memory`,
+- **Cross-session recall** — no `session_search`, `memory`,
   `contact_history`, `recent_activity`, `agent_status`, `insights`,
   `usage_summary`. A room reply can never surface the owner's DM or trading history.
 - **Outbound elsewhere** — no `message`, `send_email`, `email_send`.
@@ -333,11 +337,12 @@ service run reaches. Both still obey `chat.reply_cap_per_hour` and
 
 ## Retention and the bio disclosure
 
-Every allowed-room line — text, media captions, edits, and service events (joins,
+Every allowed-room line — text, media captions, and service events (joins,
 leaves, title and photo changes, pins) — is written to the room ledger before any other
 gate runs, secret-scrubbed, with no media bytes stored. A service event is stored as
 what it IS (`kind=service`, e.g. "joined the room"), never as a member line with no
-text. A line from a chat the owner has NOT allowlisted is never stored and never
+text. An edit is not read at all: the agent keeps the first text, and an edit that adds a
+mention does not wake the agent (send a new line). A line from a chat the owner has NOT allowlisted is never stored and never
 processed at all — it is dropped before the agent does any work on it. (On a
 non-Telegram surface nothing is recorded at all — see [Prerequisites](#prerequisites).)
 
@@ -382,7 +387,7 @@ Then, in the DM, point `here` at it and configure:
 
 ```
 /groups use telegram -1002002374383   # `here` now means that room, in this DM
-/paid asset rob                       # an asset_id from `polyrob wallet asset list`
+/paid asset demo                      # an asset_id from `polyrob wallet asset list`
 /paid price mute 0.50                 # USD; sized into the token at mint
 /paid price ban 2.00                  # optional — a room may sell one and not the other
 /groups set here paid_ban_max_duration 6h

@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX sh
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch, tmp_path):
-    for k in ("AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL", "POLYROB_OWNER_USER_ID",
+    for k in ("AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID",
               "SHELL_BACKEND", "SHELL_HOST_SUDO"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(he, "host_execution_refusal", lambda: None)
@@ -188,7 +188,7 @@ async def test_floor_text_typed_into_a_shell_job_is_refused(monkeypatch, tmp_pat
 
 
 @pytest.mark.parametrize("tail,hit", [
-    ("[sudo] password for rob: ", True),
+    ("[sudo] password for alice: ", True),
     ("Enter passphrase for key '/x/id_ed25519': ", True),
     ("Password:", True),
     ("\x1b[1mPIN?\x1b[0m ", True),

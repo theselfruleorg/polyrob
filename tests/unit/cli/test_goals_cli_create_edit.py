@@ -16,24 +16,24 @@ def board(tmp_path, monkeypatch):
     # (`core.admin_data_home.admin_owner_principal`), not the shell-local
     # `resolve_identity` — on a deployed box only the former sees the tenant
     # the service actually runs under (C14).
-    monkeypatch.setattr("core.instance.resolve_owner_user_id", lambda *a, **k: "rob")
-    monkeypatch.setattr("core.identity.resolve_identity", lambda: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_user_id", lambda *a, **k: "alice")
+    monkeypatch.setattr("core.identity.resolve_identity", lambda: "alice")
     return b
 
 
 def test_create_with_tools_acceptance_parent(board):
-    p = board.create(user_id="rob", title="Earn money")
+    p = board.create(user_id="alice", title="Earn money")
     r = CliRunner().invoke(goals, [
         "create", "Draft pricing post", "--parent", p.id,
         "--tools", "filesystem,task,twitter", "--acceptance", "a tweet id"])
     assert r.exit_code == 0, r.output
-    g = next(x for x in board.list_recent(user_id="rob") if x.parent_id == p.id)
+    g = next(x for x in board.list_recent(user_id="alice") if x.parent_id == p.id)
     assert g.payload["tools"] == ["filesystem", "task", "twitter"]
     assert g.payload["acceptance"] == "a tweet id"
 
 
 def test_create_duplicate_shows_match_and_force(board):
-    board.create(user_id="rob", title="Research revenue angles for POLYROB")
+    board.create(user_id="alice", title="Research revenue angles for POLYROB")
     r = CliRunner().invoke(goals, ["create", "Research revenue angles for POLYROB"])
     assert r.exit_code == 1 and "duplicate" in r.output.lower()
     r = CliRunner().invoke(goals, ["create", "Research revenue angles for POLYROB", "--force"])
@@ -41,7 +41,7 @@ def test_create_duplicate_shows_match_and_force(board):
 
 
 def test_edit(board):
-    g = board.create(user_id="rob", title="Old goal title words")
+    g = board.create(user_id="alice", title="Old goal title words")
     r = CliRunner().invoke(goals, ["edit", g.id, "--priority", "9",
                                    "--acceptance", "file project/x.md exists"])
     assert r.exit_code == 0, r.output
@@ -50,12 +50,12 @@ def test_edit(board):
 
 
 def test_tree(board):
-    o = board.create(user_id="rob", title="Earn money")
-    g = board.create(user_id="rob", title="Draft pricing brief", parent_id=o.id)
+    o = board.create(user_id="alice", title="Earn money")
+    g = board.create(user_id="alice", title="Draft pricing brief", parent_id=o.id)
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_success(g.id, result="OUTCOME: project/p.md", claim_token=board.get(g.id).claim_token)
     board.set_outcome(g.id, "project/p.md")
-    orphan = board.create(user_id="rob", title="Unattached goal words")
+    orphan = board.create(user_id="alice", title="Unattached goal words")
     r = CliRunner().invoke(goals, ["tree"])
     assert r.exit_code == 0, r.output
     assert "Earn money" in r.output and "Draft pricing brief" in r.output
@@ -64,7 +64,7 @@ def test_tree(board):
 
 
 def test_list_marks_missing_outcome(board):
-    g = board.create(user_id="rob", title="A done goal lacking outcome")
+    g = board.create(user_id="alice", title="A done goal lacking outcome")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_success(g.id, result="ok", claim_token=board.get(g.id).claim_token)
     r = CliRunner().invoke(goals, ["list"])

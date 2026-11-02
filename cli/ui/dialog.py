@@ -76,7 +76,7 @@ PREFER_ACTION_TEXT = os.getenv("CLI_PREFER_ACTION_TEXT", "true").strip().lower()
 
 # ---------------------------------------------------------------------------
 # Plumbing strings — the receipts the send_message tool returns to the agent.
-# These are NOT the message; they must never be shown to the user as "rob".
+# These are NOT the message; they must never be shown to the user as "agent".
 # ---------------------------------------------------------------------------
 
 #: The exact ``extracted_content`` strings the ``send_message`` action returns
@@ -229,13 +229,13 @@ def step_is_message_only(actions: List[Dict[str, Any]]) -> bool:
 # turn there is no send_message, so the model's raw CONTENT — the brain state —
 # is what streams into the live box.  That content is telemetry, not the agent's
 # voice, and must be DEMOTED to a single dim "planning" line rather than printed
-# as a "rob" bubble.  Some models (kimi-k2.6) format it as JSON, which otherwise
+# as an "agent" bubble.  Some models (kimi-k2.6) format it as JSON, which otherwise
 # surfaces as a raw ``{"current_state": …}`` dump.
 
 #: Keys that mark a dict as an agent brain-state rather than an arbitrary JSON
 #: result.  Two or more present (or a ``current_state`` wrapper) ⇒ brain-state.
 #: One canonical set — a drifted local copy here was missing "phase", so a brain
-#: block whose only extra key was "phase" rendered as a rob bubble.
+#: block whose only extra key was "phase" rendered as an agent bubble.
 from modules.llm.brain_scrubber import BRAIN_KEYS as _BRAIN_KEYS
 
 #: Brain-state field values that carry no information for a planning line.
@@ -246,7 +246,7 @@ _BRAIN_PLACEHOLDERS = frozenset({"", "pending", "n/a", "none", "synthesis pendin
 #: ``tool_call`` lowercase/underscore prefix. NVIDIA NIM intermittently leaks
 #: these as raw text. The LLM client strips them (WS-2.1); this is the render-
 #: layer backstop (WS-3.2) so a leak via any other path still can't reach the
-#: brain-state check or a "rob" bubble. Deliberately narrow — the exact closed set
+#: brain-state check or an "agent" bubble. Deliberately narrow — the exact closed set
 #: of kimi's known tokens, never arbitrary ``<|…|>`` (or ``<|tool_call*|>`` lookalikes
 #: from a future spec) that genuine prose might carry.
 _KIMI_CONTROL_TOKEN_RE = re.compile(
@@ -270,7 +270,7 @@ _PLANNING_FIELDS = ("next_goal", "reasoning", "memory")
 #: A leading ```lang fenced block (markdown). DeepSeek (and other non-native
 #: JSON-fallback providers) wrap their brain-state JSON in a ```json fence, which
 #: makes the content start with backticks instead of "{" — defeating the JSON
-#: brain-state check below and leaking the raw dump as a "rob" bubble (OR-2).
+#: brain-state check below and leaking the raw dump as an "agent" bubble (OR-2).
 _CODE_FENCE_RE = re.compile(r"^\s*(?:```|~~~)[^\n]*\n(.*?)\n?(?:```|~~~)\s*$", re.DOTALL)
 
 
@@ -298,7 +298,7 @@ def _brain_from_json(text: str) -> Optional[Dict[str, Any]]:
     string to be one JSON object, so the B4 leak shapes — a brain JSON object
     followed by trailing tool-call junk (``… done(text=…)`` or ``… </invoke>``)
     that the client recovery couldn't fully strip — are still recognised as
-    brain-state and DEMOTED to a planning line instead of dumped as a "rob"
+    brain-state and DEMOTED to a planning line instead of dumped as an "agent"
     bubble. A leading ```json markdown fence (OR-2: DeepSeek non-native path) is
     stripped first so the fenced dump is recognised the same way.
     """
@@ -357,7 +357,7 @@ def is_brain_state(text: Optional[str]) -> bool:
         return False
     # Strip any leaked Kimi control tokens first (WS-3.2) so the stray-end-token
     # shape ({brain json} <|tool_call_end|>) is still recognised as brain-state
-    # rather than mis-rendered as a "rob" bubble.
+    # rather than mis-rendered as an "agent" bubble.
     text = strip_control_tokens(text)
     if not text:
         return False

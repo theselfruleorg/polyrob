@@ -2,7 +2,7 @@
 
 A pause has scopes (031). ``/pause trading`` leaves everything else running,
 and every other seat says so. The console's head truth rendered four states and
-never read ``PauseState.scopes``, so a trading-only pause showed *"Rob is
+never read ``PauseState.scopes``, so a trading-only pause showed *"The agent is
 paused."* on every screen — confidently wrong, on the one line that may never
 be, about the one control an owner reaches for when something is going wrong.
 
@@ -41,7 +41,7 @@ def test_a_scoped_pause_names_its_scope(headline):
 def test_a_pause_of_everything_says_since_when(headline, monkeypatch):
     import webview.pages_new as mod
     monkeypatch.setattr(mod, "_when", lambda ts: "14:02")
-    assert headline(scopes=["all"], since=1_700_000_000.0) == "Rob is paused since 14:02."
+    assert headline(scopes=["all"], since=1_700_000_000.0) == "The agent is paused since 14:02."
 
 
 def test_a_pause_of_everything_does_not_say_for(headline):
@@ -64,7 +64,7 @@ def test_no_record_is_running(monkeypatch, tmp_path):
     import webview.pages_new as mod
     import webview.webgate as webgate
     monkeypatch.setattr(webgate, "data_dir", lambda: str(tmp_path))
-    assert mod._pause_headline() == "Rob is running."
+    assert mod._pause_headline() == "The agent is running."
 
 
 def test_an_unreadable_record_says_paused_and_why(monkeypatch, tmp_path):
@@ -73,7 +73,7 @@ def test_an_unreadable_record_says_paused_and_why(monkeypatch, tmp_path):
     monkeypatch.setattr(webgate, "data_dir", lambda: str(tmp_path))
     (tmp_path / PAUSE_FILENAME).write_text("{not json")
     text = mod._pause_headline()
-    assert text == "Rob is paused to be safe. It could not read its pause setting."
+    assert text == "The agent is paused to be safe. It could not read its pause setting."
 
 
 def test_the_words_are_the_terminals_own(headline):

@@ -123,7 +123,7 @@ default and only says so). The CLI does not load a per-directory
 `./.polyrob/.env` (a cloned directory could supply it), so `--project` is
 refused: nothing is written, and the message names the file the CLI reads.
 Every write tells you which file it
-wrote and when the value applies (`live`, `next-turn`, `next-session`, or `restart`).
+wrote and when the value applies (`live`, `next-step`, `next-turn`, `next-session`, or `restart`).
 
 An **environment flag is read when the process starts**, so a change needs a
 restart of whatever is running (the REPL, `polyrob serve`, a surface, a systemd
@@ -279,9 +279,9 @@ names are retired; set alone, POLYROB refuses to start and names the
 `DEEPSEEK_API_KEY` selects DeepSeek's own API (last in the preference order
 above): `deepseek-flash` by default, `deepseek-v4-pro`, and the legacy ids
 `deepseek-chat` (thinking off) and `deepseek-reasoner` (thinking on). The
-names `deepseek-v4.1-flash` and `deepseek-pro` also work: Rob sends DeepSeek
+names `deepseek-v4.1-flash` and `deepseek-pro` also work: the agent sends DeepSeek
 the API name (`deepseek-flash`, `deepseek-v4-pro`). Thinking
-is on by default; Rob sends each step's `reasoning_content` back to DeepSeek,
+is on by default; the agent sends each step's `reasoning_content` back to DeepSeek,
 as its API requires. Weekday peak hours (01:00–04:00 and
 06:00–10:00 UTC) bill at twice the catalog price, and the usage record
 carries that exact charge.
@@ -351,7 +351,7 @@ support it (off by default because it changes cost and latency).
 the run halts honestly when it is reached, and the remaining budget is shown to
 the model so it can pace itself.
 `AUTONOMOUS_MAX_STEPS` (default `150`) is the one step limit for every goal,
-scheduled job and helper. Rob cannot set a step limit of its own; AI cost
+scheduled job and helper. The agent cannot set a step limit of its own; AI cost
 (`AUTONOMOUS_RUN_BUDGET_USD`) and wall-clock time are the real bounds. A run that
 answers in a group keeps a fixed 8 steps.
 
@@ -519,9 +519,9 @@ Under the dynamic tool rig (`TOOL_PROGRESSIVE_DISCLOSURE`, on under
 `POLYROB_LOCAL`) the agent sees every loadable tool and pulls one in mid-session
 with `load_tool`; money tools are never loadable that way.
 
-Your own chat with Rob (Telegram, the console) starts with a small set of
+Your own chat with the agent (Telegram, the console) starts with a small set of
 abilities: files, the TODO list, a web read, goals and scheduled jobs, plus every
-money ability you granted. Rob sees the full catalog and calls `load_tool` for
+money ability you granted. The agent sees the full catalog and calls `load_tool` for
 anything else your request needs, like a scheduled job does.
 `INTERACTIVE_TOOL_IDS` replaces the starting set.
 
@@ -557,8 +557,8 @@ refuses it. `docker` is the hardened container. `ssh` runs on a remote host
 you name with `CODE_EXEC_SSH_HOST` and must be attested disposable with
 `CODE_EXEC_SSH_SANDBOXED=true` before a server accepts it.
 
-If the configured backend cannot start for Rob's service user, `shell`, `process`
-and `code_execution` show `gated:backend-unavailable` with the reason, and Rob
+If the configured backend cannot start for the agent's service user, `shell`, `process`
+and `code_execution` show `gated:backend-unavailable` with the reason, and the agent
 does not call them. `polyrob doctor --full`, run as that service user, prints
 which backends work.
 
@@ -577,7 +577,7 @@ added server can and cannot reach — is in
 [owner-controls.md](owner-controls.md#mcp-servers-giving-the-agent-new-tools).
 
 A server that holds its own money credential (an exchange key, an external
-wallet) can move money without Rob's wallet. Mark it in
+wallet) can move money without the agent's wallet. Mark it in
 `~/.polyrob/mcp.json` with `"money": true`:
 
 ```json
@@ -587,7 +587,7 @@ wallet) can move money without Rob's wallet. Mark it in
 ```
 
 Every action of a marked server then moves money: only you can start one, a
-helper Rob hands work to never can, and each call waits for your approval in
+helper the agent hands work to never can, and each call waits for your approval in
 `/inbox`. Call each action by its direct name (`exchange_<name>`); the generic
 `mcp_execute_tool` refuses a marked server. A server without the key behaves
 as before. Only the operator's files set it; a server added with `/mcp add` is
@@ -755,7 +755,7 @@ with their current value; from chat, `/config set KEY VALUE`.
 | Group | Keys | Notes |
 |---|---|---|
 | Style | `style.verbosity`, `style.tone`, `style.language` | how the agent writes to you |
-| Session | `session.toolset`, `session.persona` | next session |
+| Session | `session.toolset`, `session.persona` | next terminal (CLI) session; a chat seat ignores them |
 | Approvals | `approvals.require`, `approvals.deny`, `approvals.provider` | tighten only; an env value is the floor |
 | Budget | `budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`, `budget.defi_autonomous_usd` | daily = min(pref, env); per-tx and autonomous = your approved value, clamped to the daily cap |
 | Goals | `goals.daily_quota`, `goals.max_concurrent`, `goals.notify_on_done` | |

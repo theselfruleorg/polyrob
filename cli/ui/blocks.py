@@ -439,7 +439,7 @@ def error_panel(event: ErrorEvent) -> Panel:
 def agent_message(text: str) -> RenderableType:
     """The HERO: an agent message rendered as a chat turn.
 
-    Composition (dialog layer): a ``● rob`` speaker line, then the message body
+    Composition (dialog layer): a ``● agent`` speaker line, then the message body
     as full Rich ``Markdown`` indented under it — soft-wrapped, NEVER truncated,
     code blocks highlighted.  Used for both ``send_message`` text and final
     ``done`` answers, on both surfaces, so every agent utterance has one visual
@@ -475,7 +475,7 @@ def user_message(text: str) -> Optional[RenderableType]:
 
 
 def working_notice() -> Text:
-    """One honest dim ``⋯ rob · working…`` line printed at turn start (REPL).
+    """One honest dim ``⋯ agent · working…`` line printed at turn start (REPL).
 
     Under the REPL the in-flight Rich ``Live`` spinner is suppressed (it corrupts
     the cursor under prompt_toolkit's ``patch_stdout``), and the bottom toolbar is

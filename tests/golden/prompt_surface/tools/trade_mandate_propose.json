@@ -20,13 +20,9 @@
           "type": "array"
         },
         "preset": {
-          "default": "memecoin",
-          "description": "The style; its numbers come from the preset.",
-          "enum": [
-            "memecoin",
-            "majors",
-            "dca"
-          ],
+          "description": "The preset the owner chose; no default.",
+          "maxLength": 40,
+          "minLength": 1,
           "type": "string"
         },
         "slots": {
@@ -47,7 +43,8 @@
       },
       "required": [
         "budget_usd",
-        "chains"
+        "chains",
+        "preset"
       ],
       "type": "object"
     }

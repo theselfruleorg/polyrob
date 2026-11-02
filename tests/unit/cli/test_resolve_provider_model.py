@@ -61,7 +61,6 @@ def test_store_seat_resolves_when_env_has_no_key(monkeypatch):
 def test_store_seat_fallback_inert_without_local_mode(monkeypatch):
     # Off the CLI (no local mode) the resolver stays env-only → (None, None).
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
     provider, model = cs.resolve_provider_model(None, None, available_keys=set())
     assert provider is None and model is None

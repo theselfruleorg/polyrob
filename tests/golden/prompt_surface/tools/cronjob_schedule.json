@@ -14,20 +14,20 @@
         },
         "deliver_target": {
           "default": null,
-          "description": "Optional explicit recipient. IGNORED unless the operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET; by default delivery always goes to the owner's own channel.",
+          "description": "Optional explicit recipient; ignored unless the operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET.",
           "nullable": true,
           "type": "string"
         },
         "max_duration_seconds": {
           "default": 600,
-          "description": "Hard cap per run (60-1800s; default 600). A money rail that reconciles, quotes, gates, swaps and reports needs ~15-25 min at 1-5 min/step — the 600 s ceiling cut the an hourly swap job at step 6 before its swap (2026-09-18).",
+          "description": "Hard cap per run (60-1800s; default 600). A money rail that quotes, swaps and reports needs ~15-25 min.",
           "maximum": 1800,
           "minimum": 60,
           "type": "integer"
         },
         "pause_windows": {
           "default": null,
-          "description": "Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 UTC. A tick inside a window is a $0 skip (e.g. hold a recurring swap from T-1h to 24h after a mint window).",
+          "description": "Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 UTC. A tick inside a window is a $0 skip.",
           "items": {
             "items": {},
             "type": "array"
@@ -53,12 +53,12 @@
         },
         "rig": {
           "default": null,
-          "description": "Optional named tool rig for this job's runs: 'money_rail', 'social', 'research', 'ops', or 'full' (everything this deploy grants an autonomous run). A narrow rig ships far fewer tool schemas per step, which is most of the cost of a recurring job. A rig is a REQUEST, not a grant: a rig with a tool an agent-created job cannot carry is REFUSED with the rigs you can use. Omit to use this deploy's default.",
+          "description": "Optional named tool rig for this job's runs: 'money_rail', 'social', 'research', 'ops', or 'full' (everything this deploy grants). A narrow rig ships fewer tool schemas per step. A rig is a request, not a grant. Omit for this deploy's default.",
           "nullable": true,
           "type": "string"
         },
         "schedule": {
-          "description": "When to run: '30m'/'2h'/'1d', 'every monday 09:00', 5-field cron '*/15 * * * *', or an ISO timestamp (one-shot).",
+          "description": "When to run: '30m'/'2h'/'1d', 'every monday 09:00', 5-field cron '*/15 * * * *', an ISO timestamp (one-shot), or a fixed N-day cycle 'every 3d from 2026-10-26T18:00Z'.",
           "type": "string"
         },
         "skills": {
@@ -91,7 +91,7 @@
         "write_verb": {
           "additionalProperties": true,
           "default": null,
-          "description": "OWNER TURN ONLY: make this a deterministic WRITE job — the one allowlisted write verb, no LLM turn per tick: {'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': 'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. It SPENDS gas from the treasury (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run; no value, no asset) and runs only while CRON_WRITE_JOBS_ENABLED=true. Omitting dry_run=false only simulates. May recur every minute.",
+          "description": "OWNER TURN ONLY: a deterministic WRITE job, no LLM turn per tick: {'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': 'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. It spends gas (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run) while CRON_WRITE_JOBS_ENABLED=true; without dry_run=false it only simulates.",
           "nullable": true,
           "properties": {},
           "type": "object"

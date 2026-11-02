@@ -1,6 +1,6 @@
 """The `room_read` action — the agent can finally READ an allowlisted room.
 
-Rob could POST to The Lobby but not read it (owner rail 2026-09-15 19:41Z:
+The agent could POST to The Lobby but not read it (owner rail 2026-09-15 19:41Z:
 "fix tg chat reading and deploy and restart"). The harness ALREADY captures
 every allowlisted-room line into `group_ledger` (`core/surfaces/group_ledger.py`,
 044 §4.1) — the room turn, the room-servicing goal and `/groups tail` all read
@@ -36,12 +36,12 @@ class _Controller:
         self.registry = _Registry()
         self.container = type("C", (), {
             "config": type("Cfg", (), {"data_dir": str(data_dir)})()})()
-        self.user_id = "rob"
+        self.user_id = "alice"
         self.orchestrator = None
 
 
 def _ctx():
-    return type("Ctx", (), {"user_id": "rob", "role": "orchestrator",
+    return type("Ctx", (), {"user_id": "alice", "role": "orchestrator",
                             "is_sub_agent": False, "session_id": "s",
                             "metadata": {}})()
 
@@ -202,7 +202,7 @@ async def test_since_minutes_filters_old_lines(home):
 
 # --- 057 WS-D: labels are labels ---------------------------------------------
 
-def _set_chat_name(home, chat_id, name, monkeypatch, owner_uid="rob"):
+def _set_chat_name(home, chat_id, name, monkeypatch, owner_uid="alice"):
     """Write chat.name under the OWNER tenant the action's own resolver reads."""
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", owner_uid)
     from core.instance import resolve_owner_user_id

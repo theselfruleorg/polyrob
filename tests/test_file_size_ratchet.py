@@ -53,7 +53,9 @@ CEILINGS = {
     # (status SSOT); the action now renders from core/status_snapshot.py.
     # Tightened 2026-09-08: the two document-authoring actions (self_context_manage,
     # owner_doc_manage) moved to tools/controller/doc_authoring.py::DocAuthoringMixin.
-    "tools/controller/action_registration.py": 1833,
+    # Tightened 2026-10-30 (095 P0.2): the `preferences` action moved to
+    # tools/controller/preferences_action.py::PreferencesActionMixin.
+    "tools/controller/action_registration.py": 1444,
     "api/task_http_api.py": 1876,
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file
@@ -89,7 +91,8 @@ CEILINGS = {
     # landed here, paid for by trimming a dated change-story out of a docstring.
     # 2026-09-23 (025): 491 -> 466. prune_memories moved to the new scope/retention
     # mixin (modules/memory/sqlite_scope_store.py) with the scope verbs.
-    "modules/memory/sqlite_memory_provider.py": 320,
+    # 2026-10-30 (095 W8): 320 -> 316. Recall consolidation deleted (no reader).
+    "modules/memory/sqlite_memory_provider.py": 316,
     "modules/x402/invoicing.py": 1169,
     "modules/llm/adapters.py": 1111,
     "modules/memory/task/task_context_manager.py": 1135,
@@ -115,7 +118,7 @@ CEILINGS = {
     "webview/pages.py": 1841,
     "tools/browser/context.py": 1793,
     "cli/commands/owner.py": 1646,
-    "agents/task/agent/core/next_action_internal.py": 1616,
+    "agents/task/agent/core/next_action_internal.py": 1614,
     "tools/browser/browser.py": 1604,
     "core/prefs.py": 1569,
     "tools/controller/registry/service.py": 1552,

@@ -102,7 +102,9 @@ def test_model_recovery_uses_complete_adoption():
     assert asyncio.run(ErrorRecoveryMixin._attempt_llm_fallback_in_handler(agent, "rate_limit"))
     assert agent.llm is new and agent.message_manager.llm is new
     assert agent.llm_provider == "anthropic"
-    agent.message_manager.set_runtime_identity.assert_called_once_with(new.model_name, "anthropic")
+    agent.message_manager.set_runtime_identity.assert_called_once_with(
+        new.model_name, "anthropic", switched_from="gpt-4o", cause="fallback",
+        reason="rate_limit")
 
 
 def test_native_tool_mode_restores_requested_preference():

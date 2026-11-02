@@ -7,8 +7,8 @@ from core.app_service.egress import EgressApplier, render_rules, resolve_allowli
 
 
 def test_none_drops_all_but_replies():
-    s = render_rules(slug="rob-status", subnet="172.30.5.0/24", mode="none", allow_addrs=[])
-    assert "table inet polyrob_app_rob_status {" in s
+    s = render_rules(slug="demo-status", subnet="172.30.5.0/24", mode="none", allow_addrs=[])
+    assert "table inet polyrob_app_demo_status {" in s
     assert "ip saddr 172.30.5.0/24 ct state established,related accept" in s
     assert "ip saddr 172.30.5.0/24 drop" in s
     assert "daddr" not in s
@@ -110,6 +110,6 @@ def test_table_present_asks_the_kernel():
             return (self.code, "", "" if self.code == 0 else "No such file or directory")
 
     r = _R(0)
-    assert asyncio.run(EgressApplier(r).table_present("rob-status")) is True
-    assert r.calls == [["nft", "list", "table", "inet", "polyrob_app_rob_status"]]
-    assert asyncio.run(EgressApplier(_R(1)).table_present("rob-status")) is False
+    assert asyncio.run(EgressApplier(r).table_present("demo-status")) is True
+    assert r.calls == [["nft", "list", "table", "inet", "polyrob_app_demo_status"]]
+    assert asyncio.run(EgressApplier(_R(1)).table_present("demo-status")) is False

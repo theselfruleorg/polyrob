@@ -21,8 +21,7 @@ configured out of the box.
   [../../docs/guide/owner-controls.md](../../docs/guide/owner-controls.md#mcp-servers-giving-the-agent-new-tools).
 - Manage per-tenant servers over HTTP (`/api/mcp/*`), or run POLYROB as an MCP server
   (`POST /mcp`): [../../docs/guide/api.md](../../docs/guide/api.md#mcp-server-management-outbound).
-- Every flag (`MCP_ENABLED`, `MCP_OAUTH_ENABLED`, `MCP_SELF_INSTALL_ENABLED`,
-  `MCP_INSTALL_CATALOG_FILE`, `MCP_ENCRYPTION_KEY`):
+- Every flag (`MCP_ENABLED`, `MCP_OAUTH_ENABLED`, `MCP_ENCRYPTION_KEY`):
   [../../docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).
 - What an MCP server can and cannot reach:
   [../../docs/guide/security-model.md](../../docs/guide/security-model.md).
@@ -38,7 +37,6 @@ configured out of the box.
 | `user_mcp_service.py` | Per-tenant servers (HTTPS only, SSRF-checked, encrypted credentials) |
 | `child_env.py` | The environment a stdio server process receives (allowlist only) |
 | `oauth_bridge.py` | OAuth `Authorization` headers for HTTP-family servers |
-| `catalog.py`, `self_install.py` | The vetted catalog behind the agent's `mcp_install` |
 | `param_coercion.py` | JSON-schema argument coercion |
 | `subscriptions.py` | Resource-update subscriptions |
 

@@ -614,7 +614,7 @@ async def build_cli_container(
     # RAG/project-context/…). The self-directed AUTONOMY loops
     # (_AUTONOMY_LOCAL_FLAGS) stay OFF for a new install until AUTONOMY_ENABLED is
     # set (or an autonomous posture/mode) — see core.config_policy.autonomy_enabled.
-    # setdefault so an explicit `POLYROB_LOCAL=0 rob ...` can still opt out.
+    # setdefault so an explicit `POLYROB_LOCAL=0 polyrob ...` can still opt out.
     os.environ.setdefault("POLYROB_LOCAL", "1")
     console_level = log_level or os.environ.get("LOG_LEVEL", "ERROR")
     # The terminal is a UI surface, not a log sink: console stays at
@@ -644,10 +644,10 @@ async def build_cli_container(
     from agents.task.path import get_path_manager, set_path_manager
     # Isolation switch: POLYROB_DATA_DIR set (headless/server) → data home OUTSIDE the
     # code tree + workspace under it; unset (local dev) → <polyrob_home>/data + workspace==cwd.
-    rob_dir, _ws_is_project_root, _project_root = _resolve_cli_data_home()
+    cli_data_dir, _ws_is_project_root, _project_root = _resolve_cli_data_home()
 
-    # Auto-gitignore .polyrob/ on first CLI use (not only on `rob init`) so a bare
-    # `polyrob run`/`rob chat` inside a git repo doesn't leave .polyrob/ in `git status`.
+    # Auto-gitignore .polyrob/ on first CLI use (not only on `polyrob init`) so a bare
+    # `polyrob run`/`polyrob chat` inside a git repo doesn't leave .polyrob/ in `git status`.
     # Gated (default on), git-repo-guarded, fail-open.
     if os.environ.get("POLYROB_GITIGNORE_DOTROB", "1").strip().lower() not in ("0", "false", "off", "no"):
         try:
@@ -659,19 +659,19 @@ async def build_cli_container(
     # Keep autonomy/memory state (goals.db, cron.db, memory.db) under the same
     # project-scoped .polyrob/ root as session artifacts, instead of a split-off ./data.
     try:
-        config.data_dir = str(rob_dir)
+        config.data_dir = str(cli_data_dir)
     except Exception:
         pass
 
     # Cross-process workspace turn lock lives under .polyrob/ (C2). setdefault so an
     # operator override wins; only set in the CLI/local container, so the server
     # (which never calls build_cli_container) leaves the lock disabled.
-    _lock_dir = _resolve_workspace_lock_dir(rob_dir, _ws_is_project_root, _project_root)
+    _lock_dir = _resolve_workspace_lock_dir(cli_data_dir, _ws_is_project_root, _project_root)
     os.makedirs(_lock_dir, exist_ok=True)
     os.environ.setdefault("POLYROB_WORKSPACE_LOCK_DIR", _lock_dir)
 
     path_manager = get_path_manager(
-        data_root=str(rob_dir / "sessions"),
+        data_root=str(cli_data_dir / "sessions"),
         workspace_is_project_root=_ws_is_project_root,
         project_root=_project_root,
     )
@@ -698,7 +698,7 @@ async def build_cli_container(
     container.register_service("path_manager", path_manager)
     # Single source of truth: install the SAME instance as the process-global pm()
     # singleton, so the ~100 pm() utility call sites (clean_session_id, session
-    # roots) resolve under .rob with no DATA_ROOT env shim and no mass migration.
+    # roots) resolve under .polyrob with no DATA_ROOT env shim and no mass migration.
     # The orchestrator pulls path_manager from the container; everything else uses
     # pm() — both are now this one project-scoped manager. (Server never calls
     # build_cli_container, so its global pm() stays resolve_session_data_root().)

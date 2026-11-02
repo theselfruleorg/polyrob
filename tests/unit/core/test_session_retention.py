@@ -45,7 +45,7 @@ def _goals_db(home, rows):
                 "session_id TEXT, payload TEXT)")
     for gid, status, sid in rows:
         con.execute("INSERT INTO goals VALUES (?,?,?,?,?)",
-                    (gid, "rob", status, sid, "{}"))
+                    (gid, "alice", status, sid, "{}"))
     con.commit()
     con.close()
 
@@ -56,7 +56,7 @@ def _goals_db_with_payload(home, rows):
                 "session_id TEXT, payload TEXT)")
     for gid, status, sid, payload in rows:
         con.execute("INSERT INTO goals VALUES (?,?,?,?,?)",
-                    (gid, "rob", status, sid, payload))
+                    (gid, "alice", status, sid, payload))
     con.commit()
     con.close()
 
@@ -65,7 +65,7 @@ def _artifacts_db(home, paths):
     con = sqlite3.connect(os.path.join(home, "artifacts.db"))
     con.execute("CREATE TABLE artifacts (id TEXT, user_id TEXT, path TEXT)")
     for i, p in enumerate(paths):
-        con.execute("INSERT INTO artifacts VALUES (?,?,?)", (str(i), "rob", str(p)))
+        con.execute("INSERT INTO artifacts VALUES (?,?,?)", (str(i), "alice", str(p)))
     con.commit()
     con.close()
 
@@ -94,8 +94,8 @@ def _plan(home, **kw):
 
 
 def test_old_trees_go_and_recent_ones_stay(home):
-    old = _tree(home / "sessions", "rob", "old-one", age_days=200)
-    new = _tree(home / "sessions", "rob", "new-one", age_days=2)
+    old = _tree(home / "sessions", "alice", "old-one", age_days=200)
+    new = _tree(home / "sessions", "alice", "new-one", age_days=2)
 
     plan = _plan(home, days=90)
 
@@ -104,8 +104,8 @@ def test_old_trees_go_and_recent_ones_stay(home):
 
 
 def test_a_tree_holding_a_registered_artifact_is_never_deleted(home):
-    keeper = _tree(home / "sessions", "rob", "has-evidence", age_days=300)
-    _tree(home / "sessions", "rob", "empty-old", age_days=300)
+    keeper = _tree(home / "sessions", "alice", "has-evidence", age_days=300)
+    _tree(home / "sessions", "alice", "empty-old", age_days=300)
     _artifacts_db(home, [keeper / "workspace" / "out.md"])
 
     plan = _plan(home, days=90)
@@ -119,7 +119,7 @@ def test_an_unknown_goal_status_protects_rather_than_releases(home):
     (`open`/`fulfilled`/`rejected`/`obsolete` are all live on prod). An
     allow-list of "live" statuses would treat every word it had not heard of as
     safe to delete, so the rule is a DENY list of terminal statuses."""
-    weird = _tree(home / "sessions", "rob", "odd-status", age_days=300)
+    weird = _tree(home / "sessions", "alice", "odd-status", age_days=300)
     _goals_db(home, [("g1", "fulfilled", _sid("odd-status"))])
 
     plan = _plan(home, days=90)
@@ -130,7 +130,7 @@ def test_an_unknown_goal_status_protects_rather_than_releases(home):
 
 def test_a_session_named_only_in_the_payload_is_protected(home):
     """Older rows carry the session in the payload, not the column."""
-    named = _tree(home / "sessions", "rob", "payload-session", age_days=300)
+    named = _tree(home / "sessions", "alice", "payload-session", age_days=300)
     _goals_db_with_payload(home, [
         ("g1", "ready", "", '{"origin_session_id": "%s"}' % _sid("payload-session"))])
 
@@ -140,7 +140,7 @@ def test_a_session_named_only_in_the_payload_is_protected(home):
 
 
 def test_an_unparseable_payload_does_not_refuse_the_sweep(home):
-    _tree(home / "sessions", "rob", "old-one", age_days=300)
+    _tree(home / "sessions", "alice", "old-one", age_days=300)
     _goals_db_with_payload(home, [("g1", "ready", "", "{not json")])
 
     plan = _plan(home, days=90)
@@ -149,8 +149,8 @@ def test_an_unparseable_payload_does_not_refuse_the_sweep(home):
 
 
 def test_a_live_goal_keeps_its_session(home):
-    named = _tree(home / "sessions", "rob", "goal-session", age_days=300)
-    done = _tree(home / "sessions", "rob", "done-session", age_days=300)
+    named = _tree(home / "sessions", "alice", "goal-session", age_days=300)
+    done = _tree(home / "sessions", "alice", "done-session", age_days=300)
     _goals_db(home, [("g1", "running", _sid("goal-session")), ("g2", "done", _sid("done-session"))])
 
     plan = _plan(home, days=90)
@@ -160,7 +160,7 @@ def test_a_live_goal_keeps_its_session(home):
 
 
 def test_a_worker_that_still_owns_a_session_keeps_it(home):
-    owned = _tree(home / "sessions", "rob", "live-session", age_days=300)
+    owned = _tree(home / "sessions", "alice", "live-session", age_days=300)
     _registry_db(home, [_sid("live-session")])
 
     plan = _plan(home, days=90)
@@ -170,7 +170,7 @@ def test_a_worker_that_still_owns_a_session_keeps_it(home):
 
 
 def test_an_unreadable_goal_board_refuses_the_whole_sweep(home):
-    _tree(home / "sessions", "rob", "old-one", age_days=300)
+    _tree(home / "sessions", "alice", "old-one", age_days=300)
     with open(os.path.join(home, "goals.db"), "wb") as fh:
         fh.write(b"not a database")
 
@@ -179,7 +179,7 @@ def test_an_unreadable_goal_board_refuses_the_whole_sweep(home):
 
 
 def test_an_unreadable_artifact_registry_refuses_the_whole_sweep(home):
-    _tree(home / "sessions", "rob", "old-one", age_days=300)
+    _tree(home / "sessions", "alice", "old-one", age_days=300)
     with open(os.path.join(home, "artifacts.db"), "wb") as fh:
         fh.write(b"not a database")
 
@@ -191,7 +191,7 @@ def test_a_symlink_is_never_followed_and_never_removed(home, tmp_path):
     outside = tmp_path / "precious"
     outside.mkdir()
     (outside / "keep.txt").write_text("do not delete me")
-    link = home / "sessions" / "rob" / _sid("a-link")
+    link = home / "sessions" / "alice" / _sid("a-link")
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(outside, target_is_directory=True)
     os.utime(link, (NOW - 300 * DAY, NOW - 300 * DAY), follow_symlinks=False)
@@ -204,7 +204,7 @@ def test_a_symlink_is_never_followed_and_never_removed(home, tmp_path):
 
 
 def test_apply_refuses_a_path_outside_the_root(home):
-    _tree(home / "sessions", "rob", "old-one", age_days=300)
+    _tree(home / "sessions", "alice", "old-one", age_days=300)
     plan = _plan(home, days=90)
     plan.remove.append(str(home / "elsewhere"))       # a caller-injected path
 
@@ -216,7 +216,7 @@ def test_apply_refuses_a_path_outside_the_root(home):
 
 def test_the_cap_drains_a_backlog_over_several_runs(home):
     for i in range(5):
-        _tree(home / "sessions", "rob", f"old-{i}", age_days=300)
+        _tree(home / "sessions", "alice", f"old-{i}", age_days=300)
 
     plan = _plan(home, days=90, max_removals=2)
 
@@ -225,14 +225,14 @@ def test_the_cap_drains_a_backlog_over_several_runs(home):
 
 
 def test_retention_disabled_removes_nothing(home):
-    _tree(home / "sessions", "rob", "old-one", age_days=300)
+    _tree(home / "sessions", "alice", "old-one", age_days=300)
     plan = _plan(home, days=0)
     assert plan.remove == [] and plan.errors
 
 
 def test_sweep_deletes_what_the_plan_named(home, monkeypatch):
-    old = _tree(home / "sessions", "rob", "old-one", age_days=300)
-    keep = _tree(home / "sessions", "rob", "new-one", age_days=1)
+    old = _tree(home / "sessions", "alice", "old-one", age_days=300)
+    keep = _tree(home / "sessions", "alice", "new-one", age_days=1)
     monkeypatch.setenv("DATA_ROOT", str(home / "sessions"))
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "90")
 
@@ -243,7 +243,7 @@ def test_sweep_deletes_what_the_plan_named(home, monkeypatch):
 
 
 def test_sweep_is_a_noop_when_nothing_is_old(home, monkeypatch):
-    _tree(home / "sessions", "rob", "new-one", age_days=1)
+    _tree(home / "sessions", "alice", "new-one", age_days=1)
     monkeypatch.setenv("DATA_ROOT", str(home / "sessions"))
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "90")
 
@@ -255,7 +255,7 @@ def test_sweep_is_a_noop_when_nothing_is_old(home, monkeypatch):
 def test_a_root_outside_the_data_home_is_refused(home, tmp_path_factory):
     """In the local CLI the old fallback was ``./data/task`` — the user's project."""
     project = tmp_path_factory.mktemp("project")
-    victim = _tree(project / "data" / "task", "rob", "old-one", age_days=300)
+    victim = _tree(project / "data" / "task", "alice", "old-one", age_days=300)
 
     plan = plan_sweep(str(home), now=NOW, days=90,
                       sessions_root=str(project / "data" / "task"))
@@ -272,8 +272,8 @@ def test_the_data_home_itself_is_not_a_session_root(home):
 
 def test_default_root_is_the_data_home_sessions_dir_not_cwd(home, monkeypatch, tmp_path_factory):
     cwd = tmp_path_factory.mktemp("cwd")
-    decoy = _tree(cwd / "data" / "task", "rob", "decoy", age_days=300)
-    old = _tree(home / "sessions", "rob", "old-one", age_days=300)
+    decoy = _tree(cwd / "data" / "task", "alice", "decoy", age_days=300)
+    old = _tree(home / "sessions", "alice", "old-one", age_days=300)
     monkeypatch.chdir(cwd)
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
@@ -287,7 +287,7 @@ def test_default_root_is_the_data_home_sessions_dir_not_cwd(home, monkeypatch, t
 
 def test_only_uuid_named_trees_are_candidates(home):
     for name in ("sessions", "workspace", "local", "not-a-uuid"):
-        d = home / "sessions" / "rob" / name
+        d = home / "sessions" / "alice" / name
         d.mkdir(parents=True)
         os.utime(d, (NOW - 300 * DAY, NOW - 300 * DAY))
 
@@ -297,7 +297,7 @@ def test_only_uuid_named_trees_are_candidates(home):
 
 
 def test_a_tree_with_a_recent_file_is_kept_despite_an_old_top_level(home):
-    live = _tree(home / "sessions", "rob", "live", age_days=300,
+    live = _tree(home / "sessions", "alice", "live", age_days=300,
                  files=("workspace/out.md", "logs/today.log"))
     recent = NOW - 1 * DAY
     os.utime(live / "logs" / "today.log", (recent, recent))

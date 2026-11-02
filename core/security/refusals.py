@@ -32,12 +32,20 @@ def _log():
 
 
 def record_refusal(reason: str, *, tool: str = "", user_id: str = "",
-                   session_id: str = "", detail: Any = "") -> None:
-    """Record ONE refusal. Raises ValueError on an unknown reason (a programming
-    error, caught in tests), fail-open on anything else."""
+                   session_id: str = "", detail: Any = "", kind: str = "") -> None:
+    """Record ONE refusal. Raises ValueError on an unknown reason or kind (a
+    programming error, caught in tests), fail-open on anything else.
+
+    ``reason`` is the counting slug; ``kind`` (095 W2) is the typed cause, a key
+    of ``core.tool_gates.REFUSAL_KINDS`` — one slug can carry several causes."""
     if reason not in REFUSAL_REASONS:
         raise ValueError(f"unknown refusal reason: {reason!r} "
                          f"(add it to REFUSAL_REASONS)")
+    if kind:
+        from core.tool_gates import REFUSAL_KINDS
+        if kind not in REFUSAL_KINDS:
+            raise ValueError(f"unknown refusal kind: {kind!r} (add it to "
+                             f"core.tool_gates.REFUSAL_KINDS)")
     try:
         from core.event_log import event_log_enabled
         from core.event_kinds import TOOL_DENIED
@@ -45,7 +53,7 @@ def record_refusal(reason: str, *, tool: str = "", user_id: str = "",
             return
         _log().record(TOOL_DENIED, user_id=str(user_id or ""),
                       session_id=str(session_id or ""), source="gate",
-                      attrs={"reason": reason, "tool": str(tool or ""),
+                      attrs={"reason": reason, "tool": str(tool or ""), "kind": kind,
                              "detail": str(detail or "")[:200]})
     except Exception:
         logger.debug("refusals: record skipped", exc_info=True)

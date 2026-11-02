@@ -126,5 +126,7 @@ def test_get_next_action_calls_ensure_action_model_current_first():
     """Source-level wiring check: the refresh must happen before every LLM
     call, not just at construction — a full get_next_action() call is too
     heavyweight to exercise directly in a unit test."""
-    src = inspect.getsource(LLMRunnerMixin.get_next_action)
+    # 094: get_next_action is the reasoning-scope wrapper; the body is _unscoped.
+    assert "_get_next_action_unscoped" in inspect.getsource(LLMRunnerMixin.get_next_action)
+    src = inspect.getsource(LLMRunnerMixin._get_next_action_unscoped)
     assert "_ensure_action_model_current" in src

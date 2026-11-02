@@ -47,7 +47,7 @@ class _TaskAgent:
         return self._orch
 
 
-def _reconcile(task_agent, user_id="rob", session_id="s1"):
+def _reconcile(task_agent, user_id="alice", session_id="s1"):
     from surfaces.telegram.interactive_tools import reconcile_owner_toolset
     return asyncio.run(reconcile_owner_toolset(task_agent, user_id, session_id))
 
@@ -57,7 +57,7 @@ def owner(monkeypatch):
     monkeypatch.setattr(
         "surfaces.telegram.interactive_tools.owner_interactive_tool_ids",
         lambda uid, env=None: (["filesystem", "task", "defi_data", "defi_trade"]
-                               if uid == "rob" else None))
+                               if uid == "alice" else None))
 
 
 def test_a_money_tool_the_owner_granted_reaches_his_existing_session(owner):
@@ -110,6 +110,6 @@ def test_the_grant_list_comes_from_config_not_from_the_agent(monkeypatch):
         "surfaces.telegram.interactive_tools.owner_interactive_tool_ids", _fake)
     c = _Controller(["filesystem", "task", "defi_trade"])
     _reconcile(_TaskAgent(c))
-    assert seen["called_with"] == "rob"
+    assert seen["called_with"] == "alice"
     # A tool NOT in the configured grant is never added — and never removed either.
     assert c.load_calls == []

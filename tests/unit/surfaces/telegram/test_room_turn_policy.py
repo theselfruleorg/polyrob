@@ -14,7 +14,7 @@ from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 from core.surfaces.group_ledger import GroupLedger, LedgerRow
 from surfaces.telegram.room_turn import chat_title, room_turn_text
 
-_OWNER = "rob"
+_OWNER = "alice"
 _CHAT = "-100"
 
 

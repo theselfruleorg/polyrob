@@ -95,7 +95,7 @@ def test_init_wallet_optin_prompt_wired(monkeypatch, tmp_path):
     #   1. "" -> Section 2/7 default model            (blank = skip)
     #   2. "" -> Section 3/7 toolset                   (blank = default "default")
     #   3. "" -> Section 4/7 template                  (blank = default "general")
-    #   4. "" -> Section 5/7 instance id               (blank = default "rob")
+    #   4. "" -> Section 5/7 instance id               (blank = default "alice")
     #   5. "" -> Section 5/7 owner user id             (blank = default = instance id)
     #   5b. "" -> Section 4/7 give this instance its own character? (No, F0)
     #   6. "n" -> Section 6/7 enable interactive local tools?  (No)

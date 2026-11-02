@@ -79,8 +79,10 @@ class FoundationLayer:
 FOUNDATION_LAYERS: Tuple[FoundationLayer, ...] = (
 	FoundationLayer("system_prompt", "_system_message", "_system_message_tokens",
 	                None, FROZEN, refresh_on_reload=True),
+	# 095 W1a: the version + model lines must reach a resumed chat after a deploy.
 	FoundationLayer("runtime_identity", "_runtime_identity_message",
-	                "_runtime_identity_tokens", MessageOrigin.RUNTIME_IDENTITY, FROZEN),
+	                "_runtime_identity_tokens", MessageOrigin.RUNTIME_IDENTITY, FROZEN,
+	                refresh_on_reload=True),
 	FoundationLayer("environment", "_environment_message", "_environment_tokens",
 	                MessageOrigin.ENVIRONMENT, FROZEN, refresh_on_reload=True),
 	FoundationLayer("self_context", "_self_context_message", "_self_context_tokens",

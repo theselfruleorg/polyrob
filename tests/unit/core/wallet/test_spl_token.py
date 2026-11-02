@@ -213,7 +213,7 @@ def _build(**kw):
     base = dict(payer=str(payer.pubkey() if hasattr(payer, "pubkey") else payer),
                 decimals=9, supply_raw=10 ** 18,
                 recent_blockhash=str(Hash.default()),
-                name="Rob Coin", symbol="ROB", uri="https://x/y.json",
+                name="Demo Coin", symbol="DEMO", uri="https://x/y.json",
                 mint_rent=S.rent_exempt_lamports(S.MINT_WITH_POINTER_LEN))
     base.update(kw)
     return S.build_fixed_supply_mint(**base), payer
@@ -262,7 +262,7 @@ def test_a_token_with_no_name_or_symbol_is_refused():
     """They are written on-chain and are what every explorer shows. A blank one
     is the 'Unknown token' this path exists to avoid."""
     with pytest.raises(S.SplBuildError) as exc:
-        _build(name="", symbol="ROB")
+        _build(name="", symbol="DEMO")
     assert "name and a symbol" in str(exc.value)
 
 

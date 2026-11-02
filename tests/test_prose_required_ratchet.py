@@ -19,7 +19,7 @@ ROOTS = ("tools", "modules", "core")
 REVIEWED = {
     ("tools/x402/service.py", "FetchParams", "request_id"):
         "description wording only; the schema field is not the requirement",
-    ("tools/controller/action_registration.py", "PreferencesAction", "key"):
+    ("tools/controller/preferences_action.py", "PreferencesAction", "key"):
         "required for get/explain/set, absent for list: operation-dependent; the handler returns a clear error",
     ("tools/controller/views.py", "MessageTargetAction", "media_paths"):
         "file delivery argument; the handler refuses a missing path with the remedy",

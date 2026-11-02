@@ -186,7 +186,7 @@ def unknown_owner_actions(text: str) -> List[str]:
 
 
 #: blocker -> what the OWNER does about it. Keys are the verdict kinds a refusal
-#: can carry; see ``core.capability_verdict``.
+#: can carry.
 BLOCKER_REMEDIES = {
     "needs_approval": Remedy(
         telegram="/pending, then /approve <id>",

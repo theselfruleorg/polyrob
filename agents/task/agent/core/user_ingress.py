@@ -240,6 +240,19 @@ class UserIngressMixin:
             List of user message dicts. Also sets self._session_continuation_context
             if messages are present, for use by inject_user_guidance().
         """
+        # 094: a queued `/model` switch applies HERE — the drain runs between
+        # steps (and before a turn's first step), so no LLM call is in flight.
+        if getattr(self, "_pending_model_pin", None) and hasattr(self, "apply_pending_model_pin"):
+            try:
+                await self.apply_pending_model_pin()
+            except Exception:
+                self.logger.debug("queued model switch failed", exc_info=True)
+
+        # 095 W4: a preferences / owner.md / SELF write since the last step is
+        # pushed as <state-delta> parts now — a style key applies from the next step.
+        from agents.task.agent.core.state_delta import refresh_self_context
+        refresh_self_context(self)
+
         messages = await self.hitl_manager.drain_user_messages()
 
         # B1: the turn's own words drive memory recall, not the session's first task.
@@ -293,6 +306,11 @@ class UserIngressMixin:
             self._retry_wall_steps = 0
             try:
                 self.controller.reset_retry_wall()
+            except Exception:
+                pass
+            # The identical-call escalation counts within a turn too.
+            try:
+                self._reset_loop_guard()
             except Exception:
                 pass
 

@@ -58,7 +58,7 @@ def rig(tmp_path, monkeypatch):
 def _send(router, container, *, target="-1001", text="hi"):
     return asyncio.run(ms.perform_message_send(
         router=router, allowlist=None, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target=target, text=text,
+        user_id="alice", surface="telegram", target=target, text=text,
         session_id="s1", container=container, execution_context=None,
         controller=None))
 

@@ -45,7 +45,7 @@ def _log(home):
 
 def _violation(home):
     from core.status_snapshot import build_status_snapshot
-    snap = build_status_snapshot("rob", data_dir=str(home), include_money=False)
+    snap = build_status_snapshot("alice", data_dir=str(home), include_money=False)
     v = [h for h in snap.health if h.key == "pause_violation"]
     return v[0].text if v else None
 
@@ -58,7 +58,7 @@ def test_a_trading_pause_does_not_flag_an_ordinary_cron_run(home):
     and must not be reported as a breach of it."""
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("trading",), via="test", set_by="owner")
-    _log(home).record("cron_run", user_id="rob", session_id="s1", source="cron",
+    _log(home).record("cron_run", user_id="alice", session_id="s1", source="cron",
                       attrs={"job_id": "c86c438f5bb5", "outcome": "started"})
     assert _violation(home) is None
 
@@ -66,7 +66,7 @@ def test_a_trading_pause_does_not_flag_an_ordinary_cron_run(home):
 def test_a_cron_pause_does_flag_a_cron_run(home):
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("cron",), via="test", set_by="owner")
-    _log(home).record("cron_run", user_id="rob", session_id="s1", source="cron",
+    _log(home).record("cron_run", user_id="alice", session_id="s1", source="cron",
                       attrs={"job_id": "j1", "outcome": "started"})
     out = _violation(home)
     assert out and "cron_run ×1" in out
@@ -76,7 +76,7 @@ def test_a_full_pause_still_flags_a_cron_run(home):
     """Regression guard: narrowing must not blind the `all` case."""
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("all",), via="test", set_by="owner")
-    _log(home).record("cron_run", user_id="rob", session_id="s1", source="cron",
+    _log(home).record("cron_run", user_id="alice", session_id="s1", source="cron",
                       attrs={"job_id": "j1", "outcome": "started"})
     out = _violation(home)
     assert out and "cron_run ×1" in out
@@ -89,7 +89,7 @@ def test_a_wallet_spend_is_a_violation_under_any_scope(home):
     `wallet_spend` has no KIND_SCOPES entry; it stays unconditional on purpose."""
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("trading",), via="test", set_by="owner")
-    _log(home).record("wallet_spend", user_id="rob", session_id="s1", source="wallet",
+    _log(home).record("wallet_spend", user_id="alice", session_id="s1", source="wallet",
                       attrs={"outcome": "done", "usd": 12.5})
     out = _violation(home)
     assert out and "wallet_spend ×1" in out
@@ -100,7 +100,7 @@ def test_a_goal_run_is_a_violation_under_any_scope(home):
     it unconditional is the fail-safe reading."""
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("social",), via="test", set_by="owner")
-    _log(home).record("goal_run", user_id="rob", session_id="s1", source="goal",
+    _log(home).record("goal_run", user_id="alice", session_id="s1", source="goal",
                       attrs={"goal_id": "g1", "outcome": "started"})
     out = _violation(home)
     assert out and "goal_run ×1" in out
@@ -113,9 +113,9 @@ def test_one_job_started_and_done_counts_once(home):
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("all",), via="test", set_by="owner")
     log = _log(home)
-    log.record("cron_run", user_id="rob", session_id="s1", source="cron",
+    log.record("cron_run", user_id="alice", session_id="s1", source="cron",
                attrs={"job_id": "c86c438f5bb5", "outcome": "started"})
-    log.record("cron_run", user_id="rob", session_id="s1", source="cron",
+    log.record("cron_run", user_id="alice", session_id="s1", source="cron",
                attrs={"job_id": "c86c438f5bb5", "outcome": "done", "steps": 11})
     out = _violation(home)
     assert out and "cron_run ×1" in out, out
@@ -125,9 +125,9 @@ def test_two_distinct_jobs_count_twice(home):
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("all",), via="test", set_by="owner")
     log = _log(home)
-    log.record("cron_run", user_id="rob", session_id="s1", source="cron",
+    log.record("cron_run", user_id="alice", session_id="s1", source="cron",
                attrs={"job_id": "j1", "outcome": "started"})
-    log.record("cron_run", user_id="rob", session_id="s2", source="cron",
+    log.record("cron_run", user_id="alice", session_id="s2", source="cron",
                attrs={"job_id": "j2", "outcome": "started"})
     out = _violation(home)
     assert out and "cron_run ×2" in out
@@ -139,9 +139,9 @@ def test_rows_without_an_id_are_still_counted_individually(home):
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("all",), via="test", set_by="owner")
     log = _log(home)
-    log.record("self_wake", user_id="rob", session_id="s1", source="self_wake",
+    log.record("self_wake", user_id="alice", session_id="s1", source="self_wake",
                attrs={"outcome": "started"})
-    log.record("self_wake", user_id="rob", session_id="s2", source="self_wake",
+    log.record("self_wake", user_id="alice", session_id="s2", source="self_wake",
                attrs={"outcome": "started"})
     out = _violation(home)
     assert out and "self_wake ×2" in out
@@ -152,7 +152,7 @@ def test_rows_without_an_id_are_still_counted_individually(home):
 def test_an_outcome_that_honoured_the_pause_is_not_a_violation(home):
     from core import autonomy_control as ac
     ac.pause(str(home), scopes=("all",), via="test", set_by="owner")
-    _log(home).record("cron_run", user_id="rob", session_id="s1", source="cron",
+    _log(home).record("cron_run", user_id="alice", session_id="s1", source="cron",
                       attrs={"job_id": "j1", "outcome": "paused"})
     assert _violation(home) is None
 

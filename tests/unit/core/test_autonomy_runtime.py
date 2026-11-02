@@ -461,7 +461,7 @@ async def test_start_autonomy_starts_settlement_watcher_when_enabled(monkeypatch
 
 @pytest.mark.asyncio
 async def test_autonomy_master_off_records_flag_and_does_not_gate_non_autonomy(monkeypatch):
-    for v in ("POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_ENABLED",
+    for v in ("POLYROB_LOCAL", "AUTONOMY_ENABLED",
               "AUTONOMY_POSTURE", "AUTONOMY_MODE"):
         monkeypatch.delenv(v, raising=False)
     watcher = _FakeTicker()
@@ -478,7 +478,7 @@ async def test_autonomy_master_off_records_flag_and_does_not_gate_non_autonomy(m
 
 @pytest.mark.asyncio
 async def test_autonomy_master_on_recorded_under_posture(monkeypatch):
-    for v in ("POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_ENABLED", "AUTONOMY_MODE"):
+    for v in ("POLYROB_LOCAL", "AUTONOMY_ENABLED", "AUTONOMY_MODE"):
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv("AUTONOMY_POSTURE", "full")
     _disable_other_loops(monkeypatch)
@@ -633,7 +633,7 @@ def _enable_full(monkeypatch):
     """Copied from tests/unit/agents/task/test_autonomy_mode.py."""
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     from agents.task import constants
     constants.reset_autonomy_mode_warnings()
 

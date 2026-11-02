@@ -366,3 +366,36 @@ def test_the_flush_never_leaves_a_block_behind_for_the_next_agent():
     orch = _Orchestrator()
     assert asyncio.run(orch._flush_pending_room_context(object(), "a1")) == 0
     assert orch._pending_room_context == []
+
+
+def _with_registry(agent, orch):
+    agent._registry = types.SimpleNamespace(get=lambda sid: orch)
+    return agent
+
+
+def test_a_member_line_is_pending_input_even_without_a_context_block():
+    """`context_lines=0` (or a live run that consumed the block) left the
+    member's durable line invisible to the resume gate: the run skipped as a
+    no-op and the member was never answered."""
+    orch = _Orch()
+    orch.mm.push_control_message = lambda m: None
+    agent = _with_registry(_Agent(orch), orch)
+    assert _deliver(agent, context_block="", reply_to="77") == "delivered"
+    assert agent._session_has_pending_input("sess-1") is True
+    assert agent.take_pending_room_turn("sess-1") is True
+    assert orch._turn_reply_to == "77"
+    assert agent.take_pending_room_turn("sess-1") is False
+
+
+def test_a_member_line_does_not_rethread_a_live_run():
+    """Alice's in-flight answer must not post as a reply to Bob's line."""
+    orch = _Orch()
+    orch._turn_reply_to = "alice"
+    agent = _with_registry(_Agent(orch), orch)
+    agent.session_manager = types.SimpleNamespace(
+        get_session_info=lambda sid: {"id": sid, "user_id": "u_owner", "status": "running"})
+    assert _deliver(agent, reply_to="bob") == "delivered"
+    assert orch._turn_reply_to == "alice"
+    # The run that answers Bob threads to Bob when it starts.
+    assert agent.take_pending_room_turn("sess-1") is True
+    assert orch._turn_reply_to == "bob"

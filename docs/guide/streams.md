@@ -205,7 +205,7 @@ and the jobs and goals the agent wrote that you can make yours (§6).
 its own tap, or with `/approve <id>`, `/reject <id>` or `/fulfill <id>` (an
 ask). Answering an ask puts the goals behind it back in the queue.
 
-When Rob raised several decisions in a chat, it continues by itself once you
+When the agent raised several decisions in a chat, it continues by itself once you
 have made every one: it gets each outcome (sent, failed, dismissed, expired)
 in one new turn and reports back. A payment it wants next comes to you as a
 new decision.

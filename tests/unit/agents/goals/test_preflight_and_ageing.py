@@ -25,7 +25,7 @@ def _cron(tmp_path, *, when, payload):
     from cron.jobs import CronJob, CronJobStore
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(CronJob(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *",
-                      user_id="rob", next_run_at=when, payload=payload))
+                      user_id="alice", next_run_at=when, payload=payload))
     return store
 
 
@@ -70,7 +70,7 @@ def test_a_short_goal_clears_the_rail(tmp_path, monkeypatch):
     monkeypatch.setattr(el, "_INSTANCES", {})
     log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
-    log.record("goal_run", user_id="rob", source="goal",
+    log.record("goal_run", user_id="alice", source="goal",
                attrs={"goal_id": "g-2", "outcome": "done", "steps": 2,
                       "duration_sec": 90.0})
     _cron(tmp_path, when=NOW + timedelta(minutes=30), payload={"priority": "money"})
@@ -91,7 +91,7 @@ def test_measured_history_beats_the_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
     # Two prior runs of 50 s — far under the 30 x 45 s fallback.
     for _ in range(2):
-        log.record("goal_run", user_id="rob", source="goal",
+        log.record("goal_run", user_id="alice", source="goal",
                    attrs={"goal_id": "g-fast", "outcome": "done",
                           "steps": 10, "duration_sec": 50.0})
     est, measured = expected_run_seconds("g-fast", fallback_step_sec=45,
@@ -107,7 +107,7 @@ def test_the_estimate_is_the_run_time_not_the_step_cap(tmp_path, monkeypatch):
     log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
     for dur in (60.0, 80.0, 120.0):
-        log.record("goal_run", user_id="rob", source="goal",
+        log.record("goal_run", user_id="alice", source="goal",
                    attrs={"goal_id": "g-run", "outcome": "failed",
                           "steps": 150, "duration_sec": dur})
     est, measured = expected_run_seconds("g-run", fallback_step_sec=45,
@@ -120,7 +120,7 @@ def test_a_run_with_no_duration_is_not_counted_as_fast(tmp_path, monkeypatch):
     monkeypatch.setattr(el, "_INSTANCES", {})
     log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
-    log.record("goal_run", user_id="rob", source="goal",
+    log.record("goal_run", user_id="alice", source="goal",
                attrs={"goal_id": "g-old", "outcome": "done", "steps": 10})
     est, measured = expected_run_seconds("g-old", fallback_step_sec=45,
                                          max_run_sec=3600, data_dir=str(tmp_path))
@@ -140,11 +140,11 @@ async def test_preflight_defers_the_claim_and_emits_the_reason(
     from cron.jobs import CronJob, CronJobStore
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(CronJob(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *",
-                      user_id="rob",
+                      user_id="alice",
                       next_run_at=datetime.now() + timedelta(minutes=3),
                       payload={"priority": "money"}))
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Long build", priority=5)
+    g = board.create(user_id="alice", title="Long build", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     from core import interactive_gate as ig
     ig._busy_depth = 0
@@ -158,8 +158,8 @@ async def test_preflight_defers_the_claim_and_emits_the_reason(
 
 def test_yield_ageing_lifts_a_repeatedly_preempted_goal(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
-    old = board.create(user_id="rob", title="Yielded six times", priority=3)
-    fresh = board.create(user_id="rob", title="Fresh", priority=5)
+    old = board.create(user_id="alice", title="Yielded six times", priority=3)
+    fresh = board.create(user_id="alice", title="Fresh", priority=5)
     for _ in range(6):
         board._event(old.id, "yielded", {"job_id": "exit0001"})
 

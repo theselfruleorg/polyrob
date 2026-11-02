@@ -3,7 +3,7 @@
 Locally (``POLYROB_DATA_DIR`` unset) the CLI/agent resolves its data home to
 ``cwd/.polyrob`` (``polyrob.app.bootstrap._resolve_cli_data_home``), but
 ``webview.pages._data_dir``/``webview.activity._data_dir`` fell back to the
-unrelated ``./data`` — so a local ``rob`` session writes goals/cron/memory to
+unrelated ``./data`` — so a local ``polyrob`` session writes goals/cron/memory to
 one place while the webview console reads from another, empty, one.
 
 This mirrors the pattern ``webview.pages._avatar_data_dir`` already uses for the

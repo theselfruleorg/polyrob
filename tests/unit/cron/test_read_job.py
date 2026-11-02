@@ -119,7 +119,7 @@ def delivered(monkeypatch):
 
 
 def _job(payload):
-    return CronJob(id="j1", task="monitor the TKN pool", schedule_spec="30m", user_id="rob",
+    return CronJob(id="j1", task="monitor the TKN pool", schedule_spec="30m", user_id="alice",
                    next_run_at=None, payload=payload, max_duration_seconds=180)
 
 
@@ -203,29 +203,29 @@ def _svc(tmp_path):
 
 def test_schedule_normalizes_and_refuses(tmp_path):
     svc, store = _svc(tmp_path)
-    job = svc.schedule(task="monitor the pool", schedule_spec="30m", user_id="rob",
+    job = svc.schedule(task="monitor the pool", schedule_spec="30m", user_id="alice",
                        payload={"read_verb": SPEC, "pause_windows": [100, 200]})
     stored = store.get(job.id)
     assert stored.payload["pause_windows"] == [[100.0, 200.0]]
     assert stored.payload["read_verb"]["deliver_on"] == "alert"
     with pytest.raises(ScheduleError, match="end after"):
-        svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="rob",
+        svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="alice",
                      payload={"pause_windows": [[5, 1]]})
     with pytest.raises(ScheduleError, match="not a deterministic read verb"):
-        svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="rob",
+        svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="alice",
                      payload={"read_verb": {"verb": "defi_trade.swap"}})
 
 
 def test_edit_sets_and_clears_a_window(tmp_path):
     svc, store = _svc(tmp_path)
-    job = svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="rob")
-    assert svc.edit(job.id, user_id="rob",
+    job = svc.schedule(task="rebuy rail", schedule_spec="6h", user_id="alice")
+    assert svc.edit(job.id, user_id="alice",
                     payload_updates={"pause_windows": ["2026-10-01T11:00:00Z",
                                                        "2026-10-03T12:00:00Z"]}) == ["pause_windows"]
     assert len(store.get(job.id).payload["pause_windows"]) == 1
     with pytest.raises(ScheduleError):
-        svc.edit(job.id, user_id="rob", payload_updates={"pause_windows": [[3, 2]]})
-    assert svc.edit(job.id, user_id="rob", payload_updates={"pause_windows": None}) == ["pause_windows"]
+        svc.edit(job.id, user_id="alice", payload_updates={"pause_windows": [[3, 2]]})
+    assert svc.edit(job.id, user_id="alice", payload_updates={"pause_windows": None}) == ["pause_windows"]
     assert "pause_windows" not in store.get(job.id).payload
 
 

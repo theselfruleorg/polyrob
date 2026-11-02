@@ -161,6 +161,6 @@ def test_x_oauth2_line_reports_a_stored_login(tmp_path, monkeypatch):
     import json
     from cli.commands.doctor import x_oauth2_doctor_line
     monkeypatch.delenv("TWITTER_OAUTH2_ACCESS_TOKEN", raising=False)
-    (tmp_path / ".x_session.json").write_text(json.dumps({"rob|x_oauth2": "opaque"}))
+    (tmp_path / ".x_session.json").write_text(json.dumps({"alice|x_oauth2": "opaque"}))
     line = x_oauth2_doctor_line({"POLYROB_DATA_DIR": str(tmp_path)})
     assert "stored" in line

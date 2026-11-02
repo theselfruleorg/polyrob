@@ -36,7 +36,7 @@ RemedyTable = Mapping[str, str]
 #: Telegram / the REPL: slash verbs, `here` for the room you are in.
 CHAT_REMEDIES: Dict[str, str] = {
     "price": "/paid price mute 0.50",
-    "asset": "/paid asset rob",
+    "asset": "/paid asset demo",
     "enable": "/paid enable",
     "disable": "/paid disable",
     "member_verbs": "/groups set here member_verbs {verbs}",
@@ -47,7 +47,7 @@ CHAT_REMEDIES: Dict[str, str] = {
 #: explicitly — there is no `here` at a shell prompt.
 CLI_REMEDIES: Dict[str, str] = {
     "price": "polyrob owner paid price {chat_id} mute 0.50",
-    "asset": "polyrob owner paid asset {chat_id} rob",
+    "asset": "polyrob owner paid asset {chat_id} demo",
     "enable": "polyrob owner paid enable {chat_id}",
     "disable": "polyrob owner paid disable {chat_id}",
     "member_verbs":

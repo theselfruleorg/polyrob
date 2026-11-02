@@ -20,16 +20,16 @@ def test_avatar_line_not_set_without_the_shipped_default(tmp_path, monkeypatch):
 
 def test_avatar_line_set(tmp_path):
     from core.avatar import set_avatar
-    set_avatar(tmp_path, "rob", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, source="file:me.png")
-    lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path), "POLYROB_INSTANCE_ID": "rob"})
+    set_avatar(tmp_path, "alice", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, source="file:me.png")
+    lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path), "POLYROB_INSTANCE_ID": "alice"})
     assert any("avatar: set (file:me.png)" in l for l in lines)
 
 
 def test_avatar_line_unreadable(tmp_path):
     from core.avatar import avatar_dir, set_avatar
-    set_avatar(tmp_path, "rob", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, source="x")
-    (avatar_dir(tmp_path, "rob") / "avatar.json").write_text("{broken")
-    lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path), "POLYROB_INSTANCE_ID": "rob"})
+    set_avatar(tmp_path, "alice", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, source="x")
+    (avatar_dir(tmp_path, "alice") / "avatar.json").write_text("{broken")
+    lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path), "POLYROB_INSTANCE_ID": "alice"})
     assert any(l.startswith("avatar: unreadable") for l in lines)
 
 
@@ -92,7 +92,7 @@ def test_soul_default_vs_authored(tmp_path):
     lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path)})
     assert any("identity docs: none" in l for l in lines)
     (tmp_path / "identity").mkdir(parents=True)
-    (tmp_path / "identity" / "identity.md").write_text("# I am Rob")
+    (tmp_path / "identity" / "identity.md").write_text("# I am Nova")
     lines = setup_lines({"POLYROB_DATA_DIR": str(tmp_path)})
     assert any("identity docs: authored" in l for l in lines)
     assert any("identity.md" in l for l in lines if l.startswith("identity docs:"))

@@ -5,9 +5,8 @@ license: MIT
 metadata:
   polyrob-when: 'A market brief: size, players, trends, openings'
   polyrob-priority: '6'
-  polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"tool_ids":["web_fetch","perplexity","anysite"]}'
-  polyrob-version: '1'
+  polyrob-triggers: '{"tool_ids":["web_fetch"]}'
+  polyrob-version: '2'
 ---
 # Market Research Brief
 
@@ -29,12 +28,11 @@ If scope is unclear, make your assumptions explicit in the output.
 
 ### 1. Gather market data
 
-Use tools in this order of preference — fall back gracefully if one is unavailable:
+Use the search tool you hold first (a search or structured-data tool from a pack names
+its own steps in its skills), then:
 
-1. **perplexity** — best for synthesizing recent market reports, analyst quotes, and statistics. Use first if available.
-2. **anysite** — discover and use endpoints for company databases (Crunchbase, YC, LinkedIn company search) for competitive landscape data. Always discover endpoints before querying; do not hardcode paths.
-3. **web_fetch** — read specific market reports, analyst blog posts, Wikipedia overview pages, Statista free tier pages.
-4. **browser** — only if a source requires JS rendering or is otherwise inaccessible via fetch.
+1. **web_fetch** — read specific market reports, analyst blog posts, Wikipedia overview pages, Statista free tier pages.
+2. **browser** — only if a source requires JS rendering or is otherwise inaccessible via fetch.
 
 **Data to gather:**
 - Market size (TAM / SAM / SOM if available) and growth rate (CAGR)
@@ -102,4 +100,4 @@ Market size estimates vary widely. Always:
 - A brief should be 1–3 pages (or the equivalent in tokens), not a 50-page report. Summarize and link to sources for depth.
 - Always state what you couldn't verify and why (paywalled data, no recent figures, conflicting estimates).
 - Vendor-sponsored reports tend to overestimate market size — note this explicitly when citing them.
-- If `perplexity` is unavailable, combine `anysite` (company discovery for competitive landscape) with `web_fetch` (reading public reports and Wikipedia).
+- If no search tool is loaded, say so and work from `web_fetch` on public reports and Wikipedia.

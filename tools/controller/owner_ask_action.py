@@ -215,7 +215,7 @@ def register_owner_ask_action(controller) -> None:
             return ActionResult(error="Refused: a leaf/sub-agent reports its blocker to its parent, "
                                       "never to the owner.", include_in_memory=True)
         # H04: a session a correspondent drives (created for one, or tainted by
-        # one) must not speak to the owner AS Rob, nor decide an ask. The gate
+        # one) must not speak to the owner AS the agent, nor decide an ask. The gate
         # hook blocks `owner_ask` while tainted too; this holds without it.
         from agents.task.session_class import correspondent_facing
         if correspondent_facing(getattr(controller, "orchestrator", None)):

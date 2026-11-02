@@ -83,13 +83,16 @@ class ActionRegistry(BaseModel):
     # Use default_factory to avoid shared mutable default across instances
     actions: Dict[str, RegisteredAction] = Field(default_factory=dict)
 
-    def get_prompt_description(self) -> str:
-        """Get a description of all actions for the prompt, organized by tool"""
+    def get_prompt_description(self, exclude=()) -> str:
+        """Get a description of all actions for the prompt, organized by tool.
+        *exclude*: names whose schema this seat does not ship (095 W3/W9)."""
         # Group actions by tool
         tools = {}
         
         # First add actions to their tool groups
         for action in self.actions.values():
+            if action.name in exclude:
+                continue
             tool_name = action.tool or "default"
             if tool_name not in tools:
                 tools[tool_name] = []
@@ -117,7 +120,7 @@ class ActionRegistry(BaseModel):
 
         return '\n'.join(descriptions)
 
-    def get_prompt_action_index(self) -> str:
+    def get_prompt_action_index(self, exclude=()) -> str:
         """Compact one-line-per-action index for NATIVE tool mode (T1-03).
 
         In native mode the full parameter schemas already ship to the provider in
@@ -138,7 +141,7 @@ class ActionRegistry(BaseModel):
         for action in self.actions.values():
             # A legacy alias (todo_add -> task_todo_add) maps to the SAME action:
             # list it once, under its own name.
-            if action.name in seen:
+            if action.name in seen or action.name in exclude:
                 continue
             seen.add(action.name)
             tools.setdefault(action.tool or "default", []).append(action)

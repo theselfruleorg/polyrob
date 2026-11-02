@@ -16,7 +16,7 @@ def _controller(data_dir):
 	c = object.__new__(Controller)
 	c.logger = logging.getLogger("owner-doc-sweep-test")
 	c.registry = Registry()
-	c.user_id = "rob"
+	c.user_id = "alice"
 	c.session_id = "s1"
 	c.container = types.SimpleNamespace(config=types.SimpleNamespace(data_dir=str(data_dir)))
 	c._register_owner_doc_manage_action()
@@ -24,13 +24,13 @@ def _controller(data_dir):
 
 
 def _ctx():
-	return types.SimpleNamespace(user_id="rob", is_sub_agent=False, role="orchestrator", metadata={})
+	return types.SimpleNamespace(user_id="alice", is_sub_agent=False, role="orchestrator", metadata={})
 
 
 def _cron(tmp_path, task):
 	con = sqlite3.connect(tmp_path / "cron.db")
 	con.execute("CREATE TABLE cron_jobs (id TEXT, task TEXT, user_id TEXT, enabled INTEGER)")
-	con.execute("INSERT INTO cron_jobs VALUES ('dailyx01', ?, 'rob', 1)", (task,))
+	con.execute("INSERT INTO cron_jobs VALUES ('dailyx01', ?, 'alice', 1)", (task,))
 	con.commit(); con.close()
 
 
@@ -59,11 +59,14 @@ async def test_sweep_requires_content(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_model_rule_stays_pending_until_owner_review(tmp_path):
+async def test_model_rule_stays_pending_and_its_draft_is_swept(tmp_path):
+	"""095 W10 (X-21): the draft is swept — the reply names the job prose the new
+	rule would override — and stays pending until the owner reviews it."""
 	_cron(tmp_path, "Every day publish a public report of the bugs we fix.")
 	a = _controller(tmp_path)
 	res = await a.function(a.param_model(action="update",
 	                                     content="- Never publish public reports about bugs we fix."),
 	                       execution_context=_ctx())
 	assert "NOT YET IN EFFECT" in res.extracted_content
-	assert "cron dailyx01" not in res.extracted_content
+	assert "cron dailyx01" in res.extracted_content
+	assert "Advisory only" in res.extracted_content

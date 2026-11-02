@@ -284,7 +284,7 @@ def render_invoice_card(invoice: Dict[str, Any], artifact: Dict[str, Any],
             amount_text = f"{float(invoice.get('amount_usd') or 0.0):.2f}"
         except (TypeError, ValueError):
             amount_text = "0.00"
-    # 046: the card names the ACTUAL token. A ROB invoice rendered as
+    # 046: the card names the ACTUAL token. A DEMO invoice rendered as
     # "$0.50 USDC" tells the payer to send the wrong asset — money they do not
     # get back. The token amount leads (it is what they must actually send) and
     # the USD figure follows as the annotation it is.

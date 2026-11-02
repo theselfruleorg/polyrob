@@ -40,10 +40,10 @@ class _FakeBoard:
     def record_failure(self, gid, error=None, session_id=None, claim_token=None):
         self.failures.append((gid, error))
         self._status = STATUS_READY
-        return Goal(id=gid, user_id="rob", title="t", status=STATUS_READY)
+        return Goal(id=gid, user_id="alice", title="t", status=STATUS_READY)
 
     def get(self, gid):
-        return Goal(id=gid, user_id="rob", title="t", status=self._status)
+        return Goal(id=gid, user_id="alice", title="t", status=self._status)
 
     def set_outcome(self, gid, outcome):
         return True
@@ -88,7 +88,7 @@ def _row(mid, text, ts):
 
 
 def _goal():
-    return Goal(id="g-room", user_id="rob", title="Service room The Den",
+    return Goal(id="g-room", user_id="alice", title="Service room The Den",
                 payload={"group": {"surface": "telegram", "chat_id": "-1001"},
                          "tools": ["defi_trade"], "max_steps": 99})
 
@@ -182,7 +182,7 @@ def test_bind_chat_surface_write_row_false_leaves_the_live_row_alone(tmp_path, m
     registry = SessionChatRegistry(db)
     key = "agent:main:telegram:supergroup:-1001"
     src = SessionSource(surface_id="telegram", chat_id="-1001", chat_type="supergroup")
-    registry.bind(key, "live-session", "rob", "telegram", "-1001")
+    registry.bind(key, "live-session", "alice", "telegram", "-1001")
     # `updated_at` is second-resolution, so pin a known old value rather than
     # racing the clock — the idle reset reads exactly this column.
     execute_retry(db, "UPDATE session_chat_map SET updated_at=1 WHERE session_key=?", (key,))
@@ -192,7 +192,7 @@ def test_bind_chat_surface_write_row_false_leaves_the_live_row_alone(tmp_path, m
         "message_router": SimpleNamespace(), "session_chat_registry": registry}.get(n))
     orch = SimpleNamespace()
     assert bind_chat_surface(orch, container, session_source=src, chat_session_key=key,
-                             session_id="service-session", user_id="rob",
+                             session_id="service-session", user_id="alice",
                              write_row=False) is True
     assert orch._public_session is True, "the service run must still be PUBLIC"
     assert orch._chat_session_key == key
@@ -202,7 +202,7 @@ def test_bind_chat_surface_write_row_false_leaves_the_live_row_alone(tmp_path, m
 
     # ...while the default still takes the row (every ordinary chat turn).
     bind_chat_surface(orch, container, session_source=src, chat_session_key=key,
-                      session_id="another-session", user_id="rob")
+                      session_id="another-session", user_id="alice")
     assert registry.resolve(key)["session_id"] == "another-session"
 
 
@@ -211,7 +211,7 @@ def test_a_muted_room_is_a_typed_skip(tmp_path, monkeypatch):
     `no_change` are never the same line in the log."""
     from core.surfaces import chat_policy
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    ok, msg = chat_policy.set(str(tmp_path), "rob", "telegram", "-1001",
+    ok, msg = chat_policy.set(str(tmp_path), "alice", "telegram", "-1001",
                               "chat.mode", "off")
     assert ok, msg
     agent, board, _lg = _dispatch(tmp_path, monkeypatch)

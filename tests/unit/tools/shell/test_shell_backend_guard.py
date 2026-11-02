@@ -39,7 +39,7 @@ def _clean(monkeypatch):
 
 
 def _owner_ctx(sid="s1"):
-    return ActionExecutionContext(role="orchestrator", is_sub_agent=False, user_id="rob",
+    return ActionExecutionContext(role="orchestrator", is_sub_agent=False, user_id="alice",
                                   session_id=sid, metadata={"turn_kind": None})
 
 

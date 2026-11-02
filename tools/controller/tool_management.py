@@ -471,6 +471,30 @@ class ToolManagementMixin:
 		except Exception:
 			return f"'{action_name}' is not a registered action"
 
+	def absent_tool_ids(self, tool_ids) -> set:
+		"""095 W4 (IN-4, X-24): the ids among *tool_ids* this session can never
+		reach — ``gated:unavailable-on-this-deploy``/``not-constructed`` or refused
+		by the seat — so
+		the skill index treats them as absent (``core.skills.catalog.gate_allows``).
+		On the Controller so the agents tier needs no tools import. Fail-open:
+		a probe error leaves the id present."""
+		from tools.tool_disclosure import resolve_tool_status, disclosure_ceiling, seat_probe
+		loaded, out = set(self.list_tools()), set()
+		ceiling, probe = disclosure_ceiling(self), seat_probe(self)
+		for tool_id in set(tool_ids or ()):
+			try:
+				st = resolve_tool_status(
+					tool_id, container=self.container, loaded_ids=loaded,
+					is_leaf=bool(getattr(self, "_is_sub_agent", False)),
+					allowed_ids=ceiling, seat_denies=probe)
+			except Exception:
+				continue
+			if st.status == "gated" and (st.reason in ("unavailable-on-this-deploy",
+			                                           "not-constructed")
+			                             or st.reason.startswith("seat-")):
+				out.add(tool_id)
+		return out
+
 	def render_tool_catalog(self, *, is_leaf: bool = False) -> str:
 		"""S1 (dynamic tool rig): the honest <tool-catalog> block for this session.
 
@@ -478,10 +502,11 @@ class ToolManagementMixin:
 		injected controller object without importing the tools tier (layering
 		ratchet: core <- modules <- agents <- tools).
 		"""
-		from tools.tool_disclosure import render_tool_catalog, disclosure_ceiling
+		from tools.tool_disclosure import render_tool_catalog, disclosure_ceiling, seat_probe
 		return render_tool_catalog(
 			container=self.container,
 			loaded_ids=set(self.list_tools()),
 			is_leaf=is_leaf,
 			allowed_ids=disclosure_ceiling(self),
+			seat_denies=seat_probe(self),
 		)

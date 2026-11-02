@@ -164,18 +164,18 @@ async def test_workspace_bind_mount_is_writable(monkeypatch, tmp_path):
 async def test_workspace_nested_preexisting_dir_is_writable(monkeypatch, tmp_path):
     """A HOST-side tool (e.g. the `filesystem` tool's create_directory, running as
     root outside the container) commonly scaffolds nested directories under the
-    workspace BEFORE the container ever touches them — e.g. `videos/rob-reboot/`
+    workspace BEFORE the container ever touches them — e.g. `videos/demo-reboot/`
     for a Remotion project. Chmod'ing only the top-level workspace mount doesn't
     reach those: live prod hit `mkdir EACCES` one level inside such a directory
     (npm trying to create `node_modules`/`out`). The recursive (pruned) chmod
     must reach pre-existing nested dirs too, not just the mount root."""
-    nested = tmp_path / "videos" / "rob-reboot"
+    nested = tmp_path / "videos" / "demo-reboot"
     nested.mkdir(parents=True)
     backend = await _ready_backend(monkeypatch)
     result = await backend.run(ExecutionRequest(
         language="python",
         code=(
-            "import os; os.mkdir('/workspace/videos/rob-reboot/node_modules'); "
+            "import os; os.mkdir('/workspace/videos/demo-reboot/node_modules'); "
             "print('mkdir-ok')"
         ),
         timeout=TIMEOUT,

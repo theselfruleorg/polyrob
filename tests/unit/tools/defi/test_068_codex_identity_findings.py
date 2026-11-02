@@ -26,7 +26,7 @@ SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL_USDC_CASE = SOL_USDC[:-1] + "V"   # another valid 32-byte key
 
 
-def _ctx(target=None, uid="rob"):
+def _ctx(target=None, uid="alice"):
     meta = {"money_target": target} if target else {}
     return SimpleNamespace(user_id=uid, metadata=meta, role="orchestrator",
                            is_sub_agent=False)
@@ -106,9 +106,9 @@ def test_b1_entries_for_strict_raises_on_a_corrupt_store(tmp_path):
     from core import open_positions
     db = tmp_path / "open_positions.db"
     db.write_bytes(b"garbage" * 200)
-    assert open_positions.entries_for("rob", db_path=str(db)) == {}
+    assert open_positions.entries_for("alice", db_path=str(db)) == {}
     with pytest.raises(Exception):
-        open_positions.entries_for("rob", db_path=str(db), strict=True)
+        open_positions.entries_for("alice", db_path=str(db), strict=True)
 
 
 # ---- B2 ---------------------------------------------------------------------
@@ -246,7 +246,7 @@ def test_b4_solana_target_check_covers_canonical_outputs():
 def test_b10_owner_pinned_solana_mint_reads_verified(pins):
     from tools.defi.data_tool import DefiDataTool
     mint = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
-    token_pins.pin("solana", mint, "ROB")
+    token_pins.pin("solana", mint, "DEMO")
     ident = DefiDataTool._identity(SimpleNamespace(_identity_fn=None), "solana", mint)
     assert ident.verified and ident.source == "owner_pin"
     assert ident.decimals is None and ident.name is None     # nothing invented

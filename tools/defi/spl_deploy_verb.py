@@ -137,7 +137,7 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     # reallocs, and a short account fails THERE rather than at the instruction
     # that under-funded it.
     # The validated (stripped, printable-ASCII) name and symbol are the ones
-    # minted — never the raw params, or " ROB" would pass the check and mint
+    # minted — never the raw params, or " DEMO" would pass the check and mint
     # with its leading space.
     uri = (params.uri or "").strip()
     space = spl_token.MINT_WITH_POINTER_LEN + spl_token.metadata_space(

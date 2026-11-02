@@ -295,6 +295,44 @@ async def deliver_result_ex(
 ALREADY_TOLD_WINDOW_SEC = 7200
 
 
+def failed_run_notice(job: Any, outcome: str, reason: str, at: Any) -> Optional[str]:
+    """The ONE owner line for a failed run of an owner-armed job, or None.
+
+    Routines review 2026-10-29: the 10-28 announce run failed SILENTLY — the
+    agent had dropped ``deliver``, and a failed run never echoes on any sink.
+    So the line goes out whatever ``deliver`` says, once per failure streak
+    (the run before this one did not fail), never for a job the agent wrote
+    (``core.cron_outcome.agent_armed``) or for the digest (its failure IS a send failure).
+    """
+    from core.cron_outcome import FAILED_OUTCOMES, agent_armed
+    p = getattr(job, "payload", None) or {}
+    if outcome not in FAILED_OUTCOMES or agent_armed(p) or p.get("digest"):
+        return None
+    if (p.get("last_outcome") or {}).get("outcome") in FAILED_OUTCOMES:
+        return None  # told at the first failure of this streak
+    name = " ".join(str(p.get("name") or getattr(job, "task", "") or "").split())[:60]
+    when = at.strftime("%m-%d %H:%M") if hasattr(at, "strftime") else str(at or "")[5:16]
+    why = f" ({reason})" if reason else ""
+    jid = str(getattr(job, "id", "") or "")
+    # A failed ONE-SHOT is no longer live: /job run cannot re-run it (L2).
+    retry = ("" if getattr(job, "one_shot", False)
+             else f" · /job run {jid[:8]} to retry")
+    return (f"⚠ Job {jid[:8]} \"{name}\" {outcome} at {when}{why} — its work did not "
+            f"finish. /job show {jid[:8]}{retry}.")
+
+
+async def notify_failed_run(task_agent: Any, job: Any, outcome: str, reason: str,
+                            at: Any) -> bool:
+    """Push :func:`failed_run_notice` to the owner through the one owner rail
+    (``core.self_evolution.push_owner_message``). Fail-open; True iff sent."""
+    text = failed_run_notice(job, outcome, reason, at)
+    if not text:
+        return False
+    from core.self_evolution import push_owner_message
+    return bool(await push_owner_message(getattr(task_agent, "container", None), text,
+                                         source="cron_failed"))
+
+
 def _event_log_for_read() -> Any:
     """The telemetry event log, or None when it cannot be opened (fail-open)."""
     try:

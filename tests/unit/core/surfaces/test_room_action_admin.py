@@ -13,8 +13,8 @@ def rig(tmp_path, monkeypatch):
 
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(str(tmp_path))).upsert(PaymentAsset(
-        asset_id="rob", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="ROB", rail="onchain_scan", source="operator"))
+        asset_id="demo", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="DEMO", rail="onchain_scan", source="operator"))
 
     class _C:
         class config:
@@ -35,7 +35,7 @@ def _offer(**kw):
     from core.surfaces.room_action_store import Offer
     base = dict(offer_id="o1", surface="telegram", chat_id="-100123",
                 verb="mute", target_user_id="9", target_name="S",
-                duration_sec=3600, price_usd=1.0, asset_id="rob",
+                duration_sec=3600, price_usd=1.0, asset_id="demo",
                 amount_raw="1", requester_id="2", invoice_id="i",
                 status="pending", reason="", created_at=time.time())
     base.update(kw)
@@ -49,17 +49,17 @@ def test_status_on_an_unconfigured_room_says_so_plainly(rig):
 
 
 def test_enable_then_status_reports_the_price_and_the_asset(rig):
-    assert "✅" in adm.set_asset(rig, "telegram", "-100123", "rob")
+    assert "✅" in adm.set_asset(rig, "telegram", "-100123", "demo")
     assert "✅" in adm.set_price(rig, "telegram", "-100123", "mute", 0.5)
     assert "✅" in adm.enable(rig, "telegram", "-100123")
     out = adm.status(rig, "telegram", "-100123")
-    assert "rob" in out and "0.50" in out
+    assert "demo" in out and "0.50" in out
 
 
 def test_status_warns_when_members_cannot_invoke_the_verb(rig):
     """⚠️ A priced, enabled room whose members cannot reach /mute looks
     working and refuses everyone."""
-    adm.set_asset(rig, "telegram", "-100123", "rob")
+    adm.set_asset(rig, "telegram", "-100123", "demo")
     adm.set_price(rig, "telegram", "-100123", "mute", 0.5)
     adm.enable(rig, "telegram", "-100123")
     out = adm.status(rig, "telegram", "-100123")

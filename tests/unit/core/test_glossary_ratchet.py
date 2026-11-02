@@ -26,7 +26,7 @@ _REPO = Path(__file__).resolve().parents[3]
 #: Strings with at least one banned word, per corpus. Lower a number in the
 #: same commit that removes a hit; never raise one.
 CEILINGS = {
-    "webview_copy": 71,
+    "webview_copy": 70,
     "core_copy": 3,
     "verbs": 22,
     "prefs": 0,
@@ -36,8 +36,8 @@ CEILINGS = {
     # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
-    "guide_docs": 1890,
-    "guide_skill": 265,
+    "guide_docs": 1707,
+    "guide_skill": 241,
 }
 
 _INBOX_RENDER = ("core/surfaces/inbox_render.py", "core/surfaces/owner_admin.py")
@@ -57,15 +57,22 @@ _GUIDE_SKILL = "data/prompts/skills/polyrob-user-guide"
 
 def _markdown_strings(root: str) -> list:
     """``(file:line, text)`` for every owner-length prose line of the ``.md``
-    files under *root* — fenced code blocks and generated files are skipped."""
+    files under *root* — fenced code blocks and generated files are skipped,
+    and so is a generated block inside a hand-written file (095 W6: the FAQ
+    quotes the code's refusal and stop texts verbatim)."""
     out = []
     for path in sorted((_REPO / root).rglob("*.md")):
         text = path.read_text(encoding="utf-8")
         if text.startswith("<!-- GENERATED"):
             continue
         rel = path.relative_to(_REPO)
-        fenced = False
+        fenced = generated = False
         for n, line in enumerate(text.splitlines(), 1):
+            if line.startswith(("<!-- BEGIN GENERATED", "<!-- END GENERATED")):
+                generated = line.startswith("<!-- BEGIN")
+                continue
+            if generated:
+                continue
             if line.lstrip().startswith("```"):
                 fenced = not fenced
                 continue

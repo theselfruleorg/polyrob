@@ -82,18 +82,18 @@ async def _mint(db, asset_id, address, decimals, chain, status="pending"):
 async def test_pending_scan_groups_lists_one_row_per_distinct_asset(x402_db):
     await _mint(x402_db, "usdc-base", "0x" + "aa" * 20, 6, "base")
     await _mint(x402_db, "usdc-base", "0x" + "aa" * 20, 6, "base")
-    await _mint(x402_db, "rob", "0x" + "bb" * 20, 18, "robinhood")
+    await _mint(x402_db, "demo", "0x" + "bb" * 20, 18, "robinhood")
 
     groups = await settlement_scan.pending_scan_groups(TREASURY, db=x402_db)
     assert len(groups) == 2
-    assert ("robinhood", "0x" + "bb" * 20, 18, "rob") in groups
+    assert ("robinhood", "0x" + "bb" * 20, 18, "demo") in groups
 
 
 @pytest.mark.asyncio
 async def test_a_settled_invoice_contributes_no_scan_group(x402_db):
     """Scanning is driven by what is actually OWED. An asset nobody is waiting
     on costs no eth_getLogs call."""
-    await _mint(x402_db, "rob", "0x" + "bb" * 20, 18, "robinhood",
+    await _mint(x402_db, "demo", "0x" + "bb" * 20, 18, "robinhood",
                 status="completed")
     assert await settlement_scan.pending_scan_groups(TREASURY, db=x402_db) == []
 

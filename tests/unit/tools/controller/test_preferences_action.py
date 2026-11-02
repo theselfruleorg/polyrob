@@ -15,6 +15,12 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+@pytest.fixture(autouse=True)
+def _identity_home(tmp_path, monkeypatch):
+    """095 W8: the action reads the ONE identity home (``prefs_home_dir``)."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
+
 
 
 def _bare_controller(data_dir):
@@ -53,12 +59,23 @@ def _register(monkeypatch, tmp_path):
 # registration gating
 # ---------------------------------------------------------------------------
 
-def test_suppressed_when_flag_off(monkeypatch, tmp_path):
+def _ops(c):
+    model = c.registry.registry.actions["preferences"].param_model
+    return set(model.model_fields["operation"].annotation.__args__)
+
+
+def test_read_only_when_flag_off(monkeypatch, tmp_path):
+    """095 W1c (D2): reading is not a power — get/list/explain on every posture;
+    set stays behind PREFS_TOOL_ENABLED."""
     monkeypatch.setenv("PREFS_TOOL_ENABLED", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_preferences_action()
-    assert "preferences" not in c.registry.registry.actions
+    assert _ops(c) == {"list", "get", "explain"}
+    action = c.registry.registry.actions["preferences"]
+    assert "'set'" not in action.description
+    with pytest.raises(Exception):
+        action.param_model(operation="set", key="style.verbosity", value="concise")
 
 
 def test_registered_when_flag_on(monkeypatch, tmp_path):
@@ -74,12 +91,43 @@ def test_default_on_under_polyrob_local(monkeypatch, tmp_path):
     assert "preferences" in c.registry.registry.actions
 
 
-def test_default_off_without_polyrob_local(monkeypatch, tmp_path):
+def test_default_read_only_without_polyrob_local(monkeypatch, tmp_path):
     monkeypatch.delenv("PREFS_TOOL_ENABLED", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_preferences_action()
-    assert "preferences" not in c.registry.registry.actions
+    assert _ops(c) == {"list", "get", "explain"}
+
+
+def test_writes_registered_when_flag_on(monkeypatch, tmp_path):
+    monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
+    c = _bare_controller(tmp_path)
+    c._register_preferences_action()
+    # 095 W10: contract_propose is gone — owner_doc_manage is the one rule writer.
+    assert _ops(c) == {"list", "get", "explain", "set"}
+    assert "contract_propose" not in c.registry.registry.actions["preferences"].description
+    assert "apply immediately" not in c.registry.registry.actions["preferences"].description
+
+
+@pytest.mark.asyncio
+async def test_read_only_explain_works_and_masks_a_credential(monkeypatch, tmp_path):
+    monkeypatch.setenv("PREFS_TOOL_ENABLED", "false")
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    c = _bare_controller(tmp_path)
+    c._register_preferences_action()
+    action = c.registry.registry.actions["preferences"]
+    res = await action.function(action.param_model(operation="explain", key="TWITTER_ENABLED"),
+                                execution_context=_ctx())
+    assert res.error is None and "TWITTER_ENABLED" in res.extracted_content
+
+
+def test_shown_masks_credential_shapes():
+    from tools.controller.preferences_action import _shown
+    token = "sk-ant-api03-" + "a" * 40
+    assert _shown("style.tone", token) != token
+    assert _shown("OPENAI_API_KEY", "abcdefghijklmnopq") == "abcd…nopq"
+    assert _shown("style.verbosity", "concise") == "concise"
+    assert _shown("OPENAI_API_KEY", "(set, masked)") == "(set, masked)"
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +231,46 @@ async def test_safe_set_writes_and_reply_mentions_applies(monkeypatch, tmp_path)
         action.param_model(operation="set", key="style.verbosity", value="terse"),
         execution_context=_ctx())
     assert res.error is None
-    assert "applies: next-turn" in res.extracted_content
+    assert "applies: next-step" in res.extracted_content
 
     from core.prefs import load_preferences
     assert load_preferences(tmp_path, "u1").get("style.verbosity") == "terse"
+
+
+@pytest.mark.asyncio
+async def test_safe_set_names_effective_value(monkeypatch, tmp_path):
+    """095 W1c (SC-3): the reply names the value in force, not only the typed one."""
+    action = _register(monkeypatch, tmp_path)
+    res = await action.function(
+        action.param_model(operation="set", key="style.verbosity", value="terse"),
+        execution_context=_ctx())
+    assert res.error is None
+    assert "effective terse" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_safe_set_above_min_env_says_no_effect(monkeypatch, tmp_path):
+    action = _register(monkeypatch, tmp_path)
+    monkeypatch.setenv("GOAL_DAILY_QUOTA", "3")
+    res = await action.function(
+        action.param_model(operation="set", key="goals.daily_quota", value="9"),
+        execution_context=_ctx())
+    assert res.error is None
+    assert "no effect now" in res.extracted_content
+    assert "GOAL_DAILY_QUOTA" in res.extracted_content
+    assert "effective 3" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_safe_set_on_and_merge_with_env_off_says_no_effect(monkeypatch, tmp_path):
+    action = _register(monkeypatch, tmp_path)
+    monkeypatch.setenv("POLYROB_OVERRIDES", "SELF_WAKE_ENABLED=false")
+    res = await action.function(
+        action.param_model(operation="set", key="autonomy.self_wake", value="true"),
+        execution_context=_ctx())
+    assert res.error is None
+    assert "no effect now" in res.extracted_content
+    assert "SELF_WAKE_ENABLED" in res.extracted_content
 
 
 # ---------------------------------------------------------------------------
@@ -267,52 +351,6 @@ async def test_sub_agent_refuses_set(monkeypatch, tmp_path):
         action.param_model(operation="set", key="style.verbosity", value="terse"),
         execution_context=_ctx(is_sub=True))
     assert res.error is not None
-
-
-# ---------------------------------------------------------------------------
-# contract_propose — always quarantines for a background/forged author, even
-# when the review flag is off for a genuine turn.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_contract_propose_quarantines_for_background_author(monkeypatch, tmp_path):
-    # 035 P1-7: contract_propose writes the RULES doc (owner.md) now. A
-    # model-written rule is a draft on every turn (`_rules_immediate` is False);
-    # CONTRACT_DOC_REQUIRE_REVIEW no longer decides a write.
-    action = _register(monkeypatch, tmp_path)
-
-    # Model-written rules require review even in a genuine owner turn.
-    genuine_res = await action.function(
-        action.param_model(operation="contract_propose",
-                          text="Always ask before spending more than $50."),
-        execution_context=_ctx())
-    assert genuine_res.error is None
-    assert "NOT YET IN EFFECT" in genuine_res.extracted_content
-    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
-
-    # Forged (self-wake) turn: quarantined too.
-    forged_res = await action.function(
-        action.param_model(operation="contract_propose",
-                          text="Always double-check math before answering."),
-        execution_context=_forged_ctx())
-    assert forged_res.error is None
-    assert "NOT YET IN EFFECT" in forged_res.extracted_content
-    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "owner.md").exists()
-    # The ACTIVE doc from the genuine turn must be untouched by the forged propose.
-    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
-
-
-@pytest.mark.asyncio
-async def test_contract_propose_quarantines_genuine_turn_too(monkeypatch, tmp_path):
-    # A genuine owner turn queues the draft in .pending/; the owner confirms it.
-    action = _register(monkeypatch, tmp_path)
-    res = await action.function(
-        action.param_model(operation="contract_propose", text="Keep replies concise."),
-        execution_context=_ctx())
-    assert res.error is None
-    assert "NOT YET IN EFFECT" in res.extracted_content
-    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
-    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "owner.md").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -212,7 +212,7 @@ class SecretScrubbingFilter(logging.Filter):
     # skipped when BOTH this marker scan AND _MARKERLESS_PRECHECK miss.
     MARKER_WORDS = (
         "key", "token", "secret", "bearer", "akia", "-----begin",
-        "sk-", "pk-", "rk-", "rob_", "password", "authorization",
+        "sk-", "pk-", "rk-", "polyrob_", "rob_", "password", "authorization",
         # JWTs always start with eyJ (base64 of '{"') — without this marker a
         # bare OAuth token would be gated out of the battery entirely (base64url
         # `-`/`_` chars break the 32-char alnum run in _MARKERLESS_PRECHECK).

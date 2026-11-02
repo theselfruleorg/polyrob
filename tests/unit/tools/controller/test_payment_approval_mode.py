@@ -463,7 +463,7 @@ def test_leaf_turn_denied_by_owner_queue_itself(tmp_path, monkeypatch):
 
     result = asyncio.run(provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
-    assert result is False
+    assert not result
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 
@@ -498,7 +498,7 @@ def test_taint_probe_true_denies_without_creating_ask_or_notifying(tmp_path, mon
 
     result = asyncio.run(provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
-    assert result is False
+    assert not result
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
     assert notified == []
 
@@ -520,7 +520,7 @@ def test_taint_probe_raising_fails_closed(tmp_path):
 
     result = asyncio.run(provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
-    assert result is False
+    assert not result
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
 
 

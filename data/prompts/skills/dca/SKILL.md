@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Buying a fixed amount on a schedule (DCA)'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data","cronjob"]}'
   polyrob-requires: '["token-identity","pre-trade-check"]'
   polyrob-version: '3'
@@ -27,9 +26,9 @@ prediction, and the safest one to run unattended.
 ## Set it up
 
 1. **Confirm the target by ADDRESS** (`token-identity`). The job must carry the
-   address, not the symbol. On 2026-09-25 a recurring swap job whose text had
-   lost the address bought a look-alike — confirm the address with the owner
-   before the first run. A target the owner writes into the job is trusted for
+   address, not the symbol. A recurring job whose text loses the address can
+   buy a look-alike — confirm the address with the owner before the first
+   run. A target the owner writes into the job is trusted for
    that job; nobody has to pin it. If the identity check refuses a buy anyway,
    it has already asked the owner in `/pending` — do not message him about it.
 2. **Schedule it with the target as data:** `cronjob_schedule(task=…,

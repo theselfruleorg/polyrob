@@ -42,7 +42,7 @@ def test_own_bot_username_resolves_to_owner():
     router = _Router(bot_username="ExampleBot")
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target="@ExampleBot", text="done",
+        user_id="alice", surface="telegram", target="@ExampleBot", text="done",
         session_id="sess-1"))
     assert res["success"] is True
     assert res["tier"] == "owner"
@@ -54,7 +54,7 @@ def test_own_bot_username_matches_case_and_at_insensitively():
     router = _Router(bot_username="ExampleBot")
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target="examplebot", text="done",
+        user_id="alice", surface="telegram", target="examplebot", text="done",
         session_id="sess-1"))
     assert res["success"] is True
     assert res["tier"] == "owner"
@@ -65,7 +65,7 @@ def test_unrelated_target_is_not_aliased():
     router = _Router(bot_username="ExampleBot")
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target="@someone_else", text="hi",
+        user_id="alice", surface="telegram", target="@someone_else", text="hi",
         session_id="sess-1"))
     assert res["tier"] == "denied"
 
@@ -86,7 +86,7 @@ def test_router_without_bot_username_method_is_fail_soft():
     router = _NoUsernameRouter()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "100000001"},
-        user_id="rob", surface="telegram", target="@ExampleBot", text="hi",
+        user_id="alice", surface="telegram", target="@ExampleBot", text="hi",
         session_id="sess-1"))
     # 2026-08-17: still no crash without bot_username, but the outcome upgraded
     # from a bare allowlist denial to the explicit bot-recipient refusal — a

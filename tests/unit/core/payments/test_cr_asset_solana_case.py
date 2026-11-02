@@ -20,6 +20,6 @@ def test_a_solana_mint_keeps_its_case(tmp_path):
 
 def test_an_evm_address_is_still_lowercased(tmp_path):
     store = AssetStore(str(tmp_path / "a.db"))
-    store.upsert(_row(asset_id="rob", chain="base", address="0x" + "AB" * 20,
+    store.upsert(_row(asset_id="demo", chain="base", address="0x" + "AB" * 20,
                       rail="onchain_scan"))
-    assert store.get("rob").address == "0x" + "ab" * 20
+    assert store.get("demo").address == "0x" + "ab" * 20

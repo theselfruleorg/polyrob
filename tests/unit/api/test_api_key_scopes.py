@@ -11,6 +11,7 @@ from api.api_key_auth import APIKeyAuthMiddleware, validate_api_key, validate_ap
 from core.container import DependencyContainer
 from modules.auth.api_key_manager import APIKeyManager
 from modules.database.connection import DatabaseConnection
+from api.api_key_auth import API_KEY_PREFIX
 
 
 @pytest_asyncio.fixture
@@ -99,7 +100,7 @@ def test_read_key_cannot_mutate_with_either_header(monkeypatch, method, header):
         calls.append(request.method)
         return {'authenticated': request.state.authenticated}
     client = TestClient(app)
-    key = 'rob_' + 'x' * 40
+    key = API_KEY_PREFIX + 'x' * 40
     headers = {header: 'Bearer ' + key if header == 'Authorization' else key}
     assert client.get('/probe', headers=headers).status_code == 200
     assert client.request(method, '/probe', headers=headers).status_code == 403

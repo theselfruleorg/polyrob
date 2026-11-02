@@ -193,7 +193,7 @@ _SENT_KEPT, _SENT_CHARS = 3, 200
 _OUTPUTS_KEPT, _OUTPUT_CHARS = 5, 100
 _TX_KEPT = 5
 _META_BUDGET = 3200          # the store drops a meta over 4000 chars whole
-PREVIOUS_RUNS_KEPT = 3
+PREVIOUS_RUNS_KEPT = 5       # R16: a compact track record, this job only
 PREVIOUS_RUNS_MAX_CHARS = 2000
 
 # C-3 (2026-10-14 review): a run's note for the next run sat at char 1,267 of a
@@ -281,9 +281,78 @@ def did_something(facts: dict) -> bool:
     return bool(facts.get("sent") or facts.get("outputs") or facts.get("tx"))
 
 
+#: 095 W11 / R1: where a run's outcome signal came from, most trusted first. A
+#: receipt (the run sent, produced or signed something) beats the owner's word,
+#: which beats the completion judge, which beats the agent's own report. Only
+#: the first three may teach; ``self`` is recorded, never learned from.
+SIGNAL_SOURCES = ("receipt", "owner", "judge", "self", "none")
+
+
+def signal_source(meta: dict, *, useful: bool, run: Any = None,
+                  summary: Optional[str] = None) -> str:
+    """The most trusted signal this run record carries (:data:`SIGNAL_SOURCES`).
+
+    ``owner`` = the caller stamped ``meta["owner_verdict"]``; ``judge`` = a
+    goal's ``meta["verified"]``; ``self`` = only the agent's own done text or
+    summary. Never raises."""
+    try:
+        if useful:
+            return "receipt"
+        if str((meta or {}).get("owner_verdict") or "").strip():
+            return "owner"
+        if str((meta or {}).get("verified") or "").strip():
+            return "judge"
+        if str(getattr(run, "done_text", "") or "").strip() or str(summary or "").strip():
+            return "self"
+    except Exception:
+        logger.debug("signal source: partial read", exc_info=True)
+    return "none"
+
+
+def rail_lane(rail: str, data_dir: Optional[str] = None) -> str:
+    """The job's or goal's lane (``core.cron_lanes.job_lane`` of its payload),
+    read from its live store; ``""`` when there is no lane or no store."""
+    import os
+    from core.runtime_paths import cron_db_path, goals_db_path
+    kind, _, ident = (rail or "").partition(":")
+    if kind not in ("cron", "goal") or not ident:
+        return ""
+    db = cron_db_path(data_dir) if kind == "cron" else goals_db_path(data_dir)
+    if not os.path.exists(db):
+        return ""
+    table = "cron_jobs" if kind == "cron" else "goals"
+    try:
+        from core.sqlite_util import execute_retry
+        from core.cron_lanes import job_lane
+        rows = execute_retry(db, f"SELECT payload FROM {table} WHERE id=?", (ident,),
+                             fetch="all") or []
+        payload = _json.loads(rows[0][0] or "{}") if rows else {}
+        return job_lane(payload)
+    except Exception:
+        logger.debug("rail lane unreadable for %s", rail, exc_info=True)
+        return ""
+
+
+def _skill_generations(skills: list, user_id: Optional[str]) -> dict:
+    """``{skill_id: patch_generation}`` of the skills a run loaded — the join of
+    a real outcome to the revision that produced it. ``{}`` when unreadable."""
+    ids = sorted({str(s) for s in skills or [] if str(s or "").strip()})
+    if not ids or not user_id:
+        return {}
+    try:
+        from modules.skills.skill_usage import existing_skill_usage_store
+        store = existing_skill_usage_store()
+        return store.patch_generations(ids, str(user_id)) if store else {}
+    except Exception:
+        logger.debug("skill generations unreadable", exc_info=True)
+        return {}
+
+
 def _fit_meta(meta: dict) -> dict:
     """Trim the list fields until the JSON fits the store's meta cap."""
     m = dict(meta)
+    if len(_json.dumps(m)) > _META_BUDGET:
+        m.pop("skill_gens", None)
     for key in ("outputs", "sent", "skills_loaded", "tx", "errors"):
         while len(_json.dumps(m)) > _META_BUDGET and m.get(key):
             m[key] = list(m[key])[:-1]
@@ -311,8 +380,9 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
                      run: Any = None, summary: Optional[str] = None,
                      goal_id: Optional[str] = None,
                      meta: Optional[dict] = None,
-                     mandate: Any = None) -> None:
-    """Write the run record for one exit path. Never raises.
+                     mandate: Any = None) -> Optional[dict]:
+    """Write the run record for one exit path. Never raises. Returns the meta it
+    stored (095 W13: the after-run reviewer reads its signal), None on failure.
 
     ``mandate`` (086 W6): the run's trading mandate id (``payload.mandate``),
     stamped on ``meta["mandate"]`` so the mandate's LLM cost reads per run.
@@ -321,7 +391,7 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
     the run's facts (a run that stopped before ``done()`` has no done text, and
     an empty summary was the C-03 hole). A done run passes its result text."""
     if not session_id:
-        return
+        return None
     try:
         on = run_record_on(regime)
         facts = run_record_facts(run) if on else {}
@@ -337,6 +407,19 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
             _stop = getattr(run, "stop_reason", None)  # 083 WS-1
             if isinstance(_stop, str) and _stop:
                 m["stop_reason"] = _stop
+            # 095 W11: the outcome signal on the record — ``useful`` is the ONE
+            # predicate (``did_something``, the cron_run event's too), and
+            # ``signal_source`` says how far the outcome can be trusted.
+            useful = did_something(facts)
+            m["useful"] = useful
+            m["signal_source"] = signal_source(m, useful=useful, run=run, summary=summary)
+            if not m.get("lane"):
+                lane = rail_lane(rail_id)
+                if lane:
+                    m["lane"] = lane
+            gens = _skill_generations(getattr(run, "skills_loaded", None) or [], user_id)
+            if gens:
+                m["skill_gens"] = gens
         if summary is None and on:
             summary = _summary_for(outcome, reason, error, facts)
         if on:
@@ -344,6 +427,7 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
             if errors:
                 m["errors"] = errors
         from modules.memory.episodic import finalize_episode
+        stored = _fit_meta(m) if on else m
         await finalize_episode(
             session_id=session_id, user_id=user_id, kind=kind, task=task,
             outcome=outcome, summary=summary,
@@ -353,9 +437,11 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
             skills_loaded=list(getattr(run, "skills_loaded", None) or []),
             skills_activation=dict(getattr(run, "skills_activation", None) or {}),
             goal_id=goal_id, thread_key=(rail_id or None) if on else None,
-            meta=_fit_meta(m) if on else m, run_record=on)
+            meta=stored, run_record=on)
+        return stored
     except Exception:
         logger.warning("run record write failed (%s)", rail_id, exc_info=True)
+        return None
 
 
 def _own_rows(rows: list, rail_id: str) -> list:
@@ -380,11 +466,32 @@ def _hhmm_utc(ts: Any) -> str:
         return "?"
 
 
+def _flag(v: Any) -> str:
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    return str(v) if v not in (None, "") else "-"
+
+
+def _track_record(e: Any, meta: dict) -> str:
+    """095 W11 (R16): ``verified=<v> useful=<u> stop=<reason> skills=<ids> $<spend>``.
+    A skill patched since first use reads ``id@g<generation>``."""
+    gens = meta.get("skill_gens") or {}
+    ids = [str(s) for s in (meta.get("skills_loaded") or [])][:4]
+    skills = ",".join(f"{s}@g{gens[s]}" if gens.get(s) else s for s in ids) or "-"
+    try:
+        spend = f"${float(getattr(e, 'spend_usd', 0) or 0):.2f}"
+    except (TypeError, ValueError):
+        spend = "$?"
+    return (f"verified={_flag(meta.get('verified'))} useful={_flag(meta.get('useful'))} "
+            f"stop={_flag(meta.get('stop_reason'))} skills={skills} {spend}")
+
+
 def _render_run(e: Any) -> str:
     meta = getattr(e, "meta", None) or {}
     outcome = str(getattr(e, "outcome", None) or "?").upper()
     reason = meta.get("reason") or ""
-    head = f"- {_hhmm_utc(getattr(e, 'ts', None))} {outcome}" + (f" ({_one_line(reason, 120)})" if reason else "")
+    head = (f"- {_hhmm_utc(getattr(e, 'ts', None))} {outcome} {_track_record(e, meta)}"
+            + (f" ({_one_line(reason, 120)})" if reason else ""))
     summary = " ".join(str(getattr(e, "summary", None) or "").split())
     # C-3: the run's tool errors FIRST (``refusals`` = a legacy row's key), then
     # the summary clipped head+tail.
@@ -449,3 +556,63 @@ async def render_previous_runs(*, user_id: Optional[str], rail_id: str, regime: 
             f"Your own last {len(data)} run(s) of this {what}, newest first. What a run "
             f"sent, posted or signed HAPPENED — do not do it again; continue from where "
             f"it stopped. A PARTIAL run stopped before done().\n{body}\n</previous-runs>")
+
+
+# ── Per-lane outcome rates (095 W11 step 4) ──────────────────────────────────
+
+LANE_RATE_DAYS = 30
+_LANE_RATE_ROWS = 500
+
+
+async def lane_outcome_rates(*, user_id: Optional[str], days: int = LANE_RATE_DAYS,
+                             data_dir: Optional[str] = None) -> list:
+    """Per lane, the run records of the last *days*: ``{lane, runs, useful,
+    useful_n, verified, verified_n}`` (``*_n`` = the runs that carry that field;
+    a row written before the field existed is not counted as a no). Newest lane
+    data only, read-only. Raises when the episode store cannot be read — an
+    unreadable store is not an empty one."""
+    from modules.memory.registry import memory_recall_episodes
+    since_ts = int(time.time()) - int(days) * 86400
+    rows: list = []
+    for kind in ("cron", "goal"):
+        rows += await memory_recall_episodes(user_id=user_id, since_ts=since_ts,
+                                             kind=kind, limit=_LANE_RATE_ROWS,
+                                             order="newest", raise_errors=True)
+    lanes: dict = {}
+    rail_lanes: dict = {}
+    for e in rows:
+        meta = getattr(e, "meta", None) or {}
+        rail = _rail_of(e)
+        if not rail:
+            continue
+        lane = str(meta.get("lane") or "")
+        if not lane:
+            if rail not in rail_lanes:
+                rail_lanes[rail] = rail_lane(rail, data_dir)
+            lane = rail_lanes[rail] or rail
+        d = lanes.setdefault(lane, {"lane": lane, "runs": 0, "useful": 0, "useful_n": 0,
+                                    "verified": 0, "verified_n": 0})
+        d["runs"] += 1
+        if isinstance(meta.get("useful"), bool):
+            d["useful_n"] += 1
+            d["useful"] += int(meta["useful"])
+        if meta.get("verified"):
+            d["verified_n"] += 1
+            d["verified"] += int(str(meta["verified"]) == "verified")
+    return sorted(lanes.values(), key=lambda d: (-d["runs"], d["lane"]))
+
+
+def render_lane_rates(rates: list, *, days: int = LANE_RATE_DAYS, limit: int = 10) -> str:
+    """One line per lane: ``<lane>: <n> runs · useful u/n · verified v/m``."""
+    if not rates:
+        return f"no job or goal runs recorded in the last {days} days"
+    out = []
+    for d in rates[:limit]:
+        bits = [f"{d['runs']} runs"]
+        bits.append(f"useful {d['useful']}/{d['useful_n']}" if d["useful_n"] else "useful -")
+        if d["verified_n"]:
+            bits.append(f"verified {d['verified']}/{d['verified_n']}")
+        out.append(f"  - {d['lane']}: " + " · ".join(bits))
+    if len(rates) > limit:
+        out.append(f"  - (+{len(rates) - limit} more lanes)")
+    return "\n".join(out)

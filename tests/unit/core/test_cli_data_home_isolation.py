@@ -1,7 +1,7 @@
 """Doc 06 / 01 coordination: POLYROB_DATA_DIR is the headless isolation switch.
 
 On the headless server the CLI/local container runs from /opt/polyrob with
-POLYROB_LOCAL=1. Without this, `rob_dir` was hardcoded to `cwd/.polyrob` =
+POLYROB_LOCAL=1. Without this, `cli_data_dir` was hardcoded to `cwd/.polyrob` =
 INSIDE the code tree, so goals.db + agent workspaces lived next to the agent's
 own source + config/.env.* (an isolation breach). Setting POLYROB_DATA_DIR must
 move the data home OUTSIDE the code tree AND drop the workspace==cwd exception.

@@ -9,9 +9,13 @@ that disagreed with the catalog would be the 2026-10-28 incident again (two
 readers, two answers).
 """
 import logging
+import re
 from typing import Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+#: An env-flag name in a remedy text (``CODE_EXEC_BACKEND``, ``MCP_ENABLED``).
+_FLAG = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b")
 
 
 def _session_facts(controller) -> Tuple[object, set, bool, Optional[set]]:
@@ -28,10 +32,11 @@ def _session_facts(controller) -> Tuple[object, set, bool, Optional[set]]:
 def status_of(controller, tool_id: str, *, is_leaf: Optional[bool] = None):
     """The resolver's :class:`ToolStatus` for *tool_id* in this session."""
     from tools.tool_disclosure import resolve_tool_status
+    from tools.tool_disclosure import seat_probe
     container, loaded, leaf, allowed = _session_facts(controller)
     return resolve_tool_status(tool_id, container=container, loaded_ids=loaded,
                                is_leaf=leaf if is_leaf is None else is_leaf,
-                               allowed_ids=allowed)
+                               allowed_ids=allowed, seat_denies=seat_probe(controller))
 
 
 def who_when(st) -> Tuple[str, str, str]:
@@ -80,10 +85,15 @@ def tool_harness_view(controller, tool_id: str, *, is_leaf: Optional[bool] = Non
     if suggest and who == "owner-verb" and verb.startswith("/"):
         lines.append("owner can fix it: propose_setting(command=\"" + verb
                      + "\" with the real values, why=...) puts a one-tap card to the owner")
-    elif suggest and who == "operator-env":
+    elif suggest and who == "operator-env" and _FLAG.search(st.remedy or ""):
         lines.append("only the operator can fix it: propose_setting(command=\"/config set "
                      "<KEY> <value>\") files it for the operator; never advise a restart "
                      "unless the remedy says so")
+    elif suggest and who == "operator-env":
+        # SC-7 (095 W2): the remedy names no setting, so there is no line to file.
+        lines.append("only the operator can fix it and no setting does it: raise ONE "
+                     "owner_ask naming the remedy; never advise a restart unless the "
+                     "remedy says so")
     return "\n".join(lines)
 
 

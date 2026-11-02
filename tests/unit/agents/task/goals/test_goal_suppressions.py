@@ -39,43 +39,43 @@ def _tables(db):
 
 def test_a_read_never_creates_the_table(home):
     b = _board(home)
-    assert b.suppressions(user_id="rob") == []
-    assert gs.find(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="x") is None
+    assert b.suppressions(user_id="alice") == []
+    assert gs.find(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="x") is None
     assert "goal_suppressions" not in _tables(b.db_path)
 
 
 def test_suppress_is_tenant_scoped_and_normalised(home):
     b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE,
+    gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE,
                 value="Treasury: publish the track record!", reason="stop posting")
-    assert gs.find(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE,
+    assert gs.find(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE,
                    value="treasury publish the TRACK record") is not None
     assert gs.find(b.db_path, user_id="other", scope=gs.SCOPE_TITLE,
                    value="Treasury: publish the track record!") is None
-    [s] = b.suppressions(user_id="rob")
+    [s] = b.suppressions(user_id="alice")
     assert s.reason == "stop posting" and "publish the track record" in s.label
 
 
 def test_expired_suppression_is_not_in_force(home):
     b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="t",
+    gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="t",
                 expires_at=100.0, now=50.0)
-    assert gs.find(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="t", now=99) is not None
-    assert gs.find(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="t", now=101) is None
+    assert gs.find(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="t", now=99) is not None
+    assert gs.find(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="t", now=101) is None
 
 
 # --- the read site: board.create ---------------------------------------------
 
 def test_create_refuses_a_suppressed_title_even_with_force(home):
     b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="Post to the den")
+    gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="Post to the den")
     for force in (False, True):
         with pytest.raises(SuppressedGoalError) as ei:
-            b.create(user_id="rob", title="post to the DEN", force=force)
+            b.create(user_id="alice", title="post to the DEN", force=force)
         assert "/goal allow" in str(ei.value)
     b.create(user_id="other", title="Post to the den")          # another tenant is free
-    assert gs.allow(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="Post to the den")
-    assert b.create(user_id="rob", title="Post to the den").id
+    assert gs.allow(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="Post to the den")
+    assert b.create(user_id="alice", title="Post to the den").id
 
 
 # --- the owner verbs (Telegram + REPL share goal_reply) -----------------------
@@ -83,14 +83,14 @@ def test_create_refuses_a_suppressed_title_even_with_force(home):
 def test_goal_stop_forever_means_never_again(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
-    g = b.create(user_id="rob", title="Publish the track record")
-    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], "--forever", "not", "again"])
+    g = b.create(user_id="alice", title="Publish the track record")
+    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever", "not", "again"])
     assert "switched OFF" in out and "/goal allow" in out
     assert _board(home).get(g.id).status == "cancelled"
-    [s] = _board(home).suppressions(user_id="rob")
+    [s] = _board(home).suppressions(user_id="alice")
     assert s.reason == "not again"
     with pytest.raises(SuppressedGoalError):
-        _board(home).create(user_id="rob", title="Publish the track record", force=True)
+        _board(home).create(user_id="alice", title="Publish the track record", force=True)
 
 
 @pytest.mark.parametrize("flag", ["\u2014forever", "\u2013forever"])
@@ -98,53 +98,53 @@ def test_goal_stop_forever_accepts_the_phone_dash(home, flag):
     """A phone keyboard turns `--` into a dash; /job stop already took it."""
     from surfaces.telegram import owner_ops
     b = _board(home)
-    g = b.create(user_id="rob", title="Publish the track record")
-    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], flag])
+    g = b.create(user_id="alice", title="Publish the track record")
+    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], flag])
     assert "switched OFF" in out
-    [s] = _board(home).suppressions(user_id="rob")
+    [s] = _board(home).suppressions(user_id="alice")
     assert "forever" not in (s.reason or "")
 
 
 def test_goal_stop_is_once_by_default(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
-    g = b.create(user_id="rob", title="Publish the track record")
-    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8]])
+    g = b.create(user_id="alice", title="Publish the track record")
+    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8]])
     assert "stopped" in out and "switched OFF" not in out and "--forever" in out
     assert _board(home).get(g.id).status == "cancelled"
-    assert _board(home).suppressions(user_id="rob") == []
+    assert _board(home).suppressions(user_id="alice") == []
 
 
 def test_goal_allow_by_id_and_by_title(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
-    g = b.create(user_id="rob", title="Publish the track record")
-    owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], "--forever"])
-    out = owner_ops.goal_reply("rob", str(home), ["allow", g.id[:8]])
-    assert "Back ON" in out and _board(home).suppressions(user_id="rob") == []
-    g2 = _board(home).create(user_id="rob", title="Refresh the watchlist")
-    owner_ops.goal_reply("rob", str(home), ["stop", g2.id[:8], "--forever"])
-    out = owner_ops.goal_reply("rob", str(home), ["allow", "refresh", "the", "watch"])
+    g = b.create(user_id="alice", title="Publish the track record")
+    owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever"])
+    out = owner_ops.goal_reply("alice", str(home), ["allow", g.id[:8]])
+    assert "Back ON" in out and _board(home).suppressions(user_id="alice") == []
+    g2 = _board(home).create(user_id="alice", title="Refresh the watchlist")
+    owner_ops.goal_reply("alice", str(home), ["stop", g2.id[:8], "--forever"])
+    out = owner_ops.goal_reply("alice", str(home), ["allow", "refresh", "the", "watch"])
     assert "Back ON" in out
-    assert "Nothing switched off" in owner_ops.goal_reply("rob", str(home), ["allow", "zzz"])
+    assert "Nothing switched off" in owner_ops.goal_reply("alice", str(home), ["allow", "zzz"])
 
 
 def test_stopping_an_already_cancelled_goal_forever_still_switches_it_off(home):
     from surfaces.telegram import owner_ops
     b = _board(home)
-    g = b.create(user_id="rob", title="Old thing")
-    b.cancel(g.id, user_id="rob")
-    out = owner_ops.goal_reply("rob", str(home), ["stop", g.id[:8], "--forever"])
+    g = b.create(user_id="alice", title="Old thing")
+    b.cancel(g.id, user_id="alice")
+    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever"])
     assert "switched OFF" in out
-    assert len(_board(home).suppressions(user_id="rob")) == 1
+    assert len(_board(home).suppressions(user_id="alice")) == 1
 
 
 @pytest.mark.asyncio
 async def test_repl_goal_is_the_same_helper(home, monkeypatch):
     from cli.ui.commands import h_goal_one
     b = _board(home)
-    g = b.create(user_id="rob", title="REPL cancel")
-    monkeypatch.setattr(h_goal_one, "_tenant", lambda ctx: "rob")
+    g = b.create(user_id="alice", title="REPL cancel")
+    monkeypatch.setattr(h_goal_one, "_tenant", lambda ctx: "alice")
     monkeypatch.setattr(h_goal_one, "_admin_data_dir", lambda write=False: str(home))
     seen = []
     ctx = types.SimpleNamespace(args=["stop", g.id[:8], "--forever"],
@@ -158,26 +158,26 @@ async def test_repl_goal_is_the_same_helper(home, monkeypatch):
 def test_render_board_has_an_off_section(home):
     from core.goal_board_render import render_board
     b = _board(home)
-    b.create(user_id="rob", title="Still on")
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="Den posts",
+    b.create(user_id="alice", title="Still on")
+    gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="Den posts",
                 reason="stop posting to the den")
-    out = render_board(b, user_id="rob")
+    out = render_board(b, user_id="alice")
     assert "OFF — 1" in out and "Den posts" in out and "/goal allow" in out
 
 
 def test_render_board_off_section_survives_an_empty_board(home):
     from core.goal_board_render import render_board
     b = _board(home)
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="Den posts")
-    out = render_board(b, user_id="rob")
+    gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="Den posts")
+    out = render_board(b, user_id="alice")
     assert out.startswith("No goals yet.") and "Den posts" in out
 
 
 def test_repl_goals_view_has_an_off_section(home, monkeypatch):
     from cli.ui.commands import h_goals_view
     b = _board(home)
-    b.create(user_id="rob", title="Still on")
-    gs.suppress(b.db_path, user_id="rob", scope=gs.SCOPE_TITLE, value="Den posts")
+    b.create(user_id="alice", title="Still on")
+    gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="Den posts")
     monkeypatch.setattr(h_goals_view, "_board_path", lambda: b.db_path)
-    out = h_goals_view.goals_view("rob")
+    out = h_goals_view.goals_view("alice")
     assert "off (1)" in out and "Den posts" in out

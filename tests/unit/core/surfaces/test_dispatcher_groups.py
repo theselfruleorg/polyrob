@@ -411,7 +411,7 @@ async def test_owner_ordinary_line_is_still_denied_in_an_unlisted_room(tmp_path,
     monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
     c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
-    d = await route_inbound(c, _group_inbound("hey rob", user="u_owner",
+    d = await route_inbound(c, _group_inbound("hey alice", user="u_owner",
                                               mentions_bot=True))
     assert d.kind == RouteKind.DENIED and d.silent is True
 
@@ -499,7 +499,7 @@ async def test_owner_room_turn_is_refused_when_capped(tmp_path, monkeypatch):
     GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow("discord", "chan-1")
     c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
     c._svc["room_caps"] = _caps(may_reply=(False, "capped"))
-    d = await route_inbound(c, _group_inbound("hey rob", user="u_owner",
+    d = await route_inbound(c, _group_inbound("hey alice", user="u_owner",
                                               mentions_bot=True))
     assert d.kind == RouteKind.DENIED and d.reason == "room_cap"
 
@@ -546,3 +546,64 @@ async def test_a_warm_room_session_is_still_a_group_turn(tmp_path, monkeypatch):
 
     d = await route_inbound(c, _group_inbound("hey", user="u_member", mentions_bot=True))
     assert d.kind == RouteKind.GROUP_TURN and d.session_id == "sess-warm"
+
+
+@pytest.mark.asyncio
+async def test_owner_control_verb_survives_the_member_cooldown(tmp_path, monkeypatch):
+    """`/cancel` typed seconds after a bad answer hit the per-member cooldown
+    before the COMMAND classification and was silently eaten."""
+    monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow("discord", "chan-1")
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
+    caps = _caps(may_trigger=(False, "member cooldown"))
+    c._svc["room_caps"] = caps
+    d = await route_inbound(c, _group_inbound("/mute here 2h", user="u_owner",
+                                              mentions_bot=True))
+    assert d.kind == RouteKind.COMMAND
+    assert caps.recorded == []     # a control verb starts no cooldown
+
+
+@pytest.mark.asyncio
+async def test_admin_control_verb_survives_the_member_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow("discord", "chan-1")
+    from core.surfaces.group_roles import GroupRoles
+    import os
+    GroupRoles(os.path.join(str(tmp_path), "surfaces.db")).grant(
+        "discord", "chan-1", "u_admin", "admin", granted_by="u_owner")
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
+    c._svc["room_caps"] = _caps(may_trigger=(False, "member cooldown"))
+    d = await route_inbound(c, _group_inbound("/groups mode here off", user="u_admin",
+                                              mentions_bot=True))
+    assert d.kind == RouteKind.COMMAND and d.command == "/groups"
+
+
+@pytest.mark.asyncio
+async def test_member_turn_still_obeys_the_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow("discord", "chan-1")
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
+    c._svc["room_caps"] = _caps(may_trigger=(False, "member cooldown"))
+    d = await route_inbound(c, _group_inbound("/help", user="u_member", mentions_bot=True))
+    assert d.kind == RouteKind.DENIED and d.reason == "room_cap"
+
+
+@pytest.mark.asyncio
+async def test_an_admin_non_verb_slash_line_keeps_the_member_cooldown(tmp_path, monkeypatch):
+    """Only a room control verb passes the cooldown: '/x write me an essay' from an
+    admin is a paid turn and is refused like any member turn."""
+    monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    GroupAllowlist(str(tmp_path / "group_allowlist.db")).allow("discord", "chan-1")
+    from core.surfaces.group_roles import GroupRoles
+    import os
+    GroupRoles(os.path.join(str(tmp_path), "surfaces.db")).grant(
+        "discord", "chan-1", "u_admin", "admin", granted_by="u_owner")
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "c.db")))
+    c._svc["room_caps"] = _caps(may_trigger=(False, "member cooldown"))
+    d = await route_inbound(c, _group_inbound("/x write me a long essay", user="u_admin",
+                                              mentions_bot=True))
+    assert d.kind == RouteKind.DENIED

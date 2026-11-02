@@ -19,13 +19,13 @@ class _Controller:
     def __init__(self, data_dir, tainted=False):
         self.registry = _Registry()
         self.container = type("C", (), {"config": type("Cfg", (), {"data_dir": data_dir})()})()
-        self.user_id = "rob"
+        self.user_id = "alice"
         self._is_sub_agent = False
         self.orchestrator = type("O", (), {"is_correspondent_tainted": lambda self: tainted})()
 
 
 def _ctx(**meta):
-    return type("Ctx", (), {"user_id": "rob", "role": "orchestrator", "is_sub_agent": False,
+    return type("Ctx", (), {"user_id": "alice", "role": "orchestrator", "is_sub_agent": False,
                             "session_id": "s", "metadata": meta})()
 
 
@@ -33,7 +33,7 @@ def _ctx(**meta):
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     monkeypatch.setattr("tools.controller.turn_origin._is_forged_or_autonomous_turn",
                         lambda *a: False)
     return tmp_path
@@ -99,7 +99,7 @@ def test_tainted_session_is_blocked_by_the_capability_gate():
 async def test_cancel_goals_cancels_ready_rows(home):
     from agents.task.goals.board import GoalBoard
     b = GoalBoard(str(home / "goals.db"))
-    g = b.create(user_id="rob", title="held")
+    g = b.create(user_id="alice", title="held")
     c = _Controller(str(home))
     fn, model = _action(c)
     res = await fn(model(action="pause", cancel_goals=True), _ctx())
@@ -213,4 +213,4 @@ def test_the_system_prompt_scopes_stop_and_forbids_unbacked_state_claims():
     # the stop/pause scoping lives once, in the autonomy_control description
     assert "autonomy_control" not in sec
     rules = SystemPrompt._get_rules_content(None)
-    assert "A dry run stages nothing" in rules and "quote the id" in rules
+    assert "A dry run or a proposed card moves nothing" in rules and "quote the id" in rules

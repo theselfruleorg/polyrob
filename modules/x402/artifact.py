@@ -198,7 +198,7 @@ def _build_pay_text(*, request_id: str, amount_usd: float, chain: str,
     exactly what this text shows can never accidentally settle a DIFFERENT
     same-2dp-amount invoice on-chain."""
     amount_text = format_invoice_amount(amount_usd)
-    # 046: name the ACTUAL token. "Pay $0.50 USDC" on a ROB invoice tells the
+    # 046: name the ACTUAL token. "Pay $0.50 USDC" on a DEMO invoice tells the
     # payer to send the wrong asset, which is money they do not get back.
     # ``at_par`` (085 M-2): the caller's pinned-address answer; None = the symbol.
     par = (not symbol or symbol.upper() == "USDC") if at_par is None else at_par

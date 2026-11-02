@@ -93,9 +93,9 @@ def test_config_file_and_dir_roundtrip(tmp_path):
     env = data_home / ".env"
     env.parent.mkdir(parents=True, exist_ok=True)
     env.write_text("SECRET=keep-me\n")
-    ident = data_home / "identity" / "rob"
+    ident = data_home / "identity" / "alice"
     ident.mkdir(parents=True)
-    (ident / "SELF.md").write_text("i am rob")
+    (ident / "SELF.md").write_text("i am alice")
 
     info = create_snapshot(snapshots_root=snaps, data_home=data_home,
                            from_version="0.4.2", db_paths=[],
@@ -108,7 +108,7 @@ def test_config_file_and_dir_roundtrip(tmp_path):
 
     restore_snapshot(info.path, data_home=data_home)
     assert env.read_text() == "SECRET=keep-me\n"
-    assert (ident / "SELF.md").read_text() == "i am rob"
+    assert (ident / "SELF.md").read_text() == "i am alice"
     assert not (ident / "extra.md").exists()  # dir restored to snapshot state
 
 

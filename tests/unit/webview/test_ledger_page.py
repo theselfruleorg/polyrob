@@ -349,8 +349,8 @@ async def test_empty_ledger_shape_matches_real_build_ledger():
     from webview.pages import _empty_ledger
     from tests.unit.modules.credits.test_unified_ledger_split import FakeDB
 
-    real = await build_ledger("rob", days=7, db=FakeDB())
-    empty = _empty_ledger("rob", 7)
+    real = await build_ledger("alice", days=7, db=FakeDB())
+    empty = _empty_ledger("alice", 7)
 
     assert set(real.keys()) == set(empty.keys())
     assert set(real["treasury"].keys()) == set(empty["treasury"].keys())

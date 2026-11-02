@@ -28,15 +28,15 @@ is logged.
 
 | Scope | Location | Writable? | How it gets there |
 |-------|----------|-----------|-------------------|
-| **builtin** | `<data_home>/skills/bundled/`, a copy of the installed package's `data/prompts/skills/` | no — Rob suggests a fix, you accept it | ships with POLYROB; copied at each start |
+| **builtin** | `<data_home>/skills/bundled/`, a copy of the installed package's `data/prompts/skills/` | no — the agent suggests a fix, you accept it | ships with POLYROB; copied at each start |
 | **pack:<id>** | a loaded pack's contributed skills directory | read-only, trusted with the loaded pack | installed with the pack; absent when the pack is disabled/refused |
 | **user** | `<data_home>/skills/user_<uid>/` (local CLI: `~/.polyrob/data/skills/user_<uid>/`, or under `$POLYROB_DATA_DIR`) | yes | `polyrob skill install`, or the agent authoring a skill |
 | **external (discovered)** | `~/.agents/skills/`, `~/.claude/skills/` (user), and per-repo `./.agents/skills/`, `./.claude/skills/` (project) | no (loaded in place) | drop a skill folder in and it's auto-discovered |
 
 Builtin skills ship inside the installed package (`data/prompts/skills/`). Each start
 copies them to `<data_home>/skills/bundled/` and records the sha256 of every copied
-`SKILL.md` in `.bundled_manifest`; Rob reads the copy. So a fix to a builtin skill
-needs no deploy: Rob suggests it with `skill_manage patch` or `edit` (it waits for
+`SKILL.md` in `.bundled_manifest`; the agent reads the copy. So a fix to a builtin skill
+needs no deploy: the agent suggests it with `skill_manage patch` or `edit` (it waits for
 your decision, like any suggested change), and when you accept it (`/pending`, or
 `polyrob owner promote skill <id>`) the copy changes at once.
 
@@ -62,7 +62,7 @@ a whole procedure rather than add knowledge:
   timeline, and recovery only on an observed signal. It includes the order for a
   leaked secret: revoke or rotate, scope the exposure, purge, prove the old
   credential dead, record. Its index line reads "Something is broken live, or a
-  secret leaked"; there is no keyword matcher, so Rob loads it from that line.
+  secret leaked"; there is no keyword matcher, so the agent loads it from that line.
 - **`adversarial-consensus`** — for a large or hard-to-reverse decision, or when
   you ask for a blind panel: several `delegate_task` children answer
   independently, each critiques the others' anonymised answers, and the agent
@@ -274,10 +274,10 @@ id is never renamed or retired.
 
 ## History and rollback
 
-Rob changes its skills with `skill_manage` (`create`, `patch`, `edit`, `delete`,
+The agent changes its skills with `skill_manage` (`create`, `patch`, `edit`, `delete`,
 `rollback`). `load_skill` returns the skill's `sha256`, and a `patch`, `edit` or
 `delete` must carry that value as `expected_sha256`. When the skill changed after the
-read, the write is refused and the refusal gives the current sha256, so Rob reads
+read, the write is refused and the refusal gives the current sha256, so the agent reads
 the skill again before it writes. `create` never replaces a skill that exists, and it
 needs `when`, one line of 60 characters or fewer that says when to load the skill (its
 line in the index).
@@ -294,12 +294,12 @@ it is kept as `<data_home>/skills/user_<uid>/.archived/<id>/<sha256>-SKILL.md`.
 `skill_manage rollback <id>` restores the body the newest change replaced, and
 `rollback <id>` with `to_sha=<sha>` (a full sha or a unique prefix of 8 or more characters)
 restores a named revision. A rollback is an ordinary write: it is scanned again, and a
-rollback by Rob of an active skill waits for your decision.
+rollback by the agent of an active skill waits for your decision.
 
 A delete by the background reviewer or the curator is a consolidation, so it must name
 `absorbed_into`, the skill that now holds those steps, and that skill must exist. The
 curator's archive of a skill that nobody loaded is an age transition and needs no
-absorber. Your own delete, or a delete by Rob in a chat you started, needs none.
+absorber. Your own delete, or a delete by the agent in a chat you started, needs none.
 
 ---
 

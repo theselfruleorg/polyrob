@@ -21,14 +21,14 @@ def _tool(tmp_path):
     return t
 
 
-def _ctx(session_id="owner-sess", user_id="rob"):
+def _ctx(session_id="owner-sess", user_id="alice"):
     return SimpleNamespace(session_id=session_id, parent_session_id=None, user_id=user_id,
                            role="orchestrator", is_sub_agent=False, metadata={})
 
 
 @pytest.fixture(autouse=True)
 def bound_owner(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
 
 def run(coro):
@@ -44,7 +44,7 @@ def test_goal_create_duplicate_returns_match(tmp_path):
 
 def test_goal_update(tmp_path):
     t = _tool(tmp_path)
-    g = t._goal_board.create(user_id="rob", title="Old title words")
+    g = t._goal_board.create(user_id="alice", title="Old title words")
     r = run(t.goal_update(GoalUpdateAction(goal_id=g.id, priority=8,
                                            acceptance="tweet id posted"), _ctx()))
     assert not r.error
@@ -54,7 +54,7 @@ def test_goal_update(tmp_path):
 
 def test_autonomous_session_cannot_mutate(tmp_path):
     t = _tool(tmp_path)
-    g = t._goal_board.create(user_id="rob", title="Earn money")
+    g = t._goal_board.create(user_id="alice", title="Earn money")
     mark_autonomous("goal-sess-1")
     ctx = _ctx(session_id="goal-sess-1")
     r = run(t.goal_update(GoalUpdateAction(goal_id=g.id, priority=1), ctx))
@@ -66,8 +66,8 @@ def test_autonomous_session_cannot_mutate(tmp_path):
 def test_autonomous_subagent_blocked_via_parent(tmp_path):
     t = _tool(tmp_path)
     mark_autonomous("goal-sess-2")
-    ctx = SimpleNamespace(session_id="virtual-sub", parent_session_id="goal-sess-2", user_id="rob")
-    g = t._goal_board.create(user_id="rob", title="Owner standing goal")
+    ctx = SimpleNamespace(session_id="virtual-sub", parent_session_id="goal-sess-2", user_id="alice")
+    g = t._goal_board.create(user_id="alice", title="Owner standing goal")
     r = run(t.goal_update(GoalUpdateAction(goal_id=g.id, priority=1), ctx))
     assert r.error and "autonomous" in r.error.lower()
 
@@ -79,7 +79,7 @@ def test_autonomous_subagent_blocked_via_parent(tmp_path):
 ])
 def test_owner_identity_alone_does_not_authorize_goal_mutation(tmp_path, change):
     tool = _tool(tmp_path)
-    goal = tool._goal_board.create(user_id="rob", title="Owner's standing work")
+    goal = tool._goal_board.create(user_id="alice", title="Owner's standing work")
     ctx = _ctx()
     for key, value in change.items():
         setattr(ctx, key, value)

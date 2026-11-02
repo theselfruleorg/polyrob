@@ -135,7 +135,7 @@ def _unreadable_deploy(tmp_path, monkeypatch):
     the verb runs as the service user under sudo, which cannot read it."""
     import core.admin_data_home as adh
     envf = _deploy(tmp_path, monkeypatch,
-                   body="POLYROB_DATA_DIR=/var/lib/x\nPOLYROB_INSTANCE_ID=rob\nPOLYROB_OWNER_USER_ID=rob\n")
+                   body="POLYROB_DATA_DIR=/var/lib/x\nPOLYROB_INSTANCE_ID=alice\nPOLYROB_OWNER_USER_ID=alice\n")
     real_open = open
 
     def _denied(path, *a, **kw):
@@ -152,9 +152,9 @@ def _unreadable_deploy(tmp_path, monkeypatch):
 
 
 def test_unreadable_env_file_refuses_instead_of_guessing_the_instance(tmp_path, monkeypatch):
-    """`sudo -u polyrob-agent … polyrob owner promote owner_doc rob` resolved
+    """`sudo -u polyrob-agent … polyrob owner promote owner_doc alice` resolved
     instance 'polyrob' (the default) because EACCES read as 'not declared', and
-    wrote into identity/polyrob/user_rob/ — a shadow tree nothing reads — while
+    wrote into identity/polyrob/user_alice/ — a shadow tree nothing reads — while
     reporting 'no pending owner-facts doc'. Unreadable is 'cannot tell': refuse
     and name the remedy."""
     adh = _unreadable_deploy(tmp_path, monkeypatch)
@@ -166,9 +166,9 @@ def test_unreadable_env_file_refuses_instead_of_guessing_the_instance(tmp_path, 
         adh.admin_owner_principal()
     assert "POLYROB_OWNER_USER_ID" in str(ei2.value)
     # an explicit shell value still wins, exactly as before
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
-    assert adh.admin_instance_id() == "rob" and adh.admin_owner_principal() == "rob"
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
+    assert adh.admin_instance_id() == "alice" and adh.admin_owner_principal() == "alice"
 
 
 def test_absent_env_file_is_still_a_local_box(nothing_deployed):
@@ -192,6 +192,6 @@ def test_deployed_retired_identity_alias_refuses(tmp_path, monkeypatch,
     for k in ("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID", "POLYROB_PROFILE",
               "POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
         monkeypatch.delenv(k, raising=False)
-    _deploy(tmp_path, monkeypatch, body=f"{alias}=rob\n")
+    _deploy(tmp_path, monkeypatch, body=f"{alias}=alice\n")
     with pytest.raises(RetiredFlagError, match="POLYROB_"):
         getattr(adh, fn)()

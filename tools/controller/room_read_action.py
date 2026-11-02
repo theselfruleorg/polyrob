@@ -1,7 +1,7 @@
 """The `room_read` action — the agent READS an allowlisted room's ledger.
 
 Owner rail 2026-09-15 19:41Z: "fix tg chat reading and deploy and restart".
-Rob could POST to its group room but not read it: the t.me/s web preview is
+The agent could POST to its group room but not read it: the t.me/s web preview is
 off, the Telegram Bot API cannot read history at all, and no session action
 covered the one store that already holds the lines — `group_ledger`
 (`core/surfaces/group_ledger.py`, 044 §4.1), which the harness appends EVERY

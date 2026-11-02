@@ -21,7 +21,7 @@ def test_separator_label_uses_instance_name(monkeypatch):
     from cli.ui.app import separator_label
     from cli.ui.state import SessionState
     label = separator_label(SessionState())
-    assert label.startswith("aria")  # not the hardcoded "rob"
+    assert label.startswith("aria")  # not a hardcoded name
 
 
 def test_activity_line_uses_instance_name(monkeypatch):
@@ -39,4 +39,4 @@ def test_plain_renderer_message_uses_instance_name(monkeypatch):
     buf = io.StringIO()
     PlainRenderer(state=SessionState(), stream=buf)._write_bubble("hello there")
     assert "aria:" in buf.getvalue()
-    assert "rob:" not in buf.getvalue()
+    assert "polyrob:" not in buf.getvalue()

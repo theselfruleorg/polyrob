@@ -117,7 +117,7 @@ def home(tmp_path, monkeypatch):
 
 def _violations(home):
     from core.status_snapshot import build_status_snapshot
-    snap = build_status_snapshot("rob", data_dir=str(home), include_money=False)
+    snap = build_status_snapshot("alice", data_dir=str(home), include_money=False)
     return [h for h in snap.health if h.key == "pause_violation"]
 
 
@@ -126,7 +126,7 @@ def test_an_owner_send_during_the_pause_is_not_a_violation(home):
     from core.event_log import TelemetryEventLog
     ac.pause(str(home), via="test")
     log = TelemetryEventLog(str(home / "telemetry_events.db"))
-    log.record("wallet_spend", user_id="rob", session_id="tg", source="wallet",
+    log.record("wallet_spend", user_id="alice", session_id="tg", source="wallet",
                attrs={"amount_usd": 2680.0, "lane": "owner_direct"})
     assert _violations(home) == []
 
@@ -140,7 +140,7 @@ def test_an_agent_spend_during_the_pause_is_still_a_violation(home):
         attrs = {"amount_usd": 5.0}
         if lane:
             attrs["lane"] = lane
-        log.record("wallet_spend", user_id="rob", session_id="g", source="wallet",
+        log.record("wallet_spend", user_id="alice", session_id="g", source="wallet",
                    attrs=attrs)
     v = _violations(home)
     assert v and "wallet_spend" in v[0].text

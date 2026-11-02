@@ -216,7 +216,7 @@ class AppendFileAction(BaseModel):
 
 class JsonlAppendAction(BaseModel):
 	"""056 WS2: append one record (or a list of records) to a JSON-lines file —
-	ONE compact line per object, the shape Rob's stores (`targets.jsonl`,
+	ONE compact line per object, the shape the agent's stores (`targets.jsonl`,
 	`contact-log.jsonl`) require."""
 	model_config = ConfigDict(extra='forbid', populate_by_name=True)
 

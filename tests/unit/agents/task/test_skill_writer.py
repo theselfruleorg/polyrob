@@ -244,7 +244,7 @@ def test_p2_20_promote_preserves_original_authorship(sm, monkeypatch, tmp_path):
 # --- 056 WS6 (2026-09-19): a background turn PROPOSES a revision of an active skill ------
 #
 # Prod: goal 367150fd7a0e ended BLOCKED with "a background turn cannot patch an active
-# skill" and ops applied Rob's draft by hand (re-pinning the rules.json hash). The
+# skill" and ops applied the agent's draft by hand (re-pinning the rules.json hash). The
 # SK-F10 invariant stands — the ACTIVE file is never touched by a forged turn — but
 # the same call now lands a pending REVISION for the owner's `promote`.
 

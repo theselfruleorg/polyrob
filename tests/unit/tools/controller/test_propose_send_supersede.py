@@ -17,7 +17,7 @@ def _propose(fn, model, cmd, **kw):
 
 
 def _open_sends():
-    return [c for c in cards.store().open_cards("rob", limit=100) if c.verb == "/send"]
+    return [c for c in cards.store().open_cards("alice", limit=100) if c.verb == "/send"]
 
 
 def test_second_send_to_same_address_is_refused_and_names_the_open_card(_owner):  # noqa: F811
@@ -58,7 +58,7 @@ def test_replaces_never_closes_a_non_proposal_or_another_users_card(_owner):  # 
     # An id in `replaces` is not authority: an owner's choice card and another
     # tenant's proposal stay open (release review 2026-10-18).
     fn, model, _ = _actions()["propose_action"]
-    choice = cards.choice_card("rob", "Which one?", ["a", "b"])
+    choice = cards.choice_card("alice", "Which one?", ["a", "b"])
     other = cards.proposal_card("someone-else", "/send",
                                 ["5", USDC, "to", B, "on", "base"])
     res = _propose(fn, model, f"/send 17 {USDC} to {A} on base",

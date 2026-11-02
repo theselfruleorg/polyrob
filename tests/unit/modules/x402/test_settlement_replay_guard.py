@@ -54,13 +54,13 @@ async def test_replay_guard_is_case_insensitive_mixed_then_lower(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv_a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
         mixed = "0xDEADBEEFCafeBabe0000000000000000000000000000000000000001"
         assert await invoicing.settle_payment_request(
             inv_a["request_id"], transaction_hash=mixed, db=db) is True
 
         inv_b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
         lower = mixed.lower()
         assert await invoicing.settle_payment_request(
             inv_b["request_id"], transaction_hash=lower, db=db) is False
@@ -81,13 +81,13 @@ async def test_replay_guard_is_case_insensitive_lower_then_mixed(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv_a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
         lower = "0xdeadbeefcafebabe0000000000000000000000000000000000000002"
         assert await invoicing.settle_payment_request(
             inv_a["request_id"], transaction_hash=lower, db=db) is True
 
         inv_b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
         mixed = lower.upper().replace("0X", "0x")
         assert await invoicing.settle_payment_request(
             inv_b["request_id"], transaction_hash=mixed, db=db) is False
@@ -107,7 +107,7 @@ async def test_settle_stores_the_normalized_lowercase_form(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s", amount_usd=5.0, purpose="p", db=db)
         mixed = "0xAbCdEf0000000000000000000000000000000000000000000000000003"
         assert await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash=mixed, db=db) is True
@@ -127,7 +127,7 @@ async def test_transaction_hash_already_settled_case_insensitive(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=1.0, purpose="p", db=db)
+            user_id="alice", session_id="s", amount_usd=1.0, purpose="p", db=db)
         mixed = "0xCASE0000000000000000000000000000000000000000000000000004"
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash=mixed, db=db)
@@ -144,7 +144,7 @@ async def test_get_payment_request_by_tx_hash_case_insensitive(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=1.0, purpose="p", db=db)
+            user_id="alice", session_id="s", amount_usd=1.0, purpose="p", db=db)
         mixed = "0xLookup000000000000000000000000000000000000000000000000005"
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash=mixed, db=db)
@@ -172,7 +172,7 @@ async def test_revert_stale_settling_recognizes_case_variant_as_already_settled(
     db = await _setup_db(tmp_path)
     try:
         inv_settled = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=2.0, purpose="settled", db=db)
+            user_id="alice", session_id="s1", amount_usd=2.0, purpose="settled", db=db)
         mixed = "0xStale0000000000000000000000000000000000000000000000000006"
         await invoicing.settle_payment_request(
             inv_settled["request_id"], transaction_hash=mixed, db=db)
@@ -187,7 +187,7 @@ async def test_revert_stale_settling_recognizes_case_variant_as_already_settled(
         # is exactly the bug precondition this reaper guard must still catch
         # via NORMALIZED comparison.
         inv_stranded = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=3.0, purpose="stranded", db=db)
+            user_id="alice", session_id="s2", amount_usd=3.0, purpose="stranded", db=db)
         await db.execute(
             "UPDATE x402_payment_requests SET status='settling', "
             "transaction_hash=?, updated_at=datetime('now', '-700 seconds') WHERE id=?",
@@ -219,13 +219,13 @@ async def test_watcher_replay_guard_case_insensitive_end_to_end(tmp_path, monkey
     db = await _setup_db(tmp_path)
     try:
         inv_a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
         mixed = "0xReplayWatcher00000000000000000000000000000000000000000007"
         await invoicing.settle_payment_request(
             inv_a["request_id"], transaction_hash=mixed, db=db)
 
         inv_b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
 
         class _WakeAgent:
             pass

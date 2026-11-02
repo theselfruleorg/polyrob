@@ -52,11 +52,11 @@ def test_tools_list_returns_exactly_five_descriptors_with_input_schema(client):
     assert tools == TOOL_DESCRIPTORS
     names = {t["name"] for t in tools}
     assert names == {
-        "rob_usage_summary",
-        "rob_goals_list",
-        "rob_goal_show",
-        "rob_conversations",
-        "rob_pending_approvals",
+        "polyrob_usage_summary",
+        "polyrob_goals_list",
+        "polyrob_goal_show",
+        "polyrob_conversations",
+        "polyrob_pending_approvals",
     }
     for t in tools:
         assert "description" in t and t["description"]
@@ -71,7 +71,7 @@ def test_tools_call_unknown_tool_is_invalid_params(client):
     unrecognized tool NAME is a JSON-RPC INVALID_PARAMS error — deterministic
     regardless of DI/container state, since the dispatch-table lookup fails
     before any store is touched."""
-    resp = _rpc(client, "tools/call", params={"name": "rob_bogus_tool", "arguments": {}})
+    resp = _rpc(client, "tools/call", params={"name": "polyrob_bogus_tool", "arguments": {}})
     assert resp.status_code == 200
     body = resp.json()
     assert body["result"] is None

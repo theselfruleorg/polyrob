@@ -205,10 +205,10 @@ _ROWS: Dict[str, ChainRow] = {
     # half is still true and the second went stale: DexScreener, GeckoTerminal
     # AND GoPlus all index this chain now. It is also, measured that day, the #2
     # chain by paid attention on DexScreener's boost surface (13 boosted tokens
-    # against Base's 0), with minutes-old pools and CASHCAT trading $35M/24h.
+    # against Base's 0), with minutes-old pools and a leading meme token trading $35M/24h.
     #
     # Verified on-chain that day: eth_chainId == 4663, WETH symbol+decimals, the
-    # aggregator spender carries code, and a live WETH->CASHCAT quote routes.
+    # aggregator spender carries code, and a live WETH->meme-token quote routes.
     #
     # ⚠️ THE QUOTE ASSET IS ETH/WETH, NOT USDC. The chain's stablecoin is USDG
     # (0x5fc5360d0400a0fd4f2af552add042d716f1d168, Global Dollar) — deliberately
@@ -235,9 +235,8 @@ _ROWS: Dict[str, ChainRow] = {
         # so this is ~70 such routes of headroom as an anomaly brake.
         max_fee_wei_per_tx=2 * 10 ** 15,
         fee_reserve=Decimal("0.002"),
-        purpose=("Robinhood's L2 (Arbitrum Orbit, ETH gas, gas ~free) and the "
-                 "primary memecoin hunting ground — minutes-old pools on the "
-                 "pons-v2 launchpad, real depth on the leaders. It also hosts "
+        purpose=("Robinhood's L2 (Arbitrum Orbit, ETH gas, gas ~free), with "
+                 "fresh memecoin pools on the pons-v2 launchpad. It also hosts "
                  "TOKENIZED US EQUITIES (NVDA, AAPL, GME, SPY, SPCX) as ERC-20s, "
                  "and memecoins here pair against WETH *or against a stock "
                  "token* — so such a position is two bets stacked, the meme "

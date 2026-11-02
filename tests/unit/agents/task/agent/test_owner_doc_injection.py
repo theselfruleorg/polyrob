@@ -26,7 +26,7 @@ def test_construction_combines_owner_doc(tmp_path):
     # SOUL and SELF, with the "Owner facts" header, only when present.
     w = OwnerDocWriter(tmp_path)
     w.propose("Owner prefers metric units.", user_id="u1", created_by="user", pending=False)
-    _soul = "SOUL: I am Rob."
+    _soul = "SOUL: I am Nova."
     _self_doc = "SELF: I learned X."
     _owner_doc = load_owner_doc(tmp_path, "u1")
     if _owner_doc:
@@ -93,7 +93,7 @@ def test_construction_combines_contract_after_owner_facts(tmp_path):
     cw.propose("Never spend more than $5 without asking.", user_id="u1",
               created_by="user", pending=False)
 
-    _soul = "SOUL: I am Rob."
+    _soul = "SOUL: I am Nova."
     _self_doc = "SELF: I learned X."
     _owner_doc = load_owner_doc(tmp_path, "u1")
     if _owner_doc:

@@ -19,7 +19,7 @@ def _local(monkeypatch, tmp_path):
 def test_block_emitted_under_local(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     from agents.task.agent.core.env_context import build_environment_context
-    text = build_environment_context(session_id="s1", user_id="rob")
+    text = build_environment_context(session_id="s1", user_id="alice")
     assert text and "<environment>" in text and "</environment>" in text
     assert "persist" in text.lower()  # the persistence sentence
     assert "compute posture" in text.lower()
@@ -36,14 +36,14 @@ def test_block_flag_off_disables(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     monkeypatch.setenv("ENV_CONTEXT_BLOCK", "false")
     from agents.task.agent.core.env_context import build_environment_context
-    assert build_environment_context(session_id="s1", user_id="rob") is None
+    assert build_environment_context(session_id="s1", user_id="alice") is None
 
 
 def test_block_never_contains_secret_shapes(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     monkeypatch.setenv("FAKE_API_KEY", "sk-should-never-appear")
     from agents.task.agent.core.env_context import build_environment_context
-    text = build_environment_context(session_id="s1", user_id="rob") or ""
+    text = build_environment_context(session_id="s1", user_id="alice") or ""
     assert "sk-should-never-appear" not in text
 
 
@@ -51,7 +51,7 @@ def test_shared_project_workspace_wording(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     monkeypatch.setenv("POLYROB_PROJECT_DIR", str(tmp_path / "proj"))
     from agents.task.agent.core.env_context import build_environment_context
-    text = build_environment_context(session_id="s1", user_id="rob") or ""
+    text = build_environment_context(session_id="s1", user_id="alice") or ""
     assert "across sessions" in text  # shared-workspace persistence wording
 
 
@@ -66,7 +66,7 @@ def test_budget_line_present_when_flag_set(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     monkeypatch.setenv("RUN_BUDGET_USD", "1.50")
     from agents.task.agent.core.env_context import build_environment_context
-    text = build_environment_context(session_id="s1", user_id="rob")
+    text = build_environment_context(session_id="s1", user_id="alice")
     assert text is not None and "Run budget: RUN_BUDGET_USD=$1.50" in text
 
 
@@ -74,7 +74,7 @@ def test_budget_line_absent_when_disabled(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     monkeypatch.delenv("RUN_BUDGET_USD", raising=False)
     from agents.task.agent.core.env_context import build_environment_context
-    text = build_environment_context(session_id="s1", user_id="rob")
+    text = build_environment_context(session_id="s1", user_id="alice")
     assert text is not None and "Run budget:" not in text
 
 
@@ -99,11 +99,11 @@ def test_workspace_path_is_its_own_message_after_the_catalogs(monkeypatch, tmp_p
     from agents.task.agent.core.env_context import (build_environment_context,
                                                     build_workspace_note)
     from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
-    env = build_environment_context(session_id="s1", user_id="rob")
-    assert "Workspace (absolute)" not in env and "sessions/rob" not in env
-    assert build_environment_context(session_id="s2", user_id="rob") == env
-    note = build_workspace_note("s1", "rob")
-    assert "Workspace (absolute)" in note and "sessions/rob" in note
+    env = build_environment_context(session_id="s1", user_id="alice")
+    assert "Workspace (absolute)" not in env and "sessions/alice" not in env
+    assert build_environment_context(session_id="s2", user_id="alice") == env
+    note = build_workspace_note("s1", "alice")
+    assert "Workspace (absolute)" in note and "sessions/alice" in note
     keys = [layer.key for layer in FOUNDATION_LAYERS]
     assert keys[-2:] == ["workspace", "initial_task"]
     assert keys.index("tool_catalog") < keys.index("workspace")

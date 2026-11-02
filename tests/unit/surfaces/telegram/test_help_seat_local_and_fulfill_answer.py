@@ -90,13 +90,13 @@ def _board_with_blocked_goal(data_dir):
     from agents.task.goals.board import GoalBoard
 
     board = GoalBoard(os.path.join(data_dir, "goals.db"))
-    goal = board.create(user_id="rob", title="ship it")
+    goal = board.create(user_id="alice", title="ship it")
     board.claim(goal.id, "w", ttl_seconds=60)
     board.record_failure(goal.id, error="which account?", claim_token=board.get(goal.id).claim_token)
     board.claim(goal.id, "w", ttl_seconds=60)
     board.record_failure(goal.id, error="which account?",
         claim_token=board.get(goal.id).claim_token)  # breaker -> blocked
-    ask = board.create_ask(user_id="rob", what="Which account?",
+    ask = board.create_ask(user_id="alice", what="Which account?",
                            blocks_goal_ids=[goal.id])
     return board, goal, ask
 
@@ -113,7 +113,7 @@ async def test_fulfill_passes_the_owners_written_answer_into_the_retry_prompt(
     out = await h._handle_owner_admin(
         _Agent(str(tmp_path)),
         _Result(f"/fulfill {ask.id} use the treasury account, not the hot wallet",
-                "rob"),
+                "alice"),
         "/fulfill")
     assert out.startswith("✅ Ask fulfilled")
     assert "treasury account" in out
@@ -137,7 +137,7 @@ async def test_fulfill_without_an_answer_is_byte_compatible(tmp_path, monkeypatc
     board, goal, ask = _board_with_blocked_goal(str(tmp_path))
 
     out = await h._handle_owner_admin(
-        _Agent(str(tmp_path)), _Result(f"/fulfill {ask.id}", "rob"), "/fulfill")
+        _Agent(str(tmp_path)), _Result(f"/fulfill {ask.id}", "alice"), "/fulfill")
     assert out == "✅ Ask fulfilled — 1 goal(s) unblocked."
     reread = GoalBoard(os.path.join(str(tmp_path), "goals.db"))
     assert "answer" not in (reread.get(ask.id).payload or {})

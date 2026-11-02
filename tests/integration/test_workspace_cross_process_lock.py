@@ -1,6 +1,6 @@
 """Phase 6-B (path-concerns upgrade): cross-process workspace turn lock (C2).
 
-The interactive busy-gate is process-global, so two `rob` processes in one dir
+The interactive busy-gate is process-global, so two `polyrob` processes in one dir
 could mutate workspace files concurrently. A SafeFileLock on
 <.rob>/workspace.turn.lock serializes them (blocking acquire, fail-loud on
 timeout). Gated CLI_WORKSPACE_LOCK (default on) + POLYROB_WORKSPACE_LOCK_DIR (set by

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Writing or editing a skill'
   polyrob-priority: '4'
-  polyrob-auto-activate: 'true'
   polyrob-version: '3'
 ---
 # Skill Authoring
@@ -13,8 +12,12 @@ metadata:
 How to write a durable, safe skill in this system.
 
 ## Before you write
+- Search the skill index before you create: when a skill already covers the procedure,
+  load it and patch it instead of writing a second one.
 - Read the existing skill first if you are EDITING one. Patch the smallest span; do not
   rewrite a whole body from memory — a stale rewrite can lose hard-won detail.
+- A rule the owner stated is not a procedure: record it with `owner_doc_manage`, not in a
+  skill. Only the terms of a programme the owner runs as jobs live in its pinned skill.
 - An overwrite of an existing ACTIVE skill becomes a `.pending` proposal that the owner
   must promote. Do not expect an edit to take effect immediately; surface the pending id.
 

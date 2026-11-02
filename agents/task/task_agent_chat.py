@@ -465,7 +465,7 @@ class TaskAgentChatMixin:
         # from swap_model (e.g. a provider build blowing up) must never 500 the
         # /v1 request (the plan's contract: failed swap = warn + proceed).
         try:
-            res = await agent.swap_model(provider, model)
+            res = await agent.swap_model(provider, model, cause="api")
         except Exception as e:
             logger.warning(
                 f"per-request model swap raised: {e} — "

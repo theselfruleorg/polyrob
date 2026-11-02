@@ -286,14 +286,14 @@ async def test_send_message_falls_back_to_queue_when_surface_not_local(router, t
     q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
     r.attach_queue(q)
     # no "email" surface subscribed at all
-    result = await r.send_message(chat_id="rob@example.com", text="hi", surface_id="email")
+    result = await r.send_message(chat_id="alice@example.com", text="hi", surface_id="email")
     assert result is True
     rows = q.claim_due(now=__import__("time").time() + 1)
     assert len(rows) == 1
     assert rows[0]["surface_id"] == "email"
-    assert rows[0]["dest"] == "rob@example.com"
+    assert rows[0]["dest"] == "alice@example.com"
     assert rows[0]["payload"] == "hi"
-    assert rows[0]["session_key"] == "direct:email:rob@example.com"
+    assert rows[0]["session_key"] == "direct:email:alice@example.com"
 
 
 @pytest.mark.asyncio
@@ -304,7 +304,7 @@ async def test_send_message_queue_fallback_threads_media(router, tmp_path, monke
     q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
     r.attach_queue(q)
     media = [{"kind": "document", "path": "/tmp/report.pdf", "caption": None}]
-    result = await r.send_message(chat_id="rob@example.com", text="see attached",
+    result = await r.send_message(chat_id="alice@example.com", text="see attached",
                                   surface_id="email", media=media)
     assert result is True
     rows = q.claim_due(now=__import__("time").time() + 1)
@@ -318,7 +318,7 @@ async def test_send_message_no_queue_still_returns_false_for_unknown_surface(rou
     """Byte-identical legacy behavior when no queue is attached at all (the
     OUTBOUND_QUEUE_ENABLED=false / not-yet-installed default)."""
     r, _ = router
-    result = await r.send_message(chat_id="rob@example.com", text="hi", surface_id="email")
+    result = await r.send_message(chat_id="alice@example.com", text="hi", surface_id="email")
     assert result is False
 
 
@@ -335,7 +335,7 @@ async def test_send_message_fallback_ignores_flag_uses_attached_queue(router, tm
     r, _ = router
     q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
     r.attach_queue(q)
-    result = await r.send_message(chat_id="rob@example.com", text="hi", surface_id="email")
+    result = await r.send_message(chat_id="alice@example.com", text="hi", surface_id="email")
     assert result is True
     rows = q.claim_due(now=__import__("time").time() + 1)
     assert len(rows) == 1
@@ -476,3 +476,56 @@ async def test_publish_room_reply_denied_over_cap(tmp_path, monkeypatch):
         session_key="agent:main:telegram:group:-100", text="hi", partial=False))
 
     assert len(surf.sent) == 0
+
+
+@pytest.mark.asyncio
+async def test_send_message_receipt_names_the_dead_target_reason(router, tmp_path):
+    """prod 2026-10-28: a dead-target skip reached the agent as "send returned
+    false" with no reason; the receipt now carries why."""
+    r, _ = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    store.mark("telegram", "@chan", "chat_not_found")
+    r.attach_dead_targets(store)
+    receipt = await r.send_message_receipt("@chan", "hi", surface_id="telegram")
+    assert receipt.status == "failed"
+    assert receipt.error and "dead target since" in receipt.error
+    assert "chat_not_found" in receipt.error
+    assert surf.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_message_receipt_carries_the_surface_error(router, tmp_path):
+    r, _ = router
+
+    class _Flaky(_RecordingSurface):
+        async def send(self, msg):
+            return SendResult(success=False, error="Bad Request: message is too long")
+
+    r.subscribe("telegram", _Flaky())
+    receipt = await r.send_message_receipt("555", "hi", surface_id="telegram")
+    assert receipt.status == "failed" and "too long" in receipt.error
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_send_clears_an_aged_dead_mark(router, tmp_path):
+    """Review 2026-10-29 (M2): an aged-out single failure stayed in the table, so ONE
+    later failure made a broadcast channel (which never writes in) dead for good. A
+    delivered send proves the target alive and drops the stale row."""
+    import sqlite3
+    import time
+    r, _ = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    db = str(tmp_path / "dead.db")
+    store = DeadTargetStore(db)
+    store.mark("telegram", "555", "chat_not_found")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE dead_targets SET marked_at=?", (time.time() - 30 * 86400,))
+    conn.commit()
+    conn.close()
+    r.attach_dead_targets(store)
+    assert await r.send_message(chat_id="555", text="channel post", surface_id="telegram")
+    store.mark("telegram", "555", "chat_not_found")   # one later failure
+    assert store.get("telegram", "555")["fail_count"] == 1   # a fresh single mark, not a second

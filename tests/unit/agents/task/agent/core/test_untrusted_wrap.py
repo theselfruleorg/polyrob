@@ -31,7 +31,7 @@ def test_golden_string_byte_for_byte():
     ("anysite_get_page", "mcp"),     # tool namespace == mcp
     ("browser_extract_page_content", None),  # browser_ prefix
     ("click_element", "browser"),    # tool namespace == browser
-    ("perplexity_search", "perplexity"),     # perplexity namespace (C3 — ROB web vector)
+    ("perplexity_search", "perplexity"),     # perplexity namespace (C3 — the agent's web vector)
     ("perplexity_search", None),     # perplexity by name
     ("twitter_get_tweet", "twitter"),        # third-party tweet/thread bodies
     ("x_browser_x_read_dms", "x_browser"),  # browser-visible third-party DMs

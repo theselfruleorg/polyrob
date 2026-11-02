@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "729d3abd9f2d"
+      "sha": "a537b675a8de"
     },
     {
       "name": "contact_history",
@@ -38,7 +38,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "8b543916e069"
+      "sha": "05c1fe29edcb"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -66,7 +66,7 @@
     },
     {
       "name": "goal_cancel",
-      "sha": "c02104f7fee8"
+      "sha": "ac4e5aa2da7a"
     },
     {
       "name": "goal_create",
@@ -106,7 +106,7 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "d4315aebe58c"
+      "sha": "2c72779ffd6d"
     },
     {
       "name": "read_skill_resource",
@@ -122,7 +122,7 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "8977db1c077b"
+      "sha": "7d5aee19c522"
     },
     {
       "name": "send_message",
@@ -130,7 +130,7 @@
     },
     {
       "name": "skill_manage",
-      "sha": "1a9acba12d5a"
+      "sha": "816a947f06b5"
     },
     {
       "name": "task_todo_add",

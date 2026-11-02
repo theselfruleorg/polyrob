@@ -148,6 +148,20 @@ async def test_money_infra():
 
 
 @pytest.mark.asyncio
+async def test_loop():
+    """The identical-call escalation's last rung ends the run as LOOP."""
+    agent, n = _agent([])
+
+    async def _looped(step_info=None):
+        agent.state.n_steps += 1
+        agent._last_result = [ActionResult(error="RUN ENDED: x repeated")]
+        agent._loop_stop_text = "x repeated with the same arguments and the same result"
+    agent.step = AsyncMock(side_effect=_looped)
+    assert await _run(agent, n) == "loop"
+    assert agent.step.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_conversational_exit():
     agent, n = _agent([_reply() for _ in range(5)])
     assert await _run(agent, n) == "conversational_exit"

@@ -15,18 +15,18 @@ def _local(monkeypatch):
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
 
 
-def test_env_block_shows_clamped_mode_both_axes_and_tools(monkeypatch):
+def test_env_block_shows_clamped_mode_both_axes_and_no_tool_list(monkeypatch):
     from agents.task.agent.core import env_context
 
     monkeypatch.setattr(env_context, "_host_capabilities", lambda: "none")
-    out = env_context.build_environment_context(
-        "sess-1", "u1", tool_ids=["browser", "filesystem"])
+    out = env_context.build_environment_context("sess-1", "u1")
     assert out is not None
     # Clamped display, not the raw env value: with AUTONOMY_MODE unset this is
     # exactly "supervised" (the raw call would also say supervised — pin the
     # clamped path by requesting autonomous WITHOUT the owner guard satisfied).
     assert "autonomy posture" in out
-    assert "Tools loaded this session: browser, filesystem." in out
+    # 095 P0.1: the loaded tools are in <tool-catalog> ([loaded]), not here.
+    assert "Tools loaded this session" not in out
 
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.delenv("POLYROB_OWNER_USER_ID", raising=False)

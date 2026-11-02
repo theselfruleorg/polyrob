@@ -51,7 +51,7 @@ def test_genuine_owner_turn_never_gated(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _FakeStore(count=5)
     res = _autonomous_owner_resend_cooldown_refusal(
-        _OWNER_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _OWNER_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS)
     assert res is None
     assert store.calls == []  # never even queried for a real owner turn
@@ -61,7 +61,7 @@ def test_autonomous_turn_no_recent_send_not_gated(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _FakeStore(count=0)
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS)
     assert res is None
 
@@ -70,13 +70,17 @@ def test_autonomous_turn_recent_send_refused_with_actionable_message(monkeypatch
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _FakeStore(count=1)
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS)
     assert res is not None
-    assert "contact_history" in res.extracted_content
-    assert "telegram" in res.extracted_content
+    # A refusal is an ERROR (prod 2026-10-28: as extracted_content it read like a
+    # sent message and the failure counter never tripped — 69 identical calls).
+    assert res.error and not res.extracted_content
+    assert "contact_history" in res.error
+    assert "telegram" in res.error
+    assert "NOT sent" in res.error
     # queried against the RESOLVED owner address, not the literal alias
-    assert store.calls == [("rob", "telegram", "100000001", 7200)]
+    assert store.calls == [("alice", "telegram", "100000001", 7200)]
 
 
 def test_autonomous_turn_recent_send_to_real_owner_address_also_gated(monkeypatch):
@@ -84,7 +88,7 @@ def test_autonomous_turn_recent_send_to_real_owner_address_also_gated(monkeypatc
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _FakeStore(count=1)
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="100000001", owner_targets=_OWNER_TARGETS)
     assert res is not None
 
@@ -95,7 +99,7 @@ def test_non_owner_target_never_gated(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _FakeStore(count=5)
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="@some_promo_chat", owner_targets=_OWNER_TARGETS)
     assert res is None
     assert store.calls == []
@@ -105,7 +109,7 @@ def test_cooldown_disabled_never_gates(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "0")
     store = _FakeStore(count=5)
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS)
     assert res is None
 
@@ -113,7 +117,7 @@ def test_cooldown_disabled_never_gates(monkeypatch):
 def test_no_container_fails_open(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=None, user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=None, user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS)
     assert res is None
 
@@ -154,11 +158,11 @@ def test_materially_new_body_is_not_refused(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _BodyStore(["daily treasury summary: nothing to do"])
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS,
         text="X posting is BLOCKED: both rails dead, need credits or a session")
     assert res is None
-    assert store.body_calls == [("rob", "telegram", "100000001", 7200)]
+    assert store.body_calls == [("alice", "telegram", "100000001", 7200)]
 
 
 def test_same_body_is_still_refused(monkeypatch):
@@ -166,17 +170,17 @@ def test_same_body_is_still_refused(monkeypatch):
     body = "Track-record post BLOCKED — both X rails down, attempt 6"
     store = _BodyStore(["something else", body])
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS, text=body)
     assert res is not None
-    assert "already" in res.extracted_content
+    assert "already" in res.error
 
 
 def test_same_body_modulo_whitespace_is_refused(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _BodyStore(["Track-record post BLOCKED — attempt 6"])
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS,
         text="  Track-record post BLOCKED — attempt 6\n")
     assert res is not None
@@ -187,7 +191,7 @@ def test_legacy_count_gate_when_no_text_is_supplied(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _BodyStore(["anything"])
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS)
     assert res is not None
 
@@ -196,7 +200,7 @@ def test_store_without_body_reader_falls_back_to_the_count_gate(monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     store = _FakeStore(count=1)   # no outbound_bodies_since
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS,
         text="a genuinely new blocker")
     assert res is not None
@@ -214,12 +218,38 @@ def test_a_cooldown_refusal_is_readable_in_missed(monkeypatch, tmp_path):
     body = "the same blocker again"
     store = _BodyStore([body])
     res = _autonomous_owner_resend_cooldown_refusal(
-        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="rob",
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(store), user_id="alice",
         surface="telegram", target="owner", owner_targets=_OWNER_TARGETS, text=body,
         event_log=log)
     assert res is not None
-    notices = log.query(kind="owner_notice", user_id="rob")
+    notices = log.query(kind="owner_notice", user_id="alice")
     assert notices and notices[0]["attrs"]["text"].startswith(NOTICE_MARKERS[4])
     assert body in notices[0]["attrs"]["text"]
-    rows = log.query(kind="user_delivery", user_id="rob")
+    rows = log.query(kind="user_delivery", user_id="alice")
     assert rows and rows[0]["attrs"]["outcome"] == "cooldown"
+
+
+def test_an_empty_autonomous_send_is_a_validation_error_not_a_cooldown(monkeypatch):
+    """prod 2026-10-28 (TG CHANNEL run): message({"action":"send"}) with no text
+    ran 69 times; each got the cooldown text, which read like a delivered
+    message. The empty call is refused first, as an error, before any gate."""
+    import asyncio
+    import logging
+    from tools.controller.registry.service import Registry
+    from tools.controller.service import Controller
+    monkeypatch.setenv("MESSAGE_TOOL_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_OVERRIDES", "MESSAGE_TOOL_ENABLED=true")
+    monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
+    c = object.__new__(Controller)
+    c.logger = logging.getLogger("message-empty-test")
+    c.registry = Registry()
+    c.user_id = "alice"
+    c.session_id = "s1"
+    c.container = _FakeContainer(_FakeStore(count=1))
+    c._register_message_action()
+    action = c.registry.registry.actions["message"]
+    res = asyncio.run(action.function(action.param_model(action="send"),
+                                      execution_context=_AUTONOMOUS_CTX))
+    assert res.error and not res.extracted_content
+    assert "text" in res.error and "empty" in res.error
+    assert "already reached" not in res.error

@@ -173,7 +173,7 @@ def test_a_dm_death_marks_dead_but_never_touches_a_room_row(tmp_path):
     surface = _Surface(SendResult(success=False, error="Forbidden: bot was blocked by the user"))
     router, al = _router(tmp_path, surface)
     asyncio.run(router.publish(OutboundMessage(
-        session_key="agent:main:telegram:dm:-1001:rob", text="hi",
+        session_key="agent:main:telegram:dm:-1001:alice", text="hi",
         kind=MessageKind.AGENT_TEXT, partial=False)))
     assert router._dt.is_dead("telegram", "-1001")
     assert al.is_allowed("telegram", "-1001"), "a DM death is not a room departure"
@@ -205,10 +205,10 @@ def test_the_owner_seats_name_a_left_room(tmp_path):
         config=types.SimpleNamespace(data_dir=str(tmp_path)),
         get_service=lambda n: None)
 
-    out = group_admin.list_rooms(container, "rob")
+    out = group_admin.list_rooms(container, "alice")
     assert "LEFT" in out and "telegram:-1001" in out
 
-    sec = _groups_section("rob", str(tmp_path))
+    sec = _groups_section("alice", str(tmp_path))
     assert sec.data["left_rooms"] == [{"surface": "telegram", "chat_id": "-1001"}]
     assert any("LEFT" in ln for ln in sec.lines)
 

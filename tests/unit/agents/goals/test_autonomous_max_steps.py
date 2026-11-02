@@ -108,9 +108,10 @@ def test_a_billed_autonomous_run_keeps_the_billed_ceiling(monkeypatch):
     from agents.task import billed_request as br
     import agents.task.session_class as sc
     monkeypatch.setattr(sc, "is_autonomous_session", lambda sid: sid == "auto")
-    req = _Req(max_steps=150)
+    from core.config_policy import INTERACTIVE_MAX_STEPS
+    req = _Req(max_steps=INTERACTIVE_MAX_STEPS + 50)
     br.clamp_autonomous_billed_steps(req, "auto")
-    assert req.max_steps == 50
+    assert req.max_steps == INTERACTIVE_MAX_STEPS
     interactive = _Req(max_steps=150)
     br.clamp_autonomous_billed_steps(interactive, "chat")
     assert interactive.max_steps == 150, "an interactive request is refused, never clamped"

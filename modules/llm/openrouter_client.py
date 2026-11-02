@@ -27,7 +27,7 @@ from core.security.redaction import args_shape as _args_shape  # [RAW_TOOL_CALL]
 # circular import — llm_client_registry only imports openrouter_client lazily,
 # inside function bodies, never at module level).
 from modules.llm.llm_client_registry import get_default_model
-from modules.llm.openrouter_reasoning import apply_request_extras  # PROVIDER_SORT + REASONING_MAX_TOKENS
+from modules.llm.openrouter_reasoning import apply_request_extras, create_with_reasoning_fallback  # PROVIDER_SORT + REASONING_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +153,8 @@ def recover_kimi_content(content: str) -> Tuple[str, List[Dict[str, Any]]]:
 #   A. Anthropic XML:  <invoke name="done"><parameter name="text">hi</parameter></invoke>
 #   B. python-call:    done(text="hi")        (recovered only for KNOWN tool names)
 # The pipe-token path (recover_kimi_content) never sees these. Left unrecovered,
-# the action is LOST (empty-action loop) AND the raw text dumps to the user as a
-# "rob" bubble (the leak shapes end in ``)``/``>`` so the render-layer brain-state
+# the action is LOST (empty-action loop) AND the raw text dumps to the user as an
+# "agent" bubble (the leak shapes end in ``)``/``>`` so the render-layer brain-state
 # check doesn't demote them). recover_textual_tool_calls reconciles both shapes.
 # ---------------------------------------------------------------------------
 
@@ -568,7 +568,7 @@ class OpenRouterClient(LLMClient):
             apply_request_extras(request_params, self, max_tokens_value)
             self.logger.debug(f"{self._PROVIDER_LABEL} API request: model={self.model_type}, max_tokens={max_tokens_value}")
 
-            self.last_response = await inference_sdk(self).chat.completions.create(**request_params)
+            self.last_response = await create_with_reasoning_fallback(self, inference_sdk(self), request_params)
 
             # Extract response
             response_text = ""
@@ -728,7 +728,7 @@ class OpenRouterClient(LLMClient):
 
             apply_request_extras(request_params, self, max_tokens_value)
             api_start = time.time()
-            response = await create_with_tool_choice_fallback(self, inference_sdk(self), request_params)
+            response = await create_with_reasoning_fallback(self, inference_sdk(self), request_params, create_with_tool_choice_fallback)
             api_duration = time.time() - api_start
 
             self.last_response = response

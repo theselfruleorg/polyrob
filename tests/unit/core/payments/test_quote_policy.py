@@ -4,8 +4,8 @@ import pytest
 from core.payments.assets import PaymentAsset
 from core.payments.quote import PriceQuote, QuoteRefused, size_amount_raw
 
-ASSET = PaymentAsset(asset_id="rob", chain="robinhood", address="0x" + "bb" * 20,
-                     decimals=18, symbol="ROB", rail="onchain_scan",
+ASSET = PaymentAsset(asset_id="demo", chain="robinhood", address="0x" + "bb" * 20,
+                     decimals=18, symbol="DEMO", rail="onchain_scan",
                      min_amount_raw=10 ** 18, liquidity_floor_usd=2500.0,
                      verified_at=1.0, source="operator")
 USDC = PaymentAsset(asset_id="usdc-base", chain="base",
@@ -14,7 +14,7 @@ USDC = PaymentAsset(asset_id="usdc-base", chain="base",
 
 
 def _q(**kw):
-    base = dict(asset_id="rob", usd_per_token=0.10, liquidity_usd=50_000.0,
+    base = dict(asset_id="demo", usd_per_token=0.10, liquidity_usd=50_000.0,
                 verdict="SURVIVOR", source="test", ts=1000.0, confidence="high")
     base.update(kw)
     return PriceQuote(**base)

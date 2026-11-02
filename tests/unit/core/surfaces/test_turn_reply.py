@@ -59,3 +59,27 @@ def test_only_a_real_string_is_recorded_as_the_reply():
     assert turn_reply.last_reply_text(orch) is None
     turn_reply.mark_reply_published(orch, "the answer")
     assert turn_reply.last_reply_text(orch) == "the answer"
+
+
+def test_spoke_since_tells_a_turn_that_published_from_one_that_did_not():
+    from types import SimpleNamespace
+    from core.surfaces.turn_reply import mark_reply_published, spoke_since, turn_marker
+    orch = SimpleNamespace()
+    marker = turn_marker(orch)
+    assert spoke_since(orch, marker) is False
+    mark_reply_published(orch, "earlier turn")
+    marker = turn_marker(orch)           # taken before THIS turn's run
+    assert spoke_since(orch, marker) is False
+    mark_reply_published(orch, "this turn")
+    assert spoke_since(orch, marker) is True
+
+
+def test_spoke_this_turn_reads_the_current_turn_record():
+    from types import SimpleNamespace
+    from core.surfaces.turn_reply import mark_reply_published, reset_turn, spoke_this_turn
+    orch = SimpleNamespace()
+    assert spoke_this_turn(orch) is False
+    mark_reply_published(orch, "hi")
+    assert spoke_this_turn(orch) is True
+    reset_turn(orch)
+    assert spoke_this_turn(orch) is False

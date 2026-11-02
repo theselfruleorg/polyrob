@@ -662,7 +662,7 @@ def _resolve_confinement_root(session_id: str, user_id: str) -> Path:
 
     Fail-CLOSED on the server: if the workspace root can't be resolved (``pm()``
     raises), we must NOT silently widen confinement to the process CWD (e.g.
-    ``/opt/rob`` — app code/config). Only local mode (single-user) accepts the
+    ``/opt/polyrob`` — app code/config). Only local mode (single-user) accepts the
     CWD fallback; on the server the error propagates so the caller refuses.
     """
     try:

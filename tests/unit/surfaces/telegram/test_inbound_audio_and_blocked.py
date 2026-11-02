@@ -22,7 +22,7 @@ class _Directory:
 
 def _update(**message):
     base = {"message_id": 1, "chat": {"id": 555, "type": "private"},
-            "from": {"id": 555, "username": "rob"}}
+            "from": {"id": 555, "username": "alice"}}
     base.update(message)
     return {"update_id": 1, "message": base}
 

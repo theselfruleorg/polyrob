@@ -123,11 +123,33 @@ class SelfContextWriter:
         pf = self._pending_file(uid)
         return pf.with_name(pf.name + ".base")
 
-    def _drop_base(self, uid: str) -> None:
+    def _author_file(self, uid: str) -> Path:
+        """Who wrote the pending draft (095 W10, R9): one author per line."""
+        pf = self._pending_file(uid)
+        return pf.with_name(pf.name + ".by")
+
+    def _note_author(self, uid: str, created_by: str) -> None:
+        authors = self.pending_authors(uid)
+        if created_by and created_by not in authors:
+            try:
+                self._atomic_write(self._author_file(uid), "\n".join(authors + [created_by]))
+            except Exception:
+                logger.debug("%s %s: draft author not recorded", self._LOG_LABEL, uid)
+
+    def pending_authors(self, uid: str) -> List[str]:
+        """The provenance of the pending draft (``PROVENANCE_*``), oldest first."""
         try:
-            os.remove(str(self._base_file(uid)))
+            text = self._author_file(uid).read_text(encoding="utf-8")
         except OSError:
-            pass
+            return []
+        return [a.strip() for a in text.splitlines() if a.strip()]
+
+    def _drop_base(self, uid: str) -> None:
+        for f in (self._base_file(uid), self._author_file(uid)):
+            try:
+                os.remove(str(f))
+            except OSError:
+                pass
 
     def _rebase(self, uid: str, draft: str):
         """``(merged, retired, kept)`` for promoting ``draft`` now. A draft with no
@@ -354,6 +376,8 @@ class SelfContextWriter:
                 # A new draft starts: keep the active doc it is drafted against.
                 self._atomic_write(self._base_file(uid), self.read_active(uid))
             self._atomic_write(target, body)
+            if quarantine:
+                self._note_author(uid, created_by)
             logger.info("%s %s written (%s)", self._LOG_LABEL, uid,
                         "pending" if quarantine else "active")
             return SelfContextWriteResult(True, pending=quarantine, path=str(target))
@@ -458,6 +482,7 @@ class SelfContextWriter:
             "preview": preview,
             "retires": retired,
             "keeps": kept,
+            "by": self.pending_authors(uid),
             "chars": len(body),
             "path": str(pending_f),
         }
@@ -474,53 +499,6 @@ class SelfContextWriter:
             return f.read_text(encoding="utf-8") if f.is_file() else ""
         except OSError:
             return ""
-
-    def retire_pending(self, *, user_id: str) -> bool:
-        """Archive + remove a draft the ACTIVE doc has now superseded (035 P1-6).
-
-        Leaving it behind would show the owner a `/pending` proposal that is
-        already law. Archive-never-delete still applies. Fail-open.
-        """
-        uid = self._require_user(user_id)
-        if uid is None:
-            return False
-        pending_f = self._pending_file(uid)
-        if not pending_f.is_file():
-            return False
-        try:
-            self._archive_pending(uid, pending_f)
-            os.remove(str(pending_f))
-            self._drop_base(uid)
-            return True
-        except OSError:
-            logger.debug("%s %s: superseded draft not removed", self._LOG_LABEL, uid)
-            return False
-
-    def apply_now(self, content: str, *, user_id: str,
-                  created_by: str = PROVENANCE_AGENT,
-                  source: Optional[str] = None,
-                  observed_at: Optional[str] = None) -> SelfContextWriteResult:
-        """Write the ACTIVE doc and retire any draft it supersedes (035 P1-6).
-
-        Routes through :meth:`propose` with ``pending=False``, so the full gate
-        still runs — cap, safety scan, archive-before-overwrite, atomic write —
-        and ``_resolve_pending``'s hard rule still quarantines a non-user author
-        regardless of what this asks for. That layering is deliberate: the
-        immediacy decision belongs to the CALLER (is this an owner turn?), the
-        forged-author refusal belongs HERE, and neither can be bypassed by the
-        other.
-
-        Retiring the superseded draft matters for honesty: leaving it behind
-        would show the owner a `/pending` proposal that is already law.
-        """
-        uid = self._require_user(user_id)
-        if uid is None:
-            return SelfContextWriteResult(False, errors=["empty user_id refused"])
-        res = self.propose(content, user_id=uid, created_by=created_by, pending=False,
-                           source=source, observed_at=observed_at)
-        if res.ok and not res.pending:
-            self.retire_pending(user_id=uid)
-        return res
 
     def reject(self, *, user_id: str) -> SelfContextWriteResult:
         """Discard a pending self-doc draft (owner rejects the proposal).
@@ -654,6 +632,8 @@ class SelfContextWriter:
             # mkstemp is 0600; the doc is shared with the polyrob-data group.
             os.chmod(tmp, 0o660)
             os.replace(tmp, str(path))
+            from core.prefs_hooks import notify  # 095 W4: a live agent re-reads it
+            notify(self._LOG_LABEL)
         finally:
             if os.path.exists(tmp):
                 try:

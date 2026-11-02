@@ -64,7 +64,7 @@ class _FakeAgentMail:
     def __init__(self, messages, threads=None):
         self._messages = messages
         self._threads = threads or {}
-        self.address = "rob@agentmail.to"
+        self.address = "alice@agentmail.to"
 
     async def list_messages(self, limit=25):
         return [{"message_id": m["message_id"], "thread_id": m.get("thread_id")}
@@ -140,7 +140,7 @@ async def test_agentmail_fetcher_keeps_real_in_reply_to(tmp_path):
 async def test_agentmail_fetcher_skips_messages_from_self(tmp_path):
     dedup = MessageDedup(str(tmp_path / "dedup.db"))
     client = _FakeAgentMail(
-        [_msg("m1", **{"from": "rob@agentmail.to"}), _msg("m2")])
+        [_msg("m1", **{"from": "alice@agentmail.to"}), _msg("m2")])
     fetcher = AgentMailFetcher(client, dedup)
     out = await fetcher.fetch_unread()
     assert [n["message_id"] for _, n in out] == ["m2"]

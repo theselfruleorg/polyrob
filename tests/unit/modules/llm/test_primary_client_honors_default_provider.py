@@ -4,7 +4,7 @@ Regression for the 2026-08-13 dormancy: OpenRouter was exhausted (402), the
 owner had pinned a funded z.ai key, but ``_set_primary_client`` used a hardcoded
 ``priority_order`` that never includes dynamically-registered providers like
 ``zai-coding``. So a *dead-but-keyed* OpenRouter was always chosen primary and
-its 402 tripped the provider-credit sentinel before z.ai was ever used — Rob sat
+its 402 tripped the provider-credit sentinel before z.ai was ever used — the agent sat
 dormant for ~24 days. The operator's ``DEFAULT_PROVIDER``/``CHAT_PROVIDER`` pin
 (already honored by ``resolve_runtime_config`` for goal dispatch + chat) must
 also win at the LLM-manager primary-client layer.

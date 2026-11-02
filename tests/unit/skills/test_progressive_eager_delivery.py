@@ -24,8 +24,13 @@ def sm(tmp_path, monkeypatch):
 
 
 def _session(sm):
+    # A doctrine that fits the pin budget alone but not after its prerequisites:
+    # pad the pinned parent (095 B1 removed the large builtin playbook this used).
+    real = sm._load_skill_content
+    sm._load_skill_content = lambda sid, **kw: (
+        real(sid, **kw) + ("\n" + "x" * 9000 if sid == "trade-execution" else ""))
     matched = sm.get_pinned_skills(
-        seeded_skill_ids=["treasury-trading"],
+        seeded_skill_ids=["trade-execution"],
         tool_ids=["defi_trade", "defi_data", "task"])
     catalog = matched + [c for c in sm.get_catalog_skills(
         max_skills=50, tool_ids=["defi_trade", "defi_data", "task"])
@@ -38,17 +43,17 @@ def test_prerequisites_are_pinned_and_the_doctrine_that_does_not_fit_is_load_fir
     eager, load_first = sm.split_progressive(matched)
     eager_ids = [s.skill_id for s in eager]
     assert {"token-identity", "pre-trade-check"} <= set(eager_ids)
-    # treasury-trading fits the budget alone (081 WS-4.4), not after its prerequisites.
-    doctrine = len(next(m for m in matched if m.skill_id == "treasury-trading").content)
+    # the doctrine fits the budget alone (081 WS-4.4), not after its prerequisites.
+    doctrine = len(next(m for m in matched if m.skill_id == "trade-execution").content)
     assert doctrine <= MAX_SKILL_INJECT_CHARS
     assert doctrine + sum(len(s.content) for s in eager) > SkillManager.EAGER_INJECT_BUDGET_CHARS
-    assert "treasury-trading" in load_first
+    assert "trade-execution" in load_first
     assert sum(len(s.content) for s in eager) <= SkillManager.EAGER_INJECT_BUDGET_CHARS
 
     text = sm.format_progressive(eager, catalog, load_first)
     assert '<skill id="token-identity">' in text
     assert '<skill id="pre-trade-check">' in text
-    assert 'id="treasury-trading" — LOAD FIRST' in text
+    assert 'id="trade-execution" — LOAD FIRST' in text
     # A pinned body is not listed again in the catalog.
     assert 'id="token-identity" —' not in text
     # The index still lists what was not pinned.

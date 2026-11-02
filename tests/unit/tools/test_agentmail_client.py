@@ -27,22 +27,22 @@ async def test_provision_posts_and_persists(tmp_path):
         assert request.url.path == "/v0/inboxes"
         assert request.headers["Authorization"] == "Bearer am_test_key"
         body = json.loads(request.content)
-        assert body["client_id"] == "polyrob-rob"
+        assert body["client_id"] == "polyrob-alice"
         return httpx.Response(200, json={
-            "pod_id": "pod_1", "inbox_id": "rob@agentmail.to",
-            "email": "rob@agentmail.to",
+            "pod_id": "pod_1", "inbox_id": "alice@agentmail.to",
+            "email": "alice@agentmail.to",
             "created_at": "2026-08-18T00:00:00Z", "updated_at": "2026-08-18T00:00:00Z",
         })
 
     c = _client(tmp_path, handler)
-    state = await c.provision("rob")
-    assert state["address"] == "rob@agentmail.to"
+    state = await c.provision("alice")
+    assert state["address"] == "alice@agentmail.to"
     on_disk = json.loads((tmp_path / "agent_mail.json").read_text())
-    assert on_disk["inbox_id"] == "rob@agentmail.to"
-    assert on_disk["address"] == "rob@agentmail.to"
+    assert on_disk["inbox_id"] == "alice@agentmail.to"
+    assert on_disk["address"] == "alice@agentmail.to"
 
     # Second call short-circuits on the persisted state — no second POST.
-    await c.provision("rob")
+    await c.provision("alice")
     assert len(calls) == 1
 
 
@@ -53,14 +53,14 @@ async def test_send_mints_message_id_and_records_thread(tmp_path):
     def handler(request):
         if request.url.path == "/v0/inboxes":
             return httpx.Response(200, json={
-                "pod_id": "p", "inbox_id": "rob@agentmail.to", "email": "rob@agentmail.to",
+                "pod_id": "p", "inbox_id": "alice@agentmail.to", "email": "alice@agentmail.to",
                 "created_at": "x", "updated_at": "x"})
-        assert request.url.path == "/v0/inboxes/rob@agentmail.to/messages/send"
+        assert request.url.path == "/v0/inboxes/alice@agentmail.to/messages/send"
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json={"message_id": "am_msg_1", "thread_id": "th_1"})
 
     c = _client(tmp_path, handler)
-    await c.provision("rob")
+    await c.provision("alice")
     mid = await c.send("to@example.com", "Hi", "Body text")
 
     assert re.match(r"^<.+@agentmail\.to>$", mid)
@@ -79,13 +79,13 @@ async def test_send_reply_sets_threading_headers(tmp_path):
     def handler(request):
         if request.url.path == "/v0/inboxes":
             return httpx.Response(200, json={
-                "pod_id": "p", "inbox_id": "in_1", "email": "rob@agentmail.to",
+                "pod_id": "p", "inbox_id": "in_1", "email": "alice@agentmail.to",
                 "created_at": "x", "updated_at": "x"})
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json={"message_id": "m", "thread_id": "t"})
 
     c = _client(tmp_path, handler)
-    await c.provision("rob")
+    await c.provision("alice")
     await c.send("to@example.com", "Re: Hi", "Body",
                  in_reply_to="<abc@example.com>")
     headers = seen["body"]["headers"]
@@ -98,7 +98,7 @@ async def test_list_and_get(tmp_path):
     def handler(request):
         if request.url.path == "/v0/inboxes":
             return httpx.Response(200, json={
-                "pod_id": "p", "inbox_id": "in_1", "email": "rob@agentmail.to",
+                "pod_id": "p", "inbox_id": "in_1", "email": "alice@agentmail.to",
                 "created_at": "x", "updated_at": "x"})
         if request.url.path == "/v0/inboxes/in_1/messages":
             return httpx.Response(200, json={"messages": [
@@ -112,7 +112,7 @@ async def test_list_and_get(tmp_path):
         raise AssertionError(f"unexpected path {request.url.path}")
 
     c = _client(tmp_path, handler)
-    await c.provision("rob")
+    await c.provision("alice")
     msgs = await c.list_messages(limit=5)
     assert msgs[0]["message_id"] == "m1"
     full = await c.get_message("m1")
@@ -128,7 +128,7 @@ async def test_http_error_raises_apierror(tmp_path):
 
     c = _client(tmp_path, handler)
     with pytest.raises(APIError):
-        await c.provision("rob")
+        await c.provision("alice")
 
 
 def test_repr_hides_api_key(tmp_path):

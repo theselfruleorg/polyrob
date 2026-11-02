@@ -65,9 +65,9 @@ def action_id_gap(tool_id: str, has_action) -> Optional[str]:
     from core.config_policy.members import flag_raw
     set_to = flag_raw(flag)
     state = f"{flag}={set_to!r}" if set_to else f"{flag} is off"
-    return (f"gated:disabled-by-flag — '{tool_id}' is an agent action, not a tool, "
-            f"and it is not registered on this deploy ({state}); the owner enables "
-            f"it, the agent cannot")
+    from core.tool_gates import remedy_text
+    return (f"gated:disabled-by-flag — '{tool_id}' is an agent action, not a tool "
+            f"({state}); " + remedy_text("disabled-by-flag", flag=flag))
 
 
 def _tool_is_registered(tool_id: str) -> bool:
@@ -87,16 +87,17 @@ def describe_missing_tool(tool_id: str, *, container=None,
     Never raises: an unresolvable id degrades to a plain not-registered line.
     """
     tool_id = (tool_id or "").strip()
+    from core.tool_gates import remedy_text
+    # 095 W2: a withheld pack is the resolver's ``pack-not-loaded`` (one probe,
+    # ``tools.tool_disclosure._withheld_pack``); it outranks the flag line.
     try:
-        from core.packs import state as _packs
-        if _packs.tool_withheld(tool_id):
-            pack_id = _packs.pack_of_tool(tool_id)
-            rec = _packs.record(pack_id)
-            why = f"{rec.status}" + (f": {rec.reason}" if rec and rec.reason else "") if rec else "unknown"
-            return (f"gated:pack-not-loaded — provided by pack '{pack_id}', which is {why}; "
-                    "the owner enables it (`polyrob pack enable`), the agent cannot")
+        from tools.tool_disclosure import _withheld_pack
+        pack = _withheld_pack(tool_id)
     except Exception:
-        logger.debug("pack probe failed for %r", tool_id, exc_info=True)
+        pack = None
+    if pack is not None:
+        return "gated:pack-not-loaded — " + remedy_text("pack-not-loaded", pack=pack[0],
+                                                        state=pack[1])
     flag = TOOL_GATE_FLAGS.get(tool_id)
     if flag and not _tool_is_registered(tool_id):
         # The tool exists in the codebase but its registration was skipped, so the
@@ -106,8 +107,7 @@ def describe_missing_tool(tool_id: str, *, container=None,
         from core.config_policy.members import flag_raw
         set_to = flag_raw(flag)
         state = f"{flag}={set_to!r}" if set_to else f"{flag} is off"
-        return (f"gated:disabled-by-flag — not registered on this deploy "
-                f"({state}); the owner enables it, the agent cannot")
+        return f"gated:disabled-by-flag — ({state}) " + remedy_text("disabled-by-flag", flag=flag)
     try:
         from tools.tool_disclosure import resolve_tool_status
         st = resolve_tool_status(tool_id, container=container,
@@ -116,7 +116,7 @@ def describe_missing_tool(tool_id: str, *, container=None,
             return f"gated:{st.reason} — {st.remedy}"
         # loadable/loaded here means the probe disagrees with the load attempt
         # (a construction error, not a policy gate) — say exactly that.
-        return f"gated:load-failed — the container has '{tool_id}' but it did not initialize"
+        return "gated:load-failed — " + remedy_text("load-failed")
     except Exception:
         logger.debug("tool-status probe failed for %r", tool_id, exc_info=True)
         return "gated:unavailable-on-this-deploy — not registered in this container"
@@ -163,6 +163,5 @@ def shared_identity_refusal(tool_id: str, user_id: Optional[str]) -> Optional[st
             return None
     except Exception:
         pass
-    return ("gated:owner_only — this tool acts as the instance's own identity "
-            "(account, mailbox, credentials or public URL); only the owner tenant "
-            "may load it")
+    from core.tool_gates import remedy_text
+    return "gated:owner_only — " + remedy_text("owner_only")

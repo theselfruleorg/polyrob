@@ -97,7 +97,6 @@ async def test_flag_off_is_byte_identical_legacy(monkeypatch):
     the single gate, so off must not change behavior at all."""
     monkeypatch.delenv("VERIFY_BEFORE_DONE", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     monkeypatch.setattr(
         "agents.task.runtime.edit_verify.edited_since_last_test",
         MagicMock(return_value=True),
@@ -192,4 +191,30 @@ async def test_flag_on_unverified_edit_bounded_by_max_steps(monkeypatch):
     await agent.run(max_steps=max_steps, _continue_session=True)
 
     assert agent.step.await_count == 1
+    # Review 2026-10-29 M2: a done() on the LAST step gets no nudge (no step is
+    # left to answer it); a `continue` there fell into the step-limit branch.
+    assert agent._verify_nudge_count == 0
+    agent.message_manager.inject_runtime_guidance.assert_not_called()
+    assert agent.state.stop_reason == "done"
+
+
+@pytest.mark.asyncio
+async def test_flag_on_nudge_on_the_last_step_keeps_the_done_stop(monkeypatch):
+    """Two steps: the first done() is nudged, the second (the last step) is final."""
+    monkeypatch.setenv("VERIFY_BEFORE_DONE", "true")
+    monkeypatch.setattr(
+        "agents.task.runtime.edit_verify.edited_since_last_test",
+        MagicMock(return_value=True),
+    )
+    summary = AsyncMock()
+    monkeypatch.setattr(
+        "agents.task.agent.core.exhaustion_summary.run_exhaustion_summary", summary)
+
+    agent, max_steps = _build_run_loop_agent(max_steps=2)
+
+    await agent.run(max_steps=max_steps, _continue_session=True)
+
+    assert agent.step.await_count == 2
     assert agent._verify_nudge_count == 1
+    assert agent.state.stop_reason == "done"
+    summary.assert_not_awaited()

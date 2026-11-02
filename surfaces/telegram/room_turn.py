@@ -126,7 +126,27 @@ def room_turn_text(task_agent: Any, result: Any) -> Tuple[Any, str]:
             surface=str(getattr(src, "surface_id", "") or ""),
             chat_id=str(getattr(src, "chat_id", "") or ""),
             shown_message_ids=(), addressed_message_id=None)
+    if role not in ("owner", "admin"):
+        turn = turn.with_attachment(member_media_note(result.inbound))
     return turn, role
+
+
+def member_media_note(inbound: Any) -> str:
+    """Name a room MEMBER's attachments inside ``<addressed>`` (never absorbed).
+
+    A member's bytes never enter the owner tenant's workspace (044 §4.4), but
+    an unnamed file is worse than a refused one: "@bot what is this?" on a
+    photo reached the agent with no hint a photo existed, and a captionless
+    one as an empty line. Same rule as a contact's turn (D53)."""
+    media = list(getattr(inbound, "media", None) or [])
+    if not media:
+        return ""
+    from core.surfaces.group_turn import neutralize_name
+    names = ", ".join(
+        neutralize_name(str(getattr(m, "filename", None) or getattr(m, "kind", None)
+                            or "file")) for m in media)
+    return (f"[They attached {len(media)} file(s): {names}. A room member's files "
+            "are not downloaded, so you cannot see the content.]")
 
 
 def mark_turn_answered(task_agent: Any, turn: Any, session_id: str, *,

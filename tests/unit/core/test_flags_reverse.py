@@ -61,6 +61,8 @@ ALLOWLIST = {
                          # a POLYROB setting.
     "INVOCATION_ID",     # set by systemd for every unit: "a supervisor restarts me" (077)
     "XPC_SERVICE_NAME",  # set by launchd to the job label: the same fact on macOS (077)
+    "TMPDIR",            # the OS temp dir; an operator's value wins over the on-disk
+                         # <data home>/tmp the pip/lock steps pick (core/runtime_paths.py)
 }
 
 

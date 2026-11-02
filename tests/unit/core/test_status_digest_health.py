@@ -22,7 +22,7 @@ def _cron_db(path, jobs):
     for j in jobs:
         conn.execute("INSERT INTO cron_jobs (id, user_id, task, spec, enabled, status,"
                      " next_run_at, last_run_at, payload) VALUES (?,?,?,?,?,?,?,?,?)",
-                     (j["id"], "rob", j.get("task", "t"), "1d", j.get("enabled", 1),
+                     (j["id"], "alice", j.get("task", "t"), "1d", j.get("enabled", 1),
                       j.get("status", "scheduled"), 0, 0, json.dumps(j.get("payload", {}))))
     conn.commit()
     conn.close()
@@ -30,7 +30,7 @@ def _cron_db(path, jobs):
 
 def _health_keys(tmp_path):
     from core.status_snapshot import _digest_health
-    return [h.key for h in _digest_health("rob", str(tmp_path))]
+    return [h.key for h in _digest_health("alice", str(tmp_path))]
 
 
 @pytest.fixture(autouse=True)

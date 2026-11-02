@@ -17,4 +17,4 @@ def test_guard_and_chain_refusals_are_not_infra():
 def test_other_os_shapes_are_infra_only_with_the_broadcast_prefix():
     assert infra("broadcast failed: OSError: [Errno 30] Read-only file system — nothing was sent")
     assert infra("broadcast failed: sqlite3.OperationalError: unable to open database file — nothing was sent")
-    assert not infra("[Errno 30] Read-only file system: 'data/auto/rob/sessions/x'")  # H-MEM save, not a money verb
+    assert not infra("[Errno 30] Read-only file system: 'data/auto/alice/sessions/x'")  # H-MEM save, not a money verb

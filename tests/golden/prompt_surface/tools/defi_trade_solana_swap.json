@@ -23,7 +23,7 @@
               "type": "string"
             },
             "preset": {
-              "description": "The mandate preset this entry follows (memecoin | majors).",
+              "description": "The mandate preset this entry follows (its name).",
               "maxLength": 40,
               "minLength": 2,
               "title": "Preset",

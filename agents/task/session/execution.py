@@ -410,9 +410,12 @@ class SessionExecutionMixin:
                                         self.logger.info(f"🔄 Retrying agent {agent_id} with fallback LLM")
                                         from modules.llm.usage_extract import resolve_serving_provider
                                         fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
+                                        _failed_model = getattr(agent, 'model_name', None)
                                         agent.adopt_active_llm(
                                             fallback_llm, fallback_model,
                                             resolve_serving_provider(fallback_llm, fallback_model))
+                                        agent._refresh_after_model_change(
+                                            "fallback", _failed_model, reason=type(e).__name__)
 
                                         # Retry execution
                                         retry_start = time.time()

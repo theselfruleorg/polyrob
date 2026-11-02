@@ -2,8 +2,8 @@
 
 The owner describes a procedure in prose; the agent distills it into a SKILL.md
 body and lands it in ``.pending/`` via ``SkillManager.create_skill`` (created_by=
-agent), so the existing quarantine + identity-scan + owner-promote flow applies
-unchanged. No new safety machinery — this is a thin front-door onto SkillWriterMixin.
+user: the owner taught it, so the curator never auto-archives it), so the existing
+quarantine + identity-scan + owner-promote flow applies unchanged. No new safety machinery — this is a thin front-door onto SkillWriterMixin.
 
 The distillation is deterministic by default (a structured template wrapping the
 description); a model turn is not required, so /learn never blocks on or costs an
@@ -80,9 +80,11 @@ def h_learn(ctx) -> None:
     try:
         # pending=True FORCES quarantine regardless of SKILLS_WRITABLE_REQUIRE_REVIEW:
         # a described procedure is always owner-reviewed before it can auto-trigger.
+        # The owner taught it: record the owner as the author (promote keeps it).
+        from modules.skills.writer import PROVENANCE_USER
         res = mgr.create_skill(
             skill_id, content, user_id=uid,
-            description=(description[:200]), created_by="agent", pending=True)
+            description=(description[:200]), created_by=PROVENANCE_USER, pending=True)
     except Exception as e:
         ctx.emit(f"(/learn failed to write skill: {e})", title="learn")
         return

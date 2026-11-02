@@ -41,7 +41,7 @@ def test_webview_preferences_payload_covers_every_schema_key(monkeypatch, tmp_pa
 @pytest.mark.asyncio
 async def test_telegram_config_listing_covers_every_schema_key(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "dana")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
 
     from core.surfaces.dispatcher import RouteDecision, RouteKind

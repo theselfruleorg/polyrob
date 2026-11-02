@@ -1,7 +1,7 @@
 """owner_doc_manage action — gating, quarantine, owner-gated promote, forged guard.
 
-A model-written rule is always a draft (``_rules_immediate`` is False): every
-write below lands in the QUARANTINE/PROMOTE lane.
+A model-written rule is always a draft (095 W10 deleted the dead "apply now"
+branch): every write below lands in the QUARANTINE/PROMOTE lane.
 """
 import logging
 import types

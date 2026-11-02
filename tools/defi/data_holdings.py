@@ -475,7 +475,7 @@ class HoldingsReadsMixin:
         if native == 0:
             return [f"  {symbol}: 0 — the gas tank is EMPTY. No transaction can "
                     f"broadcast on {chain}, entries and EXITS alike, until it is funded."]
-        label = f"{symbol} (gas + buying power)" if chain == "robinhood" else symbol
+        label = f"{symbol} (gas + buying power)"
         return [self._native_money_line(chain, symbol, native, ",.6f", out, label=label)]
 
     def _native_price(self, chain: str) -> Optional[float]:

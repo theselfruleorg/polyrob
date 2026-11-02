@@ -76,12 +76,12 @@ def test_evidence_captures_urls_and_paths_from_successful_results_only():
     from agents.task.runtime.evidence import build_evidence
     orch = _orch([
         _Step([_Action("twitter_post")],
-              [ActionResult(extracted_content="posted: https://x.com/rob/status/12345")]),
+              [ActionResult(extracted_content="posted: https://x.com/alice/status/12345")]),
         _Step([_Action("web_fetch")],
               [ActionResult(error="404 on https://example.com/broken")]),
     ])
     pack = build_evidence(orch)
-    assert "https://x.com/rob/status/12345" in pack.captured_refs
+    assert "https://x.com/alice/status/12345" in pack.captured_refs
     assert not any("broken" in r for r in pack.captured_refs), \
         "refs come from SUCCESSFUL results (facts), never from errors/claims"
 
@@ -104,7 +104,7 @@ def test_artifacts_ledger_descriptors_for_real_output_actions():
     from agents.task.runtime.evidence import collect_artifacts
     orch = _orch([
         _Step([_Action("twitter_post", {"text": "hello world"})],
-              [ActionResult(extracted_content="posted: https://x.com/rob/status/999")]),
+              [ActionResult(extracted_content="posted: https://x.com/alice/status/999")]),
         _Step([_Action("browser_navigate")],
               [ActionResult(extracted_content="navigated")]),  # not an output action
     ])

@@ -138,3 +138,30 @@ def test_the_ledger_write_can_never_change_the_guards_refusal(tele_db):
     assert d.allowed is False
     assert "probe failed" not in d.reason
     assert "Nothing was broadcast" in d.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer,detail", [
+    (False, "not_created"),
+    ("tainted", "not_created: tainted"),
+    ("store_down", "not_created: store_down"),
+    ("forged", "not_created: forged"),
+])
+async def test_one_record_per_approval_refusal_with_its_kind(tele_db, answer, detail):
+    """095 W1b: the hook records each refusal ONCE, the outcome kind as detail —
+    tainted and store-down refusals included (they recorded nothing before)."""
+    import types
+
+    from tools.controller.approval import make_approval_hook, not_created
+
+    class _P:
+        async def request(self, *a, **k):
+            return answer if answer is False else not_created(answer)
+
+    hook = make_approval_hook(_P(), {"defi_trade"})
+    ctx = types.SimpleNamespace(user_id="u1", session_id="s9")
+    assert await hook("defi_trade", {}, ctx)
+    rows = _rows(tele_db)
+    assert len(rows) == 1
+    a = json.loads(rows[0]["attrs"])
+    assert a["reason"] == "approval_denied" and a["detail"] == detail

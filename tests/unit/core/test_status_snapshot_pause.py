@@ -13,7 +13,7 @@ def home(tmp_path, monkeypatch):
 
 def _snap(home):
     from core.status_snapshot import build_status_snapshot
-    return build_status_snapshot("rob", data_dir=str(home), include_money=False)
+    return build_status_snapshot("alice", data_dir=str(home), include_money=False)
 
 
 def test_pause_renders_first_and_as_health(home):
@@ -41,9 +41,9 @@ def test_violation_after_pause_is_critical(home):
     from core.event_log import TelemetryEventLog
     ac.pause(str(home), via="test")
     log = TelemetryEventLog(str(home / "telemetry_events.db"))
-    log.record("goal_run", user_id="rob", session_id="s1", source="goal",
+    log.record("goal_run", user_id="alice", session_id="s1", source="goal",
                attrs={"outcome": "started"})
-    log.record("self_wake", user_id="rob", session_id="s1", source="self_wake",
+    log.record("self_wake", user_id="alice", session_id="s1", source="self_wake",
                attrs={"outcome": "paused"})  # honoured the pause: not a violation
     snap = _snap(home)
     v = [h for h in snap.health if h.key == "pause_violation"]

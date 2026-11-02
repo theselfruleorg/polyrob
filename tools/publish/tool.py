@@ -1,6 +1,6 @@
 """``publish`` — give a built page a real, stable URL.
 
-The gap this closes: Rob could BUILD a page or an API and had no verb that put
+The gap this closes: the agent could BUILD a page or an API and had no verb that put
 it at an address. Every "ship" goal therefore terminated in a request to the
 owner. "Ship x402 ecosystem map: static HTML visualization" was recorded done
 with a file nobody could open; "Owner deploy package: mainnet-ready x402
@@ -29,7 +29,7 @@ from agents.task.loop_types.controller_types import ActionResult
 
 class PublishParams(BaseModel):
     slug: str = Field(..., description="Public address segment: lowercase letters, digits "
-                                       "and single hyphens (e.g. 'rob-status'). The page "
+                                       "and single hyphens (e.g. 'demo-status'). The page "
                                        "is served at <base>/<slug>/.")
     files: List[str] = Field(..., description="Workspace-relative (or absolute in-workspace) "
                                               "files or directories to publish. A file lands at "
@@ -112,7 +112,7 @@ class PublishTool(BaseTool):
         if not valid_slug(params.slug):
             return ActionResult(error=(
                 f"invalid slug {params.slug!r}: use lowercase letters, digits and single "
-                f"hyphens (e.g. 'rob-status'), 48 chars max"))
+                f"hyphens (e.g. 'demo-status'), 48 chars max"))
 
         workspace = self._workspace_root(execution_context)
         if not workspace:

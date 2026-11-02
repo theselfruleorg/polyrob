@@ -48,13 +48,13 @@ def test_probe_ok_failed_and_unavailable(env, monkeypatch):
 
     async def _http(method, url, **kw):
         calls.append(url)
-        return 200, {"ok": True, "result": {"username": "rob_bot"}}, ""
+        return 200, {"ok": True, "result": {"username": "demo_bot"}}, ""
 
     monkeypatch.setattr("surfaces._probe.http_json", _http)
     monkeypatch.setattr("surfaces.telegram.probe.http_json", _http)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
     res = _run("probe", "telegram")
-    assert res.exit_code == 0 and "ok — @rob_bot" in res.output
+    assert res.exit_code == 0 and "ok — @demo_bot" in res.output
     assert SECRET not in res.output
 
     async def _refused(method, url, **kw):
@@ -107,7 +107,7 @@ def test_probe_never_sends(env, monkeypatch):
 
 def test_add_writes_through_the_env_writer_and_never_echoes(env, monkeypatch):
     async def _http(method, url, **kw):
-        return 200, {"username": "rob", "flags": 1 << 19}, ""
+        return 200, {"username": "alice", "flags": 1 << 19}, ""
 
     monkeypatch.setattr("surfaces.discord.probe.http_json", _http)
     res = _run("add", "discord", input=f"{SECRET}\n")
@@ -183,7 +183,7 @@ def test_an_unreadable_deployed_env_is_cannot_tell_not_missing(deployed):
 
 def test_add_on_a_deployed_box_writes_the_service_env_file(deployed, monkeypatch):
     async def _http(method, url, **kw):
-        return 200, {"username": "rob"}, ""
+        return 200, {"username": "alice"}, ""
 
     monkeypatch.setattr("surfaces.discord.probe.http_json", _http)
     res = _run("add", "discord", input="new-tok\n")

@@ -72,7 +72,6 @@ modules/
 │   ├── models.py               # Data models and schemas
 │   ├── provider.py             # MemoryProvider ABC + NullMemoryProvider
 │   ├── registry.py             # MemoryProviderRegistry (one-external-provider seam)
-│   ├── recall_consolidation.py # Distils repeated recall into one curated note (MEMORY_CONSOLIDATE)
 │   ├── episodic.py             # Fail-open episode-write facade
 │   ├── sqlite_curated_store.py # Curated-notes mixin
 │   ├── sqlite_kb_store.py      # KB chunks + sources mixin

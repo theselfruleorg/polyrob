@@ -396,7 +396,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     async def _dated_merge(self, kw_list, vec, ts_map, norm, limit, *, kw_rows=None,
                            demote_automation: bool = True, prefer_job_id: str = None,
-                           prefer_goal_id: str = None):
+                           prefer_goal_id: str = None, max_age_days: float = None,
+                           drop_unverified: bool = False):
         """RRF-merge, then (D11) look up the vector-only hits in the keyword
         store: a hit renders with its write date, and a hit whose keyword row
         was pruned or purged (a vector twin left behind) is dropped. Last, the
@@ -415,6 +416,17 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             ts_map = dict(ts_map)
             ts_map.update({c: t for c, t in alive.items() if t})
             merged = [c for c in merged if c in kw_set or c in alive]
+            # F7: a vector-only hit obeys the same owner-reader predicates the
+            # keyword half applied in SQL (age by its stamp; no [unverified] row).
+            if max_age_days is not None and float(max_age_days) > 0:
+                import time as _time
+                cutoff = _time.time() - float(max_age_days) * 86400
+                from modules.memory.recall_rank import is_episodic
+                merged = [c for c in merged if c in kw_set or not is_episodic(c)
+                          or (ts_map.get(c) or 0) >= cutoff]
+            if drop_unverified:
+                from modules.memory.recall_rank import UNVERIFIED_MARK
+                merged = [c for c in merged if not c.startswith(UNVERIFIED_MARK)]
             extra = [c for c in merged if c not in kw_set]
         if not (demote_automation or prefer_job_id or prefer_goal_id):
             return merged, ts_map
@@ -436,7 +448,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None,
                        scope=None, demote_automation: bool = True,
-                       prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
+                       prefer_job_id: str = None, prefer_goal_id: str = None,
+                       max_age_days: float = None, drop_unverified: bool = False) -> str:
         # Keyword half computed DIRECTLY (not via super().prefetch — that calls
         # self.search(), which polymorphically dispatches to THIS class's hybrid
         # override and would run the vector KNN + embed twice per prefetch). Same
@@ -453,7 +466,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                 self._keyword_rows, query, norm_user=norm, limit=self.top_k,
                 allow_browse=False, exclude_session_id=session_id, scope=scope,
                 demote_automation=demote_automation, prefer_job_id=prefer_job_id,
-                prefer_goal_id=prefer_goal_id)
+                prefer_goal_id=prefer_goal_id, max_age_days=max_age_days,
+                drop_unverified=drop_unverified)
             if terms else []
         )
         kw_list = [r["content"] for r in kw_rows]
@@ -474,7 +488,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         merged, ts_map = await self._dated_merge(
             kw_list, vec, ts_map, norm, self.top_k, kw_rows=kw_rows,
             demote_automation=demote_automation, prefer_job_id=prefer_job_id,
-            prefer_goal_id=prefer_goal_id)
+            prefer_goal_id=prefer_goal_id, max_age_days=max_age_days,
+            drop_unverified=drop_unverified)
         return "\n".join(self._recall_line(c, ts_map.get(c)) for c in merged)
 
     # ---- retention (B3) ------------------------------------------------------

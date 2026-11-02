@@ -43,6 +43,10 @@ class CronJob:
     status: str = "scheduled"  # scheduled|running|paused|done|failed|cancelled
     last_run_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    #: NOT stored as a column: how THIS run ended, set by the runner/scheduler
+    #: on the claimed object — ``{"outcome": "failed", "reason": "stopped at the
+    #: step limit (150/150)"}`` — and written to ``payload.last_outcome``.
+    run_note: Optional[Dict[str, str]] = field(default=None, compare=False, repr=False)
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -318,14 +322,20 @@ class CronJobStore:
             params = params + (user_id,)
         return bool(execute_retry(self.db_path, sql, params))
 
-    def record_outcome(self, job_id: str, outcome: str, at: datetime) -> None:
+    def record_outcome(self, job_id: str, outcome: str, at: datetime,
+                       reason: Optional[str] = None) -> None:
         """Store the last run's outcome on the row (``payload.last_outcome``):
         recurring jobs go back to 'scheduled' after every run, so the status
-        alone never says how the last run ended. Merges; never replaces."""
+        alone never says how the last run ended. *reason* (why a run did not
+        finish, e.g. "stopped at the step limit (150/150)") rides with it.
+        Merges; never replaces."""
+        rec = {"outcome": str(outcome), "at": _iso(at)}
+        if reason:
+            rec["reason"] = str(reason)[:200]
         execute_retry(
             self.db_path,
             "UPDATE cron_jobs SET payload=json_set(payload, '$.last_outcome', json(?)) WHERE id=?",
-            (json.dumps({"outcome": str(outcome), "at": _iso(at)}), job_id))
+            (json.dumps(rec), job_id))
 
     def claim_for_run(self, job_id: str, *, now: Optional[datetime] = None,
                       preempting_only: bool = False) -> Optional[CronJob]:

@@ -496,7 +496,7 @@ def test_the_shell_omits_the_pause_button_without_the_owner_console(monkeypatch)
     import webview.pages_new as pn
     template = pn._TEMPLATES.get_template("shell.html")
     base = {"request": None, "nav_items": [], "nav_current": "work",
-            "page_title": "t", "wordmark": "Rob", "pause_headline": "",
+            "page_title": "t", "wordmark": "Nova", "pause_headline": "",
             "waiting_line": "", "inbox_badge": "", "inbox_aria": "",
             "inbox_partial": False, "show_logout": False}
     allowed = template.render(**base, read_only=False, owner_console=True)
@@ -553,7 +553,7 @@ def test_moves_drops_creations_and_keeps_the_explorer_link(monkeypatch, tmp_path
 
 def test_the_proxy_forwards_the_operator_token_under_its_own_header(monkeypatch):
     """⚠️ It sent ``API_AUTH_TOKEN`` as ``X-API-KEY``. The 2026-09-21 API work
-    made that header the per-user ``rob_xxx`` validator's and moved the operator
+    made that header the per-user API-key validator's and moved the operator
     credential to ``X-Service-Token`` (role ``service``); the old spelling is
     accepted for ONE release with a deprecation WARN. The console was therefore
     one release from every proxied chat message 401-ing, with nothing in its own

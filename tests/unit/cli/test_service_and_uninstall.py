@@ -251,3 +251,30 @@ def test_uninstall_never_touches_the_real_home(tmp_path, monkeypatch):
     monkeypatch.setattr("cli.commands.uninstall.find_shim", lambda: None)
     res = CliRunner().invoke(uninstall_cmd, [])
     assert res.exit_code == 0, res.output
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="posix homes")
+def test_systemd_unit_and_plist_pin_the_data_home(tmp_path, monkeypatch):
+    """2026-10-29: a unit without POLYROB_DATA_DIR let the service and the CLI
+    resolve two data homes; the unit pins the one the installing CLI reads."""
+    from cli.commands import service
+    from core.runtime_paths import resolve_data_home
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("POLYROB_PROFILE", raising=False)
+    monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+    want = str(resolve_data_home())
+    assert f'Environment="POLYROB_DATA_DIR={want}"' in service._write_systemd_unit().read_text()
+    assert f"<key>POLYROB_DATA_DIR</key><string>{want}</string>" in service._write_launchd_plist().read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="posix homes")
+def test_profile_unit_leaves_the_data_home_to_the_profile(tmp_path, monkeypatch):
+    from cli.commands import service
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("POLYROB_PROFILE", "scout")
+    assert "POLYROB_DATA_DIR" not in service._write_systemd_unit().read_text()

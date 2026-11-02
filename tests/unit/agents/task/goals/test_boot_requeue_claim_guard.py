@@ -3,7 +3,7 @@
 ``requeue_running_on_boot`` selected EVERY ``status='running'`` row and flipped it
 to ``ready`` with no predicate on the claim at all, while its siblings
 (``reclaim_stale`` / ``hold_running``) both guard. It runs from every
-``start_autonomy()`` — every worker process and every ``rob`` REPL under
+``start_autonomy()`` — every worker process and every ``polyrob`` REPL under
 ``POLYROB_LOCAL`` + ``GOALS_ENABLED`` — so a SECOND process starting against the
 same ``goals.db`` requeued a goal a FIRST, still-running process was executing:
 the goal could be claimed and run a second time concurrently (for a manifest

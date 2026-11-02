@@ -11,9 +11,10 @@ the one cost a long-lived gateway session pays most often.
 
 This module persists the rendered foundation with the history and replays it
 when the three things that MUST invalidate it are unchanged (a reference agent's three
-rebuild triggers): the model, the serving provider and the working directory.
-When any of them differs it logs ONE warning naming the cache cost and keeps the
-fresh render.
+rebuild triggers): the model, the serving provider and the working directory —
+plus the running version (095 W1a: a deploy rebuilds a resumed chat once, so it
+states the version that runs). When any of them differs it logs ONE warning
+naming the cache cost and keeps the fresh render.
 
 Fail direction: a missing, partial or unreadable ``foundation`` object ALWAYS
 falls back to the freshly built foundation. It never yields an empty prompt —
@@ -42,8 +43,18 @@ FOUNDATION_SLOTS = tuple(
 #: slots a pre-060 blob may lack and still be whole.
 _OPTIONAL_KEYS = frozenset(layer.key for layer in FOUNDATION_LAYERS if layer.optional)
 
-#: the identity triple that decides replay vs rebuild.
-IDENTITY_KEYS = ("model", "provider", "cwd")
+#: the identity keys that decide replay vs rebuild. ``version`` (095 W1a) is
+#: absent from an older blob: that reads as "changed" (one rebuild), never as torn.
+IDENTITY_KEYS = ("model", "provider", "cwd", "version")
+_REQUIRED_IDENTITY_KEYS = ("model", "provider", "cwd")
+
+
+def _running_version() -> str:
+	try:
+		from core.version import running_version_line
+		return running_version_line()
+	except Exception:  # pragma: no cover - defensive
+		return ""
 
 
 def emitted_tool_names(tools: Optional[Sequence[Any]]) -> List[str]:
@@ -81,11 +92,7 @@ def capture_foundation(manager: Any, tool_names: Optional[Sequence[str]] = None)
 	envelope) plus the identity triple and the emitted tool order, so a reload
 	can re-issue byte-identical request bytes.
 	"""
-	blob: Dict[str, Any] = {
-		"model": str(getattr(manager, "model_name", "") or ""),
-		"provider": str(getattr(manager, "provider_name", "") or ""),
-		"cwd": os.getcwd(),
-	}
+	blob: Dict[str, Any] = live_identity(manager)
 	for layer in FOUNDATION_LAYERS:
 		key = layer.key
 		value = getattr(manager, layer.attr, None) if layer_visible(manager, layer) else None
@@ -100,11 +107,12 @@ def capture_foundation(manager: Any, tool_names: Optional[Sequence[str]] = None)
 
 
 def live_identity(manager: Any) -> Dict[str, str]:
-	"""The identity triple as it stands right now."""
+	"""The identity keys as they stand right now."""
 	return {
 		"model": str(getattr(manager, "model_name", "") or ""),
 		"provider": str(getattr(manager, "provider_name", "") or ""),
 		"cwd": os.getcwd(),
+		"version": _running_version(),
 	}
 
 
@@ -117,7 +125,7 @@ def _validated(blob: Any) -> Optional[Dict[str, Any]]:
 	"""
 	if not isinstance(blob, dict):
 		return None
-	for key in IDENTITY_KEYS:
+	for key in _REQUIRED_IDENTITY_KEYS:
 		if not isinstance(blob.get(key), str):
 			return None
 	for key, _attr, _tokens_attr, _origin in FOUNDATION_SLOTS:
@@ -216,7 +224,7 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 	live = live_identity(manager)
 	if any(valid.get(key) != live.get(key) for key in IDENTITY_KEYS):
 		log.warning(
-			"foundation rebuilt (model/provider/cwd changed): prefix cache will miss once")
+			"foundation rebuilt (model/provider/cwd/version changed): prefix cache will miss once")
 		return False
 
 	# Build EVERY replacement before touching the manager, so a failure halfway

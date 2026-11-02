@@ -1,10 +1,10 @@
 """MCP-server JSON-RPC method ladder — the inbound read-only Model Context
 Protocol surface behind ``MCP_SERVE_ENABLED`` (T2.3).
 
-This is the OPPOSITE direction from ``tools/mcp/`` (which makes Rob an MCP
-*client* of external servers): here Rob itself is the MCP *server*, so an
+This is the OPPOSITE direction from ``tools/mcp/`` (which makes the agent an MCP
+*client* of external servers): here the agent itself is the MCP *server*, so an
 external client (Claude Desktop, Cursor) can point at ``POST /mcp`` with a
-Rob API key and call ``initialize`` / ``tools/list`` / ``tools/call``.
+POLYROB API key and call ``initialize`` / ``tools/list`` / ``tools/call``.
 
 Router/handler split mirrors ``api/a2a/endpoints.py``'s ``_handle_rpc_method``:
 auth + JSON-RPC framing stay in ``router.py``; this module is pure method
@@ -33,9 +33,9 @@ Method ladder:
 
 Tenancy (see the T2.3 plan's backing-call table): every store call is scoped
 to the authenticated ``user_id`` the router resolved via
-``get_user_permissive`` — never a caller-supplied id. ``rob_goals_list``
+``get_user_permissive`` — never a caller-supplied id. ``polyrob_goals_list``
 ALWAYS passes ``user_id`` to ``GoalBoard.list`` (``user_id=None`` there would
-be a cross-tenant read). ``rob_goal_show`` fetches by id (which IS
+be a cross-tenant read). ``polyrob_goal_show`` fetches by id (which IS
 cross-tenant-readable at the storage layer) and then post-filters
 ``goal.user_id == user_id``; a mismatch and a genuinely-missing id produce
 the EXACT SAME "not found" message — there is no "forbidden" outcome, so a
@@ -53,7 +53,7 @@ from core.version import get_version
 
 logger = logging.getLogger(__name__)
 
-#: Echoed verbatim in `initialize` — Rob's own protocol version, never the
+#: Echoed verbatim in `initialize` — the agent's own protocol version, never the
 #: client's requested one (honest, even if the client asks for something
 #: newer/unknown).
 PROTOCOL_VERSION = "2025-06-18"
@@ -98,7 +98,7 @@ class _ToolUnavailable(Exception):
 # ---------------------------------------------------------------------------
 TOOL_DESCRIPTORS: List[Dict[str, Any]] = [
     {
-        "name": "rob_usage_summary",
+        "name": "polyrob_usage_summary",
         "description": (
             "Summarize the caller's LLM usage (API cost, credits, call count), "
             "optionally narrowed to one session."
@@ -115,7 +115,7 @@ TOOL_DESCRIPTORS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "rob_goals_list",
+        "name": "polyrob_goals_list",
         "description": "List the caller's autonomy goals, optionally filtered by status.",
         "inputSchema": {
             "type": "object",
@@ -135,7 +135,7 @@ TOOL_DESCRIPTORS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "rob_goal_show",
+        "name": "polyrob_goal_show",
         "description": "Show one of the caller's goals by id.",
         "inputSchema": {
             "type": "object",
@@ -147,7 +147,7 @@ TOOL_DESCRIPTORS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "rob_conversations",
+        "name": "polyrob_conversations",
         "description": "List the caller's recent correspondent conversations.",
         "inputSchema": {
             "type": "object",
@@ -163,7 +163,7 @@ TOOL_DESCRIPTORS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "rob_pending_approvals",
+        "name": "polyrob_pending_approvals",
         "description": "List the caller's pending tool-approval requests.",
         "inputSchema": {
             "type": "object",
@@ -338,17 +338,17 @@ async def _call_pending_approvals(
     board = _goal_board(container)
     # `board.asks(user_id=...)` (called inside list_pending_tool_approvals)
     # is tenant-scoped by construction — same board, same tenancy contract
-    # as rob_goals_list.
+    # as polyrob_goals_list.
     pending = list_pending_tool_approvals(board, user_id)
     return _text_result({"pending_approvals": pending})
 
 
 _TOOL_DISPATCH = {
-    "rob_usage_summary": _call_usage_summary,
-    "rob_goals_list": _call_goals_list,
-    "rob_goal_show": _call_goal_show,
-    "rob_conversations": _call_conversations,
-    "rob_pending_approvals": _call_pending_approvals,
+    "polyrob_usage_summary": _call_usage_summary,
+    "polyrob_goals_list": _call_goals_list,
+    "polyrob_goal_show": _call_goal_show,
+    "polyrob_conversations": _call_conversations,
+    "polyrob_pending_approvals": _call_pending_approvals,
 }
 
 

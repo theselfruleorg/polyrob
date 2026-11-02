@@ -30,6 +30,7 @@ Env wiring (in ``Controller.__init__``):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -257,8 +258,53 @@ def default_approval_required_tools() -> tuple:
     return view(__name__, "DEFAULT_APPROVAL_REQUIRED_TOOLS")
 
 
+class ApprovalOutcome:
+    """What a provider's answer MEANS (095 W1b): falsy unless approved, so every
+    caller that tests the answer as a bool keeps working.
+
+    ``kind``: approved | pending | denied_by_owner | timeout | not_created | crashed.
+    ``reason`` (not_created): forged | leaf | autonomous | tainted | store_down |
+    no_provider | money_owner | busy | duplicate | closed. ``pending_id`` is set only when an
+    owner ask really exists — the one fact that may send the owner to /pending.
+    """
+
+    __slots__ = ("kind", "reason", "pending_id")
+
+    def __init__(self, kind: str, reason: str = "", pending_id: Optional[str] = None):
+        self.kind, self.reason, self.pending_id = kind, reason, pending_id
+
+    def __bool__(self) -> bool:
+        return self.kind == "approved"
+
+    def __repr__(self) -> str:
+        return f"ApprovalOutcome({self.kind!r}, {self.reason!r}, {self.pending_id!r})"
+
+
+def not_created(reason: str) -> ApprovalOutcome:
+    """A refusal with no owner ask behind it."""
+    return ApprovalOutcome("not_created", reason)
+
+
+#: The hook's slot for the ask a provider filed. A provider cancelled by the
+#: timeout cannot return the id, so it notes it here first (a dict shared by
+#: reference survives the task copy ``wait_for`` makes of the context).
+_PENDING_SLOT: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "approval_pending_slot", default=None)
+
+
+def note_pending_ask(pending_id: str) -> None:
+    """Record that an owner ask exists for the call being decided."""
+    slot = _PENDING_SLOT.get()
+    if slot is not None and pending_id:
+        slot["pending_id"] = pending_id
+
+
 class ApprovalProvider(ABC):
     """Decides whether a gated action may execute."""
+
+    #: What a bare ``False`` from this provider means. Only a provider whose
+    #: ``False`` IS the owner's answer (the REPL prompt) says ``denied_by_owner``.
+    false_outcome: str = "not_created"
 
     #: True only when this provider's ``True`` IS the owner's decision for THIS
     #: call (the durable owner queue). Only such a provider mints the owner grant
@@ -267,8 +313,9 @@ class ApprovalProvider(ABC):
     decides_as_owner: bool = False
 
     @abstractmethod
-    async def request(self, action_name: str, params: Dict[str, Any], context: Any) -> bool:
-        """Return True to allow the action, False to deny it.
+    async def request(self, action_name: str, params: Dict[str, Any], context: Any) -> Any:
+        """Return True to allow the action; False or a falsy :class:`ApprovalOutcome`
+        to deny it (the outcome says why, and whether an owner ask exists).
 
         MUST be cancellation-safe: the caller bounds this with
         ``asyncio.wait_for(..., APPROVAL_TIMEOUT_SEC)``, which cancels this
@@ -288,8 +335,8 @@ class AutoApprover(ApprovalProvider):
 class DenyByDefaultApprover(ApprovalProvider):
     """Always deny (safe default for an un-wired interactive provider)."""
 
-    async def request(self, action_name, params, context) -> bool:
-        return False
+    async def request(self, action_name, params, context) -> Any:
+        return not_created("no_provider")
 
 
 class AutoNotifyApprover(ApprovalProvider):
@@ -502,51 +549,44 @@ def make_approval_hook(
         decision = "error"  # overwritten on every exit path; CancelledError keeps it
         _emit_approval_event("awaiting", action_name, context, timeout_sec=timeout,
                              provider=type(provider).__name__)
+        slot: dict = {}
+        slot_token = _PENDING_SLOT.set(slot)
         try:
             try:
-                approved = await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     provider.request(action_name, params or {}, context),
                     timeout=timeout,
                 )
+                outcome = _as_outcome(result, provider)
             except asyncio.TimeoutError:
-                decision = "timeout"
                 logger.error(f"approval.timeout action={action_name} after {timeout}s")
-                from core.security.refusals import record_refusal
-                record_refusal("approval_timeout", tool=action_name,
-                               user_id=getattr(context, "user_id", None) or "",
-                               session_id=getattr(context, "session_id", None) or "")
-                return (f"approval denied (timeout) for '{action_name}'; owner can approve "
-                        "via /pending — a decision recorded after this timeout still "
-                        "applies to the next identical attempt (one-shot grant)"
-                        + _denial_remedy(action_name))
+                outcome = ApprovalOutcome("timeout", pending_id=slot.get("pending_id"))
             except Exception as e:
+                # 045: a crashing approval provider DENIES — recorded, never silent.
                 logger.error(
                     f"approval.error action={action_name} exc={type(e).__name__}: {e}"
                 )
-                # 045: a crashing approval provider DENIES — and denied silently
-                # until now, which is the exact class lane 2 exists to close.
-                # Same `approval_denied` slug (the outcome IS a denial); the
-                # detail names the crash so the reason is not lost in the count.
-                from core.security.refusals import record_refusal
-                record_refusal("approval_denied", tool=action_name,
-                               user_id=getattr(context, "user_id", None) or "",
-                               session_id=getattr(context, "session_id", None) or "",
-                               detail=f"provider crashed: {type(e).__name__}: {e}")
-                return (f"approval denied (error: approval provider crashed) for "
-                        f"'{action_name}'; owner can approve via /pending"
-                        + _denial_remedy(action_name))
-            decision = "approved" if approved else "denied"
-            if approved and getattr(provider, "decides_as_owner", False) is True:
-                _stamp_owner_grant(context, params or {})
-            if not approved:
-                from core.security.refusals import record_refusal
-                record_refusal("approval_denied", tool=action_name,
-                               user_id=getattr(context, "user_id", None) or "",
-                               session_id=getattr(context, "session_id", None) or "")
-                return (f"approval denied for '{action_name}'; owner can approve via /pending"
-                        + _denial_remedy(action_name))
-            return None
+                outcome = ApprovalOutcome(
+                    "crashed", reason=f"provider crashed: {type(e).__name__}: {e}")
+            decision = {"approved": "approved", "timeout": "timeout",
+                        "crashed": "error"}.get(outcome.kind, "denied")
+            if outcome:
+                if getattr(provider, "decides_as_owner", False) is True:
+                    _stamp_owner_grant(context, params or {})
+                return None
+            # The ONE record of this refusal; the kind names the cause.
+            from core.security.refusals import record_refusal
+            from core.tool_gates import REFUSAL_KINDS
+            detail = outcome.kind + (f": {outcome.reason}" if outcome.reason else "")
+            kind = outcome_kind(outcome, action_name)
+            record_refusal(
+                REFUSAL_KINDS[kind].slug,
+                tool=action_name, user_id=getattr(context, "user_id", None) or "",
+                session_id=getattr(context, "session_id", None) or "", detail=detail,
+                kind=kind)
+            return outcome_text(outcome, action_name)
         finally:
+            _PENDING_SLOT.reset(slot_token)
             _emit_approval_event(
                 "resolved", action_name, context,
                 decision=decision, waited_sec=_time.monotonic() - waited_from,
@@ -555,26 +595,64 @@ def make_approval_hook(
     return _hook
 
 
-def _denial_remedy(action_name: str) -> str:
-    """The tail of an approval denial: what the owner can change (2026-10-13 R4).
+def _as_outcome(result: Any, provider: Any) -> ApprovalOutcome:
+    """Normalise a provider answer: a bare bool still works (the test fakes)."""
+    if isinstance(result, ApprovalOutcome):
+        return result
+    if result:
+        return ApprovalOutcome("approved")
+    return ApprovalOutcome(getattr(provider, "false_outcome", "not_created"))
+
+
+#: not_created reasons that share one refusal kind (095 W2: the rows live in
+#: ``core.tool_gates.REFUSAL_KINDS``).
+_REASON_KIND = {"leaf": "forged", "autonomous": "forged"}
+
+
+def outcome_kind(outcome: ApprovalOutcome, action_name: str) -> str:
+    """The ``core.tool_gates.REFUSAL_KINDS`` key of a refused approval."""
+    from core.tool_gates import REFUSAL_KINDS
+    kind, pid = outcome.kind, outcome.pending_id
+    if kind == "denied_by_owner":
+        return "approval:denied_by_owner"
+    if kind in ("pending", "timeout") and pid:
+        return f"approval:{kind}"
+    if kind == "timeout":
+        return "approval:timeout_no_ask"
+    if kind == "crashed":
+        return "approval:crashed"
+    reason = _REASON_KIND.get(outcome.reason, outcome.reason)
+    key = f"approval_not_created:{reason}"
+    return key if key in REFUSAL_KINDS else "approval:refused"
+
+
+def outcome_text(outcome: ApprovalOutcome, action_name: str) -> str:
+    """The ONE text of a refused approval. Only an outcome with a real owner ask
+    (``pending_id``) sends anyone to /pending (the row needs the id)."""
+    from core.tool_gates import REMEDY_ACTORS, refusal_text, remedy_text
+    key = _denial_remedy_key(action_name)
+    return refusal_text(outcome_kind(outcome, action_name), action=action_name,
+                        pending_id=outcome.pending_id or "", remedy=remedy_text(key),
+                        lever=REMEDY_ACTORS[key].verb)
+
+
+def _denial_remedy_key(action_name: str) -> str:
+    """The lever the owner has after a denial with no ask (2026-10-13 R4).
 
     A money verb must NOT be told "loosen via the approvals.require pref" — that
     pref only ADDS gates, the money lane is decided by the spend caps, and the
-    advice sent the agent to explain a wrong fix to the owner. Name the real
-    levers instead: the owner's one-shot approval, and the live caps in the
-    Spend limits block of ``<live-health>``.
-    """
+    advice sent the agent to explain a wrong fix to the owner."""
     try:
         from core.money.classify import money_action
-        money = money_action(action_name)
+        return "approval_money" if money_action(action_name) else "approval_pref"
     except Exception:  # pragma: no cover - defensive
-        money = False
-    if money:
-        return ("; this is a money verb: the owner decides it — the live caps, and "
-                "whether any spend may skip the owner at all, are in the Spend limits "
-                "block of <live-health> — do not tell the owner a preference will "
-                "unblock it")
-    return " or loosen via the approvals.require pref"
+        return "approval_pref"
+
+
+def _denial_remedy(action_name: str) -> str:
+    """The tail of an approval denial (the ``core.tool_gates.REMEDIES`` text)."""
+    from core.tool_gates import remedy_text
+    return "; " + remedy_text(_denial_remedy_key(action_name))
 
 
 # 067 P4 prerequisite: the three approval lanes, built on first read.

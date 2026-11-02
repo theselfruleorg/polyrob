@@ -9,13 +9,13 @@ from core.config_policy import invoice_card_enabled
 
 
 def test_off_by_default(monkeypatch):
-    for k in ("INVOICE_CARD_ENABLED", "POLYROB_LOCAL", "ROB_LOCAL"):
+    for k in ("INVOICE_CARD_ENABLED", "POLYROB_LOCAL"):
         monkeypatch.delenv(k, raising=False)
     assert invoice_card_enabled() is False
 
 
 def test_explicit_on(monkeypatch):
-    for k in ("POLYROB_LOCAL", "ROB_LOCAL"):
+    for k in ("POLYROB_LOCAL",):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("INVOICE_CARD_ENABLED", "true")
     assert invoice_card_enabled() is True

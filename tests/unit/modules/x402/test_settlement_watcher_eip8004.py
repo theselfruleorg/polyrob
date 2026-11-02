@@ -95,7 +95,7 @@ class _SpyReputationManager:
 
 async def _settled_correspondent_invoice(db, *, tx_hash="0xfeed"):
     inv = await invoicing.create_payment_request(
-        user_id="rob", session_id="sess_c", amount_usd=5.0, purpose="svc", db=db,
+        user_id="alice", session_id="sess_c", amount_usd=5.0, purpose="svc", db=db,
         correspondent_ref={"surface": "email", "address": "x@y.z", "thread_id": ""})
     await invoicing.settle_payment_request(inv["request_id"], transaction_hash=tx_hash, db=db)
     return inv
@@ -179,7 +179,7 @@ async def test_no_correspondent_ref_no_identifiable_payer_skips_hook(tmp_path, m
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_w", amount_usd=2.0, purpose="p", db=db)
+            user_id="alice", session_id="sess_w", amount_usd=2.0, purpose="p", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xabc", db=db)
         spy = _SpyReputationManager()
@@ -202,7 +202,7 @@ async def test_settled_no_tx_skips_hook_no_verifiable_proof(tmp_path, monkeypatc
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_c2", amount_usd=2.0, purpose="p", db=db,
+            user_id="alice", session_id="sess_c2", amount_usd=2.0, purpose="p", db=db,
             correspondent_ref={"surface": "email", "address": "x@y.z"})
         await invoicing.settle_payment_request(inv["request_id"], db=db)  # no tx hash
         spy = _SpyReputationManager()

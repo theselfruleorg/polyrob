@@ -31,7 +31,7 @@ def virgin(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("args", [[], ["list"], ["revoke", "sess-1"]])
 def test_no_verb_creates_the_store_on_a_virgin_data_dir(virgin, args):
-    out = dapp_reply("rob", args)
+    out = dapp_reply("alice", args)
     assert not os.path.exists(virgin), (
         f"a READ created {virgin} — 'nothing is connected' must not cost a "
         f"database")
@@ -46,7 +46,7 @@ def test_an_existing_store_is_still_read(virgin):
 
     DappSessionStore(virgin)          # the ONE place the file is created
     assert os.path.exists(virgin)
-    out = dapp_reply("rob", ["list"])
+    out = dapp_reply("alice", ["list"])
     assert "no dapp-session record here at all" not in out
     assert "No web page has been armed with my wallet on this box." in out
 

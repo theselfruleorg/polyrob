@@ -14,11 +14,13 @@ tenant, bounded). A session **reads** that thread; it never owns it.
 
 - A fresh session sees the **tail** of the conversation on its first turn (the
   last `OWNER_THREAD_TAIL_HOURS` hours or `OWNER_THREAD_TAIL_ROWS` lines,
-  whichever is smaller, at most 2000 characters).
+  whichever is smaller, at most 6000 characters). Your messages and the
+  agent's replies come first; a command result, a transaction notice, a decision or
+  a background report is one short line.
 - A warm session sees the **delta** on every later turn: what other sessions
   and background runs exchanged with you since its own last turn. A long
   delta keeps the newest lines and gives a count of the rest. Your own
-  commands, button taps and their results show as yours, never as Rob's or
+  commands, button taps and their results show as yours, never as the agent's or
   a background run's. An empty delta is no message.
 - A Telegram **quote-reply** names the exact line you answered, even when that
   line came from a run this session never saw.
@@ -60,7 +62,7 @@ from a background run is refused with this remedy.
 | Flag | Default | Meaning |
 |---|---|---|
 | `OWNER_THREAD_INJECT` | ON | read it into sessions (tail, delta, referent, slice) |
-| `OWNER_THREAD_TAIL_HOURS` / `OWNER_THREAD_TAIL_ROWS` | 24 / 12 | the tail window |
+| `OWNER_THREAD_TAIL_HOURS` / `OWNER_THREAD_TAIL_ROWS` | 24 / 40 | the tail window |
 
 The thread is not the memory provider: `MEMORY_BACKEND` does not affect it.
 A missing or unreadable store costs the context block, never a turn or a send.

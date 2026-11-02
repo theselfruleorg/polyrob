@@ -29,7 +29,7 @@ def log(tmp_path, monkeypatch):
 
 
 def _job(**kw):
-    base = dict(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *", user_id="rob",
+    base = dict(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *", user_id="alice",
                 next_run_at=datetime(2026, 9, 19, 4, 0, 0), max_duration_seconds=0)
     base.update(kw)
     return CronJob(**base)
@@ -87,7 +87,7 @@ def test_loops_section_renders_last_outcome_per_job(tmp_path, log, monkeypatch):
     from types import SimpleNamespace
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(_job(max_duration_seconds=1200))
-    job = SimpleNamespace(id="exit0001", user_id="rob", task="EXIT RAIL")
+    job = SimpleNamespace(id="exit0001", user_id="alice", task="EXIT RAIL")
     cron_runner._cron_ev(job, "started")
     cron_runner._cron_ev(job, "cut_by_cap", cap_s=1200, duration_s=1200.0)
     # Drive the section builder directly with the telemetry rows this log holds
@@ -95,7 +95,7 @@ def test_loops_section_renders_last_outcome_per_job(tmp_path, log, monkeypatch):
     rows = log.query(kind="cron_run")
     tele = ss.Section(name="telemetry")
     tele.data["rows"] = rows
-    sec = ss._loops_section("rob", str(tmp_path / "cron.db"), tele, NOW.timestamp(),
+    sec = ss._loops_section("alice", str(tmp_path / "cron.db"), tele, NOW.timestamp(),
                             goals_db=str(tmp_path / "goals.db"), data_dir=str(tmp_path))
     joined = "\n".join(sec.lines)
     assert "EXIT RAIL" in joined and "cut_by_cap" in joined, joined

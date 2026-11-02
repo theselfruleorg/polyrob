@@ -240,11 +240,13 @@ def _delivery_agent(status, seen):
 def test_a_finished_chat_woken_for_cards_continues_without_rerunning(st):
     seen = []
     a, info = _delivery_agent("completed", seen)
-    a._narrow_finished_session_task(S, info, "cards_settled")
-    task = info["request"]["task"]
+    recreate_from = a._narrow_finished_session_task(S, info, "cards_settled")
+    task = recreate_from["request"]["task"]
     assert task.startswith("[cards-reply]") and "Do not repeat a step whose card is DONE" in task
     assert "pay the raffle winners" in task          # context, after the guard
-    assert info["request"]["original_task"] == "pay the raffle winners"
+    assert recreate_from["request"]["original_task"] == "pay the raffle winners"
+    # a turn scope, never the stored request (prod 82b74d81: every later owner turn ran 8 steps)
+    assert info["request"] == {"task": "pay the raffle winners", "max_steps": 99}
 
 
 def test_run_woken_closes_the_groups_by_run_status(st):

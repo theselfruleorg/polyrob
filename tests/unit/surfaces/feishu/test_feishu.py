@@ -68,7 +68,7 @@ def test_group_message_without_the_bot_mention_is_dropped():
 
 def test_group_message_that_mentions_the_bot_routes_with_the_key_stripped():
     ev = _event(chat_type="group", chat_id="oc_grp", text="@_user_1 status @_user_2",
-                mentions=[_mention("@_user_1", BOT, "Rob"),
+                mentions=[_mention("@_user_1", BOT, "Nova"),
                           _mention("@_user_2", "ou_ann", "Ann")])
     inbound = parse_event(ev, BOT)
     assert inbound is not None
@@ -80,7 +80,7 @@ def test_group_message_that_mentions_the_bot_routes_with_the_key_stripped():
 def test_a_group_mention_is_refused_when_the_bot_id_is_unknown():
     """Fail closed: with no bot open_id there is no proof the bot was addressed."""
     ev = _event(chat_type="group", text="@_user_1 hi",
-                mentions=[_mention("@_user_1", BOT, "Rob")])
+                mentions=[_mention("@_user_1", BOT, "Nova")])
     assert parse_event(ev, "") is None
 
 
@@ -151,7 +151,7 @@ def test_feishu_is_never_an_owner_alias_surface():
     from core.instance import owner_surface_alias
     assert owner_surface_alias(OWNER, "feishu",
                                env={"OWNER_FEISHU_ID": OWNER,
-                                    "POLYROB_OWNER_USER_ID": "rob"}) is None
+                                    "POLYROB_OWNER_USER_ID": "alice"}) is None
 
 
 # --- the REST client: chunking, receive_id_type, token refresh -----------------
@@ -353,9 +353,9 @@ def _probe_with(monkeypatch, answers):
 def test_probe_proves_the_app_with_the_tenant_token_read(monkeypatch):
     mod, calls = _probe_with(monkeypatch, [
         (200, {"code": 0, "tenant_access_token": "t-abc", "expire": 7200}, ""),
-        (200, {"code": 0, "bot": {"app_name": "Rob", "open_id": BOT}}, "")])
+        (200, {"code": 0, "bot": {"app_name": "Nova", "open_id": BOT}}, "")])
     res = asyncio.run(mod.probe({"FEISHU_APP_ID": "cli_test", "FEISHU_APP_SECRET": "s3cr3t"}))
-    assert res.state == "ok" and "Rob" in res.detail
+    assert res.state == "ok" and "Nova" in res.detail
     # Lark (international) is the default host; feishu.cn is config.
     assert calls[0][1] == "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal"
     assert calls[1][2]["Authorization"] == "Bearer t-abc"

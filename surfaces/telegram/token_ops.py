@@ -90,8 +90,8 @@ async def launch_reply(user_id: Optional[str], args: List[str]) -> str:
     if not args:
         return ("Usage: /launch <SYMBOL> <name…> [logo <url>] [desc <text>] "
                 "[x <url>] [site <url>] [buy <amount>] [go]\n"
-                "e.g. /launch ROB Rob Coin                 — quote only\n"
-                "     /launch ROB Rob Coin logo https://i/r.png buy 0.05 go\n\n"
+                "e.g. /launch DEMO Demo Coin               — quote only\n"
+                "     /launch DEMO Demo Coin logo https://i/r.png buy 0.05 go\n\n"
                 "⚠️ A launch with no logo and no description looks abandoned on "
                 "the launchpad. Set them.\n\n"
                 "Launches on Pons V2 (Robinhood Chain). Fixed 1B supply into a "
@@ -184,8 +184,8 @@ async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
     if len(args) < 2:
         return ("Usage: /deploy <SYMBOL> <supply> <name…> on <chain> "
                 "[decimals <n>] [uri <url>] [go]\n"
-                "e.g. /deploy ROB 1000000000 Rob Coin on base      — quote only\n"
-                "     /deploy ROB 1e9 Rob Coin on solana uri https://x/y.json\n"
+                "e.g. /deploy DEMO 1000000000 Demo Coin on base    — quote only\n"
+                "     /deploy DEMO 1e9 Demo Coin on solana uri https://x/y.json\n"
                 "\n"
                 "`decimals` defaults to 18 on an EVM chain and 9 on Solana — "
                 "it is baked into the token FOREVER, so set it deliberately.\n"

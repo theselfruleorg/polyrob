@@ -54,7 +54,7 @@ def test_grantable_matches_mode(monkeypatch):
     assert "twitter" in supervised  # _SELF_GOAL_ALLOWED_TOOLS already allows requesting it
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     constants.reset_autonomy_mode_warnings()
     assert set(constants.AUTONOMOUS_MODE_TOOLS) <= set(ta.grantable_autonomous_tools())
 
@@ -85,7 +85,7 @@ def test_prompt_omits_availability_note_when_tool_ids_unknown(monkeypatch):
     assert "<tool-availability>" not in content
 
 
-# --- compute gates name the limb that is ACTUALLY unmet (Rob's self-review 2026-09-19 #2:
+# --- compute gates name the limb that is ACTUALLY unmet (the agent's self-review 2026-09-19 #2:
 # prod ran posture 1 with CODE_EXEC_ENABLED=false and the note still told the agent to
 # "raise AGENT_COMPUTE_POSTURE" — a remedy the deploy already satisfied).
 
@@ -120,7 +120,7 @@ def test_code_exec_gate_names_the_flag_when_posture_is_already_met(_compute_env)
     assert "posture 1 already met" in line
     # the stale remedy must not survive: raising the posture changes nothing here
     assert "raises AGENT_COMPUTE_POSTURE" not in line
-    assert "CODE_EXEC_ENABLED=true" in line
+    assert "polyrob config set CODE_EXEC_ENABLED true" in line
 
 
 def test_code_exec_gate_names_posture_when_that_is_the_unmet_limb(_compute_env):

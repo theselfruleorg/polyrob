@@ -23,4 +23,5 @@ async def test_third_party_findings_never_promote_to_owner_memory(monkeypatch, m
     await host._save_step_to_memory(
         step_number=1, brain_state={"memory": "finding", "phase": "discovery"},
         actions=[], results=[])
+    await host._sync_reflection_summaries(1)       # the run-end drain (F7)
     assert sync.await_count == (1 if marker == "owner" else 0)

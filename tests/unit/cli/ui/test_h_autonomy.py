@@ -13,7 +13,7 @@ from cli.ui.commands.registry import CommandContext
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch, tmp_path):
     for var in ("AUTONOMY_MODE", "AUTONOMY_POSTURE", "AUTONOMY_ENABLED",
-                "POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_HALT", "CRON_ENABLED"):
+                "POLYROB_LOCAL", "AUTONOMY_HALT", "CRON_ENABLED"):
         # setenv first so monkeypatch RESTORES the var at teardown — a live
         # `/autonomy on` writes os.environ directly (026 P5).
         monkeypatch.setenv(var, "")

@@ -3,7 +3,7 @@
 All output goes to a StringIO so tests are fully deterministic without
 touching stdout/stderr.  Tests verify the three-layer composition:
 
-1. DEFAULT VIEW = dialog only: `› ` user echo, `rob:` message blocks,
+1. DEFAULT VIEW = dialog only: `› ` user echo, `agent:` message blocks,
    `error:` lines, plus one `(…)` activity summary per non-trivial turn.
    No bracketed trace lines, ever.
 2. TRACE (verbose=True or render_trace): the bracketed event lines, with the
@@ -172,7 +172,7 @@ _FENCED_BRAIN = (
 
 def test_brain_state_answer_demoted_not_dumped():
     """OR-2: a tool-free turn whose final answer is (fenced) brain-state JSON must
-    NOT be dumped raw as a 'rob:' bubble. The plain renderer demotes it to an
+    NOT be dumped raw as an 'agent:' bubble. The plain renderer demotes it to an
     honest 'finished without a final message' notice, mirroring the rich renderer.
     """
     rend, buf, state = _renderer()
@@ -527,7 +527,7 @@ def test_on_stream_delta_buffered_and_flushed_on_turn_end():
     rend.on_stream_delta("Hello ")
     rend.on_stream_delta("world")
     # nothing flushed yet
-    assert "rob:" not in buf.getvalue()
+    assert "polyrob:" not in buf.getvalue()
     rend.on_turn_end("")  # empty answer → use buffered
     assert "Hello world" in buf.getvalue()
 
@@ -816,9 +816,9 @@ def test_golden_sequence_verbose_trace():
 
 
 def test_run_path_answer_printed_exactly_once_via_on_turn_end():
-    """Simulate the rob-run path: feed emits SessionDone, then on_turn_end is
+    """Simulate the polyrob-run path: feed emits SessionDone, then on_turn_end is
     called with the result.  The answer must appear exactly once (in the
-    rob: block), never duplicated by the SessionDone event.
+    agent: block), never duplicated by the SessionDone event.
     """
     rend, buf, state = _renderer()
     answer = "The capital of France is Paris."

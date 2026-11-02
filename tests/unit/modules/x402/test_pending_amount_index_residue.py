@@ -43,7 +43,7 @@ async def test_residual_index_refused_cleanly_after_detection_disabled(tmp_path,
         #    the first invoice at amount 9.0 (no collision yet).
         monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=9.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=9.0, purpose="a", db=db)
         assert first["amount_usd"] == 9.0
         idx = await db.fetch_all(
             "SELECT name FROM sqlite_master WHERE type='index' AND name = ?",
@@ -57,10 +57,10 @@ async def test_residual_index_refused_cleanly_after_detection_disabled(tmp_path,
         monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "false")
         with pytest.raises(ValueError, match="already exists"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s2", amount_usd=9.0, purpose="b", db=db)
+                user_id="alice", session_id="s2", amount_usd=9.0, purpose="b", db=db)
 
         # Only the first invoice landed.
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(rows) == 1
     finally:
         await db.close()
@@ -75,9 +75,9 @@ async def test_no_residual_index_same_amount_still_allowed(tmp_path, monkeypatch
     db = await _setup_db(tmp_path)
     try:
         a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="a", db=db)
         b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=4.0, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=4.0, purpose="b", db=db)
         assert a["amount_usd"] == 4.0 and b["amount_usd"] == 4.0
     finally:
         await db.close()

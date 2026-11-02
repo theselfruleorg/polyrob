@@ -17,6 +17,16 @@ from core.prefs import load_preferences, list_pending_pref_changes, write_prefer
 from tools.controller.approval_interactive import InteractiveCLIApprover
 
 
+@pytest.fixture(autouse=True)
+def _no_open_prompt():
+    """A timed-out prompt in an earlier test file holds the single-stdin flag
+    until its reader thread returns; start every ladder case with no prompt open."""
+    from tools.controller import approval_interactive
+    approval_interactive._stdin_in_flight.clear()
+    yield
+    approval_interactive._stdin_in_flight.clear()
+
+
 def _answers(*vals):
     """input_fn stub that yields *vals* in order; a read past the end raises
     StopIteration — which is exactly what we want when a test asserts "no

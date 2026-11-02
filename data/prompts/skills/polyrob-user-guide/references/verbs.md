@@ -5,7 +5,8 @@
 Every slash verb the owner can send, from `core/verbs.py`. A verb runs on
 every seat (Telegram and the other chat apps, the console, the terminal
 REPL) unless its line says "only in …". Answer a "how do I …" question
-from this list; never invent a verb that is not on it.
+from this list; never invent a verb that is not on it. Pack verbs (such as
+`/x`) exist only when the pack is loaded; `/help` lists them.
 
 ## talk
 
@@ -34,10 +35,10 @@ from this list; never invent a verb that is not on it.
 
 ## work
 
-- `/goal` — Add, show, retry, pause, or stop one goal (not inside a group)
+- `/goal` — Add, show, retry, grant, pause, or stop one goal (not inside a group)
 - `/goals` — The goal board summary
 - `/jobs` — Scheduled jobs: next run, last outcome, and who wrote each
-- `/job` — Add, change, pause, resume, run now, or stop one scheduled job (not inside a group)
+- `/job` — Add, change, grant, pause, resume, run, or stop one scheduled job (not inside a group)
 - `/apps` — Deployed apps: approve an address, check health, or kill one (not inside a group)
 - `/skills` — The skills I can load, and what each one does (not inside a group)
 - `/learn` — Describe how to do something and I draft a skill for you to check (only in the terminal REPL)
@@ -61,7 +62,7 @@ from this list; never invent a verb that is not on it.
 - `/paid` — Paid room actions: status, pricing, and offers
 - `/pay` — Pay for one x402 resource, up to a price you name
 - `/swap` — Swap one token for another: a quote with the minimum you receive, then confirm
-- `/send` — Send native value or a token to an address: a quote, then `go`
+- `/send` — Send native value or a token to an address: a quote, then `go`. A bare amount is tokens; `$22` is dollars, which the agent converts
 - `/writeoff` — Write a holding off: the loss is its recorded cost, and nothing is sold
 - `/unquarantine` — Undo the quarantine of a look-alike holding, so it counts as open again
 - `/check` — Look at any address or ticker: a wallet's holdings or a token's report
@@ -119,10 +120,10 @@ from this list; never invent a verb that is not on it.
 - `/workers` — Named helpers: approve them, and stop or steer a running one (only in the terminal REPL)
 - `/prefs` — The preferences you have set (not inside a group)
 - `/mcp` — MCP servers I can use: add, remove, or test (not inside a group)
-- `/model` — The model I run on, where that choice comes from, and how to change it (not inside a group)
+- `/model` — The model this chat runs on — switch it live, set your default, pick reasoning (not inside a group)
 - `/auth` — The provider keys I have, and how to connect one (only in the terminal REPL)
 - `/persona` — The personas, and the one new chats use (only in the terminal REPL)
-- `/profile` — Which Rob this terminal runs, and where its files live (only in the terminal REPL)
+- `/profile` — Which agent this terminal runs, and where its files live (only in the terminal REPL)
 - `/toolset` — The ability sets, and the one new chats use (only in the terminal REPL)
 
 ## display
@@ -144,24 +145,24 @@ the words in the last column when you talk to the owner.
 
 | Concept | Say | Also fine | Never say |
 |---|---|---|---|
-| a conversation with Rob | chat | chat history | session, thread, conversation |
-| work Rob does by itself | goal | group of goals | task, stream, its own work |
+| a conversation with the agent | chat | chat history | session, thread, conversation |
+| work the agent does by itself | goal | group of goals | task, stream, its own work |
 | work at set times | scheduled job | Schedule, trading job, posting job | cron, rail, on a clock, the clock |
 | something the owner decides | decision | approval, question, quote, choice, suggested change | card, pending, proposal |
-| what Rob owns | holdings | Rob's records, Rob's wallet, tokens, pool deposits | book, ledger, position, treasury |
+| what the agent owns | holdings | the agent's records, the agent's wallet, tokens, pool deposits | book, ledger, position, treasury |
 | stop until later | pause | resume, turned off | halt, switched off |
 | end one thing now | stop | remove, cancel, delete | kill, drop |
 | a money ceiling | limit | daily limit, limit per payment, spend-without-asking limit | cap, ceiling |
 | a blockchain | network | Base, Ethereum, Solana, the network's own coin | chain, on-chain |
-| the agent | Rob | I | the agent, instance |
-| a worker Rob starts | helper | — | worker, profile, sub-agent, delegation |
-| what Rob can do | abilities | built in, optional, skill, connected app | capability, capabilities, tool, tool id, MCP, procedure |
+| the agent | the agent | I, your agent | instance |
+| a worker the agent starts | helper | — | worker, profile, sub-agent, delegation |
+| what the agent can do | abilities | built in, optional, skill, connected app | capability, capabilities, tool, tool id, MCP, procedure |
 | a permission level | permissions | yes, no, asks first | posture, mode, axis, regime, autonomy, autonomous |
 | settings | settings | — | preferences, prefs, config, flags |
-| files | files | Ready for you, Rob's working files, From you | workspace, folder, artifact |
+| files | files | Ready for you, the agent's working files, From you | workspace, folder, artifact |
 | one unit of work in a chat | step | — | action |
-| the cost to run Rob | AI cost | AI requests, AI credit | running cost, runtime, compute, model calls |
+| the cost to run the agent | AI cost | AI requests, AI credit | running cost, runtime, compute, model calls |
 | where the owner acts | this console | Telegram, the terminal, other users | seat, tenant, surface |
-| a Telegram group Rob is in | group | — | room, channel, supergroup |
-| a person Rob talks to who is not the owner | person | people | correspondent, contact, counterparty |
-| another agent or a program that calls Rob | other agents and apps | — | A2A, client, caller |
+| a Telegram group the agent is in | group | — | room, channel, supergroup |
+| a person the agent talks to who is not the owner | person | people | correspondent, contact, counterparty |
+| another agent or a program that calls the agent | other agents and apps | — | A2A, client, caller |

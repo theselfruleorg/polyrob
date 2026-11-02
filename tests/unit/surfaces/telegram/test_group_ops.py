@@ -58,7 +58,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _result(text, *, user_id="rob", raw_user_id=None, chat_role=None,
+def _result(text, *, user_id="alice", raw_user_id=None, chat_role=None,
            chat_type="supergroup", chat_id="-100"):
     source = SessionSource(surface_id="telegram", chat_id=chat_id, chat_type=chat_type)
     identity = Identity(user_id=user_id, source=source,
@@ -71,7 +71,7 @@ def _result(text, *, user_id="rob", raw_user_id=None, chat_role=None,
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     return tmp_path
@@ -274,7 +274,7 @@ def test_admin_dm_explicit_target_grammar_succeeds(env):
     room via `group_roles`, not silently default him to `member`."""
     from core.surfaces.group_roles import GroupRoles
     GroupRoles(str(env / "surfaces.db")).grant("telegram", "-100", "9911", "admin",
-                                               granted_by="rob")
+                                               granted_by="alice")
     agent = _Agent(str(env))
     result = _result("/groups mode telegram -100 listen", chat_role=None,
                      chat_type="dm", chat_id="1", user_id="u_admin", raw_user_id="9911")
@@ -293,7 +293,7 @@ def test_member_dm_explicit_target_grammar_is_refused(env):
 def test_admin_dm_explicit_target_grammar_for_mute(env):
     from core.surfaces.group_roles import GroupRoles
     GroupRoles(str(env / "surfaces.db")).grant("telegram", "-100", "9911", "admin",
-                                               granted_by="rob")
+                                               granted_by="alice")
     agent = _Agent(str(env))
     result = _result("/mute telegram -100 2h", chat_role=None, chat_type="dm",
                      chat_id="1", user_id="u_admin", raw_user_id="9911")

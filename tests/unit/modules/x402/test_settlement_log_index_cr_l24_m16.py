@@ -53,9 +53,9 @@ async def test_second_log_in_a_settled_tx_is_reported_not_dropped(tmp_path):
     db = await _db(tmp_path)
     try:
         a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s", amount_usd=5.0, purpose="a", db=db)
         b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=7.0, purpose="b", db=db)
+            user_id="alice", session_id="s", amount_usd=7.0, purpose="b", db=db)
         w = _W(db)
         t1 = {"tx_hash": "0xmulti", "from": "0x" + "11" * 20,
               "amount_usd": await _amount(db, a["request_id"]), "block": 1, "log_index": 3}
@@ -83,7 +83,7 @@ async def test_transfer_from_own_address_never_settles(tmp_path):
     db = await _db(tmp_path)
     try:
         a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s", amount_usd=5.0, purpose="a", db=db)
         w = _W(db)
         t = {"tx_hash": "0xself", "from": OWN.upper().replace("0X", "0x"),
              "amount_usd": await _amount(db, a["request_id"]), "block": 1, "log_index": 0}

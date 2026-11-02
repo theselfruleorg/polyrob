@@ -183,6 +183,44 @@ def sweep(rule: str, *, user_id: str, data_dir: str, instance_id: str,
     return out
 
 
+def same_subject_lines(new_text: str, skill_id: str, rules_text: str) -> List[str]:
+    """The owner-rule lines a programme-term change in ``skill_id`` supersedes
+    (095 W10, R8). Pure. No new matcher: the sweep's own conflict test
+    (:func:`_scan`) plus any rule line that names the skill id."""
+    hits = [h.line for h in _scan(new_text, "owner_rules", "owner.md", rules_text)]
+    sid = (skill_id or "").strip().lower()
+    if sid:
+        for raw in (rules_text or "").splitlines():
+            line = raw.strip().lstrip("#-* ").strip()
+            if line and not raw.lstrip().startswith("#") and sid in line.lower():
+                hits.append(line)
+    return list(dict.fromkeys(hits))
+
+
+def pinned_by_a_rail(skill_id: str, user_id: str, cron_db: str, goals_db: str) -> bool:
+    """Whether an enabled cron job or a live goal of this tenant pins ``skill_id``
+    (``payload.skills``) — i.e. the skill holds a lane's programme terms."""
+    from core.config_policy.rigs import pinned_skills
+    marks = ",".join("?" for _ in _LIVE_GOAL_STATUSES)
+    queries = ((cron_db, "SELECT payload FROM cron_jobs WHERE enabled=1 AND user_id=?",
+                (str(user_id),)),
+               (goals_db, f"SELECT payload FROM goals WHERE user_id=? AND status IN ({marks})",
+                (str(user_id), *_LIVE_GOAL_STATUSES)))
+    for db, sql, params in queries:
+        try:
+            rows = _rows(db, sql, params)
+        except Exception:
+            continue
+        for r in rows:
+            try:
+                payload = json.loads(r.get("payload") or "{}")
+            except ValueError:
+                continue
+            if isinstance(payload, dict) and skill_id in pinned_skills(payload):
+                return True
+    return False
+
+
 def render_sweep(result: dict, rule: str) -> str:
     """One owner-readable block for the sweep result."""
     from core.instruction_surfaces import PRECEDENCE_RULE
@@ -210,4 +248,5 @@ def rail_instruction_lines(task: str, payload: Optional[dict] = None) -> List[st
     return lines
 
 
-__all__ = ["SweepHit", "sweep", "render_sweep", "rail_instruction_lines", "MIN_OVERLAP"]
+__all__ = ["SweepHit", "sweep", "render_sweep", "rail_instruction_lines", "MIN_OVERLAP",
+           "same_subject_lines", "pinned_by_a_rail"]

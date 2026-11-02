@@ -158,11 +158,11 @@ def test_guard_reads_the_ceiling_the_writer_wrote(tmp_path, monkeypatch):
     from core.runtime_paths import prefs_home_dir
     from core.wallet import tx_guard
 
-    ok, err = prefs.write_preference(prefs_home_dir(), "rob",
+    ok, err = prefs.write_preference(prefs_home_dir(), "alice",
                                      "budget.defi_autonomous_usd", 300.0)
     assert ok, err
-    uid, home = tx_guard.ceiling_scope(type("Ctx", (), {"user_id": "rob"})())
-    assert uid == "rob"
+    uid, home = tx_guard.ceiling_scope(type("Ctx", (), {"user_id": "alice"})())
+    assert uid == "alice"
     assert Path(home) == Path(prefs_home_dir())
     # 300 is above the per-tx backstop, so the backstop binds — but it is 120,
     # not the env's 5: the owner's pref was READ.

@@ -9,6 +9,7 @@ import pytest
 
 from core import trading_mandate as tm
 from core.surfaces import cards
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 
 class _Registry:
@@ -26,20 +27,20 @@ class _Controller:
     def __init__(self, public=False):
         self.registry = _Registry()
         self.container = None
-        self.user_id = "rob"
+        self.user_id = "alice"
         self.session_id = "s-owner"
         self.orchestrator = type("O", (), {"_public_session": public,
                                            "_forged_turn_kind": None})()
 
 
 def _ctx(role="orchestrator"):
-    return type("Ctx", (), {"user_id": "rob", "role": role, "is_sub_agent": False,
+    return type("Ctx", (), {"user_id": "alice", "role": role, "is_sub_agent": False,
                             "session_id": "s-owner", "metadata": {}})()
 
 
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     monkeypatch.setattr(tm, "db_path", lambda data_dir=None: str(tmp_path / "trading.db"))
     cards.set_store(cards.CardStore(str(tmp_path / "cards.db")))
     sent = []
@@ -61,31 +62,32 @@ def _act(public=False):
 
 
 def _run(public=False, ctx=None, **params):
+    params.setdefault("preset", "longtail")
     fn, model, _ = _act(public)
     return asyncio.run(fn(model(**params), execution_context=ctx or _ctx()))
 
 
 def test_posts_one_card_whose_line_is_the_seat_start(_env):
-    res = _run(budget_usd=150, chains=["robinhood", "solana"], preset="memecoin")
+    res = _run(budget_usd=150, chains=["robinhood", "solana"], preset="longtail")
     assert res.error is None and "NOTHING is started" in res.extracted_content
-    (card,) = cards.store().open_cards("rob")
+    (card,) = cards.store().open_cards("alice")
     assert card.kind == cards.KIND_JOB and card.origin == cards.ORIGIN_AGENT
     assert card.line.startswith("/trade start d") and len(card.args) == 2
     assert "$150 allocation" in card.body and "$3 tickets" in card.body
     assert "-50% stop" in card.body                     # the preset's number
     (_u, text, kw), = _env
     assert kw["card_id"] == card.card_id and "Confirm:" in text
-    assert tm.get_active("rob") is None                 # nothing before Confirm
+    assert tm.get_active("alice") is None                 # nothing before Confirm
 
 
 def test_a_bad_value_makes_no_card():
     res = _run(budget_usd=5, chains=["base"], ticket_usd=50)
     assert res.error and "no card" in res.error
-    assert cards.store().open_cards("rob") == []
+    assert cards.store().open_cards("alice") == []
 
 
 def test_one_live_mandate_at_a_time():
-    tm.create("rob", actor=tm.OWNER_SEAT, budget_usd=10, chains=["base"])
+    tm.create("alice", actor=tm.OWNER_SEAT, budget_usd=10, chains=["base"], preset="longtail")
     res = _run(budget_usd=150, chains=["solana"])
     assert res.error and "already" in res.error
 

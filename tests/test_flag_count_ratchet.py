@@ -26,7 +26,7 @@ from core.flags_catalog import CATALOG
 # The live count. Lower it when a flag is retired; raise it only with the reason
 # in the commit message. The history lives in `git log -p` of this line and in
 # CHANGELOG.md — not here, so parallel flag commits do not conflict on a comment.
-CEILING = 650
+CEILING = 646  # 095 W10: -MCP_SELF_INSTALL_ENABLED, -MCP_INSTALL_CATALOG_FILE, -MCP_INSTALL_ALLOWLIST (mcp_install deleted)
 # A flag row is a deliberate act — unlike file line counts there is no ordinary
 # churn to absorb, so the ceiling tracks the real count exactly.
 SLACK = 0

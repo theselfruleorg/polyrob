@@ -22,14 +22,16 @@ to a brief "already active" acknowledgment instead of re-emitting the body.
 
 ## Scopes and precedence
 
-Three kinds of location, higher precedence wins on a name collision
-(**project > user > builtin**; a builtin is never shadowed):
+One precedence order (`core/skills/scopes.py`), higher wins on a name
+collision: **builtin > user > pack > project > user-external**. A builtin or
+pack id is protected — an external skill under it is skipped.
 
 | Scope | Location | Writable? |
 |---|---|---|
-| builtin | the installed package (`data/prompts/skills/`) | read-only, trusted |
-| user | per-tenant data home (`<data_dir>/skills/user_<uid>/`) | yes — install or agent-authored |
-| external (discovered) | `~/.agents/skills/`, `~/.claude/skills/` (and per-repo `./.agents/skills/` on a trusted local CLI only) | no — loaded in place, not threat-scanned |
+| builtin | the seeded copy `<data_home>/skills/bundled/` (from the package's `data/prompts/skills/`) | no — a fix is an owner-accepted change to the seeded copy |
+| user | per-tenant data home (`<data_home>/skills/user_<uid>/`) | yes — install or agent-authored |
+| pack | a loaded pack's skills directory | no |
+| project / user-external | `./.agents/skills/`, `./.claude/skills/` (trusted local CLI only), then `~/.agents/skills/`, `~/.claude/skills/` | no — loaded in place; injection-scanned before it enters the catalog |
 
 User/installed skills live under the data home, not the package tree, so they
 survive `polyrob update`.
@@ -69,8 +71,9 @@ settings — a described procedure is always owner-reviewed first.
 
 ## Writable skills (you authoring your own)
 
-When `SKILLS_WRITABLE` is on (default off; on under `POLYROB_LOCAL`), you can
-create/patch/delete/promote skills via the `skill_manage` action. Safety:
+When the `skill_manage` action is loaded (its setting is a posture member of
+the autonomy group — see `references/configuration.md`), you can
+create/patch/delete/promote skills. Safety:
 
 - Tenant-confined (`user_<uid>/` only), anonymous users blocked.
 - Every write is threat-scanned (`is_suspicious`) — fails CLOSED on a scan

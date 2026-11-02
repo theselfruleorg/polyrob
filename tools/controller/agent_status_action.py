@@ -19,7 +19,7 @@ import logging
 from pydantic import BaseModel
 
 from agents.task.agent.views import ActionResult
-from core.runtime_paths import data_dir_or_home
+from core.runtime_paths import data_dir_or_home, prefs_home_dir
 from tools.harness_view import gated_tools_block, tool_harness_view
 
 logger = logging.getLogger(__name__)
@@ -83,8 +83,7 @@ def _config_lines(controller, user_id) -> list:
 	)
 	from tools.cronjob_tools import cron_enabled as _cron_enabled
 
-	_cfg = getattr(getattr(controller, 'container', None), 'config', None)
-	data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
+	data_dir = prefs_home_dir()  # the ONE identity home (prefs writers use it)
 	instance_id = resolve_instance_id()
 	cfg_lines = ["config:"]
 	cfg_lines.append(
@@ -138,6 +137,96 @@ async def _detail_lines(controller, user_id, ledger) -> list:
 	except Exception as e:
 		lines.append(_unavail("config", e))
 	return lines
+
+
+async def _self_lines(agent, execution_context) -> list:
+	"""095 W7 (X-6, SK-11): the facts a "which version / model are you, what does
+	this run cost" answer needs — the running version, a pending deploy, THIS
+	chat's model (provider, serving provider, reasoning level) and, on a run with
+	a per-run cap, its spend vs the cap. Computed here (tools tier), never in
+	``core/status_*``. Each line fails soft and REPORTED."""
+	out = []
+	try:
+		from core.version import deployed_from, pending_deploy_line, running_version_line
+		out.append(f"running: {running_version_line()}")
+		pending = pending_deploy_line()
+		if pending:
+			out.append(pending)
+		if deployed_from().get("previous"):
+			out.append("what changed since the previous deploy: "
+					   "agent_status(release_notes='since_previous')")
+	except Exception as e:
+		out.append(_unavail("running", e))
+	try:
+		if agent is None or not getattr(agent, "model_name", None):
+			out.append("this chat's model: unavailable (no live agent)")
+		else:
+			from modules.llm.usage_extract import resolve_serving_provider
+			from agents.task.model_pin_state import session_reasoning
+			model = agent.model_name
+			provider = (getattr(agent, "llm_provider", None)
+						or getattr(agent, "provider_name", None) or "unknown")
+			serving = resolve_serving_provider(getattr(agent, "llm", None), model) or "unknown"
+			orch = getattr(agent, "orchestrator", None)
+			sid = getattr(orch, "session_id", None) or getattr(agent, "session_id", None)
+			level = session_reasoning(sid) or "operator default"
+			out.append(f"this chat's model: {model} (provider {provider}; served by "
+					   f"{serving}; reasoning {level})")
+	except Exception as e:
+		out.append(_unavail("this chat's model", e))
+	try:
+		pair = getattr(agent, "_run_spend_seen", None) if agent is not None else None
+		if pair is None and agent is not None:
+			from agents.task.agent.core.run_budget import run_spend_vs_cap
+			pair = await run_spend_vs_cap(agent)
+		if pair:
+			spent, cap = float(pair[0]), float(pair[1])
+			out.append(f"run_spend: ${spent:.4f} of the ${cap:.2f} per-run cap "
+					   f"({spent / cap * 100:.0f}%)" if cap > 0 else f"run_spend: ${spent:.4f}")
+	except Exception as e:
+		out.append(_unavail("run_spend", e))
+	try:
+		out.append(_owner_line(agent, execution_context))
+	except Exception as e:
+		out.append(_unavail("owner", e))
+	return out
+
+
+def _owner_line(agent, execution_context) -> str:
+	"""095 W7 (SK-15): who the owner is BY KIND and where this turn sits — never a
+	real identifier (no id, no handle, no address)."""
+	from core.instance import resolve_instance_id, resolve_owner_principal
+	from core.surfaces.catalog import owner_env_by_surface
+	import os
+	bound = resolve_owner_principal(default_to_instance=False)
+	if not bound:
+		kind = "unpaired (no owner bound on this install)"
+	elif bound == resolve_instance_id():
+		kind = "bound to this instance's own tenant"
+	else:
+		kind = "a bound owner principal"
+	reach = [sid for sid, env in sorted(owner_env_by_surface().items())
+			 if (os.environ.get(env) or "").strip()]
+	if "telegram" not in reach:
+		from core.instance import resolve_owner_telegram_id
+		if resolve_owner_telegram_id():
+			reach.append("telegram")
+	seat = "unknown"
+	try:
+		from agents.task.session_class import session_regime
+		if agent is not None:
+			seat = session_regime(agent)
+	except Exception as exc:
+		seat = f"unavailable ({type(exc).__name__})"
+	user_id = getattr(execution_context, "user_id", None)
+	if user_id is not None:
+		from core.instance import is_owner
+		who = "the owner" if is_owner(user_id, owner_principal=resolve_owner_principal()) \
+			else "not the owner"
+	else:
+		who = "unknown"
+	return (f"owner: {kind}; reachable on {', '.join(reach) or 'no configured surface'}; "
+			f"this session's seat: {seat}; this turn's user: {who}")
 
 
 def _may_propose(controller, execution_context) -> bool:
@@ -200,7 +289,8 @@ def register_agent_status_action(controller) -> None:
 		"Report your own runtime state: health (credit sentinel, open asks, blocked "
 		"goals, suppressed owner messages, dead loops), what runs next, steps "
 		f"used (of the cap), active {_money}. Read-only. Set release_notes to "
-		"'unreleased' (what changed since the last release), 'latest' or a version "
+		"'unreleased' (what changed since the last release), 'since_previous' (what "
+		"changed since the previous deploy), 'latest' or a version "
 		"('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with "
 		"your code. Set tool to a tool id to read why that tool is missing: its status, "
 		"remedy, who can fix it and when the fix applies.",
@@ -253,10 +343,20 @@ def register_agent_status_action(controller) -> None:
 				snap, prefix="- ", sections=[n for n in SECTION_ORDER if n != "harness"]))
 		except Exception as e:
 			lines.append(_unavail("status snapshot", e))
+		# 094: which model a new owner chat, an autonomous and a money-class run use.
+		from agents.task.agent.core.live_health import model_routing_line
+		_models = model_routing_line(str(user_id or ""))
+		if _models:
+			lines.append(f"- {_models}")
 		# 1) steps used / budget — live AgentState
 		agent = None
 		try:
 			agent = _resolve_agent(controller, execution_context)
+		except Exception as e:
+			lines.append(_unavail("agent", e))
+		# 095 W7: version, pending deploy, this chat's model, run spend, owner fact.
+		lines.extend(await _self_lines(agent, execution_context))
+		try:
 			st = getattr(agent, 'state', None)
 			if st is not None:
 				mx = getattr(st, 'max_steps', None)

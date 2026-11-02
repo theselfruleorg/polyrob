@@ -18,7 +18,7 @@ NOW = datetime(2026, 9, 20, 6, 0, 0)
 
 
 def _job(jid="exit0001", task="EXIT RAIL", payload=None, due=NOW):
-    return CronJob(id=jid, task=task, schedule_spec="0 * * * *", user_id="rob",
+    return CronJob(id=jid, task=task, schedule_spec="0 * * * *", user_id="alice",
                    next_run_at=due, max_duration_seconds=60,
                    payload=payload if payload is not None else {"priority": "money"})
 
@@ -41,7 +41,7 @@ def test_an_explicit_preempts_flag_wins_over_the_class():
 def test_set_preempts_merges_the_payload(tmp_path):
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(_job(payload={"priority": "money", "deliver": "telegram"}))
-    assert store.set_preempts("exit0001", False, user_id="rob")
+    assert store.set_preempts("exit0001", False, user_id="alice")
     job = store.get("exit0001")
     assert job.payload["preempts"] is False
     assert job.payload["deliver"] == "telegram", "the rest of the payload survives"
@@ -156,7 +156,7 @@ def test_the_default_cap_reads_an_env_row(monkeypatch):
     assert default_max_duration_sec() == 600
     monkeypatch.setenv("CRON_DEFAULT_MAX_DURATION_SEC", "900")
     assert default_max_duration_sec() == 900
-    assert CronJob(id="x", task="t", schedule_spec="1h", user_id="rob",
+    assert CronJob(id="x", task="t", schedule_spec="1h", user_id="alice",
                    next_run_at=None).max_duration_seconds == 900
 
 

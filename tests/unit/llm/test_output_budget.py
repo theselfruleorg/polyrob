@@ -113,3 +113,34 @@ def test_modules_tier_stamping_is_session_agnostic():
     assert output_token_cap(llm._client, 16384) == 4096
     assert apply_output_budget(None, 4096) == 0
     assert apply_output_budget(llm, 0) == 0
+
+
+def test_bounded_output_is_per_task_and_never_stamps_the_shared_client(monkeypatch):
+    """095 W1d: the last-report bound narrows only the calls inside its scope; a
+    concurrent task on the same client keeps the normal ceiling."""
+    import asyncio
+    from types import SimpleNamespace
+    from modules.llm.output_budget import bounded_output, output_token_cap
+    monkeypatch.delenv("LLM_MAX_OUTPUT_TOKENS", raising=False)
+    client = SimpleNamespace()
+    seen = {}
+    inside, release = asyncio.Event(), asyncio.Event()
+
+    async def _bounded():
+        with bounded_output(1500):
+            seen["bounded"] = output_token_cap(client, 16384)
+            inside.set()
+            await release.wait()
+
+    async def _other():
+        await inside.wait()
+        seen["other"] = output_token_cap(client, 16384)
+        release.set()
+
+    async def _main():
+        await asyncio.gather(_bounded(), _other())
+
+    asyncio.run(_main())
+    assert seen == {"bounded": 1500, "other": 16384}
+    assert not hasattr(client, "_polyrob_session_output_cap")
+    assert output_token_cap(client, 16384) == 16384

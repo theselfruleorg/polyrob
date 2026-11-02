@@ -1,4 +1,4 @@
-"""Money › Book: which tokens Rob trusts, and the owner's word on one (W1).
+"""Money › Book: which tokens the agent trusts, and the owner's word on one (W1).
 
 ``GET  /api/webgate/tokens``          — ``core.wallet.token_trust.trust_view``
 ``POST /api/webgate/tokens/{action}`` — trust | untrust | writeoff | unquarantine

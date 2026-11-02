@@ -16,7 +16,7 @@ async def test_cancel_inflight_returns_job_to_scheduled(home, tmp_path):
     from cron.jobs import CronJob, CronJobStore
     from cron.scheduler import CronScheduler
     store = CronJobStore(str(tmp_path / "cron.db"))
-    job = CronJob(id="j1", task="x", schedule_spec="30m", user_id="rob", next_run_at=None,
+    job = CronJob(id="j1", task="x", schedule_spec="30m", user_id="alice", next_run_at=None,
                   max_duration_seconds=60)
     store.add(job)
     started = asyncio.Event()
@@ -47,9 +47,9 @@ async def test_run_due_reschedules_a_pause_cancelled_job(home, tmp_path):
     from cron.scheduler import CronScheduler
     store = CronJobStore(str(tmp_path / "cron.db"))
     due = datetime.now() - timedelta(minutes=1)
-    store.add(CronJob(id="j1", task="x", schedule_spec="30m", user_id="rob", next_run_at=due,
+    store.add(CronJob(id="j1", task="x", schedule_spec="30m", user_id="alice", next_run_at=due,
                       max_duration_seconds=60))
-    store.add(CronJob(id="j2", task="y", schedule_spec="30m", user_id="rob", next_run_at=due,
+    store.add(CronJob(id="j2", task="y", schedule_spec="30m", user_id="alice", next_run_at=due,
                       max_duration_seconds=60))
     ran = []
     sched = {}
@@ -77,7 +77,7 @@ async def test_digest_run_survives_a_cron_scoped_pause(home, tmp_path):
     from cron.scheduler import CronScheduler
     from core import autonomy_control as ac
     store = CronJobStore(str(tmp_path / "cron.db"))
-    job = CronJob(id="d1", task="digest", schedule_spec="30m", user_id="rob", next_run_at=None,
+    job = CronJob(id="d1", task="digest", schedule_spec="30m", user_id="alice", next_run_at=None,
                   max_duration_seconds=60, payload={"digest": True})
     store.add(job)
     started = asyncio.Event()

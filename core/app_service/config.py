@@ -8,7 +8,9 @@ from core.config_policy.members import member_flag
 from core.env import bool_env, float_env, int_env
 
 RESERVED_SLUGS = frozenset({"www", "api", "apps", "console", "pub", "mail", "admin", "status",
-                            "ns", "ns1", "ns2", "mx", "smtp", "imap", "autoconfig"})
+                            "ns", "ns1", "ns2", "mx", "smtp", "imap", "autoconfig",
+                            # the static publish host `polyrob apps install` renders
+                            "static"})
 EGRESS_MODES = ("none", "allowlist", "open")
 
 
@@ -80,8 +82,11 @@ def app_service_health_timeout_sec() -> int:
 
 
 def app_service_image() -> str:
+    """``APP_SERVICE_IMAGE``, else ``CODE_EXEC_DEV_IMAGE``, else the public dev image
+    (the old ``polyrob-dev:latest`` default exists only where a private factory built it)."""
+    from core.container_hardening import DEV_IMAGE_DEFAULT
     return ((os.getenv("APP_SERVICE_IMAGE") or os.getenv("CODE_EXEC_DEV_IMAGE") or "").strip()
-            or "polyrob-dev:latest")
+            or DEV_IMAGE_DEFAULT)
 
 
 def app_service_retain_days() -> int:

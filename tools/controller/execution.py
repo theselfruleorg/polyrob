@@ -17,6 +17,32 @@ from modules.llm.adapters import BaseChatModel
 from modules.llm.messages import AIMessage
 from tools.controller._helpers import observe
 
+#: 095 W1d: where to look before a retry, per effect class of a timed-out write.
+_TIMEOUT_CHECKS = {
+	"money": "the balance or the transaction receipt",
+	"social": "the post or the timeline",
+	"comms": "the sent folder or the thread",
+	"public": "the deployed page",
+	"self": "the file or the setting",
+	"code": "the output or the changed files",
+	"network": "the target",
+}
+
+
+def _write_timeout_note(controller, action_type: str) -> str:
+	"""The sentence appended to a timeout when the action writes: the call may have
+	completed after the cancel, so a blind retry can do the effect twice. '' for a
+	read or when the classification fails."""
+	try:
+		from tools.controller.effect_hooks import _classify
+		_tool_id, verdict = _classify(controller, action_type)
+		if verdict is None:
+			return ""
+		check = _TIMEOUT_CHECKS.get(verdict.effect, "the result")
+		return f". The effect may have happened; check ({check}) before you retry."
+	except Exception:
+		return ""
+
 if TYPE_CHECKING:
 	# Type-hint-only — keep playwright's [browser] extra optional on this path.
 	from tools.browser.context import BrowserContext
@@ -79,15 +105,11 @@ def _retry_wall_text(action_name: str, attempts: int, last_error: str) -> str:
     or held by anyone. Prod 2026-10-28: a vaguer text made the agent tell the
     owner the signer was "hard-blocked" and needed a reset. The prefix is read by
     ``agents.task.agent.core.conversational_exit``; keep it."""
+    from core.tool_gates import refusal_text
     last = (last_error or "").strip().splitlines()
     last_line = last[0][:300] if last else "(no error text was recorded)"
-    return (
-        f"⚠️ Maximum retries exceeded for {action_name}: you made the SAME call "
-        f"{attempts} times in this turn and it failed each time. Last error: "
-        f"{last_line} — The tool is not broken, locked or blocked: this limit counts "
-        f"only your identical call, and only the owner's next message resets it. "
-        f"Change the parameter the last error names, or stop and tell the owner that "
-        f"last error. Do not repeat this call.")
+    return (f"⚠️ Maximum retries exceeded for {action_name}: "
+            + refusal_text("retry_wall", attempts=attempts, last_error=last_line))
 
 
 class ExecutionMixin:
@@ -416,7 +438,8 @@ class ExecutionMixin:
 					self._emit_governance_event("tool_timeout", execution_context,
 												action=action_type, timeout_s=action_timeout)
 					err = ActionResult(
-						error=f"Action {i+1}/{action_count} ({action_type}) timed out after {action_timeout} seconds",
+						error=(f"Action {i+1}/{action_count} ({action_type}) timed out after {action_timeout} seconds"
+							   + _write_timeout_note(self, action_type)),
 						include_in_memory=True,
 						tool_call_id=getattr(action, "_tool_call_id", None)
 					)

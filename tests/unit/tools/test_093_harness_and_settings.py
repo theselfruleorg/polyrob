@@ -50,7 +50,7 @@ class _Controller:
         self.registry = _Registry()
         self.container = _Container(services if services is not None
                                     else {"mcp": _mcp_tool(False)})
-        self.user_id = "rob"
+        self.user_id = "alice"
         self.session_id = sid
         self._is_sub_agent = False
         self.orchestrator = SimpleNamespace(_public_session=public, _forged_turn_kind=None,
@@ -68,13 +68,13 @@ class _Controller:
 
 
 def _ctx(sid="s-owner-093", role="orchestrator", is_sub_agent=False):
-    return SimpleNamespace(user_id="rob", role=role, is_sub_agent=is_sub_agent,
+    return SimpleNamespace(user_id="alice", role=role, is_sub_agent=is_sub_agent,
                            session_id=sid, metadata={})
 
 
 @pytest.fixture(autouse=True)
 def _owner(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     sent = []
 
     async def _deliver(container, user_id, text, **kw):
@@ -146,7 +146,7 @@ def test_propose_setting_makes_a_card_holding_the_mcp_add_line(_owner):
                                why="the 402Mob enrollment needs its MCP server"),
                          execution_context=_ctx()))
     assert res.error is None, res.error
-    open_ = [c for c in cards.store().open_cards("rob") if c.kind == cards.KIND_SETTING]
+    open_ = [c for c in cards.store().open_cards("alice") if c.kind == cards.KIND_SETTING]
     assert len(open_) == 1
     card = open_[0]
     assert card.line == "/mcp add evidence https://evidence.contact/mcp"
@@ -161,7 +161,7 @@ def test_confirm_dispatches_the_stored_line_through_the_seat(_owner):
     fn, model, _ = _setting_actions(_Controller())["propose_setting"]
     asyncio.run(fn(model(command="/mcp add evidence https://evidence.contact/mcp"),
                    execution_context=_ctx()))
-    card = next(c for c in cards.store().open_cards("rob") if c.kind == cards.KIND_SETTING)
+    card = next(c for c in cards.store().open_cards("alice") if c.kind == cards.KIND_SETTING)
 
     from cli.ui.commands import h_cards
     dispatched = []
@@ -172,10 +172,10 @@ def test_confirm_dispatches_the_stored_line_through_the_seat(_owner):
             ctx.emit("Added MCP server 'evidence' (streamable_http) — "
                      "https://evidence.contact/mcp")
 
-    ctx = SimpleNamespace(user_id="rob", emit=lambda *a, **k: None)
+    ctx = SimpleNamespace(user_id="alice", emit=lambda *a, **k: None)
     import cli._admin_home as admin_home
     orig = admin_home.admin_owner_tenant
-    admin_home.admin_owner_tenant = lambda uid: "rob"
+    admin_home.admin_owner_tenant = lambda uid: "alice"
     try:
         asyncio.run(h_cards._press(_Seat(), card.card_id, "ok", ctx))
     finally:
@@ -184,15 +184,22 @@ def test_confirm_dispatches_the_stored_line_through_the_seat(_owner):
     after = cards.store().get(card.card_id)
     assert after.state == cards.S_DONE
     # A second tap runs nothing.
-    p = cards.press(card.card_id, "ok", "rob")
+    p = cards.press(card.card_id, "ok", "alice")
     assert p.run is None
 
 
 def test_tap_line_names_the_setting_line():
-    card = cards.setting_card("rob", ["/config", "set", "style.tone", "friendly"],
+    card = cards.setting_card("alice", ["/config", "set", "style.tone", "friendly"],
                               title="Proposed setting")
-    assert cards.tap_line(cards.card_token(card.card_id, "ok"), "rob") == \
+    assert cards.tap_line(cards.card_token(card.card_id, "ok"), "alice") == \
         "/config set style.tone friendly"
+
+
+def test_a_model_default_card_taps_the_owner_model_line():
+    """095 W1c (SC-16): the owner's new-chat model is a card; Confirm runs /model."""
+    card = cards.setting_card("alice", ["/model", "sonnet", "default"], title="Proposed setting")
+    assert cards.tap_line(cards.card_token(card.card_id, "ok"), "alice") == \
+        "/model sonnet default"
 
 
 def test_setting_card_refuses_other_shapes():
@@ -200,7 +207,7 @@ def test_setting_card_refuses_other_shapes():
                   ["/job", "edit", "abc", "schedule", "daily"],
                   ["/config", "set", "style.tone", "go"]):
         with pytest.raises(ValueError):
-            cards.setting_card("rob", words, title="x")
+            cards.setting_card("alice", words, title="x")
 
 
 # --- D4: owner turn only ----------------------------------------------------
@@ -209,11 +216,11 @@ def test_an_autonomous_run_is_refused(_owner):
     from core.autonomy_marker import mark_autonomous
     mark_autonomous("s-auto-093", goal_id="g1")
     c = _Controller(sid="s-auto-093")
-    fn, model, _ = _setting_actions(c)["propose_setting"]
-    res = asyncio.run(fn(model(command="/mcp add evidence https://evidence.contact/mcp"),
-                         execution_context=_ctx(sid="s-auto-093")))
-    assert res.error and "owner turn" in res.error
-    assert not [c for c in cards.store().open_cards("rob") if c.kind == cards.KIND_SETTING]
+    # 095 W2: a goal/cron controller carries no propose_setting schema at all;
+    # the refusal agent_status reads still says why.
+    assert "propose_setting" not in _setting_actions(c)
+    assert "owner turn" in (c.propose_setting_refusal(_ctx(sid="s-auto-093")) or "")
+    assert not [c for c in cards.store().open_cards("alice") if c.kind == cards.KIND_SETTING]
     assert _owner == []
 
 
@@ -251,7 +258,7 @@ def test_money_and_unknown_shapes_are_refused(command, _owner):
     fn, model, _ = _setting_actions(_Controller())["propose_setting"]
     res = asyncio.run(fn(model(command=command), execution_context=_ctx()))
     assert res.error and "refused" in res.error
-    assert not [c for c in cards.store().open_cards("rob") if c.kind == cards.KIND_SETTING]
+    assert not [c for c in cards.store().open_cards("alice") if c.kind == cards.KIND_SETTING]
 
 
 def test_an_operator_setting_is_filed_not_carded(monkeypatch, _owner):
@@ -275,7 +282,7 @@ def test_an_operator_setting_is_filed_not_carded(monkeypatch, _owner):
     assert kw["extra_payload"]["ask_kind"] == "config_change"
     assert kw["extra_payload"]["line"] == "CODE_EXEC_BACKEND=docker"
     assert kw["force"] is True   # the exact-line dedupe, never the fuzzy title one
-    assert not [c for c in cards.store().open_cards("rob") if c.kind == cards.KIND_SETTING]
+    assert not [c for c in cards.store().open_cards("alice") if c.kind == cards.KIND_SETTING]
 
 
 def test_a_member_flag_is_filed_with_its_overrides_line():
@@ -288,7 +295,7 @@ def test_a_member_flag_is_filed_with_its_overrides_line():
 def test_a_safe_preference_and_a_non_money_grant_are_cards():
     from core.setting_proposals import CARD, classify
     p = classify("/config set style.tone friendly")
-    assert p.outcome == CARD and p.when == "next-turn"
+    assert p.outcome == CARD and p.when == "now"  # 095 W4: next-step
     g = classify("/job edit abc123 grant tools=web_fetch")
     assert g.outcome == CARD and g.words[:4] == ["/job", "edit", "abc123", "grant"]
 

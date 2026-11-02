@@ -19,6 +19,7 @@ the real routers means a future prefix mismatch on a gated path fails here.
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.api_key_auth import API_KEY_PREFIX
 from modules.x402.middleware import X402PaymentMiddleware
 from api.a2a.endpoints import router as a2a_router
 from api.a2a.streaming import router as a2a_streaming_router
@@ -340,7 +341,7 @@ def test_stray_payment_header_with_api_key_not_503_reaches_downstream(monkeypatc
         json=_NEW_SEND,
         headers={
             "X-PAYMENT": "some-base64-payload",
-            "X-API-KEY": "rob_some_valid_looking_key",
+            "X-API-KEY": API_KEY_PREFIX + "some_valid_looking_key",
         },
     )
 

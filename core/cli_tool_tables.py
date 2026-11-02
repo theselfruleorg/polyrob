@@ -86,7 +86,7 @@ _CLI_STATIC_TOOLS = {_descriptor_id(t) for t in _tool_ids_where("cli", "static")
 # Service names produced by the optional registrars (derived from the one table above).
 _CLI_OPTIONAL_TOOLS = {svc for _mod, _fn, services in _CLI_OPTIONAL_REGISTRARS for svc in services}
 
-# The CLI capability set — what `rob` CAN register when the relevant flag is on. Derived
+# The CLI capability set — what `polyrob` CAN register when the relevant flag is on. Derived
 # from the two sources above (no independently-maintained flat list). Used by
 # cli_unavailable_tools() for honest "tool not available on the CLI" feedback and by the
 # startup self-check. Flag-INDEPENDENT (lists a tool even when its flag is currently off,

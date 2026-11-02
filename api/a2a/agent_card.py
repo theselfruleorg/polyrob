@@ -265,7 +265,7 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
             "description": "Recommended for AI agents. Create once, use forever.",
             "how_to_get": "1) Login with wallet at /api/auth/nonce + /api/auth/verify, 2) POST /api/auth/api-keys",
             "requires": "an access tier granted by the operator",
-            "header": "X-API-KEY: rob_xxx..."
+            "header": "X-API-KEY: <your-api-key>"
         },
     }
     if x402_option is not None:

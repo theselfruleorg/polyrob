@@ -45,8 +45,17 @@ def _get_model_max_tokens_from_registry(model: str, provider: str) -> Optional[i
     if config:
         max_completion = config.max_completion_tokens
         if max_completion and max_completion > 0:
-            logger.debug(f"Using max_tokens={max_completion} for {model} from model registry")
-            return max_completion
+            # The model's completion CEILING is not a per-request size: a flash
+            # model advertises 384000, and a credit-metered provider reserves what
+            # a request asks for. Resolve the SAME per-request cap every call is
+            # clamped to (``_adjust_max_tokens`` -> ``output_token_cap``), so the
+            # value stored and logged here is one a request can carry.
+            from modules.llm.llm_client import _DEFAULT_OUTPUT_TOKEN_CAP
+            from modules.llm.output_budget import output_token_cap
+            cap = output_token_cap(None, _DEFAULT_OUTPUT_TOKEN_CAP)
+            logger.debug(f"max_tokens for {model}: model ceiling {max_completion}, "
+                         f"per-request cap {cap}")
+            return min(max_completion, cap)
 
     logger.warning(
         f"Model '{model}' not found in registry. "

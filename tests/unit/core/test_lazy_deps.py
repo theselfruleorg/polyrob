@@ -34,7 +34,6 @@ def _ok(cmd, **_kw):
 def local_on(monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     monkeypatch.delenv("LAZY_DEPS_MODE", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
 
 
 @pytest.fixture
@@ -49,7 +48,7 @@ def test_mode_defaults_to_trusted_and_the_old_boolean_is_not_read(monkeypatch):
     """066 P1: ``LAZY_DEPS_MODE`` (default ``trusted``) replaced the 058 boolean;
     ``LAZY_DEPS_ENABLED`` is retired and no longer read; an unknown value fails
     closed to ``off``."""
-    for name in ("LAZY_DEPS_ENABLED", "LAZY_DEPS_MODE", "POLYROB_LOCAL", "ROB_LOCAL"):
+    for name in ("LAZY_DEPS_ENABLED", "LAZY_DEPS_MODE", "POLYROB_LOCAL"):
         monkeypatch.delenv(name, raising=False)
     assert ld.lazy_mode() == "trusted" and lazy_installs_enabled() is True
     monkeypatch.setenv("LAZY_DEPS_ENABLED", "off")   # retired: ignored

@@ -77,7 +77,7 @@ class _Agent:
         self.container = _Container(data_dir, harness)
 
 
-def _result(text, *, user_id="rob", chat_role=None, chat_type="supergroup", chat_id="-100"):
+def _result(text, *, user_id="alice", chat_role=None, chat_type="supergroup", chat_id="-100"):
     source = SessionSource(surface_id="telegram", chat_id=chat_id, chat_type=chat_type)
     identity = Identity(user_id=user_id, source=source, raw_user_id=user_id, chat_role=chat_role)
     inbound = InboundMessage(text=text, identity=identity)
@@ -89,7 +89,7 @@ def _result(text, *, user_id="rob", chat_role=None, chat_type="supergroup", chat
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     return tmp_path

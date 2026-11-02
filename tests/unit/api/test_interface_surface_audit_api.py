@@ -7,6 +7,7 @@ from core.security.session_tokens import SESSION_AUDIENCE
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from api.api_key_auth import API_KEY_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -20,8 +21,8 @@ class _FakeKeyManager:
 
     async def generate_api_key(self, user_id, name, expires_days=90, scopes=('read', 'write')):
         self.minted.append(user_id)
-        return {"api_key": "rob_" + "x" * 40, "name": name,
-                "prefix": "rob_xxxxxx", "expires_at": "2030-01-01", "created_at": "t",
+        return {"api_key": API_KEY_PREFIX + "x" * 40, "name": name,
+                "prefix": API_KEY_PREFIX + "xxxxxx", "expires_at": "2030-01-01", "created_at": "t",
                 "warning": "w", "scopes": list(scopes)}
 
     async def revoke_key(self, user_id, prefix):
@@ -69,7 +70,7 @@ def test_api1_an_api_key_cannot_mint_a_key(monkeypatch):
 
 def test_api1_an_api_key_cannot_revoke_a_key(monkeypatch):
     client, mgr = _key_app(monkeypatch, "api_key")
-    resp = client.delete("/api/auth/api-keys/rob_abc123")
+    resp = client.delete("/api/auth/api-keys/" + API_KEY_PREFIX + "abc123")
     assert resp.status_code == 403, resp.text
     assert mgr.revoked == []
 
@@ -78,7 +79,7 @@ def test_api1_a_wallet_session_still_manages_keys(monkeypatch):
     client, mgr = _key_app(monkeypatch, None)
     assert client.post("/api/auth/api-keys",
                        json={"name": "n"}).status_code == 200
-    assert client.delete("/api/auth/api-keys/rob_abc123").status_code == 200
+    assert client.delete("/api/auth/api-keys/" + API_KEY_PREFIX + "abc123").status_code == 200
     assert mgr.minted == ["0xOwner"]
 
 
@@ -97,7 +98,7 @@ def test_api1_authentication_middleware_marks_an_api_key_identity():
     state = SimpleNamespace()
     req = SimpleNamespace(
         url=SimpleNamespace(path="/api/task/sessions"),
-        headers={"X-API-Key": "rob_" + "k" * 40},
+        headers={"X-API-Key": API_KEY_PREFIX + "k" * 40},
         state=state,
     )
 
@@ -139,7 +140,7 @@ def test_api1_end_to_end_an_x_api_key_cannot_mint(monkeypatch, real_app):
     monkeypatch.setattr(dependencies, "optional_container",
                         lambda: _FakeContainer(mgr))
     resp = real_app.post("/api/auth/api-keys", json={"name": "n"},
-                         headers={"X-API-KEY": "rob_" + "k" * 40})
+                         headers={"X-API-KEY": API_KEY_PREFIX + "k" * 40})
     assert resp.status_code == 403, resp.text
     assert mgr.minted == []
 
@@ -166,7 +167,7 @@ def test_api2_a_revoked_key_stops_working_at_once(monkeypatch):
     answers = [{"user_id": "0xOwner", "auth_method": "api_key"}]
     _patched_validator(monkeypatch, answers)
     mw = AuthenticationMiddleware(app=None, secret_key="s" * 40)
-    key = "rob_" + "k" * 40
+    key = API_KEY_PREFIX + "k" * 40
     assert asyncio.run(mw._validate_api_key(key))["user_id"] == "0xOwner"
     answers[0] = None  # the row is now revoked
     api_key_auth.note_key_revoked()
@@ -184,7 +185,7 @@ def test_api2_the_key_cache_expires(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(api_key_auth, "_now", lambda: clock[0])
     mw = AuthenticationMiddleware(app=None, secret_key="s" * 40)
-    key = "rob_" + "k" * 40
+    key = API_KEY_PREFIX + "k" * 40
     assert asyncio.run(mw._validate_api_key(key)) is not None
     answers[0] = None
     clock[0] += api_key_auth._CACHE_TTL_SEC + 1
@@ -337,7 +338,7 @@ def test_api5_end_to_end_service_token_passes_both_gates(real_app):
 
 
 # ---------------------------------------------------------------------------
-# API6 — `Authorization: Bearer rob_…` reaches the API-key validators
+# API6 — `Authorization: Bearer <api-key>` reaches the API-key validators
 # ---------------------------------------------------------------------------
 
 def test_api6_jwt_middleware_passes_a_non_jwt_bearer_through():
@@ -347,7 +348,7 @@ def test_api6_jwt_middleware_passes_a_non_jwt_bearer_through():
 
     mw = JWTAuthMiddleware(app=None, jwt_secret="j" * 40)
     out = _dispatch(mw, "/api/task/sessions",
-                    {"Authorization": "Bearer rob_" + "k" * 40},
+                    {"Authorization": "Bearer " + API_KEY_PREFIX + "k" * 40},
                     SimpleNamespace())
     assert out == "served"
 
@@ -374,7 +375,7 @@ def test_api6_end_to_end_bearer_api_key(monkeypatch, real_app):
 
     monkeypatch.setattr(api_key_auth, "validate_api_key", _valid)
     resp = real_app.get("/api/task/sessions",
-                        headers={"Authorization": "Bearer rob_" + "k" * 40})
+                        headers={"Authorization": "Bearer " + API_KEY_PREFIX + "k" * 40})
     assert resp.status_code != 401, resp.text
 
 
@@ -794,7 +795,7 @@ def test_api12_an_unpaid_chat_message_is_402_and_never_runs(monkeypatch):
 # API13/14/15 — /v1 content parts, stream errors, stream usage
 # ---------------------------------------------------------------------------
 
-def _v1_client(monkeypatch, reply="hello from rob", boom=False):
+def _v1_client(monkeypatch, reply="hello from alice", boom=False):
     from fastapi import Request
 
     import api.openai_compat.router as r

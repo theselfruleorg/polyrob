@@ -79,7 +79,7 @@ POLYROB follows the agentskills.io standard: the only valid top-level keys are
 and everything POLYROB-specific is namespaced under `metadata` as flat `polyrob-*`
 string values. OpenClaw also follows AgentSkills, but its own keys — `homepage`,
 `user-invocable`, `disable-model-invocation`, `command-dispatch` and the
-`metadata.openclaw` gating block — have no meaning here; remove them. Rob sees one
+`metadata.openclaw` gating block — have no meaning here; remove them. The agent sees one
 line per skill and loads the skill whose line fits. Write that line as
 `metadata.polyrob-when` (60 characters or fewer, it says when to load the skill):
 
@@ -142,7 +142,7 @@ per profile: [profiles.md](../profiles.md).
 
 OpenClaw's memory is plain Markdown in its `workspace`: `MEMORY.md`, `USER.md` and
 the dated notes under `memory/`. POLYROB has no importer for them. Read them, then
-recreate what matters by telling Rob, or — better for anything stable —
+recreate what matters by telling the agent, or — better for anything stable —
 ingest the notes into the knowledge base:
 
 ```bash

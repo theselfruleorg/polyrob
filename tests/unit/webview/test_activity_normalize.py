@@ -21,10 +21,10 @@ def test_normalize_feed_event_telemetry_shape():
         "_id": "evt-abc",
         "data": {"tool_name": "web_fetch", "success": True},
     }
-    ev = normalize_feed_event("rob", "sess-1", raw)
+    ev = normalize_feed_event("alice", "sess-1", raw)
     assert ev is not None
     assert ev["source"] == "feed"
-    assert ev["user_id"] == "rob"
+    assert ev["user_id"] == "alice"
     assert ev["session_id"] == "sess-1"
     assert ev["kind"] == "tool_execution"
     assert ev["ts"] == 1751800000000 / 1000.0
@@ -36,7 +36,7 @@ def test_normalize_feed_event_telemetry_shape():
 def test_normalize_feed_event_session_manager_shape():
     # session.py writes {timestamp, type, data} without _seq/_ts_ms/_id
     raw = {"timestamp": 1751800001.5, "type": "status", "data": {"status": "running"}}
-    ev = normalize_feed_event("rob", "sess-2", raw)
+    ev = normalize_feed_event("alice", "sess-2", raw)
     assert ev["ts"] == 1751800001.5
     assert ev["kind"] == "status"
     assert ev["id"]  # synthesized, non-empty
@@ -44,12 +44,12 @@ def test_normalize_feed_event_session_manager_shape():
 
 def test_normalize_feed_event_suppresses_streaming_output():
     raw = {"type": "streaming_output", "_ts_ms": 1, "data": {"chunk": "hi"}}
-    assert normalize_feed_event("rob", "s", raw) is None
+    assert normalize_feed_event("alice", "s", raw) is None
 
 
 def test_normalize_feed_event_truncates_huge_payload():
     raw = {"type": "step", "_ts_ms": 1, "data": {"blob": "x" * 50000}}
-    ev = normalize_feed_event("rob", "s", raw)
+    ev = normalize_feed_event("alice", "s", raw)
     assert ev is not None
     dumped = json.dumps(ev["payload"])
     assert len(dumped) < 20000
@@ -61,7 +61,7 @@ def test_normalize_db_event_telemetry_row():
         "id": 7,
         "ts": 1751800002.0,
         "kind": "cron_run",
-        "user_id": "rob",
+        "user_id": "alice",
         "session_id": "",
         "source": "cron",
         "attrs": json.dumps({"job_id": "j1", "outcome": "ok"}),

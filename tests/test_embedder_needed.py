@@ -21,7 +21,6 @@ def test_sqlite_backend_does_not_need_embedder(monkeypatch):
     monkeypatch.setenv("MEMORY_BACKEND", "sqlite")
     monkeypatch.setenv("KB_ENABLED", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     assert _embedder_needed() is False
 
 
@@ -29,7 +28,6 @@ def test_local_vector_backend_needs_embedder(monkeypatch):
     monkeypatch.setenv("MEMORY_BACKEND", "local_vector")
     monkeypatch.setenv("KB_ENABLED", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     assert _embedder_needed() is True
 
 
@@ -37,5 +35,4 @@ def test_kb_enabled_needs_embedder(monkeypatch):
     monkeypatch.setenv("MEMORY_BACKEND", "sqlite")
     monkeypatch.setenv("KB_ENABLED", "true")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     assert _embedder_needed() is True

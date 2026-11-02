@@ -39,8 +39,8 @@ what was busy. Ask again later, or use `/restart now` / `--now` to cut the work.
 
 `/restart` and `/update` show a quote with a **Confirm** button first; nothing happens
 until you confirm. Both are owner-only and refused inside a group room. Both also refuse,
-before any quote, when no service manager would start Rob again — for example when
-Rob runs in a terminal.
+before any quote, when no service manager would start the agent again — for example when
+the agent runs in a terminal.
 
 ## What an update does
 

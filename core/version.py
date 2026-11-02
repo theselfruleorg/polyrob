@@ -22,7 +22,7 @@ _FALLBACK_VERSION = "0+unknown"
 
 # Project names this module is willing to claim from an adjacent pyproject.toml, so
 # a parent/monorepo pyproject can never mislabel the version.
-_OWN_PROJECT_NAMES = {"polyrob", "polyrob-core", "rob"}
+_OWN_PROJECT_NAMES = {"polyrob", "polyrob-core"}
 
 
 def _load_toml(text: str) -> Optional[dict]:
@@ -81,8 +81,8 @@ def _code_root() -> Path:
 def deployed_sha() -> Optional[str]:
     """The commit a deploy stamped next to the code (``.deployed_sha``), or None.
 
-    Written by ``scripts/deploy_prod.sh`` after a verified restart; absent on a
-    dev checkout or a pip install. Fail-open: an unreadable file reads as None.
+    Written by ``scripts/deploy_prod.sh`` before the units start (a rollback
+    restores the old stamp); absent on a dev checkout or a pip install. Fail-open: an unreadable file reads as None.
     """
     try:
         text = (_code_root() / ".deployed_sha").read_text(encoding="utf-8").strip()
@@ -92,9 +92,52 @@ def deployed_sha() -> Optional[str]:
 
 
 def running_version_line() -> str:
-    """``vX.Y.Z (deployed abc123def456)`` — the version of the code that RUNS."""
+    """``vX.Y.Z (deployed abc123def456)`` — the version of the code that RUNS.
+
+    095 W1a: the version is the one this process imported (``__version__``);
+    the tree on disk is read again, and ``; on disk: vY`` is added only when it
+    differs (an upgrade landed and the process has not restarted yet).
+    """
     sha = deployed_sha()
-    return f"v{get_version()}" + (f" (deployed {sha})" if sha else "")
+    line = f"v{__version__}" + (f" (deployed {sha})" if sha else "")
+    disk = get_version()
+    return line + (f"; on disk: v{disk}" if disk != __version__ else "")
+
+
+def deployed_from() -> dict:
+    """The deploy provenance (``.deployed_from``: ``sha=``, ``previous=``, ``at=``,
+    ``subject=``…) as a dict; ``{}`` when absent or unreadable (a dev checkout,
+    a pip install, a deploy older than 095 P0.3). ``previous=none`` reads as no key."""
+    try:
+        text = (_code_root() / ".deployed_from").read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    out = {}
+    for raw in text.splitlines():
+        key, sep, value = raw.partition("=")
+        value = value.strip()
+        if sep and key.strip() and value and value.lower() != "none":
+            out[key.strip()] = value
+    return out
+
+
+def pending_deploy_line() -> str:
+    """095 W7: one line when the code on disk is not the code this process runs
+    (a deploy or an upgrade landed and the process has not restarted), else ``""``.
+
+    The running sha is the stamp this process read at import (``deploy_prod.sh``
+    stamps ``.deployed_sha`` BEFORE the start, 095 P0.3); the disk one is read now.
+    """
+    disk_sha, disk_ver = deployed_sha(), get_version()
+    parts = []
+    if disk_sha and disk_sha != _STARTUP_SHA:
+        parts.append(f"commit {disk_sha} (this process runs {_STARTUP_SHA or 'an unstamped tree'})")
+    if disk_ver != __version__:
+        parts.append(f"version v{disk_ver} (this process runs v{__version__})")
+    if not parts:
+        return ""
+    return ("pending deploy: the code on disk is " + " and ".join(parts)
+            + "; it applies at the next restart")
 
 
 RELEASE_NOTES_MAX_CHARS = 6000
@@ -123,7 +166,9 @@ def release_notes(version: str = "", max_chars: int = RELEASE_NOTES_MAX_CHARS) -
     released one when the running version has none); on a deploy
     (``deployed_sha()`` set) the ``[Unreleased]`` section comes first, because a
     deploy of ``main`` runs what is past the last tag (080 D9). ``unreleased`` →
-    the ``[Unreleased]`` section. Never raises; an absent file says so honestly.
+    the ``[Unreleased]`` section. ``since_previous`` → what changed since the
+    previous deploy (:func:`_since_previous`). Never raises; an absent file says
+    so honestly.
     """
     path = changelog_path()
     if path is None:
@@ -141,6 +186,8 @@ def release_notes(version: str = "", max_chars: int = RELEASE_NOTES_MAX_CHARS) -
         sections[key] = re.sub(r"(?m)^\[[^\]]+\]:\s.*\n?", "", m.group(0)).strip()
         order.append(key)
     want = (version or "").strip().lower().lstrip("v")
+    if want.replace("-", "_") in ("since_previous", "since_last_deploy", "last_update"):
+        return _cap(_since_previous(path, sections, order), max_chars)
     deployed_unreleased = ""
     if want in ("", "latest"):
         want = get_version().lower()
@@ -154,9 +201,78 @@ def release_notes(version: str = "", max_chars: int = RELEASE_NOTES_MAX_CHARS) -
     if not body:
         known = ", ".join(k for k in order[:8])
         return f"No release notes for {version!r} in CHANGELOG.md. Known: {known}."
-    if len(body) > max_chars:
-        body = body[:max_chars] + f"\n…[truncated at {max_chars} chars]"
-    return body
+    return _cap(body, max_chars)
+
+
+def _cap(body: str, max_chars: int) -> str:
+    if len(body) <= max_chars:
+        return body
+    cut = len(body) - max_chars
+    return body[:max_chars] + f"\n…[truncated at {max_chars} chars; {cut} more chars cut]"
+
+
+def _git_changelog_added(previous: str, current: str) -> Optional[list]:
+    """The CHANGELOG.md lines added between two commits, or None when this tree
+    has no git history that holds both (the prod tree is a ``git archive``)."""
+    import re
+    import subprocess
+    root = _code_root()
+    if not all(re.fullmatch(r"[0-9a-fA-F]{7,40}|HEAD", ref or "") for ref in (previous, current)):
+        return None
+    if not (root / ".git").exists():
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "diff", "--unified=0", previous, current, "--", "CHANGELOG.md"],
+            capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return [ln[1:] for ln in proc.stdout.splitlines()
+            if ln.startswith("+") and not ln.startswith("+++")]
+
+
+def _since_previous(path: Path, sections: dict, order: list) -> str:
+    """095 W7 (SK-8): the CHANGELOG change between the previous deploy and this one.
+
+    1. ``.deployed_from`` names ``previous=`` (095 P0.3); without it: say so.
+    2. A tree with git history: the CHANGELOG lines added between the two commits.
+    3. Else, when ``.deployed_from`` records ``previous_version=``: every section
+       newer than that version (``[Unreleased]`` included).
+    4. Else: say that it cannot tell, and why.
+    """
+    rec = deployed_from()
+    previous, current = rec.get("previous"), rec.get("sha") or deployed_sha()
+    if not previous:
+        why = ("no .deployed_from next to the code" if not rec
+               else ".deployed_from records no previous deploy")
+        return (f"Cannot tell what changed since the previous deploy: {why}. "
+                "Read release_notes='latest' or 'unreleased' instead.")
+    head = f"Changes since the previous deploy ({previous[:12]} -> {(current or 'this tree')[:12]}):"
+    added = _git_changelog_added(previous, current or "HEAD")
+    if added is not None:
+        lines = [ln for ln in added if ln.strip()]
+        if not lines:
+            return f"{head}\nNo CHANGELOG.md line changed between the two commits."
+        return head + "\n" + "\n".join(lines)
+    prev_ver = (rec.get("previous_version") or "").strip().lower().lstrip("v")
+    if prev_ver and prev_ver in sections:
+        newer = order[:order.index(prev_ver)]
+        if prev_ver == __version__.lower():
+            note = ("Same version as the previous deploy: only the [Unreleased] section can "
+                    "hold the change, and it may also list what the previous deploy ran.")
+        else:
+            note = f"The sections newer than v{prev_ver}:"
+        body = "\n\n".join(sections[k] for k in newer)
+        return f"{head}\n{note}\n\n{body}" if body else f"{head}\nNo newer section in CHANGELOG.md."
+    return (f"Cannot tell what changed since the previous deploy {previous[:12]}: this tree "
+            "has no git history and .deployed_from does not record the previous version. "
+            "Read release_notes='latest' (the running version, and on a deploy the "
+            "[Unreleased] section) — it may also list older changes.")
 
 
 __version__ = get_version()
+#: The deploy stamp this process read at import = the commit it RUNS (095 P0.3
+#: stamps before the start). :func:`pending_deploy_line` compares the disk to it.
+_STARTUP_SHA = deployed_sha()

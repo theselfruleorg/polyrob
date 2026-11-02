@@ -92,7 +92,7 @@ body {
     white-space: pre;
 }
 
-.logo-rob {
+.logo-mark {
     font-size: 16px;
     margin-bottom: 4px;
 }
@@ -250,7 +250,7 @@ body {
    TABLET - smaller logo
    ============================================================================= */
 @media (max-width: 1024px) {
-    .logo-rob { font-size: 14px; }
+    .logo-mark { font-size: 14px; }
     .logo-wordmark { font-size: 6px; }
     .hero { gap: 32px; }
 }
@@ -273,7 +273,7 @@ body {
         align-items: center;
     }
 
-    .logo-rob {
+    .logo-mark {
         font-size: 14px;
         margin-bottom: 8px;
     }
@@ -304,13 +304,13 @@ body {
 
 /* Large phones - bigger POLYROB */
 @media (min-width: 400px) and (max-width: 768px) {
-    .logo-rob { font-size: 16px; }
+    .logo-mark { font-size: 16px; }
     .logo-wordmark { font-size: 6px; }
 }
 
 /* Small phones */
 @media (max-width: 380px) {
-    .logo-rob { font-size: 12px; }
+    .logo-mark { font-size: 12px; }
     .logo-wordmark { font-size: 4px; }
     .features li { font-size: 9px; }
 }

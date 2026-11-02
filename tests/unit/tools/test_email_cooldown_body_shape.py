@@ -40,7 +40,7 @@ def store(tmp_path):
 
 def _refusal(store, text):
     return _autonomous_owner_resend_cooldown_refusal(
-        _Ctx(), None, container=_Container(store), user_id="rob",
+        _Ctx(), None, container=_Container(store), user_id="alice",
         surface="email", target="owner@example.com", owner_targets=_OWNER,
         text=text, event_log=None)
 
@@ -49,13 +49,13 @@ def test_a_repeat_email_body_is_refused(store, monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
     body = "Track-record post BLOCKED — both X rails down."
     # exactly what EmailTool.send_email records after a successful send
-    store.record_outbound("rob", "email", "owner@example.com", body)
+    store.record_outbound("alice", "email", "owner@example.com", body)
     assert _refusal(store, body) is not None
 
 
 def test_a_new_email_body_proceeds(store, monkeypatch):
     monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
-    store.record_outbound("rob", "email", "owner@example.com", "the daily summary")
+    store.record_outbound("alice", "email", "owner@example.com", "the daily summary")
     assert _refusal(store, "X posting is BLOCKED: both rails dead") is None
 
 

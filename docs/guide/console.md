@@ -25,7 +25,7 @@ works, and how to run it as a service are in
 | Inbox | `/inbox` | What is waiting on you, and what expires soonest |
 | Work | `/work` | What it is doing and what is queued |
 | Money | `/money` | What it earned, what it spent, what it holds |
-| Rob | `/agent` | Who it is, how it is configured, whether it is healthy |
+| Agent | `/agent` | Who it is, how it is configured, whether it is healthy |
 
 **Chat** opens on one true sentence about the last day — built from the same reader
 `polyrob journey` and the chat `/recap` use — four things you could ask, and a place

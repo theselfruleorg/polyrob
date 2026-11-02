@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Building a small read-only analysis tool to re-run'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["coding","code_execution"]}'
   polyrob-version: '2'
 ---

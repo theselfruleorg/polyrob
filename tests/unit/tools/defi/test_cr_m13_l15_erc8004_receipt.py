@@ -72,7 +72,7 @@ def _tool(receipt_logs, *, sim_id=7, audit=(), existing=None, monkeypatch=None):
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("EIP8004_REGISTER_ENABLED", "true")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
     monkeypatch.delenv("A2A_BASE_URL", raising=False)
     yield
     t4._Rail.last = None

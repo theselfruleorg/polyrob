@@ -1,7 +1,7 @@
 """`goal_ask` — a rail that needs an OWNER DECISION raises a durable board ask.
 
 2026-09-20 (intel 09:57Z): the 6-hourly TKN rebuy skipped 12 h on a gate-1 A/B
-question Rob had asked ONCE in chat and never re-raised — nothing agent-callable
+question the agent had asked ONCE in chat and never re-raised — nothing agent-callable
 reached `GoalBoard.create_ask`, so the question lived in a note to himself and
 vanished from every owner seat. The store already dedups OPEN asks (a matching
 one is refreshed), so re-asking is safe.
@@ -16,7 +16,7 @@ from tools.goal_tools import GoalAskAction, GoalTool
 
 @pytest.fixture(autouse=True)
 def _owner(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
 
 
 def _tool(tmp_path):
@@ -25,7 +25,7 @@ def _tool(tmp_path):
     return t
 
 
-def _ctx(session_id="rail-sess", user_id="rob", **kw):
+def _ctx(session_id="rail-sess", user_id="alice", **kw):
     return SimpleNamespace(session_id=session_id, parent_session_id=None, user_id=user_id, **kw)
 
 
@@ -35,7 +35,7 @@ def test_ask_lands_on_the_board_open_with_rail_provenance(tmp_path):
         what="Gate 1 reference — 24h high (A) or most recent 2h reading (B)?",
         why="03:33 and 09:34 cycles skipped on gate 1 alone"), _ctx()))
     assert not r.error and "ask" in r.extracted_content.lower()
-    asks = t._goal_board.asks(user_id="rob", status="open")
+    asks = t._goal_board.asks(user_id="alice", status="open")
     assert len(asks) == 1
     a = asks[0]
     assert a.payload.get("origin") == "agent" and a.payload.get("session_id") == "rail-sess"
@@ -47,7 +47,7 @@ def test_a_repeat_ask_is_refreshed_not_duplicated_and_the_result_says_so(tmp_pat
     a = GoalAskAction(what="Gate 1 reference — 24h high (A) or most recent 2h reading (B)?", why="skip")
     r1 = asyncio.run(t.goal_ask(a, _ctx()))
     r2 = asyncio.run(t.goal_ask(a, _ctx(session_id="rail-sess-2")))
-    assert len(t._goal_board.asks(user_id="rob", status="open")) == 1
+    assert len(t._goal_board.asks(user_id="alice", status="open")) == 1
     assert "already open" in r2.extracted_content.lower()
     assert "no need to re-ask" in r2.extracted_content.lower() or "dedup" in r2.extracted_content.lower()
     assert r1.extracted_content != r2.extracted_content
@@ -60,17 +60,17 @@ def test_a_leaf_or_sub_agent_cannot_raise_an_owner_ask(tmp_path):
     assert r.error and "leaf" in r.error.lower() or "sub-agent" in (r.error or "").lower()
     r2 = asyncio.run(t.goal_ask(a, _ctx(role="leaf")))
     assert r2.error
-    assert t._goal_board.asks(user_id="rob", status="open") == []
+    assert t._goal_board.asks(user_id="alice", status="open") == []
 
 
 def test_blocks_goal_ids_are_recorded(tmp_path):
     t = _tool(tmp_path)
-    g = t._goal_board.create(user_id="rob", title="buy TKN tranche 15", force=True)
+    g = t._goal_board.create(user_id="alice", title="buy TKN tranche 15", force=True)
     from core.autonomy_marker import mark_autonomous
     mark_autonomous("ask-own-goal", g.id)
     r = asyncio.run(t.goal_ask(GoalAskAction(what="decide X", blocks_goal_ids=[g.id]), _ctx(session_id="ask-own-goal")))
     assert not r.error
-    a = t._goal_board.asks(user_id="rob", status="open")[0]
+    a = t._goal_board.asks(user_id="alice", status="open")[0]
     assert g.id in (a.payload.get("blocks_goal_ids") or [])
 
 
@@ -88,14 +88,14 @@ def test_an_option_question_carries_tap_options(tmp_path):
     t = _tool(tmp_path)
     asyncio.run(t.goal_ask(GoalAskAction(what="Which reference: A) the 24h high or B) the 2h reading?"),
                            _ctx()))
-    a = t._goal_board.asks(user_id="rob", status="open")[0]
+    a = t._goal_board.asks(user_id="alice", status="open")[0]
     assert set((a.payload.get("options") or {}).keys()) == {"A", "B"}
 
 
 def test_autonomous_ask_cannot_hold_an_unrelated_goal(tmp_path):
     from core.autonomy_marker import mark_autonomous
     tool = _tool(tmp_path)
-    goal = tool._goal_board.create(user_id="rob", title="unrelated goal", force=True)
+    goal = tool._goal_board.create(user_id="alice", title="unrelated goal", force=True)
     mark_autonomous("other-goal-run", "own-goal")
     result = asyncio.run(tool.goal_ask(GoalAskAction(what="please block this goal", blocks_goal_ids=[goal.id]),
                                      _ctx(session_id="other-goal-run")))

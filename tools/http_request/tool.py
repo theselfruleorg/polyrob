@@ -1,7 +1,7 @@
 """The ``http_request`` tool (093 F1): one outbound HTTP call with a JSON body.
 
 ``web_fetch`` reads (GET only); a two-call REST enrollment (POST) had no rail but
-the shell, and the shell was broken on prod (2026-10-28, 402Mob). This verb is
+the shell, and a broken shell left it no rail at all. This verb is
 that rail, kept narrow:
 
 - ONE SSRF validator: every call goes through ``tools.web_fetch.fetcher.safe_fetch``

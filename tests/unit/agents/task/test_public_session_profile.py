@@ -31,7 +31,9 @@ def test_memory_injectors_skip_public_sessions():
 
 
 def test_live_health_skips_public_sessions():
-    assert "is_public_session(" in _src(live_health.LiveHealthMixin._maybe_inject_live_health)
+    # 095 W3: the guard lives in the ONE predicate the injector reads.
+    assert "live_health_injected(" in _src(live_health.LiveHealthMixin._live_health_part)
+    assert "is_public_session(" in _src(live_health.live_health_injected)
 
 
 # --- Fix round 1 (review Important #2): behavioural coverage -----------------
@@ -103,14 +105,13 @@ def test_live_health_behavioural_public_vs_private(monkeypatch):
     monkeypatch.setattr(live_health, "build_live_health_text",
                         lambda *a, **k: "SENTINEL_HEALTH_TEXT")
 
+    # 095 W4: the part is "" on a public seat (update_state_delta pushes nothing).
     public_agent = _FakeAgent(public=True)
-    asyncio.run(live_health.LiveHealthMixin._maybe_inject_live_health(public_agent))
-    assert public_agent.message_manager.pushed == []
+    assert asyncio.run(live_health.LiveHealthMixin._live_health_part(public_agent)) == ""
 
     private_agent = _FakeAgent(public=False)
-    asyncio.run(live_health.LiveHealthMixin._maybe_inject_live_health(private_agent))
-    assert len(private_agent.message_manager.pushed) == 1
-    assert "SENTINEL_HEALTH_TEXT" in private_agent.message_manager.pushed[0].content
+    out = asyncio.run(live_health.LiveHealthMixin._live_health_part(private_agent))
+    assert "SENTINEL_HEALTH_TEXT" in out
 
 
 # --- 044 I3 / I5 (final review) -------------------------------------------

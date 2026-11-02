@@ -9,7 +9,7 @@ import pytest
 
 
 def _temp_config(monkeypatch, tmp_path):
-    # Avoid the production /opt/rob paths baked into the dev env file.
+    # Avoid the production /opt/polyrob paths baked into the dev env file.
     for k in ("DATA_DIR", "DATA_ROOT", "CHARACTERS_DIR", "KNOWLEDGE_DIR",
               "CACHE_DIR", "DB_PATH", "TELEMETRY_DATA_DIR"):
         monkeypatch.setenv(k, str(tmp_path / k.lower()))

@@ -89,6 +89,7 @@ async def test_memory_write_event_only_on_insert(monkeypatch, status, events):
     host.logger = logging.getLogger("d4")
     await host._save_step_to_memory(step_number=1, brain_state={"memory": "a finding"},
                                     actions=[], results=[])
+    await host._sync_reflection_summaries(1)       # the run-end drain (F7)
     assert emitted.count("memory_write") == events
     # only a failed / refused write gives the findings back for a retry
     assert released == ([["a finding"]] if status in (R.SYNC_FAILED, R.SYNC_REFUSED_CAP) else [])

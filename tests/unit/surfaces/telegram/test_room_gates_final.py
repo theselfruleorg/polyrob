@@ -252,7 +252,7 @@ def owner_probe(monkeypatch, tmp_path):
     """The I2 rig, plus a configured owner Telegram id."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "9911")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
     calls = []
 
@@ -319,7 +319,7 @@ async def test_an_owner_voice_note_in_an_unlisted_room_is_still_dropped(owner_pr
 
 @pytest.mark.asyncio
 async def test_an_owner_ordinary_line_in_an_unlisted_room_is_still_dropped(owner_probe):
-    await _harness().handle_update(_room_update(uid=15, text="hey rob, what's up"))
+    await _harness().handle_update(_room_update(uid=15, text="hey alice, what's up"))
     await _drain()
     assert owner_probe == []
 
@@ -338,7 +338,7 @@ async def test_owner_groups_allow_here_really_writes_the_allowlist_row(tmp_path,
     first step actually allows the room it was typed in."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "9911")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("GROUP_CHAT_ENABLED", "true")
     monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)

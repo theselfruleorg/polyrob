@@ -66,7 +66,7 @@ def test_reserved_names_rejected():
 
 
 def test_good_names_accepted():
-    for good in ("rob", "scout", "my-bot_2", "A"):
+    for good in ("alice", "scout", "my-bot_2", "A"):
         assert is_safe_profile_name(good)
 
 
@@ -165,7 +165,7 @@ def test_broken_sticky_warns_and_falls_through(_isolated, capsys):
 
 
 def test_flag_overwrites_exported_homes(_isolated, monkeypatch):
-    # `rob -P scout` inside a shell exporting another profile's home MUST run scout.
+    # `polyrob -P scout` inside a shell exporting another profile's home MUST run scout.
     home = _mk_profile(_isolated, "scout")
     monkeypatch.setenv("POLYROB_HOME", str(_isolated))  # base (as the wrapper exports)
     monkeypatch.setenv("POLYROB_DATA_DIR", "/somewhere/else")

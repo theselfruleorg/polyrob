@@ -25,9 +25,9 @@ _GO_LINES = {
 
 def _result(cmd, text):
     return SimpleNamespace(
-        decision=SimpleNamespace(command=cmd, session_key="agent:main:telegram:dm:1:rob",
+        decision=SimpleNamespace(command=cmd, session_key="agent:main:telegram:dm:1:alice",
                                  session_id="s"),
-        inbound=SimpleNamespace(text=text, identity=SimpleNamespace(user_id="rob")))
+        inbound=SimpleNamespace(text=text, identity=SimpleNamespace(user_id="alice")))
 
 
 @pytest.mark.parametrize("cmd", sorted(_GO_LINES))

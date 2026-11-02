@@ -111,8 +111,8 @@ async def test_http_transports_speak_streamable_http(cls, no_ssrf_pin):
     try:
         await client.connect()
         assert [t["name"] for t in client.tools] == ["enroll"]
-        out = await client.execute_tool("enroll", {"name": "rob"})
-        assert "enrolled rob" in json.dumps(out)
+        out = await client.execute_tool("enroll", {"name": "alice"})
+        assert "enrolled alice" in json.dumps(out)
     finally:
         await client.close()
         await server.close()
@@ -287,7 +287,9 @@ class _AllowAll:
 @pytest.mark.asyncio
 async def test_mcp_add_enables_the_tool_in_the_same_process(no_ssrf_pin, monkeypatch, tmp_path):
     import aiosqlite
+    import core.tool_gates as tg
     from core.mcp_admin import perform_mcp_add, perform_mcp_list, perform_mcp_remove, perform_mcp_test
+    monkeypatch.setitem(tg._GATES, "mcp", lambda: True)  # the mcp tool is registered
     from modules.database.connection import DatabaseConnection
     from modules.database.user_mcp_servers import UserMCPServersHandler
     from tools.controller.mcp_gate import mcp_unreachable_reason, prepare_user_servers
@@ -326,8 +328,8 @@ async def test_mcp_add_enables_the_tool_in_the_same_process(no_ssrf_pin, monkeyp
         await prepare_user_servers(tool, container, "owner1")
         tools = tool.server_manager.get_all_tools()
         assert [m.server_tool_name or m.name for m in tools["user_owner1::evidence"]][0].endswith("enroll")
-        res = await tool.server_manager.execute_tool("user_owner1::evidence", "enroll", {"name": "rob"})
-        assert "enrolled rob" in json.dumps(res, default=str)
+        res = await tool.server_manager.execute_tool("user_owner1::evidence", "enroll", {"name": "alice"})
+        assert "enrolled alice" in json.dumps(res, default=str)
 
         listing = (await perform_mcp_list(svc, "owner1")).message
         assert "evidence [streamable_http, on]" in listing
@@ -452,3 +454,23 @@ def test_migrated_servers_load_through_the_operator_overlay(tmp_path, monkeypatc
     migrate_repo_servers(repo)
     assert operator_mcp_file() == tmp_path / "mcp.json"
     assert load_local_mcp_servers()["evidence"]["type"] == "streamable_http"
+
+
+@pytest.mark.asyncio
+async def test_mcp_add_says_saved_but_off_when_the_mcp_gate_is_off(monkeypatch):
+    """095 W8: a saved server is not the lever. With the mcp gate off the reply
+    must not promise "from the next turn"; it names the operator lever."""
+    import core.tool_gates as tg
+    from core.mcp_admin import perform_mcp_add
+    monkeypatch.setitem(tg._GATES, "mcp", lambda: False)
+
+    class _Svc:
+        async def add_server(self, *a, **k):
+            return SimpleNamespace(success=True, tools_discovered=2,
+                                   server=SimpleNamespace(server_type="streamable_http"))
+
+    out = await perform_mcp_add(_Svc(), "owner1", "evidence", "https://mcp.example.org")
+    assert out.ok
+    assert "next turn" not in out.message
+    assert "mcp tool is off" in out.message
+    assert "polyrob config set MCP_ENABLED true" in out.message  # merged, never a list-replacing line (095 W2)

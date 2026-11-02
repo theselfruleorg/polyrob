@@ -7,7 +7,8 @@ import pytest
 from core import open_positions as op
 from core import trading_mandate as tm
 from core.open_positions import PositionDelta, apply_delta
-from core.trading_presets import MAJORS_EXIT, MEMECOIN_EXIT
+from core.trading_presets import MAJORS_EXIT
+from tests.trading_fixture import LONGTAIL_EXIT as MEMECOIN_EXIT
 from tools.defi.data_tool import DefiDataTool
 from tools.defi.marks import (CROSSED, NEAR, NONE, UNKNOWN, DiscoveryCountParams,
                               PositionMarkParams, barrier_for)
@@ -92,7 +93,7 @@ def _tool(price=0.03, conf="high", discover=None):
 
 def _mandate():
     return tm.create("owner-1", actor=tm.OWNER_SEAT, budget_usd=30.0, chains=["base"],
-                     slots=2)
+                     slots=2, preset="longtail")
 
 
 async def _mark(tool, mandate=None, address=MEME):
@@ -113,7 +114,7 @@ async def test_mark_of_an_open_row_with_the_mandate_preset(home):
     assert md["value_usd"] == pytest.approx(1.5)
     assert md["unrealized_pct"] == pytest.approx(-50.0)
     assert md["barrier"] == CROSSED and md["barrier_reason"] == "stop_loss"
-    assert md["exit_preset"] == "memecoin_default" and md["hours_open"] is not None
+    assert md["exit_preset"] == "longtail_exit" and md["hours_open"] is not None
 
 
 @pytest.mark.asyncio
@@ -171,7 +172,7 @@ async def test_a_partial_sell_spends_the_take_profit_tier(home):
 @pytest.mark.asyncio
 async def test_a_mandate_of_another_tenant_is_unknown(home):
     _buy()
-    other = tm.create("owner-2", actor=tm.OWNER_SEAT, budget_usd=30.0, chains=["base"])
+    other = tm.create("owner-2", actor=tm.OWNER_SEAT, budget_usd=30.0, chains=["base"], preset="longtail")
     res = await _mark(_tool(), other.id)
     assert res.metadata["barrier"] == UNKNOWN
     assert res.metadata["barrier_reason"] == "mandate_unreadable"

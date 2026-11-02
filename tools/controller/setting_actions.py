@@ -1,6 +1,6 @@
 """093 D1/D2 — ``propose_setting``: the agent proposes the fix, the owner taps once.
 
-Before this (the 402Mob incident, 2026-10-28) the only exit from a missing
+Before this the only exit from a missing
 capability was prose ("ask whoever manages that tool"), and the owner had to
 know the verb. Now the agent hands ONE owner seat line to
 ``core.setting_proposals.classify``:
@@ -91,14 +91,19 @@ def _card_body(p, why: str) -> str:
     return "\n".join(body)
 
 
-def _open_config_change(board, user_id: str, line: str):
-    """The OPEN ``config_change`` ask for exactly this env line, or None. The ONE
-    dedupe: two different lines are two asks (the board's fuzzy title match
-    would merge ``MCP_ENABLED=true`` into ``CRON_ENABLED=true``)."""
+def _open_config_change(board, user_id: str, line: str, setting: str = ""):
+    """The OPEN ``config_change`` ask for this change, or None. The ONE dedupe:
+    by the setting (``KEY=value``) — 095 W1c: a member line is MERGED into the
+    running override line, so the same change can print another line after a
+    restart — else by the exact line. Two different settings are two asks (the
+    board's fuzzy title match would merge ``MCP_ENABLED=true`` into
+    ``CRON_ENABLED=true``)."""
     from core.goal_vocab import ASK_OPEN
     for ask in board.asks(user_id=user_id, status=ASK_OPEN):
         pl = ask.payload or {}
-        if pl.get("ask_kind") == ASK_KIND_CONFIG_CHANGE and pl.get("line") == line:
+        if pl.get("ask_kind") != ASK_KIND_CONFIG_CHANGE:
+            continue
+        if pl.get("line") == line or (setting and pl.get("setting") == setting):
             return ask
     return None
 
@@ -107,14 +112,20 @@ async def _file_for_operator(controller, user_id: str, sid: str, p, why: str) ->
     from tools.controller.owner_ask_action import _board
     try:
         board = _board(controller)
-        ask = _open_config_change(board, user_id, p.env_line)
+        ask = _open_config_change(board, user_id, p.env_line, p.setting)
         if ask is None:
+            # 095 W8 (SC-11): closes-when — the board sweep closes it once the
+            # setting is in effect, or at ``expires_at``.
+            from core.setting_proposals import CONFIG_ASK_TTL_DAYS
+            import time
+            expires_at = getattr(board, "_now", time.time)() + CONFIG_ASK_TTL_DAYS * 86400
             ask = board.create_ask(
                 user_id=user_id,
                 what=f"Operator: set {p.env_line} on the host (env file), then restart",
                 why=(why or "").strip()[:600],
                 extra_payload={"origin": "agent", "session_id": sid,
-                               "ask_kind": ASK_KIND_CONFIG_CHANGE, "line": p.env_line},
+                               "ask_kind": ASK_KIND_CONFIG_CHANGE, "line": p.env_line,
+                               "setting": p.setting, "expires_at": expires_at},
                 force=True)
     except Exception as e:
         logger.warning("propose_setting: the operator request was not filed: %s", e)
@@ -123,11 +134,13 @@ async def _file_for_operator(controller, user_id: str, sid: str, p, why: str) ->
                                    f"the exact line in one sentence."),
                             include_in_memory=True)
     short = str(ask.id)[:8]
+    from core.setting_proposals import CONFIG_ASK_TTL_DAYS
     return ActionResult(
         extracted_content=(
             f"Not a card: {p.env_line} is an operator setting (the env file on the host; "
             f"applies at the next restart). Filed for the operator as ask #{short} — it "
-            f"holds the exact line and shows on /asks. Tell the owner in ONE sentence: "
+            f"holds the exact line and shows on /asks; it closes by itself once the "
+            f"setting is in effect (or after {CONFIG_ASK_TTL_DAYS} days). Tell the owner in ONE sentence: "
             f"\"this needs the operator; I filed it as #{short}\". Do not retry."),
         include_in_memory=True)
 
@@ -141,11 +154,20 @@ def register_setting_actions(controller) -> None:
     # Read by agent_status(tool=) (``agent_status_action._may_propose``): the
     # view suggests this verb only where this very check passes.
     controller.propose_setting_refusal = _refusal_for
+    # 095 W2 (HI-15): a goal/cron run has no owner turn, so propose_setting could
+    # only refuse there; its schema stays off (agent_status suggests owner_ask).
+    try:
+        from core.autonomy_marker import is_autonomous
+        if is_autonomous(getattr(controller, "session_id", None)):
+            return
+    except Exception:
+        pass
 
     class ProposeSetting(BaseModel):
         command: str = Field(..., min_length=5, max_length=600, description=(
             "The owner's line: `/mcp add <id> <https-url>`, `/config set <key> <value>`, "
-            "`/goal grant <id> tools=a,b` or `/job edit <id> grant tools=a,b`."))
+            "`/goal grant <id> tools=a,b`, `/job edit <id> grant tools=a,b` or "
+            "`/model <name> default`."))
         why: str = Field("", max_length=600, description="One line: why.")
 
     @controller.registry.action(

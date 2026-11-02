@@ -126,12 +126,33 @@ class Verdict:
         return self.outcome == REFUSED
 
 
-FORGED_TEXT = ("refused: a forged/autonomous turn (self-wake, delegation-result, "
-               "leaf, or autonomous run) cannot move funds")
+from core.tool_gates import refusal_text as _refusal_text
+
+#: 095 W2: two causes, two texts — a turn the owner did not make, and an
+#: autonomous run on an instance that has not armed unattended money.
+FORGED_TEXT = _refusal_text("money:forged_text")
+UNARMED_TEXT = _refusal_text("money:autonomous_unarmed")
+FORGED_TEXTS = (FORGED_TEXT, UNARMED_TEXT)
 NO_DETECTOR_TEXT = ("refused: an agent turn was supplied but no turn-origin detector — "
                     "cannot prove the turn is genuine, so failing closed")
 SESSION_CONTEXT_TEXT = "money actions require an authenticated execution context"
 SESSION_MISMATCH_TEXT = "money action identity does not match its session"
+
+
+def _unarmed_autonomous_run(context) -> bool:
+    """The main agent of a goal/cron run on an instance whose unattended money
+    is NOT armed: the refusal names the operator's lever, not a forged turn.
+    Fail-closed to False (the forged text)."""
+    try:
+        if getattr(context, "is_sub_agent", False):
+            return False
+        from core.autonomy_marker import is_autonomous
+        if not is_autonomous(getattr(context, "session_id", None)):
+            return False
+        from core.config_policy.money_regime import unattended_money_allowed
+        return not unattended_money_allowed()
+    except Exception:
+        return False
 
 
 def _refused(step: str, reason: str, *, detail: str = "") -> Verdict:
@@ -200,7 +221,8 @@ def authorize_spend(intent: SpendIntent, context=None, *,
                 except Exception:
                     admitted = False
             if not admitted:
-                return _refused("turn", FORGED_TEXT)
+                return _refused("turn", UNARMED_TEXT if _unarmed_autonomous_run(context)
+                                else FORGED_TEXT)
             autonomous = True
 
     # -- 4. owner pause ---------------------------------------------------

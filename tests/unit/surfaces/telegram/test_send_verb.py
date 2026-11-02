@@ -13,7 +13,7 @@ TOKEN = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 def test_parse_native_send():
     order, err = send_ops.parse(["0.997", "native", "to", ADDR, "on", "ethereum", "go"])
     assert err is None
-    assert order == {"amount": 0.997, "token": "native", "to": ADDR,
+    assert order == {"amount": 0.997, "usd": None, "token": "native", "to": ADDR,
                      "chain": "ethereum", "go": True, "max_usd": None, "anyway": False}
 
 
@@ -114,7 +114,7 @@ def test_send_go_runs_in_background_and_says_send_not_bridge(monkeypatch):
     result = SimpleNamespace(
         decision=SimpleNamespace(command="/send", session_key="telegram:dm:1", session_id="s"),
         inbound=SimpleNamespace(text=f"/send 1 native to {ADDR} on base go",
-                                identity=SimpleNamespace(user_id="rob")))
+                                identity=SimpleNamespace(user_id="alice")))
     assert harness._runs_in_background("/send", result)
     reply = asyncio.run(harness._handle_command(None, result, spawn=None, deliver=_deliver))
     assert reply.startswith("⏳ Send started") and "Bridge" not in reply
@@ -180,3 +180,77 @@ def test_a_disabled_wallet_says_so():
     out = asyncio.run(send_ops.send_reply(
         "owner", ["1", "native", "to", ADDR, "on", "ethereum"], tool=_NoWallet()))
     assert "not enabled" in out and "Nothing was sent" in out
+
+
+# -- a dollar amount the tool converts (prod 2026-10-28) ------------------------
+
+class _PricedTool(_Tool):
+    """A token at $0.0000271 (the incident's order of magnitude). The simulated
+    value is what the converted amount is worth, like the real guard."""
+
+    def __init__(self, px=0.0000271):
+        super().__init__()
+        self.px = px
+
+    def _price(self, chain, addr):
+        return self.px
+
+    async def transfer(self, params, ctx):
+        self.usd = params.amount * (self.px or 0)
+        return await super().transfer(params, ctx)
+
+
+def test_a_dollar_send_quotes_the_converted_token_count_and_the_price():
+    tool = _PricedTool()
+    out = asyncio.run(send_ops.send_reply(
+        "owner", ["$22", TOKEN, "to", ADDR, "on", "base"], tool=tool))
+    sent = tool.calls[0][0]
+    assert sent.dry_run and sent.amount == pytest.approx(22 / 0.0000271, rel=1e-5)
+    assert "$22.00 = 811,808" in out and "$0.00002710" in out
+    # The confirm line keeps the dollars and carries the implied cap.
+    assert out.rstrip().endswith(f"/send $22 {TOKEN} to {ADDR} on base max 23.11 go")
+    assert "the dollars you named + 5%" in out
+
+
+def test_the_confirm_line_makes_a_confirmable_quote_card(tmp_path):
+    from core.surfaces import cards
+    cards.set_store(cards.CardStore(str(tmp_path / "cards.db")))
+    try:
+        tool = _PricedTool()
+        typed = ["$22", TOKEN, "to", ADDR, "on", "base"]
+        out = asyncio.run(send_ops.send_reply("owner", typed, tool=tool))
+        text, card = cards.quote_card("owner", "/send", typed, out)
+        assert card is not None and card.args[-2:] == ["max", "23.11"]
+        assert "811,808" in text                  # the owner sees the token count
+    finally:
+        cards.set_store(None)
+
+
+def test_a_dollar_send_with_go_converts_and_is_held_to_the_dollars():
+    tool = _PricedTool()
+    out = asyncio.run(send_ops.send_reply(
+        "owner", ["$22", TOKEN, "to", ADDR, "on", "base", "go"], tool=tool))
+    assert [p.dry_run for p, _ in tool.calls] == [True, False]
+    live = tool.calls[1][0]
+    assert live.amount == pytest.approx(22 / 0.0000271, rel=1e-5)
+    assert live.max_spend_usd == 23.11
+    assert "SENT" in out
+
+
+def test_a_dollar_send_without_a_spend_grade_price_is_refused_plainly():
+    tool = _PricedTool(px=None)
+    out = asyncio.run(send_ops.send_reply(
+        "owner", ["$22", TOKEN, "to", ADDR, "on", "base", "go"], tool=tool))
+    assert tool.calls == []                       # nothing quoted, nothing sent
+    assert "No spend-grade price" in out and "token amount" in out
+
+
+def test_a_token_send_is_unchanged_and_never_reads_a_price():
+    class _NoPrice(_Tool):
+        def _price(self, chain, addr):
+            raise AssertionError("a token amount needs no conversion")
+
+    tool = _NoPrice()
+    out = asyncio.run(send_ops.send_reply(
+        "owner", ["22", TOKEN, "to", ADDR, "on", "base"], tool=tool))
+    assert tool.calls[0][0].amount == 22.0 and "amount: $" not in out

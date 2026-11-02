@@ -107,7 +107,7 @@ def test_cold_start_requeue_runs_even_while_paused(home):
     from core import autonomy_control as ac
     from agents.task.goals.board import GoalBoard
     b = GoalBoard(str(home / "goals.db"))
-    g = b.create(user_id="rob", title="a")
+    g = b.create(user_id="alice", title="a")
     # The claim of the previous, now-dead process (the sweep's subject). The claim
     # format matters since the ownership guard added to `requeue_running_on_boot`
     # requeues only a row whose owner is expired or provably gone — this test is
