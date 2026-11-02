@@ -34,10 +34,10 @@ import {
 } from "../static/app/work-now.js";
 
 const COPY = {
-  loading: "Reading what Rob is doing.",
-  empty_now: "Rob is not running anything right now.",
+  loading: "Reading what the agent is doing.",
+  empty_now: "The agent is not running anything right now.",
   empty_next: "Nothing is waiting its turn.",
-  disabled: "Rob's own work is switched off.",
+  disabled: "The agent's own work is switched off.",
   unreadable: "I could not read the goal board.",
   unreadable_why: "Why it failed",
   running_count: "{count} running",
@@ -48,7 +48,7 @@ const COPY = {
   drop: "Drop it",
   retry: "Try it again",
   resume: "Resume",
-  helper_lead: "A helper is doing part of this for Rob.",
+  helper_lead: "A helper is doing part of this for the agent.",
   helper_body: "Helpers cannot spend money or change your files.",
   helper_goal: "Working on {goal}",
   status_ready: "waiting its turn",

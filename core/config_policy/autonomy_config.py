@@ -301,11 +301,6 @@ class AutonomyConfig(GoalFlagsMixin):
     def knowledge_note_stale_days() -> int:
         return _int_env("KNOWLEDGE_NOTE_STALE_DAYS", 90)
 
-    # W6 — cross-session search tool (read-only, default-on)
-    @staticmethod
-    def memory_search_tool() -> bool:
-        return _bool_env("MEMORY_SEARCH_TOOL", True)
-
     # W7 — insights tool (read-only authored-skill reuse metric)
     @staticmethod
     def insights_tool() -> bool:
@@ -455,25 +450,6 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def session_retention_days() -> int:
         return _int_env("SESSION_RETENTION_DAYS", 90)
-
-    # WS-K4 (2026-09-22) — distil repeated recall into ONE curated note on the
-    # curator tick. Deterministic (no LLM) and non-destructive: the raw rows
-    # still age out under MEMORY_RETENTION_DAYS.
-    #
-    # ⚠️ DEFAULT OFF since 2026-09-23, on a measurement that reversed the
-    # premise. Run over prod's real 19,329-row corpus the clusters are not
-    # LESSONS, they are per-step NARRATION and tool-call echoes: 770x
-    # "done(text=…)→DONE. Task complete", 235x "[STRATEGIC CLUE FROM
-    # COLLECTION]…", 139x "Self-wake confirms the treasury goal completed".
-    # Dropping the `verb(args)→result` traces does not rescue it — what repeats
-    # underneath is still narration. `memories` is a store of what the agent
-    # DID, not of what it LEARNED, so distilling it fills the curated store
-    # (which `memory(read)` hands straight back to the agent) with noise.
-    # The mechanism is correct and tested; the INPUT is the wrong store. Turn
-    # it on only for a corpus of authored lessons.
-    @staticmethod
-    def memory_consolidate() -> bool:
-        return _bool_env("MEMORY_CONSOLIDATE", False)
 
     # T16 — interrupt-and-redirect: Ctrl-C mid-turn prompts for a redirect instruction
     # that becomes the next turn instead of silently aborting. Default OFF; NOT in

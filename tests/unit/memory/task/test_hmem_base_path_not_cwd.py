@@ -3,8 +3,8 @@
 Prod (2026-09-17, post identity cutover): ``TaskContextManager`` defaulted to
 ``Path("data") / "auto"`` — relative to the process CWD, ``/opt/polyrob``, which
 ``ProtectSystem=strict`` makes read-only. Every hierarchical-memory save raised
-``[Errno 30] Read-only file system: 'data/auto/rob/sessions/<sid>'`` (155 in 24 h);
-Rob's per-session H-MEM was silently lost on every resume. And ``DATA_PATH`` is
+``[Errno 30] Read-only file system: 'data/auto/alice/sessions/<sid>'`` (155 in 24 h);
+the agent's per-session H-MEM was silently lost on every resume. And ``DATA_PATH`` is
 not a declared ``BotConfig`` field, so on a real deploy it is ALWAYS unset.
 Unset → the data home (the N1 rule: never CWD-relative); an explicit
 DATA_PATH still wins.

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Something is broken live, or a secret leaked'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-requires: '["secret-handling"]'
   polyrob-version: '1'
 ---

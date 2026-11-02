@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Writing or editing a long document, report or summary'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Document Writing

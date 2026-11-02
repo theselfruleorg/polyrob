@@ -6,7 +6,7 @@
       "additionalProperties": false,
       "properties": {
         "command": {
-          "description": "The owner's line: `/mcp add <id> <https-url>`, `/config set <key> <value>`, `/goal grant <id> tools=a,b` or `/job edit <id> grant tools=a,b`.",
+          "description": "The owner's line: `/mcp add <id> <https-url>`, `/config set <key> <value>`, `/goal grant <id> tools=a,b`, `/job edit <id> grant tools=a,b` or `/model <name> default`.",
           "maxLength": 600,
           "minLength": 5,
           "type": "string"

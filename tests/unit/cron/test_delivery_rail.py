@@ -75,7 +75,7 @@ async def test_router_surface_delivery_resolves_owner_address(monkeypatch):
     """030 D8: a cron job can deliver to any router surface; the recipient is
     the owner's address on that surface (owner-address contract)."""
     monkeypatch.setenv("OWNER_SLACK_ID", "C0FFEE")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
     class _Router:
         def __init__(self):
@@ -97,7 +97,7 @@ async def test_router_surface_delivery_resolves_owner_address(monkeypatch):
 
     class _Job:
         id = "j1"
-        user_id = "rob"
+        user_id = "alice"
         task = "daily check"
 
     from cron.delivery import deliver_result
@@ -120,7 +120,7 @@ async def test_router_surface_without_owner_address_fails_soft(monkeypatch):
 
     class _Job:
         id = "j2"
-        user_id = "rob"
+        user_id = "alice"
         task = "t"
 
     from cron.delivery import deliver_result

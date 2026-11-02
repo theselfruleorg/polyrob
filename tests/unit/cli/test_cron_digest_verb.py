@@ -15,20 +15,20 @@ from click.testing import CliRunner
 def _home(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     return tmp_path
 
 
 def _run(*args):
     from cli.commands.cron import job as cron
-    return CliRunner().invoke(cron, list(args) + ["--user", "rob"])
+    return CliRunner().invoke(cron, list(args) + ["--user", "alice"])
 
 
 def _jobs(tmp_path):
     from core.runtime_paths import cron_db_path
     from cron.jobs import CronJobStore
     from cron.service import CronService
-    return CronService(CronJobStore(cron_db_path(str(tmp_path)))).list_jobs(user_id="rob")
+    return CronService(CronJobStore(cron_db_path(str(tmp_path)))).list_jobs(user_id="alice")
 
 
 def test_digest_schedules_a_digest_payload_job(tmp_path):

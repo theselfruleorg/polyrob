@@ -8,6 +8,7 @@ from core import trading_mandate as tm
 from core.trading_mandate import (MandateError, MandateUnreadable, OWNER_SEAT, create, get,
                                   get_active, latch, next_stage, release, set_stage,
                                   set_status, stage_ticket)
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 
 @pytest.fixture
@@ -17,7 +18,7 @@ def db(tmp_path):
 
 def _mk(db, **kw):
     args = dict(actor=OWNER_SEAT, budget_usd=150.0, chains=["robinhood", "Solana"], path=db,
-                now=1000.0)
+                now=1000.0, preset="longtail")
     args.update(kw)
     return create("u1", **args)
 
@@ -26,8 +27,8 @@ def test_create_applies_the_preset_defaults(db):
     m = _mk(db)
     assert m.status == "active" and m.stage == "probe" and m.post_public is False
     assert m.chains == ("robinhood", "solana")
-    assert (m.preset, m.ticket_usd, m.slots, m.exit_preset) == ("memecoin", 3.0, 8,
-                                                                "memecoin_default")
+    assert (m.preset, m.ticket_usd, m.slots, m.exit_preset) == ("longtail", 3.0, 8,
+                                                                "longtail_exit")
     assert m.report == tm.DEFAULT_REPORT
     again = get(m.id, path=db)
     assert again == m
@@ -42,7 +43,7 @@ def test_only_the_owner_seat_creates(db):
 @pytest.mark.parametrize("bad", [
     dict(budget_usd=0), dict(budget_usd="x"), dict(chains=[]), dict(preset="yolo"),
     dict(ticket_usd=500.0), dict(breakers={"stop_pct": 3.0}), dict(breakers={"slots": 2}),
-    dict(exit_preset="nope"),
+    dict(exit_preset="nope"), dict(preset=None), dict(preset=""),
 ])
 def test_create_refuses_bad_fields(db, bad):
     with pytest.raises(MandateError):
@@ -67,7 +68,8 @@ def test_one_live_mandate_per_user(db):
     set_status(m.id, "stopped", actor=OWNER_SEAT, path=db)
     m2 = _mk(db)
     assert get_active("u1", path=db).id == m2.id
-    assert create("u2", actor=OWNER_SEAT, budget_usd=10, chains=["base"], path=db)
+    assert create("u2", actor=OWNER_SEAT, budget_usd=10, chains=["base"], path=db,
+                  preset="dca")
 
 
 def test_reads_never_create_and_absent_is_none(db):
@@ -156,7 +158,7 @@ def test_mandate_id_from_context():
 
 def _m(**kw):
     d = dict(id="m", user_id="u", status="active", budget_usd=150.0,
-             chains=("robinhood", "solana"), preset="memecoin", ticket_usd=3.0, slots=8,
+             chains=("robinhood", "solana"), preset="longtail", ticket_usd=3.0, slots=8,
              actor=OWNER_SEAT, created_at=0.0, updated_at=0.0, stage="probe")
     d.update(kw)
     return tm.Mandate(**d)

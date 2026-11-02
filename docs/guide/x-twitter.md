@@ -22,7 +22,7 @@ Each mention carries `author_id` and `author_username`, so a reply goes to the
 account that wrote the mention. Each tweet read carries `reposts_and_quotes`
 (retweets plus quotes), the figure that X's app shows as reposts.
 
-`twitter` carries Rob's own X identity, so a helper cannot use it.
+`twitter` carries the agent's own X identity, so a helper cannot use it.
 
 ## API rails
 
@@ -44,7 +44,7 @@ X exposes two different private-message protocols:
 Chat rejects a cold first contact — a recipient without X Chat keys, or a thread
 whose key this account cannot read, which is never re-keyed), nothing is sent
 until a new call with `allow_plaintext=true` is in your approval. Only then does
-Rob use the plaintext endpoint
+the agent use the plaintext endpoint
 (`POST /2/dm_conversations/with/:id/messages`), which still delivers; the result
 names the endpoint. The approval always shows that field. A 5xx or timeout is
 never re-sent on the other rail, since the message may have landed. Every
@@ -185,8 +185,8 @@ Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
 - `x_post`: publish a post, also approval-gated.
 - `x_reply`: reply under an existing post (status URL or id) — the lane the API tier refuses for non-mentioners; approval-gated like `x_post`.
 - `x_login_check`: verify the captured session.
-- `x_signup_start`: register Rob's own X account. It always waits for your
-  approval. It fills the form, reads the code from Rob's own mailbox, and
+- `x_signup_start`: register the agent's own X account. It always waits for your
+  approval. It fills the form, reads the code from the agent's own mailbox, and
   stores the generated password encrypted before it types it. `X_SIGNUP_HANDLE`
   and `X_SIGNUP_DISCLOSURE` set the requested handle and the automation bio, and
   the result reports whether each was applied. A CAPTCHA, a phone check or an

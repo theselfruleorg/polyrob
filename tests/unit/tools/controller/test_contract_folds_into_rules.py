@@ -3,9 +3,9 @@
 `contract.md` had a real reader (`load_contract_doc`, CONTRACT_DOC_ENABLED
 default ON) and, measured over the subsystem's entire life on prod, ZERO
 writes — a dead lane behind live plumbing, costing a document kind and a
-tool-description slot. `contract_propose` now writes the RULES doc (owner.md),
-so no new contract draft is ever created; an EXISTING contract draft stays
-listable and promotable for one release (035 §6 migration step 2).
+tool-description slot. `contract_propose` wrote the RULES doc (owner.md) from
+035 until 095 W10 deleted it; no new contract draft is ever created, and an
+EXISTING contract draft stays listable and promotable.
 """
 import logging
 import types
@@ -17,6 +17,10 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+@pytest.fixture(autouse=True)
+def _identity_home(tmp_path, monkeypatch):
+    """095 W8: the preferences action reads the ONE identity home (``prefs_home_dir``)."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
 
 
 def _c(data_dir):
@@ -30,43 +34,23 @@ def _c(data_dir):
     return c
 
 
-def _ctx(uid="rob"):
+def _ctx(uid="alice"):
     return types.SimpleNamespace(user_id=uid, is_sub_agent=False,
                                  role="orchestrator", metadata={})
 
 
-@pytest.mark.asyncio
-async def test_contract_propose_writes_the_rules_doc(monkeypatch, tmp_path):
+def test_contract_propose_is_gone(monkeypatch, tmp_path):
+    """095 W10 (X-21): the second owner.md writer skipped the rules sweep and
+    needed the FULL body. `owner_doc_manage` is the one rule writer."""
     monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _c(tmp_path)
     c._register_preferences_action()
     a = c.registry.registry.actions["preferences"]
-    res = await a.function(
-        a.param_model(operation="contract_propose",
-                      text="Never post to the Telegram lobby."),
-        execution_context=_ctx())
-    root = tmp_path / "identity" / "polyrob" / "user_rob"
-    assert (root / ".pending" / "owner.md").is_file(), \
-        "an operating rule now lands in the RULES doc"
-    assert not (root / ".pending" / "contract.md").exists(), \
-        "no NEW contract draft may be created"
-    assert res.error is None
-
-
-@pytest.mark.asyncio
-async def test_contract_propose_stays_pending_on_an_owner_turn(monkeypatch, tmp_path):
-    monkeypatch.setenv("PREFS_TOOL_ENABLED", "true")
-    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    c = _c(tmp_path)
-    c._register_preferences_action()
-    a = c.registry.registry.actions["preferences"]
-    await a.function(
-        a.param_model(operation="contract_propose", text="Never post to the den."),
-        execution_context=_ctx())
-    root = tmp_path / "identity" / "polyrob" / "user_rob"
-    assert (root / ".pending" / "owner.md").is_file()
-    assert not (root / "owner.md").exists()
+    with pytest.raises(Exception):
+        a.param_model(operation="contract_propose", text="Never post to the den.")
+    import tools.controller.doc_authoring as da
+    assert not hasattr(da, "perform_rules_propose")
 
 
 def test_an_existing_contract_draft_stays_promotable(tmp_path):
@@ -75,10 +59,10 @@ def test_an_existing_contract_draft_stays_promotable(tmp_path):
     from core.instance import DEFAULT_INSTANCE_ID
     from core import self_evolution as se
     ContractWriter(tmp_path, instance_id=DEFAULT_INSTANCE_ID).propose(
-        "legacy operating rules", user_id="rob", created_by="agent", pending=True)
-    items = se.list_pending("rob", home_dir=tmp_path,
+        "legacy operating rules", user_id="alice", created_by="agent", pending=True)
+    items = se.list_pending("alice", home_dir=tmp_path,
                             instance_id=DEFAULT_INSTANCE_ID, skill_manager=None)
     assert any(i["kind"] == "contract" for i in items)
-    ok, _ = se.promote("contract", "rob", user_id="rob", home_dir=tmp_path,
+    ok, _ = se.promote("contract", "alice", user_id="alice", home_dir=tmp_path,
                        instance_id=DEFAULT_INSTANCE_ID)
     assert ok

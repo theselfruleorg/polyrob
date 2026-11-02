@@ -6,6 +6,7 @@ trace the assertion back to the defect it pins.
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from api.api_key_auth import API_KEY_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -30,14 +31,16 @@ def test_b1_refund_due_on_auth_refusal_after_settlement():
 
 
 # ---------------------------------------------------------------------------
-# B2 — the rob_xxx validator is always-on and never refuses
+# B2 — the API-key validator is always-on and never refuses
 # ---------------------------------------------------------------------------
 
 def test_b2_api_key_shape_recognition():
     from api.api_key_auth import looks_like_api_key
 
-    assert looks_like_api_key("rob_" + "a" * 40)
-    assert not looks_like_api_key("rob_short")
+    assert looks_like_api_key(API_KEY_PREFIX + "a" * 40)
+    from api.api_key_auth import LEGACY_API_KEY_PREFIX
+    assert looks_like_api_key(LEGACY_API_KEY_PREFIX + "a" * 40)  # issued before the rename
+    assert not looks_like_api_key(API_KEY_PREFIX + "short")
     assert not looks_like_api_key("some-operator-service-token-value-here")
     assert not looks_like_api_key(None)
 
@@ -55,7 +58,7 @@ def test_b2_middleware_never_refuses_an_unknown_key():
 
     app.add_middleware(APIKeyAuthMiddleware)
     client = TestClient(app, raise_server_exceptions=False)
-    resp = client.get("/probe", headers={"X-API-KEY": "rob_" + "z" * 40})
+    resp = client.get("/probe", headers={"X-API-KEY": API_KEY_PREFIX + "z" * 40})
     assert resp.status_code == 200
 
 
@@ -109,12 +112,12 @@ def test_b6_dead_limiter_is_gone():
 
 def test_b9_every_session_status_maps():
     from agents.task.agent.session import SessionStatus
-    from api.a2a.task_handler import ROB_TO_A2A_STATE
+    from api.a2a.task_handler import INTERNAL_TO_A2A_STATE
 
     for status in SessionStatus:
-        assert status.value in ROB_TO_A2A_STATE, status.value
+        assert status.value in INTERNAL_TO_A2A_STATE, status.value
     # The dead row is gone.
-    assert "error" not in ROB_TO_A2A_STATE
+    assert "error" not in INTERNAL_TO_A2A_STATE
 
 
 def test_b9_unknown_is_not_terminal():
@@ -127,9 +130,9 @@ def test_b9_unknown_is_not_terminal():
 
 def test_b9_initializing_is_working():
     from api.a2a.models import A2ATaskState
-    from api.a2a.task_handler import ROB_TO_A2A_STATE
+    from api.a2a.task_handler import INTERNAL_TO_A2A_STATE
 
-    assert ROB_TO_A2A_STATE["initializing"] is A2ATaskState.WORKING
+    assert INTERNAL_TO_A2A_STATE["initializing"] is A2ATaskState.WORKING
 
 
 # ---------------------------------------------------------------------------

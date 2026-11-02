@@ -1,6 +1,6 @@
 """TaskAgent.pause_session / resume_session — honest status-transition ops.
 
-These are the methods the `rob session pause` / `rob session resume` CLI commands
+These are the methods the `polyrob session pause` / `polyrob session resume` CLI commands
 call. They must do an ownership check and a valid status transition, mirroring
 cancel_session's shape, without touching a live execution loop.
 

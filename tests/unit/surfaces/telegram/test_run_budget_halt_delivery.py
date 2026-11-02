@@ -27,8 +27,12 @@ class _Agent:
     def get_orchestrator(self, session_id):
         return None
 
-    def _extract_chat_reply(self, session_id):
-        return self._stale
+    def _chat_turn_baseline(self, session_id):
+        return (3, [], self._stale)
+
+    def _extract_chat_reply(self, session_id, since=None):
+        # the real C7 guard: with the turn baseline, the previous answer is not new
+        return "" if since is not None and since[2] == self._stale else self._stale
 
 
 def _run(agent):
@@ -48,9 +52,11 @@ def test_budget_halt_delivers_halt_text_not_stale_reply():
     assert STALE_REPLY not in delivered[0]
 
 
-def test_non_budget_failure_keeps_the_legacy_extraction_rail():
-    # Pre-existing behavior for other failure strings is deliberately unchanged
-    # (chat_once's fix scoped itself the same way) — pin it so the marker branch
-    # stays narrow.
+def test_a_failed_turn_never_resends_the_previous_turns_reply():
+    # 2026-10-28 (connectivity F3): the failed path extracted WITHOUT the turn
+    # baseline and could re-send the previous turn's done text. It now passes
+    # the baseline, and the owner hears why the turn ended instead.
     delivered = _run(_Agent("Session failed: boom"))
-    assert delivered == [STALE_REPLY]
+    assert len(delivered) == 1
+    assert STALE_REPLY not in delivered[0]
+    assert "My turn ended early" in delivered[0] and "continue" in delivered[0]

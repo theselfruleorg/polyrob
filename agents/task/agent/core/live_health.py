@@ -7,9 +7,10 @@ the owner asked "how's it going?" in prose, the agent confabulated a clean
 state from stale context — the exact failure the 2026-08-28 Solana memo named
 (a prompt that denies a live condition is a defect).
 
-This mixin injects, at the FIRST step of every turn, a one-shot control
-message rendered from the SAME snapshot the owner's ``/status`` shows
-(``core/status_snapshot.py`` → ``render_agent_health_note``). Cheap path: no
+This mixin renders, at EVERY step boundary, the ``live_health`` part of the
+``<state-delta>`` channel (095 W4) from the SAME snapshot the owner's
+``/status`` shows (``core/status_snapshot.py`` → ``render_agent_health_note``);
+it is pushed only when it changed. Cheap path: no
 money section, no network reads — a few read-only sqlite queries. Sub-agents
 are excluded (a focused leaf never needs tenant-wide health). Gated
 ``LIVE_HEALTH_CONTEXT`` (default ON); fail-open — a builder error injects an
@@ -54,6 +55,27 @@ def build_operations_text(user_id: str, *, data_dir=None) -> str:
         build_operations_sections(str(user_id or ""), data_dir=data_dir))
 
 
+def model_routing_line(user_id: str) -> str:
+    """094: which model each kind of run starts on — so the agent can answer
+    "what will the nightly job run on" without reading env files (``agent_status``;
+    not in ``<operations>``, which rides every turn). "" on error."""
+    try:
+        from core.model_pins import chat_runtime_for
+        from core.runtime_config import heavy_model_pin, resolve_default_provider
+        from modules.llm.llm_client_registry import get_default_model
+        c_provider, c_model, _r, c_source = chat_runtime_for(user_id)
+        a_provider, a_model = resolve_default_provider()[:2]
+        c_model = c_model or (get_default_model(c_provider) if c_provider else "?")
+        a_model = a_model or (get_default_model(a_provider) if a_provider else "?")
+        heavy = heavy_model_pin()
+        return (f"Models: a new owner chat starts on {c_model} ({c_provider}; {c_source}); "
+                f"autonomous runs use {a_model}; money-class runs use "
+                f"{heavy or 'the same (HEAVY_MODEL unset)'}. The owner switches a chat with /model.")
+    except Exception:
+        logger.debug("model routing line skipped", exc_info=True)
+        return ""
+
+
 def has_status_tool(controller) -> bool:
     """080 WS-5: True only when this session's controller registers
     ``agent_status`` — the note never names a tool the agent cannot call."""
@@ -74,66 +96,72 @@ def _operations_injected(agent) -> bool:
         return False
 
 
-class LiveHealthMixin:
-    async def _maybe_inject_live_health(self) -> None:
-        """First step of every turn, main agent only. Never raises."""
-        try:
-            if getattr(self.state, "n_steps", 0) != 1:
-                return
-            if getattr(self, "_is_sub_agent", False):
-                return
-            from core.surfaces.room_policy import is_public_session
-            if is_public_session(getattr(self, "orchestrator", None)):
-                return  # 044 T4: no owner health note into a public room
-            from agents.task.session_class import correspondent_facing
-            if correspondent_facing(getattr(self, "orchestrator", None)):
-                return  # H16: output goes to a correspondent — no owner-tenant state
-            from core.config_policy import AutonomyConfig
-            if not AutonomyConfig.live_health_context():
-                return
-            orch = getattr(self, "orchestrator", None)
-            container = getattr(orch, "container", None)
-            cfg = getattr(container, "config", None)
-            task_agent = getattr(orch, "task_agent", None)
-            status_tool = has_status_tool(getattr(self, "controller", None))
-            try:
-                text = await asyncio.to_thread(
-                    build_live_health_text, getattr(self, "user_id", None),
-                    data_dir=getattr(cfg, "data_dir", None), task_agent=task_agent,
-                    session_id=getattr(self, "session_id", None), status_tool=status_tool,
-                    with_operations=_operations_injected(self))
-            except Exception as e:
-                hint = "call agent_status or say" if status_tool else "say"
-                text = (f"Live health: unavailable ({type(e).__name__}: {str(e)[:120]}) — "
-                        f"do not claim a clean state; {hint} it is unknown.")
-            from modules.llm.messages import MessageOrigin, make_control_message
-            self.message_manager.push_ephemeral_message(
-                make_control_message(f"<live-health>\n{text}\n</live-health>",
-                                     MessageOrigin.SYSTEM_NOTE))
-            self.logger.debug("Injected live-health note")
-        except Exception as e:
-            logger.debug("live-health injection skipped: %s", e)
+def live_health_injected(agent) -> bool:
+    """095 W3: does this agent get a ``<live-health>`` note each turn? The ONE
+    predicate the injector and the ``<environment>`` sentence share: a main
+    agent, not a public room (044 T4), not correspondent-facing (H16), and
+    ``LIVE_HEALTH_CONTEXT`` on. Fail-closed."""
+    try:
+        if getattr(agent, "_is_sub_agent", False) or getattr(agent, "_role", None) == "leaf":
+            return False
+        from core.surfaces.room_policy import is_public_session
+        from agents.task.session_class import correspondent_facing
+        orch = getattr(agent, "orchestrator", None)
+        if is_public_session(orch) or correspondent_facing(orch):
+            return False
+        from core.config_policy import AutonomyConfig
+        return bool(AutonomyConfig.live_health_context())
+    except Exception:
+        return False
 
-    async def _maybe_inject_operations(self) -> None:
-        """Review 2026-10-15 rec. 2: first step of every turn, the owner-memory
-        regimes only (owner chat, cron, goal, autonomous — never a room, a
-        correspondent or a child), a short ``<operations>`` note of what runs,
-        what is open, what is paused and what the owner stopped. Read live, so a
-        doc or recall line about the same thing cannot win. It rides the
-        volatile tail (an ephemeral), outside the cached prefix. Never raises."""
-        if getattr(self.state, "n_steps", 0) != 1:
-            return
+
+class LiveHealthMixin:
+    async def _live_health_part(self) -> str:
+        """The ``<live-health>`` text, or "" where this seat gets none."""
+        if not live_health_injected(self):
+            return ""
+        orch = getattr(self, "orchestrator", None)
+        cfg = getattr(getattr(orch, "container", None), "config", None)
+        status_tool = has_status_tool(getattr(self, "controller", None))
+        try:
+            return await asyncio.to_thread(
+                build_live_health_text, getattr(self, "user_id", None),
+                data_dir=getattr(cfg, "data_dir", None),
+                task_agent=getattr(orch, "task_agent", None),
+                session_id=getattr(self, "session_id", None), status_tool=status_tool,
+                with_operations=_operations_injected(self))
+        except Exception as e:
+            hint = "call agent_status or say" if status_tool else "say"
+            return (f"Live health: unavailable ({type(e).__name__}: {str(e)[:120]}) — "
+                    f"do not claim a clean state; {hint} it is unknown.")
+
+    async def _operations_part(self) -> str:
+        """Review 2026-10-15 rec. 2: the ``<operations>`` text — what runs, what
+        is open, paused or stopped — for the owner-memory regimes only (owner
+        chat, cron, goal, autonomous; never a room, a correspondent or a child).
+        Read live, so a doc or recall line about the same thing cannot win.
+        "" elsewhere (SK-18: a seat tainted mid-session drops it)."""
         if not _operations_injected(self):
-            return  # fail closed: no owner state into an unknown session
+            return ""  # fail closed: no owner state into an unknown session
         try:
             cfg = getattr(getattr(getattr(self, "orchestrator", None), "container", None),
                           "config", None)
-            text = await asyncio.to_thread(build_operations_text, getattr(self, "user_id", None),
+            return await asyncio.to_thread(build_operations_text, getattr(self, "user_id", None),
                                            data_dir=getattr(cfg, "data_dir", None))
         except Exception as e:
-            text = (f"Live harness state: could not read ({type(e).__name__}: {str(e)[:120]}) "
+            return (f"Live harness state: could not read ({type(e).__name__}: {str(e)[:120]}) "
                     f"— jobs, goals, pauses and stops are UNKNOWN, not none.")
-        from modules.llm.messages import MessageOrigin, make_control_message
-        self.message_manager.push_ephemeral_message(
-            make_control_message(f"<operations>\n{text}\n</operations>",
-                                 MessageOrigin.SYSTEM_NOTE))
+
+    async def _maybe_update_state_delta(self) -> None:
+        """095 W4: EVERY step boundary — ``<live-health>``, ``<operations>`` and
+        the skill-index change go to ``MessageManager.update_state_delta``, which
+        pushes a part only when its text changed (one durable message at the
+        tail, outside the cached prefix). Never raises."""
+        try:
+            from agents.task.agent.core.state_delta import skills_delta_part
+            parts = {"live_health": await self._live_health_part(),
+                     "operations": await self._operations_part(),
+                     "skills_delta": skills_delta_part(self)}
+            self.message_manager.update_state_delta(parts)
+        except Exception as e:
+            logger.debug("state-delta update skipped: %s", e)

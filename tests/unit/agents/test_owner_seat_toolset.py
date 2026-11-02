@@ -21,10 +21,10 @@ def _env(monkeypatch):
     for k in ("TOOL_PROGRESSIVE_DISCLOSURE", "AUTONOMOUS_TOOL_DISCLOSURE", "POLYROB_LOCAL",
               "TOOL_SCHEMAS_FROZEN"):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
 
-def _orch(sid, user="rob", public=False, correspondent=False):
+def _orch(sid, user="alice", public=False, correspondent=False):
     return SimpleNamespace(session_id=sid, user_id=user, _public_session=public,
                            _correspondent_session=correspondent)
 

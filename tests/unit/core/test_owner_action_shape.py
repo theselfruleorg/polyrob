@@ -162,7 +162,7 @@ def test_the_pending_notice_passes_its_own_checker():
     from core.self_evolution import build_pending_notification
 
     text = build_pending_notification(
-        [{"kind": "skill", "id": "dm-conversation", "preview": "How Rob handles DMs"}])
+        [{"kind": "skill", "id": "dm-conversation", "preview": "How the agent handles DMs"}])
     assert correction_line(text) == ""
     assert shell_free_correction(text) == ""
 

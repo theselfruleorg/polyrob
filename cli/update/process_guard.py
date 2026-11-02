@@ -217,6 +217,141 @@ def _iter_cmdlines():
     yield from _iter_psutil_cmdlines()
 
 
+# Wrappers that run ANOTHER command: the guard looks through them to the real
+# executable. An option VALUE (`sudo -u polyrob`, the account name) is never the
+# executable — the 2026-10-29 managed install refused `sudo -u polyrob … update`
+# because the token `polyrob` matched as if it were the agent.
+_SUDO_VALUE_OPTS = frozenset("ugpCDhrtTUR")
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_PY_VALUE_OPTS = frozenset({"-X", "-W", "-Q"})
+
+
+def _skip_sudo(argv: List[str]) -> List[str]:
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            return argv[i + 1:]
+        if tok.startswith("--"):
+            # --user=x carries its value; a bare --user takes the next token
+            i += 1 if "=" in tok or tok in ("--login", "--shell", "--preserve-env",
+                                             "--non-interactive", "--background") else 2
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            letters = tok[1:]
+            i += 1
+            for pos, ch in enumerate(letters):
+                if ch in _SUDO_VALUE_OPTS:
+                    if pos == len(letters) - 1:
+                        i += 1  # the value is the next token
+                    break  # the rest of this token is the value
+            continue
+        return argv[i:]
+    return []
+
+
+def _skip_env(argv: List[str]) -> List[str]:
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
+            i += 2
+        elif tok.startswith("-") or "=" in tok:
+            i += 1
+        else:
+            return argv[i:]
+    return []
+
+
+def _command_argv(parts: List[str], _depth: int = 0) -> List[str]:
+    """The argv of the command a process really runs, wrappers removed."""
+    import shlex
+
+    argv = list(parts)
+    while argv and _depth < 8:
+        _depth += 1
+        name = Path(argv[0]).name.lower()
+        if name == "sudo":
+            argv = _skip_sudo(argv)
+        elif name == "env":
+            argv = _skip_env(argv)
+        elif name in ("nohup", "setsid", "exec", "nice", "ionice", "stdbuf"):
+            argv = argv[1:]
+            while argv and argv[0].startswith("-"):
+                argv = argv[1:]
+        elif name in _SHELLS:
+            # `bash -lc "<command string>"` runs the string; other shell
+            # invocations (a script, an interactive shell) are not POLYROB.
+            for i, tok in enumerate(argv[1:], start=1):
+                if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
+                    if i + 1 >= len(argv):
+                        return []
+                    try:
+                        inner = shlex.split(argv[i + 1])
+                    except ValueError:
+                        inner = argv[i + 1].split()
+                    # the first command of a `a && b; c` string is enough
+                    for j, t in enumerate(inner):
+                        if t in ("&&", "||", ";", "|"):
+                            inner = inner[:j]
+                            break
+                    argv = inner
+                    break
+                if not tok.startswith("-"):
+                    return []
+            else:
+                return []
+        else:
+            return argv
+    return argv
+
+
+def _polyrob_args(argv: List[str]):
+    """``(kind, args)`` for a POLYROB executable, else ``None``.
+
+    ``kind`` is ``"cli"`` (args = the CLI argv after the executable) or
+    ``"server"`` (an API server: uvicorn/gunicorn on ``api.app``, ``main.py``).
+    Only the EXECUTABLE position counts: ``argv[0]``, or an interpreter and
+    its script / ``-m`` module.
+    """
+    if not argv:
+        return None
+    exe = argv[0].lower()
+    name = Path(exe).name
+    if name == "polyrob":
+        return "cli", [t.lower() for t in argv[1:]]
+    if name in ("uvicorn", "gunicorn"):
+        return ("server", []) if any("api.app" in t.lower() for t in argv[1:]) else None
+    if not name.startswith("python"):
+        return None
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "-m":
+            if i + 1 >= len(argv):
+                return None
+            mod = argv[i + 1].lower()
+            rest = [t.lower() for t in argv[i + 2:]]
+            if mod == "cli.polyrob":
+                return "cli", rest
+            if mod in ("uvicorn", "gunicorn") and any("api.app" in t for t in rest):
+                return "server", []
+            return None
+        if tok in _PY_VALUE_OPTS:
+            i += 2
+            continue
+        if tok.startswith("-") and tok != "-":
+            i += 1
+            continue
+        script = tok.lower()
+        if Path(script).name == "polyrob":
+            return "cli", [t.lower() for t in argv[i + 1:]]
+        if Path(script).name == "main.py":
+            return "server", []
+        return None
+    return None
+
+
 def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -> bool:
     """Best-effort: is a long-running POLYROB server/agent process running on this box?
 
@@ -233,25 +368,13 @@ def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -
         for pid, parts in src:
             if pid == me:
                 continue
-            tokens = [t.lower() for t in parts]
-            joined = " ".join(tokens)
-            # The EXECUTABLE must be polyrob: the bare console script or a
-            # `…/bin/polyrob` path. `t.endswith("polyrob")` also matched the
-            # ARGUMENT `/opt/polyrob` — so `ls /opt/polyrob` or `tail -f
-            # /opt/polyrob/x.log` blocked --apply and trained people onto --force.
-            is_polyrob = (
-                any(t == "polyrob" or t.endswith("/bin/polyrob") for t in tokens)
-                # `python …/polyrob telegram`: the console script run through an
-                # interpreter (the real prod argv shape) — position 1 only.
-                or (len(tokens) > 1 and tokens[1].endswith("/polyrob")
-                    and Path(tokens[0]).name.startswith("python"))
-                or "cli.polyrob" in joined
-                or "api.app" in joined
-                or any(t.endswith("main.py") for t in tokens)
-            )
-            if not is_polyrob:
+            found = _polyrob_args(_command_argv(parts))
+            if found is None:
                 continue
-            if "update" in tokens:  # a sibling `polyrob update …`, not a server
+            kind, args = found
+            if kind == "server":
+                return True
+            if "update" in args:  # a sibling `polyrob update …`, not a server
                 continue
             # Bare polyrob (possibly with root options) is the resident REPL.
             try:
@@ -259,9 +382,8 @@ def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -
                 known_commands = set(_LAZY_SUBCOMMANDS) | {"chat", "version"}
             except ImportError:
                 known_commands = set(_server_subcommands()) | {"update"}
-            bare_repl = not (set(tokens) & known_commands) and "--help" not in tokens and "--version" not in tokens
-            if bare_repl or (set(tokens) & _server_subcommands()) or "uvicorn" in tokens \
-                    or "api.app" in joined or any(t.endswith("main.py") for t in tokens):
+            bare_repl = not (set(args) & known_commands) and "--help" not in args and "--version" not in args
+            if bare_repl or (set(args) & _server_subcommands()):
                 return True
     except Exception as exc:
         raise ProcessScanUnavailable(f"Process inspection failed: {exc}") from exc

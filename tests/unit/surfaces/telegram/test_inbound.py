@@ -129,14 +129,14 @@ async def test_voice_transcript_is_marked_as_voice(tmp_path):
 
 # --- owner ⇄ instance user_id alias (2026-07-03) -----------------------------
 # The authenticated Telegram owner operates as the instance OWNER principal (e.g.
-# "rob") so the owner's chat shares autonomy's tenant (goals/memory/SELF). A
+# "carol") so the owner's chat shares autonomy's tenant (goals/memory/SELF). A
 # non-owner tg id keeps its surface-hashed u_ id (tenant isolation intact).
 
 _OWNER_TG = "100000001"
 
 
 def _owner_env(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "carol")
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", _OWNER_TG)
 
 
@@ -144,7 +144,7 @@ def test_owner_tg_id_aliases_to_owner_principal(tmp_path, monkeypatch):
     _owner_env(monkeypatch)
     _, ud, _ = _deps(tmp_path)
     inbound = build_inbound_message(_update(1, "list my goals", from_id=_OWNER_TG), ud)
-    assert inbound.identity.user_id == "rob"       # aliased to the owner principal
+    assert inbound.identity.user_id == "carol"       # aliased to the owner principal
     assert inbound.identity.raw_user_id == _OWNER_TG  # raw sender id preserved
 
 
@@ -153,7 +153,7 @@ def test_non_owner_tg_id_still_hashes(tmp_path, monkeypatch):
     _, ud, _ = _deps(tmp_path)
     inbound = build_inbound_message(_update(2, "hi", from_id="99887766"), ud)
     assert inbound.identity.user_id.startswith("u_")  # unchanged: surface-hashed id
-    assert inbound.identity.user_id != "rob"
+    assert inbound.identity.user_id != "carol"
 
 
 def test_no_owner_env_all_senders_hash(tmp_path, monkeypatch):

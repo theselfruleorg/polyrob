@@ -201,7 +201,7 @@ def test_turn_summary_line_failed():
 
 # A realistic long markdown send_message step (the user's screenshot scenario).
 _LONG_MARKDOWN = (
-    "## Repository Review: ROB\n\n"
+    "## Repository Review: DEMO\n\n"
     "Based on the analysis, here is a thorough writeup with **many** details "
     "that easily exceeds the 60-char arg-summary truncation threshold used for "
     "tool-call lines. It must appear in full inside the bubble.\n\n"
@@ -225,7 +225,7 @@ _MSG_STEP = {
             }
         ],
         "agent_name": "executor",
-        "reasoning": "Executed: send_message(text=## Repository Review: ROB, "
+        "reasoning": "Executed: send_message(text=## Repository Review: DEMO, "
         "wait_for_response=True)",
         "context": {
             "outputs": {

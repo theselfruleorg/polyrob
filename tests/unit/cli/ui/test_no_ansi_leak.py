@@ -89,7 +89,7 @@ async def _styled_print_under_patch_stdout(raw: bool) -> str:
                 # real RichRenderer console does. force_terminal so color is on
                 # regardless of the capture sink's isatty.
                 console = Console(file=None, force_terminal=True, color_system="standard")
-                console.print("[bold green]●[/] [bold]rob[/]")
+                console.print("[bold green]●[/] [bold]agent[/]")
                 await asyncio.sleep(0.05)
                 app.exit()
 

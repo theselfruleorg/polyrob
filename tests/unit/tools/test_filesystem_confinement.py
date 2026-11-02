@@ -30,7 +30,7 @@ def test_gate_rejects_secret_exfil_vectors(tmp_path):
     traversal = os.path.join(root, "../../../../../../config/.env.production")
     assert not is_within_root(traversal, root)
     # absolute path to the real secrets file
-    assert not is_within_root("/opt/rob/config/.env.production", root)
+    assert not is_within_root("/opt/polyrob/config/.env.production", root)
     # in-workspace symlink escaping the root
     outside = tmp_path / "config"
     outside.mkdir()
@@ -75,13 +75,13 @@ def test_filesystem_clamps_absolute_secret_path_inside_workspace(_pm, monkeypatc
     tool = _fs_tool()
     workspace_abs = os.path.abspath(str(_pm.get_workspace_dir("s1", "u1")))
     # absolute external path is either rejected or clamped INSIDE the workspace —
-    # never resolves to the real /opt/rob/config secrets file.
+    # never resolves to the real /opt/polyrob/config secrets file.
     try:
-        result = tool._normalize_path("/opt/rob/config/.env.production")
+        result = tool._normalize_path("/opt/polyrob/config/.env.production")
     except ServiceError:
         return  # rejected outright — also acceptable
     assert is_within_root(result, workspace_abs)
-    assert os.path.realpath(result) != "/opt/rob/config/.env.production"
+    assert os.path.realpath(result) != "/opt/polyrob/config/.env.production"
 
 
 def test_filesystem_raises_on_symlink_escape(_pm, tmp_path, monkeypatch):
@@ -109,7 +109,7 @@ def _coding_tool():
 @pytest.mark.parametrize("attack", [
     "../../config/.env.production",
     "../../../../../../config/.env.production",
-    "/opt/rob/config/.env.production",
+    "/opt/polyrob/config/.env.production",
 ])
 def test_coding_confine_blocks_secret_paths(tmp_path, attack):
     from tools.coding.tool import CodingError

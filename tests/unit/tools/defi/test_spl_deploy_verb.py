@@ -70,7 +70,7 @@ class _Leaf:
 
 
 def _params(**kw):
-    base = dict(name="Rob Probe", symbol="RPROBE", supply=1_000_000_000,
+    base = dict(name="Demo Probe", symbol="RPROBE", supply=1_000_000_000,
                 decimals=9, uri="https://example.org/r.json",
                 max_spend_usd=5.0, dry_run=True)
     base.update(kw)
@@ -138,7 +138,7 @@ def test_a_transaction_with_the_wrong_signers_is_refused():
         payer=PAYER, decimals=9, supply_raw=SUPPLY_RAW,
         recent_blockhash=str(solders.hash.Hash.default()),
         mint_rent=S.rent_exempt_lamports(S.MINT_WITH_POINTER_LEN),
-        name="Rob Probe", symbol="RPROBE")
+        name="Demo Probe", symbol="RPROBE")
     assert V._refuse_shape(tx, payer=PAYER, mint=mint) is None
     assert "not this wallet" in V._refuse_shape(tx, payer=MINT, mint=mint)
     assert "not the mint account" in V._refuse_shape(tx, payer=PAYER, mint=PAYER)
@@ -196,7 +196,7 @@ def test_a_short_mint_refuses():
 def _info(*, extensions="default", **over):
     if extensions == "default":
         extensions = [{"extension": "tokenMetadata",
-                       "state": {"name": "Rob Probe", "symbol": "RPROBE",
+                       "state": {"name": "Demo Probe", "symbol": "RPROBE",
                                  "uri": "https://example.org/r.json",
                                  "updateAuthority": None,
                                  "additionalMetadata": []}}]
@@ -266,7 +266,7 @@ def test_the_pinned_RPC_check_uses_the_SAME_env_var_as_solana_swap():
 def test_a_clean_read_back_reports_the_ON_CHAIN_name(monkeypatch):
     monkeypatch.setattr("core.wallet.solana_onchain._rpc", lambda m, p: _info())
     text = V._prove_fixed_supply(MINT, SUPPLY_RAW, 9)
-    assert "'Rob Probe'" in text and "'RPROBE'" in text
+    assert "'Demo Probe'" in text and "'RPROBE'" in text
     assert "metadata authorities all null" in text
 
 

@@ -51,7 +51,7 @@ async def test_svm_invoice_pays_to_the_solana_treasury_case_preserved(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=0.10,
+            user_id="alice", session_id="s1", amount_usd=0.10,
             purpose="phase 4 round trip", chain="solana", db=db)
         row = await db.fetch_one(
             "SELECT recipient, chain, metadata FROM x402_payment_requests WHERE id = ?",
@@ -77,7 +77,7 @@ async def test_svm_invoice_refuses_without_a_solana_treasury(tmp_path, monkeypat
     try:
         with pytest.raises(ValueError, match="[Ss]olana"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s1", amount_usd=0.10,
+                user_id="alice", session_id="s1", amount_usd=0.10,
                 purpose="phase 4 round trip", chain="solana", db=db)
     finally:
         await db.close()
@@ -93,10 +93,10 @@ async def test_svm_amounts_are_never_jittered(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=0.10, purpose="a",
+            user_id="alice", session_id="s1", amount_usd=0.10, purpose="a",
             chain="solana", db=db)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=0.10, purpose="b",
+            user_id="alice", session_id="s2", amount_usd=0.10, purpose="b",
             chain="solana", db=db)
         assert first["amount_usd"] == 0.10
         assert second["amount_usd"] == 0.10
@@ -113,7 +113,7 @@ async def test_evm_recipient_is_still_lowercased(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=1.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=1.0, purpose="a", db=db)
         row = await db.fetch_one(
             "SELECT recipient FROM x402_payment_requests WHERE id = ?",
             (inv["request_id"],))
@@ -130,7 +130,7 @@ async def test_the_env_default_path_is_unchanged(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=0.10,
+            user_id="alice", session_id="s1", amount_usd=0.10,
             purpose="evm default", db=db)
         row = await db.fetch_one(
             "SELECT chain, recipient FROM x402_payment_requests WHERE id = ?",
@@ -152,7 +152,7 @@ async def test_an_explicit_chain_beats_the_env_default(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=0.10,
+            user_id="alice", session_id="s1", amount_usd=0.10,
             purpose="explicit svm", chain="solana", db=db)
         row = await db.fetch_one(
             "SELECT chain, recipient FROM x402_payment_requests WHERE id = ?",

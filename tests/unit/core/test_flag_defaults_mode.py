@@ -18,7 +18,7 @@ from core.config_policy.policy import _MODE_CAPABILITY_FLAGS
 @pytest.fixture(autouse=True)
 def _clean_mode_env(monkeypatch):
     for var in ("AUTONOMY_MODE", "AUTONOMY_POSTURE", "AUTONOMY_ENABLED",
-                "POLYROB_LOCAL", "ROB_LOCAL", "POLYROB_OWNER_USER_ID",
+                "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID",
                 "POLYROB_OWNER_EMAIL", "POLYROB_OWNER_TELEGRAM_ID",
                 "BOT_OWNER_USER_ID", "BOT_OWNER_EMAIL"):
         monkeypatch.delenv(var, raising=False)

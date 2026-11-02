@@ -68,16 +68,16 @@ async def test_a_tap_records_the_stored_option_as_the_answer(tmp_path, monkeypat
 
     monkeypatch.setattr(h, "_is_admin_owner", lambda _uid: True)
     board = GoalBoard(os.path.join(str(tmp_path), "goals.db"))
-    ask = board.create_ask(user_id="rob", what="Buy? A) yes or B) no",
+    ask = board.create_ask(user_id="alice", what="Buy? A) yes or B) no",
                            extra_payload={"options": {"A": "yes", "B": "no"}})
     out = await h._handle_owner_admin(
-        _Agent(str(tmp_path)), _Result(ask_option_token(ask.id, "B"), "rob"), "/fulfill")
+        _Agent(str(tmp_path)), _Result(ask_option_token(ask.id, "B"), "alice"), "/fulfill")
     assert out.startswith("✅ Ask fulfilled") and "B) no" in out
     assert (GoalBoard(os.path.join(str(tmp_path), "goals.db")).get(ask.id).payload
             or {}).get("answer") == "B) no"
 
-    other = board.create_ask(user_id="rob", what="Buy again? A) yes or B) no",
+    other = board.create_ask(user_id="alice", what="Buy again? A) yes or B) no",
                              extra_payload={"options": {"A": "yes", "B": "no"}})
     out = await h._handle_owner_admin(
-        _Agent(str(tmp_path)), _Result(ask_option_token(other.id, "C"), "rob"), "/fulfill")
+        _Agent(str(tmp_path)), _Result(ask_option_token(other.id, "C"), "alice"), "/fulfill")
     assert "No open ask" in out

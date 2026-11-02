@@ -55,8 +55,8 @@ curl -X POST http://localhost:9000/api/auth/api-keys \
 
 # Response:
 # {
-#   "api_key": "rob_xxx...",   # full key — shown ONCE, store it now
-#   "prefix": "rob_xxx",
+#   "api_key": "<api-key>",   # full key — shown ONCE, store it now
+#   "prefix": "<key-prefix>",
 #   "name": "My Integration",
 #   "expires_at": "2026-12-14T12:00:00+00:00",
 #   "scopes": ["read", "write"],
@@ -68,7 +68,7 @@ curl -X POST http://localhost:9000/api/auth/api-keys \
 Use the key on subsequent requests:
 
 ```
-X-API-KEY: rob_xxx...
+X-API-KEY: <api-key>
 ```
 
 Manage them with `GET /api/auth/api-keys` (list, prefixes only) and
@@ -88,7 +88,7 @@ Legacy keys without expiry or explicit scopes must be replaced after signing in.
 > (`/api/auth/nonce` + `/api/auth/verify`), which produces the JWT the mint
 > call needs, answers 503 the same way for the same reason.
 >
-> **Using a key never does.** The `rob_xxx` validator is registered
+> **Using a key never does.** The API-key validator is registered
 > unconditionally, so an existing key authenticates whether or not
 > `API_SECRET` / `ADMIN_TOKEN` is set.
 
@@ -552,15 +552,15 @@ here** — the per-request payment rail is gated on an explicit route list
 and `/mcp` is not on it, so an anonymous caller gets 401, never a 402
 challenge. v1 is read-only and exposes five tenant-scoped tools:
 
-- `rob_usage_summary` — the caller's LLM usage (cost, credits, call count)
-- `rob_goals_list` — the caller's autonomy goals
-- `rob_goal_show` — one goal by id
-- `rob_conversations` — the caller's recent correspondent conversations
-- `rob_pending_approvals` — the caller's pending tool-approval requests
+- `polyrob_usage_summary` — the caller's LLM usage (cost, credits, call count)
+- `polyrob_goals_list` — the caller's autonomy goals
+- `polyrob_goal_show` — one goal by id
+- `polyrob_conversations` — the caller's recent correspondent conversations
+- `polyrob_pending_approvals` — the caller's pending tool-approval requests
 
 ```bash
 curl -X POST http://localhost:9000/mcp \
-  -H "X-API-KEY: rob_xxx..." \
+  -H "X-API-KEY: <api-key>" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}'
 ```
@@ -572,7 +572,7 @@ To connect Claude Desktop or Cursor, point their HTTP MCP client config at `http
   "mcpServers": {
     "polyrob": {
       "url": "http://localhost:9000/mcp",
-      "headers": { "X-API-KEY": "rob_xxx..." }
+      "headers": { "X-API-KEY": "<api-key>" }
     }
   }
 }
@@ -593,7 +593,7 @@ GET  /v1/models             # list available models
 
 ```bash
 curl -X POST http://localhost:9000/v1/chat/completions \
-  -H "X-API-KEY: rob_xxx..." \
+  -H "X-API-KEY: <api-key>" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Summarize https://example.com"}]}'
 ```
@@ -606,7 +606,7 @@ declared in `~/.polyrob/providers.yaml`: `"model": "ollama/qwen3-coder:30b"` or
 `"model": "zai-coding/glm-5"`. `GET /v1/models` lists each available provider's default plus every
 declared model. Point any OpenAI SDK at `http://localhost:9000/v1` with your polyrob API key.
 
-> **Two different "API keys."** The `X-API-KEY: rob_xxx…` header is your **rob API key** — an
+> **Two different "API keys."** The `X-API-KEY: <api-key>` header is your **POLYROB API key** — an
 > inbound credential identifying the caller to POLYROB (minted at `/api/auth/api-keys`). It is NOT
 > an LLM provider key (`OPENAI_API_KEY`, …), which is the outbound credential POLYROB spends to
 > reach a model — see [configuration.md](configuration.md).

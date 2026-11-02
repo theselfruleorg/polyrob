@@ -121,8 +121,8 @@ prepare_step
 Each step is driven by the LLM's response. The agent loops until it calls `done()`, hits a budget cap, or the session is cancelled.
 
 The limits depend on who started the run. An interactive run (`polyrob run`, the API,
-another agent over the protocol) stops at `INTERACTIVE_MAX_STEPS` (50); a chat turn on a
-messaging app stops at `CHAT_MAX_STEPS` (8). A run that Rob starts by itself — a goal, a
+another agent over the protocol) stops at `INTERACTIVE_MAX_STEPS` (100); a chat turn on a
+messaging app stops at `CHAT_MAX_STEPS` (20). A run that the agent starts by itself — a goal, a
 scheduled job, a helper — stops at one operator limit, `AUTONOMOUS_MAX_STEPS` (150), or at
 `AUTONOMOUS_RUN_BUDGET_USD` ($2.00) of spend, helpers included. No argument or job
 payload sets a step budget. A run that stops before `done()` reports once and records why
@@ -234,7 +234,7 @@ between your messages:
 | Loop | Description | Flag |
 |------|-------------|------|
 | Goals | Durable goal board — the agent pursues queued goals when idle | `GOALS_ENABLED` |
-| Self-wake | Re-enters an idle session when a goal or a background result arrives, or when you have answered every decision Rob raised (one wake per group, with each outcome) | `SELF_WAKE_ENABLED` |
+| Self-wake | Re-enters an idle session when a goal or a background result arrives, or when you have answered every decision the agent raised (one wake per group, with each outcome) | `SELF_WAKE_ENABLED` |
 | Background review | An aux model reviews the work after productive turns | `BACKGROUND_REVIEW_ENABLED` |
 | Curator | Archives stale authored skills, reactivates them on reuse | `CURATOR_ENABLED` |
 | Cron | Scheduled runs | `CRON_ENABLED` |

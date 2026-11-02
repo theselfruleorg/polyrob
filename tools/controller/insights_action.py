@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from agents.task.agent.views import ActionResult
 
+_LANE_DAYS = 30
+
 
 def register_insights_action(controller) -> None:
 	"""Register the read-only `insights` tool (W7), gated INSIGHTS_TOOL.
@@ -47,6 +49,15 @@ def register_insights_action(controller) -> None:
 			outward = outward_line(outward_counts(str(user_id or ""), _time.time() - 7 * 86400))
 		except Exception:
 			outward = "unavailable (event log unreadable)"
+		# 095 W11: per lane, how many runs of the last 30 days did real work
+		# (useful = a receipt) and how many the goal judge verified. Read-only.
+		try:
+			from agents.task.agent.core.episodic_digest import (
+				lane_outcome_rates, render_lane_rates)
+			lanes = render_lane_rates(await lane_outcome_rates(user_id=user_id, days=_LANE_DAYS),
+			                          days=_LANE_DAYS)
+		except Exception as e:
+			lanes = f"  - unavailable (run records unreadable: {type(e).__name__})"
 		return ActionResult(
 			extracted_content=(
 				f"## Skill insights\n"
@@ -54,7 +65,8 @@ def register_insights_action(controller) -> None:
 				f"- reused at least once: {summary['authored_reused']} ({rate}%)\n"
 				f"- by author: {summary['by_author']}\n"
 				f"- most-used: {top}\n"
-				f"- outward acts (7d): {outward}"
+				f"- outward acts (7d): {outward}\n"
+				f"- run outcomes by lane ({_LANE_DAYS}d):\n{lanes}"
 			),
 			include_in_memory=True,
 		)

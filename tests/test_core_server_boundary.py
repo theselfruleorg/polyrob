@@ -1,10 +1,10 @@
-"""Guard test: the rob-core import graph must not reach the server tier.
+"""Guard test: the core import graph must not reach the server tier.
 
-C3 of the core/server split (docs/ROB_CORE_SERVER_SPLIT_SPEC.md §4): importing the
+C3 of the core/server split spec (§4): importing the
 core agent runtime (TaskAgent, the agent loop, the CLI) must not import FastAPI,
 billing/credits, auth, x402, or the webview. Each entry point is imported in a fresh
 subprocess with the server-tier modules blocked via a meta-path finder — simulating a
-rob-core-only environment where those packages are not installed.
+core-only environment where those packages are not installed.
 
 If this test fails, a core module gained a top-level import of a server-tier module.
 Make the import lazy (inside the function/conditional that needs it) or relocate the
@@ -45,7 +45,7 @@ class FinderWrapper:
     Every existing meta-path finder is wrapped to return None for blocked names, so
     `import fastapi` raises a plain ModuleNotFoundError and feature-detection probes
     like `importlib.util.find_spec("fastapi")` return None — both identical to a
-    rob-core-only environment.
+    core-only environment.
     \"\"\"
 
     def __init__(self, finder):

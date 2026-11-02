@@ -23,7 +23,7 @@ from agents.task.loop_types.execution_context import ActionExecutionContext
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in (
-        "AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL",
+        "AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL",
         "POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
         "SURFACE_SUPER_ADMIN_USER_IDS", "POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID",
     ):
@@ -162,9 +162,9 @@ def test_gate_local_tenant_is_the_owner_only_while_unbound(monkeypatch):
     assert c.compute_posture_allows(_ctx(user_id="100000001"), 1) is False
     assert c.compute_posture_allows(_ctx(user_id="u_stranger"), 1) is False
 
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     assert c.compute_posture_allows(_ctx(user_id="local"), 1) is False
-    assert c.compute_posture_allows(_ctx(user_id="rob"), 1) is True
+    assert c.compute_posture_allows(_ctx(user_id="alice"), 1) is True
     assert c.compute_posture_allows(_ctx(user_id="u_stranger"), 1) is False
 
 

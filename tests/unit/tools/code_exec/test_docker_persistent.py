@@ -130,7 +130,7 @@ async def test_ephemeral_mode_never_calls_the_injected_runner():
 
 @pytest.mark.asyncio
 async def test_container_created_once_and_state_persists_across_runs(monkeypatch):
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s1")
 
@@ -150,7 +150,7 @@ async def test_container_created_once_and_state_persists_across_runs(monkeypatch
 
 @pytest.mark.asyncio
 async def test_run_without_explicit_setup_lazily_creates_the_container(monkeypatch):
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s2")
     result = await b.run(ExecutionRequest(language="bash", code="echo hi"))
@@ -160,7 +160,7 @@ async def test_run_without_explicit_setup_lazily_creates_the_container(monkeypat
 
 @pytest.mark.asyncio
 async def test_teardown_is_idempotent(monkeypatch):
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s3")
     await b.setup()
@@ -181,7 +181,7 @@ async def test_teardown_is_idempotent(monkeypatch):
 @pytest.mark.asyncio
 async def test_persistent_setup_argv_has_labels_name_and_hardening_no_rm(monkeypatch):
     monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="my-session")
 
@@ -210,7 +210,7 @@ async def test_persistent_setup_argv_has_labels_name_and_hardening_no_rm(monkeyp
         assert argv[argv.index(flag) + 1] == val, flag
     assert "--read-only" in argv
     assert "--tmpfs" in argv and "/tmp" in argv
-    assert "-v" in argv and "/tmp/rob-persistent-test-ws:/workspace" in argv
+    assert "-v" in argv and "/tmp/demo-persistent-test-ws:/workspace" in argv
     assert argv[argv.index("-w") + 1] == "/workspace"
     assert argv[-3:] == [b.image, "sleep", "infinity"]
 
@@ -258,7 +258,7 @@ async def test_hardening_flags_identical_between_ephemeral_and_persistent(monkey
 
 @pytest.mark.asyncio
 async def test_run_persistent_execs_with_workdir_and_scrubbed_env(monkeypatch):
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s4")
     await b.setup()
@@ -277,7 +277,7 @@ async def test_run_persistent_execs_with_workdir_and_scrubbed_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_persistent_reports_unsupported_language_without_touching_runner(monkeypatch):
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s5")
     await b.setup()
@@ -304,7 +304,7 @@ async def test_run_persistent_reports_unsupported_language_without_touching_runn
 
 @pytest.mark.asyncio
 async def test_run_persistent_wraps_command_with_in_container_timeout(monkeypatch):
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s-timeout-argv")
     await b.setup()
@@ -326,7 +326,7 @@ async def test_run_persistent_in_container_timeout_uses_clamped_seconds(monkeypa
     handed to the in-container `timeout` binary too — matching `_clamp_timeout`,
     not the raw (unbounded) request value."""
     monkeypatch.setenv("CODE_EXEC_MAX_TIMEOUT_SEC", "9")
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     fake = _FakeDocker()
     b = DockerBackend(docker_runner=fake, session_id="s-timeout-clamp")
     await b.setup()
@@ -346,7 +346,7 @@ async def test_run_persistent_maps_timeout_exit_code_137_to_timed_out(monkeypatc
     confirmed live against the `python:3.12-slim` image's coreutils). 137 must
     surface as `ExecutionResult.timed_out=True`, not just a plain nonzero exit.
     """
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
 
     class _TimeoutFiredFakeDocker(_FakeDocker):
         async def __call__(self, args, *, input=None, timeout=None):
@@ -373,7 +373,7 @@ async def test_run_persistent_maps_timeout_exit_code_124_to_timed_out_defensivel
     `timeout` would report with a non-KILL signal policy) even though the
     wrapper this backend builds always passes `--signal=KILL` today (see the
     137 test above for the actual observed code)."""
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
 
     class _TimeoutFiredFakeDocker(_FakeDocker):
         async def __call__(self, args, *, input=None, timeout=None):
@@ -399,7 +399,7 @@ async def test_run_persistent_unrelated_nonzero_exit_is_not_flagged_as_timed_out
     """A plain command failure (e.g. exit 1), or a SIGTERM-style 143, must NOT
     be misread as a timeout — only the specific exit codes `timeout` itself
     uses to report firing (124, 137) mean `timed_out=True`."""
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
 
     class _FailFakeDocker(_FakeDocker):
         def __init__(self, code):
@@ -430,7 +430,7 @@ async def test_run_persistent_host_backstop_timeout_exceeds_in_container_timeout
     """The host-side `self._docker(...)` call's own `timeout=` kwarg must be
     set HIGHER than the in-container clamped timeout (e.g. +5s) — a backstop
     only, so the in-container `timeout` is what actually fires first."""
-    _pin_workdir(monkeypatch, "/tmp/rob-persistent-test-ws")
+    _pin_workdir(monkeypatch, "/tmp/demo-persistent-test-ws")
     seen = {}
 
     class _CapturingFakeDocker(_FakeDocker):
@@ -464,7 +464,7 @@ def test_resolve_persistent_workdir_falls_back_to_tempdir_on_path_manager_failur
     b = DockerBackend(session_id="fallback-check")
     workdir = b._resolve_persistent_workdir()
 
-    assert workdir == str(tmp_path / "rob_docker_persistent_fallback-check")
+    assert workdir == str(tmp_path / "polyrob_docker_persistent_fallback-check")
     import os
     assert os.path.isdir(workdir)
 
@@ -612,7 +612,7 @@ async def test_real_persistent_host_created_subdir_writable_on_next_exec(tmp_pat
     """A long-lived session container's workspace isn't static: a HOST-side tool
     (filesystem/coding) can scaffold a new subdirectory INTO it between two
     `run()` calls on the SAME persistent container (e.g. goal step N creates
-    `videos/rob-reboot/`, step N+1 runs npm inside it). setup() only fixes the
+    `videos/demo-reboot/`, step N+1 runs npm inside it). setup() only fixes the
     tree once; each exec must re-check for newly-appeared root-owned dirs too —
     live prod hit exactly this (`mkdir EACCES` on a dir created after setup())."""
     monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)
@@ -624,12 +624,12 @@ async def test_real_persistent_host_created_subdir_writable_on_next_exec(tmp_pat
         await b.setup()
         # Simulate a host-side tool (running as root, same as this test process)
         # scaffolding a new directory AFTER the container/workspace was set up.
-        (tmp_path / "videos" / "rob-reboot").mkdir(parents=True)
+        (tmp_path / "videos" / "demo-reboot").mkdir(parents=True)
 
         result = await b.run(ExecutionRequest(
             language="python",
             code=(
-                "import os; os.mkdir('/workspace/videos/rob-reboot/node_modules'); "
+                "import os; os.mkdir('/workspace/videos/demo-reboot/node_modules'); "
                 "print('mkdir-ok')"
             ),
             timeout=20,

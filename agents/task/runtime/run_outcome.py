@@ -132,6 +132,58 @@ def session_stop_reason(task_agent: Any, session_id: Optional[str]) -> Optional[
         return None
 
 
+def _last_tool_error(agent: Any, since_steps: Optional[int]) -> str:
+    """The newest tool error of THIS turn (history items after ``since_steps``).
+
+    Only an ACTION result counts: a result paired by position with an action
+    of the step's model output. A step-level error (the LLM call or the
+    provider failed, so the step has no model output) carries raw provider
+    text, which the harness keeps out of chat on purpose
+    (``core/surfaces/error_notices.py``)."""
+    items = _steps(agent)
+    if isinstance(since_steps, int) and since_steps >= 0:
+        items = items[since_steps:]
+    for item in reversed(items):
+        actions = list(getattr(getattr(item, "model_output", None), "action", None) or [])
+        if not actions:
+            continue
+        results = list(getattr(item, "result", None) or [])[:len(actions)]
+        for res in reversed(results):
+            err = getattr(res, "error", None)
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+    return ""
+
+
+def session_turn_end_notice(task_agent: Any, session_id: Optional[str], *,
+                            failed: bool = False, spoke: bool = False,
+                            since_steps: Optional[int] = None) -> str:
+    """The ONE owner notice for a chat turn whose run ended without finishing
+    (any stop outside ``QUIET_STOPS``, or a failed run), else ``""``.
+
+    It names the typed stop reason with ``steps/max``, the last tool error of
+    the turn, and how to resume. When the turn published nothing, the agent's
+    last report at the step limit (083 WS-2) rides in it. Never raises."""
+    try:
+        from agents.task.runtime.stop_reason import QUIET_STOPS, turn_end_notice
+        get_orch = getattr(task_agent, "get_orchestrator", None)
+        orch = get_orch(session_id) if callable(get_orch) else None
+        reason, cap, summary = _main_stop_facts(orch)
+        if not failed and (reason is None or reason in QUIET_STOPS):
+            return ""
+        agents = _main_agents(orch)
+        agent = agents[0] if agents else None
+        steps = getattr(getattr(agent, "state", None), "n_steps", None)
+        steps = steps if isinstance(steps, int) and not isinstance(steps, bool) else None
+        return turn_end_notice(
+            reason or ("error" if failed else None), steps, cap,
+            last_error=_last_tool_error(agent, since_steps) if agent is not None else "",
+            last_report="" if spoke else (summary or ""))
+    except Exception:
+        logger.debug("turn-end notice unavailable", exc_info=True)
+        return ""
+
+
 def _main_agents(orchestrator: Any) -> list:
     if orchestrator is None:
         return []
@@ -150,11 +202,23 @@ def _steps(agent: Any) -> list:
 
 
 def _action_name(action: Any) -> str:
+    """The action's registered name; a ``tool_call`` bridge entry names its TARGET.
+
+    A late tool reached through the bridge is recorded under the outer verb, so
+    every ledger reader (the ship==tested gate, ``edited_since_last_test``) would
+    otherwise never see a bridged ``coding_run_tests`` or edit (prod 2026-10-29).
+    """
     try:
         dump = action.model_dump(exclude_unset=True)
         for key in dump:
-            if key != "interacted_element":
-                return str(key)
+            if key == "interacted_element":
+                continue
+            if key == "tool_call":
+                params = dump[key]
+                target = params.get("name") if isinstance(params, dict) else None
+                if isinstance(target, str) and target.strip():
+                    return target.strip()
+            return str(key)
     except Exception:
         pass
     return ""

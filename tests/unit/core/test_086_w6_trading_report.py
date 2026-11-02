@@ -21,6 +21,7 @@ import pytest
 from core import trading_mandate as tm
 from core.open_positions import PositionDelta, apply_delta
 from core.trading_report import render_trading, trading_view
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 MEME = "0xb200000000000000000000ea8625786a776539fb"
 MEME2 = "0xb200000000000000000000b344cb4a1e8bd51968"
@@ -36,7 +37,7 @@ def home(tmp_path):
 
 def _mandate(home, now=1000.0):
     return tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=100, chains=["base"],
-                     path=home["mandate_path"], now=now)
+                     path=home["mandate_path"], now=now, preset="longtail")
 
 
 def _buy(home, addr=MEME, sym="MEME", cost=10.0, now=2000.0):
@@ -84,7 +85,7 @@ def test_mandate_positions_coverage_and_cost(home):
     _episodes(home, [("u1", 0.5, {"mandate": m.id}), ("u1", 0.25, {"mandate": m.id}),
                      ("u1", 9.0, {"mandate": "other"}), ("u2", 9.0, {"mandate": m.id})])
     t = _text(home)
-    assert f"mandate {m.id}: ACTIVE" in t and "preset memecoin" in t and "stage probe" in t
+    assert f"mandate {m.id}: ACTIVE" in t and "preset longtail" in t and "stage probe" in t
     assert "allocation $15.00 of $100.00 at cost" in t and f"slots 2/{m.slots}" in t
     assert "breaker: none tripped" in t
     meme_line = next(ln for ln in t.splitlines() if "MEME on base" in ln)
@@ -194,7 +195,7 @@ def test_status_block_absent_without_mandate_or_position(tmp_path, monkeypatch):
 
 def test_status_block_present_with_a_mandate(tmp_path, monkeypatch):
     m = tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=50, chains=["base"],
-                  path=str(tmp_path / "trading.db"))
+                  path=str(tmp_path / "trading.db"), preset="longtail")
     sec = _money(tmp_path, monkeypatch)
     assert "trading:" in sec.lines
     assert any(f"mandate {m.id}: ACTIVE" in ln for ln in sec.lines)
@@ -215,7 +216,7 @@ def test_digest_trading_section(tmp_path):
     from cron.digest import _trading_lines
     assert _trading_lines("u1", str(tmp_path)) == []  # nothing: absent
     m = tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=50, chains=["base"],
-                  path=str(tmp_path / "trading.db"))
+                  path=str(tmp_path / "trading.db"), preset="longtail")
     out = _trading_lines("u1", str(tmp_path))
     assert out[0] == "• Trading:" and any(f"mandate {m.id}" in ln for ln in out)
 

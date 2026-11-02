@@ -86,7 +86,7 @@ def test_self_evolution_promote_emits_owner_review_event(log, monkeypatch, tmp_p
         promote_pending_skill=lambda skill_id, user_id: _Res(),
     )
     ok, _msg = se.promote(se.KIND_SKILL, "draft-skill", user_id="u1",
-                          home_dir=tmp_path, instance_id="rob", skill_manager=mgr)
+                          home_dir=tmp_path, instance_id="alice", skill_manager=mgr)
     assert ok
     rows = log.query(kind="self_modification")
     assert len(rows) == 1

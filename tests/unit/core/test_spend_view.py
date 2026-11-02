@@ -72,7 +72,7 @@ def _home(tmp_path, monkeypatch, usage, episodes):
     for sid, cost in usage:
         con.execute("INSERT INTO usage_records (user_id, session_id, input_tokens, "
                     "cached_tokens, output_tokens, api_cost_usd, metadata, timestamp) "
-                    "VALUES ('rob', ?, 100, 50, 5, ?, '{\"model\": \"m1\"}', "
+                    "VALUES ('alice', ?, 100, 50, 5, ?, '{\"model\": \"m1\"}', "
                     "strftime('%Y-%m-%d %H:%M:%S','now'))", (sid, cost))
     con.commit()
     con.close()
@@ -83,7 +83,7 @@ def _home(tmp_path, monkeypatch, usage, episodes):
                     "kind TEXT, goal_id TEXT, meta TEXT)")
         for sid, kind, meta in episodes:
             con.execute("INSERT INTO episodes VALUES (?,?,?,?,NULL,?)",
-                        (int(time.time()), "rob", sid, kind, json.dumps(meta)))
+                        (int(time.time()), "alice", sid, kind, json.dumps(meta)))
         con.commit()
         con.close()
 
@@ -92,7 +92,7 @@ def test_spend_view_end_to_end_and_render(tmp_path, monkeypatch):
     _home(tmp_path, monkeypatch, [("s1", 0.5), ("s2", 0.25)],
           [("s1", "cron", {"job_id": "abcdef1234", "sent": ["hi"]}),
            ("s2", "cron", {"job_id": "abcdef1234"})])
-    view = E.spend_view("rob", str(tmp_path), now=time.time(), days=7)
+    view = E.spend_view("alice", str(tmp_path), now=time.time(), days=7)
     lines = E.spend_view_lines(view, names={"job:abcdef1234": "EXIT CHECK"})
     text = "\n".join(lines)
     assert "AI cost, the last 7 days: $0.75" in text
@@ -106,12 +106,12 @@ def test_spend_view_end_to_end_and_render(tmp_path, monkeypatch):
 def test_unreadable_run_index_is_named_not_zero(tmp_path, monkeypatch):
     _home(tmp_path, monkeypatch, [("s1", 0.5)], None)
     (tmp_path / "memory.db").write_text("not a database")
-    view = E.spend_view("rob", str(tmp_path), now=time.time(), days=1)
+    view = E.spend_view("alice", str(tmp_path), now=time.time(), days=1)
     text = "\n".join(E.spend_view_lines(view))
     assert "could not read the run records" in text and "not zero" in text
 
 
 def test_no_ledger_says_so(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "nope" / "bot.db"))
-    view = E.spend_view("rob", str(tmp_path), now=time.time(), days=3)
+    view = E.spend_view("alice", str(tmp_path), now=time.time(), days=3)
     assert "no records yet" in E.spend_view_lines(view)[0]

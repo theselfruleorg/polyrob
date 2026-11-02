@@ -30,7 +30,7 @@ def _dispatcher(agent):
 
 
 def _goal(payload=None):
-	return Goal(id="g1", user_id="rob", title="t", body="b", payload=dict(payload or {}))
+	return Goal(id="g1", user_id="alice", title="t", body="b", payload=dict(payload or {}))
 
 
 def test_run_session_is_never_woken_with_its_own_result():
@@ -47,5 +47,5 @@ def test_distinct_origin_session_is_woken():
 		_goal({"origin_session_id": "chat-9"}), "run-1", "ok"))
 	assert len(agent.calls) == 1
 	sid, uid, meta = agent.calls[0]
-	assert (sid, uid) == ("chat-9", "rob")
+	assert (sid, uid) == ("chat-9", "alice")
 	assert meta["goal_id"] == "g1" and meta["run_session_id"] == "run-1"

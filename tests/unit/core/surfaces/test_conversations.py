@@ -13,8 +13,8 @@ def _store():
 def test_record_roundtrip_and_history_order():
     s = _store()
     s.record_outbound("t1", "email", "John@Acme.com", "hello john",
-                      mid="<m1@rob>", subject="Intro", session_id="s1", now=1000.0)
-    s.record_inbound("t1", "email", "john@acme.com", "hi rob",
+                      mid="<m1@demo>", subject="Intro", session_id="s1", now=1000.0)
+    s.record_inbound("t1", "email", "john@acme.com", "hi alice",
                      mid="<r1@acme>", now=2000.0)
     conv = s.get("t1", "email", "john@acme.com")
     assert conv is not None

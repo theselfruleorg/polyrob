@@ -148,7 +148,7 @@ def annotate_decided_tokens(text: str, *, user_id: str, live_items: List[dict],
     """Rewrite each ``/approve_p_<hex>`` / ``/reject_p_<hex>`` in an owner-bound
     text whose item the owner ALREADY decided as ``(approved <time>)``.
 
-    2026-10-17 01:52Z: Rob told the owner "Still waiting on your one tap …:
+    2026-10-17 01:52Z: the agent told the owner "Still waiting on your one tap …:
     /approve_p_a9d770" — the owner had approved it at 10-16 17:16Z. The decision
     lands outside the agent's turn, so the agent's own context still says
     pending. A token that resolves in the LIVE queue is left alone (a re-proposed
@@ -361,6 +361,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                 "preview": sc["preview"],
                 "chars": sc["chars"],
                 "path": sc["path"],
+                "by": sc.get("by") or [],
             })
     except Exception as e:
         logger.debug("self_evolution: self-context list failed: %s", e)
@@ -374,6 +375,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                 "preview": od["preview"],
                 "chars": od["chars"],
                 "path": od["path"],
+                "by": od.get("by") or [],
             })
     except Exception as e:
         logger.debug("self_evolution: owner-doc list failed: %s", e)
@@ -414,6 +416,8 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                     "preview": s["preview"],
                     "chars": s["chars"],
                     "path": s["path"],
+                    "by": s.get("by") or [],
+                    "change": _skill_change(mgr, s, user_id),
                 })
         except Exception as e:
             logger.debug("self_evolution: skill list failed: %s", e)
@@ -422,7 +426,97 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
     # sixth pending pipeline, DB-backed (memory.db) not a file quarantine.
     items.extend(_curated_list_pending(home_dir, user_id))
 
+    _annotate(items, user_id, home_dir, instance_id)
     return items
+
+
+def _skill_change(mgr, entry: dict, user_id: str) -> Optional[dict]:
+    """New skill or update (+/− lines) and its description. Fail-open."""
+    try:
+        from core.pending_review import skill_change
+        body = Path(entry["path"]).read_text(encoding="utf-8")
+        active = (mgr.active_skill_text(entry["skill_id"], user_id=user_id)
+                  if hasattr(mgr, "active_skill_text") else None)
+        return skill_change(body, active)
+    except Exception as e:
+        logger.debug("self_evolution: skill change summary skipped: %s", e)
+        return None
+
+
+def review(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
+           instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+    """The owner's full review of ONE pending item — a skill update as a diff
+    against the live skill, anything else whole (``core.pending_review``)."""
+    ok, body = show(kind, item_id, user_id=user_id, home_dir=home_dir,
+                    instance_id=instance_id, skill_manager=skill_manager)
+    if not ok:
+        return ok, body
+    items = list_pending(user_id, home_dir=home_dir, instance_id=instance_id,
+                         skill_manager=skill_manager)
+    item = next((it for it in items if it["kind"] == kind and str(it["id"]) == str(item_id)),
+                {"kind": kind, "id": item_id})
+    active = None
+    if kind == KIND_SKILL:
+        mgr = _resolve_skill_manager(skill_manager)
+        try:
+            if mgr is not None and hasattr(mgr, "active_skill_text"):
+                active = mgr.active_skill_text(item_id, user_id=user_id)
+        except Exception as e:
+            logger.debug("self_evolution: live skill unreadable for review: %s", e)
+    from core.pending_review import review_text
+    return True, review_text(
+        item, body, label=_item_label(item), is_skill=(kind == KIND_SKILL),
+        active_body=active,
+        decide_line=(f"Decide: {pending_tap_token('approve', item)}   "
+                     f"{pending_tap_token('reject', item)}"))
+
+
+#: 095 W10 (R9): who drafted a pending item, in the owner's words.
+_BY_LABELS = {"user": "the owner", "agent": "the agent",
+              "background_review": "a background run"}
+
+
+def _annotate(items: List[dict], user_id: str, home_dir, instance_id: str) -> None:
+    """Name each draft's author and its linked draft in its preview (095 W10):
+    every seat that lists the queue shows both, from this one place."""
+    from core import pending_links
+    keys = {f"{it['kind']}:{it['id']}" for it in items}
+    for it in items:
+        notes = []
+        by = [_BY_LABELS.get(b, b) for b in it.get("by") or []]
+        if by:
+            notes.append("drafted by " + " + ".join(by))
+        try:
+            other = pending_links.partner(user_id, it["kind"], it["id"],
+                                          home_dir=home_dir, instance_id=instance_id)
+        except Exception:
+            other = None
+        if other and f"{other[0]}:{other[1]}" in keys:
+            it["linked"] = f"{other[0]}:{other[1]}"
+            notes.append(f"one decision with the {_item_label({'kind': other[0], 'id': other[1]})}")
+        if notes:
+            it["notes"] = "; ".join(notes)
+            it["preview"] = f"[{it['notes']}] {it.get('preview') or ''}".rstrip()
+
+
+def _linked_pending(kind: str, item_id, *, user_id: str, home_dir, instance_id: str,
+                    skill_manager=None) -> Optional[Tuple[str, str]]:
+    """The still-pending draft linked to this one, or None (a decided partner
+    drops the link: the owner already decided that half)."""
+    from core import pending_links
+    try:
+        other = pending_links.partner(user_id, kind, item_id, home_dir=home_dir,
+                                      instance_id=instance_id)
+    except Exception:
+        return None
+    if other is None:
+        return None
+    live = {(it["kind"], str(it["id"])) for it in list_pending(
+        user_id, home_dir=home_dir, instance_id=instance_id, skill_manager=skill_manager)}
+    if (other[0], str(other[1])) in live:
+        return other
+    pending_links.unlink(user_id, kind, item_id, home_dir=home_dir, instance_id=instance_id)
+    return None
 
 
 def _self_mod_ev(kind: str, action: str, item_id: str, user_id: str, ok: bool) -> None:
@@ -450,9 +544,46 @@ def _rebase_note(res) -> str:
     return f" — {note}" if note else ""
 
 
+def _decide_linked(fn, kind: str, item_id, *, user_id: str, home_dir, instance_id: str,
+                   skill_manager=None) -> Tuple[bool, str]:
+    """095 W10 (R8): a linked pair is ONE decision. The first half decides; the
+    second follows only when the first succeeded, and a failed second half is
+    named, never hidden."""
+    other = _linked_pending(kind, item_id, user_id=user_id, home_dir=home_dir,
+                            instance_id=instance_id, skill_manager=skill_manager)
+    ok, msg = fn(kind, item_id, user_id=user_id, home_dir=home_dir,
+                 instance_id=instance_id, skill_manager=skill_manager)
+    if other is None:
+        return ok, msg
+    label = _item_label({"kind": other[0], "id": other[1]})
+    if not ok:
+        return False, f"{msg} — the linked {label} stays pending too (one decision)"
+    from core import pending_links
+    pending_links.unlink(user_id, kind, item_id, home_dir=home_dir, instance_id=instance_id)
+    ok2, msg2 = fn(other[0], other[1], user_id=user_id, home_dir=home_dir,
+                   instance_id=instance_id, skill_manager=skill_manager)
+    if not ok2:
+        return False, f"{msg}; ⚠ the linked {label} FAILED: {msg2}"
+    return True, f"{msg}; {msg2}"
+
+
 def promote(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
             instance_id: str, skill_manager=None) -> Tuple[bool, str]:
-    """Promote a pending proposal to active. Returns ``(ok, message)``."""
+    """Promote a pending proposal (and the draft linked to it) to active."""
+    return _decide_linked(_promote_one, kind, item_id, user_id=user_id, home_dir=home_dir,
+                          instance_id=instance_id, skill_manager=skill_manager)
+
+
+def reject(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
+           instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+    """Reject a pending proposal (and the draft linked to it). ``(ok, message)``."""
+    return _decide_linked(_reject_one, kind, item_id, user_id=user_id, home_dir=home_dir,
+                          instance_id=instance_id, skill_manager=skill_manager)
+
+
+def _promote_one(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
+                 instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+    """Promote ONE pending proposal to active. Returns ``(ok, message)``."""
     # 019 #1: an owner action changes the pending set — forget the notified
     # fingerprint so the next (possibly same-id) proposal notifies again.
     clear_notified_item(user_id, kind, item_id, home_dir=home_dir,
@@ -502,9 +633,9 @@ def promote(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
     return False, f"unknown pending kind: {kind!r}"
 
 
-def reject(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
-           instance_id: str, skill_manager=None) -> Tuple[bool, str]:
-    """Reject (archive-then-discard) a pending proposal. Returns ``(ok, message)``."""
+def _reject_one(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
+                instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+    """Reject (archive-then-discard) ONE pending proposal. ``(ok, message)``."""
     # 019 #1: see promote() — owner action resets the notification batch.
     clear_notified_item(user_id, kind, item_id, home_dir=home_dir,
                         instance_id=instance_id)
@@ -561,7 +692,11 @@ def decide_all(approve: bool, *, user_id: str, home_dir: Path | str,
     fn = promote if approve else reject
     ok_n = fail_n = 0
     msgs: List[str] = []
+    decided: set = set()
     for it in items:
+        if f"{it['kind']}:{it['id']}" in decided:
+            continue  # the second half of a linked pair: decided with the first
+        decided.update({f"{it['kind']}:{it['id']}", it.get("linked") or ""})
         try:
             ok, msg = fn(it["kind"], it["id"], user_id=user_id, home_dir=home_dir,
                          instance_id=instance_id, skill_manager=skill_manager)
@@ -614,6 +749,21 @@ def pending_tap_token(verb: str, item: dict) -> str:
     return f"/{verb}_{alias.replace('-', '_')}"
 
 
+def _item_label(it: dict) -> str:
+    kind = it.get("kind")
+    if kind == KIND_SELF_CONTEXT:
+        return "identity note"
+    if kind == KIND_OWNER:
+        return "owner-facts note"
+    if kind == KIND_CONTRACT:
+        return "operating contract"
+    if kind == KIND_PREF_CHANGE:
+        return f"preference change '{it.get('id')}'"
+    if kind == KIND_CURATED_NOTE:
+        return f"note #{it.get('id')}"
+    return f"skill '{it.get('id')}'"
+
+
 def build_pending_notification(items: List[dict]) -> Optional[str]:
     """Turn a pending set into one proactive owner message (or None if empty).
 
@@ -629,26 +779,20 @@ def build_pending_notification(items: List[dict]) -> Optional[str]:
     """
     if not items:
         return None
-    lines = [f"🧠 I've proposed {len(items)} change(s) to how I work — tap to approve:"]
+    shown: set = set()
+    rows = []
     for it in items:
-        if it["kind"] == KIND_SELF_CONTEXT:
-            label = "identity note"
-        elif it["kind"] == KIND_OWNER:
-            label = "owner-facts note"
-        elif it["kind"] == KIND_CONTRACT:
-            label = "operating contract"
-        elif it["kind"] == KIND_PREF_CHANGE:
-            label = f"preference change '{it['id']}'"
-        elif it["kind"] == KIND_CURATED_NOTE:
-            label = f"note #{it['id']}"
-        else:
-            label = f"skill '{it['id']}'"
-        preview = (it.get("preview") or "").strip()
-        if len(preview) > 140:
-            preview = preview[:137] + "…"
-        lines.append(f"• {label} — {preview}")
+        if f"{it['kind']}:{it['id']}" in shown:
+            continue  # 095 W10: a linked pair is ONE entry with ONE pair of taps
+        shown.update({f"{it['kind']}:{it['id']}", it.get("linked") or ""})
+        rows.append(it)
+    from core.pending_review import summary_line
+    lines = [f"🧠 I've proposed {len(rows)} change(s) to how I work — tap to approve:"]
+    for it in rows:
+        lines.append(f"• {_item_label(it)} — {summary_line(it)}")
         lines.append(f"   {pending_tap_token('approve', it)}   "
-                     f"{pending_tap_token('reject', it)}")
+                     f"{pending_tap_token('reject', it)}   "
+                     f"see it all: {pending_tap_token('pending', it)}")
     lines.append("Everything at once: /approve_all · the full list: /pending")
     return "\n".join(lines)
 
@@ -697,7 +841,7 @@ _notify_states: dict = {}  # (home_dir, instance_id, user_id) -> {key: content_h
 #
 # 035 P0-1 removed ``capped`` and ``quiet_held``. Both are SUPPRESSIONS: the
 # message did not reach the owner, and the durable ``owner_notice`` row they
-# leave behind is visible only via ``polyrob telemetry``. Counting an unread
+# leave behind is visible only via ``/telemetry``. Counting an unread
 # record as delivery is what made the 09-08 lock permanent. ``rate_limited``
 # was already excluded on the same reasoning.
 #
@@ -857,7 +1001,7 @@ def summarize_doc_change(before: Optional[str], after: Optional[str]) -> str:
 def _record_owner_notice(text: str) -> None:
     """T4-04 fallback: persist an owner-facing notice to the durable event log when a
     live push couldn't be delivered, so a REPL/local owner (no telegram daemon) still
-    sees it via `polyrob telemetry` and the message is never silently lost. Owner-scoped,
+    sees it via `/telemetry` and the message is never silently lost. Owner-scoped,
     fail-open.
 
     ⚠️ A7 / A40 (2026-09-14): this writes an UNMARKED ``owner_notice`` row — it
@@ -993,7 +1137,8 @@ async def maybe_notify_owner_pending(container, user_id: str, *, home_dir: Path 
 __all__ = [
     "KIND_SELF_CONTEXT", "KIND_SKILL", "KIND_OWNER", "KIND_CONTRACT", "KIND_PREF_CHANGE",
     "PENDING_KIND_LABELS", "pending_kind_label",
-    "list_pending", "promote", "reject", "decide_all", "show", "build_pending_notification",
+    "list_pending", "promote", "reject", "decide_all", "show", "review",
+    "build_pending_notification",
     "push_owner_message", "maybe_notify_owner_pending",
     "NOTIFY_SOURCE", "summarize_doc_change",
     "pending_notify_state", "pending_needs_notification",

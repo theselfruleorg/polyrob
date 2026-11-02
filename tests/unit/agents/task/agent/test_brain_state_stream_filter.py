@@ -1,6 +1,6 @@
 """Brain-state must never reach stream consumers.
 
-Regression for the kimi-k2.6 leak: ROB instructs every model to emit its brain
+Regression for the kimi-k2.6 leak: POLYROB instructs every model to emit its brain
 state as ``{"current_state": {...}}`` text content every turn.  On a tool-free
 planning turn that content was streamed verbatim and surfaced as a raw JSON dump
 in the CLI.  The fix filters brain-state at the single ``stream_output`` funnel

@@ -158,6 +158,42 @@ def _ledger(user_id: str, days: int) -> Dict[str, Any]:
     return ledger_rollup_strict(user_id, days)
 
 
+def self_modification_text(attrs: Dict[str, Any]) -> str:
+    """One line for a ``self_modification`` event. A curator ``propose`` event
+    (095 W12) carries the owner's question in ``note`` — that line IS the text.
+    The ONE renderer for these events on every owner seat (recap, digest)."""
+    attrs = attrs or {}
+    note = str(attrs.get("note") or "").strip().replace("\n", " ")
+    if attrs.get("action") == "propose" and note:
+        return f"proposal: {note[:200]}"
+    what = attrs.get("kind") or attrs.get("action") or "self_modification"
+    ident = attrs.get("skill_id") or attrs.get("item_id") or attrs.get("id") or ""
+    return f"{what} {ident}".strip()
+
+
+def curator_proposals(user_id: str, since_ts: Optional[float],
+                      data_home: Optional[str] = None) -> List[str]:
+    """The curator's owner proposal lines in the window, newest first, one per
+    distinct line. Raises on a failed read; a disabled or absent log is empty."""
+    from core.event_kinds import SELF_MODIFICATION
+    from core.event_log import event_log_enabled, open_event_log
+    if not event_log_enabled():
+        return []
+    log = open_event_log(data_home)
+    if log is None:
+        return []
+    out: List[str] = []
+    for ev in log.query(kind=SELF_MODIFICATION, user_id=user_id, since_ts=since_ts,
+                        limit=200) or []:
+        attrs = ev.get("attrs") or {}
+        if attrs.get("action") != "propose" or not attrs.get("note"):
+            continue
+        text = self_modification_text(attrs)
+        if text not in out:
+            out.append(text)
+    return out
+
+
 def _guard(source: str, failures: List["RecapEntry"], now: float, fn, *args):
     """Run one seam; a failure becomes ONE named ``unreadable`` entry."""
     try:
@@ -185,6 +221,7 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
 
     entries: List[RecapEntry] = []
     failures: List[RecapEntry] = []
+    seen_proposals: set = set()
 
     for e in _guard("episodes", failures, now, _episodes, user_id, since_ts) or []:
         spend = float(e.get("spend_usd") or 0.0)
@@ -206,9 +243,11 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
         attrs = ev.get("attrs") or {}
         raw_kind = ev.get("kind") or "event"
         if raw_kind == "self_modification":
-            what = attrs.get("kind") or attrs.get("action") or "self_modification"
-            ident = attrs.get("skill_id") or attrs.get("id") or ""
-            text = f"{what} {ident}".strip()
+            text = self_modification_text(attrs)
+            if attrs.get("action") == "propose":
+                if text in seen_proposals:
+                    continue
+                seen_proposals.add(text)
         elif raw_kind == "user_delivery":
             # 061 §2.6: render what was SAID, not the literal kind name. A
             # quiet-held row keeps its body under `held_text`.

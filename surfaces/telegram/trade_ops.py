@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _REF = re.compile(r"^d[0-9a-f]{10}$")
 
 USAGE = (
-    "Usage: /trade start [budget=<usd> chains=<a,b> preset=memecoin|majors ticket=<usd> "
+    "Usage: /trade start [budget=<usd> chains=<a,b> preset=<name> ticket=<usd> "
     "slots=<n>]\n"
     "       /trade status | pause | resume | stop | release\n"
     "`start` shows ONE card with every number before anything is created; Confirm "
@@ -42,11 +42,11 @@ USAGE = (
 
 
 def _start_usage() -> str:
-    from core.trading_presets import PRESETS
-    lines = ["Tell me the allocation and the chains, e.g.:",
-             "  /trade start 150 solana,base memecoin",
+    from core.trading_presets import all_presets
+    lines = ["Tell me the allocation, the chains and the preset, e.g.:",
+             "  /trade start 150 base majors",
              "Presets (the numbers live in the preset; the card shows them):"]
-    for p in PRESETS.values():
+    for p in all_presets().values():
         tick = (f"${p.ticket_usd:g} tickets" if p.ticket_usd is not None
                 else f"{p.ticket_alloc_pct[1]:g}% of the allocation per ticket"
                 if p.ticket_alloc_pct else "a fixed amount")

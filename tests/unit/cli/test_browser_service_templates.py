@@ -37,10 +37,10 @@ def test_unit_hides_a_custom_agent_data_home(tmp_path, monkeypatch):
     assert "\nInaccessiblePaths=-/srv/polyrob -/etc/polyrob\n" in unit
     monkeypatch.delenv("POLYROB_DATA_DIR")
     env = tmp_path / "polyrob.env"
-    env.write_text('X=1\nexport POLYROB_DATA_DIR="/data/rob"\n')
-    assert b.agent_data_home(env) == Path("/data/rob")
+    env.write_text('X=1\nexport POLYROB_DATA_DIR="/data/alice"\n')
+    assert b.agent_data_home(env) == Path("/data/alice")
     assert b.agent_data_home(tmp_path / "missing.env") == Path("/var/lib/polyrob")
-    monkeypatch.setenv("POLYROB_DATA_DIR", "/srv/my rob")
+    monkeypatch.setenv("POLYROB_DATA_DIR", "/srv/my alice")
     with pytest.raises(Exception, match="not a plain absolute path"):
         b.agent_data_home()
 

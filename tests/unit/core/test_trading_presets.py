@@ -1,31 +1,87 @@
-"""086 W2: the trading presets — the ONE place the numbers live."""
+"""086 W2: the trading presets — the ONE place the numbers live. 095 B1: core ships
+generic presets only, a registry and an install's own file; no default preset."""
 import dataclasses
+import json
 
 import pytest
 
 from core import trading_presets as tp
-from core.trading_presets import (DCA, MAJORS, MEMECOIN, PRESETS, ExitPreset, PresetError,
+from core.trading_presets import (DCA, MAJORS, PRESETS, ExitPreset, PresetError,
                                   default_ticket_usd, get_preset, owner_tune, stop_may_move,
                                   tighten, validate_exit, validate_preset)
+from tests.trading_fixture import LONGTAIL, LONGTAIL_EXIT
+
+MEMECOIN = LONGTAIL  # the wide long-tail shape the rules below are tested on
 
 
-def test_the_three_presets_exist_and_validate():
-    assert set(PRESETS) == {"memecoin", "majors", "dca"}
-    for p in PRESETS.values():
-        validate_preset(p)
+def test_core_ships_generic_presets_only():
+    assert {"majors", "dca"} <= set(PRESETS)
+    for name in ("majors", "dca"):
+        validate_preset(PRESETS[name])
+    src = open(tp.__file__, encoding="utf-8").read().lower()
+    assert "memecoin" not in src  # an install's programme preset is not core's
+    assert DCA.doctrine_skill == "dca" and MAJORS.doctrine_skill is None
 
 
-def test_memecoin_numbers_are_the_approved_ones():
-    e, b = MEMECOIN.exit, MEMECOIN.breakers
-    assert (MEMECOIN.ticket_usd, MEMECOIN.slots) == (3.0, 8)  # D3
-    assert (MEMECOIN.hunt_cadence_min, MEMECOIN.exit_cadence_min) == (30, 15)
-    assert e.name == "memecoin_default" and e.stop_pct == -50.0
-    assert e.take_profit == ((100.0, 50.0),)
-    assert (e.trail_pct, e.trail_arm_pct) == (40.0, 100.0)
-    assert (e.time_stop_h, e.time_stop_min_gain_pct) == (48.0, 20.0)
-    assert (b.daily_loss_pct, b.drawdown_pct, b.max_consecutive_losses, b.cooldown_h,
-            b.max_entries_per_day, b.token_cooldown_h) == (10.0, 30.0, 4, 6.0, 10, 24.0)
-    assert dict(MEMECOIN.tier_ladder) == {"A": 5.0, "B": 2.5, "C": 1.0}
+def test_register_preset_validates_and_protects_the_core_names():
+    with pytest.raises(PresetError):
+        tp.register_preset(dataclasses.replace(LONGTAIL, name="broken", slots=0))
+    with pytest.raises(PresetError, match="core preset"):
+        tp.register_preset(dataclasses.replace(LONGTAIL, name="majors"))
+    assert get_preset("longtail") is LONGTAIL
+    assert tp.get_exit_preset("longtail_exit") is LONGTAIL_EXIT
+
+
+def _instance_file(tmp_path, body):
+    path = tmp_path / tp.INSTANCE_FILE
+    path.write_text(json.dumps(body) if not isinstance(body, str) else body)
+    return str(path)
+
+
+_INST = {"presets": [{
+    "name": "hunt", "universe": "u", "ticket_usd": 2, "slots": 4, "hunt_cadence_min": 30,
+    "exit_cadence_min": 15, "doctrine_skill": "my-hunt",
+    "exit": {"name": "hunt_exit", "stop_pct": -40, "take_profit": [[80, 50]],
+             "trail_pct": 30, "trail_arm_pct": 80, "time_stop_h": 24, "near_pct": 8},
+    "breakers": {"daily_loss_pct": 10, "max_consecutive_losses": 3, "cooldown_h": 6},
+    "tier_ladder": [["A", 4], ["B", 2], ["C", 1]]}],
+    "screen": {"pool": {"liquidity_floor_usd": 1234, "bogus": 1},
+               "survival": {"tier_a_age_h": 72}}}
+
+
+def test_an_install_defines_its_own_presets_and_screen_lines(tmp_path):
+    path = _instance_file(tmp_path, _INST)
+    p = get_preset("Hunt", path=path)
+    assert (p.ticket_usd, p.slots, p.doctrine_skill, p.exit.stop_pct) == (2.0, 4, "my-hunt",
+                                                                          -40.0)
+    assert dict(p.tier_ladder) == {"A": 4.0, "B": 2.0, "C": 1.0}
+    assert "hunt" in tp.all_presets(path) and tp.get_exit_preset("hunt_exit", path=path)
+    lines = tp.screen_lines("pool", {"liquidity_floor_usd": 500_000.0, "age": 12.0},
+                            path=path)
+    assert lines == {"liquidity_floor_usd": 1234.0, "age": 12.0}  # unknown key ignored
+    assert tp.screen_lines("survival", {"tier_a_age_h": 48.0}, path=path) == {
+        "tier_a_age_h": 72.0}
+
+
+def test_an_unknown_preset_refuses_with_the_remedy(tmp_path):
+    path = str(tmp_path / tp.INSTANCE_FILE)  # absent
+    with pytest.raises(PresetError, match="trading_presets.json"):
+        get_preset("yolo", path=path)
+
+
+def test_a_broken_instance_file_adds_nothing_and_names_itself(tmp_path):
+    bad = dict(_INST, presets=[dict(_INST["presets"][0], slots=0)])
+    path = _instance_file(tmp_path, bad)
+    with pytest.raises(PresetError, match="slots"):
+        get_preset("hunt", path=path)
+    path = _instance_file(tmp_path, "{not json")
+    with pytest.raises(PresetError, match="trading_presets.json"):
+        get_preset("hunt", path=path)
+    assert tp.screen_lines("pool", {"liquidity_floor_usd": 5.0}, path=path) == {
+        "liquidity_floor_usd": 5.0}
+    shadow = dict(_INST, presets=[dict(_INST["presets"][0], name="majors")])
+    path = _instance_file(tmp_path, shadow)
+    assert get_preset("majors", path=path) is MAJORS
 
 
 def test_majors_numbers_are_the_approved_ones():
@@ -43,10 +99,8 @@ def test_dca_has_no_exit():
     assert DCA.exit is None and DCA.slots == 1
 
 
-def test_unknown_preset_refuses():
-    with pytest.raises(PresetError):
-        get_preset("yolo")
-    assert get_preset(" Memecoin ") is MEMECOIN
+def test_preset_names_are_case_and_space_blind():
+    assert get_preset(" Majors ") is MAJORS
 
 
 @pytest.mark.parametrize("change", [
@@ -59,7 +113,7 @@ def test_unknown_preset_refuses():
 ])
 def test_load_time_rules_refuse(change):
     with pytest.raises(PresetError):
-        validate_exit(dataclasses.replace(tp.MEMECOIN_EXIT, **change))
+        validate_exit(dataclasses.replace(LONGTAIL_EXIT, **change))
 
 
 def test_agent_may_tighten():
@@ -116,3 +170,62 @@ def test_presets_hold_no_cap_flag():
     src = inspect.getsource(tp)
     for flag in ("AGENT_WALLET_MAX_PER_TX_USD", "WALLET_DAILY_CAP_USD", "DEFI_AUTONOMOUS_MAX_USD"):
         assert flag not in src
+
+
+# --- the screen lines fail safe (review fix) ----------------------------------
+
+def test_one_bad_preset_never_drops_the_screen_lines(tmp_path):
+    bad = dict(_INST, presets=[dict(_INST["presets"][0], slots=0)])
+    path = _instance_file(tmp_path, bad)
+    with pytest.raises(PresetError, match="slots"):
+        get_preset("hunt", path=path)
+    lines, err = tp.screen_lines_checked("pool", {"liquidity_floor_usd": 5.0}, path=path)
+    assert lines == {"liquidity_floor_usd": 1234.0} and err is None
+
+
+def test_an_unreadable_file_reports_a_screen_error(tmp_path):
+    path = _instance_file(tmp_path, "{not json")
+    lines, err = tp.screen_lines_checked("pool", {"liquidity_floor_usd": 5.0}, path=path)
+    assert lines == {"liquidity_floor_usd": 5.0}
+    assert err and err.startswith("custom screen lines unreadable")
+    path = _instance_file(tmp_path, {"screen": ["not", "an", "object"]})
+    assert tp.screen_lines_checked("pool", {"x": 1.0}, path=path)[1]
+    path = str(tmp_path / "absent.json")
+    assert tp.screen_lines_checked("pool", {"x": 1.0}, path=path) == ({"x": 1.0}, None)
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_a_non_finite_screen_line_is_rejected(tmp_path, value):
+    path = _instance_file(tmp_path, '{"screen": {"pool": {"liquidity_floor_usd": %s}}}'
+                          % value)
+    lines, err = tp.screen_lines_checked("pool", {"liquidity_floor_usd": 5.0}, path=path)
+    assert lines == {"liquidity_floor_usd": 5.0}
+    assert err and "not a finite number" in err
+
+
+def _broken_install(tmp_path, monkeypatch):
+    path = _instance_file(tmp_path, "{not json")
+    monkeypatch.setattr(tp, "instance_presets_path", lambda: path)
+
+
+def test_pool_screen_is_unscreenable_on_unreadable_lines(tmp_path, monkeypatch):
+    import types
+    from tools.defi import pool_screen
+    _broken_install(tmp_path, monkeypatch)
+    pool = types.SimpleNamespace(name="A / B", liquidity_usd=900_000.0,
+                                 volume_h24_usd=1_000_000.0, vol_liq_ratio=1.1,
+                                 hourly_vol_liq_ratio=0.1, txns_per_buyer=2.0,
+                                 age_hours=100.0)
+    v = pool_screen.classify(pool)
+    assert v.verdict == "UNSCREENABLE"
+    assert "custom screen lines unreadable" in v.reasons[0]
+
+
+def test_survivability_is_partial_on_unreadable_lines(tmp_path, monkeypatch):
+    from tools.defi import survivability as sv
+    _broken_install(tmp_path, monkeypatch)
+    res = sv.assess("evm", screen=None, holders=None, quote=None)
+    assert res["screen_lines_error"].startswith("custom screen lines unreadable")
+    assert "screen_lines" in res["unknown"]
+    assert res["tier_ceiling"] in ("C", sv.REJECT)
+    assert any("PARTIAL" in line for line in sv.render(res))

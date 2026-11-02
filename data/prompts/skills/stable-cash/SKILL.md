@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Deciding what counts as cash or a safe stablecoin'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '3'
 ---
@@ -19,7 +18,7 @@ itself a dollar is a position.
 - The chain registry pins USDC (and the wrapped native) per chain; `token_info`
   says `on the pinned canonical list` for those. Base USDC is
   `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
-- Other stables (USDG on Robinhood Chain, USDT, DAI) are NOT on the canonical
+- Other stables (a chain's own stable, USDT, DAI) are NOT on the canonical
   list. Treat them as verified only when a trusted source covers them (a
   `target_token` the owner typed, the owner's approval — `token_info` says
   `verified`); otherwise resolve them with `token-identity`. A refused buy has
@@ -54,4 +53,4 @@ measure anything — say so and stop. Never work around a missing verb with a ra
 
 ## Related
 
-`token-identity`, `sizing-and-risk`, `treasury-trading`.
+`token-identity`, `sizing-and-risk`, `trade-execution`.

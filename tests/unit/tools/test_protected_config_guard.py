@@ -121,7 +121,7 @@ def test_env_dotted_globs_stay_broad_for_real_snapshot_copies():
 @pytest.mark.parametrize("path", [
     "/etc/polyrob/polyrob.env",
     "/etc/polyrob/anything.conf",
-    "/etc/rob/rob.env",
+    "/etc/rob/legacy.env",
 ])
 def test_system_config_dirs_are_protected(path):
     assert is_protected_config_path(Path(path)) is True

@@ -333,7 +333,7 @@ async def _dedupe_amount_for_treasury(
         candidate = round(amount_usd + step * i, 6)
         if candidate > cap:
             break
-        # 046: scoped to ONE asset. A ROB invoice and a USDC invoice at the
+        # 046: scoped to ONE asset. A DEMO invoice and a USDC invoice at the
         # same price are already unambiguous on-chain (different contracts), so
         # perturbing one because of the other moves a quoted price for nothing.
         #

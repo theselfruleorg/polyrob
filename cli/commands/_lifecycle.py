@@ -337,6 +337,19 @@ def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str
     return lc.OUTCOME_BACK_ONLINE, f"✅ Back online on {label} — restart took {took} s."
 
 
+async def close_chat_episodes(task_agent: Any) -> None:
+    """The process stops (a drained restart, ``/update``, SIGTERM): write the
+    chat episode of every resident owner chat, so the next session's continuity
+    bridge carries the conversation across the restart (F5, prod review
+    2026-10-29: 39 restarts in 14 days wrote none). Bounded; never raises."""
+    try:
+        writer = getattr(task_agent, "write_open_chat_episodes", None)
+        if writer is not None:
+            await writer(source="restart")
+    except Exception:
+        logger.warning("lifecycle: chat episodes at stop not written", exc_info=True)
+
+
 async def announce_boot(container: Any, data_home: Path, role: str = "",
                         serves: frozenset = frozenset()) -> Optional[str]:
     """Stamp the healthy start and answer the request it closes. Never raises.

@@ -166,6 +166,16 @@ class GroupStore:
             conn.close()
         return [dict(r) for r in rows]
 
+    def open_groups(self, session_id: str) -> List[Dict[str, Any]]:
+        """The session's OPEN groups, oldest first."""
+        conn = self._conn()
+        try:
+            rows = conn.execute("SELECT * FROM card_groups WHERE session_id=? AND state=? "
+                                "ORDER BY created_at", (str(session_id), G_OPEN)).fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
+
     def open_count(self, session_id: str) -> int:
         conn = self._conn()
         try:
@@ -397,6 +407,7 @@ def take_outcomes(*, session_id: str, user_id: str, origin: str = "", origin_ref
         waiting = gs.open_count(session_id) if session_id and not origin else 0
         if waiting:
             parts.append(f"Still waiting on the owner: {waiting} group(s) of cards (/cards).")
+            parts += _open_cancels(gs, session_id, user_id, st)
         if not parts:
             return ""
         return "\n".join(["<card-outcomes>",
@@ -405,6 +416,21 @@ def take_outcomes(*, session_id: str, user_id: str, origin: str = "", origin_ref
     except Exception:
         logger.debug("card outcomes read failed (fail-open)", exc_info=True)
         return ""
+
+
+#: The most cancelled cards of still-open groups one block names.
+_OPEN_CANCELS_MAX = 6
+
+
+def _open_cancels(gs: GroupStore, session_id: str, user_id: str, st: Any) -> List[str]:
+    """memory F9: a card the owner cancelled while its group still waits on
+    others — named with its line and id, so the agent can say what was cancelled."""
+    lines: List[str] = []
+    for g in gs.open_groups(session_id):
+        for c in leaves(st.group_cards(user_id, g["group_id"])):
+            if c.state == "cancelled" and len(lines) < _OPEN_CANCELS_MAX:
+                lines.append(f"- {c.line or c.title} → DISMISSED (card {c.card_id})")
+    return (["The owner already cancelled:", *lines]) if lines else []
 
 
 def install() -> None:

@@ -266,7 +266,7 @@ def test_replying_to_the_BOT_is_refused(monkeypatch, tmp_path):
     out = mute_reply(
         _FakeAgent(tmp_path),
         _result(text="/mute 1h",
-                reply_from={"id": 4242, "first_name": "Rob", "is_bot": True}),
+                reply_from={"id": 4242, "first_name": "Nova", "is_bot": True}),
         ["1h"])
     assert "cannot be targeted" in reply_text(out)
 

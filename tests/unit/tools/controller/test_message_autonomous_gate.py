@@ -26,8 +26,9 @@ def test_flag_off_autonomous_turn_refused(monkeypatch):
     monkeypatch.delenv("MESSAGE_AUTONOMOUS_ALLOWLISTED", raising=False)
     res = _autonomous_message_refusal(_Ctx(is_sub_agent=True), _Controller())
     assert res is not None
-    assert "not permitted" in res.extracted_content
-    assert "MESSAGE_AUTONOMOUS_ALLOWLISTED" in res.extracted_content
+    assert res.error and not res.extracted_content  # a refusal is an error
+    assert "not permitted" in res.error
+    assert "MESSAGE_AUTONOMOUS_ALLOWLISTED" in res.error
 
 
 def test_flag_on_autonomous_turn_falls_through_to_tier_gate(monkeypatch):

@@ -1,8 +1,8 @@
-"""W6 — cross-session search: memory_search alias + UP-06 untrusted-wrap.
+"""W6 — cross-session search: ONE verb + UP-06 untrusted-wrap.
 
-The existing session_search action is reused under a second name (`memory_search`,
-default-on via MEMORY_SEARCH_TOOL), and recalled content is framed as untrusted DATA
-(it may contain previously-ingested web/tool output → indirect injection vector).
+095 W9 (IN-10) deleted the `memory_search` alias (MEMORY_SEARCH_TOOL retired): it
+was the same handler under a second name. Recalled content is framed as untrusted
+DATA (it may contain previously-ingested web/tool output → indirect injection vector).
 """
 import logging
 
@@ -48,33 +48,30 @@ def _clean_registry():
     mem_registry.reset_memory_registry()
 
 
-def test_alias_registered_when_flag_on(monkeypatch):
-    monkeypatch.setenv("MEMORY_SEARCH_TOOL", "true")
+@pytest.mark.parametrize("flag", ["true", "false"])
+def test_one_search_verb_whatever_the_retired_flag_says(monkeypatch, flag):
+    monkeypatch.setenv("MEMORY_SEARCH_TOOL", flag)
     mem_registry.set_external_memory_provider(_StubExternalProvider())
     c = _bare_controller()
     c._register_session_search_action()
     actions = c.registry.registry.actions
     assert "session_search" in actions
-    assert "memory_search" in actions, "W6 alias must register"
+    assert "memory_search" not in actions
 
 
-def test_alias_suppressed_when_flag_off(monkeypatch):
-    monkeypatch.setenv("MEMORY_SEARCH_TOOL", "false")
-    mem_registry.set_external_memory_provider(_StubExternalProvider())
-    c = _bare_controller()
-    c._register_session_search_action()
-    actions = c.registry.registry.actions
-    assert "session_search" in actions  # primary always present
-    assert "memory_search" not in actions  # alias gated off
+def test_the_retired_flag_is_listed_and_has_no_catalog_row():
+    from core.config_policy.retired_flags import RETIRED_FLAGS
+    from core.flags_catalog import CATALOG
+    assert "MEMORY_SEARCH_TOOL" in RETIRED_FLAGS
+    assert "MEMORY_SEARCH_TOOL" not in {row[0] for row in CATALOG}
 
 
 @pytest.mark.asyncio
 async def test_recalled_content_is_untrusted_wrapped(monkeypatch):
-    monkeypatch.setenv("MEMORY_SEARCH_TOOL", "true")
     mem_registry.set_external_memory_provider(_StubExternalProvider())
     c = _bare_controller()
     c._register_session_search_action()
-    action = c.registry.registry.actions["memory_search"]
+    action = c.registry.registry.actions["session_search"]
     params = action.param_model(query="anything")
     res = await action.function(params, execution_context=None)
     assert "<untrusted_tool_result" in res.extracted_content

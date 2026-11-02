@@ -29,7 +29,7 @@ def test_no_persona_is_byte_identical_to_baseline():
 
 
 def test_persona_appears_inside_identity_after_static_line():
-    marker = "You are Rob, a terse and witty assistant."
+    marker = "You are Nova, a terse and witty assistant."
     content = _prompt(persona_block=marker).get_system_message().content
     assert marker in content
     # Must land inside <identity>...</identity>

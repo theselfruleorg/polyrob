@@ -136,7 +136,7 @@ def test_cold_backfill_merges_sources(monkeypatch, tmp_path):
     con.commit(); con.close()
 
     # session feed file
-    feed = tmp_path / "sessions" / "rob" / "s-1" / "feed"
+    feed = tmp_path / "sessions" / "alice" / "s-1" / "feed"
     feed.mkdir(parents=True)
     (feed / "000001_session_start.json").write_text(
         json.dumps({"type": "session_start", "_ts_ms": 11000, "_seq": 1,

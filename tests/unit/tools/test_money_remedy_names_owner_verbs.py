@@ -20,7 +20,7 @@ def test_the_no_self_grant_warning_survives():
     """A goal the agent creates can never carry a money tool (unarmed regime)."""
     remedy = _money_remedy()
     assert "NEVER carry one" in remedy
-    assert "goal_create strips money tools" in remedy
+    assert "goal_create strips them" in remedy
 
 
 def test_under_the_armed_regime_the_remedy_says_a_goal_can_carry_it(monkeypatch):

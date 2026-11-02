@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Paying people for work a goal defines (bounties)'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_data","goal","cronjob"]}'
   polyrob-version: '1'
 ---
@@ -51,7 +50,7 @@ If the target asset covers the pool, go on. If it does not, tell the owner
 ONCE, with every remedy you can see, and stop this round:
 
 - a swap line, e.g. `/swap 0.05 native to <usdc-address> on base`;
-- a bridge line, e.g. `/bridge robinhood base 0.1 as usdc`;
+- a bridge line, e.g. `/bridge ethereum base 0.1 as usdc`;
 - the wallet address to fund directly.
 
 Do not repeat the ping every run. If the read fails, say "I could not read
@@ -103,9 +102,15 @@ earlier round is not paid twice unless the goal allows it.
 For each `pay` verdict, call `propose_action` once:
 
 ```
-propose_action(command="/send <amount> <token-address> to <payee-address> on <chain>",
+propose_action(command="/send $<usd> <token-address> to <payee-address> on <chain>",
                why="<round>: <claimant> — <one-line reason>")
 ```
+
+A payout in dollars is written with `$` (`/send $22 …`): the tool converts it
+to tokens at the spend-grade price and shows the count on the card. A bare
+number is a TOKEN count — `/send 22 <token>` sends 22 tokens, not $22. Never
+convert dollars to tokens yourself. If the card says there is no spend-grade
+price, give a token amount the goal states, or ask the owner.
 
 One card per payee. The owner taps, sees the real quote and the caps, and
 confirms. Record the card ids in the record file, and pass `then=` with what

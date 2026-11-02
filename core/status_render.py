@@ -284,11 +284,17 @@ def _ops_list(out: List[str], title: str, items: Optional[list], reason: str,
 
 
 def _ops_job(j: dict) -> str:
+    from datetime import datetime
+    from core.cron_outcome import failed_recently, outcome_text
     st = j.get("status")
     when = ("PAUSED" if st == "paused" else "running now" if st == "running"
             else f"next {_utc(j.get('next_run_at'))} UTC")
     sched = f" · {j['schedule']}" if j.get("schedule") else ""
-    return f"- {j.get('id')} \"{j.get('name')}\"{sched} · {when}"
+    rec = j.get("last_outcome")
+    flag = "⚠ " if failed_recently(rec, datetime.now()) else ""
+    last = f" · {flag}last: {outcome_text(rec, j.get('last_run_at'))}"
+    deliver = f" · deliver: {j.get('deliver') or 'none'}"
+    return f"- {j.get('id')} \"{j.get('name')}\"{sched} · {when}{last}{deliver}"
 
 
 def render_operations_block(snap, *, now: Optional[float] = None) -> str:

@@ -1,7 +1,7 @@
 """Regression: recall tools must surface even when the memory backend registers
 AFTER the Controller.
 
-The Controller's session_search/memory_search gate runs at Controller.__init__,
+The Controller's session_search gate runs at Controller.__init__,
 but the sqlite backend (MEMORY_BACKEND default) registers later during Agent
 construction, so on the FIRST session of a process the recall tools were skipped.
 The fix re-runs the gated registration after the backend exists; this test pins

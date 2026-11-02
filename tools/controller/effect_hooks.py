@@ -171,9 +171,9 @@ def make_effect_gate_hook(controller):
                 and tool_id != "mcp"):
             # MCP actions are named by a third-party server at runtime; they can
             # never carry an explicit row, so strict mode cannot mean "refuse".
-            reason = (f"'{action_name}' is an unclassified {verdict.effect} write "
-                      "(EXTERNAL_WRITE_STRICT). Add it to core/effects.py "
-                      "WRITE_ACTIONS or NON_WRITE_ACTIONS.")
+            from core.tool_gates import refusal_text
+            reason = refusal_text("strict_code_change", action=action_name,
+                                  effect=verdict.effect)
         elif (external_write_pause_gate_enabled()
                 and _autonomous(execution_context, controller)):
             reason = effect_pause_refusal(verdict.effect, tool_id, action_name)

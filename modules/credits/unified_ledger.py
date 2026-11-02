@@ -362,7 +362,7 @@ def ledger_availability_note(ledger: Dict[str, Any]) -> Optional[str]:
 def format_ledger(ledger: Dict[str, Any]) -> str:
     """Agent/owner-readable rendering of :func:`build_ledger` (pure).
 
-    Two statements, never summed. Treasury is Rob's money and is the only side
+    Two statements, never summed. Treasury is the agent's money and is the only side
     with a net; runtime cost is the owner's API bill and has nothing to net
     against. A None balance is OMITTED (unknown), never rendered as $0.00.
     """

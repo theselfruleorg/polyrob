@@ -19,11 +19,11 @@ def _fake_env_file(tmp_path, body):
 def test_deployed_env_value_reads_one_key(tmp_path, monkeypatch):
     monkeypatch.setattr(adh, "DEPLOYED_ENV_FILE", _fake_env_file(tmp_path, (
         "POLYROB_OWNER_TELEGRAM_ID=100000001\n"
-        "export POLYROB_INSTANCE_ID=rob\n"
-        'POLYROB_OWNER_USER_ID="rob"\n'
+        "export POLYROB_INSTANCE_ID=alice\n"
+        'POLYROB_OWNER_USER_ID="alice"\n'
         "POLYROB_DATA_DIR=/var/lib/polyrob\n")))
-    assert adh.deployed_env_value("POLYROB_INSTANCE_ID") == "rob"
-    assert adh.deployed_env_value("POLYROB_OWNER_USER_ID") == "rob"
+    assert adh.deployed_env_value("POLYROB_INSTANCE_ID") == "alice"
+    assert adh.deployed_env_value("POLYROB_OWNER_USER_ID") == "alice"
     assert adh.deployed_env_value("POLYROB_DATA_DIR") == "/var/lib/polyrob"
     assert adh.deployed_env_value("NOPE") is None
 
@@ -56,11 +56,11 @@ def test_admin_instance_id_prefers_the_shell(tmp_path, monkeypatch):
 def test_admin_instance_id_adopts_the_deployment(tmp_path, monkeypatch):
     """THE prod case: nothing in the shell, a deployed instance names itself."""
     monkeypatch.setattr(adh, "DEPLOYED_ENV_FILE", _fake_env_file(
-        tmp_path, "POLYROB_INSTANCE_ID=rob\n"))
+        tmp_path, "POLYROB_INSTANCE_ID=alice\n"))
     monkeypatch.delenv("POLYROB_INSTANCE_ID", raising=False)
     monkeypatch.delenv("BOT_INSTANCE_ID", raising=False)
     monkeypatch.delenv("POLYROB_PROFILE", raising=False)
-    assert adh.admin_instance_id() == "rob"
+    assert adh.admin_instance_id() == "alice"
 
 
 def test_admin_instance_id_refuses_an_unsafe_name(tmp_path, monkeypatch):
@@ -74,30 +74,30 @@ def test_admin_instance_id_refuses_an_unsafe_name(tmp_path, monkeypatch):
 
 def test_admin_owner_principal_adopts_the_deployment(tmp_path, monkeypatch):
     monkeypatch.setattr(adh, "DEPLOYED_ENV_FILE", _fake_env_file(
-        tmp_path, "POLYROB_INSTANCE_ID=rob\nPOLYROB_OWNER_USER_ID=rob\n"))
+        tmp_path, "POLYROB_INSTANCE_ID=alice\nPOLYROB_OWNER_USER_ID=alice\n"))
     for k in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID", "POLYROB_INSTANCE_ID",
               "BOT_INSTANCE_ID", "POLYROB_PROFILE", "SURFACE_SUPER_ADMIN_USER_IDS"):
         monkeypatch.delenv(k, raising=False)
-    assert adh.admin_owner_principal() == "rob"
+    assert adh.admin_owner_principal() == "alice"
 
 
 def test_a_declared_instance_is_not_an_owner_tenant(tmp_path, monkeypatch):
     """⚠️ Reversed 2026-09-15 (043 residue). This used to adopt the deployment's
     INSTANCE id as the owner tenant when no owner was declared, on the reading
     that a single-instance deploy IS owned by its instance. That made
-    `polyrob owner …` answer `rob` on a box whose REPL, goals, memory and
+    `polyrob owner …` answer `alice` on a box whose REPL, goals, memory and
     identity docs all answered `local` — the four-resolver divergence. An
     instance id names the identity-doc tier and the avatar, never an owner
     tenant, so an undeclared owner now falls to the ONE resolver's answer.
     A deployment that declares an OWNER is still adopted (test above)."""
     monkeypatch.setattr(adh, "DEPLOYED_ENV_FILE", _fake_env_file(
-        tmp_path, "POLYROB_INSTANCE_ID=rob\n"))
+        tmp_path, "POLYROB_INSTANCE_ID=alice\n"))
     for k in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID", "POLYROB_INSTANCE_ID",
               "BOT_INSTANCE_ID", "POLYROB_PROFILE", "SURFACE_SUPER_ADMIN_USER_IDS",
               "POLYROB_LOCAL_OWNER"):
         monkeypatch.delenv(k, raising=False)
     assert adh.admin_owner_principal() == "local"
-    assert adh.admin_instance_id() == "rob", "the instance axis is untouched"
+    assert adh.admin_instance_id() == "alice", "the instance axis is untouched"
 
 
 def test_no_deployment_is_byte_identical(tmp_path, monkeypatch):

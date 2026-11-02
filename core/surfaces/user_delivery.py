@@ -78,7 +78,7 @@ _DELIVERED_OUTCOMES = ("sent",)
 # day regardless of what they had to say. Live consequence on 2026-07-19: the
 # 30 slots were spent by 17:33Z on routine chatter, and for the next 12h every
 # goal completion (99), both daily digests, and — at 01:38:15Z — the credit
-# sentinel's own "autonomy paused" notice were dropped. The owner messaged Rob
+# sentinel's own "autonomy paused" notice were dropped. The owner messaged the agent
 # at 02:35Z not knowing it had stopped. Two lanes close that class.
 PRIORITY_CRITICAL = "critical"
 PRIORITY_NORMAL = "normal"
@@ -507,7 +507,7 @@ def _maybe_notice(event_log: Any, user_id: str, source: str, text: str, *,
 def _record_notice(event_log: Any, user_id: str, text: str, *,
                    content_hash: Optional[str] = None) -> None:
     """Durable fallback (extends push_owner_message's owner_notice, T4-04):
-    visible via `polyrob telemetry` and rolled into the digest. The notice must
+    visible via `/telemetry` and rolled into the digest. The notice must
     outlive a disabled telemetry flag — same guarantee the original
     ``_record_owner_notice`` gave — so it falls back to the raw event log.
 

@@ -68,13 +68,13 @@ def test_a_legacy_user_rule_cannot_replace_builtin_triggers_or_gate(sm, tmp_path
     root = sm._user_root("u1")
     root.mkdir(parents=True, exist_ok=True)
     (root / "rules.json").write_text(json.dumps({
-        "treasury-trading": {"priority": 0, "auto_activate": True, "requires": [],
+        "trade-execution": {"priority": 0, "auto_activate": True, "requires": [],
                              "triggers": {"tool_ids": []}},
     }))
-    rule = sm.get_skill_rule("treasury-trading", user_id="u1")
-    assert rule == sm.skill_rules["treasury-trading"]
+    rule = sm.get_skill_rule("trade-execution", user_id="u1")
+    assert rule == sm.skill_rules["trade-execution"]
     pinned = {m.skill_id for m in sm.get_pinned_skills(
-        seeded_skill_ids=["treasury-trading"], tool_ids=["defi_trade"], user_id="u1")}
+        seeded_skill_ids=["trade-execution"], tool_ids=["defi_trade"], user_id="u1")}
     assert {"token-identity", "pre-trade-check"} <= pinned  # the builtin `requires` held
 
 

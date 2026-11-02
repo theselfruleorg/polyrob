@@ -34,6 +34,11 @@ def _resolver_reasons() -> set:
         text = path.read_text(encoding="utf-8")
         if "availability_gap" in text or "gap_from_reason" in text:
             found |= set(gap.findall(text))
+    # 095 W2: the load path's own "gated:<reason> —" lines share the vocabulary.
+    line = re.compile(r"gated:([a-z_]+(?:-[a-z]+)*) —")
+    for rel in ("tools/controller/tool_load_report.py", "tools/controller/tool_management.py",
+                "tools/controller/owner_ask_action.py"):
+        found |= set(line.findall((REPO / rel).read_text(encoding="utf-8")))
     return found
 
 
@@ -75,8 +80,25 @@ def test_owner_seats_pin_the_manual(monkeypatch):
     m.mark_owner_seat("sess-owner-093")
     agent = SimpleNamespace(orchestrator=SimpleNamespace(session_id="sess-owner-093"))
     assert c.owner_seat_skill_ids(agent) == ["harness-manual"]
-    other = SimpleNamespace(orchestrator=SimpleNamespace(session_id="sess-cron-093"))
+    other = SimpleNamespace(orchestrator=SimpleNamespace(session_id="sess-room-093"))
     assert c.owner_seat_skill_ids(other) == []
+    # 095 W2: a goal or cron run pins it too; a leaf of one does not.
+    m.mark_autonomous("sess-cron-093", cron_job_id="job-093")
+    cron = SimpleNamespace(orchestrator=SimpleNamespace(session_id="sess-cron-093"))
+    assert c.owner_seat_skill_ids(cron) == ["harness-manual"]
+    m.mark_autonomous("sess-goal-093", goal_id="goal-093")
+    goal = SimpleNamespace(orchestrator=SimpleNamespace(session_id="sess-goal-093"))
+    assert c.owner_seat_skill_ids(goal) == ["harness-manual"]
+    leaf = SimpleNamespace(orchestrator=goal.orchestrator, _is_sub_agent=True)
+    assert c.owner_seat_skill_ids(leaf) == []
+
+
+def test_the_manual_carries_both_tables():
+    from core.tool_gates import REFUSAL_KINDS
+    text = (REPO / "data/prompts/skills/harness-manual/SKILL.md").read_text(encoding="utf-8")
+    assert "## Gate — who · when · fix" in text and "## Refusal — who" in text
+    for kind in REFUSAL_KINDS:
+        assert f"- {kind}: " in text, kind
 
 
 def test_the_pinned_skill_loads_through_the_skill_manager():

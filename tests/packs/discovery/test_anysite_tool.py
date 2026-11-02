@@ -155,7 +155,7 @@ def test_anysite_api_description_steers_to_describe():
 
 @pytest.mark.asyncio
 async def test_empty_search_with_a_long_query_names_the_query_shape(monkeypatch):
-    """Rob's evening self-review #5 (2026-09-19): `/api/twitter/search/users` returned
+    """The agent's evening self-review #5 (2026-09-19): `/api/twitter/search/users` returned
     `[]` for every multi-word phrasing and 20 rows for the same theme in two words —
     a query-shape artefact the agent read as "theme exhausted" and recorded as such.
     An empty search answer on a >2-word query must say so, not look like no supply."""

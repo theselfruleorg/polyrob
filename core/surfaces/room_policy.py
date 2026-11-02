@@ -223,10 +223,18 @@ def make_room_gate_hook(get_public: Callable[[], bool],
             except Exception:
                 tool_id = None
         if is_room_denied_call(action_name, tool_id):
-            return (f"'{action_name}' is not available in a group chat. This session "
-                    "speaks into a public room and can only read and reply. The owner "
-                    "can do this from their private chat with me.")
+            from core.tool_gates import refusal_text
+            return refusal_text("seat:room", action=action_name)
         return None
+
+    def _seat_denies(tool_id: str) -> Optional[str]:
+        """095 W2: "room" when this PUBLIC seat refuses every call of *tool_id*."""
+        try:
+            public = bool(get_public())
+        except Exception:
+            public = True
+        return "room" if public and is_room_denied_call(tool_id, tool_id) else None
+    _hook.seat_denies = _seat_denies
     return _hook
 
 

@@ -30,5 +30,6 @@ def test_no_shipped_skill_forbids_without_fallback():
 
 
 def test_person_analyzer_offers_browser_fallback():
-    text = (SKILLS_DIR / "person-analyzer" / "SKILL.md").read_text()
+    text = (SKILLS_DIR.parents[2] / "packs" / "discovery" / "polyrob_discovery" / "skills"
+            / "person-analyzer" / "SKILL.md").read_text()
     assert "fallback" in text.lower()

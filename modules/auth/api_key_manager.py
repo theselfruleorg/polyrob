@@ -60,11 +60,11 @@ class APIKeyManager:
         granted_scopes = validate_scopes(scopes)
 
         # Generate secure key
-        key = f"rob_{secrets.token_urlsafe(32)}"
+        key = f"polyrob_{secrets.token_urlsafe(32)}"
 
         # Hash for storage
         key_hash = hashlib.sha256(key.encode()).hexdigest()
-        key_prefix = key[:12]  # rob_abc123...
+        key_prefix = key[:12]  # polyrob_abc1...
 
         # Calculate expiry
         now = datetime.now(timezone.utc)

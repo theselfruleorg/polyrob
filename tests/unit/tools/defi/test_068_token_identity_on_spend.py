@@ -14,7 +14,7 @@ from tools.defi.identity_gate import buy_identity_refusal
 
 REAL = "0x5555555555555555555555555555555555555555"
 FAKE = "0x3535353535353535353535353535353535353535"
-CTX = SimpleNamespace(user_id="rob", metadata={})
+CTX = SimpleNamespace(user_id="alice", metadata={})
 
 
 @pytest.fixture

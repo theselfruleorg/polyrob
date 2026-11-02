@@ -55,7 +55,7 @@ def _seed_session(root, user_id, session_id, task="do a thing", creator=None):
 def catalog_tree(tmp_path):
     """Three user dirs, like the real prod tree: owner-login, CLI, telegram."""
     root = tmp_path / "sessions"
-    _seed_session(root, "rob", "s-console-1")
+    _seed_session(root, "alice", "s-console-1")
     _seed_session(root, "local", "s-cli-1")
     _seed_session(root, "u_abc123", "s-tg-1")
     from agents.task.path import get_path_manager, set_path_manager, reset_path_manager
@@ -90,7 +90,7 @@ def test_local_owner_sees_all_user_dirs(monkeypatch, catalog_tree):
     import webview.server as server
     rows = _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))
     assert {r["id"] for r in rows} == {"s-console-1", "s-cli-1", "s-tg-1"}
-    assert {r["user"] for r in rows} == {"rob", "local", "u_abc123"}
+    assert {r["user"] for r in rows} == {"alice", "local", "u_abc123"}
 
 
 def test_own_ops_owner_sees_all_user_dirs(monkeypatch, catalog_tree):
@@ -151,7 +151,7 @@ def test_runtime_annotation_marks_remote_sessions(monkeypatch, catalog_tree):
 
     (catalog_tree / "local" / "s-cli-1" / "status.json").write_text(
         json.dumps({"status": "running"}))
-    (catalog_tree / "rob" / "s-console-1" / "status.json").write_text(
+    (catalog_tree / "alice" / "s-console-1" / "status.json").write_text(
         json.dumps({"status": "running"}))
 
     routes = {

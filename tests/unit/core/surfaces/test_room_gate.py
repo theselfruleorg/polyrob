@@ -82,7 +82,7 @@ async def test_create_session_empty_tool_ids_override_is_authoritative(tmp_path,
 def test_denied_actions_cover_deferred_execution_and_recall():
     for name in ("goal_create", "cronjob_schedule", "skill_manage", "self_context_manage",
                  "preferences", "owner_doc_manage", "load_tool", "session_search",
-                 "memory_search", "contact_history", "recent_activity", "agent_status",
+                 "contact_history", "recent_activity", "agent_status",
                  "insights", "usage_summary", "message", "x402_invoice_x402_request",
                  "defi_data_portfolio", "defi_data_positions", "defi_data_reconcile",
                  "delegate_task", "autonomy_control"):

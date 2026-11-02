@@ -92,7 +92,7 @@ async def test_sepolia_matched_transfer_records_without_paid_work(tmp_path, monk
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_sep", amount_usd=3.21, purpose="test",
+            user_id="alice", session_id="sess_sep", amount_usd=3.21, purpose="test",
             db=db)
 
         chain = _FakeChain(head=1000)

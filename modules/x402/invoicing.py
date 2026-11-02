@@ -402,7 +402,7 @@ async def create_payment_request(
     expiry_hours = max(0.1, float(expiry_hours))
     deadline = int(time.time() + expiry_hours * 3600)
     contact = (payer_contact or payer_hint or "").strip()[:200] or None
-    # user_id has an FK to user_profiles; an agent tenant (e.g. "rob") may not
+    # user_id has an FK to user_profiles; an agent tenant (e.g. "agent") may not
     # exist there. Pre-check and store NULL in the column when absent — the
     # tenant stays queryable via metadata.tenant_id (every reader matches both).
     column_user: Optional[str] = user_id

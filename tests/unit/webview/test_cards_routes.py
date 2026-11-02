@@ -45,12 +45,12 @@ class _Agent:
 
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     import webview.pages as pages
     import webview.server as server
-    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "rob")
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "alice")
     monkeypatch.setattr("core.wallet.authority.owner_refusal", lambda uid: None)
     agent = _Agent(str(tmp_path))
     monkeypatch.setattr(server, "_in_process_task_agent", lambda: agent)
@@ -73,7 +73,7 @@ def client(rig):
     return TestClient(app)
 
 
-def _quote_card(user="rob"):
+def _quote_card(user="alice"):
     reply = (f"transfer\n  RESULT: DRY RUN\n\nTo send it: /send 1 native to {ADDR} "
              f"on base max 105.01 go")
     return cards.quote_card(user, "/send", ["1", "native", "to", ADDR, "on", "base"],
@@ -99,7 +99,7 @@ def test_cancel_decides_the_card_and_the_answer_redraws_it(client):
 
 
 def test_a_choice_is_answered_from_the_inbox(client):
-    card = cards.choice_card("rob", "Which chain?", ["Base", "Ethereum"])
+    card = cards.choice_card("alice", "Which chain?", ["Base", "Ethereum"])
     r = client.post(f"/api/webgate/cards/{card.card_id}/1").json()
     assert r["ok"] and cards.store().get(card.card_id).answer == "Base"
 
@@ -121,11 +121,11 @@ def test_the_chat_box_quote_is_a_card_and_confirm_runs_in_the_background(rig):
 
     async def _go():
         quote = await maybe_handle_console_command(
-            rig.agent, "s1", "rob", f"/send 1 native to {ADDR} on base")
+            rig.agent, "s1", "alice", f"/send 1 native to {ADDR} on base")
         assert isinstance(quote, str) and "/card_" in quote
-        (card,) = cards.store().open_cards("rob")
+        (card,) = cards.store().open_cards("alice")
         started = await maybe_handle_console_command(
-            rig.agent, "s1", "rob", f"/card_{card.card_id}_ok")
+            rig.agent, "s1", "alice", f"/card_{card.card_id}_ok")
         assert started.startswith("⏳ Send started")
         for _ in range(100):
             if cards.store().get(card.card_id).state != cards.S_CONFIRMED:

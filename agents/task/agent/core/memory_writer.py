@@ -244,26 +244,12 @@ class MemoryWriterMixin:
 			if raw_memory and not is_placeholder:
 				finding = raw_memory
 
-				# Check for duplicate (static memory = thinking loop symptom)
+				# Repetition is the loop breaker's job (loop_detection.py: the same
+				# call with the same result escalates to a block, then a LOOP stop).
+				# A second per-step nudge here only added context noise and never
+				# stopped anything (prod: 725 of them in 14 days).
 				if hasattr(self, '_last_memory_finding') and finding == self._last_memory_finding:
-					self.logger.warning(
-						f"⚠️ Memory identical to previous step - thinking loop indicator"
-					)
-					# Add warning to next step
-					try:
-						# HumanMessage imported at module level from modules.llm.messages
-						self.message_manager.push_ephemeral_message(HumanMessage(
-							content=(
-								"⚠️ Your memory is identical to the previous step.\n"
-								"This suggests you're not making progress.\n\n"
-								"Memory should be unique each step:\n"
-								"- What you DID this step (actions taken)\n"
-								"- What you LEARNED (new insights)\n"
-								"- Progress update (X/Y if quantitative)"
-							)
-						))
-					except Exception as e:
-						self.logger.warning(f"Could not inject memory warning: {e}")
+					self.logger.debug("Memory identical to previous step (loop breaker owns repetition)")
 				else:
 					# Save for next comparison
 					self._last_memory_finding = finding
@@ -332,9 +318,47 @@ class MemoryWriterMixin:
 		except Exception as e:
 			self.logger.error(f"Failed to save step to hierarchical memory: {e}", exc_info=True)
 
-		# P7: hand the session's queued reflection summaries (LLM-consolidated) to
-		# the cross-session store. Raw per-step findings stay in H-MEM (2026-10-14).
-		# No-op unless a provider is registered; isolated + fail-open.
+		# Periodically save to disk (every 10 steps). The cross-session drain runs
+		# once at run end (_sync_reflection_summaries), when the stop reason is known.
+		# Offloaded for the same reason add_step_memory above is (HIGH-3):
+		# save_session -> HierarchicalMemory.save is a synchronous mkdir + open +
+		# json.dump of the session's whole H-MEM state. Run inline it froze the
+		# shared event loop — every concurrent session in the process — for the
+		# duration of that write, every 10 steps of every active session.
+		if step_number % 10 == 0 and self.task_context_manager and self.session_id:
+			try:
+				await asyncio.to_thread(
+					self.task_context_manager.save_session,
+					self.session_id, self.user_id,
+				)
+				self.logger.info(f"💾 Persisted H-MEM to disk (step {step_number})")
+			except Exception as e:
+				self.logger.error(f"Failed to persist H-MEM: {e}", exc_info=True)
+
+	async def _sync_reflection_summaries(self, step_number: int = 0) -> None:
+		"""Hand the session's queued reflection summaries (LLM-consolidated) to
+		the cross-session store. Raw per-step findings stay in H-MEM (2026-10-14).
+		No-op unless a provider is registered; isolated + fail-open.
+
+		F7 (prod review 2026-10-29): called ONCE, when the run ends (run_loop),
+		not after every step — so the run's stop reason is known. A run that
+		ended at the step limit, after consecutive failures, or by repeating one
+		call (``stop_reason.NOT_MEMORY_WORTHY``) drops its summaries: they stay
+		in this session's H-MEM, never in owner recall."""
+		from agents.task.runtime.stop_reason import memory_worthy
+		_reason = getattr(getattr(self, 'state', None), 'stop_reason', None)
+		if not memory_worthy(_reason):
+			try:
+				from agents.task.session_class import regime_policy
+				if regime_policy(self).owner_memory and self.task_context_manager and self.session_id:
+					dropped = self.task_context_manager.drain_promoted_findings(self.session_id)
+					if dropped:
+						self.logger.info(
+							f"memory: {len(dropped)} phase summary(ies) not written to "
+							f"cross-session memory — the run stopped ({_reason})")
+			except Exception as e:
+				self.logger.debug(f"unworthy-run summary drop skipped: {e}")
+			return
 		try:
 			from modules.memory.registry import memory_sync_turn
 			from agents.task.session_class import regime_policy
@@ -344,7 +368,7 @@ class MemoryWriterMixin:
 			# recall — a stranger's message must not become the owner's future memory.
 			# The regime's `owner_memory` column is the ONE answer. A CHILD shares its
 			# parent's session queue and does not drain it: the parent's own drain
-			# (its next step, or the close drain) writes those findings under the
+			# (its run-end drain, or the close drain) writes those findings under the
 			# PARENT's regime, so nothing is lost and a child never writes owner memory.
 			owner_ok = regime_policy(self).owner_memory
 			if owner_ok and self.task_context_manager and self.session_id:
@@ -373,23 +397,6 @@ class MemoryWriterMixin:
 					await self._emit_memory_write(content, promoted, step_number)
 		except Exception as e:
 			self.logger.debug(f"memory_sync_turn skipped (backend hiccup): {e}")
-
-		# Periodically save to disk (every 10 steps) — AFTER the drain above, so
-		# the saved emitted set (D1) covers what this step handed cross-session.
-		# Offloaded for the same reason add_step_memory above is (HIGH-3):
-		# save_session -> HierarchicalMemory.save is a synchronous mkdir + open +
-		# json.dump of the session's whole H-MEM state. Run inline it froze the
-		# shared event loop — every concurrent session in the process — for the
-		# duration of that write, every 10 steps of every active session.
-		if step_number % 10 == 0 and self.task_context_manager and self.session_id:
-			try:
-				await asyncio.to_thread(
-					self.task_context_manager.save_session,
-					self.session_id, self.user_id,
-				)
-				self.logger.info(f"💾 Persisted H-MEM to disk (step {step_number})")
-			except Exception as e:
-				self.logger.error(f"Failed to persist H-MEM: {e}", exc_info=True)
 
 	async def _emit_memory_write(self, content: str, promoted: List[str], step_number: int) -> None:
 		"""Record the memory_write event (durable log → /telemetry + /activity) and

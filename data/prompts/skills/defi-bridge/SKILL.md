@@ -5,13 +5,12 @@ license: MIT
 metadata:
   polyrob-when: 'Moving funds between chains (bridge)'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade"]}'
   polyrob-version: '3'
 ---
 # Bridge — moving value between chains
 
-Part of the `treasury-trading` playbook, split out. `defi_trade.bridge` is the
+`defi_trade.bridge` is the
 ONE cross-chain move. It takes no `max_spend_usd`: the amount you bridge is the
 declaration, and the caps apply to it.
 
@@ -22,18 +21,18 @@ Your money is rarely on the chain that holds the opportunity.
 
 **What it does.** Sends the origin chain's **NATIVE asset** (SOL / ETH), or its
 **PINNED USDC** (`token_in="usdc"`), through Relay. **Every direction works**: solana → EVM,
-EVM → EVM (Base → Robinhood included), and EVM → solana (native SOL or `usdc`;
+EVM → EVM (Base → Ethereum, for example), and EVM → solana (native SOL or `usdc`;
 the arrival is measured in lamports / the SPL balance). solana → solana is not a bridge: use `solana_swap` / `solana_transfer`.
 
 The **destination** asset may be native OR a token **pinned in the chain
 registry** — `weth` / `usdc` where that chain has one:
 
 ```
-defi_trade.bridge(from_chain="base", to_chain="robinhood", amount=0.036)
-defi_trade.bridge(from_chain="base", to_chain="robinhood", amount=0.036,
+defi_trade.bridge(from_chain="base", to_chain="ethereum", amount=0.036)
+defi_trade.bridge(from_chain="base", to_chain="ethereum", amount=0.036,
                   token_out="weth")
     # dry_run defaults TRUE — quotes, asserts and simulates, broadcasts nothing
-defi_trade.bridge(from_chain="robinhood", to_chain="solana", amount=0.1,
+defi_trade.bridge(from_chain="ethereum", to_chain="solana", amount=0.1,
                   token_out="usdc")             # ETH in, USDC on Solana
 defi_trade.bridge(from_chain="base", to_chain="solana", amount=50,
                   token_in="usdc", token_out="usdc")   # USDC to USDC
@@ -44,11 +43,13 @@ every address in the registry was verified on-chain, a supplied one was not. The
 ORIGIN is native or the chain's pinned `usdc` (`amount` is then in dollars). On an
 EVM chain a usdc origin first approves EXACTLY the amount to the pinned Relay
 depository, then deposits; a refused deposit revokes that approval. Any other
-origin token is refused. Robinhood pins no USDC, so its origin is ETH.
+origin token is refused. A chain whose registry row pins no USDC can only send
+its native asset.
 
-⚠️ **On Robinhood, prefer `native`.** ETH there is gas AND the asset that routes
-straight into a position with no allowance, so `token_out="weth"` costs you more
-slippage and buys you nothing unless WETH is wanted for its own sake.
+⚠️ **Prefer `native` where native routes.** On a chain where ETH is gas AND
+the asset that routes straight into a position with no allowance,
+`token_out="weth"` costs you more slippage and buys you nothing unless WETH is
+wanted for its own sake.
 
 **Caps, not taps.** The bridge is bounded by the caps, not by a tap on every
 move:
@@ -118,4 +119,4 @@ verb with a raw `call`, a browser dapp, or another agent.
 
 ## Related
 
-`treasury-trading`, `robinhood-chain`, `stable-cash`.
+`stable-cash`, `trade-execution`.

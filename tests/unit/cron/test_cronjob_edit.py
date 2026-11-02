@@ -214,7 +214,7 @@ async def test_show_a_live_pin_says_nothing_extra(tmp_path, monkeypatch):
     assert "credit-dead" not in res.extracted_content
 
 
-# 2026-10-17 06:53Z: Rob "verified" a BOUNTY JUDGE schedule of `0 18 */3 * *` as
+# 2026-10-17 06:53Z: the agent "verified" a BOUNTY JUDGE schedule of `0 18 */3 * *` as
 # "24h after the announce", but the announce job had the very same spec, so the
 # two fired at the same minute. Show and edit now name the job it collides with.
 
@@ -269,3 +269,129 @@ async def test_a_real_change_beside_a_current_value_still_lands(tmp_path, owner_
     assert not res.error and "task" in res.extracted_content
     assert "deliver" not in res.extracted_content
     assert "and the replies" in t._cron_service.store.get(job.id).task
+
+
+# --- routines review 2026-10-29: add a step with no copy; run now keeps the schedule ---
+
+@pytest.mark.asyncio
+async def test_append_text_adds_a_step_without_old_text(tmp_path, agent_turn):
+    t = _tool(tmp_path)
+    job = _job(t)
+    res = await t.cronjob_edit(
+        CronEditAction(job_id=job.id, append_text="Repost one winning piece."),
+        execution_context=_ctx())
+    assert res.error is None and "task" in res.extracted_content
+    task = t._cron_service.store.get(job.id).task
+    assert task.startswith(RULES.strip()) and task.endswith("Repost one winning piece.")
+
+
+@pytest.mark.asyncio
+async def test_nothing_to_change_names_append_text(tmp_path, agent_turn):
+    t = _tool(tmp_path)
+    job = _job(t)
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, deliver="telegram"),
+                               execution_context=_ctx())
+    assert res.error and "append_text" in res.error and "Do not repeat" in res.error
+
+
+def test_schedule_doc_has_no_set_it_back_instruction():
+    doc = CronEditAction.model_fields["schedule"].description
+    assert "set its recurring spec back" not in doc and "cronjob_run_now" in doc
+
+
+@pytest.mark.asyncio
+async def test_run_now_keeps_the_recurring_schedule(tmp_path, agent_turn):
+    from tools.cronjob_tools import CronRunNowAction
+    t = _tool(tmp_path)
+    job = _job(t)
+    res = await t.cronjob_run_now(CronRunNowAction(job_id=job.id), execution_context=_ctx())
+    assert res.error is None and "schedule (1h) is kept" in res.extracted_content
+    stored = t._cron_service.store.get(job.id)
+    assert stored.schedule_spec == "1h" and not stored.one_shot
+    assert stored.next_run_at <= job.next_run_at
+
+
+@pytest.mark.asyncio
+async def test_run_now_on_a_paused_job_says_so(tmp_path, agent_turn):
+    from tools.cronjob_tools import CronRunNowAction
+    t = _tool(tmp_path)
+    job = _job(t)
+    t._cron_service.pause(job.id, user_id="u1", via="owner")
+    res = await t.cronjob_run_now(CronRunNowAction(job_id=job.id), execution_context=_ctx())
+    assert res.error and "paused" in res.error
+
+
+@pytest.mark.asyncio
+async def test_show_lists_next_runs_and_the_dom_step_note(tmp_path):
+    t = _tool(tmp_path)
+    job = t._cron_service.schedule(task=RULES, schedule_spec="0 18 */3 * *", user_id="u1")
+    res = await t.cronjob_show(CronShowAction(job_id=job.id), execution_context=_ctx())
+    assert "next runs: " in res.extracted_content
+    assert res.extracted_content.split("next runs: ")[1].split("\n")[0].count(",") == 2
+    assert "restarts on the 1st of every month" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_show_names_siblings_that_pin_the_same_skill(tmp_path, monkeypatch):
+    import core.cron_lanes as lanes
+    monkeypatch.setattr(lanes, "check_pinned_skills", lambda *a, **k: None)
+    t = _tool(tmp_path)
+    svc = t._cron_service
+    a = svc.schedule(task="ANNOUNCE the round.", schedule_spec="every 3d from 2030-01-01T18:00",
+                     user_id="u1", payload={"skills": ["promo"]})
+    b = svc.schedule(task="JUDGE the round.", schedule_spec="every 3d from 2030-01-03T18:00",
+                     user_id="u1", payload={"skills": ["promo"]})
+    res = await t.cronjob_show(CronShowAction(job_id=a.id), execution_context=_ctx())
+    assert f"shares skill promo with `{b.id}`" in res.extracted_content
+    assert "2030-01-03 18:00" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_show_and_list_flag_a_task_that_names_a_stopped_job(tmp_path):
+    from tools.cronjob_tools import CronListAction
+    t = _tool(tmp_path)
+    svc = t._cron_service
+    old = svc.schedule(task="JUDGE the round.", schedule_spec="1h", user_id="u1")
+    svc.cancel(old.id, user_id="u1", via="owner")
+    live = svc.schedule(task=f"Replies belong to the judge job {old.id}; skip them.",
+                        schedule_spec="1h", user_id="u1")
+    res = await t.cronjob_show(CronShowAction(job_id=live.id), execution_context=_ctx())
+    assert f"no longer run: {old.id} (cancelled)" in res.extracted_content
+    res = await t.cronjob_list(CronListAction(), execution_context=_ctx())
+    line = next(ln for ln in res.extracted_content.splitlines() if live.id in ln)
+    assert f"names stopped job(s) {old.id} (cancelled)" in line
+
+
+@pytest.mark.asyncio
+async def test_a_live_reference_is_not_flagged(tmp_path):
+    t = _tool(tmp_path)
+    svc = t._cron_service
+    other = svc.schedule(task="JUDGE the round.", schedule_spec="1h", user_id="u1")
+    live = svc.schedule(task=f"see job {other.id} and tx {'ab' * 32}",
+                        schedule_spec="1h", user_id="u1")
+    res = await t.cronjob_show(CronShowAction(job_id=live.id), execution_context=_ctx())
+    assert "no longer run" not in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_run_now_off_an_owner_turn_respects_the_jobs_own_gap(tmp_path, agent_turn):
+    # Review 2026-10-29 L1: a run that keeps asking cannot turn an hourly job into
+    # a once-a-minute job.
+    from datetime import datetime
+    from tools.cronjob_tools import CronRunNowAction
+    t = _tool(tmp_path)
+    job = _job(t)
+    t._cron_service.store.update_after_run(job.id, last_run_at=datetime.now(),
+                                           next_run_at=job.next_run_at, status="scheduled")
+    res = await t.cronjob_run_now(CronRunNowAction(job_id=job.id), execution_context=_ctx())
+    assert res.error and "cannot run again early" in res.error
+
+
+@pytest.mark.asyncio
+async def test_run_now_off_an_owner_turn_never_runs_a_money_job(tmp_path, agent_turn):
+    from tools.cronjob_tools import CronRunNowAction
+    t = _tool(tmp_path)
+    job = t._cron_service.schedule(task=RULES, schedule_spec="1h", user_id="u1",
+                                   payload={"priority": "money"})
+    res = await t.cronjob_run_now(CronRunNowAction(job_id=job.id), execution_context=_ctx())
+    assert res.error and "money job" in res.error

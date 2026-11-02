@@ -3,7 +3,7 @@
 Two pieces live here:
 
 ``ResponseBox``
-    A Rich ``Live`` "rob" box that accumulates LLM output deltas and repaints.
+    A Rich ``Live`` "agent" box that accumulates LLM output deltas and repaints.
     It is written to be **1-or-N-chunk safe** (proposal §4.2): the agent's
     ``astream`` currently yields the whole answer in a single chunk, so the box
     must look identical whether it receives one delta or many — append + repaint
@@ -48,7 +48,7 @@ class ResponseBox:
                   and ``finalize`` returns the accumulated text for the caller
                   to print.
         title:    The panel title for the live box (defaults to the resolved
-                  instance name, e.g. ``"rob"``).
+                  instance name, e.g. ``"polyrob"``).
 
     Lifecycle:
         ``append(delta)``  → opens the Live on the first delta, accumulates,
@@ -66,7 +66,7 @@ class ResponseBox:
 
     def __init__(self, console: Optional[Any] = None, *, title: Optional[str] = None) -> None:
         self._console = console
-        # Default to the resolved instance name (not a hardcoded "rob") so a renamed
+        # Default to the resolved instance name (not a hardcoded name) so a renamed
         # instance's streaming box matches its bubbles/banner.
         if title is None:
             from cli.ui.identity import agent_display_name

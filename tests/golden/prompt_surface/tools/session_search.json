@@ -1,0 +1,37 @@
+{
+  "function": {
+    "description": "Recall your durable memory of PAST sessions. WHEN TO USE: reach for this BEFORE web/filesystem on 'what did we do about X', 'where did we leave Y', or 'what was I working on'. Two shapes: pass a `query` to DISCOVER relevant past work (facts, decisions); leave `query` empty to BROWSE your most-recent sessions. Optional `limit` (1-20) and `sort` ('newest'/'oldest'); each result line is tagged `(id N)` — with sort='newest', pass `before_id=<smallest id>` to page further back (in relevance-ranked mode, refine the query or switch to sort='newest' instead). Optional `collection`: set to search a named knowledge-base collection instead of past sessions (requires KB to be enabled).",
+    "name": "session_search",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "before_id": {
+          "default": null,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
+        "collection": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "limit": {
+          "default": 5,
+          "type": "integer"
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        },
+        "sort": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'A token named by ticker only: find its address first'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '4'
 ---
@@ -17,14 +16,13 @@ address — not the symbol — through every later step.
 
 ## Why this is the first procedure
 
-On 2026-09-25 a recurring swap job bought an airdropped look-alike instead of
-the token it was set up to buy — both contracts had the same symbol. The cron
-text had lost the address; `reconcile` listed the look-alike first; the address
-was taken from the first line that said that symbol. `token_info` had already answered `verified: false`, and
-nobody read it. Two days earlier a safety run made the same mistake by reading
-the portfolio by symbol. Other agents have lost money the same way (a copycat
-of the ticker an agent was shilling; a "membership" NFT an attacker airdropped
-that unlocked authority).
+Two contracts can carry the same symbol, and an attacker airdrops look-alikes
+on purpose. The usual path to a wrong buy: a job's text loses the address,
+`reconcile` or a portfolio read lists the look-alike first, the address is
+taken from the first line that says that symbol, and the `verified: false`
+answer from `token_info` goes unread. Agents lose money the same way to a
+copycat of a ticker they promote, or to an airdropped "membership" NFT that
+claims to unlock authority.
 
 ## What the code enforces (you cannot skip it)
 
@@ -111,7 +109,7 @@ him to one.
 
 A recurring job that buys one token must carry the address in the job, not only
 in its task text: `cronjob_schedule(task=…, schedule=…, rig="money_rail",
-target_token={"chain": "robinhood", "address": "0x…"})`; `goal_create` takes
+target_token={"chain": "base", "address": "0x…"})`; `goal_create` takes
 the same field. Text gets rewritten and loses addresses; the field does not.
 
 What the target covers — the run may ACQUIRE no non-canonical token other than
@@ -153,5 +151,5 @@ measure anything — say so and stop. Never work around a missing verb with a ra
 
 ## Related
 
-`pre-trade-check` (what to measure next), `trade-execution`,
-`treasury-trading` (the memecoin playbook, which assumes this procedure).
+`pre-trade-check` (what to measure next), `trade-execution`, and every
+preset's doctrine skill (each one assumes this procedure).

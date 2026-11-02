@@ -17,42 +17,42 @@ from core.prefs import load_preferences, propose_pref_change
 
 def test_propose_lists_as_pending_pref_change(tmp_path):
     ok, proposal_id = propose_pref_change(
-        "alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
+        "alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
     assert ok
     assert proposal_id == "budget.wallet_daily_usd"
 
-    items = se.list_pending("alice", home_dir=tmp_path, instance_id="rob")
+    items = se.list_pending("alice", home_dir=tmp_path, instance_id="dana")
     assert len(items) == 1
     assert items[0]["kind"] == se.KIND_PREF_CHANGE
     assert items[0]["id"] == "budget.wallet_daily_usd"
     assert "5.0" in items[0]["preview"]
 
     # not written yet — the pref file doesn't exist until approved
-    assert load_preferences(tmp_path, "alice", instance_id="rob") == {}
+    assert load_preferences(tmp_path, "alice", instance_id="dana") == {}
 
 
 def test_propose_unknown_key_refused_at_propose_time(tmp_path):
-    ok, err = propose_pref_change("alice", "bogus.nonexistent", "x", tmp_path, instance_id="rob")
+    ok, err = propose_pref_change("alice", "bogus.nonexistent", "x", tmp_path, instance_id="dana")
     assert not ok
     assert "unknown" in err.lower()
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_propose_invalid_value_refused_at_propose_time(tmp_path):
     ok, err = propose_pref_change(
-        "alice", "budget.wallet_daily_usd", "not-a-number", tmp_path, instance_id="rob")
+        "alice", "budget.wallet_daily_usd", "not-a-number", tmp_path, instance_id="dana")
     assert not ok
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_propose_tenant_scoped(tmp_path):
-    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
-    assert se.list_pending("mallory", home_dir=tmp_path, instance_id="rob") == []
+    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
+    assert se.list_pending("mallory", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_propose_refuses_unsafe_user_id(tmp_path):
     ok, err = propose_pref_change(
-        "../evil", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
+        "../evil", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
     assert not ok
 
 
@@ -62,48 +62,48 @@ def test_approve_via_core_seam_writes_pref_and_resolves_proposal(tmp_path):
     """Drives core.self_evolution.promote() directly — NOT a CLI/Telegram handler —
     proving the apply happens in the shared core function that every surface
     (REPL /pending, polyrob owner promote, Telegram /approve) calls."""
-    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
+    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
 
     ok, msg = se.promote(
         se.KIND_PREF_CHANGE, "budget.wallet_daily_usd", user_id="alice",
-        home_dir=tmp_path, instance_id="rob")
+        home_dir=tmp_path, instance_id="dana")
 
     assert ok
     assert "5.0" in msg
-    prefs = load_preferences(tmp_path, "alice", instance_id="rob")
+    prefs = load_preferences(tmp_path, "alice", instance_id="dana")
     assert prefs["budget.wallet_daily_usd"] == 5.0
     # proposal resolved — no longer pending
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_guarded_key_round_trip(tmp_path):
-    ok, _ = propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
+    ok, _ = propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
     assert ok
     ok, _ = se.promote(se.KIND_PREF_CHANGE, "budget.wallet_daily_usd", user_id="alice",
-                       home_dir=tmp_path, instance_id="rob")
+                       home_dir=tmp_path, instance_id="dana")
     assert ok
-    assert load_preferences(tmp_path, "alice", instance_id="rob")["budget.wallet_daily_usd"] == 5.0
+    assert load_preferences(tmp_path, "alice", instance_id="dana")["budget.wallet_daily_usd"] == 5.0
 
 
 # --- reject ---------------------------------------------------------------------
 
 def test_reject_never_writes_pref(tmp_path):
-    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
+    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
 
     ok, msg = se.reject(se.KIND_PREF_CHANGE, "budget.wallet_daily_usd", user_id="alice",
-                        home_dir=tmp_path, instance_id="rob")
+                        home_dir=tmp_path, instance_id="dana")
 
     assert ok
-    assert load_preferences(tmp_path, "alice", instance_id="rob") == {}
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert load_preferences(tmp_path, "alice", instance_id="dana") == {}
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
     # archived (recoverable), not silently gone
-    archived = list((tmp_path / "identity" / "rob" / "user_alice" / ".archived").glob("*.json"))
+    archived = list((tmp_path / "identity" / "dana" / "user_alice" / ".archived").glob("*.json"))
     assert archived
 
 
 def test_reject_unknown_proposal_errors(tmp_path):
     ok, msg = se.reject(se.KIND_PREF_CHANGE, "no.such.key", user_id="alice",
-                        home_dir=tmp_path, instance_id="rob")
+                        home_dir=tmp_path, instance_id="dana")
     assert not ok
 
 
@@ -119,22 +119,22 @@ def test_write_failure_leaves_proposal_pending(tmp_path):
 
     # Seed a legit-looking pending directory under a SAFE tenant ("alice"), but the
     # record's own embedded user_id is smuggled as unsafe.
-    path = _pref_proposal_path(tmp_path, "alice", "budget.wallet_daily_usd", instance_id="rob")
+    path = _pref_proposal_path(tmp_path, "alice", "budget.wallet_daily_usd", instance_id="dana")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "user_id": "../evil", "key": "budget.wallet_daily_usd", "value": 5.0,
     }), encoding="utf-8")
 
     ok, err = se.promote(se.KIND_PREF_CHANGE, "budget.wallet_daily_usd", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
 
     assert not ok
     # never silently lost — still pending after the failed apply
-    items = se.list_pending("alice", home_dir=tmp_path, instance_id="rob")
+    items = se.list_pending("alice", home_dir=tmp_path, instance_id="dana")
     assert len(items) == 1
     assert items[0]["id"] == "budget.wallet_daily_usd"
     # and, of course, never actually written anywhere
-    assert load_preferences(tmp_path, "../evil", instance_id="rob") == {}
+    assert load_preferences(tmp_path, "../evil", instance_id="dana") == {}
 
 
 # --- cross-tenant write via a tampered embedded user_id (review fix) -------------
@@ -149,23 +149,23 @@ def test_tampered_embedded_tenant_mismatch_refused(tmp_path):
     from core.prefs import _pref_proposal_path
 
     # Legit propose as alice...
-    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="rob")
+    propose_pref_change("alice", "budget.wallet_daily_usd", 5.0, tmp_path, instance_id="dana")
     # ...then tamper the pending record's embedded user_id to another SAFE tenant.
-    path = _pref_proposal_path(tmp_path, "alice", "budget.wallet_daily_usd", instance_id="rob")
+    path = _pref_proposal_path(tmp_path, "alice", "budget.wallet_daily_usd", instance_id="dana")
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["user_id"] = "mallory"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     ok, err = se.promote(se.KIND_PREF_CHANGE, "budget.wallet_daily_usd", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
 
     assert not ok
     assert "mismatch" in err.lower()
     # NEITHER tenant got a write
-    assert load_preferences(tmp_path, "alice", instance_id="rob") == {}
-    assert load_preferences(tmp_path, "mallory", instance_id="rob") == {}
+    assert load_preferences(tmp_path, "alice", instance_id="dana") == {}
+    assert load_preferences(tmp_path, "mallory", instance_id="dana") == {}
     # proposal still pending — never silently lost
-    items = se.list_pending("alice", home_dir=tmp_path, instance_id="rob")
+    items = se.list_pending("alice", home_dir=tmp_path, instance_id="dana")
     assert len(items) == 1 and items[0]["id"] == "budget.wallet_daily_usd"
 
 
@@ -178,11 +178,11 @@ def test_tampered_embedded_tenant_mismatch_refused(tmp_path):
 
 def test_propose_remove_entry_preview_renders_operation(tmp_path):
     from core.prefs import write_preference
-    write_preference(tmp_path, "alice", "approvals.require", ["A", "B"], instance_id="rob")
+    write_preference(tmp_path, "alice", "approvals.require", ["A", "B"], instance_id="dana")
     ok, pid = propose_pref_change("alice", "approvals.require", None, tmp_path,
-                                  instance_id="rob", op="remove_entry", entry="A")
+                                  instance_id="dana", op="remove_entry", entry="A")
     assert ok and pid == "approvals.require"
-    items = se.list_pending("alice", home_dir=tmp_path, instance_id="rob")
+    items = se.list_pending("alice", home_dir=tmp_path, instance_id="dana")
     assert len(items) == 1
     assert "remove 'A' from approvals.require" in items[0]["preview"]
 
@@ -192,55 +192,55 @@ def test_remove_entry_promote_recomputes_current_list(tmp_path):
     the removal -> C SURVIVES and A is gone (the old full-list snapshot would
     have silently erased C)."""
     from core.prefs import write_preference
-    write_preference(tmp_path, "alice", "approvals.require", ["A", "B"], instance_id="rob")
+    write_preference(tmp_path, "alice", "approvals.require", ["A", "B"], instance_id="dana")
     ok, _ = propose_pref_change("alice", "approvals.require", None, tmp_path,
-                                instance_id="rob", op="remove_entry", entry="A")
+                                instance_id="dana", op="remove_entry", entry="A")
     assert ok
     # Owner adds C AFTER queuing the removal (e.g. /approve add C).
-    write_preference(tmp_path, "alice", "approvals.require", ["A", "B", "C"], instance_id="rob")
+    write_preference(tmp_path, "alice", "approvals.require", ["A", "B", "C"], instance_id="dana")
 
     ok, msg = se.promote(se.KIND_PREF_CHANGE, "approvals.require", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
 
     assert ok
-    got = load_preferences(tmp_path, "alice", instance_id="rob")["approvals.require"]
+    got = load_preferences(tmp_path, "alice", instance_id="dana")["approvals.require"]
     assert "C" in got and "B" in got and "A" not in got
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_remove_entry_already_gone_resolves_gracefully(tmp_path):
     from core.prefs import write_preference
-    write_preference(tmp_path, "alice", "approvals.require", ["A"], instance_id="rob")
+    write_preference(tmp_path, "alice", "approvals.require", ["A"], instance_id="dana")
     propose_pref_change("alice", "approvals.require", None, tmp_path,
-                        instance_id="rob", op="remove_entry", entry="A")
+                        instance_id="dana", op="remove_entry", entry="A")
     # The entry disappears before promote (owner hand-edited / another surface).
-    write_preference(tmp_path, "alice", "approvals.require", [], instance_id="rob")
+    write_preference(tmp_path, "alice", "approvals.require", [], instance_id="dana")
 
     ok, msg = se.promote(se.KIND_PREF_CHANGE, "approvals.require", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
 
     assert "already removed" in msg.lower() and "nothing to apply" in msg.lower()
     # resolved — NOT left dangling in the pending queue
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_remove_entry_refused_on_non_list_key(tmp_path):
     ok, err = propose_pref_change("alice", "budget.wallet_daily_usd", None, tmp_path,
-                                  instance_id="rob", op="remove_entry", entry="A")
+                                  instance_id="dana", op="remove_entry", entry="A")
     assert not ok
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_remove_entry_refused_on_empty_entry(tmp_path):
     ok, err = propose_pref_change("alice", "approvals.require", None, tmp_path,
-                                  instance_id="rob", op="remove_entry", entry="")
+                                  instance_id="dana", op="remove_entry", entry="")
     assert not ok
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_unknown_op_refused(tmp_path):
     ok, err = propose_pref_change("alice", "approvals.require", None, tmp_path,
-                                  instance_id="rob", op="bogus_op", entry="A")
+                                  instance_id="dana", op="bogus_op", entry="A")
     assert not ok
 
 
@@ -250,23 +250,23 @@ def test_legacy_set_proposal_without_op_field_still_applies(tmp_path):
     import json
     from core.prefs import _pref_proposal_path
 
-    path = _pref_proposal_path(tmp_path, "alice", "approvals.require", instance_id="rob")
+    path = _pref_proposal_path(tmp_path, "alice", "approvals.require", instance_id="dana")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"user_id": "alice", "key": "approvals.require",
                                 "value": ["X"]}), encoding="utf-8")
 
     ok, msg = se.promote(se.KIND_PREF_CHANGE, "approvals.require", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
 
     assert ok
-    assert load_preferences(tmp_path, "alice", instance_id="rob")["approvals.require"] == ["X"]
+    assert load_preferences(tmp_path, "alice", instance_id="dana")["approvals.require"] == ["X"]
 
 
 # --- promote/reject unknown kind still errors cleanly ---------------------------
 
 def test_promote_unknown_pref_change_id_errors(tmp_path):
     ok, msg = se.promote(se.KIND_PREF_CHANGE, "no.such.key", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
     assert not ok
     assert "no pending" in msg.lower()
 
@@ -276,11 +276,11 @@ def test_promote_unknown_pref_change_id_errors(tmp_path):
 def test_contract_pending_draft_appears_in_listing(tmp_path):
     from core.contract_writer import ContractWriter, PROVENANCE_BACKGROUND
 
-    ContractWriter(tmp_path, instance_id="rob").propose(
+    ContractWriter(tmp_path, instance_id="dana").propose(
         "Never spend more than the daily budget without approval.",
         user_id="alice", created_by=PROVENANCE_BACKGROUND)
 
-    items = se.list_pending("alice", home_dir=tmp_path, instance_id="rob")
+    items = se.list_pending("alice", home_dir=tmp_path, instance_id="dana")
     kinds = {i["kind"] for i in items}
     assert se.KIND_CONTRACT in kinds
     contract_item = next(i for i in items if i["kind"] == se.KIND_CONTRACT)
@@ -291,30 +291,30 @@ def test_contract_approve_promotes_to_active(tmp_path):
     from core.contract_writer import ContractWriter, PROVENANCE_BACKGROUND
     from core.instance import load_self_doc
 
-    writer = ContractWriter(tmp_path, instance_id="rob")
+    writer = ContractWriter(tmp_path, instance_id="dana")
     writer.propose("Never spend more than the daily budget without approval.",
                    user_id="alice", created_by=PROVENANCE_BACKGROUND)
 
     ok, msg = se.promote(se.KIND_CONTRACT, "alice", user_id="alice",
-                         home_dir=tmp_path, instance_id="rob")
+                         home_dir=tmp_path, instance_id="dana")
 
     assert ok
-    contract_path = tmp_path / "identity" / "rob" / "user_alice" / "contract.md"
+    contract_path = tmp_path / "identity" / "dana" / "user_alice" / "contract.md"
     assert "daily budget" in contract_path.read_text(encoding="utf-8")
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []
 
 
 def test_contract_reject_never_activates(tmp_path):
     from core.contract_writer import ContractWriter, PROVENANCE_BACKGROUND
 
-    writer = ContractWriter(tmp_path, instance_id="rob")
+    writer = ContractWriter(tmp_path, instance_id="dana")
     writer.propose("Draft rule to be discarded.", user_id="alice",
                    created_by=PROVENANCE_BACKGROUND)
 
     ok, _ = se.reject(se.KIND_CONTRACT, "alice", user_id="alice",
-                      home_dir=tmp_path, instance_id="rob")
+                      home_dir=tmp_path, instance_id="dana")
 
     assert ok
-    contract_path = tmp_path / "identity" / "rob" / "user_alice" / "contract.md"
+    contract_path = tmp_path / "identity" / "dana" / "user_alice" / "contract.md"
     assert not contract_path.exists()
-    assert se.list_pending("alice", home_dir=tmp_path, instance_id="rob") == []
+    assert se.list_pending("alice", home_dir=tmp_path, instance_id="dana") == []

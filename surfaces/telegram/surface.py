@@ -230,10 +230,14 @@ class TelegramSurface(Surface):
         last_id = None
         ids: list = []
         try:
-            last_id = await self.send_text(
-                chat_id, msg.text or "", reply_to=msg.reply_to,
-                thread_id=thread_id_from_session_key(msg.session_key),
-                actions=getattr(msg, "actions", None) or None, ids_out=ids)
+            # A file-only message (media, no words) has no text to land: Bot API
+            # refuses an empty message ("message text is empty"), which dropped the
+            # whole send — the attachment too. Skip the text leg, send the media.
+            if (msg.text or "").strip() or not msg.media:
+                last_id = await self.send_text(
+                    chat_id, msg.text or "", reply_to=msg.reply_to,
+                    thread_id=thread_id_from_session_key(msg.session_key),
+                    actions=getattr(msg, "actions", None) or None, ids_out=ids)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
             remaining = getattr(e, "remaining_text", None)
@@ -247,8 +251,10 @@ class TelegramSurface(Surface):
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.
             if msg.media:
+                _thread = thread_id_from_session_key(msg.session_key)
                 failed = await self._send_media(chat_id, msg.media,
-                                                self._parse_mode(), ids_out=ids)
+                                                self._parse_mode(), ids_out=ids,
+                                                thread_id=_thread)
                 if failed:
                     # ⚠️ D56: SAID, not just logged. The text above carries the
                     # message; the reader needs to know a picture is MISSING
@@ -259,7 +265,7 @@ class TelegramSurface(Surface):
                     await self.send_text(
                         chat_id,
                         f"(I could not attach {failed} file(s) — everything "
-                        f"you need is in the message above.)")
+                        f"you need is in the message above.)", thread_id=_thread)
             if self._voice_reply_wanted(msg, chat_id):
                 await self.send_voice(chat_id, msg.text or "")
         except Exception as e:
@@ -342,7 +348,8 @@ class TelegramSurface(Surface):
         return head + "…"
 
     async def _send_media(self, chat_id: str, media: list, parse_mode,
-                          ids_out: Optional[list] = None) -> int:
+                          ids_out: Optional[list] = None,
+                          thread_id: Optional[str] = None) -> int:
         """Send each renderable media entry (path + kind) as a photo/document.
 
         Returns the number of entries that did NOT go (D56) so the caller can
@@ -359,6 +366,14 @@ class TelegramSurface(Surface):
         # (mirrors harness.py/voice.py); only paid when there is media to send.
         from aiogram.types import FSInputFile
 
+        # A forum topic's reply sends its files INTO the topic, like its text;
+        # without this every attachment landed in General.
+        extra: dict = {}
+        if thread_id:
+            try:
+                extra["message_thread_id"] = int(thread_id)
+            except (TypeError, ValueError):
+                pass
         failed = 0
         for entry in media:
             if not isinstance(entry, dict):
@@ -377,12 +392,14 @@ class TelegramSurface(Surface):
                     sent = await self._call_flood_controlled(
                         chat_id, "send_photo",
                         lambda: self._bot.send_photo(
-                            chat_id, file, caption=caption, parse_mode=parse_mode))
+                            chat_id, file, caption=caption, parse_mode=parse_mode,
+                            **extra))
                 else:
                     sent = await self._call_flood_controlled(
                         chat_id, "send_document",
                         lambda: self._bot.send_document(
-                            chat_id, file, caption=caption, parse_mode=parse_mode))
+                            chat_id, file, caption=caption, parse_mode=parse_mode,
+                            **extra))
                 mid = getattr(sent, "message_id", None)
                 if ids_out is not None and mid is not None:
                     ids_out.append(str(mid))

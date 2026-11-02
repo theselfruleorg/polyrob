@@ -72,7 +72,7 @@ Both follow the agentskills.io standard, and everything POLYROB-specific is
 namespaced under `metadata` as flat `polyrob-*` string values — the valid key set
 is in [skills.md](../skills.md#the-skillmd-format-quick-reference). Hermes'
 top-level `version` and `platforms` keys and its `metadata.hermes` block (tags,
-category, `requires_toolsets`, settings) have no meaning here; remove them. Rob sees
+category, `requires_toolsets`, settings) have no meaning here; remove them. The agent sees
 one line per skill and loads the skill whose line fits. Write that line as
 `metadata.polyrob-when` (60 characters or fewer, it says when to load the skill) —
 the "When to Use" section of a Hermes skill is a good source for it:
@@ -131,7 +131,7 @@ under your data home — see [instances.md](../instances.md).
 
 Hermes keeps its built-in memory in two Markdown files, `~/.hermes/memories/MEMORY.md`
 and `USER.md` (an external memory-provider plugin keeps its own store). POLYROB has
-no importer for them. Read them, then recreate what matters by telling Rob,
+no importer for them. Read them, then recreate what matters by telling the agent,
 or — better for anything stable — write it as a skill or ingest the files into the
 knowledge base:
 

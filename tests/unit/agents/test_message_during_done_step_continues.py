@@ -1,7 +1,7 @@
 """An owner message that arrives DURING the step that calls done() must get a turn.
 
 Prod (2026-09-18 08:12:33Z): the owner corrected a directive ("Ok I meant
-0.04. From 0.04 to 0.1 eth") while Rob's session was mid-step. The run loop
+0.04. From 0.04 to 0.1 eth") while the agent's session was mid-step. The run loop
 drained the message after the step, injected it at the history tail — and
 then saw the step's done() and broke. The HITL queue was now empty, so the
 harness logged "completed with no pending input — skipping no-op resume".

@@ -29,7 +29,7 @@ class _FakeAgent:
 
 def test_run_task_as_session_marks_when_autonomous():
     sid, final = asyncio.run(run_task_as_session(
-        _FakeAgent(), user_id="rob", request={"task": "x"}, autonomous=True))
+        _FakeAgent(), user_id="alice", request={"task": "x"}, autonomous=True))
     assert sid == "auto-sess-1"
     assert is_autonomous("auto-sess-1") is True
 
@@ -38,5 +38,5 @@ def test_run_task_as_session_default_not_marked():
     class A(_FakeAgent):
         async def create_session(self, user_id, request):
             return {"id": "manual-sess-1"}
-    asyncio.run(run_task_as_session(A(), user_id="rob", request={"task": "x"}))
+    asyncio.run(run_task_as_session(A(), user_id="alice", request={"task": "x"}))
     assert is_autonomous("manual-sess-1") is False

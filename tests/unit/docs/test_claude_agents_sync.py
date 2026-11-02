@@ -1,14 +1,8 @@
-import re
 from pathlib import Path
 
 
 CLAUDE_MD = Path("CLAUDE.md")
 AGENTS_MD = Path("AGENTS.md")
-
-# ROB_LOCAL not immediately preceded by POLY — catches a regression where AGENTS.md
-# named this flag ROB_LOCAL while the code (and every other doc) reads POLYROB_LOCAL.
-ROB_LOCAL_BARE = re.compile(r"(?<!POLY)ROB_LOCAL\b")
-
 
 def test_claude_md_stays_a_thin_pointer():
     """CLAUDE.md must stay a minimal pointer to AGENTS.md, not re-accumulate content.
@@ -32,6 +26,3 @@ def test_agents_md_is_the_resolved_canonical_doc():
     text = AGENTS_MD.read_text(encoding="utf-8")
     assert len(text.splitlines()) > 40
 
-
-def test_agents_md_does_not_use_stale_rob_local_name():
-    assert not ROB_LOCAL_BARE.findall(AGENTS_MD.read_text(encoding="utf-8"))

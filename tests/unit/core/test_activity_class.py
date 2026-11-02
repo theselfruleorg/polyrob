@@ -137,7 +137,6 @@ _EXPECTED = {
         ek.SELF_WAKE,
         ek.SELF_MODIFICATION,
         ek.APP_LIVE,
-        ek.MCP_INSTALL,
         "skill_install",
         "error",
         "session_start",

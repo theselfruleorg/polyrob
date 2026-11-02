@@ -13,6 +13,12 @@ from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
 
+@pytest.fixture(autouse=True)
+def _identity_home(tmp_path, monkeypatch):
+    """095 W8: the config lines read the ONE identity home (``prefs_home_dir``)."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
+
 def _controller(user_id="tenant-A"):
     # mirrors tests/unit/tools/test_memory_tool_action.py::_controller
     c = object.__new__(Controller)
@@ -74,7 +80,6 @@ def test_agent_status_registered_when_flag_off(monkeypatch):
 def test_agent_status_registered_by_default_on_server(monkeypatch):
     monkeypatch.delenv("AGENT_STATUS_TOOL", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     c = _controller()
     c._register_agent_status_action()
     assert "agent_status" in c.registry.registry.actions
@@ -566,3 +571,57 @@ async def test_agent_status_release_notes_reads_the_shipped_changelog(monkeypatc
     assert text.startswith(f"running: v{get_version()}")
     assert f"## [{get_version()}]" in text
     assert "steps:" not in text
+
+
+# --- 095 W7: version, this chat's model, run spend, owner fact -----------------
+
+class _LiveAgent(_Agent):
+    model_name = "model-x"
+    llm_provider = "provider-a"
+    llm = None
+    _run_spend_seen = (0.5, 2.0)
+
+    class orchestrator:  # noqa: N801 — a stub
+        session_id = "s-w7"
+
+
+@pytest.mark.asyncio
+async def test_agent_status_names_version_model_spend_and_owner(monkeypatch):
+    import core.version as v
+    import agents.task.model_pin_state as mps
+    import modules.llm.usage_extract as ue
+    monkeypatch.setattr(v, "pending_deploy_line", lambda: "pending deploy: test line")
+    monkeypatch.setattr(v, "deployed_from", lambda: {"previous": "aaaaaaa"})
+    monkeypatch.setattr(ue, "resolve_serving_provider", lambda llm, m=None: "serving-b")
+    mps.set_session_reasoning("s-w7", "high")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-fixture")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "12345")
+    try:
+        c = _live_controller(monkeypatch)
+        c.orchestrator.agents = {"orchestrator_s1": _LiveAgent()}
+        action = c.registry.registry.actions["agent_status"]
+        ctx = type("Ctx", (), {"user_id": "owner-fixture", "agent_id": None})()
+        text = (await action.function(action.param_model(), execution_context=ctx)).extracted_content
+    finally:
+        mps.forget_session("s-w7")
+    assert f"running: v{v.__version__}" in text
+    assert "pending deploy: test line" in text
+    assert "release_notes='since_previous'" in text
+    assert ("this chat's model: model-x (provider provider-a; served by serving-b; "
+            "reasoning high)") in text
+    assert "run_spend: $0.5000 of the $2.00 per-run cap (25%)" in text
+    owner = next(ln for ln in text.splitlines() if ln.startswith("owner:"))
+    assert "a bound owner principal" in owner and "telegram" in owner
+    assert "this turn's user: the owner" in owner
+    # SK-15: kinds only — never the identifier itself.
+    assert "owner-fixture" not in owner and "12345" not in owner
+
+
+@pytest.mark.asyncio
+async def test_agent_status_no_live_agent_says_so(monkeypatch):
+    c = _live_controller(monkeypatch)
+    action = c.registry.registry.actions["agent_status"]
+    text = (await action.function(action.param_model(), execution_context=None)).extracted_content
+    assert "this chat's model: model-x" not in text
+    assert "this chat's model: unavailable" in text
+    assert "run_spend:" not in text  # owner chat stub: no per-run cap

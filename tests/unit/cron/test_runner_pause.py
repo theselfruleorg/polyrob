@@ -13,7 +13,7 @@ def home(tmp_path, monkeypatch):
 
 def _job(payload):
     from cron.jobs import CronJob
-    return CronJob(id="j1", task="x", schedule_spec="30m", user_id="rob", next_run_at=None,
+    return CronJob(id="j1", task="x", schedule_spec="30m", user_id="alice", next_run_at=None,
                    payload=payload, max_duration_seconds=180)
 
 

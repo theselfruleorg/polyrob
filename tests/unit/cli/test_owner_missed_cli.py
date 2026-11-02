@@ -8,7 +8,7 @@ from click.testing import CliRunner
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "carol")
 
 
 def test_missed_empty(tmp_path, monkeypatch):

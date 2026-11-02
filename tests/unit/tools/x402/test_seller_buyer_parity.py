@@ -65,7 +65,7 @@ async def test_probe_scores_our_own_seller_as_payable(real_challenge):
         def validate_and_resolve(self, url):
             return True, None, None
 
-    row = await probe_endpoint("https://rob.test/a2a/rpc",
+    row = await probe_endpoint("https://alice.test/a2a/rpc",
                                fetch=_fetch, validator=_AllowAll())
 
     assert row["status"] == 402

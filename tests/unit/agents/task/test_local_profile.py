@@ -9,19 +9,8 @@ order-dependent failures in unrelated suites).
 import agents.task.constants as constants
 
 
-def test_retired_rob_local_alias_is_not_read(monkeypatch):
-    # ROB_LOCAL was retired in 1.4 (core/config_policy/retired_flags.py; doctor
-    # warns on it). Only POLYROB_LOCAL enables local mode.
-    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.setenv("ROB_LOCAL", "1")
-    assert constants.local_mode_enabled() is False
-    monkeypatch.setenv("POLYROB_LOCAL", "1")
-    assert constants.local_mode_enabled() is True
-
-
 def test_local_mode_off_by_default(monkeypatch):
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     monkeypatch.delenv("GOALS_ENABLED", raising=False)
     monkeypatch.delenv("CURATOR_ENABLED", raising=False)
     monkeypatch.delenv("SELF_WAKE_ENABLED", raising=False)
@@ -93,7 +82,6 @@ def test_autonomy_enabled_needs_local_too(monkeypatch):
     # The master flag alone (no POLYROB_LOCAL) does NOT flip the group — the flags
     # are the LOCAL profile's autonomous subset (local AND autonomy).
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     monkeypatch.setenv("AUTONOMY_ENABLED", "1")
     _clear(monkeypatch, "AUTONOMY_POSTURE", "AUTONOMY_MODE", "GOALS_ENABLED")
     assert constants.autonomy_enabled() is True
@@ -122,7 +110,6 @@ def test_explicit_autonomy_enabled_off_beats_posture(monkeypatch):
 def test_explicit_flag_on_wins_without_local_or_master(monkeypatch):
     # A single explicit per-flag env still works with neither local nor the master.
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     _clear(monkeypatch, "AUTONOMY_ENABLED", "AUTONOMY_POSTURE", "AUTONOMY_MODE")
     monkeypatch.setenv("GOALS_ENABLED", "1")
     assert constants.AutonomyConfig.goals_enabled() is True
@@ -139,7 +126,6 @@ def test_explicit_off_overrides_local(monkeypatch):
 def test_server_both_buckets_off(monkeypatch):
     # Server byte-identity: no POLYROB_LOCAL => interactive AND autonomy buckets off.
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
     _clear(monkeypatch, "AUTONOMY_ENABLED", "AUTONOMY_POSTURE", "AUTONOMY_MODE")
     for name, _ in _AUTONOMY_FLAG_READERS + _INTERACTIVE_FLAG_READERS:
         monkeypatch.delenv(name, raising=False)

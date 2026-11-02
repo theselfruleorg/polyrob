@@ -13,7 +13,7 @@ disagreed whenever no owner was bound:
 
 So on an unbound install the console read a tenant nothing had ever written to,
 and ``polyrob owner …`` read a third one. A bound install (prod carries
-``POLYROB_OWNER_USER_ID=rob``) never saw it — the divergence is unbound-only.
+``POLYROB_OWNER_USER_ID=alice``) never saw it — the divergence is unbound-only.
 
 The decision: the unbound owner tenant is ``local`` — the tenant every REPL
 session, goal, memory row and identity doc has been written under since the CLI
@@ -83,12 +83,12 @@ def test_unbound_nobody_answers_the_instance_id(unbound):
     assert DEFAULT_INSTANCE_ID not in set(_all_four().values())
 
 
-# --- (b) a bound owner: all four say `rob` ----------------------------------- #
+# --- (b) a bound owner: all four say `alice` ----------------------------------- #
 
 def test_bound_owner_every_resolver_agrees(unbound, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     answers = _all_four()
-    assert set(answers.values()) == {"rob"}, answers
+    assert set(answers.values()) == {"alice"}, answers
 
 
 def test_the_super_admin_ladder_binds_an_owner_too(unbound, monkeypatch):
@@ -110,8 +110,8 @@ def test_local_owner_override_every_resolver_agrees(unbound, monkeypatch):
 
 def test_an_explicit_owner_still_outranks_the_local_override(unbound, monkeypatch):
     monkeypatch.setenv("POLYROB_LOCAL_OWNER", "me")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
-    assert set(_all_four().values()) == {"rob"}
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
+    assert set(_all_four().values()) == {"alice"}
 
 
 # --- (d) the instance axis is untouched -------------------------------------- #
@@ -126,12 +126,12 @@ def test_the_instance_id_is_still_polyrob_when_unbound(unbound):
 def test_a_named_instance_is_not_an_owner_tenant(unbound, monkeypatch):
     """⚠️ ``admin_owner_principal`` used to adopt the deployment's INSTANCE id as
     the owner tenant when no owner was declared. An instance id is not an owner:
-    it answered ``rob`` where the REPL on the same box answered ``local``."""
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    it answered ``alice`` where the REPL on the same box answered ``local``."""
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
     answers = _all_four()
     assert set(answers.values()) == {"local"}, answers
     from core.instance import resolve_instance_id
-    assert resolve_instance_id() == "rob"
+    assert resolve_instance_id() == "alice"
 
 
 def test_a_deployment_that_declares_an_owner_is_still_adopted(monkeypatch):
@@ -143,8 +143,8 @@ def test_a_deployment_that_declares_an_owner_is_still_adopted(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(
         adh, "deployed_env_value",
-        lambda key: "rob" if key == "POLYROB_OWNER_USER_ID" else None)
-    assert adh.admin_owner_principal() == "rob"
+        lambda key: "alice" if key == "POLYROB_OWNER_USER_ID" else None)
+    assert adh.admin_owner_principal() == "alice"
 
 
 # --- the anon bucket is never an owner --------------------------------------- #
@@ -206,10 +206,10 @@ def _migrated_seats() -> dict:
 def test_a_bound_install_is_byte_identical_at_every_migrated_seat(unbound, monkeypatch):
     """The migration must not move a single tenant on a BOUND install — which is
     prod, and every deployment that took the documented remedy."""
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     seats = _migrated_seats()
-    assert set(seats.values()) == {"rob"}, seats
-    assert set(_all_four().values()) == {"rob"}
+    assert set(seats.values()) == {"alice"}, seats
+    assert set(_all_four().values()) == {"alice"}
 
 
 def test_an_unbound_install_names_one_tenant_at_every_migrated_seat(unbound):
@@ -264,13 +264,13 @@ def test_the_inline_tenant_stamps_read_the_one_resolver(dotted):
 
 _ENV_COMBINATIONS = [
     ("unbound", {}),
-    ("bound", {"POLYROB_OWNER_USER_ID": "rob"}),
+    ("bound", {"POLYROB_OWNER_USER_ID": "alice"}),
     ("local_owner", {"POLYROB_LOCAL_OWNER": "me"}),
     ("ladder", {"SURFACE_SUPER_ADMIN_USER_IDS": "u-admin,u-other"}),
-    ("named_instance", {"POLYROB_INSTANCE_ID": "rob"}),
+    ("named_instance", {"POLYROB_INSTANCE_ID": "alice"}),
     ("anon_sentinel", {"POLYROB_OWNER_USER_ID": "system"}),
     ("anon_local_owner", {"POLYROB_LOCAL_OWNER": "x402_user"}),
-    ("explicit_wins", {"POLYROB_OWNER_USER_ID": "rob", "POLYROB_LOCAL_OWNER": "me"}),
+    ("explicit_wins", {"POLYROB_OWNER_USER_ID": "alice", "POLYROB_LOCAL_OWNER": "me"}),
 ]
 
 
@@ -290,7 +290,7 @@ def test_the_strict_resolution_still_answers_none_when_unbound():
     assert resolve_owner_principal(
         env={"POLYROB_LOCAL_OWNER": "me"}, default_to_instance=False) is None
     assert resolve_owner_principal(
-        env={"POLYROB_OWNER_USER_ID": "rob"}, default_to_instance=False) == "rob"
+        env={"POLYROB_OWNER_USER_ID": "alice"}, default_to_instance=False) == "alice"
 
 
 def test_an_unbound_owner_gate_compares_local_to_local(unbound):
@@ -337,17 +337,17 @@ def test_an_unbound_goal_keeps_its_deliverable_attachments(unbound):
 
 def test_a_bound_install_is_unchanged_on_both_axes(unbound, monkeypatch):
     """(d) The byte-identical claim covers the principal axis too."""
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     from core.instance import (is_owner, owner_surface_alias,
                                resolve_owner_principal, resolve_owner_user_id)
-    assert resolve_owner_principal() == resolve_owner_user_id() == "rob"
-    assert set(_all_four().values()) == {"rob"}
-    assert set(_migrated_seats().values()) == {"rob"}
-    assert is_owner("rob", owner_principal=resolve_owner_principal()) is True
+    assert resolve_owner_principal() == resolve_owner_user_id() == "alice"
+    assert set(_all_four().values()) == {"alice"}
+    assert set(_migrated_seats().values()) == {"alice"}
+    assert is_owner("alice", owner_principal=resolve_owner_principal()) is True
     assert owner_surface_alias(
         "100000001", "telegram",
         env={"POLYROB_OWNER_TELEGRAM_ID": "100000001",
-             "POLYROB_OWNER_USER_ID": "rob"}) == "rob"
+             "POLYROB_OWNER_USER_ID": "alice"}) == "alice"
 
 
 def test_the_telegram_admin_owner_gate_holds_both_ways(unbound, monkeypatch):
@@ -358,7 +358,7 @@ def test_the_telegram_admin_owner_gate_holds_both_ways(unbound, monkeypatch):
     assert _is_admin_owner("local") is True          # the owner, unbound
     assert _is_admin_owner("u_stranger") is False
     assert _is_admin_owner("") is False
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
-    assert _is_admin_owner("rob") is True            # the owner, bound (via the alias)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
+    assert _is_admin_owner("alice") is True            # the owner, bound (via the alias)
     assert _is_admin_owner("local") is False, "an unbound-era tenant is not the bound owner"
     assert _is_admin_owner("u_stranger") is False

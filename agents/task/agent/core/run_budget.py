@@ -21,7 +21,7 @@ as its own cap (``attach_parent_run_budget``). Both caps share RUN_BUDGET_MARKER
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 from core.config_policy.policy import autonomous_run_budget_usd, run_budget_usd
 
@@ -88,6 +88,7 @@ async def snapshot_run_baseline(agent) -> None:
     """
     try:
         agent.state.run_spend_baseline = None
+        agent._run_spend_seen = None
         if getattr(agent, "_is_sub_agent", False):
             return
         if autonomous_run_budget_usd() <= 0 or not _is_autonomous(agent):
@@ -134,6 +135,15 @@ async def attach_parent_run_budget(child, orchestrator, parent_agent_id: str,
         logger.debug("parent run budget not attached to child", exc_info=True)
 
 
+def _note_seen(agent, spent: float, cap: float) -> None:
+    """Keep the last measured (spend this run, per-run cap) for the 80 % dollar
+    notice (095 W1d), so the notice costs no second spend probe."""
+    try:
+        agent._run_spend_seen = (max(0.0, float(spent)), float(cap))
+    except Exception:
+        pass
+
+
 async def _check_child_limit(agent) -> Optional[str]:
     limit = getattr(agent, "_run_budget_limit", None)
     if not limit:
@@ -143,6 +153,7 @@ async def _check_child_limit(agent) -> Optional[str]:
     if spent is None:
         return None
     delta = spent - baseline
+    _note_seen(agent, delta, cap)
     if delta < cap:
         return None
     if kind == "background":
@@ -155,6 +166,42 @@ async def _check_child_limit(agent) -> Optional[str]:
         f"{RUN_BUDGET_MARKER}: the parent run's provider spend ${delta:.4f} reached "
         f"AUTONOMOUS_RUN_BUDGET_USD ${cap:.2f}; this sub-agent halts before its next step"
     )
+
+
+async def run_spend_vs_cap(agent) -> Optional[Tuple[float, float]]:
+    """``(spent this run, per-run cap)`` for a run with a per-run cap, else None.
+
+    Main agent: AUTONOMOUS_RUN_BUDGET_USD against the run-start baseline. Sub-agent:
+    the parent budget it carries (083 WS-3). None when no per-run cap applies or the
+    spend is unreadable. Fail-open.
+    """
+    try:
+        if getattr(agent, "_is_sub_agent", False):
+            limit = getattr(agent, "_run_budget_limit", None)
+            if not limit:
+                return None
+            baseline, cap = float(limit[0]), float(limit[1])
+        else:
+            cap = autonomous_run_budget_usd()
+            baseline = getattr(getattr(agent, "state", None), "run_spend_baseline", None)
+            if cap <= 0 or baseline is None:
+                return None
+            baseline = float(baseline)
+        if cap <= 0:
+            return None
+        spent = await _session_spend(agent)
+        if spent is None:
+            return None
+        return max(0.0, spent - baseline), cap
+    except Exception:
+        return None
+
+
+async def run_budget_fraction(agent) -> Optional[float]:
+    """095 W1d: this run's spend as a fraction of its per-run cap (1.0 = at the
+    cap), or None when no per-run cap applies or the spend is unreadable."""
+    pair = await run_spend_vs_cap(agent)
+    return None if pair is None else pair[0] / pair[1]
 
 
 async def check_run_budget(agent) -> Optional[str]:
@@ -182,6 +229,8 @@ async def check_run_budget(agent) -> Optional[str]:
                 f"RUN_BUDGET_USD ${budget:.2f}; halting before the next step "
                 f"(raise the budget or start a new session to continue)"
             )
+        if run_on:
+            _note_seen(agent, spent - float(baseline), run_cap)
         if run_on and spent - float(baseline) >= run_cap:
             return (
                 f"{RUN_BUDGET_MARKER}: this run's provider spend "

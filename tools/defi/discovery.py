@@ -1,16 +1,10 @@
 """Pool discovery with an honest status, and the hunt's $0 candidate count (086 W9).
 
-On 2026-10-12 six discovery reads on three chains (robinhood, base, solana)
-came back empty and the trading hunt reported "0 candidates". Two causes, both
-in the plumbing, neither in the market:
-
-* ``geckoterminal._fetch`` turned every provider error into ``[]``, and a burst
-  of reads met the indexer's free-tier limit (HTTP 429 after about four calls
-  in a burst, measured 2026-10-23). Fixed 2026-10-13: the read now RAISES
-  ``DiscoveryUnavailable``; this module keeps that distinction typed.
-* ``scan`` with a liquidity floor that excluded every pool rendered "no pools
-  were returned for this chain" — the indexer HAD returned them. The renderers
-  now say how many pools the indexer sent and how many a floor removed.
+Two plumbing faults once made a hunt report "0 candidates" when the market had
+pools: a provider error (a free-tier HTTP 429 in a burst of reads) was turned
+into ``[]``, and a liquidity floor that removed every pool rendered as "no pools
+were returned". The read now RAISES ``DiscoveryUnavailable`` (kept typed here),
+and the renderers say how many pools the indexer sent and how many a floor removed.
 
 So a discovery read has exactly three outcomes, and a caller can always tell
 them apart:
@@ -42,18 +36,35 @@ UNAVAILABLE = "unavailable"
 
 KINDS = ("new", "trending")
 
-#: The hunt's default pre-screen. The liquidity floor is the Tier C entry
-#: floor of the memecoin ladder (``treasury-trading``: $3k); the age window is
-#: "new pairs hours–days old" (086 §3.3 ``memecoin``).
+#: The pre-screen's neutral default lines. An install tunes them for its own
+#: chains in ``<data_home>/trading_presets.json`` under ``screen.discovery``
+#: (``core.trading_presets.screen_lines``); a caller's argument wins over both.
+#: The liquidity floor matches the lowest survivability floor
+#: (``tools/defi/survivability.py``); the age window is "new pairs hours–days old".
 DEFAULT_MIN_LIQUIDITY_USD = 3_000.0
 DEFAULT_MAX_AGE_H = 72.0
-#: A pool minutes old has proven nothing, and the indexer's first figures for
-#: it are the least reliable (a 9-minute-old pool read $495M "liquidity" on
-#: 2026-10-23). One hour is the bottom of "hours–days old".
+#: A pool minutes old has proven nothing, and an indexer's first figures for a
+#: fresh pool are the least reliable. One hour is the bottom of "hours–days old".
 DEFAULT_MIN_AGE_H = 1.0
-#: A pool nobody trades is not a candidate: most fresh pools show $0–$30 of
-#: 24h volume (measured 2026-10-23 on base and robinhood).
+#: A pool nobody trades is not a candidate: most fresh pools show almost no
+#: 24h volume.
 DEFAULT_MIN_VOLUME_H24_USD = 1_000.0
+
+#: The ``screen.discovery`` keys an install may set, and their neutral defaults.
+DEFAULT_LINES = {
+    "min_liquidity_usd": DEFAULT_MIN_LIQUIDITY_USD,
+    "max_age_h": DEFAULT_MAX_AGE_H,
+    "min_age_h": DEFAULT_MIN_AGE_H,
+    "min_volume_h24_usd": DEFAULT_MIN_VOLUME_H24_USD,
+}
+
+
+def lines_checked():
+    """``(lines, error)``: the defaults with the install's ``screen.discovery`` over
+    them; *error* names install lines that could not be applied."""
+    from core.trading_presets import screen_lines_checked
+    return screen_lines_checked("discovery", DEFAULT_LINES)
+
 
 #: Market verdicts (``pool_screen``) that end a candidate at the pre-screen:
 #: WASH is a reject at any size; UNSCREENABLE means the screen did not run.
@@ -170,10 +181,10 @@ def _candidate_row(pool, kind: str, verdict) -> Dict[str, Any]:
 def discovery_candidates(
         chains: Iterable[str], *,
         kinds: Sequence[str] = KINDS,
-        max_age_h: float = DEFAULT_MAX_AGE_H,
-        min_age_h: float = DEFAULT_MIN_AGE_H,
-        min_liquidity_usd: float = DEFAULT_MIN_LIQUIDITY_USD,
-        min_volume_h24_usd: float = DEFAULT_MIN_VOLUME_H24_USD,
+        max_age_h: Optional[float] = None,
+        min_age_h: Optional[float] = None,
+        min_liquidity_usd: Optional[float] = None,
+        min_volume_h24_usd: Optional[float] = None,
         exclude_tokens: Iterable[Tuple[str, str]] = (),
         discover_fn: Optional[DiscoverFn] = None) -> Dict[str, Any]:
     """Count the discovery candidates that pass the cheap pre-screen. $0, no LLM.
@@ -186,13 +197,24 @@ def discovery_candidates(
          "unavailable_chains": [chain, ...], # ANY read on the chain failed
          "complete": bool,                   # no read failed
          "reads": [{chain, kind, status, provider_pools, passed, reason}, ...],
-         "rejected": {reason: n}}
+         "rejected": {reason: n},
+         "screen_lines_error": str | None}   # the install's lines not applied
+
+    A line left ``None`` is the install's ``screen.discovery`` line, else the
+    neutral default. When the install's lines cannot be read the result is not
+    ``complete`` (they may be stricter than the defaults).
 
     A chain in ``unavailable_chains`` makes ``count`` a LOWER BOUND, never a
     zero to act on: 086 §3.6 — a hunt refuses to start while the discovery read
     for a chain is UNAVAILABLE. ``exclude_tokens`` takes ``(chain, address)``
     pairs (held positions, the same-token cooldown) and drops them by address.
     """
+    L, lines_error = lines_checked()
+    max_age_h = L["max_age_h"] if max_age_h is None else max_age_h
+    min_age_h = L["min_age_h"] if min_age_h is None else min_age_h
+    min_liquidity_usd = L["min_liquidity_usd"] if min_liquidity_usd is None else min_liquidity_usd
+    min_volume_h24_usd = (L["min_volume_h24_usd"] if min_volume_h24_usd is None
+                          else min_volume_h24_usd)
     excluded = {(c, str(a).lower()) for c, a in exclude_tokens}
     best: Dict[Tuple[str, str], Dict[str, Any]] = {}
     reads: List[Dict[str, Any]] = []
@@ -224,5 +246,6 @@ def discovery_candidates(
                           "reason": r.reason})
     candidates = sorted(best.values(), key=lambda c: -(c["liquidity_usd"] or 0))
     return {"count": len(candidates), "candidates": candidates,
-            "unavailable_chains": unavailable, "complete": not unavailable,
-            "reads": reads, "rejected": rejected}
+            "unavailable_chains": unavailable,
+            "complete": not unavailable and not lines_error,
+            "reads": reads, "rejected": rejected, "screen_lines_error": lines_error}

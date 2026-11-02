@@ -4,7 +4,7 @@ The cold-start sweep (``GoalBoard.requeue_running_on_boot``) exists so a goal le
 ``running`` by a killed process comes back WITHOUT a failure increment — a deploy
 is not the goal's fault. It must not, however, requeue a goal a DIFFERENT, still
 live process is executing right now: every ``start_autonomy()`` runs the sweep, so
-a second worker (or a ``rob`` REPL under ``POLYROB_LOCAL``) booting against the
+a second worker (or a ``polyrob`` REPL under ``POLYROB_LOCAL``) booting against the
 same ``goals.db`` would otherwise rip a live claim, double-run the goal, and make
 the original run's ``record_success`` CAS miss.
 

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'The owner wants to start, change or stop trading'
   polyrob-priority: '1'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '1'
 ---
@@ -29,8 +28,10 @@ Once the owner confirms the card, code creates and retires every job:
   dust. Its `$0` precheck marks the position against the preset's barriers and
   wakes you only when a barrier is near or crossed, the time stop is due, or
   the price cannot be read.
-- **The daily review** — one run a day: P&L, what fired, breaker state, and the
-  four questions of `treasury-trading` "Learning the meta".
+- **The daily review** — one run a day: P&L, what fired, breaker state, and
+  four learning questions: what surprised you, which rule cost you, what would
+  change a rule, where the next edge is. Write the dated answer, with what
+  would prove it wrong, to the knowledge base.
 - **Reports** — fills, exits and halts reach the owner as event pushes, and
   the daily digest has a Trading section. Nobody schedules a report job.
 - **Breakers** — the money kernel refuses a new ENTRY when the mandate is
@@ -47,7 +48,7 @@ Once the owner confirms the card, code creates and retires every job:
 **Never create a trading goal, an exit job, a cancel job or a report job
 yourself** — not with `goal_create`, not with `cronjob_schedule`. A
 hand-built job duplicates the structure, has no precheck, and outlives its
-position (one such job ran 59 times on dust). If a position looks unprotected,
+position, running again and again on dust. If a position looks unprotected,
 `/trade status` says `UNPROTECTED` and the lifecycle pass arms it; tell the
 owner what you saw.
 
@@ -56,23 +57,24 @@ owner what you saw.
 Ask only what the owner has not already said. Never re-ask an answer he gave.
 State the default with each question, by preset NAME:
 
-1. **Style** — a preset: `memecoin` (fresh pairs on the mandate chains, the
-   `treasury-trading` doctrine) or `majors` (ETH, SOL, BTC wrappers against the
-   pinned stable). "Tokens" with no detail means `memecoin`.
+1. **Style** — a preset. Name the presets the tool offers with one line each
+   (for example `majors`: ETH, SOL, BTC wrappers against the pinned stable;
+   `dca`: one pinned major, a fixed amount on a schedule). There is NO default
+   style: if the owner did not name one, ask.
 2. **Chains** — default: where the funds already sit. Check first with
    `defi_data.portfolio(chain=…)` on each chain (one chain per read) and name
    what you found ("USDC on Base, SOL on Solana"). Never guess a balance.
 3. **Budget** — the allocation in USD for open positions at cost. There is NO
    default: if the owner did not give a number, ask for one.
 4. **Ticket and slots** (optional) — default: the preset's own. Say "the
-   memecoin preset's ticket and slots", not a number; the card shows the
+   preset's ticket and slots", not a number; the card shows the
    numbers.
 
 Then echo the whole mandate in ONE line and propose the card:
 
 ```
-trade_mandate_propose(preset="memecoin", chains=["base","solana"],
-    budget_usd=150)            # ticket_usd=…, slots=… only if the owner said them
+trade_mandate_propose(preset="<style>", chains=["<chain>", …],
+    budget_usd=<budget>)            # ticket_usd=…, slots=… only if the owner said them
 ```
 
 The card shows the full mandate — ticket, slots, exit preset, breakers, the
@@ -91,9 +93,9 @@ the mandate in one line, and tell the owner to start it with `/trade start`.
 The run's task names the mandate. Before any buy:
 
 1. **Reconcile** — `defi_data.reconcile(chain=…)` for each mandate chain
-   (`treasury-trading`, the reconcile step).
-2. **Candidates** — the discovery reads on the mandate chains
-   (`memecoin-scouting`). An UNAVAILABLE read is not an empty one: say which
+   — the book against the chain, before anything else.
+2. **Candidates** — the discovery reads on the mandate chains (the
+   preset's doctrine skill names them). An UNAVAILABLE read is not an empty one: say which
    chain could not be read.
 3. **Screen every candidate** with `defi_data.token_info(chain=…, address=…)`.
    Read its `survivability:` line: `REJECT` means skip, always. Otherwise it
@@ -107,7 +109,7 @@ The run's task names the mandate. Before any buy:
    `max_spend_usd` to it. If the task names no stage ticket, do not guess a
    size: enter nothing and say so in the report.
 6. **Every entry carries a `plan`** — `defi_trade.swap(chain=…, …, plan={"thesis": …,
-   "confidence": 0.0–1.0, "invalidation": …, "preset": "memecoin"})` (the same
+   "confidence": 0.0–1.0, "invalidation": …, "preset": <the mandate's preset>})` (the same
    field on `solana_swap`). A buy inside a mandate run is refused without it.
    The thesis says why this token, now; the invalidation says what proves it
    wrong. Be honest with the confidence.
@@ -163,5 +165,5 @@ words, name the verb or offer the card; chat text is never a command.
 
 ## Related
 
-`treasury-trading` (the memecoin doctrine), `exits`, `sizing-and-risk`,
+The preset's doctrine skill (the hunt and review runs pin it), `exits`, `sizing-and-risk`,
 `position-journal`, `pre-trade-check`, `trade-execution`, `post-trade-verify`.

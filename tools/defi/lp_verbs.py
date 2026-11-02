@@ -153,7 +153,7 @@ def prepare_add(p, rpc, holder, npm, price_fn=None):
     ps = R.pool_state(rpc, p.chain, pool) if pool else None
     if ps is None or ps.sqrt_price_x96 == 0:
         if p.initial_price is None:
-            raise ValueError('pool does not exist or is uninitialized; pass initial_price (token_b per token_a) to create it. Read Liquidity in treasury-trading first.')
+            raise ValueError('pool does not exist or is uninitialized; pass initial_price (token_b per token_a) to create it. Read the defi-liquidity skill first.')
         price = Decimal(str(p.initial_price))
         if not price.is_finite() or price <= 0:
             raise ValueError('initial_price must be finite and positive')

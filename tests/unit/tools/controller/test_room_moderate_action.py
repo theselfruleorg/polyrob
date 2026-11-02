@@ -1,6 +1,6 @@
 """The `room_moderate` action — the agent can mute/ban/delete in its rooms.
 
-Owner rail 2026-10-05: Rob told the owner "I can't ban — I have no moderation
+Owner rail 2026-10-05: the agent told the owner "I can't ban — I have no moderation
 tool" while a spammer posted in The Lobby. The adapter existed (the owner's
 own /mute /ban use `room_moderator`); the agent had no seat on it.
 """

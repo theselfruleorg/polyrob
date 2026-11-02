@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Setting a stop loss, take profit or time exit'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '7'
 ---
@@ -40,7 +39,7 @@ What does exist:
   chain's quote asset — that other autonomous turns may not. The quote asset is
   the chain's pinned USDC where the registry pins one (Base, Ethereum,
   Arbitrum, Polygon, and Solana — USDC only, not wSOL), and the wrapped native
-  where it pins none (Robinhood Chain: WETH). A sell into any other token is
+  where it pins none (WETH, for example). A sell into any other token is
   not an exit on this lane. Optimism is READ-ONLY here: you can read prices and
   balances on it, but no swap can be sent there, so it is never an exit chain.
 - **The exit clamp:** a sell of up to 1% more than the held balance is clamped to
@@ -50,7 +49,7 @@ What does exist:
 
 A stop loss, a take profit (or a scale-out), and a time limit — and, once in
 profit, a trailing stop that replaces the fixed stop. The numbers live in the
-mandate's preset (`memecoin` or `majors`), never in this skill or in a job's
+mandate's preset, never in this skill or in a job's
 text: `position_mark` computes the barrier from them. The preset's rules hold
 at load time: a stop sits below entry, no tier takes profit at break-even (a
 break-even lock still pays fees), and a trail arms only above entry. You may

@@ -2,7 +2,7 @@
 
 It used to add the name to ``processed_files`` BEFORE ``json.load``. A
 half-written ``agent_message_*.json`` failed the parse, was marked seen, and
-the later ``modified`` event was skipped — Rob's reply appeared only after a
+the later ``modified`` event was skipped — the agent's reply appeared only after a
 reload. A parse failure now leaves the name unmarked so the next change event
 retries it.
 """

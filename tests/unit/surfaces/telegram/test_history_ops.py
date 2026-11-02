@@ -24,7 +24,7 @@ def test_transcript_newest_last_with_rails(tmp_path):
     out = history_reply("12345", str(tmp_path), [])
     lines = out.splitlines()
     assert lines[0].startswith("our conversation — last 2 line(s)")
-    assert "rob (via telegram, agent_send): Exit rail ran" in lines[1]
+    assert "agent (via telegram, agent_send): Exit rail ran" in lines[1]
     assert lines[2].endswith("you: Explin better")
     assert history_reply("12345", str(tmp_path), ["1"]).count("\n") == 1
     assert "no lines in the last 1h" not in history_reply("12345", str(tmp_path), ["1h"])

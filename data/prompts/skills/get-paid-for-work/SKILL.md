@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Quoting, invoicing and getting paid for a task'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["goal","cronjob"]}'
   polyrob-version: '1'
 ---

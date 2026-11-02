@@ -110,8 +110,8 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
         "research", # toolset
         "research", # template
         "n",        # keep the stock character
-        "",         # owner pairing: instance id (default rob)
-        "",         # owner pairing: owner user id (default rob)
+        "",         # owner pairing: instance id (default alice)
+        "",         # owner pairing: owner user id (default alice)
         "",         # 5/5 guardrails: local mode (default No)
         "",         # 5/5 guardrails: autonomy budget (blank = skip)
         "",         # 5/5 guardrails: approval preset (default No)
@@ -189,8 +189,8 @@ def test_default_provider_inferred_interactive(tmp_path, monkeypatch):
         "",           # toolset (default)
         "",           # template (default)
         "n",          # keep the stock character
-        "",           # owner pairing: instance id (default rob)
-        "",           # owner pairing: owner user id (default rob)
+        "",           # owner pairing: instance id (default alice)
+        "",           # owner pairing: owner user id (default alice)
         "",           # 5/5 guardrails: local mode (default No)
         "",           # 5/5 guardrails: autonomy budget (blank = skip)
         "",           # 5/5 guardrails: approval preset (default No)
@@ -265,9 +265,9 @@ def test_template_unknown_falls_back_to_general(tmp_path, monkeypatch):
 
 def test_corrupted_env_does_not_crash(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
-    rob_dir = home / ".polyrob"
-    rob_dir.mkdir(parents=True)
-    env_path = rob_dir / ".env"
+    home_dir = home / ".polyrob"
+    home_dir.mkdir(parents=True)
+    env_path = home_dir / ".env"
     # Write garbage (non-utf8-like but valid bytes as text)
     env_path.write_text("NOT=VALID\x00garbage\nFOO=BAR\n")
     env_path.chmod(0o600)
@@ -285,9 +285,9 @@ def test_corrupted_env_does_not_crash(tmp_path, monkeypatch):
 def test_existing_env_preserved_on_write(tmp_path, monkeypatch):
     """Pre-existing keys in ~/.polyrob/.env are preserved after init."""
     home = _make_home(tmp_path)
-    rob_dir = home / ".polyrob"
-    rob_dir.mkdir(parents=True)
-    env_path = rob_dir / ".env"
+    home_dir = home / ".polyrob"
+    home_dir.mkdir(parents=True)
+    env_path = home_dir / ".env"
     env_path.write_text("EXISTING_KEY=keep_me\nOTHER=value\n")
     env_path.chmod(0o600)
 

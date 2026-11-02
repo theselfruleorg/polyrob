@@ -36,6 +36,7 @@ HELP_GOAL = (
     "    /goal new <what>      a background goal (I work on it on my own)\n"
     "    /goal show <id>       why it is where it is, result, cost, session\n"
     "    /goal retry <id>      re-queue a blocked or paused goal (clears failures)\n"
+    "    /goal grant <id> tools=a,b [target=0x… chain=base]   grant it tools\n"
     "    /goal pause <id>      hold it until /goal retry\n"
     "    /goal stop <id>       stop it once (it may be created again)\n"
     "    /goal stop <id> --forever   never again: switched off until /goal allow\n"
@@ -50,7 +51,7 @@ def register(reg, Command) -> None:
     """Register ``/goal``. Called from ``h_a23.register``."""
     reg.register(Command(
         "goal", h_goal,
-        "Act on one goal: new / show / retry / pause / stop / allow",
+        "Act on one goal: new / show / retry / grant / pause / stop / allow",
         usage="<verb> <id>", group="work",
         help_long=HELP_GOAL[0], elsewhere=HELP_GOAL[1],
     ))

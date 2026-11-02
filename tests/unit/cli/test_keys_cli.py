@@ -17,17 +17,18 @@ import sqlite3
 from pathlib import Path
 
 from click.testing import CliRunner
+from api.api_key_auth import API_KEY_PREFIX
 
 
 def _extract_secret(output: str) -> str:
-    """The full ``rob_…`` secret from a `create` run.
+    """The full API-key secret from a `create` run.
 
-    The manager logs the 12-char PREFIX (``rob_abc…``) and the command also
+    The manager logs the 12-char PREFIX and the command also
     prints the prefix on its own line, so a bare ``re.search`` can grab a
-    12-char token; the real secret is the LONGEST ``rob_`` match.
+    12-char token; the real secret is the LONGEST API-key match.
     """
-    cands = re.findall(r"rob_[A-Za-z0-9_\-]+", output)
-    assert cands, f"no rob_ token in output:\n{output}"
+    cands = re.findall(re.escape(API_KEY_PREFIX) + r"[A-Za-z0-9_\-]+", output)
+    assert cands, f"no API key in output:\n{output}"
     return max(cands, key=len)
 
 
@@ -66,9 +67,9 @@ def test_create_mints_a_key_and_prints_it_once(tmp_path, monkeypatch):
     data = _isolated(tmp_path, monkeypatch)
     res = _invoke(["create", "--name", "my-agent"])
     assert res.exit_code == 0, res.output
-    # A real `rob_` key is printed exactly once, with its label.
-    assert "rob_" in res.output
-    assert res.output.count("rob_") >= 1
+    # A real API key is printed exactly once, with its label.
+    assert API_KEY_PREFIX in res.output
+    assert res.output.count(API_KEY_PREFIX) >= 1
     assert "my-agent" in res.output
     assert "shown only once" in res.output
     # It landed in the SAME bot.db the API reads, scoped to the owner tenant,
@@ -83,7 +84,7 @@ def test_create_mints_a_key_and_prints_it_once(tmp_path, monkeypatch):
     user_id, key_hash, key_prefix, name = rows[0]
     assert user_id == "local"          # owner tenant, resolved not from a JWT
     assert name == "my-agent"
-    assert key_prefix.startswith("rob_")
+    assert key_prefix.startswith(API_KEY_PREFIX)
     # The plaintext secret is nowhere in the row (only its sha256 hash).
     full = _extract_secret(res.output)
     assert len(full) > len(key_prefix)
@@ -135,7 +136,7 @@ def test_revoke_by_prefix_removes_it(tmp_path, monkeypatch):
 
 def test_revoke_unknown_prefix_is_a_clear_error(tmp_path, monkeypatch):
     _isolated(tmp_path, monkeypatch)
-    res = _invoke(["revoke", "rob_notreal000"])
+    res = _invoke(["revoke", API_KEY_PREFIX + "notreal000"])
     assert res.exit_code != 0
     assert "no active API key" in res.output
 
@@ -173,7 +174,7 @@ def test_list_is_tenant_scoped(tmp_path, monkeypatch):
         con.execute(
             "INSERT INTO api_keys (user_id, key_hash, key_prefix, name, is_active) "
             "VALUES (?, ?, ?, ?, 1)",
-            ("someone_else", "deadbeefhash", "rob_stranger", "not-mine"))
+            ("someone_else", "deadbeefhash", API_KEY_PREFIX + "stranger", "not-mine"))
         con.commit()
     finally:
         con.close()
@@ -181,5 +182,5 @@ def test_list_is_tenant_scoped(tmp_path, monkeypatch):
     res = _invoke(["list"])
     assert res.exit_code == 0, res.output
     assert "not-mine" not in res.output
-    assert "rob_stranger" not in res.output
+    assert API_KEY_PREFIX + "stranger" not in res.output
     assert "no API keys" in res.output

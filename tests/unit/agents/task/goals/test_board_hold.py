@@ -4,8 +4,8 @@ from agents.task.goals.board import GoalBoard
 
 def test_hold_running_returns_only_this_workers_rows_to_ready(tmp_path):
     b = GoalBoard(str(tmp_path / "goals.db"))
-    g1 = b.create(user_id="rob", title="a")
-    g2 = b.create(user_id="rob", title="b")
+    g1 = b.create(user_id="alice", title="a")
+    g2 = b.create(user_id="alice", title="b")
     assert b.claim(g1.id, "goal-dispatch-1", ttl_seconds=60)
     assert b.claim(g2.id, "goal-dispatch-2", ttl_seconds=60)
     held = b.hold_running(worker="goal-dispatch-1", reason="owner pause")

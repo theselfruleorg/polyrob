@@ -524,7 +524,7 @@ JWT tokens contain:
 Self-service keys minted at `POST /api/auth/api-keys`:
 
 ```http
-X-API-KEY: rob_xxx...
+X-API-KEY: <your-api-key>
 ```
 
 The validator is registered UNCONDITIONALLY (`api/api_key_auth.py`), so a key

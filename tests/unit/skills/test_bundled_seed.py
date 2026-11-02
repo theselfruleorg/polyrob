@@ -90,7 +90,7 @@ def test_a_tenant_skill_under_a_bundled_id_is_untouched_and_named(home):
     rep = seed.seed_bundled_skills()
     assert rep.collisions == ["user_rob/alpha"]
     assert (mine / "SKILL.md").read_text().startswith("# My alpha")
-    assert scopes.resolve("alpha", "rob").scope == "builtin"  # as before seeding
+    assert scopes.resolve("alpha", "alice").scope == "builtin"  # as before seeding
 
 
 def test_agent_fix_is_pending_and_the_owner_accept_writes_the_copy(home, monkeypatch):
@@ -100,19 +100,19 @@ def test_agent_fix_is_pending_and_the_owner_accept_writes_the_copy(home, monkeyp
     monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager()
     assert sm.skills_dir == root
-    res = sm.patch_skill("alpha", user_id="rob", old_string="well", new_string="carefully",
+    res = sm.patch_skill("alpha", user_id="alice", old_string="well", new_string="carefully",
                          created_by="agent", expected_revision=_sha(ALPHA))
     assert res.ok and res.pending, res.errors
     assert (root / "alpha" / "SKILL.md").read_text() == ALPHA       # nothing served changed
-    [item] = sm.list_pending_skills("rob")
+    [item] = sm.list_pending_skills("alice")
     assert item["skill_id"] == "alpha" and item["bundled"] is True
-    done = sm.promote_pending_skill("alpha", user_id="rob")
+    done = sm.promote_pending_skill("alpha", user_id="alice")
     assert done.ok, done.errors
     fixed = ALPHA.replace("well", "carefully")
     assert (root / "alpha" / "SKILL.md").read_text() == fixed
-    assert "carefully" in sm._load_skill_content("alpha", user_id="rob")
+    assert "carefully" in sm._load_skill_content("alpha", user_id="alice")
     assert seed.seed_bundled_skills().kept == ["alpha"]   # the next start keeps the fix
-    back = sm.rollback_skill("alpha", user_id="rob", created_by="agent")
+    back = sm.rollback_skill("alpha", user_id="alice", created_by="agent")
     assert back.ok and back.pending                        # a rollback is a proposal too
 
 
@@ -120,9 +120,9 @@ def test_a_bundled_skill_is_never_deleted_or_created(home):
     from agents.task.agent.skill_manager import SkillManager
     seed.seed_bundled_skills()
     sm = SkillManager()
-    res = sm.archive_skill("beta", user_id="rob")
+    res = sm.archive_skill("beta", user_id="alice")
     assert not res.ok and "bundled" in res.errors[0]
-    assert not sm.create_skill("beta", BETA, user_id="rob", created_by="user").ok
+    assert not sm.create_skill("beta", BETA, user_id="alice", created_by="user").ok
 
 
 def test_the_update_message_names_kept_skills(home, monkeypatch):
@@ -179,7 +179,7 @@ def test_rollback_after_an_upstream_update_finds_the_old_body(home):
     (src / "beta" / "SKILL.md").write_text(BETA + "\nUpstream line.\n")
     assert seed.seed_bundled_skills().updated == ["beta"]
     assert (root / ".archived" / "beta" / f"{_sha(BETA)}-SKILL.md").read_text() == BETA
-    back = SkillManager().rollback_skill("beta", user_id="rob", created_by="user")
+    back = SkillManager().rollback_skill("beta", user_id="alice", created_by="user")
     assert back.ok, back.errors
 
 
@@ -190,9 +190,9 @@ def test_accepting_a_bundled_fix_keeps_a_newer_draft_pending(home, monkeypatch):
     seed.seed_bundled_skills()
     monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager()
-    assert sm.patch_skill("alpha", user_id="rob", old_string="well", new_string="carefully",
+    assert sm.patch_skill("alpha", user_id="alice", old_string="well", new_string="carefully",
                           created_by="agent", expected_revision=_sha(ALPHA)).pending
-    pending = sm._user_root("rob") / ".pending" / "alpha" / "SKILL.md"
+    pending = sm._user_root("alice") / ".pending" / "alpha" / "SKILL.md"
     newer = ALPHA.replace("well", "with great care")
     real_scan = sm.validate_skill_content
 
@@ -201,7 +201,7 @@ def test_accepting_a_bundled_fix_keeps_a_newer_draft_pending(home, monkeypatch):
         return real_scan(skill_id, content)
 
     monkeypatch.setattr(sm, "validate_skill_content", _scan_then_concurrent_patch)
-    done = sm.promote_pending_skill("alpha", user_id="rob")
+    done = sm.promote_pending_skill("alpha", user_id="alice")
     assert done.ok, done.errors
     assert (root / "alpha" / "SKILL.md").read_text() == ALPHA.replace("well", "carefully")
     assert pending.read_text() == newer
@@ -215,7 +215,7 @@ def test_a_promote_whose_ledger_row_fails_is_refused_not_reverted_later(home, mo
     seed.seed_bundled_skills()
     monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager()
-    assert sm.patch_skill("alpha", user_id="rob", old_string="well", new_string="carefully",
+    assert sm.patch_skill("alpha", user_id="alice", old_string="well", new_string="carefully",
                           created_by="agent", expected_revision=_sha(ALPHA)).pending
     store = get_skill_usage_store()
     real = store.record_change
@@ -225,12 +225,12 @@ def test_a_promote_whose_ledger_row_fails_is_refused_not_reverted_later(home, mo
             raise OSError("disk full")
         return real(*a, **kw)
     monkeypatch.setattr(store, "record_change", _fail_promote)
-    done = sm.promote_pending_skill("alpha", user_id="rob")
+    done = sm.promote_pending_skill("alpha", user_id="alice")
     assert not done.ok and "ledger" in done.errors[0]
     assert (root / "alpha" / "SKILL.md").read_text() == ALPHA      # nothing half-applied
-    assert sm.list_pending_skills("rob")                            # still pending
+    assert sm.list_pending_skills("alice")                            # still pending
     monkeypatch.setattr(store, "record_change", real)
-    assert sm.promote_pending_skill("alpha", user_id="rob").ok
+    assert sm.promote_pending_skill("alpha", user_id="alice").ok
     assert seed.seed_bundled_skills().kept == ["alpha"]
 
 

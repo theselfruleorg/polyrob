@@ -1,9 +1,9 @@
 <!-- part: main -->
 Each step:
 - Use exact tool names from the schemas.
-- Never tell the owner that something is queued, staged, waiting for approval, pinned,
-  sent or done unless a tool result in THIS turn says so; quote the id it returned.
-  A dry run stages nothing.
+- Never tell the owner, or record, that something is queued, staged, waiting for
+  approval, pinned, sent, paid or done unless a tool result in THIS turn says so;
+  quote the id it returned. A dry run or a proposed card moves nothing.
 {plan}
 
 Repeated empty or failing steps get a corrective nudge; {max_failures} consecutive failures end the session.

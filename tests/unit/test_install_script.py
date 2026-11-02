@@ -129,20 +129,10 @@ def test_init_is_non_interactive():
 
 
 def test_uses_polyrob_naming():
-    """install.sh must use 'polyrob' (not bare 'rob') in CLI-invocation strings."""
+    """install.sh names the polyrob CLI (the instance-name ratchet forbids any other name)."""
     text = _script_text()
     # Must mention polyrob
     assert "polyrob" in text.lower()
-    # The script must NOT invoke the old 'rob' CLI binary (e.g. 'rob run', 'rob init').
-    # Allowed: 'polyrob', '~/.rob/' (config dir path), '.rob/' (project dir), 'rob.egg'.
-    import re
-    # Match standalone 'rob' that is NOT preceded by 'poly' or '.' or '~/'
-    # This excludes: polyrob, ~/.rob, .rob/
-    standalone_rob = re.findall(r'(?<![./~\w])rob(?!\w|\.egg)', text)
-    assert not standalone_rob, (
-        f"install.sh should not invoke the old 'rob' CLI binary. "
-        f"Found standalone 'rob' occurrences: {standalone_rob}"
-    )
 
 
 def test_no_hardcoded_secrets():

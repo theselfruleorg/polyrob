@@ -18,7 +18,7 @@ ANCIENT = "6f1c3b0e-0000-4000-8000-000000000001"
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    root = tmp_path / "sessions" / "rob"
+    root = tmp_path / "sessions" / "alice"
     root.mkdir(parents=True)
     # Only UUID-named trees are session trees (H13).
     old, new = root / ANCIENT, root / "6f1c3b0e-0000-4000-8000-000000000002"
@@ -32,7 +32,7 @@ def home(tmp_path, monkeypatch):
     con = sqlite3.connect(tmp_path / "goals.db")
     con.execute("CREATE TABLE goals (id TEXT, user_id TEXT, status TEXT, "
                 "session_id TEXT, payload TEXT)")
-    con.execute("INSERT INTO goals VALUES ('g1','rob','done',?,'{}')", (ANCIENT,))
+    con.execute("INSERT INTO goals VALUES ('g1','alice','done',?,'{}')", (ANCIENT,))
     con.commit()
     con.close()
 

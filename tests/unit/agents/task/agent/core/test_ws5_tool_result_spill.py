@@ -45,7 +45,7 @@ def test_a_mid_size_result_is_saved_and_the_cut_names_the_file(tmp_path, monkeyp
     _pm_into(tmp_path, monkeypatch)
     body = "".join(f"line {i}\n" for i in range(6000))  # ~50k chars: 24k < n < 100k
     ar = ActionResult(extracted_content=body, tool_call_id="c1")
-    a = _agent(_Controller({"search_docs": _Details("knowledge")}))
+    a = _agent(_Controller({"search_docs": _Details("knowledge"), "filesystem_read_file": _Details("filesystem")}))
     a._handle_large_action_results([ar], [{"id": "c1", "name": "search_docs"}])
 
     files = list(tmp_path.iterdir())
@@ -65,7 +65,7 @@ def test_an_exec_result_keeps_its_tail(tmp_path, monkeypatch):
     _pm_into(tmp_path, monkeypatch)
     body = "noise\n" * 20000 + "FAILED tests/test_x.py::test_y - AssertionError\n3 failed"
     ar = ActionResult(extracted_content=body, tool_call_id="c1")
-    a = _agent(_Controller({"shell_run": _Details("shell")}))
+    a = _agent(_Controller({"shell_run": _Details("shell"), "filesystem_read_file": _Details("filesystem")}))
     a._handle_large_action_results([ar], [{"id": "c1", "name": "shell_run"}])
     assert ar.extracted_content.rstrip().endswith("3 failed")
     assert "FAILED tests/test_x.py" in ar.extracted_content
@@ -117,7 +117,7 @@ def test_a_framed_result_with_defanged_delimiters_names_the_exact_offset(tmp_pat
     body = evil + "".join(f"row {i}\n" for i in range(6000))
     ar = ActionResult(extracted_content=body, tool_call_id="c1",
                       metadata={"url": "https://example.com/x"})  # untrusted
-    a = _agent(_Controller({"fetch": _Details("web_fetch")}))
+    a = _agent(_Controller({"fetch": _Details("web_fetch"), "filesystem_read_file": _Details("filesystem")}))
     a._spill_over_wire_cap([ar], {"c1": "fetch"})
     saved = list(tmp_path.iterdir())[0].read_text()
     assert saved.startswith("<untrusted_tool_result")
@@ -136,3 +136,12 @@ def test_offset_is_omitted_when_the_cut_splits_a_delimiter(tmp_path, monkeypatch
     assert at(14) is None  # the cut falls inside the delimiter
     assert written[at(len(content) - 10):].startswith("b" * 10)
     assert _offset_mapper(content, content, None)(7) == 7
+
+
+def test_a_seat_with_no_file_reader_is_not_sent_to_one(tmp_path, monkeypatch):
+    """095 W2 (X-23): no filesystem_read_file -> no call it cannot make."""
+    _pm_into(tmp_path, monkeypatch)
+    a = _agent(_Controller({"search_docs": _Details("knowledge")}))
+    assert a._can_read_workspace() is False
+    a2 = _agent(_Controller({"filesystem_read_file": _Details("filesystem")}))
+    assert a2._can_read_workspace() is True

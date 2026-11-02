@@ -41,8 +41,7 @@ def test_install_enforces_existing_taint_when_admission_is_disabled(monkeypatch)
 def test_compute_posture_verbs_are_name_high_impact():
     # shell + self_env + process verbs enumerated by NAME (not just tool-id), so a
     # tainted session can't reach them even if the tool-id resolver faults.
-    for name in ("shell_run", "self_env_install_dep", "self_env_patch_source",
-                 "self_env_restart_service", "self_env_git_pull", "self_env_read_source",
+    for name in ("shell_run", "self_env_restart_service", "self_env_read_source",
                  "process_kill", "process_log", "process_poll", "process_list"):
         assert is_high_impact(name), name
 
@@ -283,11 +282,11 @@ def test_high_impact_call_allows_low_impact_tool_reads():
 
 
 def test_cross_session_recall_actions_are_gated_while_tainted():
-    """session_search/memory_search/recent_activity read the owner's past sessions and
+    """session_search/recent_activity read the owner's past sessions and
     per-run spend. They are directly-registered (tool_id=None), so the name layer is
     the ONLY thing in front of them — and with the D1 reply exemption on, whatever
     they return can be echoed back to the tainting party."""
-    for name in ("session_search", "memory_search", "recent_activity",
+    for name in ("session_search", "recent_activity",
                  "contact_history", "owner_doc_manage", "load_tool"):
         assert is_high_impact_call(name, None), name
 

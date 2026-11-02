@@ -2,7 +2,7 @@
 
 GLM via OpenRouter intermittently emits tool calls as a raw <function_calls> block
 (tool name as tag + <arg_key>/<arg_value> children, sometimes malformed) instead of
-structured tool_calls. ROB's recovery was Kimi-gated, so GLM's dump leaked to the
+structured tool_calls. POLYROB's recovery was Kimi-gated, so GLM's dump leaked to the
 user. We can't reliably recover the malformed args, but we MUST strip the block.
 """
 from modules.llm.openrouter_client import (

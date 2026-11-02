@@ -1,7 +1,7 @@
 /**
- * work-apps.js — Work › Apps: everything Rob built that you can open (043 WS-P2).
+ * work-apps.js — Work › Apps: everything the agent built that you can open (043 WS-P2).
  *
- * The owner's ask was one place where everything Rob has built is reachable.
+ * The owner's ask was one place where everything the agent has built is reachable.
  * This draws it as THREE tiers, by reach:
  *
  *   1. **Online** — durable app services (the `app_services` registry), each

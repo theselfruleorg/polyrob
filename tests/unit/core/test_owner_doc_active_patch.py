@@ -1,6 +1,6 @@
 """owner.md self-configuration defects (prod, 72h to 2026-10-11).
 
-8 of Rob's ``owner_doc_manage`` patches failed:
+8 of the agent's ``owner_doc_manage`` patches failed:
 
 - 3 with "old_string occurs 4× — pass replace_all=true": the count ran over the
   WHOLE file, and every extra copy sat in ``## Superseded``. Following the hint

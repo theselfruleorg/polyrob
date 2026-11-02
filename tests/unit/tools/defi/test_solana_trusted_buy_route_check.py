@@ -27,7 +27,7 @@ BUILD_REACHED = "BUILD_REACHED"
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setattr("core.wallet.solana_onchain._rpc",
                         lambda m, p: {"value": {"decimals": 6}})
     tp._reset_for_tests()
@@ -82,7 +82,7 @@ def _tool(factor=1.0):
 
 
 def _ctx():
-    return types.SimpleNamespace(user_id="rob", metadata={}, role="orchestrator",
+    return types.SimpleNamespace(user_id="alice", metadata={}, role="orchestrator",
                                  is_sub_agent=False)
 
 

@@ -307,8 +307,8 @@ class TestIsProtectedConfigPath:
 
     def test_preferences_and_contract_are_protected(self):
         # Preferences and contract files under identity/ are protected
-        assert is_protected_config_path(Path("/data/identity/rob/user_1/preferences.toml")) is True
-        assert is_protected_config_path(Path("/data/identity/rob/user_1/contract.md")) is True
+        assert is_protected_config_path(Path("/data/identity/polyrob/user_1/preferences.toml")) is True
+        assert is_protected_config_path(Path("/data/identity/polyrob/user_1/contract.md")) is True
 
     def test_preferences_anywhere_under_identity_path(self):
         # Nested deeper in identity/ path
@@ -316,7 +316,7 @@ class TestIsProtectedConfigPath:
 
     def test_contract_anywhere_under_identity_path(self):
         # Contract files under identity/ path
-        assert is_protected_config_path(Path("/home/rob/identity/rob/user_abc/contract.md")) is True
+        assert is_protected_config_path(Path("/home/alice/identity/polyrob/user_abc/contract.md")) is True
 
     def test_preferences_not_under_identity_not_protected(self):
         # preferences.toml NOT under identity/ should not be protected
@@ -328,16 +328,16 @@ class TestIsProtectedConfigPath:
 
     def test_other_files_under_identity_not_protected(self):
         # Other files under identity/ are OK (only preferences.toml and contract.md)
-        assert is_protected_config_path(Path("/data/identity/rob/user_1/README.md")) is False
-        assert is_protected_config_path(Path("/data/identity/rob/user_1/data.json")) is False
+        assert is_protected_config_path(Path("/data/identity/polyrob/user_1/README.md")) is False
+        assert is_protected_config_path(Path("/data/identity/polyrob/user_1/data.json")) is False
 
     # -- review-fix regressions: case-insensitivity + segment robustness --
 
     def test_mixed_case_identity_segment_is_protected(self):
         # Case-insensitive filesystems (macOS APFS, Windows) treat `Identity/`
         # as the same directory as `identity/` — must still be protected.
-        assert is_protected_config_path(Path("/data/Identity/rob/user_1/preferences.toml")) is True
-        assert is_protected_config_path(Path("/data/IDENTITY/rob/user_1/contract.md")) is True
+        assert is_protected_config_path(Path("/data/Identity/polyrob/user_1/preferences.toml")) is True
+        assert is_protected_config_path(Path("/data/IDENTITY/polyrob/user_1/contract.md")) is True
 
     def test_relative_path_no_leading_slash_is_protected(self):
         # Bare relative paths (no leading slash) must still be caught.
@@ -350,8 +350,8 @@ class TestIsProtectedConfigPath:
     def test_nonidentity_segment_not_protected(self):
         # A segment that merely CONTAINS "identity" as a substring (not an
         # exact segment match) must NOT be protected.
-        assert is_protected_config_path(Path("/data/nonidentity/rob/user_1/preferences.toml")) is False
-        assert is_protected_config_path(Path("/data/identityx/rob/user_1/contract.md")) is False
+        assert is_protected_config_path(Path("/data/nonidentity/polyrob/user_1/preferences.toml")) is False
+        assert is_protected_config_path(Path("/data/identityx/polyrob/user_1/contract.md")) is False
 
 
 # ---------------------------------------------------------------------------

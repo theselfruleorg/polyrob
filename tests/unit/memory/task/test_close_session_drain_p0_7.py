@@ -99,3 +99,23 @@ def test_close_session_bool_wrapper_still_works():
 	_add_findings(mgr, "s3", 2)
 	assert mgr.close_session("s3", "u1") is True
 	assert mgr.close_session("s3", "u1") is False  # already gone
+
+
+def test_the_regime_asks_for_close_reflection_when_the_flag_is_off(monkeypatch):
+	"""095 W9 (IN-7): owner chat reflects at close by regime, not only by posture."""
+	monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "false")
+	monkeypatch.setattr(
+		"modules.memory.task.task_context_manager.REFLECTION_SESSION_CLOSE_THRESHOLD", 3)
+	calls = []
+	for sid, ask in (("s4", False), ("s5", True)):
+		mgr = _make_manager()
+		mgr.create_session(session_id=sid, task="t")
+		_add_findings(mgr, sid, 5)
+		monkeypatch.setattr(mgr, "_trigger_reflection", lambda s, p: calls.append(s))
+		assert mgr.close_session_and_drain(sid, "u1", ask)[0] is True
+	assert calls == ["s5"]
+
+
+def test_only_owner_chat_reflects_on_close_by_regime():
+	from agents.task.session_class import OWNER_CHAT, REGIME_POLICY
+	assert {r for r, p in REGIME_POLICY.items() if p.reflect_on_close} == {OWNER_CHAT}

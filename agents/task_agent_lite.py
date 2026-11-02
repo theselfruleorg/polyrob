@@ -474,6 +474,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # value, so binding after init would be a permanent no-op. Flag-gated +
         # fail-open: with the flag OFF or no chat_session_key (legacy callers pass
         # neither), this touches nothing and the legacy callback path is unchanged.
+        await self.close_previous_chat_episode(kwargs.get("chat_session_key"), actual_id)  # F5: the outgoing chat's episode
         try:
             from core.surfaces.binding import bind_chat_surface
             bind_chat_surface(
@@ -545,12 +546,12 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         }
 
 
-    async def run_session(
+    async def _run_session_locked(
         self,
         user_id: str,
         session_id: Optional[str] = None
     ) -> str:
-        """Run a task session with concurrency protection.
+        """Run a task session with concurrency protection (wrapped by ``run_session``).
 
         This method encapsulates the entire execution flow:
         1. Acquire execution lock for the session (prevents race conditions)
@@ -623,7 +624,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # wall of no-op done-turns to the persisted history (prod fa1212de).
         # No status churn, and an evicted orchestrator is NOT recreated just to
         # discover there is nothing to do.
-        if current_status == 'completed' and not self._session_has_pending_input(session_id):
+        if not self._resume_has_input(session_id, current_status):
             logger.info(
                 f"Session {session_id} is completed with no pending input — "
                 f"skipping no-op resume"
@@ -681,7 +682,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             # (orchestrator.__init__ sets status='initializing'). A warm STEER resume — e.g. the
             # owner sending a voice/text message to continue a suspended session — lands in
             # 'initializing', and WITHOUT this case it dead-ends at the else below ("Cannot run
-            # session in status: initializing") so Rob never replies. Both are pre-run states →
+            # session in status: initializing") so the agent never replies. Both are pre-run states →
             # transition to running. try_transition_status is a compare-and-swap, so it's safe.
             if not self.session_manager.try_transition_status(session_id, current_status, 'running'):
                 logger.warning(f"Session {session_id} is already being processed")
@@ -776,9 +777,8 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             # Execute - orchestrator handles everything
             results = await orchestrator.execute_session(
                 agent_sequence=[agent.agent_id],
-                max_steps_per_agent={
-                    agent.agent_id: request.get('max_steps', INTERACTIVE_MAX_STEPS)
-                }
+                max_steps_per_agent={  # the turn scope wins over the stored request
+                    agent.agent_id: self._run_max_steps(session_id, request, agent)}
             )
 
             # Check results and set status ONCE
@@ -870,8 +870,8 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                     # STEP 1: Save message history BEFORE cleanup (BUG FIX #2)
                     # This ensures conversation context is preserved for continuous chat
                     try:
-                        for agent in orchestrator.agents.values():
-                            if hasattr(agent, 'message_manager') and agent.message_manager:
+                        for agent in orchestrator.agents.values():  # a sub-agent is never the session
+                            if getattr(agent, 'message_manager', None) and not getattr(agent, '_is_sub_agent', False):
                                 try:
                                     agent.message_manager.save_to_disk(
                                         session_id=session_id,

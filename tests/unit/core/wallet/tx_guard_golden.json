@@ -889,7 +889,7 @@
   "deploy": null,
   "lane": "refuse",
   "position_token_id": null,
-  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or autonomous run) cannot move funds",
+  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an autonomous run this instance does not admit) cannot move funds [who: the owner \u00b7 lever: the owner runs it from his chat \u00b7 retry: no]",
   "sim_gas_used": null,
   "simulated_token_deltas": null,
   "valuation_basis": "outflow"
@@ -915,7 +915,7 @@
   "deploy": null,
   "lane": "refuse",
   "position_token_id": null,
-  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or autonomous run) cannot move funds",
+  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an autonomous run this instance does not admit) cannot move funds [who: the owner \u00b7 lever: the owner runs it from his chat \u00b7 retry: no]",
   "sim_gas_used": null,
   "simulated_token_deltas": null,
   "valuation_basis": "outflow"
@@ -1340,7 +1340,7 @@
   "deploy": null,
   "lane": "refuse",
   "position_token_id": null,
-  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or autonomous run) cannot move funds",
+  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an autonomous run this instance does not admit) cannot move funds [who: the owner \u00b7 lever: the owner runs it from his chat \u00b7 retry: no]",
   "sim_gas_used": null,
   "simulated_token_deltas": null,
   "valuation_basis": "outflow"
@@ -1382,7 +1382,7 @@
   "deploy": null,
   "lane": "refuse",
   "position_token_id": null,
-  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or autonomous run) cannot move funds",
+  "reason": "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an autonomous run this instance does not admit) cannot move funds [who: the owner \u00b7 lever: the owner runs it from his chat \u00b7 retry: no]",
   "sim_gas_used": null,
   "simulated_token_deltas": null,
   "valuation_basis": "outflow"

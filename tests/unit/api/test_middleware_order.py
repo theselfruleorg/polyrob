@@ -1,6 +1,6 @@
 """C3: fallback_auth_middleware was registered LAST, which (Starlette inserts each
 add_middleware at index 0) made it the OUTERMOST layer — it ran before
-AuthenticationMiddleware._validate_api_key, so self-service `rob_xxx` API keys were
+AuthenticationMiddleware._validate_api_key, so self-service API keys were
 rejected against the static API_AUTH_TOKEN and never reached the DB validator.
 
 It must be registered FIRST so it becomes the INNERMOST layer and runs only after
@@ -27,7 +27,7 @@ def _index_of_cls(user_mw, cls):
 
 
 def test_fallback_auth_runs_inside_authentication_middleware(monkeypatch):
-    # API_SECRET makes AuthenticationMiddleware (the DB-backed rob_xxx validator) register.
+    # API_SECRET makes AuthenticationMiddleware (the DB-backed API-key validator) register.
     monkeypatch.setenv("API_SECRET", "test-secret-for-authmw")
     from api.middleware import AuthenticationMiddleware
 
@@ -42,5 +42,5 @@ def test_fallback_auth_runs_inside_authentication_middleware(monkeypatch):
     # Fallback must be INNER (higher index) than AuthenticationMiddleware.
     assert fb > auth, (
         f"fallback (idx {fb}) must run inside AuthenticationMiddleware (idx {auth}); "
-        "otherwise rob_xxx API keys never reach the DB validator"
+        "otherwise self-service API keys never reach the DB validator"
     )

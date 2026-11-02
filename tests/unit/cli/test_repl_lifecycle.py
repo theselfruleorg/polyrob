@@ -287,7 +287,7 @@ async def test_dispatch_replexit_still_propagates():
 
 
 # ---------------------------------------------------------------------------
-# F7 — `rob skills validate <unknown>` fails clearly (no such skill, exit 1)
+# F7 — `polyrob skills validate <unknown>` fails clearly (no such skill, exit 1)
 # ---------------------------------------------------------------------------
 
 

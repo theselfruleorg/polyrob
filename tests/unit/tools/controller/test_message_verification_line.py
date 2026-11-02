@@ -35,7 +35,7 @@ def _send(ok=True, surface="telegram", target="999"):
     return asyncio.run(perform_message_send(
         router=_Router(ok), allowlist=OutboundAllowlist(os.path.join(tmp, "a.db")),
         owner_targets={"telegram": "999", "email": "o@example.com"},
-        user_id="rob", surface=surface, target=target, text="hi", action="send"))
+        user_id="alice", surface=surface, target=target, text="hi", action="send"))
 
 
 def test_successful_telegram_send_carries_the_channel_proof_rule():

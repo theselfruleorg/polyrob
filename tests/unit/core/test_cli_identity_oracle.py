@@ -21,12 +21,12 @@ class _CtxNoUser:
 async def test_cli_container_identity_matches_resolve_identity_with_owner(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "dana")
     with patch("modules.llm.llm_manager.LLMManager._initialize", AsyncMock()):
         from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container()
-    assert resolve_identity() == "rob"
-    assert container.get_service("identity").resolve() == "rob"
+    assert resolve_identity() == "dana"
+    assert container.get_service("identity").resolve() == "dana"
 
 
 @pytest.mark.asyncio
@@ -52,9 +52,9 @@ def test_goal_tool_user_never_anonymous(monkeypatch):
 
 
 def test_goal_tool_user_prefers_owner(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "dana")
     from tools.goal_tools import GoalTool
-    assert GoalTool._user(_CtxNoUser()) == "rob"
+    assert GoalTool._user(_CtxNoUser()) == "dana"
 
 
 def test_goal_tool_user_passthrough_when_set():
@@ -73,6 +73,6 @@ def test_cronjob_tool_user_never_anonymous(monkeypatch):
 
 
 def test_cronjob_tool_user_prefers_owner(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "dana")
     from tools.cronjob_tools import CronJobTool
-    assert CronJobTool._user(_CtxNoUser()) == "rob"
+    assert CronJobTool._user(_CtxNoUser()) == "dana"

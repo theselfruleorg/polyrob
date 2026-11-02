@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Checking a trade after it confirms'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '4'
 ---

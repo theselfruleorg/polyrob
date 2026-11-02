@@ -4,7 +4,7 @@
 owner topped up at ~08:39Z and polyrob was restarted, but the latch file
 survives a restart and was re-armed by later 402s. Every cron tick and goal
 dispatch kept logging `credit-dead — $0 skip` until a human ran
-`release("openrouter")` at 09:14Z. That was 35 minutes of a funded Rob sitting
+`release("openrouter")` at 09:14Z. That was 35 minutes of a funded agent sitting
 dead.
 
 `release_funded_latches` closes that gap. For a latched provider that publishes

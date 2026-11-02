@@ -76,7 +76,7 @@ def _stores(tmp_path, monkeypatch):
 
 
 def _ctx():
-    return types.SimpleNamespace(user_id="rob", metadata={}, role="orchestrator",
+    return types.SimpleNamespace(user_id="alice", metadata={}, role="orchestrator",
                                  is_sub_agent=False)
 
 

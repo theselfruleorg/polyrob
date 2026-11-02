@@ -21,9 +21,9 @@ from core.env import parse_bool
 
 
 # ---------------------------------------------------------------------------
-# AgentConfig — pure-agent settings that rob-core needs to run standalone.
+# AgentConfig — pure-agent settings that the core needs to run standalone.
 #
-# Lives in core so rob-core has a config surface that imports zero
+# Lives in core so the core has a config surface that imports zero
 # server/billing/multi-tenant fields. ServerConfig below inherits from this
 # and adds the server-scope fields (auth, billing, blockchain, x402, etc.).
 # Existing `from core.config import BotConfig` call sites keep working via
@@ -265,7 +265,7 @@ class ServerConfig(AgentConfig):
 
     # NOTE: model_config inherited from AgentConfig. The fields below are
     # everything that depends on the server stack (auth, billing, payments,
-    # blockchain, multi-tenant, Telegram/Twitter/Gmail). When rob-server is
+    # blockchain, multi-tenant, Telegram/Twitter/Gmail). When the server tier is
     # extracted as a separate package, this class moves to polyrob-platform.
 
     # 067 F4 (2026-09-24): 54 fields with ZERO consumers outside this file
@@ -533,11 +533,12 @@ class ServerConfig(AgentConfig):
 
         # A 1.4.0 server kept config.data_dir at <POLYROB_DATA_DIR>/data; move
         # that tree up BEFORE any mkdir below, or bot.db opens empty.
+        # Also with POLYROB_DATA_DIR unset (a managed user-mode install): the
+        # home is the one effective_data_home() resolves, for every process.
         _home_env = (os.getenv("POLYROB_DATA_DIR") or "").strip()
-        if _home_env:
-            from core.legacy_data_tree import converge_legacy_data_tree
-            converge_legacy_data_tree(Path(_home_env).expanduser().resolve(),
-                                      data_dir=self.data_dir, db_path=self.db_path)
+        from core.legacy_data_tree import converge_legacy_data_tree
+        converge_legacy_data_tree(Path(_home_env or data_anchor).expanduser().resolve(),
+                                  data_dir=self.data_dir, db_path=self.db_path)
 
         # Convert relative paths to absolute FIRST (so the mkdirs below never
         # resolve against CWD). An unset data_dir IS the data home.
@@ -553,7 +554,7 @@ class ServerConfig(AgentConfig):
             self.services_ocr_temp_dir = str(Path(data_anchor) / self.services_ocr_temp_dir)
 
         # Now create the (absolute) directories. Fail-open on a read-only install
-        # dir (R1: pip site-packages) — the CLI reassigns data_dir to .rob anyway.
+        # dir (R1: pip site-packages) — the CLI reassigns data_dir to .polyrob anyway.
         try:
             for path in [self.data_dir, Path(self.db_path).parent, self.services_ocr_temp_dir]:
                 Path(path).mkdir(parents=True, exist_ok=True)

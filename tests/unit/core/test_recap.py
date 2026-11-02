@@ -212,7 +212,7 @@ def _split_ledger(**over):
     still reads. ``treasury.net_usd`` is always ``income_usd - spend_usd`` —
     never the legacy merged figure."""
     led = {
-        "user_id": "rob", "window_days": 1,
+        "user_id": "alice", "window_days": 1,
         "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 0.0,
                      "pending_count": 0, "balance_usd": None, "net_usd": 0.0,
                      "available": True},
@@ -291,7 +291,7 @@ def test_recap_entry_reports_treasury_and_runtime_separately(monkeypatch):
     as the agent's own P&L. Treasury and runtime must never be summed."""
     from core.recap import build_recap
     monkeypatch.setattr("core.recap._ledger", lambda u, d: {
-        "user_id": "rob", "window_days": 1,
+        "user_id": "alice", "window_days": 1,
         "treasury": {"income_usd": 4.0, "spend_usd": 1.0, "pending_usd": 0.0,
                      "pending_count": 0, "balance_usd": None, "net_usd": 3.0,
                      "available": True},
@@ -301,7 +301,7 @@ def test_recap_entry_reports_treasury_and_runtime_separately(monkeypatch):
         "costs_available": True, "inbound_available": True, "wallet_metering": "on",
         "settled_payments": 1,
     })
-    entries = build_recap("rob")
+    entries = build_recap("alice")
     ledger_entries = [e for e in entries if e.kind == "ledger"]  # real kind label
     assert len(ledger_entries) == 1
     text = ledger_entries[0].text
@@ -321,5 +321,43 @@ def test_recap_never_probes_balances(monkeypatch):
         seen["include_balances"] = include_balances
         return {}
     monkeypatch.setattr("modules.credits.unified_ledger.build_ledger", fake_build)
-    ae.ledger_rollup("rob", 1)
+    ae.ledger_rollup("alice", 1)
     assert seen["include_balances"] is False
+
+
+# --- 095 W12b: curator proposals reach the owner -------------------------------
+
+def _seed_proposals(tmp_path, monkeypatch):
+    from core import event_log as el
+    now = time.time()
+    path = str(tmp_path / "telemetry_events.db")
+    log = el.TelemetryEventLog(path)
+    note = "my-skill: your skill has not been used for 40 days — keep or archive?"
+    for ts in (now - 10, now - 5):  # the same line filed twice
+        log.record("self_modification", user_id="u1", ts=ts, source="curator",
+                   attrs={"kind": "skill", "action": "propose", "item_id": "my-skill",
+                          "reason": "idle", "note": note})
+    log.record("self_modification", user_id="u1", ts=now, source="curator",
+               attrs={"kind": "skill", "action": "archive", "item_id": "old-skill"})
+    log.record("self_modification", user_id="u2", ts=now, source="curator",
+               attrs={"kind": "skill", "action": "propose", "item_id": "x",
+                      "note": "x: other tenant"})
+    monkeypatch.setattr("core.recap._episodes", lambda *a, **k: [])
+    monkeypatch.setattr("core.recap._authored", lambda *a, **k: [])
+    monkeypatch.setattr("core.recap._ledger", lambda *a, **k: {})
+    return note
+
+
+def test_recap_shows_curator_proposal_note_once(tmp_path, monkeypatch):
+    note = _seed_proposals(tmp_path, monkeypatch)
+    entries = build_recap("u1", str(tmp_path), window="24h")
+    texts = [e.text for e in entries if e.kind == "self_modification"]
+    assert texts.count(f"proposal: {note}") == 1
+    assert "skill old-skill" in texts
+    assert not any("other tenant" in t for t in texts)
+
+
+def test_curator_proposals_reader_is_deduped_and_tenant_scoped(tmp_path, monkeypatch):
+    from core.recap import curator_proposals
+    note = _seed_proposals(tmp_path, monkeypatch)
+    assert curator_proposals("u1", time.time() - 3600, str(tmp_path)) == [f"proposal: {note}"]

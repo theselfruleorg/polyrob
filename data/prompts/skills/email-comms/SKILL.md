@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Writing, sorting or answering email'
   polyrob-priority: '4'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Email & Comms

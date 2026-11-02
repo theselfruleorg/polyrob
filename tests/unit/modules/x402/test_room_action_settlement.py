@@ -7,7 +7,7 @@ import pytest
 from modules.x402 import invoicing
 
 TREASURY = "0x" + "11" * 20
-ROB = "0x" + "bb" * 20
+DEMO = "0x" + "bb" * 20
 
 
 async def _mint_room_action(db, *, status="pending", offer_id="off_1"):
@@ -22,8 +22,8 @@ async def _mint_room_action(db, *, status="pending", offer_id="off_1"):
                asset_id,asset_address,asset_decimals,amount_raw,
                created_at,updated_at)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))""",
-        (rid, "0.5", 0.5, "rob", "robinhood", TREASURY, rid, 9_999_999_999,
-         status, json.dumps(meta), "rob", ROB, 18, str(5 * 10 ** 18)))
+        (rid, "0.5", 0.5, "demo", "robinhood", TREASURY, rid, 9_999_999_999,
+         status, json.dumps(meta), "demo", DEMO, 18, str(5 * 10 ** 18)))
     return rid
 
 
@@ -33,9 +33,9 @@ async def test_the_scan_matches_a_room_action_invoice(x402_db):
     allowed set, a paid offer sits pending forever with the money received."""
     rid = await _mint_room_action(x402_db)
     assert await invoicing.match_pending_invoice(
-        TREASURY, ROB, 5 * 10 ** 18, chain="robinhood", db=x402_db) is None
+        TREASURY, DEMO, 5 * 10 ** 18, chain="robinhood", db=x402_db) is None
     hit = await invoicing.match_pending_invoice(
-        TREASURY, ROB, 5 * 10 ** 18, kinds=tuple(invoicing.PAYABLE_KINDS),
+        TREASURY, DEMO, 5 * 10 ** 18, kinds=tuple(invoicing.PAYABLE_KINDS),
         chain="robinhood", db=x402_db)
     assert hit["request_id"] == rid
     assert hit["room_action"]["offer_id"] == "off_1"

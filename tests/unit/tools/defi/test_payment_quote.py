@@ -2,8 +2,8 @@
 from core.payments.assets import PaymentAsset
 from tools.defi.payment_quote import PaymentQuoter, _deepest_priced_pool
 
-ASSET = PaymentAsset(asset_id="rob", chain="robinhood", address="0x" + "bb" * 20,
-                     decimals=18, symbol="ROB", min_amount_raw=10 ** 18,
+ASSET = PaymentAsset(asset_id="demo", chain="robinhood", address="0x" + "bb" * 20,
+                     decimals=18, symbol="DEMO", min_amount_raw=10 ** 18,
                      liquidity_floor_usd=2500.0)
 
 
@@ -13,7 +13,7 @@ class _Pool:
     volume_h24_usd = 60_000.0
     volume_h1_usd = 2_000.0
     created_at = "2020-01-01T00:00:00Z"
-    name = "ROB/WETH"
+    name = "DEMO/WETH"
     vol_liq_ratio = 1.2
     hourly_vol_liq_ratio = 0.04
     mcap_liq_ratio = None
@@ -27,7 +27,7 @@ def test_the_quote_carries_the_screen_verdict_and_the_pool_depth():
     assert q.usd_per_token == 0.10
     assert q.liquidity_usd == 50_000.0
     assert q.verdict
-    assert q.asset_id == "rob"
+    assert q.asset_id == "demo"
     assert q.source == "independent + geckoterminal screen"
     assert q.confidence == "high"
 
@@ -144,7 +144,7 @@ def test_cr_m06_pool_without_the_asset_on_either_side_is_not_a_price():
           "price_change_percentage": {"h24": "0"}},
          _rel(base=WETH, quote="0x" + "dd" * 20)),
         {"address": "0xmine", "reserve_in_usd": "5000",
-         "base_token_price_usd": "0.10", "name": "ROB/WETH",
+         "base_token_price_usd": "0.10", "name": "DEMO/WETH",
          "volume_usd": {"h24": "1"}, "price_change_percentage": {"h24": "0"}})
     pool, price = _deepest_priced_pool("base", TOKEN, fetch=lambda url: payload)
     assert pool.pool_address == "0xmine"

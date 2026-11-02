@@ -211,7 +211,7 @@ def admin_owner_principal() -> str:
     exports ``POLYROB_OWNER_USER_ID`` must still be read under that tenant.
 
     ⚠️ It no longer falls back to the ADOPTED INSTANCE id. That branch made
-    ``polyrob owner …`` answer ``rob`` on a box whose REPL, goals and memory all
+    ``polyrob owner …`` answer the instance id on a box whose REPL, goals and memory all
     answered ``local`` — an instance id names the identity-doc tier and the
     avatar, not an owner tenant. With nothing declared anywhere the answer is
     ``core.instance.resolve_owner_user_id``'s, the same one every other seat

@@ -11,7 +11,7 @@ from tools.x402.invoice_tool import (
 
 
 class _Ctx:
-    user_id = "rob"
+    user_id = "carol"
     session_id = "sess_1"
 
 
@@ -44,7 +44,7 @@ def test_x402_request_in_recommended_approval_set():
 
 def test_x402_request_action_formats_instructions(monkeypatch):
     async def fake_create(**kw):
-        assert kw["user_id"] == "rob" and kw["session_id"] == "sess_1"
+        assert kw["user_id"] == "carol" and kw["session_id"] == "sess_1"
         return {"request_id": "inv_abc", "amount_usd": 5.0, "asset": "usdc",
                 "chain": "base", "recipient": "0xT", "purpose": kw["purpose"],
                 "expires_at_epoch": 123, "status": "pending"}
@@ -94,9 +94,9 @@ def test_accounting_action(monkeypatch):
     seen = {}
 
     async def fake_build(user_id, *, days, include_balances=False, **kw):
-        assert user_id == "rob" and days == 7
+        assert user_id == "carol" and days == 7
         seen["include_balances"] = include_balances
-        return {"user_id": "rob", "window_days": 7, "llm_api_cost_usd": 0.1,
+        return {"user_id": "carol", "window_days": 7, "llm_api_cost_usd": 0.1,
                 "credits_spent": 1.0, "llm_calls": 3, "wallet_spend_usd": 0.0,
                 "wallet_payments": 0, "settled_payments": 1,
                 "pending_invoices_usd": 0.0, "pending_invoices": 0,
@@ -124,7 +124,7 @@ def test_accounting_action(monkeypatch):
 def test_accounting_receive_rail_footer_is_fail_open(monkeypatch):
     """A broken rail summary must never break the ledger view."""
     async def fake_build(user_id, **kw):
-        return {"user_id": "rob", "window_days": 7, "llm_api_cost_usd": 0.0,
+        return {"user_id": "carol", "window_days": 7, "llm_api_cost_usd": 0.0,
                 "credits_spent": 0.0, "llm_calls": 0, "wallet_spend_usd": 0.0,
                 "wallet_payments": 0, "settled_payments": 0,
                 "pending_invoices_usd": 0.0, "pending_invoices": 0,
@@ -186,7 +186,7 @@ class _CtxWithWorkspace:
     (Task 6) reads it via `getattr(execution_context, "workspace_dir", None)`."""
 
     def __init__(self, workspace_dir):
-        self.user_id = "rob"
+        self.user_id = "carol"
         self.session_id = "sess_1"
         self.workspace_dir = str(workspace_dir)
 
@@ -200,7 +200,6 @@ def _fake_create_kwargs(**kw):
 def test_invoice_card_flag_off_result_unchanged(monkeypatch, tmp_path):
     monkeypatch.delenv("INVOICE_CARD_ENABLED", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
 
     async def fake_create(**kw):
         return _fake_create_kwargs(**kw)
@@ -257,7 +256,6 @@ def test_invoice_card_flag_on_renders_and_appends_path(monkeypatch, tmp_path):
 def test_result_teaches_concrete_message_delivery_no_card(monkeypatch, tmp_path):
     monkeypatch.delenv("INVOICE_CARD_ENABLED", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    monkeypatch.delenv("ROB_LOCAL", raising=False)
 
     async def fake_create(**kw):
         return _fake_create_kwargs(**kw)
@@ -326,7 +324,7 @@ def test_invoice_card_no_workspace_is_fail_open(monkeypatch):
     monkeypatch.setattr(inv, "create_payment_request", fake_create)
 
     class _NoWorkspaceCtx:
-        user_id = "rob"
+        user_id = "carol"
         session_id = ""
 
     tool = X402InvoiceTool()
@@ -496,7 +494,7 @@ def test_x402_request_forwards_the_asset_and_chain(monkeypatch):
 
     async def fake_create(**kw):
         seen.update(kw)
-        return {"request_id": "inv_1", "amount_usd": 1.0, "asset": "rob",
+        return {"request_id": "inv_1", "amount_usd": 1.0, "asset": "carol",
                 "chain": "robinhood", "recipient": "0x" + "11" * 20,
                 "purpose": "p", "expires_at_epoch": 1, "amount_raw": "5"}
 
@@ -506,9 +504,9 @@ def test_x402_request_forwards_the_asset_and_chain(monkeypatch):
     ctx = type("C", (), {"user_id": "u", "session_id": "s"})()
     tool = X402InvoiceTool()
     res = asyncio.run(tool.x402_request(
-        InvoiceParams(amount_usd=1.0, purpose="a thing", asset_id="rob",
+        InvoiceParams(amount_usd=1.0, purpose="a thing", asset_id="carol",
                       chain="robinhood"), execution_context=ctx))
-    assert seen["asset_id"] == "rob" and seen["chain"] == "robinhood"
+    assert seen["asset_id"] == "carol" and seen["chain"] == "robinhood"
     assert "5 raw units" in (res.extracted_content or "")
 
 

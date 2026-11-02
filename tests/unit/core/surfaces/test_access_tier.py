@@ -133,13 +133,13 @@ def test_local_mode_owns_local_surface_only_not_network(workdir):
 
 def test_aliased_telegram_owner_is_owner_tier(workdir):
     """Seam 7 (owner-instance identity model): the Telegram owner, aliased at inbound
-    to the OWNER principal (`rob`), must resolve to OWNER tier on the *network* telegram
+    to the OWNER principal (`alice`), must resolve to OWNER tier on the *network* telegram
     surface — WITHOUT the local-owner bypass (telegram ∉ {cli,local,repl}). So the
-    owner can steer + use gated tools once POLYROB_OWNER_USER_ID=rob is bound.
+    owner can steer + use gated tools once POLYROB_OWNER_USER_ID=alice is bound.
     """
     c = _Container(workdir)
-    env = {"POLYROB_OWNER_USER_ID": "rob"}
-    ident = _identity("rob", raw="100000001", surface="telegram")
+    env = {"POLYROB_OWNER_USER_ID": "alice"}
+    ident = _identity("alice", raw="100000001", surface="telegram")
     assert resolve_access_tier(c, ident, env=env) == AccessTier.OWNER
 
 
@@ -148,7 +148,7 @@ def test_non_owner_telegram_sender_isolated_not_owner(workdir):
     the owner (no correspondent binding -> DENIED). Tenant isolation is intact.
     """
     c = _Container(workdir)
-    env = {"POLYROB_OWNER_USER_ID": "rob"}
+    env = {"POLYROB_OWNER_USER_ID": "alice"}
     ident = _identity("u_66170da11e7a74ac54e2bfaa", raw="99887766", surface="telegram")
     assert resolve_access_tier(c, ident, env=env) == AccessTier.DENIED
 

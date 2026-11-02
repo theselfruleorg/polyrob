@@ -9,13 +9,13 @@ from core.config_policy import message_tool_enabled
 
 
 def test_off_by_default(monkeypatch):
-    for k in ("MESSAGE_TOOL_ENABLED", "POLYROB_LOCAL", "ROB_LOCAL"):
+    for k in ("MESSAGE_TOOL_ENABLED", "POLYROB_LOCAL"):
         monkeypatch.delenv(k, raising=False)
     assert message_tool_enabled() is False
 
 
 def test_explicit_on(monkeypatch):
-    for k in ("POLYROB_LOCAL", "ROB_LOCAL"):
+    for k in ("POLYROB_LOCAL",):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MESSAGE_TOOL_ENABLED", "true")
     assert message_tool_enabled() is True

@@ -67,8 +67,8 @@ URL_PASSWORD_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{1,20}://[^\s/@:]+:)[^\s/
 STRIPE_KEY_RE = re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}")
 COOKIE_RE = re.compile(r"(?im)\b(?:set-cookie|cookie)\s*:\s*[^\r\n]+")
 
-#: POLYROB API keys (``rob_…``).
-POLYROB_KEY_RE = re.compile(r"\brob_[A-Za-z0-9]{16,}")
+#: POLYROB API keys (``polyrob_…``; keys issued before 2026-10-31 use the legacy short prefix).
+POLYROB_KEY_RE = re.compile(r"\b(?:polyrob|rob)_[A-Za-z0-9]{16,}")
 
 #: AWS access-key id (``AKIA…``).
 AWS_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")

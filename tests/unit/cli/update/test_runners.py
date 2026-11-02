@@ -222,3 +222,70 @@ def test_install_carries_the_installed_extras_under_the_lock(tmp_path, monkeypat
     rollback_deps = rollback_closure[rollback_closure.index("-o") + 1]
     assert rollback_deps != deps
     assert hashed[:-1] + [rollback_deps] in ran and project in ran
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29: the OLD updater's hardcoded import list rolled back every
+# 1.3.x → ≥1.5 update (utils.gif_utils moved). Verify asks the NEW tree.
+# ---------------------------------------------------------------------------
+
+def test_verify_runs_the_new_trees_probe_when_it_ships_one(tmp_path):
+    (tmp_path / "cli" / "update").mkdir(parents=True)
+    (tmp_path / "cli" / "update" / "verify_probe.py").write_text("")
+    calls, run, capture = _rec()
+    ctx = InstallContext(EDITABLE_GIT, tmp_path, tmp_path, "editable")
+    r = build_runners(ctx, python="/py", run=run, capture=capture)
+    r.verify()
+    cmds = [c[0] for c in calls]
+    assert ["/py", "-I", "-m", "cli.update.verify_probe"] in cmds
+    assert not any(c[:3] == ["/py", "-I", "-c"] for c in cmds), (
+        "the old updater's hardcoded list must not run when the new tree has a probe")
+
+
+def test_the_verify_probe_RUNS_and_passes_against_this_tree():
+    import subprocess, sys
+    repo = Path(__file__).resolve().parents[4]
+    r = subprocess.run([sys.executable, "-m", "cli.update.verify_probe"],
+                       cwd=str(repo), capture_output=True, text=True)
+    assert r.returncode == 0, (r.stdout + r.stderr)
+
+
+def test_the_verify_probe_fails_on_a_missing_module(monkeypatch):
+    from cli.update import verify_probe
+    monkeypatch.setattr(verify_probe, "MODULES", ("utils.gif_utils",))
+    assert any("utils.gif_utils" in p for p in verify_probe.problems())
+    assert verify_probe.main() == 1
+
+
+def test_pip_steps_run_with_tmpdir_on_disk_under_the_data_home(tmp_path, monkeypatch):
+    """A small tmpfs /tmp failed an extras install with Errno 122 (2026-10-29)."""
+    import os
+    import core.runtime_paths as rp
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.setattr(rp, "effective_data_home", lambda: tmp_path / "home")
+    seen = []
+
+    def run(cmd, cwd):
+        if "pip" in cmd:
+            seen.append(os.environ.get("TMPDIR"))
+
+    calls, _run, capture = _rec()
+    ctx = InstallContext(EDITABLE_GIT, tmp_path, tmp_path, "editable")
+    r = build_runners(ctx, python="/py", run=run, capture=capture, extras=[], packs=[])
+    r.install()
+    assert seen and all(t and t.startswith(str(tmp_path / "home" / "tmp")) for t in seen), seen
+    assert "TMPDIR" not in os.environ
+
+
+def test_an_operator_tmpdir_wins(tmp_path, monkeypatch):
+    import core.runtime_paths as rp
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "mine"))
+    assert rp.install_tmp_dir() is None
+
+
+def test_lazy_installer_child_env_carries_a_disk_tmpdir(tmp_path, monkeypatch):
+    import core.runtime_paths as rp
+    from core.lazy_installer import child_env
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.setattr(rp, "effective_data_home", lambda: tmp_path / "home")
+    assert child_env()["TMPDIR"] == str(tmp_path / "home" / "tmp")

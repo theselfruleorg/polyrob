@@ -66,14 +66,14 @@ def rig(tmp_path, monkeypatch):
     posts = SentPosts(db)
     router.attach_sent_posts(posts)
     allow = OutboundAllowlist(db)
-    allow.allow("rob", "telegram", DEN)
+    allow.allow("alice", "telegram", DEN)
     return router, bot, posts, allow
 
 
 def _send(router, allow, text="6551 tease", target=DEN):
     return asyncio.run(ms.perform_message_send(
         router=router, allowlist=allow, owner_targets={"telegram": "111"},
-        user_id="rob", surface="telegram", target=target, text=text))
+        user_id="alice", surface="telegram", target=target, text=text))
 
 
 def _delete(router, ctx=None, **kw):
@@ -190,7 +190,7 @@ def test_router_without_ledger_still_sends(tmp_path, monkeypatch):
     router = MessageRouter(SessionChatRegistry(db))
     router.subscribe("telegram", TelegramSurface(_Bot()))
     allow = OutboundAllowlist(db)
-    allow.allow("rob", "telegram", DEN)
+    allow.allow("alice", "telegram", DEN)
     res = _send(router, allow)
     assert res["success"] is True and res["message_id"] and res.get("post") is None
 
@@ -223,12 +223,12 @@ def test_action_entry_routes_delete_and_refuses_empty_send(rig):
     res = _send(router, allow)
     out = asyncio.run(ms.perform_message_action(
         action="delete", post=res["post"], router=router, allowlist=allow,
-        owner_targets={}, user_id="rob", surface="telegram", target=None,
+        owner_targets={}, user_id="alice", surface="telegram", target=None,
         execution_context=_Ctx(), controller=_Controller()))
     assert out["success"] is True
     empty = asyncio.run(ms.perform_message_action(
         action="send", text="  ", router=router, allowlist=allow, owner_targets={},
-        user_id="rob", surface="telegram", target=DEN))
+        user_id="alice", surface="telegram", target=DEN))
     assert empty["success"] is False and "empty" in empty["error"]
 
 
@@ -295,3 +295,32 @@ def test_correspondent_reply_exemption_never_covers_delete():
                                      "action": "posts"}) == ("", "")
     assert _reply_target("message", {"surface": "telegram", "target": "42",
                                      "text": "hi"}) == ("telegram", "42")
+
+
+def test_message_input_error_names_the_empty_send():
+    # prod 2026-10-28: message(action='send') with no text ran 69 times; each
+    # read like a send. It is a validation error before any gate.
+    assert ms.message_input_error("send", "", None)
+    assert ms.message_input_error("reply", "   ", [])
+    assert ms.message_input_error(None, "", None)
+    assert ms.message_input_error("send", "", ["a.png"]) is None
+    assert ms.message_input_error("send", "hi", None) is None
+    assert ms.message_input_error("delete", "", None) is None
+    assert ms.message_input_error("posts", "", None) is None
+
+
+def test_a_send_to_a_dead_target_names_the_mark_not_send_returned_false(rig, tmp_path,
+                                                                      monkeypatch):
+    """prod 2026-10-28: `message(target='@chan')` met a two-month-old single
+    chat_not_found and the agent read only "send returned false"."""
+    from core.surfaces.dead_targets import DeadTargetStore
+    monkeypatch.setenv("DEAD_TARGET_REGISTRY", "true")
+    monkeypatch.setenv("POLYROB_OVERRIDES", "DEAD_TARGET_REGISTRY=true")
+    router, bot, posts, allow = rig
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    store.mark("telegram", DEN, "chat_not_found")
+    router.attach_dead_targets(store)
+    res = _send(router, allow)
+    assert res["success"] is False
+    assert "dead target since" in res["error"] and "chat_not_found" in res["error"]
+    assert bot.sent == []

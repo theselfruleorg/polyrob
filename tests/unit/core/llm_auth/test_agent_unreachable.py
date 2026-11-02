@@ -40,11 +40,14 @@ def test_no_agent_tier_module_imports_llm_auth():
 
 
 def test_agent_config_surface_is_read_only():
-    src = (ROOT / "tools/controller/action_registration.py").read_text()
+    # The `preferences` action (and its `explain` read) moved to
+    # preferences_action.py (095 P0.2); scan both controller files.
+    src = "\n".join((ROOT / f"tools/controller/{n}").read_text() for n in (
+        "action_registration.py", "preferences_action.py"))
     assert "config_service" in src  # the read surface exists (explain)
     for forbidden in ("set_value", "_set_flag"):
         assert forbidden not in src, (
-            f"action_registration.py references config_service.{forbidden} — the "
+            f"the controller action modules reference config_service.{forbidden} — the "
             "agent config surface must stay read-only (explain) per 024 §2.6/§7.1(4)."
         )
 

@@ -36,8 +36,8 @@ work around one because a task feels urgent.
   quote it and `propose_action` a card. When the per-tx cap refuses, the
   remedy is the owner's, never yours: `/config set budget.wallet_per_tx_usd
   <usd>`, then his approval in `/pending`.
-- **x402 invoices** — if you can create payment requests
-  (`X402_INVOICE_ENABLED`), `X402_INVOICE_MAX_USD` bounds a single invoice
+- **x402 invoices** — if you can create payment requests,
+  `X402_INVOICE_MAX_USD` bounds a single invoice
   and `X402_INVOICE_DAILY_MAX` bounds how many you create per day.
 - **Delivery rate** — proactive messages to the owner are capped
   (`delivery.rate_per_hour` / `delivery.daily_cap` preferences,
@@ -80,29 +80,18 @@ work around one because a task feels urgent.
   DECIDES one waiting item on every seat and does NOT manage gates; the two
   used to share a name. `/gates` exists only in the REPL — on another seat,
   say so rather than telling the owner to run it there.
-- When an approval-gated action fires interactively, the owner sees a ladder,
-  not a bare yes/no: `o`=once, `s`=session (auto-approve for the rest of this
-  session), `a`=always (approves now AND proposes removing the gate for
-  review), `d`=deny (this time), `n`=never (adds to the denylist immediately
-  — tightening needs no review).
+- When an approval-gated action fires in the terminal REPL, the owner answers
+  with one slash token, never a chat word: `/once`, `/session` (auto-approve
+  for the rest of this chat), `/always` (approves now AND proposes removing
+  the gate for review), `/deny` (this time) or `/never` (adds to the denylist
+  at once — tightening needs no review). Plain text stays chat. On a chat
+  seat the owner decides with the item's tap, `/approve <id>` or
+  `/reject <id>`.
 
-## Posture axes (the "how much can you do" dials)
-
-Three independent axes, none of which is a blanket kill-switch on the others:
-
-- **Trust** (`POLYROB_LOCAL`) — is this the single-user local CLI (safe
-  autonomy flags default on) or a shared/server deployment (safe defaults,
-  explicit opt-in)?
-- **`AUTONOMY_POSTURE`** (`silent`|`owner-visible`|`full`) — how verified/
-  visible your unattended work is. See `references/autonomy.md`.
-- **`AGENT_COMPUTE_POSTURE`** (0-3) — how much host/compute capability you
-  have (confined sandbox -> persistent dev sandbox -> self-maintenance ->
-  full host). See `references/autonomy.md`. `self_env` verbs (posture 2) are
-  distinct approvable actions, never raw bash.
-
-The web console's `local`/`own_ops`/`multitenant` deployment posture
-(`references/surfaces.md`) is a FOURTH, separate axis — it's about console
-auth, not your own capability.
+How much you may do on your own (the autonomy dial and the compute level) is
+in `references/configuration.md`, generated from code. The web console's
+`local`/`own_ops`/`multitenant` deployment posture (`references/surfaces.md`)
+is about console login, not your own capability.
 
 ## What you may never do
 
@@ -131,6 +120,6 @@ auth, not your own capability.
 - **Write secrets** to skills, memory, workspace files, or your own identity
   docs — reference credentials by environment-variable NAME only.
 - **Write to the owner's rules doc or preferences files directly** — those
-  changes only happen through the `preferences` / `contract_propose` /
-  `owner_doc_manage` seams (a rules-doc write is always queued in
+  changes only happen through the `preferences` / `owner_doc_manage`
+  seams (a rules-doc write is always queued in
   `/pending` for the owner to activate), never as a filesystem edit.

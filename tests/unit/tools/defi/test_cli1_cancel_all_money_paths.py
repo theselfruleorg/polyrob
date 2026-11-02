@@ -102,7 +102,7 @@ async def test_deploy(monkeypatch, capsys):
     monkeypatch.setattr(dc._Rail, "await_receipt", _blocking_receipt)
     tool, gate = dc._tool()
     await _cancel_mid_receipt(tool.deploy_token(dc.DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000,
         max_spend_usd=5.0, dry_run=False)))
     assert len(gate.recorded) == 1, gate.recorded
     assert gate.recorded[0]["action"] == "deploy_token"

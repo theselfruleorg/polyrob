@@ -37,11 +37,11 @@ def test_configured_owner_ambiguous_multi_id_is_none(monkeypatch):
 
 
 def test_owner_telegram_falls_back_for_nonnumeric_tenant(monkeypatch):
-    """The headline bug: a goal/cron run as user_id='rob' must still resolve the owner."""
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    """The headline bug: a goal/cron run as user_id='alice' must still resolve the owner."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "100000001")
-    assert _owner_telegram(_Agent(), _Job("rob")) == "100000001"
+    assert _owner_telegram(_Agent(), _Job("alice")) == "100000001"
 
 
 def test_owner_telegram_numeric_uid_is_chat(monkeypatch):
@@ -53,21 +53,21 @@ def test_owner_telegram_numeric_uid_is_chat(monkeypatch):
 def test_owner_telegram_none_when_unresolvable(monkeypatch):
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
-    assert _owner_telegram(_Agent(), _Job("rob")) is None
+    assert _owner_telegram(_Agent(), _Job("alice")) is None
 
 
 def test_owner_alias_roundtrip_prod_config(monkeypatch):
-    """End-to-end (handoff seam 3): an owner aliased to tenant 'rob' at inbound must
+    """End-to-end (handoff seam 3): an owner aliased to tenant 'alice' at inbound must
     have its OUT-OF-BAND cron/goal/self-wake delivery resolve back to the owner's tg
     chat via the SAME core SSOT. Mirrors prod: explicit POLYROB_OWNER_TELEGRAM_ID.
     """
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
-    # No user_directory row maps 'rob' -> a tg chat (the alias skips resolve_internal,
+    # No user_directory row maps 'alice' -> a tg chat (the alias skips resolve_internal,
     # and the UNIQUE(tg_user_id) constraint forbids upserting one), so delivery MUST
     # fall through to the configured owner id.
-    assert _owner_telegram(_Agent(), _Job("rob")) == "100000001"
+    assert _owner_telegram(_Agent(), _Job("alice")) == "100000001"
 
 
 def test_owner_telegram_delegates_to_rail_resolver(monkeypatch):
@@ -77,4 +77,4 @@ def test_owner_telegram_delegates_to_rail_resolver(monkeypatch):
     import core.surfaces.user_delivery as ud
     monkeypatch.setattr(ud, "resolve_telegram_recipient",
                         lambda container, user_id: "424242")
-    assert _owner_telegram(_Agent(), _Job("rob")) == "424242"
+    assert _owner_telegram(_Agent(), _Job("alice")) == "424242"

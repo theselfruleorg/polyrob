@@ -129,6 +129,37 @@ _NEAR_MIN_CHARS = 80
 _NEAR_RATIO = 0.85
 
 
+def turn_marker(orchestrator):
+    """What the turn record holds now — taken BEFORE a run, so
+    :func:`spoke_since` can tell whether the run published anything. Every
+    publish stores a new list, so the identity changes on each reply."""
+    try:
+        return getattr(orchestrator, _TEXTS_ATTR, None)
+    except Exception:
+        return None
+
+
+def spoke_since(orchestrator, marker) -> bool:
+    """Did this orchestrator publish a reply after ``marker`` was taken?
+    Fail-open to False: the caller then tells the owner the turn ended."""
+    try:
+        current = getattr(orchestrator, _TEXTS_ATTR, None)
+        return bool(current) and current is not marker
+    except Exception:
+        return False
+
+
+def spoke_this_turn(orchestrator) -> bool:
+    """Has the CURRENT turn (since the drain reset) published a reply? A run
+    reads this from inside the turn. Fail-open to True: a probe fault never
+    costs an extra model call."""
+    try:
+        texts = getattr(orchestrator, _TEXTS_ATTR, None)
+        return isinstance(texts, list) and bool(texts)
+    except Exception:
+        return True
+
+
 def reset_turn(orchestrator) -> None:
     """Clear the record at a turn boundary."""
     if orchestrator is None:

@@ -22,7 +22,7 @@ what his own agent had done. Those two rules now consult
 rather than implied: an opaque credential that is EXACTLY 43-44 base58
 characters, or exactly 64 hex after ``0x``, is indistinguishable from a Solana
 pubkey / a transaction hash by shape alone and would survive the catch-all. The
-named-shape rules (PEM, Bearer, KV, ``sk-``, ``rob_``, AWS, JWT, opaque-token,
+named-shape rules (PEM, Bearer, KV, ``sk-``, self-service API key, AWS, JWT, opaque-token,
 Google, Slack, GitHub) all run FIRST and catch the credentials that actually
 exist; this gap was taken deliberately against losing every address the agent
 writes down.
@@ -161,7 +161,7 @@ def scrub_secrets(text: Optional[str]) -> str:
     """
     if not text:
         return ""
-    # Shared ordered battery (PEM → Bearer → KV → provider → rob → AWS → JWT) —
+    # Shared ordered battery (PEM → Bearer → KV → provider → API key → AWS → JWT) —
     # ONE home in core/secret_patterns.apply_ssot_shapes so the three scrubbers
     # can't drift. Display-only extras + catch-alls layer AFTER it (JWT before
     # hex/base64 so a three-segment token redacts as one unit).

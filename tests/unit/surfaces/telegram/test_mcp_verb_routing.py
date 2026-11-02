@@ -39,7 +39,7 @@ def test_the_bare_verb_lists_rather_than_erroring(monkeypatch):
 
     monkeypatch.setattr("core.mcp_admin.mcp_reply_async", _fake)
     from surfaces.telegram import owner_ops
-    assert asyncio.run(owner_ops.mcp_reply("rob", [])) == "listing"
+    assert asyncio.run(owner_ops.mcp_reply("alice", [])) == "listing"
     assert seen["args"] == []
 
 
@@ -52,6 +52,6 @@ def test_add_reaches_the_shared_helper(monkeypatch):
 
     monkeypatch.setattr("core.mcp_admin.mcp_reply_async", _fake)
     from surfaces.telegram import owner_ops
-    out = asyncio.run(owner_ops.mcp_reply("rob", ["add", "aave", "https://mcp.aave.com"]))
+    out = asyncio.run(owner_ops.mcp_reply("alice", ["add", "aave", "https://mcp.aave.com"]))
     assert out == "added"
-    assert seen["call"] == ("rob", ["add", "aave", "https://mcp.aave.com"])
+    assert seen["call"] == ("alice", ["add", "aave", "https://mcp.aave.com"])

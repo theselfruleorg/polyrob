@@ -16,7 +16,7 @@ from tools.coding.tool import (
 )
 
 
-def _tool(root, *, user_id="rob", session_id="s1"):
+def _tool(root, *, user_id="alice", session_id="s1"):
     t = object.__new__(CodingTool)
     t.logger = logging.getLogger("coding-artifacts")
     t._root_override = str(root)
@@ -32,11 +32,11 @@ async def test_create_file_records_an_artifact(tmp_path):
         CreateFileParams(file_path="report.md", content="# findings\n"))
     assert res.error is None
 
-    rows = get_artifact_ledger().list_for_session("rob", "s1")
+    rows = get_artifact_ledger().list_for_session("alice", "s1")
     assert len(rows) == 1
     assert rows[0].path.endswith("report.md")
     assert rows[0].kind == "report"
-    assert get_artifact_ledger().verify(rows[0].id, "rob") == "ok"
+    assert get_artifact_ledger().verify(rows[0].id, "alice") == "ok"
 
 
 @pytest.mark.asyncio
@@ -47,7 +47,7 @@ async def test_str_replace_records_the_edited_file(tmp_path):
         file_path="app.py", old_string="x = 1", new_string="x = 2"))
     assert res.error is None
 
-    rows = get_artifact_ledger().list_for_session("rob", "s1")
+    rows = get_artifact_ledger().list_for_session("alice", "s1")
     assert len(rows) == 1
     assert rows[0].path.endswith("app.py")
     assert rows[0].kind == "code"
@@ -59,7 +59,7 @@ async def test_no_user_id_records_nothing(tmp_path):
     res = await _tool(tmp_path, user_id=None).create_file(
         CreateFileParams(file_path="x.md", content="y"))
     assert res.error is None
-    assert get_artifact_ledger().list_for_session("rob", "s1") == []
+    assert get_artifact_ledger().list_for_session("alice", "s1") == []
 
 
 # --------------------------------------------------------------------------- #
@@ -74,7 +74,7 @@ async def test_create_file_stamps_artifact_id_on_the_result(tmp_path):
         CreateFileParams(file_path="report.md", content="# findings\n"))
     assert res.error is None
 
-    row = get_artifact_ledger().list_for_session("rob", "s1")[0]
+    row = get_artifact_ledger().list_for_session("alice", "s1")[0]
     assert res.metadata == {"artifact_id": row.id}
 
 
@@ -86,7 +86,7 @@ async def test_str_replace_stamps_artifact_id_on_the_result(tmp_path):
         file_path="app.py", old_string="x = 1", new_string="x = 2"))
     assert res.error is None
 
-    row = get_artifact_ledger().list_for_session("rob", "s1")[0]
+    row = get_artifact_ledger().list_for_session("alice", "s1")[0]
     assert res.metadata == {"artifact_id": row.id}
 
 
@@ -102,7 +102,7 @@ async def test_apply_patch_stamps_artifact_id_on_the_result(tmp_path):
     res = await t.apply_patch(ApplyPatchParams(file_path="app.py", patch=patch))
     assert res.error is None
 
-    row = get_artifact_ledger().list_for_session("rob", "s1")[0]
+    row = get_artifact_ledger().list_for_session("alice", "s1")[0]
     assert res.metadata == {"artifact_id": row.id}
 
 

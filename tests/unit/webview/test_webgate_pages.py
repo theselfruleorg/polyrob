@@ -111,7 +111,7 @@ def test_goals_endpoint_calls_goalboard_list_recent(monkeypatch):
 
         def list_recent(self, *, user_id=None, statuses=None, limit=30):
             listed["user_id"] = user_id
-            return [Goal(id="g1", user_id=user_id or "rob", title="ship it", status="ready")]
+            return [Goal(id="g1", user_id=user_id or "alice", title="ship it", status="ready")]
 
         def status_counts(self, *, user_id=None):
             listed["counts_user_id"] = user_id
@@ -163,7 +163,7 @@ def test_cron_endpoint_calls_cronservice_list(monkeypatch):
         def list_jobs(self, user_id=None):
             seen["user_id"] = user_id
             return [CronJob(id="c1", task="ping", schedule_spec="30m",
-                            user_id=user_id or "rob", next_run_at=None)]
+                            user_id=user_id or "alice", next_run_at=None)]
 
     monkeypatch.setattr(pages, "CronJobStore", lambda path: ("store", path))
     monkeypatch.setattr(pages, "CronService", lambda store: FakeService())
@@ -186,7 +186,7 @@ def test_cron_endpoint_disabled_flag_still_lists_the_jobs(monkeypatch):
     class FakeService:
         def list_jobs(self, user_id=None):
             return [CronJob(id="c1", task="Console digest", schedule_spec="every day 08:00",
-                            user_id=user_id or "rob", next_run_at=None)]
+                            user_id=user_id or "alice", next_run_at=None)]
 
     monkeypatch.setattr(pages, "CronJobStore", lambda path: ("store", path))
     monkeypatch.setattr(pages, "CronService", lambda store: FakeService())
@@ -269,13 +269,13 @@ def test_identity_endpoint_reuses_core_instance(monkeypatch):
     client, pages = _router_client()
     monkeypatch.setattr(pages, "load_self_context", lambda home: "SOUL TEXT")
     monkeypatch.setattr(pages, "load_self_doc", lambda home, uid, iid: "SELF TEXT")
-    monkeypatch.setattr(pages, "resolve_instance_id", lambda: "rob")
+    monkeypatch.setattr(pages, "resolve_instance_id", lambda: "alice")
     r = client.get("/api/webgate/identity")
     assert r.status_code == 200
     body = r.json()
     assert body["soul"] == "SOUL TEXT"
     assert body["self"] == "SELF TEXT"
-    assert body["instance_id"] == "rob"
+    assert body["instance_id"] == "alice"
     assert body["owner"]
 
 

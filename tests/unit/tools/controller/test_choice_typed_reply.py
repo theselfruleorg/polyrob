@@ -16,12 +16,12 @@ from tests.unit.tools.controller.test_card_actions import _actions, _ctx, _owner
 
 
 def _choice(sid="s-owner"):
-    return cards.choice_card("rob", "Which round?", ["Judge", "Drop"], session_id=sid, ttl=300)
+    return cards.choice_card("alice", "Which round?", ["Judge", "Drop"], session_id=sid, ttl=300)
 
 
 def test_closes_the_open_choice_in_that_session_without_a_pick():
     c = _choice()
-    closed = cards.close_choices_for_text("rob", "s-owner", "Judge")
+    closed = cards.close_choices_for_text("alice", "s-owner", "Judge")
     assert [x.card_id for x in closed] == [c.card_id]
     got = cards.store().get(c.card_id)
     assert got.state == cards.S_CANCELLED and got.answer is None
@@ -30,14 +30,14 @@ def test_closes_the_open_choice_in_that_session_without_a_pick():
 
 def test_leaves_other_sessions_and_users_alone():
     c = _choice("s-other")
-    assert cards.close_choices_for_text("rob", "s-owner", "x") == []
+    assert cards.close_choices_for_text("alice", "s-owner", "x") == []
     assert cards.close_choices_for_text("someone", "s-other", "x") == []
     assert cards.store().get(c.card_id).state == cards.S_OPEN
 
 
 def test_no_session_closes_nothing():
     _choice()
-    assert cards.close_choices_for_text("rob", "", "x") == []
+    assert cards.close_choices_for_text("alice", "", "x") == []
 
 
 def test_present_choice_returns_promptly_on_a_typed_reply(_owner):  # noqa: F811
@@ -46,8 +46,8 @@ def test_present_choice_returns_promptly_on_a_typed_reply(_owner):  # noqa: F811
 
     def _type_soon():
         for _ in range(100):
-            if cards.store().open_cards("rob"):
-                cards.close_choices_for_text("rob", "s-owner", "Judge")
+            if cards.store().open_cards("alice"):
+                cards.close_choices_for_text("alice", "s-owner", "Judge")
                 return
             time.sleep(0.05)
 
@@ -64,4 +64,4 @@ def test_an_unreadable_store_never_raises(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("db locked")
     monkeypatch.setattr(cards.store(), "open_cards", _boom)
-    assert cards.close_choices_for_text("rob", "s-owner", "x") == []
+    assert cards.close_choices_for_text("alice", "s-owner", "x") == []

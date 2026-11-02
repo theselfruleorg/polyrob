@@ -25,9 +25,9 @@ def test_build_keeps_sizes_and_drops_unmeasured():
 
 
 def test_emits_once_per_session(log):
-    assert PM.emit_prompt_manifest(session_id="s1", user_id="rob", regime="cron",
+    assert PM.emit_prompt_manifest(session_id="s1", user_id="alice", regime="cron",
                                    slots={"foundation": 10}, previous_runs_chars=7)
-    assert not PM.emit_prompt_manifest(session_id="s1", user_id="rob")
+    assert not PM.emit_prompt_manifest(session_id="s1", user_id="alice")
     assert PM.emit_prompt_manifest(session_id="s1", phase="compaction")
     rows = log.query(kind="prompt_manifest")
     assert len(rows) == 2
@@ -42,7 +42,7 @@ def test_agent_first_step_emits_the_manifest(log):
     cls = [v for v in vars(logging_io).values()
            if isinstance(v, type) and hasattr(v, "_emit_prompt_manifest")][0]
     agent = types.SimpleNamespace(
-        session_id="s9", user_id="rob", llm=types.SimpleNamespace(model_name="m1"),
+        session_id="s9", user_id="alice", llm=types.SimpleNamespace(model_name="m1"),
         controller=types.SimpleNamespace(_activated_skills={"exits", "x#ack"}),
         task="<previous-runs>\nrun 1: SKIPPED\n</previous-runs>\nwatch it",
         logger=types.SimpleNamespace(debug=lambda *a, **k: None))
@@ -73,7 +73,7 @@ def _mm_stub(**over):
 def _agent(n_steps, mm):
     import types
     return types.SimpleNamespace(
-        session_id="s10", user_id="rob", llm=types.SimpleNamespace(model_name="m1"),
+        session_id="s10", user_id="alice", llm=types.SimpleNamespace(model_name="m1"),
         controller=None, task="hi", state=types.SimpleNamespace(n_steps=n_steps),
         message_manager=mm, logger=types.SimpleNamespace(debug=lambda *a, **k: None))
 

@@ -36,6 +36,23 @@ def install_session_gates(controller, *, correspondent_hook, room_hook) -> None:
         return
     controller.register_pre_tool_call_hook(correspondent_hook, fail_mode="closed")
     controller.register_pre_tool_call_hook(room_hook, fail_mode="closed")
+    # 095 W2: the seat probe the status resolver reads (core stores, tools reads):
+    # a hook that carries ``seat_denies(tool_id) -> seat | None`` says which
+    # tools this seat refuses on every call.
+    probes = [p for p in (getattr(room_hook, "seat_denies", None),
+                          getattr(correspondent_hook, "seat_denies", None)) if callable(p)]
+
+    def _seat_denies(tool_id):
+        for probe in probes:
+            seat = probe(tool_id)
+            if seat:
+                return seat
+        return None
+
+    try:
+        controller._seat_denies = _seat_denies
+    except Exception:  # a frozen fake: no probe, the resolver works without it
+        pass
 
 
 __all__ = ["ORDER", "SEAT_STAGES", "install_session_gates"]

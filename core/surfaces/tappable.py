@@ -25,7 +25,8 @@ from typing import Optional, Tuple
 #: The verbs that carry a folded argument. Each must also be a real chat verb
 #: (``core.surfaces.dispatcher._COMMANDS``) — the token is that verb plus an
 #: argument, never a verb of its own.
-TAPPABLE_VERBS: Tuple[str, ...] = ("/approve", "/reject")
+TAPPABLE_VERBS: Tuple[str, ...] = ("/approve", "/reject", "/pending")
+#: ``/pending_p_<hex>`` opens ONE item's full review — a read, never a decision.
 
 #: Accepted argument shapes, all separator-free.
 #: ``tap_<hex>``  a queued tool/spend approval (``tap-<ask id>``)

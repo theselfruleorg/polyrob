@@ -28,8 +28,8 @@ def test_instance_id_profile_tier():
 
 
 def test_explicit_instance_id_beats_profile():
-    env = {"POLYROB_PROFILE": "scout", "POLYROB_INSTANCE_ID": "rob"}
-    assert resolve_instance_id(env=env) == "rob"
+    env = {"POLYROB_PROFILE": "scout", "POLYROB_INSTANCE_ID": "alice"}
+    assert resolve_instance_id(env=env) == "alice"
 
 
 def test_unsafe_profile_name_never_becomes_instance_id():

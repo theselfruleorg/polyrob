@@ -8,11 +8,11 @@ def test_journey_cli_invokes_renderer(monkeypatch):
     import cli.ui.commands.h_journey as hj
     monkeypatch.setattr(hj, "render_journey",
                         lambda **kw: f"TL[{kw['user_id']}|{kw['since_label']}]")
-    monkeypatch.setattr("cli.commands.journey.resolve_identity", lambda: "rob",
+    monkeypatch.setattr("cli.commands.journey.resolve_identity", lambda: "alice",
                         raising=False)
-    r = CliRunner().invoke(journey, ["--since", "24h", "--user", "rob"])
+    r = CliRunner().invoke(journey, ["--since", "24h", "--user", "alice"])
     assert r.exit_code == 0
-    assert "TL[rob|24h]" in r.output
+    assert "TL[alice|24h]" in r.output
 
 
 def test_journey_cli_default_since(monkeypatch):
@@ -20,7 +20,7 @@ def test_journey_cli_default_since(monkeypatch):
     import cli.ui.commands.h_journey as hj
     monkeypatch.setattr(hj, "render_journey",
                         lambda **kw: captured.update(kw) or "ok")
-    monkeypatch.setattr("cli.commands.journey.resolve_identity", lambda: "rob",
+    monkeypatch.setattr("cli.commands.journey.resolve_identity", lambda: "alice",
                         raising=False)
     r = CliRunner().invoke(journey, [])
     assert r.exit_code == 0

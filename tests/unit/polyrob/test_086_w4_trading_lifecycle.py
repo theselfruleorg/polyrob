@@ -17,6 +17,7 @@ from cron.jobs import CronJobStore
 from cron.service import CronService
 from polyrob.app import trading_jobs as tj
 from polyrob.app import trading_lifecycle as tl
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 U = "owner-1"
 TOK = "0x" + "ab" * 20
@@ -58,7 +59,7 @@ class World:
         kw.setdefault("budget_usd", 150.0)
         kw.setdefault("chains", ["solana", "base"])
         kw.setdefault("now", time.time() - 3600)
-        return tm.create(U, actor=tm.OWNER_SEAT, path=self.mp, **kw)
+        return tm.create(U, actor=tm.OWNER_SEAT, path=self.mp, **kw, preset="longtail")
 
     def hold(self, address=TOK, chain="base", qty=10.0, cost=3.0):
         self.rows.append({"chain": chain, "account": "", "address": address, "qty": qty,
@@ -317,17 +318,17 @@ def test_live_mandates_lists_every_non_stopped_mandate(w):
     assert tm.live_mandates(path=w.mp) == []         # absent store: none, not created
     m = w.mandate()
     other = tm.create("owner-2", actor=tm.OWNER_SEAT, budget_usd=10, chains=["base"],
-                      path=w.mp)
+                      path=w.mp, preset="longtail")
     assert {x.id for x in tm.live_mandates(path=w.mp)} == {m.id, other.id}
     tm.set_status(other.id, tm.STOPPED, actor=tm.OWNER_SEAT, path=w.mp)
     assert [x.id for x in tm.live_mandates(path=w.mp)] == [m.id]
 
 
 def test_draft_validates_like_create_and_writes_nothing(w):
-    d = tm.draft(U, budget_usd=150, chains=["Solana"], preset="memecoin")
+    d = tm.draft(U, budget_usd=150, chains=["Solana"], preset="longtail")
     assert d.actor == "" and d.chains == ("solana",) and d.ticket_usd == 3.0
     with pytest.raises(tm.MandateError):
-        tm.draft(U, budget_usd=0, chains=["base"])
+        tm.draft(U, budget_usd=0, chains=["base"], preset="longtail")
     assert tm.live_mandates(path=w.mp) == []
 
 

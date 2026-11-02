@@ -22,9 +22,9 @@ def test_agent_without_memory_manager_keeps_the_persona_block(monkeypatch):
     a._is_sub_agent = False
     a.orchestrator = types.SimpleNamespace(container=_Container(), session_id="s1",
                                            user_id="u1")
-    cfg = AgentConfig(task="t", persona_block="I am Rob.")
+    cfg = AgentConfig(task="t", persona_block="I am Nova.")
     p = types.SimpleNamespace(config=cfg)
     a._init_task_memory(p)
     assert a._created_task_context_manager is True   # the fallback path ran
     assert p.config is cfg
-    assert getattr(p.config, "persona_block", None) == "I am Rob."
+    assert getattr(p.config, "persona_block", None) == "I am Nova."

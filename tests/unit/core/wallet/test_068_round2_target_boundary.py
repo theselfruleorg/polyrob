@@ -29,7 +29,7 @@ TRANSFER = buy_target._TOPIC_TRANSFER
 
 
 def _ctx(chain="base", address=USDC):
-    return SimpleNamespace(role="orchestrator", is_sub_agent=False, user_id="rob",
+    return SimpleNamespace(role="orchestrator", is_sub_agent=False, user_id="alice",
                            metadata={buy_target.METADATA_KEY: {"chain": chain,
                                                                "address": address}})
 
@@ -175,7 +175,7 @@ def test_open_positions_behind_an_unsearchable_parent_raises_when_strict(tmp_pat
     os.chmod(parent, 0o600)
     try:
         with pytest.raises(OSError):
-            open_positions.entries_for("rob", db_path=str(path), strict=True)
-        assert open_positions.entries_for("rob", db_path=str(path)) == {}
+            open_positions.entries_for("alice", db_path=str(path), strict=True)
+        assert open_positions.entries_for("alice", db_path=str(path)) == {}
     finally:
         os.chmod(parent, 0o700)

@@ -27,7 +27,7 @@ def test_every_spec_is_well_formed():
         assert spec.sensitivity in ("safe", "guarded")
         assert spec.merge in ("override", "min", "union", "narrow_list", "and",
                               "stricter_provider", "stricter_policy")
-        assert spec.applies in ("live", "next-turn", "next-session", "restart")
+        assert spec.applies in ("live", "next-step", "next-turn", "next-session", "restart")
         if spec.type == "enum":
             assert spec.enum_values
 
@@ -146,8 +146,8 @@ def test_validate_pref_covers_the_chat_namespace():
     assert ok and val == "active" and err == ""
     ok, _, err = validate_pref("chat.mode", "loud")
     assert not ok and "mention" in err
-    ok, val, _ = validate_pref("chat.wake_words", "rob, hey bot")
-    assert ok and val == ["rob", "hey bot"]
+    ok, val, _ = validate_pref("chat.wake_words", "alice, hey bot")
+    assert ok and val == ["alice", "hey bot"]
     ok, _, err = validate_pref("chat.context_lines", 500)
     assert not ok and "at most" in err
     ok, _, err = validate_pref("chat.language", "en;rm -rf")

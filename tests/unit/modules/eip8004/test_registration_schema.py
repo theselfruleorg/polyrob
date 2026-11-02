@@ -7,7 +7,7 @@ publicly-served `/eip8004/registration.json` lie:
   ERC-8004 draft renamed to `services`, and carried neither `x402Support` nor
   `active`. A consumer reading the spec finds none of the fields it expects.
 - **A 404 image (I5).** `image` was hardcoded to
-  `{base_url}/static/images/rob-logo.png` — a file that does not exist ANYWHERE
+  `{base_url}/static/images/<name>-logo.png` — a file that does not exist ANYWHERE
   in this tree. Every registration file ever served pointed at nothing.
 - **Someone else's identity (I6).** `name="POLYROB"` and a fixed description
   were literals in framework code, so every instance advertised the framework's
@@ -32,14 +32,14 @@ def _clean(monkeypatch, tmp_path):
               "EIP8004_IDENTITY_REGISTRY", "X402_ENABLED", "MCP_ENABLED"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "demo")
     return tmp_path
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 8
 
 
-def _write_pfp(home, instance="rob", source="nft:base:0xabc:7"):
+def _write_pfp(home, instance="demo", source="nft:base:0xabc:7"):
     from core.avatar import set_avatar
     return set_avatar(home, instance, PNG, source=source)
 
@@ -103,11 +103,11 @@ def test_the_image_is_this_instances_avatar_when_it_can_be_served(_clean):
     assert reg.image == "https://example.test/avatar.png"
 
 
-def test_the_image_is_never_the_missing_rob_logo():
+def test_the_image_is_never_the_missing_logo():
     """That path does not exist anywhere in the tree — it was a guaranteed 404
     in every registration file this project has ever served."""
     reg = build_registration_file("https://example.test")
-    assert "rob-logo" not in (reg.image or "")
+    assert "-logo.png" not in (reg.image or "")
 
 
 def test_an_unset_slot_publishes_the_default_mark(_clean):

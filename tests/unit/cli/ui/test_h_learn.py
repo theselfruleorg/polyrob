@@ -42,7 +42,9 @@ def test_learn_creates_pending_skill(monkeypatch):
     ctx, emitted = _ctx(["When", "deploying", "always", "run", "tests"], sm)
     h_learn.h_learn(ctx)
     assert sm.created["sid"]
-    assert sm.created["created_by"] == "agent"
+    # 095 W12b: the owner taught it — owner provenance, so the curator never
+    # auto-archives it.
+    assert sm.created["created_by"] == "user"
     assert sm.created["pending"] is True  # quarantine FORCED, not flag-dependent
     assert "deploy" in sm.created["content"].lower()
     assert "pending" in emitted["text"].lower()
@@ -85,3 +87,12 @@ def test_distill_produces_valid_structure():
     assert sid and sid[0].isalpha()
     assert content.startswith("# ")
     assert "## When to use" in content and "## Procedure" in content
+
+
+def test_owner_authored_learn_draft_still_quarantined():
+    """095 W12b: owner provenance must not skip the pending gate /learn forces,
+    even over an active skill of the same id."""
+    from modules.skills.writer import PROVENANCE_USER, SkillWriterMixin
+    resolve = SkillWriterMixin._resolve_pending
+    assert resolve(None, PROVENANCE_USER, True) is True
+    assert resolve(None, PROVENANCE_USER, True, overwriting_active=True) is True

@@ -46,6 +46,9 @@ class MatchedSkill:
     #: 081 WS-4.3: the frontmatter ``metadata.polyrob-when`` line (<= 60 chars) the
     #: index shows; "" when the skill has none (the description is the fallback).
     when: str = ""
+    #: 095 W12 (IN-3): a tenant-authored skill (the agent's, the owner's). The
+    #: index never cuts it and never renders it as a name only.
+    authored: bool = False
 
     def __getitem__(self, key: str):
         """Dict-style access (``m["id"]``) alongside normal attribute access, so
@@ -278,6 +281,19 @@ class SkillManager(SkillWriterMixin):
                 present.add(req)
         return result + extra
 
+    def prerequisites_of(self, skill_id: str, *, user_id: Optional[str],
+                         tool_ids=None) -> List["MatchedSkill"]:
+        """The ``polyrob-requires`` skills of ONE skill, by the pin rule
+        (:meth:`_with_prerequisites`): 095 W10 (IN-8) — ``load_skill`` honours
+        them the way a pin does. ``[]`` for an unknown id."""
+        all_rules = self._effective_rules(user_id)
+        rule = all_rules.get(skill_id)
+        if not isinstance(rule, dict):
+            return []
+        head = self._entry(skill_id, rule, "", user_id, reason="load_skill",
+                           trigger_type="on_demand")
+        return self._with_prerequisites([head], all_rules, list(tool_ids or []), user_id)[1:]
+
     def _effective_rules(self, user_id: Optional[str]) -> dict:
         """The system rules with the tenant's rules merged over them."""
         self._ensure_rules_loaded()
@@ -324,11 +340,15 @@ class SkillManager(SkillWriterMixin):
         result: List[MatchedSkill] = []
         for sid in dict.fromkeys(seeded_skill_ids):
             rule = all_rules.get(sid)
-            if not rule:
-                continue  # unknown id → skip (fail-open)
             content = self._load_skill_content(sid, user_id=user_id)
             if not content:
-                continue  # no SKILL.md → skip (fail-open)
+                continue  # unknown id / no SKILL.md → skip (fail-open)
+            if not rule:
+                # A pin is explicit intent: a skill that resolves (a user-scope copy
+                # with no rules.json row, e.g. a builtin preserved by 095 B0) serves
+                # from its own frontmatter — the same existence test the lane check
+                # (core.cron_lanes.missing_pinned_skills) uses.
+                rule = self._rule_from_content(content)
             result.append(self._entry(sid, rule, content, user_id, reason="seeded:preset",
                                       trigger_type="seeded", priority=rule.get("priority", 99)))
         result = self._with_prerequisites(result, all_rules, tool_ids or [], user_id)
@@ -336,15 +356,46 @@ class SkillManager(SkillWriterMixin):
             logger.info(f"Pinned {len(result)} skills for session: {[m.skill_id for m in result]}")
         return result
 
+    @staticmethod
+    def _rule_from_content(content: str) -> dict:
+        meta, _ = parse_frontmatter(content)
+        meta = meta if isinstance(meta, dict) else {}
+        return catalog.rule_from_frontmatter(meta) or {
+            "triggers": {}, "priority": 5, "auto_activate": True,
+            "description": str(meta.get("description") or "")}
+
     #: D8: catalog rank of an external (ecosystem) skill — after builtin (1-5)
     #: and agent-authored (6) skills.
     EXTERNAL_SKILL_PRIORITY = 9
 
+    def _authored_ids(self, user_id: Optional[str]) -> Set[str]:
+        """The tenant's own skill ids (its rules that are not a system or pack id)."""
+        if not user_id:
+            return set()
+        self._ensure_rules_loaded()
+        user_rules, _ = self._load_user_rules(user_id)
+        if not isinstance(user_rules, dict):
+            return set()
+        return {sid for sid in user_rules if sid not in self.skill_rules}
+
+    def catalog_cap(self, user_id: Optional[str] = None) -> int:
+        """095 W12 (IN-3): the session index cap, DERIVED — every library skill
+        (builtin + pack) plus every skill the tenant authored. A hand-kept number
+        ("50 is above the 48-skill library") went stale each time a skill landed.
+        Ecosystem skills share the room the gates leave."""
+        self._ensure_rules_loaded()
+        library = set(self.skill_rules)
+        library.update(sid for sid, ds in self._load_external_skills().items()
+                       if str(getattr(ds, "scope", "")).startswith("pack:"))
+        return len(library | self._authored_ids(user_id))
+
     def get_catalog_skills(
         self,
         user_id: Optional[str] = None,
-        max_skills: int = 20,
+        max_skills: Optional[int] = 20,
         tool_ids: Optional[List[str]] = None,
+        third_party: bool = False,
+        absent=(),
     ) -> List["MatchedSkill"]:
         """Return auto-activatable skills as catalog entries (S-1, true progressive disclosure).
 
@@ -360,11 +411,15 @@ class SkillManager(SkillWriterMixin):
         it (see :meth:`may_load_skill`), so the gate is real, not advisory.
 
         067 P0.1: in a SESSION context (*tool_ids* given) an auto-activatable money
-        playbook (e.g. ``treasury-trading``) passes the money-tool gate
+        playbook (e.g. ``trade-execution``) passes the money-tool gate
         (:meth:`_money_tool_gate_ok`). ``tool_ids=None`` is a listing
         view (console, export, ``/skills``), not a session, and lists it.
+
+        095 W12 (IN-3): ``max_skills=None`` is the derived :meth:`catalog_cap`. A
+        tenant-authored skill is never cut by the cap.
         """
         all_rules = self._effective_rules(user_id)
+        authored = self._authored_ids(user_id)
 
         entries = []
         # 067 P4: ids a gate below withheld. A pack skill (e.g. the markets pack's
@@ -373,14 +428,17 @@ class SkillManager(SkillWriterMixin):
         withheld = set()
         for skill_id, rules in all_rules.items():
             # P1-1 gated + 067 P0.1 money gate: the ONE predicate load_skill uses.
-            if not catalog.gate_allows(rules, tool_ids, listing=True):
+            if not catalog.gate_allows(rules, tool_ids, listing=True, third_party=third_party,
+                                       skill_id=skill_id, absent=absent):
                 withheld.add(skill_id)
                 continue
             content = self._load_skill_content(skill_id, user_id=user_id)
             if not content:
                 continue
-            entries.append(self._entry(skill_id, rules, content, user_id,
-                                       reason="catalog", trigger_type="catalog"))
+            entry = self._entry(skill_id, rules, content, user_id,
+                                reason="catalog", trigger_type="catalog")
+            entry.authored = skill_id in authored
+            entries.append(entry)
 
         # Task 14: append externally-discovered (agentskills.io ecosystem) skills that
         # aren't already covered by a builtin/user rule of the same id.
@@ -420,7 +478,11 @@ class SkillManager(SkillWriterMixin):
             existing_ids.add(ext_id)
 
         entries.sort(key=lambda m: (m.priority, m.skill_id))
-        return entries[:max_skills]
+        cap = self.catalog_cap(user_id) if max_skills is None else int(max_skills)
+        kept = entries[:cap]
+        # IN-3: the cap never cuts what the tenant wrote.
+        kept += [m for m in entries[cap:] if m.authored]
+        return kept
 
     @staticmethod
     def _external_content_suspicious(skill_id: str, description: str, body: str,
@@ -539,12 +601,21 @@ class SkillManager(SkillWriterMixin):
 
     def may_load_skill(
         self, skill_id: str, tool_ids: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
+        user_id: Optional[str] = None, third_party: bool = False, absent=(),
     ) -> bool:
         """Gate for on-demand loading (P1-1, 067 P0.1): the same predicate the
         session catalog applies (``core.skills.catalog.gate_allows``), so listing
         and loading agree. An unknown id is loadable; other guards apply."""
-        return catalog.gate_allows(self.get_skill_rule(skill_id, user_id=user_id), tool_ids)
+        return catalog.gate_allows(self.get_skill_rule(skill_id, user_id=user_id), tool_ids,
+                                   third_party=third_party, skill_id=skill_id, absent=absent)
+
+    def declared_tool_ids(self, user_id: Optional[str] = None) -> Set[str]:
+        """095 W4: every tool id a skill rule declares (``triggers.tool_ids``) —
+        the ids whose availability decides the index (``gate_allows(absent=)``)."""
+        out: Set[str] = set()
+        for rules in self._effective_rules(user_id).values():
+            out.update((rules.get("triggers") or {}).get("tool_ids") or [])
+        return out
 
     def _load_skill_content(self, skill_id: str, user_id: Optional[str] = None) -> str:
         """The skill's body, frontmatter stripped, by the ONE precedence order
@@ -679,7 +750,32 @@ class SkillManager(SkillWriterMixin):
         if not matched_skills:
             return ""
         load_first = set(load_first or ())
+        ordered = ([s for s in matched_skills if s.skill_id in load_first]
+                   + [s for s in matched_skills if s.skill_id not in load_first])
+        names_only: List[MatchedSkill] = []
+        text = self._render_catalog(ordered, load_first, names_only)
+        # 095 W12 (IN-3): over budget, the lowest-priority shipped groups lose their
+        # line first (names only). A tenant-authored or LOAD FIRST entry keeps its line.
+        bands = sorted({s.priority for s in ordered
+                        if not getattr(s, "authored", False) and s.skill_id not in load_first},
+                       reverse=True)
+        for band in bands:
+            if len(text) <= self.INDEX_BUDGET_CHARS:
+                break
+            names_only += [s for s in ordered if s.priority == band
+                           and not getattr(s, "authored", False)
+                           and s.skill_id not in load_first]
+            text = self._render_catalog(ordered, load_first, names_only)
+        return text
 
+    #: 095 W12 (IN-3): the rendered skill index budget (~1.5k tokens). Above it,
+    #: the lowest-priority shipped groups render as names only.
+    INDEX_BUDGET_CHARS = 6000
+
+    @staticmethod
+    def _render_catalog(ordered: List[MatchedSkill], load_first: Set[str],
+                        names_only: List[MatchedSkill]) -> str:
+        short = {s.skill_id for s in names_only}
         lines = [
             "<skill-catalog>",
             'Before you act, call load_skill(skill_id="<id>") for the skill whose line fits the task.',
@@ -688,10 +784,12 @@ class SkillManager(SkillWriterMixin):
             lines.append("Entries marked LOAD FIRST are pinned to this run: load each one "
                          "before you act.")
         lines.append("")
-        ordered = ([s for s in matched_skills if s.skill_id in load_first]
-                   + [s for s in matched_skills if s.skill_id not in load_first])
         for skill in ordered:
-            lines.append(catalog_line(skill, load_first=skill.skill_id in load_first))
+            if skill.skill_id not in short:
+                lines.append(catalog_line(skill, load_first=skill.skill_id in load_first))
+        if short:
+            lines.append("- also loadable by id: "
+                         + ", ".join(s.skill_id for s in ordered if s.skill_id in short))
         lines.append("</skill-catalog>")
         return "\n".join(lines)
 

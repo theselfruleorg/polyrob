@@ -209,7 +209,7 @@ def _terms():
 def test_a_plain_launch_carries_EXACTLY_the_launch_fee():
     """`if (msg.value != launchFee) revert LaunchFeeNotPaid()` — exact equality,
     not a minimum."""
-    built = pons.build_launch(terms=_terms(), name="Rob", symbol="ROB",
+    built = pons.build_launch(terms=_terms(), name="Nova", symbol="DEMO",
                               creator=HOLDER)
     assert built["to"] == P.FACTORY
     assert built["value_wei"] == 500_000_000_000_000
@@ -219,7 +219,7 @@ def test_a_plain_launch_carries_EXACTLY_the_launch_fee():
 
 def test_launch_and_buy_carries_the_fee_PLUS_the_buy_on_a_native_pair():
     built = pons.build_launch_and_buy(
-        terms=_terms(), name="Rob", symbol="ROB", creator=HOLDER,
+        terms=_terms(), name="Nova", symbol="DEMO", creator=HOLDER,
         recipient=HOLDER, quote_in=10 ** 17, min_tokens_out=1)
     assert built["to"] == P.ROUTER
     assert built["value_wei"] == 500_000_000_000_000 + 10 ** 17
@@ -228,7 +228,7 @@ def test_launch_and_buy_carries_the_fee_PLUS_the_buy_on_a_native_pair():
 
 def test_an_erc20_pair_carries_only_the_fee_and_says_it_needs_an_approval():
     built = pons.build_launch_and_buy(
-        terms=_terms(), name="Rob", symbol="ROB", creator=HOLDER,
+        terms=_terms(), name="Nova", symbol="DEMO", creator=HOLDER,
         recipient=HOLDER, quote_in=10 ** 6, min_tokens_out=1,
         pair_token="0x5FC5360d0400a0fd4F2Af552aDD042d716f1d168")
     assert built["value_wei"] == 500_000_000_000_000
@@ -240,7 +240,7 @@ def test_a_third_party_recipient_is_AUTO_EXEMPTED_from_the_snipe_tax():
     un-exempted opening buy pays the 99% opening rate."""
     other = "0x1111111111111111111111111111111111111111"
     built = pons.build_launch_and_buy(
-        terms=_terms(), name="Rob", symbol="ROB", creator=HOLDER,
+        terms=_terms(), name="Nova", symbol="DEMO", creator=HOLDER,
         recipient=other, quote_in=10 ** 17, min_tokens_out=1)
     args = abi.decode(P.LAUNCH_AND_BUY["inputs"], "0x" + built["calldata"][10:])
     assert [a.lower() for a in args[6]] == [other.lower()]
@@ -248,7 +248,7 @@ def test_a_third_party_recipient_is_AUTO_EXEMPTED_from_the_snipe_tax():
 
 def test_the_creator_is_not_double_exempted():
     built = pons.build_launch_and_buy(
-        terms=_terms(), name="Rob", symbol="ROB", creator=HOLDER,
+        terms=_terms(), name="Nova", symbol="DEMO", creator=HOLDER,
         recipient=HOLDER, quote_in=10 ** 17, min_tokens_out=1)
     args = abi.decode(P.LAUNCH_AND_BUY["inputs"], "0x" + built["calldata"][10:])
     assert args[6] == []
@@ -257,7 +257,7 @@ def test_the_creator_is_not_double_exempted():
 def test_the_economics_commitment_is_CARRIED_not_waived():
     """bytes32(0) waives the check — i.e. accepts whatever the terms became
     between the quote and the broadcast. We always commit."""
-    built = pons.build_launch(terms=_terms(), name="Rob", symbol="ROB",
+    built = pons.build_launch(terms=_terms(), name="Nova", symbol="DEMO",
                               creator=HOLDER)
     args = abi.decode(P.LAUNCH_TOKEN["inputs"], "0x" + built["calldata"][10:])
     assert args[0][8] == "0x" + "a9" * 32

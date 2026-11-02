@@ -308,6 +308,18 @@ class BaseTool(BaseComponent):
         """Check if service is enabled."""
         return self._enabled
 
+    def availability_gap(self):
+        """``(reason, remedy)`` when this constructed tool refuses every call, so
+        the catalog says ``gated:<reason>`` instead of ``[loaded]`` (095 W2; the
+        resolver reads it, ``tools/tool_disclosure.py::_instance_gap``). A tool
+        that did not start is ``tool-off``; a wallet tool on an instance with no
+        wallet is ``wallet-off`` (``_wallet_gap``, ``tools/wallet_holder.py``)."""
+        from core.tool_gates import remedy_text
+        if not self._enabled:
+            return ("tool-off", remedy_text("tool-off"))
+        probe = getattr(self, "_wallet_gap", None)
+        return probe() if callable(probe) else None
+
     def _off_text(self) -> str:
         """The refusal when this tool did not start (``enabled`` is False)."""
         return (f"the {self.name} tool is off: it did not start on this instance (a "

@@ -117,11 +117,11 @@ def test_setting_a_bare_unit_price_binds_the_rooms_current_asset(tmp_path):
             return None
 
     home = str(tmp_path)
-    ok, _ = chat_policy.set(home, "rob", "telegram", "-100", "chat.paid_asset", "tkn")
+    ok, _ = chat_policy.set(home, "alice", "telegram", "-100", "chat.paid_asset", "tkn")
     assert ok
-    out = set_key(_C(), "rob", "telegram", "-100", "paid_ban_units", "75000")
+    out = set_key(_C(), "alice", "telegram", "-100", "paid_ban_units", "75000")
     assert "❌" not in out, out
-    stored = chat_policy.load(home, "rob", "telegram", "-100").paid_ban_units
+    stored = chat_policy.load(home, "alice", "telegram", "-100").paid_ban_units
     assert stored == "75000 tkn", stored
 
 
@@ -136,6 +136,6 @@ def test_an_explicit_asset_is_respected_on_write(tmp_path):
             return None
 
     home = str(tmp_path)
-    chat_policy.set(home, "rob", "telegram", "-100", "chat.paid_asset", "tkn")
-    set_key(_C(), "rob", "telegram", "-100", "paid_ban_units", "75000 usdc-base")
-    assert chat_policy.load(home, "rob", "telegram", "-100").paid_ban_units == "75000 usdc-base"
+    chat_policy.set(home, "alice", "telegram", "-100", "chat.paid_asset", "tkn")
+    set_key(_C(), "alice", "telegram", "-100", "paid_ban_units", "75000 usdc-base")
+    assert chat_policy.load(home, "alice", "telegram", "-100").paid_ban_units == "75000 usdc-base"

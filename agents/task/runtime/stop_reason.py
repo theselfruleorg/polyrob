@@ -29,6 +29,7 @@ class StopReason(str, Enum):
     CONTROL = "control"
     CANCELLED = "cancelled"
     WALL_CLOCK = "wall_clock"
+    LOOP = "loop"
 
 
 _TEXT = {
@@ -45,7 +46,94 @@ _TEXT = {
     StopReason.CONTROL: "stopped by a stop control",
     StopReason.CANCELLED: "cancelled",
     StopReason.WALL_CLOCK: "cut by the wall-clock cap",
+    StopReason.LOOP: "stopped because it repeated the same tool call",
 }
+
+
+#: 095 W6 — "why did you not reply": one owner sentence and the next step for
+#: each stop reason. The guide FAQ renders its troubleshooting rows from here.
+OWNER_EXPLAIN = {
+    StopReason.DONE: (
+        "The run finished. If no answer reached you, a delivery limit or a pause "
+        "held it.", "`/missed`"),
+    StopReason.AWAITING_REPLY: (
+        "A question to you is open; the run waits for your answer.", "answer in this chat, or `/inbox`"),
+    StopReason.MAX_STEPS: (
+        "The run used every step it may take.",
+        "say continue in this chat; for a goal, `/goal retry <id>`"),
+    StopReason.FAILURES: (
+        "Too many steps in a row failed, so the run stopped.",
+        "`/status`, then `/why` for the refusals"),
+    StopReason.ERROR: (
+        "An error that a retry cannot fix ended the run.", "`/status`"),
+    StopReason.STALL: (
+        "A provider or a tool did not answer in time.", "`/status`, then say continue"),
+    StopReason.RUN_BUDGET: (
+        "The run reached its AI cost limit.", "`/usage`"),
+    StopReason.MONEY_INFRA: (
+        "A money step failed on the host side. Nothing was sent.", "`/status`, then `/book`"),
+    StopReason.CONVERSATIONAL_EXIT: (
+        "The run ended after it replied; the reply was the answer.", "`/missed` if none came"),
+    StopReason.CONTROL: (
+        "A stop control ended the run: a pause or a stop on that run.",
+        "`/status`; `/resume` lifts a pause"),
+    StopReason.CANCELLED: (
+        "The run was cancelled, for example by `/cancel`.", "send the task again"),
+    StopReason.WALL_CLOCK: (
+        "The run reached its time limit.", "for a goal, `/goal retry <id>`"),
+    StopReason.LOOP: (
+        "The same tool call repeated, so the harness stopped the run.",
+        "say continue with a hint, or `/why`"),
+}
+
+
+#: F7 (prod review 2026-10-29): a run that ended at the step limit, after
+#: consecutive failures, or by repeating one call wrote phase summaries that
+#: recall then served as fact ("six winners paid", a wrong tweet id). Its own
+#: account of what happened does not become cross-session memory.
+NOT_MEMORY_WORTHY = frozenset({StopReason.MAX_STEPS.value, StopReason.FAILURES.value,
+                               StopReason.LOOP.value})
+
+
+def memory_worthy(reason: Any) -> bool:
+    """False for a stop reason in :data:`NOT_MEMORY_WORTHY`; True otherwise
+    (no reason yet = a run still going or one that ended normally)."""
+    return _value(reason) not in NOT_MEMORY_WORTHY
+
+
+#: Stop reasons after which an owner chat turn needs no word from the harness:
+#: it finished, it paused for the owner's reply, the owner stopped it, or it
+#: ended by the R1 conversational exit — two reply-only steps, so the turn
+#: already answered with send_message (a "turn ended early" notice there was
+#: false and went into the owner thread tail).
+QUIET_STOPS = frozenset({StopReason.DONE.value, StopReason.AWAITING_REPLY.value,
+                         StopReason.CANCELLED.value, StopReason.CONTROL.value,
+                         StopReason.CONVERSATIONAL_EXIT.value})
+
+#: The last line of every turn-end notice.
+CONTINUE_HINT = "Say continue and I pick up where I stopped."
+
+
+def _one_line(text: Any, limit: int = 200) -> str:
+    t = " ".join(str(text or "").split())
+    return t if len(t) <= limit else t[:limit - 1] + "…"
+
+
+def turn_end_notice(reason: Any, steps: Optional[int] = None,
+                    max_steps: Optional[int] = None, *, last_error: str = "",
+                    last_report: str = "") -> str:
+    """What an owner chat turn says when its run ended without finishing (the
+    step limit, a loop, failures, an error): the typed stop reason in plain
+    words, the agent's last report when there is one, the last tool error in
+    one line, and how to resume. Pure."""
+    lines = [f"⚠️ My turn ended early: {describe_stop_reason(reason, steps, max_steps)}."]
+    report = label_last_report(last_report)
+    if report:
+        lines.append(report)
+    if (last_error or "").strip():
+        lines.append(f"Last tool error: {_one_line(last_error)}")
+    lines.append(CONTINUE_HINT)
+    return "\n".join(lines)
 
 
 def _value(reason: Any) -> Optional[str]:

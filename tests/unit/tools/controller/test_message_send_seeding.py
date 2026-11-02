@@ -50,11 +50,11 @@ def test_allowlisted_send_seeds_reply_binding(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     monkeypatch.setenv("CORRESPONDENT_REQUIRE_APPROVAL", "false")
     corr, allowlist = _fixtures()
-    allowlist.allow("rob", "telegram", "555")
+    allowlist.allow("alice", "telegram", "555")
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="555", text="hi",
+        user_id="alice", surface="telegram", target="555", text="hi",
         session_id="sess-1", container=_Container(corr)))
     assert res["success"] is True
     row = corr.resolve(surface="telegram", address="555")
@@ -67,7 +67,7 @@ def test_owner_send_never_seeds(monkeypatch):
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi",
+        user_id="alice", surface="telegram", target="999", text="hi",
         session_id="sess-1", container=_Container(corr)))
     assert res["success"] is True
     assert corr.list() == [], "the owner is not a correspondent"
@@ -77,11 +77,11 @@ def test_cap_refused_binding_blocks_proactive_send(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     monkeypatch.setenv("CORRESPONDENT_MAX_NEW_PER_DAY", "0")
     corr, allowlist = _fixtures()
-    allowlist.allow("rob", "email", "new@acme.com")
+    allowlist.allow("alice", "email", "new@acme.com")
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="email", target="new@acme.com", text="hi",
+        user_id="alice", surface="email", target="new@acme.com", text="hi",
         session_id="sess-1", container=_Container(corr)))
     assert res["success"] is False
     assert "cap" in (res.get("error") or "").lower()
@@ -93,11 +93,11 @@ def test_pending_seed_sends_with_note(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     monkeypatch.setenv("CORRESPONDENT_REQUIRE_APPROVAL", "true")
     corr, allowlist = _fixtures()
-    allowlist.allow("rob", "email", "new@acme.com")
+    allowlist.allow("alice", "email", "new@acme.com")
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="email", target="new@acme.com", text="hi",
+        user_id="alice", surface="email", target="new@acme.com", text="hi",
         session_id="sess-1", container=_Container(corr)))
     assert res["success"] is True
     assert router.sent, "pending approval gates the REPLY, not the outbound send"
@@ -108,11 +108,11 @@ def test_pending_seed_sends_with_note(monkeypatch):
 def test_no_container_is_fail_soft(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     _, allowlist = _fixtures()
-    allowlist.allow("rob", "telegram", "555")
+    allowlist.allow("alice", "telegram", "555")
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="telegram", target="555", text="hi",
+        user_id="alice", surface="telegram", target="555", text="hi",
         session_id="sess-1"))
     assert res["success"] is True
 

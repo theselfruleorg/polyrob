@@ -108,6 +108,35 @@ def test_the_prod_variant_renders_the_owner_dm_with_the_prod_grants(fresh):
         assert sizes[name]["tools"]["count"] > sizes[surface]["tools"]["count"]
 
 
+@pytest.mark.parametrize("prefix,surfaces", [(GEN.PROD_PREFIX, GEN.PROD_SURFACES),
+                                             (GEN.SERVER_PREFIX, GEN.SERVER_SURFACES)])
+def test_the_prod_and_server_seats_run_with_memory_wallet_and_install_record(
+        fresh, prefix, surfaces):
+    """095 P0.4: the seats that stand for prod render prod's facts — memory ON
+    (not the ``MEMORY_BACKEND=none`` of the base seats), the wallet ON with its
+    caps readable, and an install record — so the size bar and every truth test
+    read the surface prod sends."""
+    assert GEN.PROD_ENV["MEMORY_BACKEND"] == "sqlite"  # never local_vector (an extra)
+    assert "POLYROB_LOCAL" in GEN.SERVER_UNSET
+    for surface in surfaces:
+        text = (fresh / f"{prefix}{surface}.system.txt").read_text(encoding="utf-8")
+        assert "MEMORY_BACKEND=none" not in text, prefix + surface
+        assert "wallet: not enabled" not in text, prefix + surface
+        assert "per-transaction cap: $" in text, prefix + surface
+        assert "Install: not recorded" not in text, prefix + surface
+        names = [t["name"] for t in json.loads(
+            (fresh / f"{prefix}{surface}.tools.json").read_text(encoding="utf-8"))["tools"]]
+        if prefix == GEN.PROD_PREFIX:
+            assert any(n.startswith("defi_trade_") for n in names), prefix + surface
+        else:
+            # 095 W1c (SC-1, D2): the server posture reads its config — the
+            # read-only `preferences` (no set).
+            schema = json.loads((fresh / "tools" / f"preferences.{prefix}{surface}.json")
+                                .read_text(encoding="utf-8"))
+            ops = schema["function"]["parameters"]["properties"]["operation"]["enum"]
+            assert sorted(ops) == ["explain", "get", "list"], prefix + surface
+
+
 def test_the_owner_first_call_is_at_most_45k_under_the_prod_posture(fresh):
     """081 bar 3 / WS-3.1 acceptance: the owner's first call (system + tool
     schemas) under the prod posture is at most 45K tokens (was 58K here, 90K
@@ -115,6 +144,11 @@ def test_the_owner_first_call_is_at_most_45k_under_the_prod_posture(fresh):
 
     093 (2026-10-28) raised it to 45.7K for the operational self-awareness
     surface (propose_setting + agent_status(tool=), the pinned harness manual,
-    the owner-seat harness rule) after trimming the rest; trim, don't raise."""
+    the owner-seat harness rule) after trimming the rest; trim, don't raise.
+
+    095 P0.1 (2026-10-30): 36,805 on the prod-faithful seat (P0.4: memory ON,
+    wallet ON — 46,830 before the trim). The per-chain guidance renders once
+    (defi_trade.swap), not on every defi_trade verb; the bar stays at 45.7K and
+    later work spends from the headroom. Trim, don't raise."""
     sizes = json.loads((fresh / "sizes.json").read_text(encoding="utf-8"))
     assert sizes[GEN.PROD_PREFIX + "owner_telegram_dm"]["total_tokens"] <= 45_700

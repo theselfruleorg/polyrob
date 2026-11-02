@@ -20,7 +20,7 @@ USER = "alice"
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", USER)
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "dana")
     monkeypatch.setenv("MEMORY_SCOPES_ENABLED", "true")
     monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "true")
     return tmp_path

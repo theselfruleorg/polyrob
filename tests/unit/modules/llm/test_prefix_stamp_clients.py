@@ -14,7 +14,7 @@ import pytest
 
 from modules.llm.prefix_stamp import read_stamps
 
-SYSTEM = "You are Rob."
+SYSTEM = "You are Nova."
 TOOLS = [{"type": "function", "function": {"name": "read_file"}}]
 
 

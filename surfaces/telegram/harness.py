@@ -217,7 +217,7 @@ _USAGE = {
              "cancel <id>>",
     "/prefs": "[all]",
     "/config": "[get|explain <key> | set <key> <value>]",
-    "/model": "[<provider>/<model>]",
+    "/model": "[<name> [default] [reasoning=<level>] | reset | aliases]",
     "/usage": "[days]",
     "/skills": "[words]",
     "/kb": "[list [collection] | search <query> | <words>]",
@@ -680,131 +680,114 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
     if not is_group_session_key(notice_key or ""):
         from surfaces.telegram.interactive_tools import reconcile_owner_toolset
         await reconcile_owner_toolset(task_agent, user_id, session_id)
+        # The owner turn owns its budget: a wake's narrowing never lowers it.
+        from core.config_policy import INTERACTIVE_MAX_STEPS
+        if callable(getattr(task_agent, "scope_next_run", None)):
+            task_agent.scope_next_run(session_id, max_steps=INTERACTIVE_MAX_STEPS)
 
     # 056 WS3: a headless owner/room turn HOLDS the shared workspace for its whole
     # run (busy depth + turn.active marker + cross-process lock, never refusing
     # the human). Until 2026-09-19 nothing marked these turns, so cron/goal runs
     # could start under the owner's live turn on the same project root.
     from core.interactive_gate import owner_turn
-    _kind = "room_turn" if is_group_session_key(notice_key or "") else "owner_chat"
+    from core.surfaces.turn_reply import spoke_since, turn_marker
+    room = is_group_session_key(notice_key or "")
+    _get_orch = getattr(task_agent, "get_orchestrator", None)
+
+    def _orch():
+        try:
+            return _get_orch(session_id) if callable(_get_orch) else None
+        except Exception:  # pragma: no cover - fail-open probe
+            return None
+    # C7: what the session held before THIS turn, so no earlier turn's text is
+    # ever delivered as this turn's reply, and whether this turn published.
+    _baseline_fn = getattr(task_agent, "_chat_turn_baseline", None)
+    baseline = _baseline_fn(session_id) if callable(_baseline_fn) else None
+    marker = turn_marker(_orch())
+    _kind = "room_turn" if room else "owner_chat"
     with owner_turn(kind=_kind, session_id=session_id):
         status = await task_agent.run_session(user_id, session_id)
     if deliver is None:
         return
-    # run_session returns a human-readable string, not a status enum. The
-    # "Session failed: ..." prefix (generic exception) and "Session suspended: ..."
-    # prefix (agents/task_agent_lite.py's `except InsufficientCreditsError` path —
-    # the OTHER credit-death shape, distinct from a mid-step LLM 402) are both real
-    # failures; the canonical list lives in run_as_session._RUN_REFUSALS
-    # (comment "live-test F7"). "Session is already executing" and "No new
-    # input; ..." are no-ops that must stay silent — do NOT swap in
-    # run_as_session.is_refusal() here, it also matches those and would break
-    # the deliberate busy-session silence.
-    failed = str(status or "").startswith(("Session failed:", "Session suspended:"))
-
-    # T1.1 enable-blocker (validated 2026-07-23): a RUN_BUDGET_USD halt on a
-    # CONTINUED session ends the turn before any new step, so the extraction
-    # below would surface the PREVIOUS turn's reply as if it answered this
-    # message. run_session's return IS the honest halt text for exactly this
-    # case (mirrors chat_once's marker branch) — deliver it and stop. Scoped
-    # to the budget marker; every other failure keeps the notice/extraction rail.
-    if failed:
-        from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
-        if RUN_BUDGET_MARKER in str(status):
-            try:
-                await _deliver_owner_aware(task_agent, notice_key, deliver, f"⚠️ {status}")
-            except Exception as e:
-                logger.error("telegram reply delivery failed: %s", e, exc_info=True)
-            return
-
-    if not failed:
-        # C10: when Singular Chat is bound, the send_message / done router mirror
-        # already delivered the reply LIVE (MarkdownV2) for a SUCCESSFUL run.
-        # Delivering again here would double-send (raw plain text). Skip for bound
-        # sessions; keep the post-run deliver for unbound/legacy paths (cron,
-        # `polyrob run`, raw API) that have no router.
+    # run_session returns a human-readable string, not a status enum. "Session
+    # failed:" / "Session suspended:" are real failures (run_as_session._RUN_REFUSALS);
+    # "Session is already executing" / "No new input; ..." are no-ops that stay
+    # silent — do NOT swap in run_as_session.is_refusal(), it matches those too.
+    status = str(status or "")
+    failed = status.startswith(("Session failed:", "Session suspended:"))
+    if not failed and status != "Session completed successfully":
+        return
+    # T1.1: a RUN_BUDGET_USD halt ends a continued turn before any new step;
+    # run_session's return IS the honest halt text — deliver it and stop.
+    from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
+    if failed and RUN_BUDGET_MARKER in status:
         try:
-            get_orch = getattr(task_agent, "get_orchestrator", None)
-            orch = get_orch(session_id) if get_orch is not None else None
-            if orch is not None and getattr(orch, "_message_router", None) is not None \
-                    and getattr(orch, "_chat_session_key", None):
-                logger.debug(
-                    "telegram: session %s bound to chat router; skipping post-run deliver "
-                    "(already delivered live)", session_id,
-                )
-                return
-        except Exception as e:  # pragma: no cover - fail-open
-            logger.debug("telegram bound-session check failed: %s", e)
-
+            await _deliver_owner_aware(task_agent, notice_key, deliver, f"⚠️ {status}")
+        except Exception as e:
+            logger.error("telegram reply delivery failed: %s", e, exc_info=True)
+        return
+    orch = _orch()
+    spoke = spoke_since(orch, marker)
+    # C10: a session bound to the chat router delivered its replies LIVE
+    # (send_message); delivering an extracted reply again would double-send.
+    bound = orch is not None and getattr(orch, "_message_router", None) is not None \
+        and bool(getattr(orch, "_chat_session_key", None))
     reply = ""
-    try:
-        extract = getattr(task_agent, "_extract_chat_reply", None)
-        if extract is not None:
-            reply = extract(session_id) or ""
-    except Exception as e:  # pragma: no cover - fail-open
-        logger.debug("telegram extract chat reply failed: %s", e)
-    reply = (reply or "").strip()
-
-    if not reply:
-        if not failed:
-            # A successful run with nothing to say is legitimately silent.
-            logger.info("telegram: session %s produced no deliverable reply", session_id)
-            return
-        # A FAILED run must never be silent — that is the outage (2026-07-16: the
-        # owner asked a question, OpenRouter 402'd, and got absolute silence). The
-        # raw error_msg is deliberately NOT forwarded here — it's provider/stack
-        # text (a 402 body can be ~2KB of JSON); it goes to the log. The credit
-        # sentinel is what delivers the actionable "credits are out" notice.
-        logger.warning(
-            "telegram: session %s failed with no reply; sending error notice (status=%s)",
-            session_id, status,
-        )
-        # Proposal 015 #2: an LLM-provider outage (ALL providers exhausted /
-        # 402 cascade) gets a specific, static, LLM-independent notice —
-        # kill-switch LLM_OUTAGE_NOTICE (default ON) + a 30-min per-surface+chat
-        # cooldown so a 402 storm can't spam the chat. This runs ONLY here, on
-        # the chat-surface post-run deliver seam (act_on_inbound → spawned
-        # _run_and_deliver), so goal/cron/self-wake runs can never trigger it.
-        # Fail-open: any error in classification falls through to the legacy
-        # generic notice below, never into the error path.
+    if not bound:   # unbound/legacy paths: the extraction IS the reply
+        try:
+            extract = getattr(task_agent, "_extract_chat_reply", None)
+            reply = (extract(session_id, since=baseline) or "").strip() if extract else ""
+        except Exception as e:  # pragma: no cover - fail-open
+            logger.debug("telegram extract chat reply failed: %s", e)
+    # ONE owner-turn end rule (2026-10-29: 8 owner messages got no reply at all):
+    # a run that ended without finishing — step limit, loop, failures, an error —
+    # says so once, with the stop reason, the last tool error and how to resume.
+    # Never in a room.
+    notice = ""
+    if not room:
+        from agents.task.runtime.run_outcome import session_turn_end_notice
+        notice = session_turn_end_notice(
+            task_agent, session_id, failed=failed, spoke=spoke or bool(reply),
+            since_steps=baseline[0] if baseline else None)
+    if failed and not (reply or spoke):
+        # Proposal 015 #2: an LLM-provider outage gets the specific, static
+        # notice (kill-switch LLM_OUTAGE_NOTICE + 30-min per-chat cooldown);
+        # the raw provider text never reaches the chat.
         try:
             from core.surfaces.error_notices import notice_for_texts
             from core.surfaces.llm_outage_notice import (
-                OUTAGE_NOTICE_TEXT,
-                looks_like_llm_outage,
-                should_send_llm_outage_notice,
-            )
+                OUTAGE_NOTICE_TEXT, looks_like_llm_outage, should_send_llm_outage_notice)
             last_err = _last_error_text(task_agent, session_id)
             if looks_like_llm_outage(status, last_err):
                 if not should_send_llm_outage_notice(notice_key or session_id):
-                    # Flag off, or within the cooldown window: deliberately
-                    # silent (the failure itself is logged above; the first
-                    # notice of the window already told this chat).
-                    logger.info(
-                        "telegram: LLM-outage notice suppressed for session %s "
-                        "(flag off or cooldown)", session_id,
-                    )
+                    logger.info("telegram: LLM-outage notice suppressed for session %s "
+                                "(flag off or cooldown)", session_id)
                     return
-                # T1.2: append a reason-specific phrase (from the SAME
-                # classify_text SSOT looks_like_llm_outage just used) on top
-                # of the generic notice — never raw provider/model text, only
-                # one of the fixed sentences in core.surfaces.error_notices.
-                notice = OUTAGE_NOTICE_TEXT
                 phrase = notice_for_texts(status, last_err)
-                if phrase:
-                    notice = f"{OUTAGE_NOTICE_TEXT}\n{phrase}"
-                reply = notice
+                notice = f"{OUTAGE_NOTICE_TEXT}\n{phrase}" if phrase else OUTAGE_NOTICE_TEXT
         except Exception:
             logger.debug("llm outage notice classification failed (fail-open)",
                          exc_info=True)
-        if not reply:
-            reply = ("⚠️ I couldn't answer that — my run failed before I could reply. "
-                     "If this keeps happening, my API credits may be out.")
-
+        if not notice:   # a room's failed turn: the owner hears it in his DM
+            notice = ("⚠️ I couldn't answer that — my run failed before I could reply. "
+                      "If this keeps happening, my API credits may be out.")
+        logger.warning("telegram: session %s failed with no reply; sending a notice "
+                       "(status=%s)", session_id, status)
+    text = "\n\n".join(t for t in (reply, notice) if t)
+    if not text:
+        return
     try:
-        await _deliver_owner_aware(task_agent, notice_key, deliver, reply)
+        await _deliver_owner_aware(task_agent, notice_key, deliver, text)
     except Exception as e:
         logger.error("telegram reply delivery failed: %s", e, exc_info=True)
+        return
+    # The thread records what the owner saw from the harness (the agent's own
+    # replies are recorded where they were published).
+    unrecorded = "\n\n".join(t for t in ("" if spoke else reply, notice) if t)
+    if unrecorded and not room:
+        from core.surfaces.owner_thread import record_turn_fallback
+        record_turn_fallback(getattr(task_agent, "container", None), user_id, unrecorded,
+                             session_key=notice_key or "", session_id=session_id)
 
 
 def _correspondent_text(result: InboundResult) -> str:
@@ -822,6 +805,9 @@ def _correspondent_text(result: InboundResult) -> str:
     reply.
     """
     text = (result.inbound.text or "")
+    _quoted = _reply_quote(result)
+    if _quoted:
+        text = f"{text}\n{_quoted}" if text else _quoted
     try:
         media = list(getattr(result.inbound, "media", None) or [])
     except Exception as e:
@@ -937,6 +923,15 @@ def _record_owner_line(task_agent: Any, result: InboundResult, *, session_id: st
         _note_thread_skip("inbound")
 
 
+def _reply_quote(result: InboundResult) -> str:
+    """The rendered ``<replying-to>`` block for this inbound, or "". Fail-open."""
+    try:
+        from core.surfaces.reply_ref import render_reply_ref
+        return render_reply_ref(getattr(result.inbound, "reply_ref", None))
+    except Exception:
+        return ""
+
+
 def _stamp_fresh_referent(task_agent: Any, result: InboundResult, session_id: str) -> None:
     """061: a quote-reply that opens a FRESH session carries its referent onto
     the orchestrator; the first-step injector renders it. Fail-open."""
@@ -946,7 +941,8 @@ def _stamp_fresh_referent(task_agent: Any, result: InboundResult, session_id: st
         orch = task_agent.get_orchestrator(session_id) if hasattr(task_agent, "get_orchestrator") else None
         if orch is not None:
             via = result.inbound.identity.source.surface_id or "telegram"
-            orch._owner_thread_reply_to = (via, str(result.inbound.reply_to))
+            orch._owner_thread_reply_to = (via, str(result.inbound.reply_to),
+                                           _reply_quote(result))
     except Exception:
         _note_thread_skip("referent")
 
@@ -991,9 +987,18 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         from surfaces.telegram.interactive_tools import owner_interactive_tool_ids
         tool_ids = owner_interactive_tool_ids(inbound.identity.user_id)
     from core.surfaces.inbound_attachments import owner_typed_text
+    # 094: an owner DM starts on the chat's pin (a queued /model or the owner's default).
+    _pin = None
+    if room_turn is None and tool_ids is not None:
+        from agents.task.model_switch_service import owner_chat_pin
+        _pin = owner_chat_pin(result.decision.session_key, session_user_id)
+    _request = request_text
+    if _pin:
+        from agents.task.task_agent_support import SessionRequest
+        _request = SessionRequest(task=request_text, provider=_pin["provider"], model=_pin["model"])
     info = await task_agent.create_session(
         session_user_id,
-        request=request_text,
+        request=_request,
         session_source=inbound.identity.source,
         chat_session_key=result.decision.session_key,
         tool_ids=tool_ids,
@@ -1002,6 +1007,9 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         typed_text=owner_typed_text(inbound),
     )
     session_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
+    if session_id and _pin:
+        from agents.task.model_switch_service import start_with_pin
+        start_with_pin(task_agent, str(session_id), _pin)
     if session_id:
         if room_turn is None:
             _record_owner_line(task_agent, result, session_id=str(session_id), kind="comment")
@@ -1685,6 +1693,12 @@ async def _act_on_inbound_locked(
             _metadata = {**(_metadata or {}),
                          "owner_thread_reply_to": [result.inbound.identity.source.surface_id or "telegram",
                                                    str(result.inbound.reply_to)]}
+            # The platform's own copy of the replied-to message: shown when the
+            # owner thread does not hold that line (a member's or a forwarded
+            # message, or one older than the thread).
+            _quoted = _reply_quote(result)
+            if _quoted:
+                _metadata["reply_quote"] = _quoted
         _metadata = _with_forwarded(result, _metadata)
         try:
             status = await task_agent.ensure_session_and_deliver(
@@ -2615,7 +2629,7 @@ class TelegramHarness:
             return False
 
         # Persistent transcript echo (voice only): post '🎙️ Transcript: …' quoting the
-        # voice note so the user sees what ROB heard, BEFORE the answer. Fail-open —
+        # voice note so the user sees what the agent heard, BEFORE the answer. Fail-open —
         # never blocks the turn. Gated by the owner pref voice.transcript_echo (default ON).
         from core.surfaces.voice_echo import voice_transcript, voice_echo_message
         from core.surfaces.config import SurfaceConfig

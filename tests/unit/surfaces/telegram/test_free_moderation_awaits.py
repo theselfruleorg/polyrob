@@ -37,7 +37,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _result(text, *, chat_role="owner", user_id="rob"):
+def _result(text, *, chat_role="owner", user_id="alice"):
     source = SessionSource(surface_id="telegram", chat_id="-100",
                            chat_type="supergroup")
     identity = Identity(user_id=user_id, source=source, raw_user_id=user_id,
@@ -59,7 +59,7 @@ def _result(text, *, chat_role="owner", user_id="rob"):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     return tmp_path
 

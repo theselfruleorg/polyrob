@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "729d3abd9f2d"
+      "sha": "a537b675a8de"
     },
     {
       "name": "anysite_api",
@@ -158,7 +158,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "8b543916e069"
+      "sha": "05c1fe29edcb"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -218,11 +218,11 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "d4315aebe58c"
+      "sha": "2c72779ffd6d"
     },
     {
       "name": "preferences",
-      "sha": "ad8318905601"
+      "sha": "266de197b9b5"
     },
     {
       "name": "present_choice",
@@ -230,11 +230,11 @@
     },
     {
       "name": "propose_action",
-      "sha": "bb1c23b06a81"
+      "sha": "8adf404efe07"
     },
     {
       "name": "propose_setting",
-      "sha": "6f27817332ef"
+      "sha": "9d443cf89616"
     },
     {
       "name": "read_skill_resource",
@@ -250,7 +250,7 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "8977db1c077b"
+      "sha": "7d5aee19c522"
     },
     {
       "name": "send_message",
@@ -258,7 +258,7 @@
     },
     {
       "name": "skill_manage",
-      "sha": "1a9acba12d5a"
+      "sha": "816a947f06b5"
     },
     {
       "name": "task_todo_add",
@@ -294,7 +294,7 @@
     },
     {
       "name": "trade_mandate_propose",
-      "sha": "ff5dfd36d681"
+      "sha": "a10e0c5bdc0d"
     },
     {
       "name": "web_fetch_fetch_url",

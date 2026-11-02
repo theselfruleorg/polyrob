@@ -5,7 +5,7 @@
 // specific:
 //
 //   * Files merges the workspace tree and the typed ledger into three tiers —
-//     what is READY for you (a deliverable, WITH its verdict), Rob's own
+//     what is READY for you (a deliverable, WITH its verdict), the agent's own
 //     WORKING files, and what you GAVE it (inbound/) — and a file that IS a
 //     deliverable is shown once, in ready, never doubled into working;
 //   * a deliverable's verdict is the ledger's typed value (ok / changed /
@@ -41,7 +41,7 @@ const COPY = {
   files_tree_unreadable: "I could not load all files. These are only the finished ones.",
   files_ledger_unreadable: "I cannot tell which of these files are finished.",
   tier_ready: "Ready for you",
-  tier_working: "Rob's working files",
+  tier_working: "The agent's working files",
   tier_given: "From you",
   show_all: "Show all {count}",
   shared_link: "Browse the shared folder ({count})",

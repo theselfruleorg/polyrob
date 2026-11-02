@@ -3,7 +3,8 @@
 At the cap the agent gets exactly ONE extra model call (same tools, request on
 the ephemeral rail). Its reply is recorded as the agent's words; nothing in it
 runs — not even done — so an exhausted run is never a board success (T2-01).
-Scope: autonomous runs and sub-agents; chat skips the call. Fail-open.
+Scope: autonomous runs, sub-agents, and an owner chat turn that published
+nothing; a chat turn that spoke, a room and a correspondent session skip it. Fail-open.
 """
 import asyncio
 from types import SimpleNamespace
@@ -204,3 +205,104 @@ def test_run_outcome_carries_the_report_and_stays_not_done():
     o = asyncio.run(build_run_outcome(_TA(), "s1", "Session completed successfully"))
     assert o.done_called is False and o.done_text == ""
     assert o.exhausted_summary == REPORT and o.stop_reason == "max_steps"
+
+
+@pytest.mark.asyncio
+async def test_a_loop_stop_gets_the_last_report_with_the_loop_request(_env):
+    """The loop breaker's stop (StopReason.LOOP) asks for the same last report,
+    with a request that names the real reason (not "the step limit")."""
+    from agents.task.agent.core.exhaustion_summary import LOOP_SUMMARY_REQUEST
+    agent, n = _agent(max_steps=5)
+
+    async def _looped(step_info=None):
+        agent._last_result = [ActionResult(error="RUN ENDED: x repeated")]
+        agent.state.n_steps += 1
+        agent._loop_stop_text = "x repeated"
+    agent.step = AsyncMock(side_effect=_looped)
+    await _run(agent, n)
+    assert agent.state.stop_reason == "loop"
+    assert agent.step.await_count == 1
+    request = agent.message_manager.push_ephemeral_message.call_args[0][0]
+    assert "repeated the same tool call" in request.content
+    assert LOOP_SUMMARY_REQUEST in request.content
+    assert agent.state.exhausted_summary == REPORT
+
+
+def _owner_chat(agent, sid="sess-owner", spoke=False, public=False, correspondent=False):
+    from types import SimpleNamespace as NS
+    orch = NS(session_id=sid, user_id="alice", _public_session=public,
+              _correspondent_session=correspondent, _correspondent_tainted=False,
+              agents={}, browser_manager=None)
+    if spoke:
+        orch._reply_texts_this_turn = ["On it."]
+    agent.orchestrator = orch
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_a_silent_owner_chat_turn_gets_the_last_report(monkeypatch):
+    """Prod 2026-10-28 16:21: the turn enrolled the agent, hit the cap and said
+    nothing; the owner had to write "yo" to learn the result."""
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: False)
+    monkeypatch.setattr("agents.task.session_class.budget_class_autonomous", lambda sid: False)
+    agent, n = _agent(sub=False)
+    _owner_chat(agent)
+    await _run(agent, n)
+    agent.get_next_action.assert_awaited_once()
+    assert agent.state.exhausted_summary == REPORT
+
+
+def test_the_call_scope_on_owner_seats(monkeypatch):
+    from types import SimpleNamespace as NS
+    from agents.task.agent.core.exhaustion_summary import summary_turn_applies
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: False)
+    monkeypatch.setattr("agents.task.session_class.budget_class_autonomous", lambda sid: False)
+    a = NS(_is_sub_agent=False, session_id="sess-owner")
+    assert summary_turn_applies(_owner_chat(a)) is True
+    assert summary_turn_applies(_owner_chat(a, spoke=True)) is False       # it already replied
+    assert summary_turn_applies(_owner_chat(a, public=True)) is False      # a room: never
+    assert summary_turn_applies(_owner_chat(a, correspondent=True)) is False
+
+
+@pytest.mark.asyncio
+async def test_the_dollar_cap_gets_one_bounded_last_report(monkeypatch, _env):
+    """095 W1d: the dollar cap stop gets the same one last report as the step cap,
+    with a fixed output bound; its cost is named in the halt text, and the honest
+    error item stays last in the history."""
+    from agents.task.agent.core.exhaustion_summary import (
+        BUDGET_REPORT_MAX_TOKENS, BUDGET_SUMMARY_REQUEST)
+    halt = "run_budget_exhausted: this run's provider spend $2.0100 reached AUTONOMOUS_RUN_BUDGET_USD $2.00"
+    monkeypatch.setattr("agents.task.agent.core.run_loop.check_run_budget",
+                        AsyncMock(return_value=halt))
+    # The guard inside the summary must be skipped for a dollar stop.
+    monkeypatch.setattr("agents.task.agent.core.run_budget.check_run_budget",
+                        AsyncMock(return_value=halt))
+    monkeypatch.setattr("agents.task.agent.core.run_budget._session_spend",
+                        AsyncMock(side_effect=[2.01, 2.035]))
+    agent, n = _agent(max_steps=5)
+    client = SimpleNamespace(_polyrob_session_output_cap=None)
+    agent.llm = SimpleNamespace(_default_max_tokens=None, _client=client)
+    seen = {}
+    from modules.llm.output_budget import output_token_cap
+
+    async def _report(messages):
+        seen["cap"] = output_token_cap(client, 16384)
+        seen["stamp"] = client._polyrob_session_output_cap
+        return _model_output(_Act("done", {"text": REPORT}))
+    agent.get_next_action = AsyncMock(side_effect=_report)
+    await _run(agent, n)
+    agent.step.assert_not_called()
+    agent.get_next_action.assert_awaited_once()
+    agent.controller.multi_act.assert_not_called()
+    request = agent.message_manager.push_ephemeral_message.call_args[0][0]
+    assert BUDGET_SUMMARY_REQUEST in request.content
+    # The bound is per call: the shared client/adapter are never stamped.
+    assert seen == {"cap": BUDGET_REPORT_MAX_TOKENS, "stamp": None}
+    assert agent.llm._default_max_tokens is None
+    assert output_token_cap(client, 16384) == 16384               # scope ended
+    assert agent.state.stop_reason == "run_budget"
+    assert agent.state.exhausted_summary == REPORT
+    last = agent.history.history[-1].result[-1]
+    assert last.error == halt + "; the last report cost $0.0250"
+    assert agent.history.history[-2].result[0].extracted_content == REPORT
+    assert ("exhaustion_summary_cost", {"report_cost_usd": 0.025}) in _env

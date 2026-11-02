@@ -71,10 +71,10 @@ class TestInputConversion:
     def test_system_becomes_instructions_not_a_role(self):
         """`system` is not a role in this API."""
         items, instructions = to_responses_input([
-            {"role": "system", "content": "You are ROB."},
+            {"role": "system", "content": "You are NOVA."},
             {"role": "user", "content": "hi"},
         ])
-        assert instructions == "You are ROB."
+        assert instructions == "You are NOVA."
         assert all(i.get("role") != "system" for i in items)
 
     def test_text_part_type_follows_the_role(self):

@@ -52,7 +52,7 @@ def test_owner_clause_renders_without_correspondent_frame():
     # The owner clause must be available even when correspondent access is OFF —
     # the frame sentence about <correspondent-message> is what stays gated.
     line = owner_awareness_line(
-        {"POLYROB_OWNER_USER_ID": "alice", "POLYROB_INSTANCE_ID": "rob"},
+        {"POLYROB_OWNER_USER_ID": "alice", "POLYROB_INSTANCE_ID": "demo"},
         include_correspondent_frame=False,
     )
     assert "alice" in line
@@ -62,7 +62,7 @@ def test_owner_clause_renders_without_correspondent_frame():
 def test_owner_clause_empty_without_distinct_owner_and_frame_off():
     assert owner_awareness_line({}, include_correspondent_frame=False) == ""
     assert owner_awareness_line(
-        {"POLYROB_OWNER_USER_ID": "rob", "POLYROB_INSTANCE_ID": "rob"},
+        {"POLYROB_OWNER_USER_ID": "alice", "POLYROB_INSTANCE_ID": "alice"},
         include_correspondent_frame=False,
     ) == ""
 

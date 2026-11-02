@@ -9,7 +9,7 @@ someone else, or keep your personal bot out of the framework's defaults.
 ~/.polyrob/                        # base home (default-mode config; data/ below it)
 ├── active_profile                 # sticky selection (one line)
 └── profiles/
-    └── rob/                       # a profile == a full POLYROB home
+    └── scout/                     # a profile == a full POLYROB home
         ├── .env                   # this identity's secrets + flags
         ├── profile.yaml           # name, description, install source
         ├── characters/            # this identity's character files
@@ -114,8 +114,8 @@ Two distinct mechanisms:
 **Export/import** — backup, or moving between your own machines:
 
 ```bash
-polyrob profile export rob -o rob.tar.gz
-polyrob profile import rob.tar.gz --name rob2
+polyrob profile export scout -o scout.tar.gz
+polyrob profile import scout.tar.gz --name scout2
 ```
 
 Exports are private backups, created with owner-only permissions at a new destination.

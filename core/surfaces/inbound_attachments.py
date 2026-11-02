@@ -21,7 +21,7 @@ import base64
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.env import bool_env, float_env, int_env
 
@@ -212,6 +212,28 @@ def with_typed_text(metadata: Optional[Dict[str, Any]], typed: Optional[str]) ->
     return {**(metadata or {}), TYPED_TEXT_KEY: typed if isinstance(typed, str) else ""}
 
 
+#: the label ``inject_file_content`` puts before an attached image's saved path.
+IMAGE_PATH_MARKER = "Path in workspace: "
+
+
+def image_route_note(can_see: bool, model: str = "", texts: Sequence[str] = ()) -> str:
+    """095 W1a (D5 a): the one-line route note on the turn that carries an image,
+    from the CURRENT model's capability (the frozen prompt claims nothing). True
+    by construction after a ``/model`` switch or a provider fallback.
+
+    ``texts`` = the turn's message texts; the saved paths are read from them.
+    """
+    who = f" ({model})" if model else ""
+    if can_see:
+        return f"[Route: image attached natively; your current model{who} sees it in this message.]"
+    paths = [line.split(IMAGE_PATH_MARKER, 1)[1].strip()
+             for text in texts for line in str(text or "").splitlines()
+             if IMAGE_PATH_MARKER in line]
+    where = ", ".join(p for p in paths if p) or "the workspace path named above"
+    return (f"[Route: your current model{who} cannot see images; the file is saved at "
+            f"{where}. Say so; do not describe it.]")
+
+
 def inject_file_content(
     workspace_dir: str,
     rel_path: str,
@@ -254,7 +276,7 @@ def inject_file_content(
                     f"{name}: {type(e).__name__}]", None)
         mime = _MIME_BY_EXT.get(ext, "image/png")
         text = (f"{message_text}\n\n[Attached image: {name} ({_human_size(size)})]\n"
-                f"Path in workspace: {rel_path}")
+                f"{IMAGE_PATH_MARKER}{rel_path}")
         return text, [{"type": "image_url",
                        "image_url": {"url": f"data:{mime};base64,{encoded}"}}]
 

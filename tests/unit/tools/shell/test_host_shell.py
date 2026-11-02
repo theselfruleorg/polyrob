@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX sh
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    for k in ("AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL", "POLYROB_OWNER_USER_ID",
+    for k in ("AGENT_COMPUTE_POSTURE", "POLYROB_LOCAL", "POLYROB_OWNER_USER_ID",
               "SHELL_BACKEND"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(he, "host_execution_refusal", lambda: None)

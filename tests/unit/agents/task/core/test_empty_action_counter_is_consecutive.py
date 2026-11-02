@@ -163,3 +163,42 @@ def test_empty_action_texts_have_no_contradiction_and_no_absent_tools():
     assert "mcp_execute_tool" not in texts
     assert "filesystem_write_file" not in texts
     assert "done(" in texts
+
+
+# --- a REJECTED call is a failed step, not a planning turn (prod 2026-10-26/28) ---
+
+class _RejectingController(_Controller):
+    def get_last_validation_errors(self):
+        return {"c1": "Validation failed for 'defi_data_wallet_holdings': "
+                      "Missing required: ['chain']."}
+
+
+@pytest.mark.parametrize("issue", ["bad_args", "unknown_tool"])
+def test_a_rejected_call_is_a_failed_step_not_a_planning_turn(issue):
+    """Every call failed validation (a required arg missing) or named no action.
+    That was granted the tool-free planning allowance ("Planning turn noted"),
+    so the failure counter rose only every second rejected step."""
+    from agents.task.agent.core import call_quality
+    a = _Agent()
+    a.controller = _RejectingController()
+    for n in (1, 2, 3):
+        call_quality.set_call_issue(a, issue)
+        assert a._validate_and_intervene(_EMPTY) is False
+        assert a.state.consecutive_failures == n
+        res = a._last_result
+        assert len(res) == 1 and res[0].error
+        assert "Planning" not in (res[0].extracted_content or "")
+        assert "did NOT run" in res[0].error
+    assert issue != "bad_args" or "chain" in a._last_result[0].error
+    assert a._empty_action_counter == 0     # a call was made: not a tool-free step
+
+
+def test_a_rejected_call_does_not_spend_the_planning_allowance(monkeypatch):
+    from agents.task.agent.core import call_quality
+    monkeypatch.setenv("ALLOWED_REASONING_TURNS", "1")
+    a = _Agent()
+    a.controller = _RejectingController()
+    call_quality.set_call_issue(a, "bad_args")
+    a._validate_and_intervene(_EMPTY)
+    a._validate_and_intervene(_EMPTY)       # a real tool-free step after it
+    assert a._last_result[0].metadata.get("planning_turn") is True

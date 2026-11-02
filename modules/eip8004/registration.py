@@ -33,7 +33,7 @@ def get_eip8004_config() -> EIP8004Config:
 
 #: Hosts that nobody outside this machine can resolve. An `image` or a service
 #: URL on one of these is not a public endpoint, and advertising it as one is
-#: the same defect as the `rob-logo.png` 404 this replaced.
+#: the same defect as the `<name>-logo.png` 404 this replaced.
 _PRIVATE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
 
 

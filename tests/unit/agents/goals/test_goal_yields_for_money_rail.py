@@ -21,7 +21,7 @@ NOW = datetime(2026, 9, 19, 6, 0, 0)
 
 
 def _job(**kw):
-    base = dict(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *", user_id="rob",
+    base = dict(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *", user_id="alice",
                 next_run_at=datetime(2026, 9, 19, 5, 0, 0), max_duration_seconds=60,
                 payload={"priority": "money"})
     base.update(kw)
@@ -121,7 +121,7 @@ async def test_dispatcher_yield_for_rail_returns_row_to_ready_with_note(tmp_path
     from agents.task.goals.board import GoalBoard
     from agents.task.goals.dispatcher import GoalDispatcher
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", body="do things", priority=5)
+    g = board.create(user_id="alice", title="Round 15", body="do things", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "goals.tick.lock"))
     claimed = board.claim(g.id, disp._worker, ttl_seconds=900)
     assert claimed

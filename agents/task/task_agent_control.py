@@ -143,7 +143,7 @@ class TaskAgentControlMixin:
 
         Flips the persisted status so the normal resume path
         (try_transition_status RESUMED -> RUNNING inside the run loop) will pick it
-        up; actually continuing execution still requires ``rob run``/attach. Returns
+        up; actually continuing execution still requires ``polyrob run``/attach. Returns
         False for an unknown/foreign session or one not in a resumable state.
         """
         if not self.task_available:

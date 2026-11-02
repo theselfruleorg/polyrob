@@ -27,11 +27,11 @@ async def _seed_db(db_path):
     # don't trip the constraint.
     await db.execute(
         "INSERT OR IGNORE INTO user_profiles (user_id, wallet_address) VALUES (?, ?)",
-        ("rob", "0xWALLET_rob"))
+        ("alice", "0xWALLET_rob"))
     return db
 
 
-def _insert_invoice(db, *, rid, status, created_at, amount_usd=5.0, user_id="rob"):
+def _insert_invoice(db, *, rid, status, created_at, amount_usd=5.0, user_id="alice"):
     meta = '{"kind": "agent_invoice", "tenant_id": "%s", "purpose": "widget"}' % user_id
     return db.execute(
         """INSERT INTO x402_payment_requests
@@ -77,10 +77,10 @@ def test_invoices_prints_scope_tenant(tmp_path, monkeypatch):
 
     asyncio.run(setup())
     monkeypatch.setenv("DB_PATH", str(db_path))
-    res = CliRunner().invoke(owner, ["invoices", "--user", "rob"])
+    res = CliRunner().invoke(owner, ["invoices", "--user", "alice"])
     assert res.exit_code == 0, res.output
     assert "scope:" in res.output.lower()
-    assert "tenant rob" in res.output
+    assert "tenant alice" in res.output
 
 
 def test_invoices_status_filter_before_limit(tmp_path, monkeypatch):

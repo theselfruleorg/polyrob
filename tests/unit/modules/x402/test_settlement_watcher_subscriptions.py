@@ -79,7 +79,7 @@ class _Agent:
 
 
 async def _make_sub(db, *, paid_through_offset_days=2, lead_days=5, grace_days=3,
-                    amount_usd=10.0, user_id="rob"):
+                    amount_usd=10.0, user_id="alice"):
     return await subs.create_subscription(
         user_id=user_id, correspondent_surface="email",
         correspondent_address="payer@example.com", cron_job_id="job1",
@@ -123,7 +123,7 @@ async def test_auto_mode_creates_and_delivers_renewal_invoice(tmp_path, monkeypa
         out = await watcher.tick_once()
         assert out["subscription_renewals_invoiced"] == 1
 
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(rows) == 1
         assert rows[0]["status"] == "pending"
 
@@ -136,7 +136,7 @@ async def test_auto_mode_creates_and_delivers_renewal_invoice(tmp_path, monkeypa
         # Second tick: an OPEN pending invoice already exists -> not re-created.
         out2 = await watcher.tick_once()
         assert out2["subscription_renewals_invoiced"] == 0
-        rows2 = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows2 = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(rows2) == 1
     finally:
         await db.close()
@@ -155,7 +155,7 @@ async def test_auto_mode_no_correspondent_binding_still_creates_invoice(tmp_path
         out = await watcher.tick_once()
         assert out["subscription_renewals_invoiced"] == 1
         assert not agent.correspondent_deliveries  # nothing to route to — skipped, not failed
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(rows) == 1
     finally:
         await db.close()
@@ -177,11 +177,11 @@ async def test_approve_mode_queues_ask_not_invoice(tmp_path, monkeypatch):
         out = await watcher.tick_once()
         assert out["subscription_renewals_invoiced"] == 0
 
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert rows == []  # no money moved yet
 
         from agents.task.goals.board import ASK_OPEN
-        open_asks = board.asks(user_id="rob", status=ASK_OPEN)
+        open_asks = board.asks(user_id="alice", status=ASK_OPEN)
         assert len(open_asks) == 1
         payload = open_asks[0].payload
         assert payload["ask_kind"] == "tool_approval"
@@ -191,7 +191,7 @@ async def test_approve_mode_queues_ask_not_invoice(tmp_path, monkeypatch):
         # Second tick: the SAME open ask -> no duplicate ask, still no invoice.
         out2 = await watcher.tick_once()
         assert out2["subscription_renewals_invoiced"] == 0
-        assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 1
+        assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 1
     finally:
         await db.close()
 
@@ -210,20 +210,20 @@ async def test_approve_mode_approved_ask_invoices_on_next_tick(tmp_path, monkeyp
         await watcher.tick_once()
 
         from agents.task.goals.board import ASK_OPEN
-        ask = board.asks(user_id="rob", status=ASK_OPEN)[0]
-        ok, _ = board.decide_ask(ask.id, user_id="rob", approved=True)
+        ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
+        ok, _ = board.decide_ask(ask.id, user_id="alice", approved=True)
         assert ok is True
 
         out2 = await watcher.tick_once()
         assert out2["subscription_renewals_invoiced"] == 1
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(rows) == 1
 
         # A THIRD tick must not double-invoice (grant already consumed, and a
         # pending invoice now exists so the sub isn't even "needing renewal").
         out3 = await watcher.tick_once()
         assert out3["subscription_renewals_invoiced"] == 0
-        rows3 = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows3 = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(rows3) == 1
     finally:
         await db.close()
@@ -243,15 +243,15 @@ async def test_approve_mode_rejected_ask_backs_off(tmp_path, monkeypatch):
         await watcher.tick_once()
 
         from agents.task.goals.board import ASK_OPEN
-        ask = board.asks(user_id="rob", status=ASK_OPEN)[0]
-        ok, _ = board.decide_ask(ask.id, user_id="rob", approved=False)
+        ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
+        ok, _ = board.decide_ask(ask.id, user_id="alice", approved=False)
         assert ok is True
 
         # Immediately after rejection: no new ask spammed, no invoice.
         out2 = await watcher.tick_once()
         assert out2["subscription_renewals_invoiced"] == 0
-        assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 0
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 0
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert rows == []
     finally:
         await db.close()
@@ -279,14 +279,14 @@ async def test_auto_mode_renewal_skipped_while_halted_and_retries_after_resume(
                             lambda: True)
         out1 = await watcher.tick_once()
         assert out1["subscription_renewals_invoiced"] == 0
-        assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
+        assert await invoicing.list_payment_requests(user_id="alice", db=db) == []
 
         # RESUMED: the same due subscription now mints normally.
         monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                             lambda: False)
         out2 = await watcher.tick_once()
         assert out2["subscription_renewals_invoiced"] == 1
-        assert len(await invoicing.list_payment_requests(user_id="rob", db=db)) == 1
+        assert len(await invoicing.list_payment_requests(user_id="alice", db=db)) == 1
     finally:
         await db.close()
 
@@ -308,7 +308,7 @@ async def test_renewal_fails_closed_when_halt_probe_raises(tmp_path, monkeypatch
         monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted", _boom)
         out = await watcher.tick_once()
         assert out["subscription_renewals_invoiced"] == 0
-        assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
+        assert await invoicing.list_payment_requests(user_id="alice", db=db) == []
     finally:
         await db.close()
 
@@ -330,8 +330,8 @@ async def test_approve_mode_halt_does_not_burn_approved_grant(tmp_path, monkeypa
         # Tick 1 queues the ask; the owner approves it.
         await watcher.tick_once()
         from agents.task.goals.board import ASK_OPEN
-        ask = board.asks(user_id="rob", status=ASK_OPEN)[0]
-        ok, _ = board.decide_ask(ask.id, user_id="rob", approved=True)
+        ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
+        ok, _ = board.decide_ask(ask.id, user_id="alice", approved=True)
         assert ok is True
 
         # HALTED: the approved grant is held, NOT consumed, no invoice.
@@ -339,14 +339,14 @@ async def test_approve_mode_halt_does_not_burn_approved_grant(tmp_path, monkeypa
                             lambda: True)
         out_halted = await watcher.tick_once()
         assert out_halted["subscription_renewals_invoiced"] == 0
-        assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
+        assert await invoicing.list_payment_requests(user_id="alice", db=db) == []
 
         # RESUMED: the SAME grant is still consumable -> the invoice mints once.
         monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
                             lambda: False)
         out_resumed = await watcher.tick_once()
         assert out_resumed["subscription_renewals_invoiced"] == 1
-        assert len(await invoicing.list_payment_requests(user_id="rob", db=db)) == 1
+        assert len(await invoicing.list_payment_requests(user_id="alice", db=db)) == 1
     finally:
         await db.close()
 
@@ -359,11 +359,11 @@ async def test_settled_renewal_invoice_extends_subscription(tmp_path):
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="p@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+            user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
             subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -394,7 +394,7 @@ async def test_settled_non_subscription_invoice_unaffected(tmp_path):
     try:
         sub = await _make_sub(db, paid_through_offset_days=100)  # not due
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=5.0, purpose="one-off", db=db)
+            user_id="alice", session_id="", amount_usd=5.0, purpose="one-off", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
         agent = _Agent()
@@ -475,11 +475,11 @@ async def test_apply_settlement_failure_does_not_deliver_wake_and_retries_next_t
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="p@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_retry", amount_usd=10.0,
+            user_id="alice", session_id="sess_retry", amount_usd=10.0,
             purpose="renewal", subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -538,17 +538,17 @@ async def test_apply_settlement_failure_does_not_livelock_other_invoices(tmp_pat
     db = await _setup_db(tmp_path)
     try:
         sub_bad = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="bad@x.com", cron_job_id="job_bad",
             period_days=30, paid_through=int(time.time()), db=db)
         inv_bad = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_bad", amount_usd=10.0,
+            user_id="alice", session_id="sess_bad", amount_usd=10.0,
             purpose="renewal", subscription_id=sub_bad["id"], db=db)
         await invoicing.settle_payment_request(inv_bad["request_id"], db=db)
 
         # A plain, non-subscription invoice settling in the SAME tick.
         inv_ok = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_ok", amount_usd=3.0,
+            user_id="alice", session_id="sess_ok", amount_usd=3.0,
             purpose="one-off", db=db)
         await invoicing.settle_payment_request(inv_ok["request_id"], db=db)
 
@@ -608,11 +608,11 @@ async def test_apply_settlement_second_statement_failure_rolls_back_and_wake_fir
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="p@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_atomic", amount_usd=10.0,
+            user_id="alice", session_id="sess_atomic", amount_usd=10.0,
             purpose="renewal", subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -674,11 +674,11 @@ async def test_already_applied_result_proceeds_to_wake_without_double_extending(
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="p@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_dup", amount_usd=10.0,
+            user_id="alice", session_id="sess_dup", amount_usd=10.0,
             purpose="renewal", subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -754,7 +754,7 @@ async def test_unknown_subscription_does_not_silently_wake_as_settled(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_unknown", amount_usd=10.0,
+            user_id="alice", session_id="sess_unknown", amount_usd=10.0,
             purpose="renewal", subscription_id="sub_does_not_exist", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 

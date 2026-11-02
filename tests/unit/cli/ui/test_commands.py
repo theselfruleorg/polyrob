@@ -397,33 +397,6 @@ async def test_quiet_toggles_show_tools():
     assert ctx.renderer.show_tools is True
 
 
-@pytest.mark.asyncio
-async def test_model_persists(monkeypatch):
-    called = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: called.update(provider=p, model=m),
-    )
-    reg = default_registry()
-    ctx, buf = _plain_ctx()
-    await reg.dispatch("/model anthropic claude-opus-4-8", ctx)
-    assert called == {"provider": "anthropic", "model": "claude-opus-4-8"}
-    assert "new sessions" in buf.getvalue().lower()
-
-
-@pytest.mark.asyncio
-async def test_model_slash_form(monkeypatch):
-    called = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: called.update(provider=p, model=m),
-    )
-    reg = default_registry()
-    ctx, buf = _plain_ctx()
-    await reg.dispatch("/model openai/gpt-4o", ctx)
-    assert called == {"provider": "openai", "model": "gpt-4o"}
-
-
 class _FakePM:
     """Minimal pm() stand-in that routes session paths under a tmp dir."""
     def __init__(self, root):
@@ -552,17 +525,6 @@ async def test_model_rejects_unknown_provider(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_model_usage_when_single_ambiguous_arg():
-    # A lone arg with no "/" is still ambiguous (not a provider+model pair, not a
-    # "provider/model" string) — Usage is still shown for THIS shape. (0 args now
-    # launches the picker instead — see test_model_no_args_launches_picker_and_persists.)
-    reg = default_registry()
-    ctx, buf = _plain_ctx()
-    await reg.dispatch("/model openai", ctx)
-    assert "Usage" in buf.getvalue()
-
-
-@pytest.mark.asyncio
 async def test_model_no_args_launches_picker_and_persists(monkeypatch):
     called = {}
     monkeypatch.setattr(
@@ -665,32 +627,13 @@ class _FakeSwapAgent:
         self._result = result
         self.calls = []
 
-    async def swap_model(self, provider, model):
+    async def swap_model(self, provider, model, cause=None):
         self.calls.append((provider, model))
         return self._result
 
 
 @pytest.mark.asyncio
-async def test_model_live_swap_success(monkeypatch):
-    persisted = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: persisted.update(provider=p, model=m),
-    )
-    agent = _FakeSwapAgent({"ok": True, "provider": "anthropic", "model": "claude-sonnet-4-5", "previous": {}})
-    convo = type("Conv", (), {})()
-    convo.agent = agent
-    reg = default_registry()
-    ctx, buf = _plain_ctx(conversation=convo)
-    await reg.dispatch("/model anthropic claude-sonnet-4-5", ctx)
-    assert agent.calls == [("anthropic", "claude-sonnet-4-5")]
-    assert persisted == {"provider": "anthropic", "model": "claude-sonnet-4-5"}
-    out = buf.getvalue().lower()
-    assert "swapped live" in out or "live swap" in out
-
-
-@pytest.mark.asyncio
-async def test_model_live_swap_repaints_frame(monkeypatch):
+async def test_model_live_swap_repaints_frame(monkeypatch, _plan_stub):
     """After a live swap the toolbar/frame must show the NEW model immediately —
     SessionState.model is only set from an LLMCall event when unset, so the handler
     must push it (else the bar keeps the pre-swap model)."""
@@ -709,102 +652,97 @@ async def test_model_live_swap_repaints_frame(monkeypatch):
     assert state.provider == "anthropic"
 
 
-@pytest.mark.asyncio
-async def test_model_live_swap_failure_still_persists(monkeypatch):
-    persisted = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: persisted.update(provider=p, model=m),
-    )
-    agent = _FakeSwapAgent({"ok": False, "error": "boom", "previous": {}})
+@pytest.fixture
+def _plan_stub(monkeypatch):
+    """094: the REPL runs the shared pipeline; stub its catalog-backed plan."""
+    import agents.task.model_switch_service as svc
+    seen = {}
+
+    async def fake(cmd, *, user_id, current=(None, None)):
+        seen["cmd"] = cmd
+        if cmd.name == "pricey" and not cmd.confirm:
+            plan = svc.Plan("openrouter", "x/pricey", "id", None, cmd.default)
+            plan.quote = "Switch to x/pricey? …\nTo switch: /model pricey go"
+            return plan, ""
+        if cmd.name == "nope":
+            return None, "❌ 'nope' is not on openrouter. Nothing changed."
+        return svc.Plan(cmd.provider or "anthropic", cmd.name, "id", cmd.reasoning, cmd.default), ""
+
+    monkeypatch.setattr(svc, "plan_switch", fake)
+    return seen
+
+
+def _swap_ctx(result):
+    agent = _FakeSwapAgent(result)
     convo = type("Conv", (), {})()
     convo.agent = agent
-    reg = default_registry()
     ctx, buf = _plain_ctx(conversation=convo)
-    await reg.dispatch("/model anthropic claude-sonnet-4-5", ctx)
+    return agent, ctx, buf
+
+
+@pytest.mark.asyncio
+async def test_model_switches_this_session_only(monkeypatch, _plan_stub):
+    monkeypatch.setattr("cli.config_store.set_default_model",
+                        lambda p, m: pytest.fail("a plain /model is this session only"))
+    agent, ctx, buf = _swap_ctx({"ok": True, "provider": "anthropic",
+                                 "model": "claude-sonnet-4-5", "previous": {}})
+    await default_registry().dispatch("/model anthropic claude-sonnet-4-5", ctx)
     assert agent.calls == [("anthropic", "claude-sonnet-4-5")]
+    assert "swapped live" in buf.getvalue().lower()
+
+
+@pytest.mark.asyncio
+async def test_model_default_also_persists(monkeypatch, _plan_stub, tmp_path):
+    import core.runtime_paths as rp
+    monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
+    persisted = {}
+    monkeypatch.setattr("cli.config_store.set_default_model",
+                        lambda p, m: persisted.update(provider=p, model=m))
+    agent, ctx, buf = _swap_ctx({"ok": True, "provider": "anthropic",
+                                 "model": "claude-sonnet-4-5", "previous": {}})
+    await default_registry().dispatch("/model anthropic claude-sonnet-4-5 default", ctx)
     assert persisted == {"provider": "anthropic", "model": "claude-sonnet-4-5"}
+    assert "default for new sessions" in buf.getvalue().lower()
+
+
+@pytest.mark.asyncio
+async def test_model_quote_does_not_swap(_plan_stub):
+    agent, ctx, buf = _swap_ctx({"ok": True})
+    await default_registry().dispatch("/model pricey", ctx)
+    assert agent.calls == [] and "/model pricey go" in buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_model_swap_failure_says_so(_plan_stub):
+    agent, ctx, buf = _swap_ctx({"ok": False, "error": "boom", "previous": {}})
+    await default_registry().dispatch("/model anthropic claude-sonnet-4-5", ctx)
     out = buf.getvalue().lower()
-    assert "saved" in out or "default" in out
-    assert "failed" in out
-    assert "boom" in out
+    assert "failed" in out and "boom" in out
 
 
 @pytest.mark.asyncio
-async def test_model_no_live_agent_falls_back_to_persist_only(monkeypatch):
-    persisted = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: persisted.update(provider=p, model=m),
-    )
-    reg = default_registry()
-    ctx, buf = _plain_ctx()  # no conversation set -> ctx.agent is None
-    await reg.dispatch("/model anthropic claude-sonnet-4-5", ctx)
-    assert persisted == {"provider": "anthropic", "model": "claude-sonnet-4-5"}
-    out = buf.getvalue().lower()
-    assert "new sessions" in out
-    assert "no live session" in out
-
-
-# ---------------------------------------------------------------------------
-# /model <alias> — B6 model_aliases
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_model_alias_expands_and_swaps(monkeypatch):
-    persisted = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: persisted.update(provider=p, model=m),
-    )
-    monkeypatch.setattr(
-        "cli.config_store.load_cli_config",
-        lambda: {"model_aliases": {"fav": "anthropic/claude-sonnet-4-5"}},
-    )
-    agent = _FakeSwapAgent({"ok": True, "provider": "anthropic", "model": "claude-sonnet-4-5", "previous": {}})
-    convo = type("Conv", (), {})()
-    convo.agent = agent
-    reg = default_registry()
-    ctx, buf = _plain_ctx(conversation=convo)
-    await reg.dispatch("/model fav", ctx)
-    assert agent.calls == [("anthropic", "claude-sonnet-4-5")]
-    assert persisted == {"provider": "anthropic", "model": "claude-sonnet-4-5"}
-    out = buf.getvalue().lower()
-    assert "swapped live" in out or "live swap" in out
-
-
-@pytest.mark.asyncio
-async def test_model_alias_bare_model_infers_provider(monkeypatch):
-    persisted = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: persisted.update(provider=p, model=m),
-    )
-    monkeypatch.setattr(
-        "cli.config_store.load_cli_config",
-        lambda: {"model_aliases": {"mini": "gpt-5"}},
-    )
-    reg = default_registry()
-    ctx, buf = _plain_ctx()  # no live agent -> persist-only path
-    await reg.dispatch("/model mini", ctx)
-    assert persisted == {"provider": "openai", "model": "gpt-5"}
-
-
-@pytest.mark.asyncio
-async def test_model_unknown_alias_is_clean_error(monkeypatch):
-    persisted = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: persisted.update(provider=p, model=m),
-    )
-    monkeypatch.setattr("cli.config_store.load_cli_config", lambda: {})
-    reg = default_registry()
+async def test_model_no_live_agent(_plan_stub):
     ctx, buf = _plain_ctx()
-    await reg.dispatch("/model nope", ctx)
-    assert not persisted
-    out = buf.getvalue().lower()
-    assert "unknown alias" in out
-    assert "usage" in out
+    await default_registry().dispatch("/model anthropic claude-sonnet-4-5", ctx)
+    assert "no live session" in buf.getvalue().lower()
+
+
+@pytest.mark.asyncio
+async def test_model_cli_alias_expands(monkeypatch, _plan_stub):
+    monkeypatch.setattr("cli.config_store.load_cli_config",
+                        lambda: {"model_aliases": {"fav": "anthropic/claude-sonnet-4-5"}})
+    agent, ctx, buf = _swap_ctx({"ok": True, "provider": "anthropic",
+                                 "model": "claude-sonnet-4-5", "previous": {}})
+    await default_registry().dispatch("/model fav", ctx)
+    assert (_plan_stub["cmd"].provider, _plan_stub["cmd"].name) == ("anthropic", "claude-sonnet-4-5")
+    assert agent.calls == [("anthropic", "claude-sonnet-4-5")]
+
+
+@pytest.mark.asyncio
+async def test_model_refusal_is_shown(_plan_stub):
+    agent, ctx, buf = _swap_ctx({"ok": True})
+    await default_registry().dispatch("/model nope", ctx)
+    assert agent.calls == [] and "not on openrouter" in buf.getvalue()
 
 
 # ---------------------------------------------------------------------------

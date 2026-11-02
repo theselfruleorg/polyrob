@@ -43,7 +43,7 @@ def test_step_event_renders_message_bubble():
     r, _, buf = _renderer()
     r.on_event(normalize(_REAL_STEP))
     out = buf.getvalue()
-    # The message text appears as the rob bubble...
+    # The message text appears as the agent bubble...
     assert "hello" in out
     assert "polyrob" in out
     # ...but the demoted scaffolding does not (REPL message-only chat turn).
@@ -167,7 +167,7 @@ def test_on_turn_end_brain_state_with_stray_tokens_notice():
 
 def test_sub_agent_step_renders_oneliner_in_verbose():
     """Sub-agent step (different agent_name) → dim one-liner under verbose,
-    silence by default — its text is never "rob" speaking.
+    silence by default — its text is never "alice" speaking.
 
     Uses the REAL formatter shape: step dicts carry agent_name (never agent_id).
     Main agent is registered via a real-shaped agent_registration event first.
@@ -488,7 +488,7 @@ def test_no_summary_line_after_trivial_turn():
 
 
 def test_agent_message_has_speaker_mark():
-    """The dialog identity: a ● rob speaker line above the markdown body."""
+    """The dialog identity: a ● agent speaker line above the markdown body."""
     r, _, buf = _renderer()
     r.on_turn_start("hi")
     r.on_event(normalize(_MSG_STEP))

@@ -14,7 +14,7 @@ from modules.x402 import invoicing
 
 TREASURY = "0x" + "11" * 20
 USDC = "0x" + "aa" * 20
-ROB = "0x" + "bb" * 20
+DEMO = "0x" + "bb" * 20
 
 
 async def _mint(db, *, asset_id, address, decimals, raw, usd,
@@ -38,8 +38,8 @@ async def test_a_payment_in_one_asset_never_settles_an_invoice_in_another(x402_d
     usdc_inv = await _mint(x402_db, asset_id="usdc-base", address=USDC,
                            decimals=6, raw=1_000_000, usd=1.0)
     hit = await invoicing.match_pending_invoice(
-        TREASURY, ROB, 1_000_000, db=x402_db)
-    assert hit is None, "a ROB transfer settled a USDC invoice"
+        TREASURY, DEMO, 1_000_000, db=x402_db)
+    assert hit is None, "a DEMO transfer settled a USDC invoice"
     same = await invoicing.match_pending_invoice(
         TREASURY, USDC, 1_000_000, db=x402_db)
     assert same["request_id"] == usdc_inv
@@ -48,21 +48,21 @@ async def test_a_payment_in_one_asset_never_settles_an_invoice_in_another(x402_d
 @pytest.mark.asyncio
 async def test_an_18_decimal_amount_matches_exactly(x402_db):
     raw = 7 * 10 ** 18 + 3
-    rid = await _mint(x402_db, asset_id="rob", address=ROB, decimals=18,
+    rid = await _mint(x402_db, asset_id="demo", address=DEMO, decimals=18,
                       raw=raw, usd=0.5, chain="robinhood")
-    hit = await invoicing.match_pending_invoice(TREASURY, ROB, raw, chain="robinhood", db=x402_db)
+    hit = await invoicing.match_pending_invoice(TREASURY, DEMO, raw, chain="robinhood", db=x402_db)
     assert hit["request_id"] == rid
     assert await invoicing.match_pending_invoice(
-        TREASURY, ROB, raw - 1, chain="robinhood", db=x402_db) is None
+        TREASURY, DEMO, raw - 1, chain="robinhood", db=x402_db) is None
 
 
 @pytest.mark.asyncio
 async def test_the_oldest_pending_invoice_wins_on_a_tie(x402_db):
-    first = await _mint(x402_db, asset_id="rob", address=ROB, decimals=18,
+    first = await _mint(x402_db, asset_id="demo", address=DEMO, decimals=18,
                         raw=10 ** 18, usd=1.0, chain="robinhood")
-    await _mint(x402_db, asset_id="rob", address=ROB, decimals=18,
+    await _mint(x402_db, asset_id="demo", address=DEMO, decimals=18,
                 raw=10 ** 18, usd=1.0, chain="robinhood")
-    hit = await invoicing.match_pending_invoice(TREASURY, ROB, 10 ** 18, chain="robinhood", db=x402_db)
+    hit = await invoicing.match_pending_invoice(TREASURY, DEMO, 10 ** 18, chain="robinhood", db=x402_db)
     assert hit["request_id"] == first
 
 
@@ -101,12 +101,12 @@ async def test_a_legacy_row_is_NOT_matched_without_decimals(x402_db):
 async def test_a_kind_outside_the_allowed_set_is_not_matched(x402_db):
     """⚠️ The kind filter is why a room-action invoice needs kinds= — without
     it a paid offer sits pending forever with the money already received."""
-    await _mint(x402_db, asset_id="rob", address=ROB, decimals=18,
+    await _mint(x402_db, asset_id="demo", address=DEMO, decimals=18,
                 raw=10 ** 18, usd=1.0, kind="room_action", chain="robinhood")
     assert await invoicing.match_pending_invoice(
-        TREASURY, ROB, 10 ** 18, chain="robinhood", db=x402_db) is None
+        TREASURY, DEMO, 10 ** 18, chain="robinhood", db=x402_db) is None
     hit = await invoicing.match_pending_invoice(
-        TREASURY, ROB, 10 ** 18, kinds=("agent_invoice", "room_action"),
+        TREASURY, DEMO, 10 ** 18, kinds=("agent_invoice", "room_action"),
         chain="robinhood", db=x402_db)
     assert hit is not None
     assert hit["kind"] == "room_action"

@@ -68,7 +68,7 @@ def test_character_fallback_when_no_explicit_persona(tmp_path, monkeypatch):
 def test_async_resolver_prefers_container_character_manager(monkeypatch):
     class _Char:
         def to_dict(self):
-            return {"name": "Rob", "bio": "Bold concierge.", "adjectives": ["bold"]}
+            return {"name": "Nova", "bio": "Bold concierge.", "adjectives": ["bold"]}
 
     class _CM:
         async def get_default_character(self):
@@ -83,7 +83,7 @@ def test_async_resolver_prefers_container_character_manager(monkeypatch):
     out = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         resolve_persona(container=_Container())
     )
-    assert "Rob" in out and "bold" in out
+    assert "Nova" in out and "bold" in out
 
 
 def test_both_surfaces_delegate_to_the_resolver():
@@ -114,14 +114,14 @@ def test_neutral_default_on_clean_env():
     # the neutral framework persona — never a specific person's bot.
     out = resolve_persona_sync()
     assert "You are POLYROB" in out
-    assert "You are Rob" not in out
+    assert "You are Nova" not in out
     assert "Swar" not in out  # Swarāj lore must not ship
     assert "Selfrule" not in out
 
 
 def test_shipped_characters_are_neutral_only():
     # The package must ship exactly the neutral character — a specific
-    # operator's bot (rob/trump) is profile data, not framework code.
+    # operator's named bot is profile data, not framework code.
     from pathlib import Path
 
     shipped = sorted(p.name for p in

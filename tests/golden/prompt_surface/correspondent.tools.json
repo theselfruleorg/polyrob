@@ -1,26 +1,6 @@
 {
   "tools": [
     {
-      "name": "agent_avatar",
-      "sha": "414a85c0b80e"
-    },
-    {
-      "name": "agent_status",
-      "sha": "729d3abd9f2d"
-    },
-    {
-      "name": "autonomy_control",
-      "sha": "1f2e50255e3a"
-    },
-    {
-      "name": "contact_history",
-      "sha": "cd5b9107df8e"
-    },
-    {
-      "name": "delegate_task",
-      "sha": "99c7f57cb8f9"
-    },
-    {
       "name": "done",
       "sha": "d52ce43147c8"
     },
@@ -46,7 +26,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "8b543916e069"
+      "sha": "05c1fe29edcb"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -77,60 +57,16 @@
       "sha": "1cf2893b4073"
     },
     {
-      "name": "load_tool",
-      "sha": "a7b2720e3dbc"
-    },
-    {
       "name": "message",
       "sha": "a477faab6c1f"
-    },
-    {
-      "name": "owner_ask",
-      "sha": "fff14dbc6121"
-    },
-    {
-      "name": "owner_doc_manage",
-      "sha": "d4315aebe58c"
-    },
-    {
-      "name": "preferences",
-      "sha": "ad8318905601"
-    },
-    {
-      "name": "present_choice",
-      "sha": "e65bf115d368"
-    },
-    {
-      "name": "propose_action",
-      "sha": "bb1c23b06a81"
-    },
-    {
-      "name": "propose_setting",
-      "sha": "6f27817332ef"
     },
     {
       "name": "read_skill_resource",
       "sha": "5157194c3386"
     },
     {
-      "name": "room_moderate",
-      "sha": "47c4b36dfcef"
-    },
-    {
-      "name": "room_read",
-      "sha": "9af7efe8d3e0"
-    },
-    {
-      "name": "self_context_manage",
-      "sha": "8977db1c077b"
-    },
-    {
       "name": "send_message",
       "sha": "5639154a5361"
-    },
-    {
-      "name": "skill_manage",
-      "sha": "1a9acba12d5a"
     },
     {
       "name": "task_todo_add",
@@ -159,10 +95,6 @@
     {
       "name": "tool_search",
       "sha": "7d8f9245f92d"
-    },
-    {
-      "name": "trade_mandate_propose",
-      "sha": "ff5dfd36d681"
     }
   ]
 }

@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { startSession } from "../static/app/chat-open.js";
 
-const NO_MODEL = "Rob cannot answer from this console yet. Your text is still here.";
+const NO_MODEL = "The agent cannot answer from this console yet. Your text is still here.";
 
 function page() {
   document.body.innerHTML =

@@ -35,7 +35,7 @@ async def test_self_wake_is_dropped_with_reason_while_paused(home, monkeypatch):
     ac.pause(str(home), via="test")
     agent = _agent(home)
     outcomes = _capture_events(monkeypatch)
-    assert await agent.deliver_self_wake("sid", "rob", "text", metadata={"source": "goal"}) is False
+    assert await agent.deliver_self_wake("sid", "alice", "text", metadata={"source": "goal"}) is False
     assert ("self_wake", "paused", "paused (all) by owner via test") in outcomes
 
 
@@ -52,7 +52,7 @@ async def test_correspondent_delivery_is_held_while_paused(home, monkeypatch):
             recorded.append((a, k))
 
     agent.container = type("Ct", (), {"get_service": lambda self, n: Store() if n == "conversation_store" else None})()
-    agent.session_manager = type("SM", (), {"get_session_info": lambda self, sid: {"user_id": "rob", "status": "completed"}})()
+    agent.session_manager = type("SM", (), {"get_session_info": lambda self, sid: {"user_id": "alice", "status": "completed"}})()
     called = []
 
     async def _never(*a, **k):
@@ -61,7 +61,7 @@ async def test_correspondent_delivery_is_held_while_paused(home, monkeypatch):
     monkeypatch.setattr(agent, "_resolve_or_recreate", _never, raising=False)
     ok = await agent.deliver_correspondent_data("sid", "x@y", "hi", {"message_id": "m1"}, surface="email")
     assert ok is False and called == []
-    assert recorded and recorded[0][0][:3] == ("rob", "email", "x@y")
+    assert recorded and recorded[0][0][:3] == ("alice", "email", "x@y")
 
 
 @pytest.mark.asyncio
@@ -72,7 +72,7 @@ async def test_correspondent_data_never_reruns_a_finished_task(home, monkeypatch
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     agent = _agent(home)
     agent.container = None
-    info = {"user_id": "rob", "status": "completed",
+    info = {"user_id": "alice", "status": "completed",
             "request": {"task": "trade the treasury", "max_steps": 40}}
     updates = []
 
@@ -113,8 +113,11 @@ async def test_correspondent_data_never_reruns_a_finished_task(home, monkeypatch
     ok = await agent.deliver_correspondent_data("sid", "x@y", "hi", {}, surface="email")
     assert ok is True
     assert seen["task"].startswith("[correspondent-reply]") and "trade the treasury" not in seen["task"]
-    assert seen["max_steps"] <= 8
-    assert updates and updates[0][0] == "sid"
+    from agents.task.constants import CHAT_MAX_STEPS
+    assert seen["max_steps"] <= CHAT_MAX_STEPS
+    # the narrowing is the reply run's own scope: the stored request is untouched
+    assert updates == [] and info["request"]["task"] == "trade the treasury"
+    assert agent._run_max_steps("sid", info["request"]) <= CHAT_MAX_STEPS
 
 
 @pytest.mark.asyncio
@@ -141,7 +144,7 @@ async def test_delegation_wake_kick_is_held_for_autonomous_sessions_while_paused
     agent._registry = type("R", (), {"register": lambda self, sid, orch: None})()
     kicks = {}
     for sid in ("auto-kick", "chat-kick"):
-        orch = type("O", (), {"user_id": "rob"})()
+        orch = type("O", (), {"user_id": "alice"})()
         # the registration seam wires the kick onto the orchestrator
         TaskAgent.register_orchestrator(agent, sid, orch)
         kicks[sid] = orch._wake_kick

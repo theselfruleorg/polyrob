@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Reading Hyperliquid markets, funding and depth'
   polyrob-priority: '5'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["hyperliquid_data"]}'
   polyrob-version: '2'
 ---

@@ -6,7 +6,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "729d3abd9f2d"
+      "sha": "a537b675a8de"
     },
     {
       "name": "autonomy_control",
@@ -22,15 +22,19 @@
     },
     {
       "name": "cronjob_edit",
-      "sha": "c76144282bc0"
+      "sha": "bf34d0b6ceff"
     },
     {
       "name": "cronjob_list",
       "sha": "74312efe0bdb"
     },
     {
+      "name": "cronjob_run_now",
+      "sha": "5e06266754e4"
+    },
+    {
       "name": "cronjob_schedule",
-      "sha": "ac9e4bce6c7c"
+      "sha": "b894eb97c2d3"
     },
     {
       "name": "cronjob_show",
@@ -38,7 +42,7 @@
     },
     {
       "name": "defi_trade_approve_token",
-      "sha": "f362c84ca67d"
+      "sha": "ec946205ebf6"
     },
     {
       "name": "defi_trade_bridge",
@@ -46,35 +50,35 @@
     },
     {
       "name": "defi_trade_call",
-      "sha": "985068c12bbc"
+      "sha": "488f7edf4061"
     },
     {
       "name": "defi_trade_deploy_contract",
-      "sha": "0d3d32d54c20"
+      "sha": "c45201868b9b"
     },
     {
       "name": "defi_trade_deploy_token",
-      "sha": "7cf2dc66850d"
+      "sha": "d3d2d8b10c8c"
     },
     {
       "name": "defi_trade_lp_add",
-      "sha": "7e87d5b4cf0f"
+      "sha": "472f229efaca"
     },
     {
       "name": "defi_trade_lp_collect",
-      "sha": "e62b4155217e"
+      "sha": "224ade2dcaba"
     },
     {
       "name": "defi_trade_lp_remove",
-      "sha": "0205fab0950f"
+      "sha": "b83c32187392"
     },
     {
       "name": "defi_trade_nft_revoke_approval",
-      "sha": "a6932eeb1ddd"
+      "sha": "03efede62a3b"
     },
     {
       "name": "defi_trade_nft_transfer",
-      "sha": "0e5608b23817"
+      "sha": "29999b1b477c"
     },
     {
       "name": "defi_trade_register_agent",
@@ -82,19 +86,19 @@
     },
     {
       "name": "defi_trade_revoke_approval",
-      "sha": "a5b2005c550d"
+      "sha": "b6ffe47c62d0"
     },
     {
       "name": "defi_trade_set_agent_uri",
-      "sha": "791f9fb05136"
+      "sha": "3b5479429a07"
     },
     {
       "name": "defi_trade_solana_deploy_token",
-      "sha": "fb2c9bf2ff4b"
+      "sha": "cd184b9c4316"
     },
     {
       "name": "defi_trade_solana_swap",
-      "sha": "171b00dea17c"
+      "sha": "2803f43bef04"
     },
     {
       "name": "defi_trade_solana_transfer",
@@ -102,19 +106,19 @@
     },
     {
       "name": "defi_trade_swap",
-      "sha": "fc325aba1c13"
+      "sha": "63842ea4bd84"
     },
     {
       "name": "defi_trade_transfer",
-      "sha": "5c8c320d1c96"
+      "sha": "20ff45c7579f"
     },
     {
       "name": "defi_trade_unwrap",
-      "sha": "3d91c0ad62b3"
+      "sha": "53af2072b3d2"
     },
     {
       "name": "defi_trade_wrap",
-      "sha": "1e2a141b050d"
+      "sha": "243b7475be7d"
     },
     {
       "name": "delegate_task",
@@ -146,7 +150,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "8b543916e069"
+      "sha": "05c1fe29edcb"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -174,7 +178,7 @@
     },
     {
       "name": "goal_cancel",
-      "sha": "c02104f7fee8"
+      "sha": "ac4e5aa2da7a"
     },
     {
       "name": "goal_create",
@@ -218,11 +222,11 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "d4315aebe58c"
+      "sha": "2c72779ffd6d"
     },
     {
       "name": "preferences",
-      "sha": "ad8318905601"
+      "sha": "266de197b9b5"
     },
     {
       "name": "present_choice",
@@ -230,15 +234,19 @@
     },
     {
       "name": "propose_action",
-      "sha": "bb1c23b06a81"
+      "sha": "8adf404efe07"
     },
     {
       "name": "propose_setting",
-      "sha": "6f27817332ef"
+      "sha": "9d443cf89616"
     },
     {
       "name": "read_skill_resource",
       "sha": "5157194c3386"
+    },
+    {
+      "name": "recent_activity",
+      "sha": "81d042365cd7"
     },
     {
       "name": "room_moderate",
@@ -250,15 +258,19 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "8977db1c077b"
+      "sha": "7d5aee19c522"
     },
     {
       "name": "send_message",
       "sha": "5639154a5361"
     },
     {
+      "name": "session_search",
+      "sha": "f6fbe7338f45"
+    },
+    {
       "name": "skill_manage",
-      "sha": "1a9acba12d5a"
+      "sha": "816a947f06b5"
     },
     {
       "name": "task_todo_add",
@@ -294,7 +306,7 @@
     },
     {
       "name": "trade_mandate_propose",
-      "sha": "ff5dfd36d681"
+      "sha": "a10e0c5bdc0d"
     },
     {
       "name": "wallet_sign_api_call",

@@ -313,3 +313,40 @@ def test_edit_task_file_is_tenant_scoped(tmp_path):
     res = _invoke(["edit", job_id, "--task-file", str(f), "--user", "u2"], tmp_path)
     assert res.exit_code != 0
     assert _jobs(tmp_path, "u1")[0].task == "old prose"
+
+
+# Routines review 2026-10-29 §13: the CLI edit wrote the store directly — no
+# CRON_EDITED audit row (two re-times on 10-26 were absent from telemetry), no
+# recurrence floor, no live-job check. It now rides CronService.edit.
+
+def test_edit_schedule_goes_through_the_service_and_is_audited(tmp_path, monkeypatch):
+    import core.event_log as el
+    from core.event_kinds import CRON_EDITED
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
+    monkeypatch.setattr(el, "_INSTANCES", {})
+    log = el.TelemetryEventLog(str(tmp_path / "te.db"))
+    monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
+    job_id = _new(tmp_path)
+    res = _invoke(["edit", job_id, "--schedule", "0 18 */3 * *", "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    assert "restarts on the 1st of every month" in res.output
+    (row,) = log.query(kind=CRON_EDITED)
+    assert row["attrs"]["via"] == "cli" and row["attrs"]["fields"] == ["schedule"]
+
+
+def test_edit_schedule_below_the_floor_is_refused(tmp_path):
+    job_id = _new(tmp_path)
+    res = _invoke(["edit", job_id, "--schedule", "1m", "--user", "u1"], tmp_path)
+    assert res.exit_code != 0 and "minimum" in res.output
+    assert _jobs(tmp_path, "u1")[0].schedule_spec == "30m"
+
+
+def test_edit_same_value_says_nothing_changed(tmp_path):
+    job_id = _new(tmp_path)
+    res = _invoke(["edit", job_id, "--deliver", "none", "--user", "u1"], tmp_path)
+    assert res.exit_code == 0 and "nothing changed" in res.output
+
+
+def _new(tmp_path):
+    _invoke(["schedule", "scout", "30m", "--user", "u1"], tmp_path)
+    return _jobs(tmp_path, "u1")[0].id

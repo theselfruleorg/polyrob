@@ -22,7 +22,7 @@ def home(tmp_path):
 def _clean_env(monkeypatch):
     for var in ("GOAL_NOTIFY_ON_DONE", "SELF_WAKE_ENABLED",
                 "BACKGROUND_REVIEW_ENABLED", "CORRESPONDENT_MAX_NEW_PER_DAY",
-                "POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_POSTURE"):
+                "POLYROB_LOCAL", "AUTONOMY_POSTURE"):
         monkeypatch.delenv(var, raising=False)
 
 

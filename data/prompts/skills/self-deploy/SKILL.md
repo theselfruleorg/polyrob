@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Bringing a new instance of yourself online'
   polyrob-priority: '1'
-  polyrob-auto-activate: 'true'
   polyrob-version: '1'
 ---
 # Self-deploy — bring yourself online
@@ -23,10 +22,9 @@ Three rules for the whole procedure:
 2. **Provision before you ask.** If a lever exists that lets you create the
    thing yourself (an inbox, a goal, a cron job), pull it. An X account is
    NOT such a lever — see Step 2. Ask only for what needs a human: a secret
-   you cannot mint, money, a CAPTCHA (you never solve one), an env flag (flags are frozen at process start and the env files are
-   hard-denied to you — an env change is ALWAYS an owner edit + restart; the
-   owner restarts from chat with `/restart`, and you may put that card in front
-   of him with `propose_action`).
+   you cannot mint, money, a CAPTCHA (you never solve one), a setting (the env
+   files are hard-denied to you; `propose_setting` files the change for the
+   owner, and it applies at the restart he sends with `/restart`).
 3. **Report facts, not hopes.** Every line of the readiness table is one of
    `ready` / `missing → <exact remedy>` / `unverified (<reason>)`. A check
    that did not run is not a check that passed.
@@ -88,7 +86,7 @@ signup, and the owner needs it to know who is writing.
   env, then `/restart`. A pay-per-use tier is enough; writes cost ~$0.015 each.
 
 **Standing work.** Only if `goals`/`cron` show as loaded AND the owner has
-told you what your mission is. Create the objective(s) with `goal_create`
+told you what your mission is. Create the goal(s) with `goal_create`
 (whether a goal you write yourself may carry a money tool is the owner's
 money regime). Trading runs only under a mandate the owner starts with
 `/trade start` (`trading-mandate`); other money work the owner grants with
@@ -96,16 +94,19 @@ money regime). Trading runs only under a mandate the owner starts with
 `cronjob_schedule`. Never seed work
 the owner did not name.
 
-**Identity docs.** If the owner gives you durable facts about who you are or
-how they want you to operate, write them through `owner_doc_manage` /
-`self_context_manage` / `preferences(operation="contract_propose", text=…)`
-— never as loose files (`text` is the FULL owner doc: keep every existing
-line). The write is always queued in `/pending` as a draft for the owner
-to activate. Report what the result says.
+**Identity docs.** If the owner gives you durable facts or rules about how
+they want you to operate, write them through `owner_doc_manage` — never as
+loose files. The write is always queued in `/pending` as a draft for the
+owner to activate. Report what the result says.
 
 ## Step 3 — Ask the owner, once, for exactly what is missing
 
-Raise ONE `owner_ask` for all of it (a durable ask the owner answers with
+File every missing SETTING with `propose_setting` first, one call per setting:
+it puts a one-tap card in front of the owner for a console setting and files
+the operator half as one ask, deduped by line, so the same line is never
+asked twice. It needs a live owner turn: in an autonomous run, put the
+settings in the ask below instead. Then raise ONE `owner_ask` for the rest — keys, funding, a
+CAPTCHA (a durable ask the owner answers with
 `/fulfill` or in chat; in an autonomous run, never a question in a message —
 the run cannot wait for a reply). Its shape is fixed by the tool:
 
@@ -123,13 +124,15 @@ Typical items:
   running; skip. If a cheaper aux model is wanted, name the flag
   (`AUX_MODEL_JUDGE` / `AUX_MODEL_COMPACTION`).
 - **Funding** — give the EXACT addresses from `x402_wallet_status`, per chain,
-  and say which asset is gas on each (ETH on Base/Robinhood/Ethereum, SOL on
+  and say which asset is gas on each (ETH on Base/Ethereum, SOL on
   Solana, POL on Polygon). Say what you plan to do with the first dollars.
   Never quote an address from memory.
 - **`AGENTMAIL_API_KEY`** — if no email lever exists at all.
 - **X API keys** — as above.
-- **Env flags** — any `gated:<reason>` tool the mission needs. Name the flag
-  from the remedy text verbatim. Money flags (`DEFI_TRADE_ENABLED`,
+- **Settings** — not in the ask: each one went through `propose_setting`
+  above, unless this is an autonomous run (any `gated:<reason>` tool the
+  mission needs; take the setting from the remedy text verbatim).
+  Money settings (`DEFI_TRADE_ENABLED`,
   `SOLANA_TRADE_ENABLED`, `LAUNCHPAD_ENABLED`, `DEFI_AGENT_AUTONOMY`,
   `DEFI_AUTONOMOUS_TURN_TRADING`, `DEFI_TIERED_SPEND_LANE`) and caps
   (`DEFI_AUTONOMOUS_MAX_USD`, `WALLET_DAILY_CAP_USD`,
@@ -150,18 +153,18 @@ it moves to `ready`. Then send the readiness table once, in this shape:
 ```
 READINESS — <instance> @ <date>
 model        ready      <provider/model from agent_status>
-wallet       ready      evm 0x…  solana …   (base $X gas Y · robinhood gas Z · solana N SOL)
+wallet       ready      evm 0x…  solana …   (<chain> $X gas Y · … · solana N SOL)
 email        ready      <address>
 x            ready      api @handle, writes ON · browser rail: off (owner's choice)
 autonomy     ready      mode=autonomous posture=full goals=on cron=on
-trading      ready      defi_trade/solana_swap/launchpad loaded; ceiling $A/tx, $B/day
-standing     ready      objective "<title>" · cron "<task>" every Nh
+trading      ready      <money tools loaded>; ceiling $A/tx, $B/day
+standing     ready      goal "<title>" · job "<task>" every Nh
 pending      —          <anything still on the owner's list, or "nothing">
 ```
 
 A row that is not `ready` says `missing → <remedy>` or `unverified (<why>)`.
-Write the same table to memory (`memory add` if the tool is loaded, else your
-KB) so the next session does not redo the interview.
+Save the same table as a `knowledge` note (your KB) so the next session does
+not redo the interview.
 
 ## What this skill never does
 

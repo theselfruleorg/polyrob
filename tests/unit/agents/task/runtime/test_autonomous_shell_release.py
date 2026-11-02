@@ -46,7 +46,7 @@ class _FakeAgent:
 def test_autonomous_run_releases_shell_backend():
     orch = _FakeOrch()
     outcome = asyncio.run(run_task_to_outcome(
-        _FakeAgent(orch), user_id="rob", request={}, autonomous=True))
+        _FakeAgent(orch), user_id="alice", request={}, autonomous=True))
     assert outcome.session_id == "sess-shell-1"
     assert orch.released == 1
 
@@ -54,7 +54,7 @@ def test_autonomous_run_releases_shell_backend():
 def test_interactive_run_keeps_shell_backend():
     orch = _FakeOrch()
     outcome = asyncio.run(run_task_to_outcome(
-        _FakeAgent(orch), user_id="rob", request={}, autonomous=False))
+        _FakeAgent(orch), user_id="alice", request={}, autonomous=False))
     assert outcome.session_id == "sess-shell-1"
     assert orch.released == 0, "a chat session keeps its container between turns"
 
@@ -65,14 +65,14 @@ def test_release_failure_never_breaks_the_run():
             raise RuntimeError("docker down")
 
     outcome = asyncio.run(run_task_to_outcome(
-        _FakeAgent(_BoomOrch()), user_id="rob", request={}, autonomous=True))
+        _FakeAgent(_BoomOrch()), user_id="alice", request={}, autonomous=True))
     assert outcome.session_id == "sess-shell-1"
     assert outcome.refusal is False
 
 
 def test_missing_orchestrator_is_tolerated():
     outcome = asyncio.run(run_task_to_outcome(
-        _FakeAgent(None), user_id="rob", request={}, autonomous=True))
+        _FakeAgent(None), user_id="alice", request={}, autonomous=True))
     assert outcome.session_id == "sess-shell-1"
 
 

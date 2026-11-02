@@ -1,4 +1,4 @@
-"""``/usage [days]`` — what Rob's AI use cost, split (2026-10-14 review D-11 / E-6).
+"""``/usage [days]`` — what the agent's AI use cost, split (2026-10-14 review D-11 / E-6).
 
 Owner decision D6: one spend view on every seat (Telegram, the console, which
 routes through Telegram, and the terminal). The numbers and the lines are

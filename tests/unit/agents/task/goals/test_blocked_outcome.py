@@ -16,7 +16,7 @@ from agents.task.goals.context import (
 
 def test_goal_run_prompt_teaches_blocked_exit(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Post the announcement")
+    g = b.create(user_id="alice", title="Post the announcement")
     t = build_goal_run_task(g)
     assert "OUTCOME: BLOCKED" in t
     assert "do NOT report success" in t
@@ -46,7 +46,7 @@ def test_extract_then_parse_end_to_end():
 
 def test_block_from_ready_flips_only_ready_rows(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Post it")
+    g = b.create(user_id="alice", title="Post it")
     b.claim(g.id, "w", ttl_seconds=60)
     # below-breaker failure returns the goal to ready
     b.record_failure(g.id, error="agent declared BLOCKED: need TWITTER_ENABLED",
@@ -60,7 +60,7 @@ def test_block_from_ready_flips_only_ready_rows(tmp_path):
 def test_block_from_ready_respects_owner_intervention(tmp_path):
     """An owner-cancelled row must never be resurrected into 'blocked'."""
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Post it")
+    g = b.create(user_id="alice", title="Post it")
     b.claim(g.id, "w", ttl_seconds=60)
     b.record_failure(g.id, error="x", claim_token=b.get(g.id).claim_token)  # back to ready
     b.cancel(g.id)

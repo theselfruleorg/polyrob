@@ -1,7 +1,7 @@
 """The `room_moderate` action — the agent MODERATES an allowlisted room.
 
 Owner rail 2026-10-05: "it should have mute and ban and other exposed as
-actions not just read and send messages". Rob could read its group room
+actions not just read and send messages". the agent could read its group room
 (`room_read`) and post in it (`message`), and told the owner "I can't ban — I
 have no moderation tool" while a spammer posted a promo pitch. The transport
 already existed: the owner's own `/mute` `/ban` in the room run through the ONE

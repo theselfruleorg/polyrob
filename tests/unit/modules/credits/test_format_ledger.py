@@ -3,7 +3,7 @@ from modules.credits.unified_ledger import format_ledger
 
 def _led(**over):
     led = {
-        "user_id": "rob", "window_days": 1,
+        "user_id": "alice", "window_days": 1,
         "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 2.0,
                      "pending_count": 1, "balance_usd": 10.0, "net_usd": 0.0,
                      "available": True},

@@ -117,7 +117,7 @@ def test_the_eip681_uri_names_the_invoices_own_token_and_chain_id(monkeypatch):
     monkeypatch.setenv("INVOICE_QR_STYLE", "eip681")
     from modules.x402.artifact import build_payment_artifact
     uri = build_payment_artifact(_inv(
-        chain="robinhood", asset_id="rob", asset_address="0x" + "bb" * 20,
+        chain="robinhood", asset_id="demo", asset_address="0x" + "bb" * 20,
         asset_decimals=18, amount_raw=7 * 10 ** 18, amount_usd=0.5,
     ))["pay_uri"]
     assert uri.startswith("ethereum:0x" + "bb" * 20)
@@ -169,14 +169,14 @@ def test_a_non_evm_invoice_falls_back_to_the_bare_address(monkeypatch):
 
 
 def test_the_pay_text_names_the_actual_token_not_always_usdc():
-    """⚠️ A ROB invoice that reads 'Pay $0.50 USDC' tells the payer to send the
+    """⚠️ A DEMO invoice that reads 'Pay $0.50 USDC' tells the payer to send the
     wrong token."""
     from modules.x402.artifact import build_payment_artifact
     text = build_payment_artifact(_inv(
-        chain="robinhood", asset_id="rob", asset_symbol="ROB",
+        chain="robinhood", asset_id="demo", asset_symbol="DEMO",
         asset_address="0x" + "bb" * 20, asset_decimals=18,
         amount_raw=7 * 10 ** 18, amount_usd=0.5,
     ))["pay_text"]
-    assert "ROB" in text
+    assert "DEMO" in text
     assert "USDC" not in text
     assert "7" in text          # the token amount, not only the USD figure

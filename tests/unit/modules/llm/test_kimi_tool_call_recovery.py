@@ -3,7 +3,7 @@
 Regression for the NVIDIA-NIM + kimi-k2.6 failure: NIM intermittently returns
 Kimi's native ``<|tool_call_begin|>`` tokens as raw text in ``content`` with no
 structured ``tool_calls``. The agent then loses the actions (wasted planning
-turn) and dumps the tokens to the CLI. ROB recovers them client-side.
+turn) and dumps the tokens to the CLI. POLYROB recovers them client-side.
 """
 
 from __future__ import annotations

@@ -67,7 +67,7 @@ async def test_deploy_guard_send_and_receipt_run_off_the_loop(monkeypatch):
     monkeypatch.setattr(dc._Rail, "sign_and_send", _slow_send)
     monkeypatch.setattr(dc._Rail, "await_receipt", _slow_receipt)
     res, ticks = await _ticks_during(tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000,
         max_spend_usd=5.0, dry_run=False)))
     assert "DEPLOYED AND CONFIRMED" in (res.extracted_content or ""), res.error
     # Three blocking waits of 0.3 s: a frozen loop ticks ~0 times.

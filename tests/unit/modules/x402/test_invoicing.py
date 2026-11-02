@@ -40,7 +40,7 @@ async def test_create_payment_request_refused_while_halted(tmp_path, monkeypatch
     try:
         with pytest.raises(ValueError, match="autonomy pause.*/resume"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="sess_1", amount_usd=5.0,
+                user_id="alice", session_id="sess_1", amount_usd=5.0,
                 purpose="research report", db=db,
             )
     finally:
@@ -52,7 +52,7 @@ async def test_create_persists_pending_invoice_row(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_1", amount_usd=5.0,
+            user_id="alice", session_id="sess_1", amount_usd=5.0,
             purpose="research report", db=db,
         )
         assert inv["status"] == "pending"
@@ -64,7 +64,7 @@ async def test_create_persists_pending_invoice_row(tmp_path):
         meta = row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"])
         assert meta["kind"] == "agent_invoice"
         assert meta["session_id"] == "sess_1"
-        assert meta["tenant_id"] == "rob"
+        assert meta["tenant_id"] == "alice"
         assert meta["wake_delivered"] is False
     finally:
         await db.close()
@@ -75,7 +75,7 @@ async def test_get_payment_request_returns_row(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         created = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="test", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="test", db=db)
         got = await invoicing.get_payment_request(created["request_id"], db=db)
         assert got is not None
         assert got["request_id"] == created["request_id"]
@@ -102,7 +102,7 @@ async def test_create_stores_correspondent_ref(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=3.0, purpose="svc", db=db,
+            user_id="alice", session_id="s1", amount_usd=3.0, purpose="svc", db=db,
             correspondent_ref={"surface": "email", "address": "x@y.z", "thread_id": ""})
         rows = await invoicing.settled_unnotified_invoices(db=db)  # none settled yet
         assert rows == []
@@ -121,7 +121,7 @@ async def test_create_drops_invalid_correspondent_ref(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=3.0, purpose="svc", db=db,
+            user_id="alice", session_id="s1", amount_usd=3.0, purpose="svc", db=db,
             correspondent_ref={"surface": "", "address": "x@y.z"})
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         settled = await invoicing.settled_unnotified_invoices(db=db)
@@ -137,7 +137,7 @@ async def test_amount_ceiling_enforced(tmp_path, monkeypatch):
         monkeypatch.setenv("X402_INVOICE_MAX_USD", "10")
         with pytest.raises(ValueError, match="ceiling"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s", amount_usd=11.0, purpose="too big", db=db)
+                user_id="alice", session_id="s", amount_usd=11.0, purpose="too big", db=db)
     finally:
         await db.close()
 
@@ -149,10 +149,10 @@ async def test_daily_cap_enforced(tmp_path, monkeypatch):
         monkeypatch.setenv("X402_INVOICE_DAILY_MAX", "2")
         for i in range(2):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s", amount_usd=1.0, purpose=f"job {i}", db=db)
+                user_id="alice", session_id="s", amount_usd=1.0, purpose=f"job {i}", db=db)
         with pytest.raises(ValueError, match="daily"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s", amount_usd=1.0, purpose="job 3", db=db)
+                user_id="alice", session_id="s", amount_usd=1.0, purpose="job 3", db=db)
     finally:
         await db.close()
 
@@ -164,7 +164,7 @@ async def test_missing_treasury_refused(tmp_path, monkeypatch):
         monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "")
         with pytest.raises(ValueError, match="treasury"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s", amount_usd=1.0, purpose="p", db=db)
+                user_id="alice", session_id="s", amount_usd=1.0, purpose="p", db=db)
     finally:
         await db.close()
 
@@ -174,7 +174,7 @@ async def test_settle_transitions_pending_once(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=2.0, purpose="p", db=db)
+            user_id="alice", session_id="s", amount_usd=2.0, purpose="p", db=db)
         rid = inv["request_id"]
         assert await invoicing.settle_payment_request(rid, transaction_hash="0xabc", db=db) is True
         # idempotent: second settle is a no-op
@@ -190,7 +190,7 @@ async def test_expiry_marks_stale_pending(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=2.0, purpose="p",
+            user_id="alice", session_id="s", amount_usd=2.0, purpose="p",
             expiry_hours=1.0, db=db)
         # nothing expires yet
         assert await invoicing.expire_stale_requests(db=db) == []
@@ -212,13 +212,13 @@ async def test_settled_unnotified_and_mark_delivered(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_9", amount_usd=3.0, purpose="p", db=db)
+            user_id="alice", session_id="sess_9", amount_usd=3.0, purpose="p", db=db)
         assert await invoicing.settled_unnotified_invoices(db=db) == []
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         pending_wakes = await invoicing.settled_unnotified_invoices(db=db)
         assert len(pending_wakes) == 1
         assert pending_wakes[0]["session_id"] == "sess_9"
-        assert pending_wakes[0]["user_id"] == "rob"
+        assert pending_wakes[0]["user_id"] == "alice"
         await invoicing.mark_wake_delivered(inv["request_id"], db=db)
         assert await invoicing.settled_unnotified_invoices(db=db) == []
     finally:
@@ -230,10 +230,10 @@ async def test_list_is_tenant_scoped(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=1.0, purpose="mine", db=db)
+            user_id="alice", session_id="s1", amount_usd=1.0, purpose="mine", db=db)
         await invoicing.create_payment_request(
             user_id="other", session_id="s2", amount_usd=1.0, purpose="theirs", db=db)
-        mine = await invoicing.list_payment_requests(user_id="rob", db=db)
+        mine = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert len(mine) == 1 and mine[0]["purpose"] == "mine"
     finally:
         await db.close()
@@ -249,9 +249,9 @@ async def test_list_status_filter_applied_before_limit(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         old = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=1.0, purpose="old pending", db=db)
+            user_id="alice", session_id="s1", amount_usd=1.0, purpose="old pending", db=db)
         new = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=2.0, purpose="new settled", db=db)
+            user_id="alice", session_id="s2", amount_usd=2.0, purpose="new settled", db=db)
         # Force deterministic ordering + make the NEWEST row non-pending.
         await db.execute(
             "UPDATE x402_payment_requests SET created_at = ? WHERE id = ?",
@@ -263,7 +263,7 @@ async def test_list_status_filter_applied_before_limit(tmp_path):
         # post-LIMIT Python filter would drop it and return [] — hiding the
         # older still-pending invoice.
         pending = await invoicing.list_payment_requests(
-            user_id="rob", status="pending", limit=1, db=db)
+            user_id="alice", status="pending", limit=1, db=db)
         assert len(pending) == 1, "older pending invoice must survive the status+limit"
         assert pending[0]["purpose"] == "old pending"
         assert pending[0]["status"] == "pending"
@@ -335,7 +335,7 @@ async def test_claim_wake_is_atomic_single_winner(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s", amount_usd=1.0, purpose="p", db=db)
+            user_id="alice", session_id="s", amount_usd=1.0, purpose="p", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         assert await invoicing.claim_wake(inv["request_id"], db=db) is True
         # a racing second claimer loses
@@ -349,7 +349,7 @@ async def test_claim_for_settlement_is_exclusive(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         rid = inv["request_id"]
         # first claim wins, second loses (already settling)
         assert await invoicing.claim_for_settlement(rid, db=db) is True
@@ -367,7 +367,7 @@ async def test_revert_settlement_claim_restores_pending(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         rid = inv["request_id"]
         assert await invoicing.claim_for_settlement(rid, db=db) is True
         await invoicing.revert_settlement_claim(rid, db=db)
@@ -389,7 +389,7 @@ async def test_owner_direct_settle_still_works_from_pending(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         assert await invoicing.settle_payment_request(inv["request_id"], db=db) is True
     finally:
         await db.close()
@@ -402,7 +402,7 @@ async def test_create_stores_and_returns_payer_contact(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             payer_contact="Alice <a@x.com>", db=db)
         assert inv["payer_contact"] == "Alice <a@x.com>"
         row = await db.fetch_one(
@@ -413,7 +413,7 @@ async def test_create_stores_and_returns_payer_contact(tmp_path):
         got = await invoicing.get_payment_request(inv["request_id"], db=db)
         assert got["payer_contact"] == "Alice <a@x.com>"
 
-        listed = await invoicing.list_payment_requests(user_id="rob", db=db)
+        listed = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert listed[0]["payer_contact"] == "Alice <a@x.com>"
     finally:
         await db.close()
@@ -425,7 +425,7 @@ async def test_create_payer_hint_alias_still_works(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             payer_hint="Bob <b@x.com>", db=db)
         assert inv["payer_contact"] == "Bob <b@x.com>"
         got = await invoicing.get_payment_request(inv["request_id"], db=db)
@@ -439,7 +439,7 @@ async def test_create_payer_contact_takes_precedence_over_payer_hint(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             payer_contact="Alice <a@x.com>", payer_hint="Bob <b@x.com>", db=db)
         assert inv["payer_contact"] == "Alice <a@x.com>"
     finally:
@@ -451,11 +451,11 @@ async def test_create_no_payer_contact_is_none_no_crash(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         assert inv.get("payer_contact") is None
         got = await invoicing.get_payment_request(inv["request_id"], db=db)
         assert got.get("payer_contact") is None
-        listed = await invoicing.list_payment_requests(user_id="rob", db=db)
+        listed = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert listed[0].get("payer_contact") is None
     finally:
         await db.close()
@@ -469,9 +469,9 @@ async def test_legacy_payer_hint_metadata_read_as_payer_contact(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         legacy_meta = json.dumps({
-            "kind": "agent_invoice", "session_id": "s1", "tenant_id": "rob",
+            "kind": "agent_invoice", "session_id": "s1", "tenant_id": "alice",
             "purpose": "p", "payer_hint": "Legacy Payer", "wake_delivered": False,
             "correspondent_ref": None,
         })
@@ -482,7 +482,7 @@ async def test_legacy_payer_hint_metadata_read_as_payer_contact(tmp_path):
         got = await invoicing.get_payment_request(inv["request_id"], db=db)
         assert got["payer_contact"] == "Legacy Payer"
 
-        listed = await invoicing.list_payment_requests(user_id="rob", db=db)
+        listed = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert listed[0]["payer_contact"] == "Legacy Payer"
     finally:
         await db.close()
@@ -495,7 +495,7 @@ async def test_expired_unnotified_and_claim_expiry_wake(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_exp", amount_usd=2.0, purpose="widget",
+            user_id="alice", session_id="sess_exp", amount_usd=2.0, purpose="widget",
             expiry_hours=1.0, db=db)
         # not expired yet -> nothing pending
         assert await invoicing.expired_unnotified_invoices(db=db) == []
@@ -504,7 +504,7 @@ async def test_expired_unnotified_and_claim_expiry_wake(tmp_path):
         assert len(pending) == 1
         assert pending[0]["request_id"] == inv["request_id"]
         assert pending[0]["session_id"] == "sess_exp"
-        assert pending[0]["user_id"] == "rob"
+        assert pending[0]["user_id"] == "alice"
         assert pending[0]["purpose"] == "widget"
         # claim is atomic: first wins, second (racing) claimer loses
         assert await invoicing.claim_expiry_wake(inv["request_id"], db=db) is True
@@ -524,9 +524,9 @@ async def test_terminal_wake_flags_do_not_cross_settled_and_expired(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         settled_inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_settled", amount_usd=1.0, purpose="a", db=db)
+            user_id="alice", session_id="s_settled", amount_usd=1.0, purpose="a", db=db)
         expired_inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_expired", amount_usd=1.0, purpose="b",
+            user_id="alice", session_id="s_expired", amount_usd=1.0, purpose="b",
             expiry_hours=1.0, db=db)
         await invoicing.settle_payment_request(settled_inv["request_id"], db=db)
         await invoicing.expire_stale_requests(
@@ -567,7 +567,7 @@ async def test_compacted_metadata_row_still_gets_its_settlement_wake(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_compact", amount_usd=4.0,
+            user_id="alice", session_id="sess_compact", amount_usd=4.0,
             purpose="p", db=db)
 
         # Recompact the metadata blob exactly the way the boot-time
@@ -612,7 +612,7 @@ async def test_compacted_metadata_row_still_gets_its_expiry_wake(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_compact_exp", amount_usd=2.0,
+            user_id="alice", session_id="sess_compact_exp", amount_usd=2.0,
             purpose="p", expiry_hours=1.0, db=db)
         await db.execute(
             "UPDATE x402_payment_requests "
@@ -644,11 +644,11 @@ async def test_wake_delivered_absent_key_is_not_eligible(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_noflag", amount_usd=1.0,
+            user_id="alice", session_id="sess_noflag", amount_usd=1.0,
             purpose="p", db=db)
         legacy_meta = json.dumps({
             "kind": "agent_invoice", "session_id": "sess_noflag",
-            "tenant_id": "rob", "purpose": "p",
+            "tenant_id": "alice", "purpose": "p",
             # wake_delivered key deliberately absent
         })
         await db.execute(
@@ -677,7 +677,7 @@ async def test_claim_wake_racing_calls_exactly_one_wins(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_race", amount_usd=1.0,
+            user_id="alice", session_id="sess_race", amount_usd=1.0,
             purpose="p", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -702,12 +702,12 @@ async def test_second_pending_invoice_for_same_subscription_is_refused_not_dupli
     db = await _setup_db(tmp_path)
     try:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+            user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
             subscription_id="sub_abc123", db=db)
 
         with pytest.raises(ValueError, match="pending renewal invoice already exists"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+                user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
                 subscription_id="sub_abc123", db=db)
 
         rows = await db.fetch_all(
@@ -733,7 +733,7 @@ async def test_concurrent_renewal_creates_for_same_subscription_only_one_wins(tm
     try:
         async def _attempt():
             return await invoicing.create_payment_request(
-                user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+                user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
                 subscription_id="sub_race", db=db)
 
         results = await asyncio.gather(_attempt(), _attempt(), return_exceptions=True)
@@ -761,12 +761,12 @@ async def test_new_renewal_allowed_once_prior_pending_invoice_settles(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+            user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
             subscription_id="sub_cycle", db=db)
         await invoicing.settle_payment_request(first["request_id"], db=db)
 
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=10.0, purpose="renewal",
+            user_id="alice", session_id="", amount_usd=10.0, purpose="renewal",
             subscription_id="sub_cycle", db=db)
         assert second["request_id"] != first["request_id"]
     finally:
@@ -810,7 +810,7 @@ def _enable_full(monkeypatch):
     """Copied from tests/unit/agents/task/test_autonomy_mode.py."""
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     from agents.task import constants
     constants.reset_autonomy_mode_warnings()
 

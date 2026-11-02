@@ -24,7 +24,7 @@ def rig(tmp_path, monkeypatch):
     from core.app_service.registry import AppServiceRegistry
     import webview.apps_routes as mod
     reg = AppServiceRegistry(str(tmp_path / "a.db"))
-    reg.upsert_request("rob-status", "owner-1", source_dir="d", cmd=["x"], container_port=80,
+    reg.upsert_request("demo-status", "owner-1", source_dir="d", cmd=["x"], container_port=80,
                        health_path="/", egress="none", egress_allow=[], env={},
                        workspace_digest="d" * 64)
     reads = []
@@ -43,8 +43,8 @@ def _logs(rig, slug, n=100):
     return asyncio.run(rig.mod.api_apps_logs(None, slug, n))
 
 
-@pytest.mark.parametrize("slug", ["../../../etc", "..", "rob status", "Rob-Status",
-                                  "rob-status/../../x", "a" * 200, ""])
+@pytest.mark.parametrize("slug", ["../../../etc", "..", "demo status", "Demo-Status",
+                                  "demo-status/../../x", "a" * 200, ""])
 def test_invalid_slug_is_refused_before_any_filesystem_read(rig, slug):
     with pytest.raises(HTTPException) as e:
         _logs(rig, slug)
@@ -60,6 +60,6 @@ def test_unknown_slug_for_this_tenant_is_404_not_a_path_read(rig):
 
 
 def test_the_tenants_own_app_still_reads(rig):
-    res = _logs(rig, "rob-status", 5)
+    res = _logs(rig, "demo-status", 5)
     assert res.status_code == 200
-    assert rig.reads == [(rig.mod._p()._data_dir(), "owner-1", "rob-status", 5)]
+    assert rig.reads == [(rig.mod._p()._data_dir(), "owner-1", "demo-status", 5)]

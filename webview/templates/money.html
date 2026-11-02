@@ -6,7 +6,7 @@
   the agent page, where the caps live. Everything below the subnav is
   drawn by webview/static/app/money.js from GET /api/webgate/book — the verdict
   first, the positions the ledger claims beside the chain's reading, the chains
-  Rob checked with the cache age, and the trading run (which lives in Work).
+  the agent checked with the cache age, and the trading run (which lives in Work).
 
   Every word comes from webview/copy/en.py. No inline script on any 043 template
   (tests/unit/webview/test_no_new_inline_script.py): the words ride on
@@ -43,7 +43,7 @@
           <button type="button" class="btn btn-quiet" id="money-liquidity-recheck">{{ t('money.book.recheck') }}</button>
         </section>
         <p class="state-body" id="money-book-state" hidden></p>
-        {# W1: the tokens Rob trusts — drawn by money-tokens.js from /api/webgate/tokens. #}
+        {# W1: the tokens the agent trusts — drawn by money-tokens.js from /api/webgate/tokens. #}
         <div id="money-tokens"></div>
       </div>
 
@@ -100,7 +100,7 @@
         <p class="state-body" id="money-cash-state" hidden></p>
       </div>
 
-      {# Invoices — who owes Rob money + the A20 machine-income note. Drawn from
+      {# Invoices — who owes the agent money + the A20 machine-income note. Drawn from
          /api/webgate/invoices; settle posts to /api/webgate/invoices/{id}/settle. #}
       <div data-pane="invoices" hidden>
         <div id="money-invoices"></div>

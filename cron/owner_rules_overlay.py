@@ -1,6 +1,6 @@
 """Owner rules newer than a cron job's text ride into that job's run as overrides.
 
-Prod 2026-10-05: the owner said "Approve posts with me" at 17:56 and Rob wrote
+Prod 2026-10-05: the owner said "Approve posts with me" at 17:56 and the agent wrote
 it to ``owner.md``. At 18:01 the PROMO cron run had that rule in its foundation
 context and posted anyway: its task text ("post one; no owner message on a
 routine slot") was the specific, recent instruction, and the model followed it.

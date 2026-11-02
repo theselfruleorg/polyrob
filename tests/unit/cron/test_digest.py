@@ -7,6 +7,8 @@ import pytest
 from cron import digest
 from cron.digest import compose_digest
 
+_REAL_FAILED_JOBS = digest._failed_jobs
+
 
 @pytest.fixture(autouse=True)
 def _hermetic_top_cost(monkeypatch):
@@ -15,11 +17,15 @@ def _hermetic_top_cost(monkeypatch):
                         "Top AI cost: scheduled job EXIT $0.40 (40%) of $1.00")
     # 086 W6: the Trading section reads the home's trading stores; keep it out.
     monkeypatch.setattr(digest, "_trading_lines", lambda uid, data_dir: [])
+    # Routines review 2026-10-29: the failed-jobs seam reads the home's cron store.
+    monkeypatch.setattr(digest, "_failed_jobs", lambda uid, data_dir: [])
+    # 095 W12b: the curator proposals seam reads the home's event log.
+    monkeypatch.setattr(digest, "_proposals", lambda uid, since, data_dir: [])
 
 
 def _split_ledger(**over):
     led = {
-        "user_id": "rob", "window_days": 1,
+        "user_id": "alice", "window_days": 1,
         "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 2.0,
                      "pending_count": 1, "balance_usd": 10.0, "net_usd": 0.0,
                      "available": True},
@@ -152,13 +158,13 @@ async def test_degraded_ledger_appends_availability_note(monkeypatch):
 @pytest.mark.asyncio
 async def test_digest_never_merges_treasury_and_runtime(monkeypatch):
     """The 2026-07-16 bug: 'Money: earned $0.00, spent $2.47, net $-2.47' reported
-    the owner's API bill as Rob's P&L while his wallet was untouched."""
+    the owner's API bill as the agent's P&L while his wallet was untouched."""
     monkeypatch.setattr("cron.digest._ledger", lambda u, d: _split_ledger())
     monkeypatch.setattr("cron.digest._event_aggregate", lambda u, t: {"counts_by_kind": {}})
     monkeypatch.setattr("cron.digest._open_asks", lambda u, d: [])
     monkeypatch.setattr("cron.digest._episodes", lambda u, t: [])
 
-    out = await compose_digest("rob", days=1)
+    out = await compose_digest("alice", days=1)
     assert "Treasury: income $0.00, spend $0.00, net $0.00" in out
     assert "Runtime cost: $2.47 last 24 h" in out
     assert "$13.97 total" in out
@@ -417,7 +423,7 @@ async def test_digest_no_missed_messages_says_so(monkeypatch):
 @pytest.mark.asyncio
 async def test_digest_carries_one_top_cost_line(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
-    text = await digest.compose_digest("rob", days=1)
+    text = await digest.compose_digest("alice", days=1)
     assert _line_starting(text, "• Top AI cost: scheduled job EXIT $0.40") is not None
 
 
@@ -428,7 +434,7 @@ async def test_unreadable_cost_records_are_named_not_zero(monkeypatch):
     def boom(uid, data_dir, days):
         raise OSError("disk")
     monkeypatch.setattr(digest, "_top_cost", boom)
-    text = await digest.compose_digest("rob", days=1)
+    text = await digest.compose_digest("alice", days=1)
     assert "AI cost records (OSError: disk)" in text
     assert "Top AI cost: could not read the records" in text
 
@@ -436,5 +442,103 @@ async def test_unreadable_cost_records_are_named_not_zero(monkeypatch):
 def test_top_cost_reads_the_spend_view(tmp_path, monkeypatch):
     monkeypatch.undo()
     monkeypatch.setenv("DB_PATH", str(tmp_path / "none" / "bot.db"))
-    line = digest._top_cost("rob", str(tmp_path), 1)
+    line = digest._top_cost("alice", str(tmp_path), 1)
     assert line.startswith("Top AI cost: none")
+
+
+
+# --- routines review 2026-10-29: failed jobs first; ask age ---------------------
+
+def _quiet(monkeypatch):
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
+    monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
+    monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
+    monkeypatch.setattr(digest, "_health_lines", lambda uid, d: [
+        "Health: DEGRADED — 6 issue(s)", "• ⚠ housekeeping item"])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_owner_job_comes_before_the_health_block(monkeypatch):
+    import time as _t
+    from datetime import datetime
+    _quiet(monkeypatch)
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, d: [])
+    at = datetime.fromtimestamp(_t.time() - 3600).isoformat()
+    job = SimpleNamespace(
+        id="bbbe8d3e1cd2", task="BOUNTY ANNOUNCE v2", status="scheduled",
+        next_run_at=None, last_run_at=None, schedule_spec="0 18 */3 * *",
+        payload={"last_outcome": {"outcome": "failed", "at": at,
+                                  "reason": "stopped at the step limit (150/150)"}})
+    monkeypatch.setattr(digest, "_failed_jobs", lambda uid, d: [job])
+    lines = (await digest.compose_digest("u1")).split("\n")
+    assert lines[1].startswith("• ⚠ Your jobs that failed (1)")
+    assert "bbbe8d3e" in lines[2] and "stopped at the step limit" in lines[2]
+    assert "deliver: none" in lines[2]
+    assert lines[3].startswith("Health:")
+
+
+@pytest.mark.asyncio
+async def test_a_failure_outside_the_window_is_not_repeated(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, d: [])
+    job = SimpleNamespace(id="j1", task="x", status="scheduled", next_run_at=None,
+                          last_run_at=None, schedule_spec="1h",
+                          payload={"last_outcome": {"outcome": "failed",
+                                                    "at": "2020-01-01T00:00:00"}})
+    monkeypatch.setattr(digest, "_failed_jobs", lambda uid, d: [job])
+    assert "Your jobs that failed" not in await digest.compose_digest("u1")
+
+
+@pytest.mark.asyncio
+async def test_an_old_ask_shows_its_age_and_how_to_withdraw_it(monkeypatch):
+    import time as _t
+    _quiet(monkeypatch)
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, d: [
+        {"id": "bc5f02a4e9b2", "title": "confirm the USDG contract",
+         "created_at": _t.time() - 12.8 * 86400},
+        {"id": "a2", "title": "fresh ask", "created_at": _t.time() - 60}])
+    text = await digest.compose_digest("u1")
+    assert "confirm the USDG contract (open 12.8 d) — still needed? if not, tell me " \
+           "to withdraw ask bc5f02a4e9b2" in text
+    assert "   - fresh ask" in text and "fresh ask (" not in text
+
+
+def test_failed_jobs_reads_only_owner_jobs_that_failed(tmp_path):
+    from datetime import datetime
+    from cron.jobs import CronJobStore
+    from cron.service import CronService
+    svc = CronService(CronJobStore(str(tmp_path / "cron.db")))
+    mine = svc.schedule(task="owner job", schedule_spec="1h", user_id="u1")
+    agents = svc.schedule(task="agent job", schedule_spec="1h", user_id="u1",
+                          payload={"actor": "agent"})
+    fine = svc.schedule(task="fine job", schedule_spec="1h", user_id="u1")
+    for j, o in ((mine, "failed"), (agents, "failed"), (fine, "done")):
+        svc.store.record_outcome(j.id, o, datetime.now())
+    assert [j.id for j in _REAL_FAILED_JOBS("u1", str(tmp_path))] == [mine.id]
+
+
+@pytest.mark.asyncio
+async def test_digest_quotes_curator_proposals_one_line_each(monkeypatch):
+    """095 W12b: the curator's propose events reach the owner on the digest."""
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
+    monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
+    monkeypatch.setattr(digest, "_proposals", lambda uid, since, data_dir: [
+        "proposal: my-skill: your skill has not been used for 40 days — keep or archive?"])
+    text = await compose_digest("alice", days=1)
+    assert text.count("my-skill: your skill has not been used for 40 days") == 1
+
+
+@pytest.mark.asyncio
+async def test_digest_unreadable_proposals_are_named(monkeypatch):
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
+    monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
+
+    def _boom(*a):
+        raise OSError("locked")
+    monkeypatch.setattr(digest, "_proposals", _boom)
+    text = await compose_digest("alice", days=1)
+    assert "curator proposals" in text

@@ -1,7 +1,7 @@
 """BotInstance / AgentIdentity + self-context loader (polyrob Phase A/C skeleton).
 
 The instance abstraction is the inert skeleton for later multi-instance work:
-instance_id defaults to "rob" so a single-instance deploy is byte-equivalent.
+instance_id defaults to "polyrob" so a single-instance deploy is byte-equivalent.
 load_self_context reads operator-authored SOUL/IDENTITY docs from the instance
 home dir (empty -> "" -> inert).
 """
@@ -114,34 +114,34 @@ def test_is_owner_empty_user_never_owner():
 def test_local_safe_allows_the_local_operator_tenant():
     # The CLI operator (LocalIdentity -> user_id "local") stays owner under local mode,
     # even though "local" != the owner principal.
-    assert is_owner_local_safe("local", owner_principal="rob", local_enabled=True)
+    assert is_owner_local_safe("local", owner_principal="dana", local_enabled=True)
 
 
 def test_local_safe_denies_network_sender_even_under_local():
     # THE FIX: a forgeable network uid must NOT become owner just because POLYROB_LOCAL
     # is set on a process that also has a network surface attached.
-    assert not is_owner_local_safe("u_ab12cd", owner_principal="rob", local_enabled=True)
+    assert not is_owner_local_safe("u_ab12cd", owner_principal="dana", local_enabled=True)
 
 
 def test_local_safe_owner_by_principal_still_owner():
     # A network owner (telegram alias -> owner principal) is owner via principal match,
     # independent of the local bypass.
-    assert is_owner_local_safe("rob", owner_principal="rob", local_enabled=True)
+    assert is_owner_local_safe("dana", owner_principal="dana", local_enabled=True)
     assert is_owner_local_safe("alice", owner_principal="alice", local_enabled=False)
 
 
 def test_local_safe_no_bypass_when_local_disabled():
-    assert not is_owner_local_safe("local", owner_principal="rob", local_enabled=False)
+    assert not is_owner_local_safe("local", owner_principal="dana", local_enabled=False)
 
 
 def test_local_safe_empty_user_never_owner():
-    assert not is_owner_local_safe("", owner_principal="rob", local_enabled=True)
-    assert not is_owner_local_safe(None, owner_principal="rob", local_enabled=True)
+    assert not is_owner_local_safe("", owner_principal="dana", local_enabled=True)
+    assert not is_owner_local_safe(None, owner_principal="dana", local_enabled=True)
 
 
 def test_instance_id_defaults_to_polyrob():
     # W1 neutral identity: the framework default is "polyrob"; a specific bot
-    # (e.g. "rob") is an explicit env/profile binding, never the shipped default.
+    # (e.g. "dana") is an explicit env/profile binding, never the shipped default.
     assert resolve_instance_id(env={}) == "polyrob"
 
 
@@ -162,9 +162,9 @@ def test_retired_bot_owner_user_id_alone_refuses():
     from core.config_policy.retired_flags import RetiredFlagError
     from core.instance import resolve_owner_principal
     with pytest.raises(RetiredFlagError, match="POLYROB_OWNER_USER_ID"):
-        resolve_owner_principal(env={"BOT_OWNER_USER_ID": "rob"})
+        resolve_owner_principal(env={"BOT_OWNER_USER_ID": "dana"})
     assert resolve_owner_principal(
-        env={"BOT_OWNER_USER_ID": "old", "POLYROB_OWNER_USER_ID": "rob"}) == "rob"
+        env={"BOT_OWNER_USER_ID": "old", "POLYROB_OWNER_USER_ID": "dana"}) == "dana"
 
 
 def test_instance_id_blank_falls_back_to_default():
@@ -173,16 +173,16 @@ def test_instance_id_blank_falls_back_to_default():
 
 
 def test_agent_identity_and_bot_instance_are_frozen():
-    ident = AgentIdentity(name="rob", role="specialist", voice=None, core_truths=[])
+    ident = AgentIdentity(name="dana", role="specialist", voice=None, core_truths=[])
     inst = BotInstance(
-        instance_id="rob",
+        instance_id="dana",
         identity=ident,
-        home_dir=Path("/tmp/.rob"),
+        home_dir=Path("/tmp/.polyrob"),
         owner_principal=None,
         allowed_surfaces=frozenset({"cli"}),
         autonomy_policy={},
     )
-    assert inst.instance_id == "rob"
+    assert inst.instance_id == "dana"
     with pytest.raises(Exception):
         inst.instance_id = "other"  # frozen
 
@@ -194,13 +194,13 @@ def test_load_self_context_empty_when_no_docs(tmp_path):
 def test_load_self_context_reads_identity_and_operating(tmp_path):
     idir = tmp_path / "identity"
     idir.mkdir()
-    (idir / "identity.md").write_text("I am ROB, a careful operator.")
+    (idir / "identity.md").write_text("I am Nova, a careful operator.")
     (idir / "operating.md").write_text("Always confirm before destructive ops.")
     out = load_self_context(tmp_path)
-    assert "I am ROB, a careful operator." in out
+    assert "I am Nova, a careful operator." in out
     assert "Always confirm before destructive ops." in out
     # identity comes before operating
-    assert out.index("I am ROB") < out.index("Always confirm")
+    assert out.index("I am Nova") < out.index("Always confirm")
 
 
 def test_load_self_context_per_doc_char_cap(tmp_path):
@@ -226,8 +226,8 @@ def test_console_display_name_default():
 
 
 def test_console_display_name_env_override():
-    env = {"POLYROB_CONSOLE_NAME": "Rob Console"}
-    assert console_display_name(env=env) == "Rob Console"
+    env = {"POLYROB_CONSOLE_NAME": "Nova Console"}
+    assert console_display_name(env=env) == "Nova Console"
 
 
 def test_console_display_name_blank_override_falls_back():

@@ -31,10 +31,6 @@ CORE_VERB_ROWS = {
         "owner_doc_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "agent_avatar": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "preferences": dict(effect="self", correspondent_blocked=True, room_denied=True),
-        "mcp_install": dict(
-            effect="self", approval=("recommended", "always_queued"), correspondent_blocked=True,
-            room_denied=True,
-        ),
         # A self-service capability expansion.
         # A tainted turn must not widen the surface the next (untainted) turn inherits.
         "load_tool": dict(effect="self", correspondent_blocked=True, room_denied=True),
@@ -50,12 +46,12 @@ CORE_VERB_ROWS = {
         # 031: a tainted turn must not RESUME autonomy; a third party steering the pause state
         # at all is not the owner driving.
         "autonomy_control": dict(effect="none", correspondent_blocked=True, room_denied=True),
-        # H04: question= speaks to the owner AS Rob, answer= writes what a later run reads as
+        # H04: question= speaks to the owner AS the agent, answer= writes what a later run reads as
         # the owner's decision.
         "owner_ask": dict(effect="none", correspondent_blocked=True),
         # Action cards (2026-09-27): a question with buttons, and a money PROPOSAL whose only
         # action is the verb's quote on the owner's seat. Neither moves anything; both speak to
-        # the owner as Rob, so a tainted or room turn reaches neither.
+        # the owner as the agent, so a tainted or room turn reaches neither.
         "present_choice": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "propose_action": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # 086 W5: the trading mandate's intake card — a draft + ONE owner card; Confirm on
@@ -63,15 +59,14 @@ CORE_VERB_ROWS = {
         "trade_mandate_propose": dict(effect="none", correspondent_blocked=True,
                                       room_denied=True),
         # 093 D1: a setting card (Confirm re-runs the owner's own seat line) or an
-        # operator request on the board. Speaks to the owner as Rob; owner turn only.
+        # operator request on the board. Speaks to the owner as the agent; owner turn only.
         "propose_setting": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # Who we talked to and what was said (gated on CORRESPONDENT_ACCESS_ENABLED, so live
-        # wherever taint exists); session_search/memory_search/recent_activity: past sessions
+        # wherever taint exists); session_search/recent_activity: past sessions
         # and the run ledger with per-run spend. With the D1 reply exemption on, what they
         # return could be echoed to the tainting party.
         "contact_history": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "session_search": dict(effect="none", correspondent_blocked=True, room_denied=True),
-        "memory_search": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # P1-4: a curated-memory write persists into FUTURE prompts (injection persistence); the
         # whole action, read too, fails closed.
         "memory": dict(effect="none", correspondent_blocked=True, room_denied=True),
@@ -144,6 +139,7 @@ CORE_VERB_ROWS = {
         # room_denied, deferred execution (as goal).
         "cronjob_cancel": dict(room_denied=True),
         "cronjob_edit": dict(room_denied=True),
+        "cronjob_run_now": dict(room_denied=True),
         "cronjob_schedule": dict(room_denied=True),
     },
     "dapp_browser": {
@@ -514,15 +510,6 @@ CORE_VERB_ROWS = {
         # WS-5: owner-only via the posture gate already; a tainted session must never reach them
         # either.
         "self_env_read_source": dict(effect="none", correspondent_blocked=True),
-        "self_env_git_pull": dict(
-            effect="self", approval=("posture2", "always_queued"), correspondent_blocked=True,
-        ),
-        "self_env_install_dep": dict(
-            effect="self", approval=("posture2", "always_queued"), correspondent_blocked=True,
-        ),
-        "self_env_patch_source": dict(
-            effect="self", approval=("posture2", "always_queued"), correspondent_blocked=True,
-        ),
         "self_env_restart_service": dict(
             effect="self", approval=("posture2", "always_queued"), correspondent_blocked=True,
         ),

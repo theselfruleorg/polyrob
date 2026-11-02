@@ -10,7 +10,7 @@ from cli.commands import goals as G
 def _setup(tmp_path, monkeypatch):
     board = GoalBoard(str(tmp_path / "goals.db"))
     monkeypatch.setattr(G, "_get_board", lambda data_root=None: board)
-    monkeypatch.setattr(G, "_owner_tenant", lambda user=None: "rob")
+    monkeypatch.setattr(G, "_owner_tenant", lambda user=None: "alice")
     return board
 
 
@@ -21,7 +21,7 @@ def test_deleted_verbs_are_gone():
 
 def test_pause_then_retry(tmp_path, monkeypatch):
     board = _setup(tmp_path, monkeypatch)
-    g = board.create(user_id="rob", title="a goal")
+    g = board.create(user_id="alice", title="a goal")
     r = CliRunner().invoke(G.goals, ["pause", g.id])
     assert r.exit_code == 0, r.output
     assert board.get(g.id).status == "paused"
@@ -32,14 +32,14 @@ def test_pause_then_retry(tmp_path, monkeypatch):
 def test_stop_once_and_forever(tmp_path, monkeypatch):
     from core.goal_suppressions import blocking
     board = _setup(tmp_path, monkeypatch)
-    g = board.create(user_id="rob", title="gas watch")
+    g = board.create(user_id="alice", title="gas watch")
     r = CliRunner().invoke(G.goals, ["stop", g.id])
     assert r.exit_code == 0 and board.get(g.id).status == "cancelled"
-    assert not blocking(board.db_path, user_id="rob", title="gas watch")
-    g2 = board.create(user_id="rob", title="gas watch", force=True)
+    assert not blocking(board.db_path, user_id="alice", title="gas watch")
+    g2 = board.create(user_id="alice", title="gas watch", force=True)
     r = CliRunner().invoke(G.goals, ["stop", g2.id, "--forever"])
     assert r.exit_code == 0 and "switched OFF" in r.output
-    assert blocking(board.db_path, user_id="rob", title="gas watch")
+    assert blocking(board.db_path, user_id="alice", title="gas watch")
 
 
 def test_another_tenants_goal_is_not_found(tmp_path, monkeypatch):

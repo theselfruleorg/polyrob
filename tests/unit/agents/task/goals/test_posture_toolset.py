@@ -61,7 +61,7 @@ def test_child_inheritable_posture_1_adds_exec(monkeypatch):
 
 
 class _Goal:
-    def __init__(self, payload=None, parent_id=None, uid="rob"):
+    def __init__(self, payload=None, parent_id=None, uid="alice"):
         self.payload = payload or {}
         self.parent_id = parent_id
         self.user_id = uid

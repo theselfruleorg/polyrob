@@ -7,6 +7,7 @@ no-false-mangle of ordinary prose, and the scrub-then-truncate contract.
 """
 
 from cli.ui.secrets import REDACTED, scrub_secrets, scrub_then_cap
+from api.api_key_auth import API_KEY_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -26,8 +27,8 @@ def test_anthropic_style_key_redacted():
 
 
 def test_rob_api_key_redacted():
-    out = scrub_secrets("X-API-KEY: rob_aBcd1234EFgh5678ijKL90mnOP")
-    assert "rob_aBcd1234EFgh5678ijKL90mnOP" not in out
+    out = scrub_secrets("X-API-KEY: " + API_KEY_PREFIX + "aBcd1234EFgh5678ijKL90mnOP")
+    assert API_KEY_PREFIX + "aBcd1234EFgh5678ijKL90mnOP" not in out
     assert REDACTED in out
 
 

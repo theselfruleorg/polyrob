@@ -1238,7 +1238,7 @@ def _echo_result(result, *, what: str):
 @as_root_option
 def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
                         vanity, salt, uri, execute, yes):
-    """Deploy a fixed-supply token: polyrob wallet deploy-token ROB 1e9 Rob Coin
+    """Deploy a fixed-supply token: polyrob wallet deploy-token DEMO 1e9 Demo Coin
 
     On an EVM chain it deploys ONE audited template whose runtime the guard
     compares byte for byte before signing — no mint function, no owner, no
@@ -1340,7 +1340,7 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
 @as_root_option
 def wallet_launch(symbol, name, buy, creator_tax_bps, logo, desc, twitter,
                   site, max_usd, execute, yes):
-    """Launch a token on the Pons launchpad: polyrob wallet launch ROB Rob Coin
+    """Launch a token on the Pons launchpad: polyrob wallet launch DEMO Demo Coin
 
     Deploys the token AND its bonding curve in one transaction on Robinhood
     Chain. Fixed 1B supply into a curve that graduates to a locked Uniswap pool.
@@ -1719,7 +1719,7 @@ def _require_address(chain: str, address: str) -> str:
 
 
 @wallet_asset.command("add")
-@click.option("--id", "asset_id", required=True, help="short id, e.g. rob")
+@click.option("--id", "asset_id", required=True, help="short id, e.g. demo")
 @click.option("--chain", required=True)
 @click.option("--address", required=True)
 @click.option("--decimals", type=int, default=None,

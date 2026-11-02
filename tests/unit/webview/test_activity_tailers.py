@@ -19,7 +19,7 @@ def telemetry_db(tmp_path):
                attrs TEXT NOT NULL DEFAULT '{}')"""
     )
     con.execute(
-        "INSERT INTO telemetry_events (ts, kind, user_id, attrs) VALUES (1.0, 'cron_run', 'rob', ?)",
+        "INSERT INTO telemetry_events (ts, kind, user_id, attrs) VALUES (1.0, 'cron_run', 'alice', ?)",
         (json.dumps({"job_id": "j1", "outcome": "ok"}),),
     )
     con.commit()
@@ -30,7 +30,7 @@ def telemetry_db(tmp_path):
 def _insert_telemetry(db_path, kind, ts):
     con = sqlite3.connect(db_path)
     con.execute(
-        "INSERT INTO telemetry_events (ts, kind, user_id, attrs) VALUES (?, ?, 'rob', '{}')",
+        "INSERT INTO telemetry_events (ts, kind, user_id, attrs) VALUES (?, ?, 'alice', '{}')",
         (ts, kind),
     )
     con.commit()
@@ -90,17 +90,17 @@ def test_goal_events_tail_normalizes(tmp_path):
 
 def test_feed_path_info_accepts_canonical_layout(tmp_path):
     root = str(tmp_path)
-    p = f"{root}/rob/sess-123/feed/000007_step_0002.json"
-    assert feed_path_info(p, root) == ("rob", "sess-123")
+    p = f"{root}/alice/sess-123/feed/000007_step_0002.json"
+    assert feed_path_info(p, root) == ("alice", "sess-123")
 
 
 def test_feed_path_info_rejects_non_feed_paths(tmp_path):
     root = str(tmp_path)
     assert feed_path_info(f"{root}/telemetry_events.db-wal", root) is None
-    assert feed_path_info(f"{root}/rob/sess-1/screenshots/step_1.jpg", root) is None
-    assert feed_path_info(f"{root}/rob/sess-1/feed/x.tmp", root) is None
-    assert feed_path_info(f"{root}/rob/feed/x.json", root) is None  # missing session level
-    assert feed_path_info("/elsewhere/rob/s/feed/x.json", root) is None
+    assert feed_path_info(f"{root}/alice/sess-1/screenshots/step_1.jpg", root) is None
+    assert feed_path_info(f"{root}/alice/sess-1/feed/x.tmp", root) is None
+    assert feed_path_info(f"{root}/alice/feed/x.json", root) is None  # missing session level
+    assert feed_path_info("/elsewhere/alice/s/feed/x.json", root) is None
 
 
 # --- the goal tail carries the goal's TENANT ------------------------------ #
@@ -120,7 +120,7 @@ def _goal_db_with_owner(tmp_path):
         """CREATE TABLE goals (id TEXT PRIMARY KEY, user_id TEXT, title TEXT,
                status TEXT)"""
     )
-    con.execute("INSERT INTO goals VALUES ('g1', 'rob', 'Engage the den', 'running')")
+    con.execute("INSERT INTO goals VALUES ('g1', 'alice', 'Engage the forum', 'running')")
     con.execute(
         "INSERT INTO goal_events (goal_id, kind, payload, created_at) "
         "VALUES ('g1','claimed','{}',5.0)"
@@ -140,8 +140,8 @@ def test_goal_tail_stamps_the_goal_owner_as_the_event_tenant(tmp_path):
     rows = tail.poll()
     assert [r["id"] for r in rows] == [1, 2]
     ev = normalize_db_event("goal", rows[0])
-    assert ev["user_id"] == "rob"
-    assert ev["payload"].get("title") == "Engage the den"
+    assert ev["user_id"] == "alice"
+    assert ev["payload"].get("title") == "Engage the forum"
     # A payload that names its own tenant still wins over the join.
     assert normalize_db_event("goal", rows[1])["user_id"] == "u2"
     # The cursor advanced on the joined rows too.
@@ -153,7 +153,7 @@ def test_goal_tail_cold_backfill_uses_the_same_join(tmp_path):
     tail = goal_events_tail(str(_goal_db_with_owner(tmp_path)))
     rows = tail.recent(10)
     assert [r["id"] for r in rows] == [2, 1]
-    assert rows[1]["goal_user_id"] == "rob"
+    assert rows[1]["goal_user_id"] == "alice"
 
 
 def test_goal_tail_without_a_goals_table_still_delivers_untenanted(tmp_path):

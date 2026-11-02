@@ -107,7 +107,6 @@ class TestFailClosedTenancy:
         """No POLYROB_LOCAL → the store NEVER serves (an accidental server
         deploy degrades to env-key behavior, it can't share the owner's seat)."""
         monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-        monkeypatch.delenv("ROB_LOCAL", raising=False)
         store.set_provider("p", {"access_token": "tok"})
         cred = resolve_credential(
             "p", spec(), env={"LLM_AUTH_STORE_ENABLED": "true"}, store=store

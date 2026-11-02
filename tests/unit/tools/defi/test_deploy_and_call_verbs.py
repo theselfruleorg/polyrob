@@ -153,7 +153,7 @@ async def test_deploy_token_declares_the_pinned_template_to_the_guard():
     captured = []
     tool, _ = _tool(captured=captured)
     res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000_000_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000_000_000,
         max_spend_usd=5.0, dry_run=True))
     assert res.error is None, res.error
     intent = captured[0]
@@ -170,7 +170,7 @@ async def test_deploy_token_declares_the_pinned_template_to_the_guard():
 async def test_deploy_token_names_the_address_before_broadcasting():
     tool, _ = _tool()
     res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000,
         max_spend_usd=5.0, dry_run=True))
     assert "0x" + "cd" * 20 in res.extracted_content
     assert "MATCHED byte for byte" in res.extracted_content
@@ -210,7 +210,7 @@ async def test_an_unknown_chain_refuses():
 async def test_a_live_deploy_reports_the_LANDED_address_not_the_prediction():
     tool, gate = _tool()
     res = await tool.deploy_token(DeployTokenParams(
-        chain="base", name="Rob Coin", symbol="ROB", supply=1_000,
+        chain="base", name="Demo Coin", symbol="DEMO", supply=1_000,
         max_spend_usd=5.0, dry_run=False))
     assert "DEPLOYED AND CONFIRMED" in res.extracted_content
     assert "0x" + "11" * 20 in res.extracted_content

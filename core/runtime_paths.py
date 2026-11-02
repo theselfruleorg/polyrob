@@ -72,8 +72,15 @@ def _server_default_data_home() -> Path:
     """Server data-home when POLYROB_DATA_DIR is unset.
 
     Prefer FHS ``/var/lib/polyrob`` when its parent is writable (or it already
-    exists), else fall back to ``~/.polyrob`` so a non-root / locked-down service
-    user still gets a writable home OUTSIDE the code tree.
+    exists), else the SAME home the CLI resolves (``<polyrob_home>/data``), so a
+    non-root service user still gets a writable home OUTSIDE the code tree.
+
+    ⚠️ The fallback was ``~/.polyrob`` — one level above the CLI's
+    ``<polyrob_home>/data``. On a managed user-mode install (no
+    ``POLYROB_DATA_DIR``) every process without ``POLYROB_LOCAL`` (the updater's
+    ``migrations.migrate`` step, the server config) then read and created a
+    second, empty tree while the CLI and the gateway read the real one
+    (2026-10-29). One rule for both modes closes that split.
     """
     try:
         if _SERVER_DATA_HOME.exists():
@@ -83,7 +90,7 @@ def _server_default_data_home() -> Path:
             return _SERVER_DATA_HOME
     except Exception:
         pass
-    return Path.home() / ".polyrob"
+    return _local_default_data_home()
 
 
 #: Store names whose presence marks a directory as a pre-existing data home.
@@ -114,7 +121,14 @@ def _warn_ignored_project_home(data_home: Path) -> None:
         legacy = (Path.cwd() / ".polyrob").resolve()
         if legacy == data_home or legacy in _warned_project_homes:
             return
-        if not any((legacy / name).exists() for name in _DATA_HOME_MARKERS):
+        markers = _DATA_HOME_MARKERS
+        from core.paths import polyrob_home
+        if legacy == polyrob_home().resolve():
+            # cwd is $HOME: ``~/.polyrob`` is the polyrob home itself, where
+            # skills/, wallet/ and identity files legitimately live. Only a
+            # store there is a sign of a data home this process ignores.
+            markers = tuple(m for m in _DATA_HOME_MARKERS if m.endswith(".db"))
+        if not any((legacy / name).exists() for name in markers):
             return
         _warned_project_homes.add(legacy)
         import logging
@@ -192,6 +206,24 @@ def resolve_data_home() -> Path:
 #: ``<data home>/snapshots/<name>/``; the copied env files sit in its ``config/``.
 UPDATE_SNAPSHOTS_DIRNAME = "snapshots"
 UPDATE_SNAPSHOT_CONFIG_SUBDIR = "config"
+
+
+def install_tmp_dir() -> Optional[Path]:
+    """A private scratch dir ON DISK for pip/lock steps: ``<data home>/tmp``.
+
+    A small tmpfs ``/tmp`` (1.9 GB on a 4 GB box) failed an extras install with
+    ``Errno 122`` (2026-10-29). An operator-set ``TMPDIR`` wins; ``None`` when
+    the data home cannot hold the dir (the caller keeps the default)."""
+    if (os.environ.get("TMPDIR") or "").strip():
+        return None
+    try:
+        path = effective_data_home() / "tmp"
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.access(str(path), os.W_OK):
+            return path
+    except Exception:
+        pass
+    return None
 
 
 def update_snapshots_root(data_home: Optional[Path] = None) -> Path:
@@ -405,13 +437,15 @@ def prefs_home_dir() -> str:
     2026-09-15 prod review, C10: ``BotConfig.data_dir`` defaults to the relative
     string ``"data"`` and ``_ensure_directories`` anchors a relative default to
     ``POLYROB_DATA_DIR`` — so on prod ``config.data_dir`` is
-    ``/var/lib/polyrob/data`` while the data home is ``/var/lib/polyrob``. Every
-    preference WRITER (console ``/config``, ``polyrob config set``, the REPL, the
-    agent's ``prefs`` action) resolves the data home; the delivery rail's readers
-    derived theirs from ``config.data_dir``. ``delivery.daily_cap``,
+    ``/var/lib/polyrob/data`` while the data home is ``/var/lib/polyrob``. The
+    preference writers resolved the data home; the delivery rail's readers derived
+    theirs from ``config.data_dir``. ``delivery.daily_cap``,
     ``delivery.rate_per_hour`` and quiet hours were therefore written to one tree
     and read from another, so the owner's own remedy for "too many messages
-    suppressed" changed nothing.
+    suppressed" changed nothing. Every identity reader and writer — the agent's
+    ``preferences`` action, ``agent_status`` config lines, the identity-doc load
+    at session construction and the ``<environment>`` "Data dir" line — calls
+    this function (095 W8).
 
     Deliberately takes no argument: an identity path has ONE answer per process,
     and letting a caller pass a home is how the two axes drifted apart.

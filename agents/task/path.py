@@ -1070,7 +1070,7 @@ class PathManager:
         ):
             # B2/C3: get_workspace_dir ignores session_id in project-root mode, so a
             # <project>/.polyrob/todo.md is shared by EVERY session/sub-agent/parallel
-            # `rob`. Session-scope it under the per-session tree (sibling to
+            # `polyrob`. Session-scope it under the per-session tree (sibling to
             # feed/logs/screenshots, already gitignored).
             session_root = self.get_session_root(clean_id, user_id)
             os.makedirs(session_root, exist_ok=True)

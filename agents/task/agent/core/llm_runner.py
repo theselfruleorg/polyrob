@@ -54,6 +54,7 @@ from modules.llm.messages import (
 	ToolMessage,
 )
 from modules.llm.adapters import BaseChatModel
+from modules.llm.usage_extract import resolve_serving_provider
 from core.exceptions import (
     RateLimitError,
     LLMError,
@@ -299,6 +300,15 @@ class LLMRunnerMixin:
 
 	@time_execution_async('--get_next_action')
 	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
+		"""Get the next action, inside the owner's reasoning scope (094): a session
+		pinned with ``/model … reasoning=<level>`` sends that level on its MAIN calls
+		only — compaction, reflection and the judge keep the operator env."""
+		from agents.task.model_pin_state import session_reasoning as _level_for
+		from modules.llm.openrouter_reasoning import session_reasoning
+		with session_reasoning(_level_for(getattr(self, "session_id", None))):
+			return await self._get_next_action_unscoped(input_messages)
+
+	async def _get_next_action_unscoped(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Get next action from the model with enhanced retry logic and token safety.
 
 		This method uses a language model to determine the next action based on the current state.
@@ -472,9 +482,13 @@ class LLMRunnerMixin:
 					# compaction ran against the dead client. The switch is permanent for
 					# the rest of the session, so the staleness was too.
 					fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
-					self.adopt_active_llm(
-						fallback_llm, fallback_model,
-						self._get_provider_from_model(fallback_model) or 'unknown')
+					# 095 W1a: the SERVING provider (a spec-built client), not the
+					# vendor the model id names; one shared refresh (identity with
+					# cause=fallback, system prompt, usage anchor).
+					fallback_provider = resolve_serving_provider(fallback_llm, fallback_model)
+					self.adopt_active_llm(fallback_llm, fallback_model, fallback_provider)
+					self._refresh_after_model_change(
+						"fallback", original_model_name, reason=error_type)
 					
 					self.logger.info(f"✅ Switched to fallback provider: {fallback_model}")
 					
@@ -488,7 +502,6 @@ class LLMRunnerMixin:
 					fallback_duration = time.time() - fallback_start
 					
 					# Record successful fallback
-					fallback_provider = self._get_provider_from_model(fallback_model)
 					self._emit_fallback_success_telemetry(
 						original_provider=current_provider,
 						original_model=original_model_name,
@@ -510,13 +523,13 @@ class LLMRunnerMixin:
 					# Fallback also failed - restore original and raise typed error.
 					# Restore the FULL SSOT, symmetrically with the switch above.
 					self.adopt_active_llm(original_llm, original_model_name, original_provider)
+					self._refresh_after_model_change("restore")
 					
 					self.logger.error(
 						f"❌ Fallback also failed: {type(fallback_error).__name__}: {str(fallback_error)[:200]}"
 					)
 					
 					# Track both failed providers
-					fallback_provider = self._get_provider_from_model(fallback_model)
 					self.state.track_llm_error(type(fallback_error).__name__, fallback_provider)
 					
 					# Raise typed exception for proper handling
@@ -576,8 +589,8 @@ class LLMRunnerMixin:
 					# llm/model_name alone was not enough).
 					_fb_model = getattr(fallback_llm, 'model_name', 'fallback')
 					self.adopt_active_llm(
-						fallback_llm, _fb_model,
-						self._get_provider_from_model(_fb_model) or 'unknown')
+						fallback_llm, _fb_model, resolve_serving_provider(fallback_llm, _fb_model))
+					self._refresh_after_model_change("fallback", original_model, reason=error_type)
 					self.logger.info(f"✅ Switched to fallback: {self.model_name}")
 
 					result = await asyncio.wait_for(
@@ -590,9 +603,10 @@ class LLMRunnerMixin:
 
 				except Exception as fallback_error:
 					self.adopt_active_llm(original_llm, original_model, original_provider)
+					self._refresh_after_model_change("restore")
 					self.logger.error(f"❌ Fallback also failed: {fallback_error}")
 					# Track the failed fallback provider
-					fallback_provider = self._get_provider_from_model(getattr(fallback_llm, 'model_name', 'unknown'))
+					fallback_provider = resolve_serving_provider(fallback_llm, _fb_model)
 					self.state.track_llm_error(type(fallback_error).__name__, fallback_provider)
 					raise LLMProviderExhaustedError(
 						f"Primary LLM failed: {generic_llm_error}. Fallback failed: {fallback_error}",

@@ -365,7 +365,7 @@ def _warn_service_token_header_once(logger) -> None:
         "The operator service token was sent as X-API-KEY. That spelling is "
         "DEPRECATED and is removed in the next release — send it as "
         "X-Service-Token instead. (X-API-KEY remains the header for "
-        "self-service rob_xxx API keys.)"
+        "self-service API keys.)"
     )
 
 
@@ -630,12 +630,12 @@ def create_app() -> FastAPI:
     # add_middleware at index 0) leaves it as the INNERMOST layer — it then runs
     # LAST, after AuthenticationMiddleware/JWTAuthMiddleware/X402 have authenticated
     # the request. Registering it last made it outermost and shadowed the DB-backed
-    # rob_xxx API-key validator (self-service keys were rejected before it ran).
+    # self-service API-key validator (self-service keys were rejected before it ran).
     from api.account_access import enforce_account_access
     app.middleware("http")(enforce_account_access)
     app.middleware("http")(fallback_auth_middleware)
 
-    # B2: the self-service `rob_xxx` API-key validator is registered
+    # B2: the self-service API-key validator is registered
     # UNCONDITIONALLY — it used to live only inside AuthenticationMiddleware,
     # which is mounted only when API_SECRET/ADMIN_TOKEN is set, so on the
     # default deployment a minted key authenticated nothing while the agent
@@ -919,8 +919,8 @@ def create_app() -> FastAPI:
         logger.warning(f"OpenAI-compatible endpoints not available: {e}")
 
     # Mount MCP-server /mcp router (gated; default OFF). Reuses POLYROB auth
-    # (get_user_permissive) — Rob acting as an MCP SERVER for external clients
-    # (Claude Desktop/Cursor), the opposite direction from tools/mcp/ (Rob as
+    # (get_user_permissive) — the agent acting as an MCP SERVER for external clients
+    # (Claude Desktop/Cursor), the opposite direction from tools/mcp/ (the agent as
     # MCP client). Read-only v1 (T2.3).
     try:
         from api.mcp_serve.router import router as mcp_serve_router, mcp_serve_enabled

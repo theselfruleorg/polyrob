@@ -1,11 +1,17 @@
 {
   "function": {
-    "description": "Amend a live cron job IN PLACE — patch its task (old_text -> new_text, the rest kept verbatim), or change its schedule, cap, rig, delivery or pinned skills. Use this instead of cancel + re-schedule, which re-types the task and loses its rules. To run a job sooner, set a new schedule (e.g. a one-shot ISO time a minute ahead).",
+    "description": "Amend a live cron job in place: add to its task (append_text / prepend_text), change a passage (old_text -> new_text), or change its schedule, cap, rig, delivery or skills. Never cancel + re-schedule.",
     "name": "cronjob_edit",
     "parameters": {
       "additionalProperties": false,
       "description": "Amend a live job IN PLACE. Pass only the fields to change.",
       "properties": {
+        "append_text": {
+          "default": null,
+          "description": "Text to ADD at the END of the task (no copy needed).",
+          "nullable": true,
+          "type": "string"
+        },
         "deliver": {
           "default": null,
           "description": "New delivery sink ('telegram'|'email' to the owner, 'twitter' = a PUBLIC X post), or 'none' to drop it.",
@@ -32,7 +38,7 @@
         },
         "old_text": {
           "default": null,
-          "description": "Exact passage of the CURRENT task to replace (copy it from cronjob_show; must occur exactly once). The rest of the task is kept verbatim — never re-type a whole task to change one value.",
+          "description": "Exact passage of the current task to change or delete (from cronjob_show; must occur once).",
           "nullable": true,
           "type": "string"
         },
@@ -54,6 +60,12 @@
           "properties": {},
           "type": "object"
         },
+        "prepend_text": {
+          "default": null,
+          "description": "Text to ADD at the START of the task.",
+          "nullable": true,
+          "type": "string"
+        },
         "read_verb": {
           "additionalProperties": true,
           "default": null,
@@ -70,7 +82,7 @@
         },
         "schedule": {
           "default": null,
-          "description": "New schedule spec; the next run is recomputed from now. This is how you run a job SOONER: set a one-shot ISO time a minute ahead. A one-shot spec makes a recurring job one-shot — set its recurring spec back after that run.",
+          "description": "New schedule spec (next run recomputed). To run once now, use cronjob_run_now.",
           "nullable": true,
           "type": "string"
         },

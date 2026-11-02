@@ -26,7 +26,7 @@ def wrong_surface_target_reason(surface: str, target):
     """Why this target can NEVER be delivered on this surface, or None.
 
     2026-09-15 prod review, C8: the dead-target registry held
-    ``telegram / rob@example.org / chat_not_found`` — an email address
+    ``telegram / alice@example.org / chat_not_found`` — an email address
     handed to the Bot API. Nothing checked the SHAPE, so the send was spent, it
     failed, and the address was durably marked dead on a surface it was never
     addressable on. This is the same courtesy :func:`is_bot_username` already

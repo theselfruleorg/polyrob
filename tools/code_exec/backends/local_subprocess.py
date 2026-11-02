@@ -95,7 +95,7 @@ class LocalSubprocessBackend(ExecutionBackend):
                 backend=self.name,
             )
 
-        workdir = request.workdir or tempfile.mkdtemp(prefix="rob_codeexec_")
+        workdir = request.workdir or tempfile.mkdtemp(prefix="polyrob_codeexec_")
         created_tmp = request.workdir is None
         if not created_tmp:
             # A caller-supplied workspace dir may not exist yet; subprocess cwd requires it.

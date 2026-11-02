@@ -1,9 +1,9 @@
 """Loop-detection + intervention mixin (roadmap P9 decomposition; code-motion from service.py).
 
 Stop-flag checks, multi-signal action-loop detection (action repetition + memory
-similarity + goal stagnation), and the guidance-injection intervention. Moved
-verbatim off the ``Agent`` god-file; ``Agent`` composes ``LoopDetectionMixin``
-(call sites in the step loop and flow-efficiency tests unchanged via MRO).
+similarity + goal stagnation), the guidance-injection intervention, and the
+identical-call escalation (guidance -> the next identical call is not executed ->
+the run ends with ``StopReason.LOOP``). ``Agent`` composes ``LoopDetectionMixin``.
 """
 from __future__ import annotations
 
@@ -13,6 +13,22 @@ from typing import Any, Dict, List, Optional
 
 from modules.llm.messages import make_control_message, MessageOrigin
 from agents.task.agent.views import ActionResult
+
+
+#: Observe / poll / navigation actions (review 2026-10-29 H2). They return the
+#: SAME text while the world changes — '⬇️ Scrolled down', a "Load more" click
+#: ('🖱️ Clicked element with index N: <label>'), process_wait on a quiet job
+#: ('running (still running after 60s)' + the same log tail) — so "same
+#: arguments + same result" is no proof of a loop. A repetition of a step made
+#: ONLY of these gets guidance once; it is never blocked and never ends a run.
+#: Exact registered names (core/verb_policy_rows.py); verb-level sets stay
+#: hand-curated next to their gate (core/tool_capabilities.py is per tool id).
+REPEAT_OK_ACTIONS = frozenset({
+    "browser_scroll", "browser_scroll_down", "browser_scroll_up", "browser_scroll_to_text",
+    "browser_click_element", "browser_send_keys", "browser_go_back_action",
+    "browser_refresh_page", "browser_switch_tab", "browser_extract_page_content",
+    "process_wait", "process_poll", "process_log", "process_list",
+})
 
 
 class LoopDetectionMixin:
@@ -35,15 +51,26 @@ class LoopDetectionMixin:
             raise InterruptedError("Agent stopped (paused flag deprecated)")
         return False
 
-    def _trigger_loop_intervention(self, reason: str, clear_history: bool = False) -> None:
+    def _trigger_loop_intervention(self, reason: str, clear_history: bool = False,
+                                   observe: bool = False) -> None:
         """Trigger loop intervention guidance without clearing history.
 
         Args:
             reason: Human-readable reason for intervention
             clear_history: Deprecated, always False. History is preserved.
+            observe: the repetition is an observe/poll/navigation step
+                (``REPEAT_OK_ACTIONS``): a short note only — no error result,
+                no "will not run" warning, because nothing is blocked.
         """
         clear_history = False  # History clearing disabled - causes amnesia loops
         self.logger.warning(f"🔄 LOOP DETECTED: {reason}")
+        if observe:
+            self.message_manager.add_message(make_control_message(
+                f"Note: {reason}. If you scroll, page or wait for something that does "
+                "not change, change the approach (a longer wait, another element, a "
+                "different source) or report what you have. This call is not blocked.",
+                MessageOrigin.INTERVENTION))
+            return
 
         # Check if this looks like a validation/parameter error loop
         is_validation_error = any(x in reason.lower() for x in [
@@ -75,6 +102,9 @@ class LoopDetectionMixin:
             _names = set(_ctrl.get_action_names()) if _ctrl else set()
         except Exception:
             _names = set()
+        _esc = getattr(self, '_loop_escalation', None) or {}
+        _next = (" The next identical call will NOT run, and one more after that ends "
+                 "this run." if _esc.get('stage') == 'warned' else "")
         if is_validation_error:
             _mcp = ""
             if "mcp_execute_tool" in _names:
@@ -93,7 +123,7 @@ The error message above tells you exactly what's wrong - READ IT CAREFULLY.
 1. READ the error message - it tells you which parameter is missing
 2. INCLUDE all required parameters in your tool call{_mcp}
 
-DO NOT just repeat the same broken call. FIX the parameters first.""", MessageOrigin.INTERVENTION)
+DO NOT just repeat the same broken call. FIX the parameters first.{_next}""", MessageOrigin.INTERVENTION)
         else:
             _create = ("3. If you need to CREATE something, use filesystem_write_file NOW\n"
                        if "filesystem_write_file" in _names else "")
@@ -107,7 +137,7 @@ DO NOT just repeat the same broken call. FIX the parameters first.""", MessageOr
 2. DO NOT repeat the same action sequence
 {_create}{_stuck_n}. If you're truly stuck, call the 'done' action with your current progress
 
-TAKE A DIFFERENT ACTION IMMEDIATELY. Reading the same files again will result in task termination.""", MessageOrigin.INTERVENTION)
+TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
 
         self.message_manager.add_message(intervention_msg)
 
@@ -125,9 +155,10 @@ TAKE A DIFFERENT ACTION IMMEDIATELY. Reading the same files again will result in
             include_in_memory=True
         ))
 
-        # Reset counter and clear action history after intervention
-        self._action_repetition_counter = 0
-        self._previous_actions.clear()
+        # The identical-call counter is NOT reset here: an intervention is the first
+        # rung of the escalation (_loop_guard_check blocks the next identical call and
+        # ends the run on the one after). Resetting it made the warning fire every few
+        # steps forever (prod 2026-10-28: 139 identical reads, 16 warnings in one turn).
 
         # FIX #4: Signal to AgentState for tracking
         if hasattr(self, 'state'):
@@ -137,68 +168,221 @@ TAKE A DIFFERENT ACTION IMMEDIATELY. Reading the same files again will result in
         # CRITICAL: History is NEVER cleared - agent retains full context
         self.logger.info(f"✅ Loop intervention complete. Full context preserved, guidance injected.")
 
+    # --- identical-call escalation (prod 2026-10-26..28) ----------------------
+    #
+    # One rung per further identical call, keyed on the step's arguments AND its
+    # result: (1) guidance at the configured repetition threshold, (2) the next
+    # identical call is NOT executed — it gets an error that names the repetition
+    # and the earlier result, (3) the one after ends the run with StopReason.LOOP.
+    # A call whose result changes (polling) never counts; any different call
+    # clears the escalation, since the world may have changed. A step made only
+    # of REPEAT_OK_ACTIONS (scroll, a "Load more" click, process_wait) gets the
+    # guidance rung only. A step whose every result is an error is not counted
+    # here: the 093 retry wall (tools/controller/execution.py) owns identical
+    # failures. An identical A-B-A-B cycle escalates like one repeated call.
+
+    @staticmethod
+    def _step_dump(model_output) -> list:
+        dump = []
+        for a in (getattr(model_output, 'action', None) or []):
+            try:
+                dump.append(a.model_dump(mode="json", exclude_unset=True, by_alias=True))
+            except Exception:
+                dump.append(repr(a))
+        return dump
+
+    @classmethod
+    def _step_action_hash(cls, model_output) -> Optional[str]:
+        dump = cls._step_dump(model_output)
+        if not dump:
+            return None
+        return hashlib.md5(json.dumps(dump, sort_keys=True, default=str).encode()).hexdigest()
+
+    @staticmethod
+    def _step_result_text(results) -> str:
+        parts = []
+        for r in (results or []):
+            err = getattr(r, 'error', None)
+            parts.append(f"ERROR: {err}" if err else str(getattr(r, 'extracted_content', '') or ''))
+        return " | ".join(p for p in parts if p)
+
+    @staticmethod
+    def _step_tool_names(dump: list) -> str:
+        names = []
+        for d in dump:
+            if isinstance(d, dict):
+                names.extend(str(k) for k in d.keys() if k != 'interacted_element')
+        return ", ".join(dict.fromkeys(names)) or "the same call"
+
+    @staticmethod
+    def _esc_hashes(esc: Dict[str, Any]) -> frozenset:
+        """The action hashes an escalation covers: one call, or the two calls of
+        an A-B-A-B cycle."""
+        return frozenset(esc.get('hashes') or ()) | {esc.get('hash')}
+
+    @staticmethod
+    def _is_observe_step(dump: list) -> bool:
+        names = [str(k) for d in dump if isinstance(d, dict)
+                 for k in d.keys() if k != 'interacted_element']
+        return bool(names) and all(n in REPEAT_OK_ACTIONS for n in names)
+
+    def _reset_loop_guard(self) -> None:
+        """A new run starts with a clean escalation (the run loop calls this)."""
+        self._loop_escalation = None
+        self._loop_observe_hashes = set()
+        self._loop_blocked_step = False
+        self._loop_stop_text = None
+        self._last_step_key = None
+        self._action_repetition_counter = 0
+
+    def _take_loop_stop(self) -> Optional[str]:
+        """The loop-stop reason once (the run loop ends the run on it), else None."""
+        text = getattr(self, '_loop_stop_text', None)
+        self._loop_stop_text = None
+        return text
+
+    def _loop_guard_check(self, model_output) -> Optional[List[ActionResult]]:
+        """Before execution: the error results for a call that must not run again,
+        or None to run the step normally. Never raises."""
+        try:
+            esc = getattr(self, '_loop_escalation', None)
+            if not esc:
+                return None
+            if esc.get('stage') == 'observe':
+                return None
+            action_hash = self._step_action_hash(model_output)
+            if action_hash is None or action_hash not in self._esc_hashes(esc):
+                return None
+            self._loop_blocked_step = True
+            tools = esc.get('tools') or "the same call"
+            earlier = (esc.get('result') or "(no result text)")[:600]
+            n = esc.get('count') or 0
+            if esc.get('stage') == 'warned':
+                esc['stage'] = 'blocked'
+                self.logger.warning(f"🛑 LOOP: identical call to {tools} not executed (repeated {n} times)")
+                error = (
+                    f"REPEATED CALL NOT RUN: {tools} with these exact arguments already ran "
+                    f"{n} times in a row and returned the same result each time, so it was "
+                    f"not run again. The earlier result: {earlier}\n"
+                    "Use that result, change the arguments, use a different tool, or call "
+                    "done with what you have. One more identical call ends this run.")
+            else:
+                from agents.task.runtime.stop_reason import StopReason, set_stop
+                self.logger.error(f"🛑 LOOP: identical call to {tools} repeated after a block — ending the run")
+                self._loop_stop_text = (
+                    f"{tools} repeated with the same arguments and the same result "
+                    f"after a warning and a block")
+                set_stop(self, StopReason.LOOP)
+                error = (
+                    f"RUN ENDED: {tools} was called again with the same arguments after "
+                    f"it was blocked. The earlier result: {earlier}")
+            n_actions = max(1, len(getattr(model_output, 'action', None) or []))
+            return [ActionResult(error=error, include_in_memory=True) for _ in range(n_actions)]
+        except Exception:
+            self.logger.debug("loop guard check failed (fail-open)", exc_info=True)
+            return None
+
     def _record_action_for_loop_detection(self, model_output) -> None:
         """Hash-based action-repetition + alternating-pattern detector (the second of the
         three loop signals; ``detect_action_loop`` is the H-MEM multi-signal one and
-        ``AgentState.track_action`` the string-similarity one). Folded in from the step
-        recording tail verbatim (S7, 2026-08-29); ``_previous_actions`` /
-        ``_action_repetition_counter`` / ``_max_allowed_repetitions`` are set in construction.
+        ``AgentState.track_action`` the string-similarity one). A repetition is the same
+        arguments AND the same result as the previous step; it feeds the escalation
+        above. ``_previous_actions`` / ``_action_repetition_counter`` /
+        ``_max_allowed_repetitions`` are set in construction.
         """
-        # Action repetition detection
-        if model_output and hasattr(model_output, 'action') and model_output.action:
-            # Create a simplified representation of the action for comparison
-            import hashlib
-            # --- UPGRADE: use order-independent semantic hash ----------------
-            action_dump = []
-            for a in model_output.action:
-                # Dump each action with sorted keys so param order does not matter
-                action_dump.append(a.model_dump(mode="json", exclude_unset=True, by_alias=True))
-            action_hash = hashlib.md5(json.dumps(action_dump, sort_keys=True).encode()).hexdigest()
-            # ---------------------------------------------------------------
+        if not (model_output and hasattr(model_output, 'action') and model_output.action):
+            return
+        action_dump = self._step_dump(model_output)
+        action_hash = self._step_action_hash(model_output)
 
-            # The NAMES too: `_has_active_browser_usage` needs them, and the hashes
-            # above cannot answer "was that a browser action?".
-            names = getattr(self, '_recent_action_names', None)
-            if names is not None:
-                for dumped in action_dump:
-                    if isinstance(dumped, dict):
-                        names.extend(str(k) for k in dumped.keys())
+        # The NAMES too: `_has_active_browser_usage` needs them, and the hashes
+        # above cannot answer "was that a browser action?".
+        names = getattr(self, '_recent_action_names', None)
+        if names is not None:
+            for dumped in action_dump:
+                if isinstance(dumped, dict):
+                    names.extend(str(k) for k in dumped.keys())
 
-            # Check for repeated actions with improved detection
-            if self._previous_actions and action_hash == self._previous_actions[-1]:
-                self._action_repetition_counter += 1
-                # Log warnings after 3+ repetitions (more aggressive)
-                if self._action_repetition_counter >= 3:
-                    self.logger.warning(f"Same action repeated {self._action_repetition_counter} times")
+        # A step the guard refused did not run: it is neither a new repetition nor
+        # progress, so the escalation state stays as it is.
+        if getattr(self, '_loop_blocked_step', False):
+            self._loop_blocked_step = False
+            return
 
-                # FIX #1: Respect the configured threshold instead of hardcoding 8
-                # The config value is typically 2-3 for faster loop detection
-                max_reps = self._max_allowed_repetitions  # Removed the max(..., 8) override
-                if self._action_repetition_counter >= max_reps:
-                    self._trigger_loop_intervention(f"Action repeated {self._action_repetition_counter} times")
-            else:
-                # Different action, reset counter
-                self._action_repetition_counter = 0
+        # A step whose every result is an error is the 093 retry wall's to count
+        # (tools/controller/execution.py: the operation key, max retries, then two
+        # wall-only steps end the run). Counting it here too sent one identical
+        # FAILING call toward two different stops (LOOP and FAILURES); the wall
+        # also catches a failure whose text changes. It breaks a same-result run.
+        last = list(getattr(self, '_last_result', None) or [])
+        if last and all(getattr(r, 'error', None) for r in last):
+            self._action_repetition_counter = 0
+            self._last_step_key = None
+            self._previous_actions.clear()
+            return
 
-            # Update action history (deque automatically maintains max size)
-            self._previous_actions.append(action_hash)
+        result_text = self._step_result_text(last)
+        step_key = f"{action_hash}:{hashlib.md5(result_text.encode()).hexdigest()}"
+        observe = self._is_observe_step(action_dump)
+        if observe:
+            hashes = getattr(self, '_loop_observe_hashes', None)
+            if hashes is None:
+                hashes = self._loop_observe_hashes = set()
+            hashes.add(action_hash)
+        esc = getattr(self, '_loop_escalation', None)
+        if esc and action_hash not in self._esc_hashes(esc):
+            self._loop_escalation = esc = None
 
-            # FIX #2: Enhanced pattern detection with IMMEDIATE intervention
-            if len(self._previous_actions) >= 4:
-                # Convert deque to list for slice operations
-                prev_actions_list = list(self._previous_actions)
+        if step_key == getattr(self, '_last_step_key', None):
+            self._action_repetition_counter += 1
+            if self._action_repetition_counter >= 3:
+                self.logger.warning(f"Same action repeated {self._action_repetition_counter} times")
+            if self._action_repetition_counter >= self._max_allowed_repetitions and not esc:
+                tools = self._step_tool_names(action_dump)
+                self._loop_escalation = {
+                    'hash': action_hash, 'stage': 'observe' if observe else 'warned',
+                    'tools': tools, 'count': self._action_repetition_counter + 1,
+                    'result': result_text}
+                self._trigger_loop_intervention(
+                    f"{tools} repeated {self._action_repetition_counter + 1} times in a row "
+                    f"with the same arguments and the same result",
+                    **({'observe': True} if observe else {}))
+            elif esc:
+                esc['count'] = self._action_repetition_counter + 1
+        else:
+            self._action_repetition_counter = 0
+        self._last_step_key = step_key
 
-                # Check for A-B-A-B pattern - IMMEDIATE intervention
-                if (prev_actions_list[-1] == prev_actions_list[-3] and
-                    prev_actions_list[-2] == prev_actions_list[-4]):
-                    self.logger.warning("🔄 Detected alternating action pattern (A-B-A-B) - INTERVENING NOW")
-                    self._trigger_loop_intervention("Alternating A-B-A-B pattern detected")
-
-                # Check for A-B-C-A-B-C pattern - IMMEDIATE intervention
-                elif (len(self._previous_actions) >= 6 and
-                      prev_actions_list[-3:] == prev_actions_list[-6:-3]):
-                    self.logger.warning("🔄 Detected repeating 3-action pattern (A-B-C-A-B-C) - INTERVENING NOW")
-                    self._trigger_loop_intervention("Repeating 3-action pattern detected")
+        # Pattern history keys on the result too: a re-check whose answer changed
+        # is not a cycle.
+        self._previous_actions.append(step_key)
+        if len(self._previous_actions) >= 4:
+            prev = list(self._previous_actions)
+            pattern = None
+            cycle = None
+            if prev[-1] == prev[-3] and prev[-2] == prev[-4] and prev[-1] != prev[-2]:
+                pattern = "Alternating A-B-A-B pattern detected"
+                cycle = {prev[-1].split(':', 1)[0], prev[-2].split(':', 1)[0]}
+            elif len(prev) >= 6 and prev[-3:] == prev[-6:-3] and len(set(prev[-3:])) > 1:
+                pattern = "Repeating 3-action pattern detected"
+            if pattern:
+                self.logger.warning(f"🔄 {pattern} - INTERVENING NOW")
+                observed = getattr(self, '_loop_observe_hashes', None) or set()
+                cycle_observe = bool(cycle) and cycle <= observed
+                # L4: an identical two-call cycle (same arguments, same results)
+                # escalates like one repeated call: the next call of the cycle is
+                # not run, the one after ends the run. An observe-only cycle and
+                # the 3-call pattern stay guidance.
+                if cycle and not cycle_observe and not getattr(self, '_loop_escalation', None):
+                    self._loop_escalation = {
+                        'hash': action_hash, 'hashes': sorted(cycle), 'stage': 'warned',
+                        'tools': "the same two calls in turn", 'count': 2,
+                        'result': result_text}
+                self._trigger_loop_intervention(
+                    pattern, **({'observe': True} if cycle_observe else {}))
+                # Start the pattern window afresh so it does not fire again on
+                # every following step.
+                self._previous_actions.clear()
 
     def detect_action_loop(
         self,

@@ -153,4 +153,10 @@ async def handle_truncated_output(agent: Any, input_messages: List[Any],
         # ONE retry, and an honest fall-back to what we already have — a second
         # attempt would double the very cost this exists to bound.
         logger.warning("truncation retry failed (%s); keeping the first answer", err)
+        # 095 W2 (HI-15): the next step is told, as on the no-retry path.
+        try:
+            agent.message_manager.push_ephemeral_message(
+                build_truncation_note(tokens, reasoning, used=True))
+        except Exception:  # pragma: no cover - a note never fails a step
+            logger.debug("truncation note skipped", exc_info=True)
         return result

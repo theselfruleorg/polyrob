@@ -127,10 +127,8 @@ async def _recover(task_agent: Any, card: Any, text: str) -> None:
                                        text)
         if ack is None:
             return
-        from core.surfaces.user_delivery import deliver_user_message
-        await deliver_user_message(getattr(task_agent, "container", None), card.user_id,
-                                   cards.render_text(ack), source="action_card",
-                                   session_id=card.session_id, card_id=ack.card_id)
+        await cards.push(getattr(task_agent, "container", None), card.user_id, ack,
+                         session_id=card.session_id)
     except Exception:
         logger.warning("card %s: recovery card skipped", getattr(card, "card_id", "?"),
                        exc_info=True)

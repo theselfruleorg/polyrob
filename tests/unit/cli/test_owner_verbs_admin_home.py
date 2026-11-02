@@ -28,7 +28,7 @@ def deployed(tmp_path, monkeypatch):
 def test_soul_init_writes_the_deployed_home(deployed, monkeypatch):
     from cli.commands.soul import soul
     monkeypatch.setattr("click.edit", lambda *a, **k: None)
-    res = CliRunner().invoke(soul, ["init", "--no-prompt", "--name", "Rob"])
+    res = CliRunner().invoke(soul, ["init", "--no-prompt", "--name", "Nova"])
     assert res.exit_code == 0, res.output
     assert (deployed / "identity" / "identity.md").is_file()
 

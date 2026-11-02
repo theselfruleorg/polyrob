@@ -146,8 +146,15 @@ def operator_model_for(provider, env=None):
 #: Model tiers a ``REGIME_POLICY`` row may name (``agents/task/session_class.py``).
 #: ``default`` = the operator's model; ``heavy`` = ``HEAVY_MODEL``; ``inherit`` = the
 #: caller keeps the parent's LLM (a child agent). The tier -> model map stays in env
-#: because a model id is per-provider.
+#: because a model id is per-provider. A NEW owner chat's tier (the owner's own
+#: default above the operator's) is ``core.model_pins.chat_runtime_for`` (094).
 MODEL_TIERS = ("default", "heavy", "inherit")
+
+
+def heavy_model_pin(env=None):
+    """``HEAVY_MODEL`` (the money tier on the operator's provider), or ``None``."""
+    env = _os.environ if env is None else env
+    return (env.get("HEAVY_MODEL") or "").strip() or None
 
 
 def model_for(payload, provider, *, tier="default", env=None):
@@ -182,7 +189,7 @@ def model_for(payload, provider, *, tier="default", env=None):
         heavy = is_money_class(payload)
     if not heavy:
         return None
-    model = (env.get("HEAVY_MODEL") or "").strip()
+    model = heavy_model_pin(env)
     if not model:
         return None
     pinned = canonicalize_provider(operator_provider_pin(env))

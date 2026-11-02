@@ -60,7 +60,7 @@ def test_trip_activates_and_auto_releases(data_dir, monkeypatch):
     from core.credit_sentinel import (credit_sentinel_active, trip_credit_sentinel,
                                       _sentinel_path)
     assert credit_sentinel_active() is False
-    asyncio.run(trip_credit_sentinel("openrouter 402", container=None, user_id="rob"))
+    asyncio.run(trip_credit_sentinel("openrouter 402", container=None, user_id="alice"))
     assert credit_sentinel_active() is True
     # age the latch past the release window → auto-release
     p = _sentinel_path()
@@ -83,8 +83,8 @@ def test_trip_sends_one_safety_net_notice(data_dir, monkeypatch):
         return "sent"
 
     monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _fake_deliver)
-    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
-    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="alice"))
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="alice"))
     assert len(sent) == 1, "already-active sentinel must not re-notify"
     assert "402" in sent[0]
 
@@ -92,7 +92,7 @@ def test_trip_sends_one_safety_net_notice(data_dir, monkeypatch):
 def test_flag_off_disables_sentinel(data_dir, monkeypatch):
     monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "false")
     from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
-    asyncio.run(trip_credit_sentinel("402", container=None, user_id="rob"))
+    asyncio.run(trip_credit_sentinel("402", container=None, user_id="alice"))
     assert credit_sentinel_active() is False
 
 
@@ -100,7 +100,7 @@ def test_dispatch_once_pauses_while_sentinel_active(data_dir):
     from core.credit_sentinel import trip_credit_sentinel
     from agents.task.goals.dispatcher import GoalDispatcher
 
-    asyncio.run(trip_credit_sentinel("402", container=None, user_id="rob"))
+    asyncio.run(trip_credit_sentinel("402", container=None, user_id="alice"))
 
     class _Board:
         def reclaim_stale(self):
@@ -122,7 +122,7 @@ def test_cron_llm_tick_skipped_while_sentinel_active(data_dir):
     from cron.runner import make_agent_runner
     from cron.jobs import CronJob
 
-    asyncio.run(trip_credit_sentinel("402", container=None, user_id="rob"))
+    asyncio.run(trip_credit_sentinel("402", container=None, user_id="alice"))
 
     created = []
 
@@ -219,10 +219,10 @@ def test_retrip_notice_text_is_byte_distinct(data_dir, monkeypatch):
     fake_now = [time.struct_time((2026, 7, 19, 8, 16, 0, 5, 200, 0))]
     monkeypatch.setattr(time, "gmtime", lambda *a: fake_now[0])
 
-    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="alice"))
     os.remove(cs._sentinel_path())  # simulate auto-release
     fake_now[0] = time.struct_time((2026, 7, 19, 14, 16, 0, 5, 200, 0))
-    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="alice"))
 
     assert len(sent) == 2
     assert sent[0] != sent[1], "re-trip notice must be byte-distinct from the first"
@@ -239,12 +239,12 @@ def test_deduped_sentinel_notice_warns(data_dir, monkeypatch, caplog):
 
     monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _fake_deliver)
     with caplog.at_level(logging.WARNING, logger=cs.logger.name):
-        asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+        asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="alice"))
     assert any("DEDUPED" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
-# Provider scoping (2026-08-14). Live prod: Rob ran a HEALTHY flat-rate
+# Provider scoping (2026-08-14). Live prod: the agent ran a HEALTHY flat-rate
 # zai-coding seat, but one legacy cron job still pinned the credit-dead
 # OpenRouter. Its 402 latched the GLOBAL sentinel and paused every goal —
 # including ones correctly pinned to the working provider — for 5.7 hours.

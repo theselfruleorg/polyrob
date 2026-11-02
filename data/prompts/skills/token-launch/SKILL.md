@@ -5,37 +5,35 @@ license: MIT
 metadata:
   polyrob-when: 'Launching a token, claiming its fees, or using a dapp'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","launchpad","dapp_browser"]}'
   polyrob-version: '2'
 ---
 # Token Launch — launching, deploying, claiming, and dapps
 
-Part of the `treasury-trading` playbook, split out. Launching and deploying are
-separate from trading: read this before `launchpad_launch`, `deploy_token`,
+Launching and deploying are separate from trading: read this before `launchpad_launch`, `deploy_token`,
 `deploy_contract`, `launchpad_claim` or `dapp_browser.dapp_connect`.
 
-## Launching a token, deploying one, and using a dapp (2026-09-13)
+## Launching a token, deploying one, and using a dapp
 
-Nine verbs you did not have last week. If a memory of an older run tells you any
-of these does not exist, that memory is out of date — check your toolset, then
-say which of the two it is. Telling the owner a shipped rail does not exist has
-cost you twice already.
+If a memory of an older run tells you one of these verbs does not exist, check
+your toolset before you believe it, then say which of the two is true. Never
+tell the owner a rail does not exist from memory alone.
 
-**`launchpad_launch`** launches a token on **Pons V2**, Robinhood Chain's
-dominant launchpad: token + bonding curve in one transaction, fixed 1B supply,
-graduating to a locked Uniswap pool at 4.2 ETH of curve liquidity. `dry_run`
-defaults TRUE and reads the live terms — do that first, always. An opening buy
+**`launchpad_launch`** launches a token on the launchpad the `launchpad` tool
+supports (its description names the launchpad and the chain): token + bonding
+curve in one transaction, a fixed supply, graduating to a locked pool at a set
+amount of curve liquidity. `dry_run` defaults TRUE and reads the live terms —
+supply, graduation threshold, taxes — do that first, always. An opening buy
 (`buy_amount`) is how you take the first position; without one, somebody else
 does.
 
-**`launchpad_buy` / `launchpad_sell`** trade an existing Pons token on its curve,
+**`launchpad_buy` / `launchpad_sell`** trade an existing launchpad token on its curve,
 BEFORE graduation. After graduation it is an ordinary Uniswap pool and
 `defi_trade.swap` is the verb. `launchpad_status` tells you which, and how close
 to graduating it is. `launchpad_quote` prices a trade exactly and costs nothing.
 
-⚠️ **The snipe tax opens at 99% and decays over ~3 seconds.** A buy in the launch
-block loses almost everything. `launchpad_buy` refuses while the live rate is
+⚠️ **A launch-block snipe tax can open near 99% and decay over seconds.** A buy
+in the launch block then loses almost everything. `launchpad_buy` refuses while the live rate is
 above 100 bps rather than paying it — that refusal is correct, and the answer is
 to wait a few seconds, not to look for a way around it. Your OWN launches are
 exempt (the factory exempts the deployer), so an opening buy is not taxed.
@@ -100,17 +98,16 @@ standing authorization.
 
 ## Your launches EARN — and the money does not come to you
 
-A Pons launch routes its creator tax (`creator_tax_bps` on `launchpad_launch`,
-100 bps = 1% by default, 1000 at most) to **a fee escrow**, not to the curve and not to your wallet. It sits
-there until you claim it. Nothing pushes it.
+A launch routes its creator tax (`creator_tax_bps` on `launchpad_launch`; the
+tool states the default and the maximum) to **a fee escrow**, not to the curve
+and not to your wallet. It sits there until you claim it. Nothing pushes it.
 
-⚠️ **This stranded real money.** On 2026-09-14 two launches had accrued fees for
-days while the agent reported them "unproven": it probed the CURVE for a balance
-(`creatorFees()`, `pendingFees()`, `claimable()` — none of which exist), read the
-reverts as "no fees", estimated the total from trading volume, and escalated to
-the owner. The balance was one hop away on the escrow the whole time.
+⚠️ **Fees left in the escrow are real money left unclaimed.** Never probe the
+CURVE for a fee balance with guessed functions (`creatorFees()`,
+`pendingFees()`, `claimable()`), never read a revert as "no fees", and never
+estimate fees from trading volume. The balance is on the escrow.
 
-- `launchpad_status(token)` now **prints the claimable balance** and the escrow
+- `launchpad_status(token)` **prints the claimable balance** and the escrow
   address. Read that line. It is the only thing that tells you money is waiting.
 - `launchpad_claim(token)` takes it. Nothing leaves the wallet — the only cost is
   gas — and the simulation must prove the money arrives before anything is
@@ -144,7 +141,7 @@ exist on every rail — using them is your job, not the code's.
 
 - **`launchpad_launch`** takes `logo` (an https:// or ipfs:// image URL),
   `description`, `twitter` and `website`. Fill at least the logo and the
-  description. A Pons listing without them sits below every listing that has
+  description. A listing without them sits below every listing that has
   them.
 - **`defi_trade.solana_deploy_token`** writes `name` and `symbol` ON-CHAIN
   (Token-2022 metadata — no Metaplex account needed) and takes a `uri` pointing
@@ -174,4 +171,4 @@ verb with a raw `call`, a browser dapp, or another agent.
 
 ## Related
 
-`treasury-trading`, `robinhood-chain`.
+`defi-liquidity`, `token-identity`, `trade-execution`.

@@ -66,9 +66,9 @@ async def test_pay_text_carries_full_precision_when_jittered(tmp_path, monkeypat
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=7.5, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=7.5, purpose="a", db=db)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=7.5, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=7.5, purpose="b", db=db)
         assert second["amount_usd"] != 7.5  # jitter fired — precondition for this test
 
         first_art = build_payment_artifact(first)
@@ -88,7 +88,7 @@ async def test_pay_text_carries_full_precision_when_jittered(tmp_path, monkeypat
 # --- invoice_tool.py: x402_request result text carries full precision -------
 
 class _Ctx:
-    user_id = "rob"
+    user_id = "alice"
     session_id = "sess_1"
 
 

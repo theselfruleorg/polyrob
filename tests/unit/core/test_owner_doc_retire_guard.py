@@ -1,8 +1,8 @@
 """An agent write may not silently retire a block of live owner rules.
 
-Prod 2026-10-15 (twice: 04:55 draft, 08:06 write): Rob's revision put a
+Prod 2026-10-15 (twice: 04:55 draft, 08:06 write): the agent's revision put a
 `## Superseded` heading ABOVE live rules, so the writer recorded 27 current
-rules as retired and Rob read only 16. The writer now refuses (a) any write
+rules as retired and the agent read only 16. The writer now refuses (a) any write
 with more than one Superseded heading and (b) an agent write that would
 retire more than a handful of active rules at once. The owner's own writes
 (promote, owner turn) are not limited.

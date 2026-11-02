@@ -212,7 +212,7 @@ def _default_character_dict() -> Optional[dict]:
     """Tier 3 (sync): read the default character JSON directly, fail-open.
 
     Fallback shim (W1, neutral-identity): when the named character does not
-    resolve (e.g. an install upgraded past the packaged ``rob`` character, or a
+    resolve (e.g. an install upgraded past a packaged character that no longer ships, or a
     data-dir character set lacks the named file), degrade to the packaged
     neutral ``polyrob`` character with a one-shot warning — an existing install
     must never hard-fail or silently lose its persona block on upgrade.

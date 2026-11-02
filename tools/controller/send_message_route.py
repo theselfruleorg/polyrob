@@ -77,7 +77,7 @@ def third_party_address_refusal(controller: Any, text: str):
 def annotate_decided_tokens(controller: Any, text: str, user_id: str) -> str:
     """Rewrite approval tokens the owner already decided (core.self_evolution).
 
-    2026-10-17: Rob asked the owner to tap /approve_p_a9d770 nine hours after
+    2026-10-17: the agent asked the owner to tap /approve_p_a9d770 nine hours after
     the owner had approved it. Fail-open: any fault returns the text unchanged."""
     if not text or "_p_" not in text:
         return text

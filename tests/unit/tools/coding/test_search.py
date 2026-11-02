@@ -60,7 +60,7 @@ def test_bounded_output(tmp_path):
     assert len(hits) == 10
 
 
-# --- 2026-09-19 (Rob's self-review ask #2): a FILE path is searched, not walked ---
+# --- 2026-09-19 (the agent's self-review ask #2): a FILE path is searched, not walked ---
 # `os.walk` on a file yields nothing, so `coding_grep(path="data/x-targets/rounds.md")`
 # answered "(no matches)" for a line that IS there (2 wasted steps + a false
 # "gitignored?" conclusion). A file path now greps that file; a path that is neither

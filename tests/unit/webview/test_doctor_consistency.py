@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 
 def _doctor_body(monkeypatch, **env):
-    for key in ("POLYROB_LOCAL", "ROB_LOCAL", "MEMORY_BACKEND"):
+    for key in ("POLYROB_LOCAL", "MEMORY_BACKEND"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)

@@ -14,7 +14,7 @@ import pytest
 
 from tests.unit.core.test_status_snapshot import _fake_ledger, _seed_cron, _seed_goals, _seed_telemetry
 
-OWNER = "rob"
+OWNER = "alice"
 
 
 @pytest.fixture()

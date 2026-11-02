@@ -11,7 +11,7 @@
           "type": "boolean"
         },
         "command": {
-          "description": "The owner money verb and its arguments, WITHOUT `go`, exactly as the owner would type it, e.g. `/send 0.5 native to 0xAbc… on base`, `/swap 0.1 native to 0xToken… on base`, `/bridge solana base 0.9`, `/pay https://api.x/y 0.10`, `/claim 0xToken…`.",
+          "description": "The owner money verb and its arguments, WITHOUT `go`, exactly as the owner would type it, e.g. `/send 0.5 native to 0xAbc… on base`. A bare /send amount is a TOKEN count; for a dollar amount write `$`: `/send $22 0xToken… to 0xAbc… on base` (the tool converts at the spend-grade price — never convert yourself). `/swap 0.1 native to 0xToken… on base`, `/bridge solana base 0.9`, `/pay https://api.x/y 0.10`, `/claim 0xToken…`.",
           "maxLength": 600,
           "minLength": 3,
           "type": "string"

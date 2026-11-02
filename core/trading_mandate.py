@@ -223,7 +223,7 @@ def _clean_chains(chains: Iterable[str]) -> Tuple[str, ...]:
 
 
 def draft(user_id: str, *, budget_usd: float, chains: Sequence[str],
-          preset: str = "memecoin", ticket_usd: Optional[float] = None,
+          preset: Optional[str] = None, ticket_usd: Optional[float] = None,
           slots: Optional[int] = None, breakers: Optional[Mapping[str, Any]] = None,
           exit_preset: Optional[str] = None, report: Optional[Mapping[str, Any]] = None,
           post_public: bool = False, now: Optional[float] = None,
@@ -240,6 +240,9 @@ def draft(user_id: str, *, budget_usd: float, chains: Sequence[str],
         raise MandateError(f"budget_usd must be a number (got {budget_usd!r})") from None
     if not budget > 0:
         raise MandateError("budget_usd must be > 0")
+    if not str(preset or "").strip():
+        raise MandateError("a mandate needs a preset — there is no default; ask the owner "
+                           "which style")
     try:
         base = get_preset(preset)
     except PresetError as exc:
@@ -258,8 +261,8 @@ def draft(user_id: str, *, budget_usd: float, chains: Sequence[str],
         raise MandateError(str(exc)) from None
     exit_name = exit_preset or (base.exit.name if base.exit else None)
     if exit_name is not None:
-        from core.trading_presets import EXIT_PRESETS
-        if exit_name not in EXIT_PRESETS:
+        from core.trading_presets import get_exit_preset
+        if get_exit_preset(exit_name) is None:
             raise MandateError(f"unknown exit preset {exit_name!r}")
     ts = time.time() if now is None else float(now)
     m = Mandate(
@@ -273,7 +276,7 @@ def draft(user_id: str, *, budget_usd: float, chains: Sequence[str],
 
 
 def create(user_id: str, *, actor: str, budget_usd: float, chains: Sequence[str],
-           preset: str = "memecoin", ticket_usd: Optional[float] = None,
+           preset: Optional[str] = None, ticket_usd: Optional[float] = None,
            slots: Optional[int] = None, breakers: Optional[Mapping[str, Any]] = None,
            exit_preset: Optional[str] = None, report: Optional[Mapping[str, Any]] = None,
            post_public: bool = False, path: Optional[str] = None,

@@ -174,7 +174,7 @@ def _api_proxy_auth_headers(request: Request) -> Dict[str, str]:
 
     ⚠️ The operator token goes out under ``webgate.service_token_header()``
     (``X-Service-Token``). It was sent as ``X-API-KEY``, which the 2026-09-21
-    API work made the per-user ``rob_xxx`` validator's header — accepted for one
+    API work made the per-user API-key validator's header — accepted for one
     more release only, so this was one release from 401-ing every message.
     """
     authorization = (request.headers.get("Authorization") or "").strip()

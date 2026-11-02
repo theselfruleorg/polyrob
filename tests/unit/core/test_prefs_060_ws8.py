@@ -21,7 +21,7 @@ KNOBS = {
 def home(tmp_path, monkeypatch):
 	monkeypatch.setattr("core.runtime_paths.prefs_home_dir", lambda *a, **k: str(tmp_path))
 	monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "owner1")
-	monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+	monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
 	return tmp_path
 
 
@@ -47,7 +47,7 @@ def test_the_owner_sets_them_from_chat(home):
 	from core.surfaces.user_delivery import _lifecycle_daily_cap
 	for key, value in (("voice.transcript_echo", False), ("stream.telegram", True),
 	                   ("delivery.lifecycle_daily_cap", 3)):
-		ok = prefs.write_preference(str(home), "owner1", key, value, instance_id="rob")
+		ok = prefs.write_preference(str(home), "owner1", key, value, instance_id="alice")
 		assert getattr(ok, "ok", ok) not in (False, None), (key, ok)
 	assert SurfaceConfig.voice_transcript_echo_enabled() is False
 	assert SurfaceConfig.telegram_incremental_stream() is True

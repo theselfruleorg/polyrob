@@ -12,14 +12,14 @@ SVG = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
 def _home(monkeypatch, tmp_path):
     monkeypatch.setattr("cli.commands.avatar._home",
-                        lambda write=None: (str(tmp_path), "rob"))
+                        lambda write=None: (str(tmp_path), "alice"))
 
 
 def test_show_with_no_avatar_shows_the_default(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     res = CliRunner().invoke(avatar, ["show"])
     assert res.exit_code == 0, res.output
-    assert "rob — avatar the default" in res.output
+    assert "alice — avatar the default" in res.output
     assert "polyrob avatar set" in res.output
     assert str(slot.DEFAULT_AVATAR) in res.output
 
@@ -28,7 +28,7 @@ def test_show_without_the_shipped_default_says_not_set(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     monkeypatch.setattr(slot, "DEFAULT_AVATAR", tmp_path / "missing.png")
     res = CliRunner().invoke(avatar, ["show"])
-    assert res.exit_code == 0 and "rob — avatar not set" in res.output
+    assert res.exit_code == 0 and "alice — avatar not set" in res.output
     assert "polyrob avatar set" in res.output
 
 
@@ -45,7 +45,7 @@ def test_set_from_a_file(monkeypatch, tmp_path):
     res = CliRunner().invoke(avatar, ["set", str(f)])
     assert res.exit_code == 0, res.output
     assert "set (file:face.png)" in res.output
-    assert slot.load_avatar(tmp_path, "rob").is_set
+    assert slot.load_avatar(tmp_path, "alice").is_set
 
 
 def test_set_from_a_url(monkeypatch, tmp_path):
@@ -60,7 +60,7 @@ def test_set_from_a_url(monkeypatch, tmp_path):
     res = CliRunner().invoke(avatar, ["set", "https://example.com/face.png"])
     assert res.exit_code == 0, res.output
     assert seen["url"] == "https://example.com/face.png"
-    assert slot.load_avatar(tmp_path, "rob").source == "url:https://example.com/face.png"
+    assert slot.load_avatar(tmp_path, "alice").source == "url:https://example.com/face.png"
 
 
 def test_set_refuses_a_non_image(monkeypatch, tmp_path):
@@ -79,10 +79,10 @@ def test_set_needs_exactly_one_source(monkeypatch, tmp_path):
 
 def test_clear(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+    slot.set_avatar(tmp_path, "alice", PNG, source="x")
     res = CliRunner().invoke(avatar, ["clear", "--yes"])
     assert res.exit_code == 0 and "removed" in res.output
-    assert slot.load_avatar(tmp_path, "rob").is_default
+    assert slot.load_avatar(tmp_path, "alice").is_default
 
 
 def test_push_refuses_with_no_avatar(monkeypatch, tmp_path):
@@ -104,7 +104,7 @@ def test_push_works_with_the_default(monkeypatch, tmp_path):
 
 def test_push_refuses_an_svg(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    slot.set_avatar(tmp_path, "rob", SVG, source="nft:base:0x1:1")
+    slot.set_avatar(tmp_path, "alice", SVG, source="nft:base:0x1:1")
     res = CliRunner().invoke(avatar, ["push", "--twitter"])
     assert res.exit_code != 0 and "SVG" in res.output
 
@@ -112,7 +112,7 @@ def test_push_refuses_an_svg(monkeypatch, tmp_path):
 def test_push_is_flag_gated(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     monkeypatch.delenv("PFP_PUSH_TWITTER", raising=False)
-    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+    slot.set_avatar(tmp_path, "alice", PNG, source="x")
     res = CliRunner().invoke(avatar, ["push", "--twitter"])
     assert res.exit_code == 0 and "twitter: disabled" in res.output
 
@@ -120,7 +120,7 @@ def test_push_is_flag_gated(monkeypatch, tmp_path):
 def test_push_twitter_is_hash_idempotent(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     monkeypatch.setenv("PFP_PUSH_TWITTER", "true")
-    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+    slot.set_avatar(tmp_path, "alice", PNG, source="x")
     calls = []
     monkeypatch.setattr("modules.avatar.push.push_twitter", lambda p: calls.append(p))
     r1 = CliRunner().invoke(avatar, ["push", "--twitter"])
@@ -132,7 +132,7 @@ def test_push_twitter_is_hash_idempotent(monkeypatch, tmp_path):
 def test_push_telegram_sets_the_bot_and_each_group_once(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     monkeypatch.setenv("PFP_PUSH_TELEGRAM", "true")
-    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+    slot.set_avatar(tmp_path, "alice", PNG, source="x")
     calls = []
     monkeypatch.setattr("modules.avatar.push.push_telegram_bot",
                         lambda p: calls.append(("bot", None)))
@@ -148,7 +148,7 @@ def test_push_telegram_sets_the_bot_and_each_group_once(monkeypatch, tmp_path):
 def test_push_telegram_failure_gives_the_manual_path(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     monkeypatch.setenv("PFP_PUSH_TELEGRAM", "true")
-    slot.set_avatar(tmp_path, "rob", PNG, source="x")
+    slot.set_avatar(tmp_path, "alice", PNG, source="x")
 
     def boom(*a):
         raise RuntimeError("setChatPhoto: Bad Request: not enough rights")

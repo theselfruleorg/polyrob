@@ -77,9 +77,9 @@ def _autonomous_message_refusal(execution_context, controller_self):
 	except Exception:
 		pass
 	from agents.task.loop_types.controller_types import ActionResult
-	return ActionResult(
-		extracted_content=(
-			"message: not permitted for forged/autonomous turns "
+	return ActionResult(  # an error: a refused send is not a send
+		error=(
+			"message NOT sent: not permitted for forged/autonomous turns "
 			"(owner must be in the loop; the owner can set "
 			"POLYROB_OVERRIDES=MESSAGE_AUTONOMOUS_ALLOWLISTED=true to permit autonomous sends "
 			"to owner-ALLOWLISTED targets only)"),
@@ -142,10 +142,13 @@ def _autonomous_owner_resend_cooldown_refusal(
 		from agents.task.loop_types.controller_types import ActionResult
 		hours = cooldown / 3600
 		repeat = " This exact text" if body else " An autonomous message"
+		# An ERROR, not extracted_content: as content it read like a completed send
+		# and the failure counter never tripped (prod 2026-10-28: 69 identical
+		# refused sends in one run).
 		return ActionResult(
-			extracted_content=(
-				f"message:{repeat} already reached the owner on {surface} within "
-				f"the last {hours:.1f}h. Call `contact_history` "
+			error=(
+				f"message NOT sent:{repeat} already reached the owner on {surface} "
+				f"within the last {hours:.1f}h. Call `contact_history` "
 				f"(surface={surface!r}, address=<the owner address>) to see what "
 				f"was already sent — say something materially new, or skip this "
 				f"send entirely rather than repeating it."),

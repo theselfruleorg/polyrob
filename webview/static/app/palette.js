@@ -25,7 +25,7 @@
  * it (shipped, muscle-memory). The palette opens on **⌘⇧P** from anywhere, and
  * on **`/`** typed into an empty composer (the `/`-triggered list the mockup
  * `chat-palette.html` draws). A verb you type that is not one of mine is not an
- * error: the palette says so, and pressing enter sends it to Rob as a message,
+ * error: the palette says so, and pressing enter sends it to the agent as a message,
  * which is exactly what the console does with an unknown slash.
  */
 
@@ -112,7 +112,7 @@ export function verbRow(verb, copy) {
 /**
  * Fill *container* for *query*. Returns what it rendered:
  *   "rows"    — one or more matching groups;
- *   "unknown" — an explicit `/token` that names nothing (the "sends to Rob as a
+ *   "unknown" — an explicit `/token` that names nothing (the "sends to the agent as a
  *               message" line);
  *   "empty"   — no matches and not a slash token (an ordinary word with no
  *               command; the palette still says so rather than going blank).
@@ -280,7 +280,7 @@ function bind() {
         selectVerb(dialog, first.dataset.verb, copy);
       } else {
         // An unknown slash: hand the raw text back to the composer so pressing
-        // enter there sends it to Rob as a message — the console's own rule.
+        // enter there sends it to the agent as a message — the console's own rule.
         // Merge it the same way a verb selection does, so a half-typed draft
         // survives here too.
         const text = input.value.trim();

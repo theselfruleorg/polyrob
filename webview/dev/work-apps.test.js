@@ -1,6 +1,6 @@
-// 043 WS-P2 §5 — Work › Apps: everything Rob built you can open, by reach.
+// 043 WS-P2 §5 — Work › Apps: everything the agent built you can open, by reach.
 //
-// The owner's ask was ONE place where everything Rob has built is reachable,
+// The owner's ask was ONE place where everything the agent has built is reachable,
 // in three tiers by reach: online app services, published pages/files with a
 // link, and files still in a chat folder. What this tab must get right is the
 // same set of honest-state rules the rest of 043 turns on:
@@ -25,9 +25,9 @@ import {
 } from "../static/app/work-apps.js";
 
 const COPY = {
-  loading: "Reading what Rob has built.",
+  loading: "Reading what the agent has built.",
   online_title: "Online", online_aside: "{count} in all",
-  online_empty: "Rob has not put an app online yet.",
+  online_empty: "The agent has not put an app online yet.",
   online_unreadable: "I could not read the app registry.",
   online_unreadable_why: "Why it failed", online_open: "Open it",
   status_live: "Online and healthy.", status_deploying: "Going online now.",
@@ -48,9 +48,9 @@ const COPY = {
   made_unreadable_why: "Why it failed",
   col_file: "File", col_kind: "Kind",
   made_note: "These live in the folder of the chat that made them.",
-  empty_title: "Rob has not built anything yet.",
+  empty_title: "The agent has not built anything yet.",
   empty_body: "Ask it to build something and it will appear here.",
-  empty_action: "Ask Rob to build something",
+  empty_action: "Ask the agent to build something",
 };
 
 describe("Online — one app service entry per row, linking out when live", () => {

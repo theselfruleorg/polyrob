@@ -84,11 +84,11 @@ async def test_ingest_reuses_the_one_ingest_path(tmp_path, monkeypatch):
     import tools.knowledge_ingest as ki
     monkeypatch.setattr(ki, "kb_ingest", fake_kb_ingest)
 
-    got = await ai.ingest_artifact("rob", _write(tmp_path, "brief.md"),
+    got = await ai.ingest_artifact("alice", _write(tmp_path, "brief.md"),
                                    session_id="s1")
     assert got == {"ingested": 1, "n_chunks": 3}
     assert calls["collection"] == ai.AUTO_COLLECTION == "artifacts_unreviewed"
-    assert calls["user_id"] == "rob" and calls["recursive"] is False
+    assert calls["user_id"] == "alice" and calls["recursive"] is False
 
 
 @pytest.mark.asyncio
@@ -106,8 +106,8 @@ async def test_force_skips_enablement_but_never_the_kind_rule(tmp_path, monkeypa
 
     doc = _write(tmp_path, "brief.md")
     log = _write(tmp_path, "exit-run-log.md")
-    assert await ai.ingest_artifact("rob", doc, force=True) == {"ingested": 1}
-    assert await ai.ingest_artifact("rob", log, force=True) is None
+    assert await ai.ingest_artifact("alice", doc, force=True) == {"ingested": 1}
+    assert await ai.ingest_artifact("alice", log, force=True) is None
     assert seen == [doc]
 
 
@@ -119,7 +119,7 @@ async def test_an_ingest_failure_never_reaches_the_caller(tmp_path, monkeypatch)
     import tools.knowledge_ingest as ki
     monkeypatch.setattr(ki, "kb_ingest", boom)
 
-    assert await ai.ingest_artifact("rob", _write(tmp_path, "brief.md")) is None
+    assert await ai.ingest_artifact("alice", _write(tmp_path, "brief.md")) is None
 
 
 def test_recording_an_artifact_reaches_the_installed_hook(tmp_path, monkeypatch):
@@ -135,8 +135,8 @@ def test_recording_an_artifact_reaches_the_installed_hook(tmp_path, monkeypatch)
     ai.install_artifact_hook()
     try:
         path = _write(tmp_path, "brief.md")
-        artifacts.record_artifact("rob", path, session_id="s1")
-        assert scheduled == [("rob", path)]
+        artifacts.record_artifact("alice", path, session_id="s1")
+        assert scheduled == [("alice", path)]
     finally:
         artifacts.clear_artifact_hooks()
 
@@ -151,7 +151,7 @@ def test_a_raising_hook_never_breaks_the_record(tmp_path, monkeypatch):
     artifacts.clear_artifact_hooks()
     artifacts.register_artifact_hook(boom)
     try:
-        assert artifacts.record_artifact("rob", _write(tmp_path, "brief.md")) == "abc123"
+        assert artifacts.record_artifact("alice", _write(tmp_path, "brief.md")) == "abc123"
     finally:
         artifacts.clear_artifact_hooks()
 
@@ -193,12 +193,12 @@ async def test_m03_a_tainted_sessions_document_is_never_indexed(tmp_path, monkey
     from agents.task.session.hitl_ingress import HITLIngressMixin
 
     class _O(HITLIngressMixin):
-        session_id, user_id, agents = "s-taint", "rob", {}
+        session_id, user_id, agents = "s-taint", "alice", {}
     _O()._set_correspondent_taint("email", "mallory@evil.com")
 
     doc = _write(tmp_path, "brief.md")
-    assert await ai.ingest_artifact("rob", doc, session_id="s-taint") is None
-    assert await ai.ingest_artifact("rob", doc, session_id="s-clean") == {"ingested": 1}
+    assert await ai.ingest_artifact("alice", doc, session_id="s-taint") is None
+    assert await ai.ingest_artifact("alice", doc, session_id="s-clean") == {"ingested": 1}
     assert calls == ["s-clean"]
 
 

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Reviewing Polymarket positions and trade history'
   polyrob-priority: '5'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["polymarket_data"]}'
   polyrob-version: '2'
 ---

@@ -151,3 +151,70 @@ def test_classify_dead_error_matches_known_patterns(error_text, expected_reason)
 )
 def test_classify_dead_error_returns_none_for_transient_or_unknown(error_text):
     assert classify_dead_error("telegram", error_text) is None
+
+
+# ---------------------------------------------------------------------------
+# prod 2026-10-28: one `chat_not_found` from August kept a live channel dead for
+# two months, and the send said only "send returned false".
+# ---------------------------------------------------------------------------
+
+def _age(db, surface, address, days):
+    import sqlite3
+    import time
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE dead_targets SET marked_at=? WHERE surface=? AND address=?",
+                 (time.time() - days * 86400, surface, address))
+    conn.commit()
+    conn.close()
+
+
+def test_a_single_failure_ages_out(tmp_path):
+    from core.surfaces.dead_targets import SINGLE_FAILURE_TTL_S
+    db = str(tmp_path / "dead_targets.db")
+    store = DeadTargetStore(db)
+    store.mark("telegram", "@chan", "chat_not_found")
+    assert store.is_dead("telegram", "@chan") is True
+    _age(db, "telegram", "chan", SINGLE_FAILURE_TTL_S / 86400 + 1)
+    assert store.is_dead("telegram", "@chan") is False
+    assert store.get("telegram", "chan") is None
+    assert store.count_for_surface("telegram") == 0
+    assert store.list_all() == []
+
+
+def test_a_repeated_failure_does_not_age_out(tmp_path):
+    db = str(tmp_path / "dead_targets.db")
+    store = DeadTargetStore(db)
+    store.mark("telegram", "555", "blocked")
+    store.mark("telegram", "555", "blocked")
+    _age(db, "telegram", "555", 365)
+    assert store.is_dead("telegram", "555") is True
+    assert store.count_for_surface("telegram") == 1
+
+
+def test_an_aged_mark_that_fails_again_is_dead_for_good(tmp_path):
+    db = str(tmp_path / "dead_targets.db")
+    store = DeadTargetStore(db)
+    store.mark("telegram", "555", "chat_not_found")
+    _age(db, "telegram", "555", 365)
+    assert store.is_dead("telegram", "555") is False   # one retry is allowed
+    store.mark("telegram", "555", "chat_not_found")     # and it failed again
+    assert store.is_dead("telegram", "555") is True
+    assert store.get("telegram", "555")["fail_count"] == 2
+
+
+def test_describe_dead_target_names_since_reason_and_revive(tmp_path):
+    from core.surfaces.dead_targets import describe_dead_target
+    store = DeadTargetStore(str(tmp_path / "dead_targets.db"))
+    store.mark("telegram", "@chan", "chat_not_found")
+    text = describe_dead_target(store.get("telegram", "@chan"))
+    assert text.startswith("dead target since 20")
+    assert "chat_not_found" in text
+    assert "sends a message" in text            # how it revives
+    assert "ages out" in text                   # a single failure says when
+
+
+def test_get_is_fail_open(tmp_path):
+    db = tmp_path / "dead_targets.db"
+    store = DeadTargetStore(str(db))
+    db.write_bytes(b"not a sqlite file")
+    assert store.get("telegram", "1") is None

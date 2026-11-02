@@ -30,7 +30,8 @@ def extract_answer(history: Any) -> str:
     return answer
 
 
-DEFAULT_TURN_BUDGET = 20  # interactive turns; raise for big asks, autonomous tasks use run()
+# A REPL turn is an owner turn: the one interactive budget (REPL ⊇ Telegram).
+from core.config_policy.goal_flags import INTERACTIVE_MAX_STEPS as DEFAULT_TURN_BUDGET  # noqa: E402
 
 
 def _reset_turn_state(agent: Any, *, owner_line: bool = False) -> None:

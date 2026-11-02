@@ -9,7 +9,7 @@ import pytest
 
 from core.config_policy import AutonomyConfig
 
-OWNER = "rob"
+OWNER = "alice"
 
 
 @pytest.fixture

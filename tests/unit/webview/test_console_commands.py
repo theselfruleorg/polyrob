@@ -12,7 +12,7 @@ import pytest
 def srv(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
     import webview.server as server
     return server
@@ -38,7 +38,7 @@ class _Agent:
 
 def test_known_verb_is_handled_inline(srv, monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/status"))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/status"))
     assert reply is not None and reply.strip()
 
 
@@ -46,27 +46,27 @@ def test_halt_actually_halts(srv, monkeypatch, tmp_path):
     import os
 
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/halt"))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/halt"))
     assert reply and ("HALT" in reply.upper() or "PAUSED" in reply.upper())
     assert os.path.exists(os.path.join(str(tmp_path), _PAUSE_FILENAME))
-    asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/resume"))
+    asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/resume"))
     assert not os.path.exists(os.path.join(str(tmp_path), _PAUSE_FILENAME))
 
 
 def test_plain_text_and_unknown_slash_pass_through(srv, monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    assert asyncio.run(srv._maybe_handle_console_command("s", "rob", "hello there")) is None
-    assert asyncio.run(srv._maybe_handle_console_command("s", "rob", "/etc/passwd?")) is None
+    assert asyncio.run(srv._maybe_handle_console_command("s", "alice", "hello there")) is None
+    assert asyncio.run(srv._maybe_handle_console_command("s", "alice", "/etc/passwd?")) is None
 
 
 def test_session_creating_verbs_pass_through(srv, monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    assert asyncio.run(srv._maybe_handle_console_command("s", "rob", "/task do x")) is None
+    assert asyncio.run(srv._maybe_handle_console_command("s", "alice", "/task do x")) is None
 
 
 def test_no_in_process_agent_passes_through(srv, monkeypatch):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: None)
-    assert asyncio.run(srv._maybe_handle_console_command("s", "rob", "/status")) is None
+    assert asyncio.run(srv._maybe_handle_console_command("s", "alice", "/status")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ def test_no_in_process_agent_passes_through(srv, monkeypatch):
 
 def test_console_help_excludes_task_and_new(srv, monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/help"))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/help"))
     assert reply is not None
     assert "/task <goal>" not in reply
     for line in reply.splitlines():
@@ -88,7 +88,7 @@ def test_console_help_new_answers_not_available(srv, monkeypatch, tmp_path):
     from webview.console_commands import _CONSOLE_HELP_UNAVAILABLE
 
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/help new"))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/help new"))
     assert reply == _CONSOLE_HELP_UNAVAILABLE
 
 
@@ -96,7 +96,7 @@ def test_console_help_task_answers_not_available(srv, monkeypatch, tmp_path):
     from webview.console_commands import _CONSOLE_HELP_UNAVAILABLE
 
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/help task"))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/help task"))
     assert reply == _CONSOLE_HELP_UNAVAILABLE
 
 
@@ -129,7 +129,7 @@ def test_console_cancel_permitted_for_a_non_owner_on_their_own_session(srv, monk
 def test_unknown_command_shaped_verb_gets_the_help_answer(srv, monkeypatch, tmp_path):
     """CLI11: a typo verb is answered like Telegram answers it, never an agent turn."""
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
-    reply = asyncio.run(srv._maybe_handle_console_command("s", "rob", "/statsu"))
+    reply = asyncio.run(srv._maybe_handle_console_command("s", "alice", "/statsu"))
     assert reply and "Unknown command /statsu" in reply and "/help" in reply
     from webview.console_commands import looks_like_console_verb
     assert looks_like_console_verb("/statsu") is True
@@ -146,5 +146,5 @@ def test_a_routing_failure_on_a_known_verb_is_an_error_reply(srv, monkeypatch, t
 
     monkeypatch.setattr(harness, "_handle_command", _boom)
     reply = asyncio.run(srv._maybe_handle_console_command(
-        "s", "rob", "/send 1 native to 0xabc on base go"))
+        "s", "alice", "/send 1 native to 0xabc on base go"))
     assert reply is not None and reply.startswith("/send could not run here")

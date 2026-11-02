@@ -17,7 +17,7 @@ def test_the_pinned_usdc_does_not_warn():
 
 
 def test_an_ordinary_token_does_not_warn():
-    assert unpinned_stable_note("base", FAKE, "ROB") == ""
+    assert unpinned_stable_note("base", FAKE, "DEMO") == ""
 
 
 def test_the_cli_add_wires_the_note():

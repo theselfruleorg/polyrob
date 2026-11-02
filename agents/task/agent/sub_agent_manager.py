@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Any, Set, Union, TYPE_CHECKING
 
 # F28: the parent context a child inherits is third-party DATA, not task text.
 # `core.security` is a lower tier than `agents`, so this is a downward import.
@@ -530,7 +530,7 @@ class SubAgentManager:
         return f"{parent[:max(1, 50 - len(suffix))]}{suffix}"
 
     async def _build_child_controller(self, requested_tools: Optional[List[str]] = None,
-                                      force: bool = False):
+                                      force: bool = False, exclude_actions=()):
         """UP-05: build a least-privilege child Controller for a delegated sub-agent.
 
         Narrows the parent's tool_ids (drops ``code_execution``/``cronjob``) and
@@ -569,7 +569,10 @@ class SubAgentManager:
             requested_tools=requested_tools,  # None = inherit (minus blocklist); a worker's own list otherwise
             child_role=child_role,
         )
-        exclude = sorted(delegation_exclusions_for_child(child_role))
+        # 078 D7: a caller-named exclusion (e.g. the reviewer's owner/self doc
+        # writers) is enforced in the registry, not only in the prompt.
+        exclude = sorted(set(delegation_exclusions_for_child(child_role))
+                         | set(exclude_actions or ()))
 
         child_controller = Controller(
             exclude_actions=exclude,
@@ -637,6 +640,7 @@ class SubAgentManager:
         is_parent_sub_agent: bool = False,
         skip_complexity_check: bool = False,
         background: bool = False,
+        exclude_actions: Optional[Set[str]] = None,
     ) -> SubAgentResult:
         """
         Spawn and run a sub-agent for a subtask with ISOLATED context.
@@ -669,6 +673,9 @@ class SubAgentManager:
             skip_complexity_check: Skip task complexity validation (for testing)
             background: A background (async) child — its own cap is the parent run's
                 remaining AUTONOMOUS_RUN_BUDGET_USD at spawn (083 WS-3).
+            exclude_actions: Action ids the child's registry never holds (always
+                builds a least-privilege child). The reviewer drops the owner and
+                self document writers here (078 D7).
 
         Returns:
             SubAgentResult with output, usage, and structured data
@@ -804,7 +811,9 @@ class SubAgentManager:
                 # None when SUBAGENT_LEAST_PRIVILEGE is off => shared parent controller.
                 child_controller = await self._build_child_controller(
                     requested_tools=(worker.tool_ids if worker is not None else None),
-                    force=bool(worker is not None and worker.tool_ids is not None))
+                    force=bool((worker is not None and worker.tool_ids is not None)
+                               or exclude_actions),
+                    exclude_actions=exclude_actions or ())
 
                 # Create sub-agent with ISOLATION flags
                 sub_agent = await self.orchestrator.create_agent(

@@ -52,6 +52,13 @@ def docker_socket_unreachable_reason(backend_name: str) -> Optional[str]:
             )
         if os.access(sock, os.R_OK | os.W_OK):
             return None
+        from core.security.sandbox_setup import socket_access, stale_group_hint
+        stale = stale_group_hint(socket_access(sock))
+        if stale:
+            # The operator already granted the group; only a restart is missing.
+            return (f"code execution unavailable now: the agent identity cannot open the "
+                    f"Docker socket {sock} (permission denied): {stale}. Do not retry "
+                    f"run_tests/run_code before that restart.")
         return (
             f"code execution unavailable on this deploy: the agent identity cannot open "
             f"the Docker socket {sock} (permission denied). This is a deliberate hardening "

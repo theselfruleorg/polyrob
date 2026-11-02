@@ -112,3 +112,25 @@ def test_error_classes():
     assert c("Error executing action read_file: [Errno 2] No such file or directory: 'a'") == "not_found"
     assert c("Error in action 1/1: Error code: 503 service unavailable") == "provider"
     assert c("Error in action 1/1: division by zero") == "other"
+
+
+def test_a_write_timeout_says_the_effect_may_have_happened(monkeypatch):
+    """095 W1d (HI-11): a timed-out WRITE may have completed after the cancel; the
+    model text says so and names where to check. A read gets no such sentence."""
+    from core.effects import EffectVerdict
+    import tools.controller.effect_hooks as eh
+    monkeypatch.setattr(eh, "_classify", lambda c, a: ("email", EffectVerdict("comms", "action")))
+    note = ex._write_timeout_note(_Ctrl(), "email_send")
+    assert note == ". The effect may have happened; check (the sent folder or the thread) before you retry."
+    monkeypatch.setattr(eh, "_classify", lambda c, a: ("filesystem", None))
+    assert ex._write_timeout_note(_Ctrl(), "read_file") == ""
+
+    def _boom(c, a):
+        raise RuntimeError("x")
+    monkeypatch.setattr(eh, "_classify", _boom)
+    assert ex._write_timeout_note(_Ctrl(), "email_send") == ""
+
+
+def test_the_timeout_error_carries_the_write_note():
+    body = (_REPO / "tools/controller/execution.py").read_text()
+    assert "_write_timeout_note(self, action_type)" in body

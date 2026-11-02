@@ -108,7 +108,6 @@ TOOL_TIMEOUT = "tool_timeout"
 TOOL_INVOKED = "tool_invoked"
 TOOL_AUTO_APPROVED = "tool_auto_approved"
 PAYMENT_AUTO_APPROVED = "payment_auto_approved"
-MCP_INSTALL = "mcp_install"
 
 # --- perimeter (045 lane 1) -----------------------------------------------------
 #: One row per inbound routing decision, allowed and denied alike. The ONLY
@@ -246,6 +245,16 @@ LLM_OUTPUT_TRUNCATED = "llm_output_truncated"
 MODEL_CALL_QUALITY = "model_call_quality"
 #: A money verb stopped a run because the broadcast infrastructure failed.
 MONEY_VERB_INFRA_FAILURE = "money_verb_infra_failure"
+#: The loop breaker ended a run (StopReason.LOOP): the same call with the same
+#: result ran again after a warning and a block. attrs: reason, step. Producer:
+#: ``agents/task/agent/core/run_loop.py``.
+LOOP_STOP = "loop_stop"
+#: 094: the owner switched a chat's model (attrs from, to, via, seat, default,
+#: reasoning), the queued switch failed to build (+ error), or only the session's
+#: reasoning level changed (level, seat). Producer: ``agents/task/model_switch_service.py``.
+MODEL_SWITCHED = "model_switched"
+MODEL_SWITCH_FAILED = "model_switch_failed"
+MODEL_REASONING_SET = "model_reasoning_set"
 
 # Infra/storage housekeeping
 DB_RELOCATED = "db_relocated"                 # R-2 T3 one-shot sidecar move ran

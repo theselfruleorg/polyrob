@@ -6,7 +6,7 @@ from tools.controller.approval import default_approval_required_tools
 
 def test_high_impact_contains_new_tools():
     for name in ("git_push", "github_open_pr", "github_merge_pr", "github_pr_comment",
-                 "github_issue_create", "mcp_install", "tool_manage", "self_modify",
+                 "github_issue_create", "tool_manage", "self_modify",
                  "git", "github", "process"):
         assert name in HIGH_IMPACT_TOOLS, name
         assert is_high_impact(name), name
@@ -22,4 +22,4 @@ def test_delegate_blocked_contains_new_container_tools():
 def test_default_approval_required_tools():
     s = set(default_approval_required_tools())
     assert {"git_push", "github_open_pr", "github_merge_pr",
-            "mcp_install", "tool_manage", "self_modify"} <= s
+            "tool_manage", "self_modify"} <= s

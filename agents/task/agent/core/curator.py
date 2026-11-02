@@ -1,15 +1,31 @@
-"""Skill curator (W5, Reference-parity curator.py).
+"""Skill curator (W5, Reference-parity curator.py; 095 W12 by last use and outcome).
 
-Periodic maintenance of self-authored skills so the library doesn't rot: unused
+Periodic maintenance of self-authored skills so the library doesn't rot: idle
 authored skills go stale, then archive (recoverable, never hard-deleted); reuse
 reactivates them. A skill the agent created but never reloads is noise — the curator
 is what keeps "writable skills" from becoming "write-only skills".
 
-Phase 1 (no LLM, always-on when CURATOR_ENABLED): ``apply_automatic_transitions``
-over ``created_by ∈ {agent, background_review}`` skills using the W2-D load_count:
-unused + age > ``CURATOR_STALE_DAYS`` → stale; stale + age > ``CURATOR_ARCHIVE_DAYS``
-→ archive (via SkillManager.delete_skill → ``.archived/``); reuse reactivates.
-System/pinned skills are never touched (only agent-authored ones).
+Phase 1 (no LLM, always-on when CURATOR_ENABLED): ``apply_automatic_transitions``.
+
+- The clock is ``last_used_at`` (a never-used skill's clock starts at ``created_at``),
+  never the lifetime ``load_count`` — one load long ago is not use today (X-4).
+  Idle > ``CURATOR_STALE_DAYS`` → stale; idle > ``CURATOR_ARCHIVE_DAYS`` → archive
+  (via SkillManager.delete_skill → ``.archived/``); use again reactivates.
+- A skill younger than :data:`INCUBATION_DAYS` is never staled or archived ("no use
+  yet is no evidence").
+- A skill pinned by a live cron job or goal (``payload.skills``) counts as used. A pin
+  store that cannot be read stops every stale/archive this tick (an unreadable store
+  is not an empty one).
+- Owner-authored skills (provenance ``user``) are never auto-archived: an idle one
+  files ONE owner proposal line instead (a ``self_modification`` event).
+
+The contribution report (``contribution_report``, proposal only): per skill with at
+least :data:`CONTRIBUTION_MIN_RUNS` trusted run records (``signal_source`` receipt,
+owner or judge — never self/none) on each side, the useful-or-verified rate of
+same-lane runs that loaded it vs that did not. A clearly worse skill files ONE owner
+line; it never archives on this alone.
+
+System/bundled skills are never touched (only skills with a provenance row).
 
 (A Phase-2 aux-LLM "merge near-duplicate skills into umbrellas" step was scaffolded
 but never had a real merge policy — it was a logged no-op. It was removed (2026-06-29
@@ -24,53 +40,166 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
 _AUTHORED = ["agent", "background_review"]
+#: Provenance of a skill the owner wrote (console, API): never auto-archived.
+_OWNER_AUTHORED = ["user"]
 _DAY_S = 86400.0
+
+#: 095 W12: days after ``created_at`` during which a skill is never staled or
+#: archived. A constant beside ``CURATOR_STALE_DAYS`` (no flag).
+INCUBATION_DAYS = 30
+#: The contribution report's window, its minimum sample PER SIDE (runs that
+#: loaded the skill, and same-lane runs that did not), and the rate gap that
+#: counts as "clearly worse".
+CONTRIBUTION_DAYS = 30
+CONTRIBUTION_MIN_RUNS = 5
+CONTRIBUTION_MARGIN = 0.25
+#: The signal sources the report may learn from (``episodic_digest.SIGNAL_SOURCES``
+#: minus ``self``/``none``: the agent's own word never teaches).
+_TRUSTED_SIGNALS = frozenset({"receipt", "owner", "judge"})
+_CONTRIBUTION_ROWS = 500
+
+
+def _run_good(meta: Dict[str, Any]) -> bool:
+    """A run that was useful (a receipt) or that the judge verified."""
+    return meta.get("useful") is True or str(meta.get("verified") or "") == "verified"
+
+
+def _run_skills(e: Any, meta: Dict[str, Any]) -> Set[str]:
+    raw = meta.get("skills_loaded") or getattr(e, "skills_loaded", None) or []
+    return {str(s) for s in raw if str(s or "").strip()} if isinstance(raw, (list, tuple)) else set()
+
+
+def contribution_findings(skill_ids: Iterable[str], runs: Iterable[Any], *,
+                          min_runs: int = CONTRIBUTION_MIN_RUNS,
+                          margin: float = CONTRIBUTION_MARGIN) -> List[Dict[str, Any]]:
+    """The skills that do clearly worse on the runs that load them.
+
+    *runs* are episode records (``.meta``). Only runs with a lane and a trusted
+    ``signal_source`` count. For each skill: ``with`` = runs that loaded it,
+    ``without`` = runs in the SAME lanes that did not. Both sides need
+    *min_runs*; a skill is reported when its rate is at least *margin* below.
+    Pure; never raises on a malformed run (it is skipped)."""
+    trusted: List[Tuple[str, Set[str], bool]] = []
+    for e in runs or []:
+        meta = getattr(e, "meta", None)
+        if not isinstance(meta, dict):
+            continue
+        lane = str(meta.get("lane") or "")
+        if not lane or str(meta.get("signal_source") or "") not in _TRUSTED_SIGNALS:
+            continue
+        trusted.append((lane, _run_skills(e, meta), _run_good(meta)))
+    out: List[Dict[str, Any]] = []
+    for sid in sorted({str(s) for s in skill_ids or []}):
+        loaded = [(lane, good) for lane, skills, good in trusted if sid in skills]
+        if len(loaded) < min_runs:
+            continue
+        lanes = {lane for lane, _ in loaded}
+        without = [good for lane, skills, good in trusted if lane in lanes and sid not in skills]
+        if len(without) < min_runs:
+            continue
+        a, b = sum(1 for _, g in loaded if g), len(loaded)
+        c, d = sum(1 for g in without if g), len(without)
+        if (c / d) - (a / b) >= margin:
+            out.append({"skill_id": sid, "with_good": a, "with_n": b,
+                        "without_good": c, "without_n": d, "lanes": sorted(lanes)})
+    return out
+
+
+def contribution_line(f: Dict[str, Any]) -> str:
+    """The one owner line for a finding."""
+    return (f"{f['skill_id']}: {f['with_good']}/{f['with_n']} useful when loaded vs "
+            f"{f['without_good']}/{f['without_n']} without — patch or archive?")
 
 
 class SkillCurator:
     def __init__(self, skill_manager: Any, usage_store: Any, *,
-                 clock=time.time, dry_run: bool = False):
+                 clock=time.time, dry_run: bool = False,
+                 data_dir: Optional[str] = None):
         self.sm = skill_manager
         self.usage = usage_store
         self._now = clock
         self.dry_run = dry_run
+        self.data_dir = data_dir
 
     # --- Phase 1: automatic, no LLM -----------------------------------------
 
-    def apply_automatic_transitions(self) -> Dict[str, List[str]]:
-        """Stale/archive/reactivate authored skills by age + reuse. Returns the plan.
+    def _pinned_skill_keys(self) -> Optional[Set[Tuple[str, str]]]:
+        """``{(user_id, skill_id)}`` pinned (``payload.skills``) by a live cron job
+        (enabled, not cancelled) or a live goal. Read-only. ``None`` when a store
+        that exists cannot be read; a missing store pins nothing."""
+        import json
+        import os
+        from core.config_policy.rigs import pinned_skills
+        from core.goal_vocab import LIVE_STATUSES
+        from core.runtime_paths import cron_db_path, goals_db_path
+        from core.sqlite_util import execute_retry
+        keys: Set[Tuple[str, str]] = set()
+        live = sorted(LIVE_STATUSES)
+        reads = (
+            (cron_db_path(self.data_dir),
+             "SELECT user_id, payload FROM cron_jobs WHERE enabled=1 AND status!='cancelled'", ()),
+            (goals_db_path(self.data_dir),
+             "SELECT user_id, payload FROM goals WHERE status IN (%s)" % ",".join("?" * len(live)),
+             tuple(live)),
+        )
+        for db, sql, args in reads:
+            if not os.path.exists(db):
+                continue
+            try:
+                rows = execute_retry(db, sql, args, fetch="all") or []
+            except Exception:
+                logger.warning("curator: pinned skills unreadable in %s", db, exc_info=True)
+                return None
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                for sid in pinned_skills(payload if isinstance(payload, dict) else {}):
+                    keys.add((str(row["user_id"]), sid))
+        return keys
 
-        Pure-ish: computes the transition for every authored skill, then (unless
-        dry_run) applies archives via SkillManager. ``stale``/``reactivate`` are
-        bookkeeping states recorded in curator_state; ``archive`` is the only
-        filesystem effect (and it is recoverable).
+    def apply_automatic_transitions(self) -> Dict[str, List[str]]:
+        """Stale/archive/reactivate skills by idle time since last use. Returns the plan.
+
+        Pure-ish: computes the transition for every skill with a provenance row,
+        then (unless dry_run) applies archives via SkillManager. ``stale``/
+        ``reactivate`` are bookkeeping states recorded in curator_state;
+        ``archive`` is the only filesystem effect (and it is recoverable). An
+        owner-authored skill is never archived: ``proposed`` lists the owner
+        lines filed instead.
         """
         from core.config_policy import AutonomyConfig
         stale_days = AutonomyConfig.curator_stale_days()
         archive_days = AutonomyConfig.curator_archive_days()
         now = self._now()
-        plan: Dict[str, List[str]] = {"stale": [], "archived": [], "reactivated": [], "kept": []}
+        plan: Dict[str, List[str]] = {"stale": [], "archived": [], "reactivated": [],
+                                      "kept": [], "proposed": []}
+        pinned = self._pinned_skill_keys()
 
-        rows = self.usage.list_authored(created_by=_AUTHORED)
+        rows = self.usage.list_authored(created_by=_AUTHORED + _OWNER_AUTHORED)
         for r in rows:
             skill_id = r["skill_id"]
             user_id = r["user_id"]
-            load_count = r.get("load_count", 0) or 0
             created_at = r.get("created_at") or now
+            last_used = r.get("last_used_at")
             age_days = max(0.0, (now - created_at) / _DAY_S)
+            # X-4: the clock is the LAST use; a never-used skill's starts at creation.
+            idle_days = max(0.0, (now - (last_used or created_at)) / _DAY_S)
             key = f"{user_id}/{skill_id}"
+            owner_skill = r.get("created_by") in _OWNER_AUTHORED
 
             # SK-F2: a background-review-authored draft always lands in
-            # `.pending/` (quarantined, uncatalogued) — its load_count can
-            # NEVER rise because it isn't in rules.json to be loaded from.
-            # Age-based archiving would otherwise sweep up drafts nobody has
-            # reviewed yet. Resolve the actual file (active wins over pending
-            # if both somehow exist) and skip the row entirely while pending.
+            # `.pending/` (quarantined, uncatalogued) — it can NEVER be loaded
+            # because it isn't in rules.json to be loaded from. Age-based
+            # archiving would otherwise sweep up drafts nobody has reviewed yet.
+            # Resolve the actual file (active wins over pending if both somehow
+            # exist) and skip the row entirely while pending.
             find_file = getattr(self.sm, "_find_skill_file", None)
             if callable(find_file):
                 try:
@@ -78,28 +207,47 @@ class SkillCurator:
                 except Exception:
                     resolved = None
                 if resolved is not None and ".pending" in Path(resolved).parts:
-                    continue  # pending = awaiting owner review, load_count can never rise
+                    continue  # pending = awaiting owner review, it can never be loaded
 
-            if load_count > 0:
-                # Reused → keep active; clear any prior stale mark.
-                if self._get_mark(key) == "stale":
-                    plan["reactivated"].append(key)
+            mark = self._get_mark(key)
+            is_pinned = pinned is not None and (str(user_id), skill_id) in pinned
+            in_use = is_pinned or idle_days <= stale_days
+            # P2-21: a skill archived on a prior tick stays archived. list_authored
+            # still returns its provenance row (rows persist after archive), so
+            # without this guard the curator re-archived it every tick. Only a load
+            # AFTER the archive (a restored skill) brings it back.
+            if mark == "archived" and not (last_used and idle_days <= stale_days):
+                continue
+            if in_use or age_days < INCUBATION_DAYS or pinned is None:
+                # Used recently, pinned, incubating — or the pins are unreadable
+                # (never stale or archive on a read we could not make).
+                if mark in ("stale", "archived", "proposed") and in_use:
+                    if mark != "proposed":
+                        plan["reactivated"].append(key)
                     if not self.dry_run:
                         self._set_mark(key, "active")
-                        self._self_mod_ev("reactivate", skill_id, user_id)
+                        if mark != "proposed":
+                            self._self_mod_ev("reactivate", skill_id, user_id)
                 else:
                     plan["kept"].append(key)
                 continue
 
-            # never reused
-            # P2-21: skip a skill already archived on a prior tick. list_authored still
-            # returns its provenance row (rows persist after archive), so without this
-            # guard the weekly curator re-archived the same skill every tick — re-calling
-            # delete_skill (which returns False, file already gone) and re-emitting a
-            # self_modification "archive" event each time.
-            if self._get_mark(key) == "archived":
+            if owner_skill:
+                # 095 W12: the owner's skill is the owner's to archive. File ONE
+                # proposal line once it is idle past the archive age; never stale it.
+                if idle_days > archive_days and mark != "proposed":
+                    line = (f"{skill_id}: your skill has not been used for {int(idle_days)} "
+                            f"days — keep or archive?")
+                    plan["proposed"].append(line)
+                    if not self.dry_run:
+                        self._set_mark(key, "proposed")
+                        self._self_mod_ev("propose", skill_id, user_id,
+                                          reason="idle", note=line)
+                else:
+                    plan["kept"].append(key)
                 continue
-            if age_days > archive_days:
+
+            if idle_days > archive_days:
                 plan["archived"].append(key)
                 if not self.dry_run:
                     try:
@@ -109,26 +257,78 @@ class SkillCurator:
                         self._self_mod_ev("archive", skill_id, user_id)
                     except Exception as e:
                         logger.debug("curator archive failed for %s: %s", key, e)
-            elif age_days > stale_days:
-                plan["stale"].append(key)
-                if not self.dry_run:
-                    self._set_mark(key, "stale")
             else:
-                plan["kept"].append(key)
+                plan["stale"].append(key)
+                if not self.dry_run and mark != "stale":
+                    self._set_mark(key, "stale")
 
         logger.info("curator phase-1: %s",
                     {k: len(v) for k, v in plan.items()})
         return plan
 
+    # --- contribution report (095 W12 step 3, proposal only) -----------------
+
+    def _recent_runs(self, user_id: str, since_ts: int) -> List[Any]:
+        """The tenant's cron and goal run records since *since_ts*. Raises when
+        the episode store cannot be read. Runs on the curator's worker thread."""
+        from modules.memory.registry import memory_recall_episodes
+
+        async def _read() -> List[Any]:
+            out: List[Any] = []
+            for kind in ("cron", "goal"):
+                out += await memory_recall_episodes(
+                    user_id=user_id, since_ts=since_ts, kind=kind,
+                    limit=_CONTRIBUTION_ROWS, order="newest", raise_errors=True)
+            return out
+
+        return asyncio.run(_read())
+
+    def contribution_report(self) -> List[str]:
+        """File ONE owner line per skill that does clearly worse when loaded.
+        Proposal only — never archives. A line is filed at most once per
+        :data:`CONTRIBUTION_DAYS`. Returns the lines of this tick. Fail-open per
+        tenant (an unreadable episode store files nothing)."""
+        now = self._now()
+        since_ts = int(now - CONTRIBUTION_DAYS * _DAY_S)
+        by_user: Dict[str, List[str]] = {}
+        for r in self.usage.list_authored(created_by=_AUTHORED + _OWNER_AUTHORED) or []:
+            by_user.setdefault(str(r["user_id"]), []).append(str(r["skill_id"]))
+        lines: List[str] = []
+        for user_id, skill_ids in sorted(by_user.items()):
+            try:
+                runs = self._recent_runs(user_id, since_ts)
+            except Exception:
+                logger.warning("curator: contribution report skipped for a tenant "
+                               "(run records unreadable)", exc_info=True)
+                continue
+            for f in contribution_findings(skill_ids, runs):
+                state_key = f"contribution:{user_id}/{f['skill_id']}"
+                last = self._get_mark(state_key)
+                try:
+                    if last is not None and now - float(last) < CONTRIBUTION_DAYS * _DAY_S:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                line = contribution_line(f)
+                lines.append(line)
+                if not self.dry_run:
+                    self._set_mark(state_key, str(now))
+                    self._self_mod_ev("propose", f["skill_id"], user_id,
+                                      reason="contribution", note=line)
+        if lines:
+            logger.info("curator: contribution report filed %d line(s)", len(lines))
+        return lines
+
     @staticmethod
-    def _self_mod_ev(action: str, skill_id: str, user_id: str) -> None:
+    def _self_mod_ev(action: str, skill_id: str, user_id: str, **attrs) -> None:
         """T4-06: curator lifecycle transitions are self-modifications too —
-        record them on the durable event log. Fail-open."""
+        record them on the durable event log. A ``propose`` event carries the
+        owner line in ``note``. Fail-open."""
         try:
             from core.self_events import emit_self_modification
             emit_self_modification(kind="skill", action=action, item_id=skill_id,
                                    user_id=user_id or "", created_by="curator",
-                                   source="curator")
+                                   source="curator", **attrs)
         except Exception as e:
             logger.debug("curator event emit skipped: %s", e)
 
@@ -197,11 +397,14 @@ class SkillCurator:
         except Exception as e:
             logger.error("curator run failed: %s", e, exc_info=True)
             result["error"] = str(e)
+        try:
+            result["contribution"] = self.contribution_report()
+        except Exception:
+            logger.warning("curator contribution report skipped", exc_info=True)
         self._prune_episodes()
         self._prune_memories()
         self._prune_sessions()
         self._consolidate_notes()
-        self._consolidate_recall()
         return result
 
     def _prune_episodes(self) -> None:
@@ -285,36 +488,6 @@ class SkillCurator:
                                    source="curator", reason=reason)
         except Exception as e:
             logger.debug("curator note event emit skipped: %s", e)
-
-    def _consolidate_recall(self) -> None:
-        """Distil repeated recall into ONE curated note (WS-K4, 2026-09-22).
-
-        Prod held 19,001 raw recall rows and 0 curated notes — the distilled
-        store had never been written to, so every repeated lesson was learned
-        again from scratch. Deterministic (no LLM: the CURATOR_LLM_MERGE lesson
-        applies — a clustering nobody can predict is worse than none) and
-        NON-DESTRUCTIVE: it writes notes and never prunes a row.
-
-        Global across tenants, like its two sibling sweeps, and fail-open.
-        """
-        try:
-            from core.config_policy import AutonomyConfig
-            from modules.memory.registry import get_memory_registry
-            if not AutonomyConfig.memory_consolidate():
-                return
-            prov = get_memory_registry().active()
-            if prov is None or not hasattr(prov, "consolidate_recall"):
-                return
-            from modules.memory.recall_consolidation import tenants_with_recall
-            totals = {"written": 0, "updated": 0, "clusters": 0}
-            for user_id in tenants_with_recall(getattr(prov, "db_path", "")):
-                got = prov.consolidate_recall(user_id=user_id)
-                for key in totals:
-                    totals[key] += int(got.get(key) or 0)
-            if totals["written"] or totals["updated"]:
-                logger.info("curator: recall consolidation %s", totals)
-        except Exception:
-            logger.warning("recall consolidation skipped", exc_info=True)
 
     def _prune_memories(self) -> None:
         """Cross-session `memories` retention sweep (B3, 2026-07-11) — same
@@ -404,6 +577,7 @@ def build_curator_ticker(*, data_dir: str = "data", dry_run: bool = False) -> Cu
     import os
     from agents.task.agent.skill_manager import get_skill_manager
     from modules.skills.skill_usage import get_skill_usage_store
-    curator = SkillCurator(get_skill_manager(), get_skill_usage_store(data_dir), dry_run=dry_run)
+    curator = SkillCurator(get_skill_manager(), get_skill_usage_store(data_dir), dry_run=dry_run,
+                           data_dir=data_dir)
     return CuratorTicker(curator, lock_path=os.path.join(data_dir, "curator.tick.lock"))
 

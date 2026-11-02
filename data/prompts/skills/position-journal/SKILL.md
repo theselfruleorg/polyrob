@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Recording fills and reading P&L of positions'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-version: '5'
 ---
@@ -57,9 +56,9 @@ note. A second record is what disagreed with the chain before.
    lots by hand, do not use FIFO, and do not compute or convert a money figure
    yourself. If a verb says `unknown` or "at least", say the same.
 3. **Reconcile before any claim** about the book, before a new entry on the
-   same token, and after anything that looked wrong. On 2026-08-25 the record
-   said "Open positions: NONE" while the chain held three — and that was
-   published.
+   same token, and after anything that looked wrong. A record can say "Open
+   positions: NONE" while the chain holds positions; never publish a book
+   claim you did not reconcile.
 4. **Holdings the book does not explain** are either a position bought outside
    the money rail or something someone sent you (dust; never interact). Say
    which in your report. `reconcile` names an unpriced token the book does not
@@ -82,7 +81,6 @@ measure anything — say so and stop. Never work around a missing verb with a ra
 
 ## Related
 
-`post-trade-verify`, `exits`, `trading-mandate`, `treasury-trading` (the
-reconcile section there). To check SOMEONE ELSE's wallet, use
+`post-trade-verify`, `exits`, `trading-mandate`. To check SOMEONE ELSE's wallet, use
 `defi_data.wallet_holdings(address=…, chain=…)` — `positions` and `portfolio`
 read only this agent's own book.

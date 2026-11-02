@@ -235,7 +235,7 @@ async def test_signup_success_returns_handle(monkeypatch):
 
     async def _flow(user_id, resume):
         return FakeSignupFlow(
-            result=SignupResult(handle="robbot", address="rob@agentmail.to"))
+            result=SignupResult(handle="robbot", address="carol@agentmail.to"))
     tool._build_signup_flow = _flow
 
     res = await tool.x_signup_start(XSignupStartAction(), execution_context=_Ctx())

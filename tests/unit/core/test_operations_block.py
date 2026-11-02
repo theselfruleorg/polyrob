@@ -12,7 +12,7 @@ import pytest
 from core.status_render import render_operations_block
 from core.status_snapshot import build_operations_sections
 
-OWNER = "rob"
+OWNER = "alice"
 
 
 @pytest.fixture()
@@ -55,9 +55,9 @@ def test_block_lists_jobs_goals_pause_and_stops(home):
     _cron(home, n=2, paused_id="job01")
     board = _board(home)
     g = board.create(user_id=OWNER, title="Watch the ETH price")
-    board.create(user_id="someone-else", title="Not rob's goal")
+    board.create(user_id="someone-else", title="Not alice's goal")
     goal_suppressions.suppress(os.path.join(home, "goals.db"), user_id=OWNER,
-                               scope="title", value="Buy back ROB", label="Buy back ROB")
+                               scope="title", value="Buy back DEMO", label="Buy back DEMO")
     autonomy_control.pause(home, scopes=("trading",), set_by="owner", via="telegram")
     text = _block(home)
     lines = text.splitlines()
@@ -67,8 +67,8 @@ def test_block_lists_jobs_goals_pause_and_stops(home):
     assert 'job01 "Job number 1"' in text and "PAUSED" in text
     assert "gone" not in text  # a cancelled job is not active
     assert f'{g.id} "Watch the ETH price"' in text
-    assert "Not rob's goal" not in text  # tenant-scoped
-    assert "- title: Buy back ROB since " in text
+    assert "Not alice's goal" not in text  # tenant-scoped
+    assert "- title: Buy back DEMO since " in text
 
 
 def test_every_stop_scope_renders_generically(home):
@@ -154,3 +154,33 @@ def test_full_snapshot_carries_the_same_data(home):
     full = render_operations_block(snap).splitlines()[1:]
     narrow = _block(home).splitlines()[1:]
     assert full == narrow
+
+
+# Routines review 2026-10-29 §14: on 10-29 the agent saw `bbbe8d3e1cd2 ... next
+# 10-31` and not "last run failed 10-28, nothing posted"; it also could not see
+# that the agent itself had dropped the job's delivery.
+
+def test_job_line_names_the_last_failure_with_its_reason_and_the_delivery(home):
+    store = _cron(home, n=1)
+    store.record_outcome("job00", "failed", datetime.now(),
+                         reason="stopped at the step limit (150/150)")
+    text = _block(home)
+    line = next(ln for ln in text.splitlines() if ln.startswith("- job00"))
+    assert "⚠ last: failed " in line and "(stopped at the step limit (150/150))" in line
+    assert "deliver: none" in line
+
+
+def test_a_done_run_shows_no_reason_and_no_flag(home):
+    from cron.rig_edit import set_job_payload_key
+    store = _cron(home, n=1)
+    set_job_payload_key(store, "job00", "deliver", "telegram")
+    store.record_outcome("job00", "done", datetime.now(), reason="ignored for done")
+    line = next(ln for ln in _block(home).splitlines() if ln.startswith("- job00"))
+    assert "last: done " in line and "⚠" not in line and "ignored" not in line
+    assert "deliver: telegram" in line
+
+
+def test_a_job_that_never_ran_says_so(home):
+    _cron(home, n=1)
+    line = next(ln for ln in _block(home).splitlines() if ln.startswith("- job00"))
+    assert "last: never run" in line

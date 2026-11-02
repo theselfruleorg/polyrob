@@ -9,7 +9,7 @@
  *   2. the positions the rail TRACKS that the ledger does not list, each with
  *      its lifecycle (open / quarantined / written off) and the owner's
  *      Write off / Undo quarantine buttons;
- *   3. the tokens Rob TRUSTS, by source, the ones the owner said are not the
+ *   3. the tokens the agent TRUSTS, by source, the ones the owner said are not the
  *      real token, and a small form to trust one.
  *
  * Every button asks before it acts (`window.confirm`) and posts to
@@ -110,7 +110,7 @@ export function trackedSection(data, copy, readOnly) {
   return section;
 }
 
-/** The tokens Rob trusts, the owner's not-trusted list, and a trust form. */
+/** The tokens the agent trusts, the owner's not-trusted list, and a trust form. */
 export function tokensSection(view, copy, readOnly) {
   const section = el("div", "section");
   section.appendChild(head(copy && copy.tok_title, copy && copy.tok_aside));

@@ -9,28 +9,28 @@ from cli.commands.owner import _do_allow, _do_deny, _do_allowlist, _allowlist_te
 
 def test_allow_and_list():
     al = OutboundAllowlist(os.path.join(tempfile.mkdtemp(), "a.db"))
-    _do_allow(al, "rob", "telegram", "555", note="team")
-    rows = _do_allowlist(al, "rob")
+    _do_allow(al, "alice", "telegram", "555", note="team")
+    rows = _do_allowlist(al, "alice")
     assert any(r["target"] == "555" for r in rows)
 
 
 def test_deny():
     al = OutboundAllowlist(os.path.join(tempfile.mkdtemp(), "a.db"))
-    _do_allow(al, "rob", "telegram", "555")
-    assert _do_deny(al, "rob", "telegram", "555") is True
-    assert al.is_allowed("rob", "telegram", "555") is False
+    _do_allow(al, "alice", "telegram", "555")
+    assert _do_deny(al, "alice", "telegram", "555") is True
+    assert al.is_allowed("alice", "telegram", "555") is False
 
 
 def test_deny_unknown_returns_false():
     al = OutboundAllowlist(os.path.join(tempfile.mkdtemp(), "a.db"))
-    assert _do_deny(al, "rob", "telegram", "999") is False
+    assert _do_deny(al, "alice", "telegram", "999") is False
 
 
 def test_allowlist_scoped_by_tenant():
     al = OutboundAllowlist(os.path.join(tempfile.mkdtemp(), "a.db"))
-    _do_allow(al, "rob", "telegram", "555")
+    _do_allow(al, "alice", "telegram", "555")
     _do_allow(al, "other", "telegram", "777")
-    rows = _do_allowlist(al, "rob")
+    rows = _do_allowlist(al, "alice")
     assert len(rows) == 1
     assert rows[0]["target"] == "555"
 
@@ -38,7 +38,7 @@ def test_allowlist_scoped_by_tenant():
 def test_allowlist_tenant_matches_session_identity_oracle():
     # The CLI's default tenant for allow/deny/allowlist MUST equal the tenant a local
     # REPL session reads at runtime (core.identity.resolve_identity()), NOT the
-    # instance id ("rob") that _owner_tenant defaults to when no owner is bound.
+    # instance id ("alice") that _owner_tenant defaults to when no owner is bound.
     assert _allowlist_tenant(None) == resolve_identity()
 
 

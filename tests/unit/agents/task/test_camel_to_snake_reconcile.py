@@ -1,6 +1,6 @@
 """WS-1.3: systematic camelCase→snake_case field reconciliation.
 
-kimi-k2.6 emits camelCase tool params (``filePath``) where ROB's Pydantic param
+kimi-k2.6 emits camelCase tool params (``filePath``) where POLYROB's Pydantic param
 models use snake_case (``file_path``). Rather than grow the hand-maintained
 whack-a-mole map, the casing class of error is fixed generically — but ONLY when
 the snake_case form is an actual field of the target model, so genuinely-

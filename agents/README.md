@@ -197,7 +197,7 @@ class SessionRequest:
     model: str = "gpt-5"                       # LLM model (overridden by env/key resolution)
     provider: str = "openai"                   # LLM provider
     tools: List[str] = None                    # → ["browser", "filesystem", "task"] if None
-    max_steps: int = INTERACTIVE_MAX_STEPS     # 50 (core.config_policy)
+    max_steps: int = INTERACTIVE_MAX_STEPS     # 100 (core.config_policy)
     use_vision: bool = True                    # Enable vision capabilities
 ```
 Note: actual provider/model are resolved at chat/session time from whichever API key is present
@@ -420,8 +420,8 @@ character = await character_manager.load_character("researcher")
 
 ### Task automation
 1. **Step limits**: an interactive request may set `max_steps` (`polyrob run`/API/A2A default 50,
-   `INTERACTIVE_MAX_STEPS`); a REPL turn runs `DEFAULT_TURN_BUDGET` (20) and a chat-surface turn
-   `CHAT_MAX_STEPS` (8); an autonomous run (goal, cron, delegation, worker) has no per-run budget — it
+   `INTERACTIVE_MAX_STEPS`); a REPL turn runs the same budget and a chat-surface turn
+   `CHAT_MAX_STEPS` (20); an autonomous run (goal, cron, delegation, worker) has no per-run budget — it
    stops at the operator's `AUTONOMOUS_MAX_STEPS` (default 150, 083).
 2. **Tool selection**: only enable necessary tools (MCP/browser/coding are opt-in, not defaults).
 3. **Session cleanup**: clean up completed/failed sessions.

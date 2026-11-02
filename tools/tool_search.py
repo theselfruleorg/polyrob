@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from tools.tool_disclosure import _one_liner, resolve_tool_status, disclosure_ceiling
+from tools.tool_disclosure import _one_liner, resolve_tool_status, disclosure_ceiling, seat_probe
 
 _STATUS_RANK = {"loaded": 0, "loadable": 1, "gated": 2}
 
@@ -94,7 +94,7 @@ def _score(query: str, tokens: List[str], hay_id: str, hay_desc: str) -> int:
 
 def search_tools(query: str, *, container, loaded_ids, is_leaf: bool = False, allowed_ids=None,
                  mcp_tools: Optional[List[Dict[str, Any]]] = None,
-                 limit: int = 8) -> SearchResult:
+                 limit: int = 8, seat_denies=None) -> SearchResult:
     """Rank every callable tool (built-ins + connected MCP tools) against *query*.
 
     Deterministic: id-exact > id-prefix > id-token > desc-token; ties broken by
@@ -111,8 +111,9 @@ def search_tools(query: str, *, container, loaded_ids, is_leaf: bool = False, al
         s = _score(q, tokens, display, d)
         if s <= 0:
             continue
-        st = resolve_tool_status(display, container=container,
-                                 loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
+        st = resolve_tool_status(display, container=container, loaded_ids=loaded,
+                                 is_leaf=is_leaf, allowed_ids=allowed_ids,
+                                 seat_denies=seat_denies)
         scored.append((-s, _STATUS_RANK.get(st.status, 3), display,
                        ToolHit(display, "builtin", st.status, st.reason, st.remedy, d)))
 
@@ -177,7 +178,8 @@ async def perform_tool_search(controller, query: str, limit: int = 8,
                       loaded_ids=set(controller.list_tools()),
                       allowed_ids=disclosure_ceiling(controller),
                       is_leaf=_is_leaf(controller, execution_context),
-                      mcp_tools=_mcp_metadata(controller), limit=limit)
+                      mcp_tools=_mcp_metadata(controller), limit=limit,
+                      seat_denies=seat_probe(controller))
     if not sr.results:
         return ActionResult(
             extracted_content=(
@@ -197,7 +199,8 @@ async def perform_tool_search(controller, query: str, limit: int = 8,
 
 
 def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
-                  mcp_tools: List[Dict[str, Any]], registry, allowed_ids=None) -> str:
+                  mcp_tools: List[Dict[str, Any]], registry, allowed_ids=None,
+                  seat_denies=None) -> str:
     """Render the full detail block for one id. Pure over its inputs; the wrapper
     supplies them from the controller."""
     from core.tool_capabilities import TOOL_CAPABILITIES
@@ -226,8 +229,8 @@ def describe_tool(tool_id: str, *, container, loaded_ids, is_leaf: bool,
         return (f"tool_describe('{raw}'): unknown tool id. Use "
                 "tool_search('<keyword>') or browse the <tool-catalog>.")
 
-    st = resolve_tool_status(display, container=container,
-                             loaded_ids=set(loaded_ids or ()), is_leaf=is_leaf, allowed_ids=allowed_ids)
+    st = resolve_tool_status(display, container=container, loaded_ids=set(loaded_ids or ()),
+                             is_leaf=is_leaf, allowed_ids=allowed_ids, seat_denies=seat_denies)
     caps = TOOL_CAPABILITIES.get(display)
     cap_line = ("capabilities: (unclassified)" if caps is None
                 else "capabilities: " + (", ".join(sorted(caps)) if caps else "(none)"))
@@ -291,5 +294,6 @@ async def perform_tool_describe(controller, tool_id: str, execution_context=None
         allowed_ids=disclosure_ceiling(controller),
         is_leaf=_is_leaf(controller, execution_context),
         mcp_tools=_mcp_metadata(controller),
-        registry=getattr(controller, "registry", None))
+        registry=getattr(controller, "registry", None),
+        seat_denies=seat_probe(controller))
     return ActionResult(extracted_content=content, include_in_memory=True)

@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'A big or hard-to-reverse decision needs blind second views'
   polyrob-priority: '5'
-  polyrob-auto-activate: 'true'
   polyrob-version: '1'
 ---
 # Adversarial Consensus

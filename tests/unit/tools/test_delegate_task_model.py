@@ -18,6 +18,18 @@ from agents.task.loop_types.execution_context import ActionExecutionContext
 from tools.controller.views import DelegateTaskAction, SubtaskAction
 
 
+@pytest.fixture(autouse=True)
+def _allow_any_child_model(monkeypatch):
+    """These tests pin the delegate's model PLUMBING; the 094 allowlist (which model a
+    child may run on) is tested in tests/unit/agents/task/test_model_switch_094.py."""
+    import agents.task.model_switch_service as svc
+
+    async def _allow(parent_agent, model, provider):
+        return ""
+
+    monkeypatch.setattr(svc, "child_model_refusal", _allow)
+
+
 # --- fakes -------------------------------------------------------------------
 
 class _Result:

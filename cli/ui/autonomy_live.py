@@ -1,6 +1,6 @@
 """The REPL's live handle on its autonomy loops (026 P5.2).
 
-`rob` starts the autonomy runtime once at boot (``cli/commands/chat.py``). This
+`polyrob` starts the autonomy runtime once at boot (``cli/commands/chat.py``). This
 module holds that handle so REPL ``/autonomy on|off`` can start and stop the
 loops in the SAME process, with no restart:
 

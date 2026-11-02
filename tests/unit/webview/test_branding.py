@@ -1,8 +1,8 @@
-"""P3 — branding is polyrob/rob, with the old/test/placeholder strings removed.
+"""P3 — branding is polyrob, with the old/test/placeholder strings removed.
 
 The webgate templates must not carry the old framework name (`AutoV2`/`Auto Agent`),
 the test bot handle (`@testestovichbot`/`testesto…`), or any placeholder-bot string.
-Framework = ``polyrob``; instance persona = ``rob``/``Rob`` (kept). Instance
+Framework = ``polyrob``; the shipped tree names no instance persona. Instance
 domain/support-handle copy is env-driven via ``branding_config()`` (generic
 defaults), so it is not scanned here.
 """

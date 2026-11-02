@@ -1,6 +1,6 @@
 """Proposal 001: goal_create accepts a `tools` list, filtered to a safe allowlist.
 
-Owner-approved option 2 (2026-07-01): Rob's self-created goals may request research/content/coding
+Owner-approved option 2 (2026-07-01): the agent's self-created goals may request research/content/coding
 tools AND twitter, but never money (wallet/x402/hyperliquid/polymarket), code execution, cron, or
 meta goal/skill tools.
 """
@@ -114,7 +114,7 @@ def test_goal_create_infers_tools_from_text_when_unset(tmp_path):
 def test_goal_create_inference_covers_mission_surfaces(tmp_path):
     tool = _make_tool(tmp_path)
     cases = {
-        "Use rob mailbox for registrations": ("send email signups", "email"),
+        "Use the agent mailbox for registrations": ("send email signups", "email"),
         "Find x402 services and earn": ("issue an invoice for value", "x402_invoice"),
         "Introduce yourself in t.me/examplegroup": ("post in the telegram group", "message"),
         "Re-learn POLYROB docs": ("fetch polyrob.dev and update notes", "web_fetch"),

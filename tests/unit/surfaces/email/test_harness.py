@@ -6,16 +6,16 @@ from surfaces.email.harness import normalize_email_message
 
 _RAW = (
     "From: John Doe <john@acme.com>\r\n"
-    "To: rob@bot.com\r\n"
+    "To: alice@bot.com\r\n"
     "Subject: Re: invoice\r\n"
     "Message-ID: <reply1@acme.com>\r\n"
-    "In-Reply-To: <out1@rob>\r\n"
-    "References: <root@rob> <out1@rob>\r\n"
+    "In-Reply-To: <out1@alice>\r\n"
+    "References: <root@alice> <out1@alice>\r\n"
     "Content-Type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "The invoice is paid.\r\n"
     "\r\n"
-    "On Mon ROB wrote:\r\n"
+    "On Mon DEMO wrote:\r\n"
     "> please confirm\r\n"
 )
 
@@ -25,8 +25,8 @@ def test_normalize_captures_headers_and_plain_body():
     msg = normalize_email_message(em)
     assert msg["message_id"] == "<reply1@acme.com>"
     assert msg["from"] == "John Doe <john@acme.com>"
-    assert msg["in_reply_to"] == "<out1@rob>"
-    assert msg["references"] == "<root@rob> <out1@rob>"
+    assert msg["in_reply_to"] == "<out1@alice>"
+    assert msg["references"] == "<root@alice> <out1@alice>"
     assert "The invoice is paid." in msg["body"]
 
 

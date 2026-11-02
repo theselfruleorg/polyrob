@@ -80,9 +80,16 @@ def host_execution_refusal():
     return None
 
 
-#: 085 W1: the fix the readable-file gap names — the two ways out.
-CUSTODY_FILE_REMEDY = ("move the seed to the signer (`polyrob signer install`) and remove it "
-                       "from that file, or run code in a sandbox backend (CODE_EXEC_BACKEND=docker)")
+#: 085 W1: the fix the readable-file gap names — the two ways out. Every
+#: ``polyrob …`` command named here must exist (tests/unit/cli/test_named_commands_exist.py):
+#: there is no ``polyrob signer`` group; the signer unit is a root install step
+#: on a system (``/opt/polyrob``) install only.
+CUSTODY_FILE_REMEDY = ("run code in the Docker sandbox (CODE_EXEC_BACKEND=docker; `polyrob doctor` "
+                       "lists the setup steps), or take the seed out of that file: back it up "
+                       "with `polyrob wallet export`, delete the wallet key lines, and give the "
+                       "key to the agent another way (a system install: a root-owned service "
+                       "env file or the polyrob-signer unit; a `systemctl --user` install has "
+                       "no env file out of this user's reach, so use the sandbox)")
 
 
 #: 085 W1: the fix when the only readable copy is in an update snapshot.
@@ -117,6 +124,16 @@ def _snapshot_copy_with_key():
     return None
 
 
+def _with_sandbox_steps(remedy: str) -> str:
+    """*remedy* plus the Docker sandbox steps with this process's uid and user
+    filled in (``core.security.sandbox_setup``). Fail-open: the bare remedy."""
+    try:
+        from core.security.sandbox_setup import docker_sandbox_steps
+        return f"{remedy}. Docker sandbox steps: {docker_sandbox_steps()}"
+    except Exception:  # pragma: no cover - defensive
+        return remedy
+
+
 def _custody_file_finding():
     """``(reason, fix)`` for the readable-file gap, or None (085 W1)."""
     try:
@@ -126,9 +143,9 @@ def _custody_file_finding():
                 return None
             return ("an old `polyrob update` snapshot holds a wallet key in an env file "
                     "this user can read, so code that runs on the host could read it",
-                    SNAPSHOT_COPY_REMEDY)
+                    _with_sandbox_steps(SNAPSHOT_COPY_REMEDY))
         return ("a wallet key is in an env file this user can read, so code that "
-                "runs on the host could read that file", CUSTODY_FILE_REMEDY)
+                "runs on the host could read that file", _with_sandbox_steps(CUSTODY_FILE_REMEDY))
     except Exception as e:  # pragma: no cover - defensive
         return (f"the key file could not be checked ({type(e).__name__})", CUSTODY_FILE_REMEDY)
 

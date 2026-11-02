@@ -64,4 +64,12 @@ def prompt_text(key: str, **kw) -> str:
     return _t(key, _formatted=True, **kw)
 
 
-__all__ = ["SYSTEM_DIR", "STRINGS", "has", "load_blocks", "missing_keys", "prompt_text"]
+def owner_route(part: str) -> str:
+    """One ``owner_instructions`` bullet as one line. The routing text has ONE
+    source (095 W10): the tool descriptions and the user guide quote it from
+    here, never a hand copy."""
+    return " ".join(prompt_text(f"owner_instructions.{part}").lstrip("- ").split())
+
+
+__all__ = ["SYSTEM_DIR", "STRINGS", "has", "load_blocks", "missing_keys", "owner_route",
+           "prompt_text"]

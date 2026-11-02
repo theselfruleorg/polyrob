@@ -62,6 +62,9 @@ def rule_from_frontmatter(meta: Optional[dict]) -> Optional[dict]:
     rule: Dict[str, Any] = {
         "triggers": decode_triggers(md.get("polyrob-triggers")),
         "priority": _int_or(md.get("polyrob-priority"), 5),
+        # 095 W8 (IN-9): absent = true; only 'false' (gated) carries meaning. The
+        # builtins dropped the vestigial 'true' line; an old 'true' still reads
+        # here for one release (a user or pack skill copied from the old form).
         "auto_activate": parse_bool(md.get("polyrob-auto-activate", "true")),
         "description": str(meta.get("description") or ""),
     }
@@ -179,9 +182,40 @@ def money_tool_gate_ok(triggers: Optional[dict], session_tool_ids) -> bool:
     return bool(reach & set(session_tool_ids or []))
 
 
-def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False) -> bool:
+def _declares_money(triggers: Optional[dict]) -> bool:
+    """Does the skill declare a money tool in ``triggers.tool_ids``? Fail-closed."""
+    declared = list((triggers or {}).get("tool_ids") or [])
+    if not declared:
+        return False
+    try:
+        from core.tool_capabilities import ids_with
+        return any(t in ids_with("money") for t in declared)
+    except Exception:
+        return True
+
+
+#: 095 W4 (IN-12): skills that only the owner's own seats can act on (they
+#: author skills, deploy the instance, handle a live incident) — never listed or
+#: loaded on a third-party seat, the same seat gate as a money playbook.
+#: The pay/get-paid procedures join them: they drive payouts and invoices through
+#: non-money tools (goal, cronjob, defi_data), so the money-tool test alone misses them.
+OWNER_ONLY_SKILLS = frozenset({"skill-authoring", "self-deploy", "incident-response",
+                               "pay-for-work", "get-paid-for-work"})
+
+
+def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False,
+                third_party: bool = False, skill_id: Optional[str] = None,
+                absent=()) -> bool:
     """May a session holding ``tool_ids`` see or load the skill of ``rule``?
 
+    * ``third_party`` (095 W3) — a room or a correspondent's session: a money
+      playbook (it declares a money tool: ``trading-mandate``, ``token-identity``,
+      the trading playbooks) or an :data:`OWNER_ONLY_SKILLS` id is the owner's
+      and never listed or loaded there.
+    * ``absent`` (095 W4, IN-4) — declared tools this session can never reach
+      (``gated:unavailable-on-this-deploy``/``not-constructed``, or refused by
+      the seat) count as
+      not there: a skill whose EVERY declared tool is absent is withheld.
     * no rule — not a gated skill; other guards apply (True).
     * ``auto_activate: false`` — a GATED skill (P1-1): only when every declared
       ``triggers.tool_ids`` is loaded.
@@ -189,9 +223,20 @@ def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False) -> boo
       is a listing view (console, export, ``/skills``), not a session, and lists
       an auto-activatable money playbook.
     """
+    if third_party and skill_id in OWNER_ONLY_SKILLS:
+        return False
     if rule is None:
         return True
     triggers = rule.get("triggers", {}) or {}
+    if third_party and _declares_money(triggers):
+        return False
+    absent = set(absent or ())
+    if absent:
+        declared = list(triggers.get("tool_ids") or [])
+        if declared and all(t in absent for t in declared):
+            return False
+        if tool_ids is not None:
+            tool_ids = [t for t in tool_ids if t not in absent]
     if not rule.get("auto_activate", True):
         gate = set(triggers.get("tool_ids", []) or [])
         return bool(gate and gate.issubset(set(tool_ids or [])))

@@ -11,6 +11,43 @@ from core.exceptions import DatabaseError
 from modules.base_module import BaseModule
 
 
+def _split_bot_db_candidates(derived: Path) -> list:
+    """bot.db files in the OTHER data-home layout of *derived*'s home.
+
+    ``<home>/data/database/bot.db`` (the pre-one-data-dir tree) and, for a home
+    named ``data``, ``<parent>/database/bot.db`` (the flat tree a process
+    without ``POLYROB_LOCAL`` created before 2026-10-29). Non-empty files only.
+    """
+    home = derived.parent.parent
+    cands = [home / "data" / "database" / "bot.db"]
+    if home.name == "data":
+        cands.append(home.parent / "database" / "bot.db")
+    out = []
+    for c in cands:
+        try:
+            if c.is_file() and c.stat().st_size > 0:
+                out.append(c)
+        except OSError:
+            continue
+    return out
+
+
+def _refuse_split_bot_db(derived: Path) -> None:
+    """Never open a fresh, empty bot.db while the real one sits in the other
+    layout: that is a split data home, not a first start."""
+    if derived.exists():
+        return
+    found = _split_bot_db_candidates(derived)
+    if found:
+        other_home = found[0].parent.parent
+        raise RuntimeError(
+            f"Refusing to create a new empty database at {derived}: the existing "
+            f"database is at {found[0]}. The data home is split. Stop the services, "
+            f"set POLYROB_DATA_DIR={other_home} in the service unit and the .env "
+            "file (or move the stores into one home), then restart. "
+            "`polyrob doctor` names every store and where each process reads it.")
+
+
 def resolve_bot_db_path(config) -> Path:
     """THE bot.db resolution rule (R-2 B2, 2026-07-17).
 
@@ -26,6 +63,7 @@ def resolve_bot_db_path(config) -> Path:
     legacy = Path(config.data_dir) / "database" / "bot.db"
     configured_raw = os.getenv("DB_PATH")
     if not configured_raw:
+        _refuse_split_bot_db(legacy)
         return legacy
     configured = Path(getattr(config, "db_path", configured_raw))
     if not configured.is_absolute():

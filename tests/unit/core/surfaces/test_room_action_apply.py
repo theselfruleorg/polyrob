@@ -21,7 +21,7 @@ def rig(tmp_path, monkeypatch):
     store.create(Offer(
         offer_id="off_1", surface="telegram", chat_id="-100123", verb="mute",
         target_user_id="9911", target_name="S", duration_sec=3600,
-        price_usd=0.5, asset_id="rob", amount_raw=str(5 * 10 ** 18),
+        price_usd=0.5, asset_id="demo", amount_raw=str(5 * 10 ** 18),
         requester_id="2277", invoice_id="inv_1", status="paid", reason="",
         created_at=time.time(), settled_at=time.time()))
 

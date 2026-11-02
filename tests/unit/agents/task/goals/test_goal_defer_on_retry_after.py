@@ -22,7 +22,7 @@ def board(tmp_path):
 
 
 def _running(board):
-    g = board.create(user_id="rob", title="X growth cycle")
+    g = board.create(user_id="alice", title="X growth cycle")
     return board.claim(g.id, "w1", ttl_seconds=600)
 
 
@@ -46,13 +46,13 @@ def test_defer_requeues_without_a_failure_and_holds_until_not_before(board):
 def test_a_held_goal_does_not_hide_the_next_one(board):
     held = _running(board)
     board.defer_run(held.id, retry_after_sec=600, claim_token=held.claim_token)
-    other = board.create(user_id="rob", title="other")
+    other = board.create(user_id="alice", title="other")
 
     assert [x.id for x in board.ready(limit=1)] == [other.id]
 
 
 def test_deferral_is_capped_so_a_guard_cannot_hold_a_goal_forever(board):
-    g = board.create(user_id="rob", title="loops on a guard")
+    g = board.create(user_id="alice", title="loops on a guard")
     for _ in range(GoalBoard.MAX_RUN_DEFERRALS):
         c = board.claim(g.id, "w1", ttl_seconds=600)
         assert board.defer_run(g.id, retry_after_sec=1, claim_token=c.claim_token) is not None
@@ -164,7 +164,7 @@ def test_the_deferral_cap_counts_in_a_row_not_lifetime(board):
     """A recorded failure (or success) ends the row: the next guard gets a
     fresh MAX_RUN_DEFERRALS, so a long-lived goal is not failed on its 4th
     deferral ever."""
-    g = board.create(user_id="rob", title="X growth cycle", max_retries=5)
+    g = board.create(user_id="alice", title="X growth cycle", max_retries=5)
     for _ in range(board.MAX_RUN_DEFERRALS):
         c = board.claim(g.id, "w1", ttl_seconds=600)
         assert board.defer_run(g.id, retry_after_sec=1, claim_token=c.claim_token)

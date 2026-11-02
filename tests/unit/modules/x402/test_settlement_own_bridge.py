@@ -53,7 +53,7 @@ def _bridge(*, state=bridge_guard.STATE_ARRIVED, before=3_259_753,
         request_id=f"0xreq{time.time_ns()}", origin_chain_id=4663,
         dest_chain_id=dest, recipient=TREASURY, currency_out=currency,
         amount_in_raw=150_000_000_000_000_000, min_out_raw=FLOOR)
-    bid = bridge_guard.record_pending(user_id="rob", quote=quote,
+    bid = bridge_guard.record_pending(user_id="alice", quote=quote,
                                       amount_usd=404.21, balance_before=before)
     if state != bridge_guard.STATE_PENDING:
         bridge_guard.settle(bid, state=state, balance_after=after)

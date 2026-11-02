@@ -37,8 +37,8 @@ def rig(tmp_path, monkeypatch):
 
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(str(tmp_path))).upsert(PaymentAsset(
-        asset_id="rob", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="ROB", rail="onchain_scan",
+        asset_id="demo", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="DEMO", rail="onchain_scan",
         min_amount_raw=10 ** 18, liquidity_floor_usd=2500.0, source="operator"))
 
     from core.surfaces.group_allowlist import GroupAllowlist
@@ -54,7 +54,7 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "5150")
 
     from core.surfaces import chat_policy
-    for k, v in (("chat.paid_enabled", True), ("chat.paid_asset", "rob"),
+    for k, v in (("chat.paid_enabled", True), ("chat.paid_asset", "demo"),
                  ("chat.paid_mute_usd", 0.50), ("chat.paid_mute_min_usd", 0.10),
                  ("chat.paid_mute_max_usd", 5.0),
                  ("chat.paid_mute_max_duration", "24h")):
@@ -77,7 +77,7 @@ def _quoter(price=0.10, liq=50_000.0, verdict="SURVIVOR", ts=None):
 
     class _Q:
         def quote(self, asset):
-            return PriceQuote("rob", price, liq, verdict, "test",
+            return PriceQuote("demo", price, liq, verdict, "test",
                               ts if ts is not None else time.time(), confidence="high")
     return _Q()
 
@@ -111,7 +111,7 @@ def test_a_configured_room_mints_an_offer(rig):
     res = _offer(rig)
     assert res.ok, res.text
     assert res.offer_id
-    assert "ROB" in res.text
+    assert "DEMO" in res.text
 
 
 def test_the_offer_row_is_durable_and_pending_with_the_sized_amount(rig):

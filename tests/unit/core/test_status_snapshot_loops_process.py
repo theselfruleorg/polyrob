@@ -2,7 +2,7 @@
 
 `autonomy_started` is written once per process start, and the snapshot read the
 NEWEST row from ANY process as its `expected` loop set. On a box where the owner
-opens a `rob` REPL beside the service — which local mode is designed for — the
+opens a `polyrob` REPL beside the service — which local mode is designed for — the
 REPL's row is newer and names ITS loop set, so the service's curator/settlement/
 bridge loops quietly stopped being expected. Nothing rendered differently; the
 checks simply stopped happening, which is the silent-narrowing shape a status
@@ -115,7 +115,7 @@ def test_many_short_repl_rows_cannot_evict_the_live_service_row(tmp_path):
     """The read window is per-PROCESS, not per-row and not per-day.
 
     ⚠️ Both of the obvious bounds lose a live process. A count window (this was
-    `LIMIT 20`) is evicted by process STARTS — 25 short `rob` runs on a local
+    `LIMIT 20`) is evicted by process STARTS — 25 short `polyrob` runs on a local
     box push the service's own row out and `expected` silently narrows back to
     gate-derived. A time floor is worse: one row is written per process start,
     so a service up longer than the window (prod's normal state) falls out of

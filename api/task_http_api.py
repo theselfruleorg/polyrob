@@ -1274,7 +1274,9 @@ async def create_session(
         from agents.task.config import TaskSessionConfig
         from agents.task.utils import detect_llm_provider
 
+        from agents.task.model_switch_service import start_with_pin, with_chat_pin
         session_config = TaskSessionConfig.defaults()
+        request_body = with_chat_pin(request_body, user_id)  # 094: the owner's default model
         req_model = request_body.get("model")
         if req_model:
             session_config.llm.model = req_model
@@ -1284,8 +1286,7 @@ async def create_session(
                 session_config.llm.provider = detect_llm_provider(None, req_model)
                 logger.info(f"Auto-detected provider '{session_config.llm.provider}' for model '{req_model}'")
         else:
-            # No model in body: operator runtime config (DEFAULT_PROVIDER pin >
-            # first keyed) — never a hardcoded openai/gpt-5 (2026-08-14 outage).
+            # No model: the operator pin > first keyed — never a gpt-5 literal (2026-08-14).
             from agents.task.config import resolve_session_provider_model
             provider, model = resolve_session_provider_model(request_body.get("provider"), None)
             session_config.llm.provider, session_config.llm.model = provider, model
@@ -1361,7 +1362,7 @@ async def create_session(
             raise HTTPException(status_code=500, detail="Failed to create session - no session info returned")
 
         session_id = session_info.get("id")
-
+        start_with_pin(agent, session_id, request_body.get("_chat_pin"))
         # Create workspace directory immediately to prevent race condition with file uploads
         from agents.task.path import pm
         workspace_dir = pm().get_workspace_dir(session_id, user_id)

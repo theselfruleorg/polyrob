@@ -17,7 +17,7 @@ class _DummyAgent:
 @pytest.mark.asyncio
 async def test_run_goal_fills_default_model_when_payload_has_none(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
-    goal = board.create(user_id="rob", title="t", body="do x",
+    goal = board.create(user_id="alice", title="t", body="do x",
                         payload={"tools": ["filesystem"]})  # no model pinned
 
     captured = {}

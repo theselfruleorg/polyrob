@@ -1306,7 +1306,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
 
     # ========================================
     # CURATED OPENROUTER SHORTLIST EXPANSION (2026-06-24)
-    # Models ROB has no native client for (OpenRouter's real value). Pricing +
+    # Models POLYROB has no native client for (OpenRouter's real value). Pricing +
     # specs verified against the live OpenRouter models API on 2026-06-24
     # (GET https://openrouter.ai/api/v1/models). Pinned in
     # tests/unit/modules/llm/test_openrouter_pricing_verified.py.
@@ -1314,7 +1314,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
 
     # --- Frontier agentic / coding ---
 
-    # Moonshot Kimi K2.5 — strong agentic; ROB otherwise only has Kimi via NIM.
+    # Moonshot Kimi K2.5 — strong agentic; POLYROB otherwise only has Kimi via NIM.
     # Multimodal (image input) on OpenRouter, native tools + reasoning.
     register(ModelConfig(
         name="moonshotai/kimi-k2.5",

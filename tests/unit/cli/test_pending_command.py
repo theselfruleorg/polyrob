@@ -140,7 +140,7 @@ def test_self_evolution_show_returns_full_body(tmp_path, seeded_long_sm):
     from core import self_evolution as se
 
     ok, body = se.show("skill", "long-skill", user_id="u1",
-                       home_dir=tmp_path, instance_id="rob")
+                       home_dir=tmp_path, instance_id="alice")
     assert ok
     assert "UNIQUE-TAIL-MARKER" in body  # full body, not the truncated preview
 
@@ -149,7 +149,7 @@ def test_self_evolution_show_unknown_item(tmp_path, seeded_sm):
     from core import self_evolution as se
 
     ok, msg = se.show("skill", "nope", user_id="u1",
-                      home_dir=tmp_path, instance_id="rob")
+                      home_dir=tmp_path, instance_id="alice")
     assert not ok
     assert "no pending" in msg.lower()
 

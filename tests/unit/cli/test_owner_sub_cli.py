@@ -20,7 +20,7 @@ async def _seed_db(db_path):
     return db
 
 
-def _make_db_with_sub(tmp_path, *, user_id="rob"):
+def _make_db_with_sub(tmp_path, *, user_id="alice"):
     db_path = tmp_path / "bot.db"
 
     async def setup():
@@ -38,10 +38,10 @@ def _make_db_with_sub(tmp_path, *, user_id="rob"):
 
 
 def test_sub_list_shows_tenant_subscriptions(tmp_path, monkeypatch):
-    db_path, sub_id = _make_db_with_sub(tmp_path, user_id="rob")
+    db_path, sub_id = _make_db_with_sub(tmp_path, user_id="alice")
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["sub", "list", "--user", "rob"])
+    res = CliRunner().invoke(owner, ["sub", "list", "--user", "alice"])
     assert res.exit_code == 0
     assert sub_id in res.output
     assert "active" in res.output
@@ -59,7 +59,7 @@ def test_sub_list_empty(tmp_path, monkeypatch):
     asyncio.run(setup())
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["sub", "list", "--user", "rob"])
+    res = CliRunner().invoke(owner, ["sub", "list", "--user", "alice"])
     assert res.exit_code == 0
     assert "no subscriptions" in res.output
 
@@ -89,14 +89,14 @@ def test_sub_list_is_tenant_scoped(tmp_path, monkeypatch):
 
 
 def test_sub_cancel_flips_status(tmp_path, monkeypatch):
-    db_path, sub_id = _make_db_with_sub(tmp_path, user_id="rob")
+    db_path, sub_id = _make_db_with_sub(tmp_path, user_id="alice")
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["sub", "cancel", sub_id, "--user", "rob"])
+    res = CliRunner().invoke(owner, ["sub", "cancel", sub_id, "--user", "alice"])
     assert res.exit_code == 0
     assert "canceled" in res.output.lower()
 
-    res_list = CliRunner().invoke(owner, ["sub", "list", "--user", "rob"])
+    res_list = CliRunner().invoke(owner, ["sub", "list", "--user", "alice"])
     assert "canceled" in res_list.output
 
 
@@ -121,9 +121,9 @@ def test_sub_cancel_wrong_tenant_refused(tmp_path, monkeypatch):
 
 
 def test_sub_cancel_unknown_id(tmp_path, monkeypatch):
-    db_path, _sub_id = _make_db_with_sub(tmp_path, user_id="rob")
+    db_path, _sub_id = _make_db_with_sub(tmp_path, user_id="alice")
     monkeypatch.setenv("DB_PATH", str(db_path))
 
-    res = CliRunner().invoke(owner, ["sub", "cancel", "sub_doesnotexist", "--user", "rob"])
+    res = CliRunner().invoke(owner, ["sub", "cancel", "sub_doesnotexist", "--user", "alice"])
     assert res.exit_code == 0
     assert "no active subscription" in res.output.lower()

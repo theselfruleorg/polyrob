@@ -1,6 +1,6 @@
 """Phase 2 (path-concerns upgrade): auto-gitignore .polyrob/ on first CLI use.
 
-`.polyrob/` was only added to .gitignore by `rob init`; bare `polyrob run`/`rob chat`
+`.polyrob/` was only added to .gitignore by `polyrob init`; bare `polyrob run`/`polyrob chat`
 created `.polyrob/` but never ignored it. The helper must be idempotent, only write
 inside an actual git work tree, and never raise.
 """
@@ -74,7 +74,7 @@ def test_no_false_match_on_similar_entry(tmp_path):
 
 
 def test_require_git_repo_false_writes_without_git(tmp_path):
-    # `rob init` opt-in path: write even without a .git marker.
+    # `polyrob init` opt-in path: write even without a .git marker.
     ensure_rob_gitignored(tmp_path, require_git_repo=False)
     assert ".polyrob/" in (tmp_path / ".gitignore").read_text()
 

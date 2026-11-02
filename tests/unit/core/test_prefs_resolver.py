@@ -112,7 +112,7 @@ def test_resolve_without_instance_id_honors_custom_instance(home, monkeypatch):
     cron/delivery.py, tools/controller/approval.py, tools/controller/service.py)
     never thread an explicit instance_id through — they must still see a pref
     written under a non-default POLYROB_INSTANCE_ID, not silently fall back to
-    the "rob" literal default and ignore it."""
+    a hardcoded literal default and ignore it."""
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "custom")
     write_preference(home, "u1", "budget.wallet_daily_usd", 5.0)
     val, src = resolve_with_source("budget.wallet_daily_usd", "u1", home,

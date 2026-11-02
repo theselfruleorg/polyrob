@@ -130,7 +130,7 @@ def test_dingtalk_is_never_an_owner_alias_surface():
     from core.instance import owner_surface_alias
     assert owner_surface_alias(OWNER, "dingtalk",
                                env={"OWNER_DINGTALK_ID": OWNER,
-                                    "POLYROB_OWNER_USER_ID": "rob"}) is None
+                                    "POLYROB_OWNER_USER_ID": "alice"}) is None
 
 
 # --- the client: token, session webhook, proactive, chunking -------------------

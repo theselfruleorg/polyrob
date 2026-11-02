@@ -101,5 +101,5 @@ with `${VAR}` placeholder syntax resolved from environment variables at startup.
 - Store all secrets (API keys, wallet keys, tokens) in environment variables or a secrets
   manager — never in source code or config files committed to version control.
 - Run POLYROB behind a reverse proxy (nginx/Caddy) with TLS in production.
-- The default API key format (`rob_...`) provides a simple authentication layer; for
+- The default self-service API key format provides a simple authentication layer; for
   production, pair it with network-level controls.

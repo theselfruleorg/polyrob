@@ -134,7 +134,7 @@ def test_explicit_owner_id_leads_and_dedupes(monkeypatch):
 
 
 def test_non_numeric_ids_are_dropped(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "alice")
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111,@someone, ,222")
     assert _menu_chat_ids() == [111, 222]
 

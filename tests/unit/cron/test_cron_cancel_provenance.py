@@ -1,9 +1,9 @@
 """Who cancelled a cron job — answerable from the job itself (2026-10-06).
 
-Prod: the owner asked Rob 'who canceled the promo content job?'. Maintenance had
+Prod: the owner asked the agent 'who canceled the promo content job?'. Maintenance had
 cancelled 228b02251501 from the CLI at 10-05 20:29Z. The service did record a
 `cron_cancelled` event, but with `via=""`, and `cronjob_show` never read it, so
-Rob could only guess.
+The agent could only guess.
 """
 import types
 

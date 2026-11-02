@@ -61,7 +61,12 @@ def message_mentions_bot(msg: dict, *, bot_username: Optional[str],
 
 
 def is_reply_to_bot(msg: dict, *, bot_username: Optional[str], bot_id: Optional[int]) -> bool:
-    frm = (msg.get("reply_to_message") or {}).get("from") or {}
+    reply = msg.get("reply_to_message") or {}
+    # A forum topic's messages all "reply" to the topic root. A topic the bot
+    # opened would otherwise make every line in it address the bot.
+    if reply.get("forum_topic_created") is not None:
+        return False
+    frm = reply.get("from") or {}
     if not frm.get("is_bot"):
         return False
     if bot_id is not None and frm.get("id") == bot_id:

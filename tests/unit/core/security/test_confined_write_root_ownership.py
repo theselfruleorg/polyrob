@@ -31,7 +31,7 @@ def test_root_write_matches_parent_group_and_opens_group_bits(tmp_path, monkeypa
     monkeypatch.setattr(cw.os, "fstat", lambda fd: _fake_stat(4242))
     chown = MagicMock(); chmod = MagicMock()
     monkeypatch.setattr(cw.os, "chown", chown); monkeypatch.setattr(cw.os, "chmod", chmod)
-    target = tmp_path / "user_rob" / "skill-x" / "SKILL.md"
+    target = tmp_path / "user_alice" / "skill-x" / "SKILL.md"
     cw.write_confined_text(target, tmp_path, "hello")
     assert target.read_text() == "hello"
     # the new directories and the file were re-grouped to the parent's gid …

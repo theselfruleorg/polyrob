@@ -188,6 +188,25 @@ class CronScheduler:
         self._approval_deferred = False
         #: 056 WS5: async hook(job) -> [goal ids] set by the runtime (None = never yield).
         self._yield_hook = None
+        #: Routines review 2026-10-29: async hook(job, outcome, reason, at) for a failed run.
+        self._failure_hook = None
+
+    def set_failure_hook(self, hook) -> None:
+        """``async hook(job, outcome, reason, at)`` — called after a run that
+        FAILED (or ended partial) is recorded; the runtime wires the owner
+        notice (``cron.delivery.notify_failed_run``). None = no notice."""
+        self._failure_hook = hook
+
+    async def _tell_failure(self, job: CronJob, now: datetime, success: bool) -> None:
+        hook = getattr(self, "_failure_hook", None)
+        note = job.run_note or {}
+        outcome = note.get("outcome") or ("done" if success else "failed")
+        if hook is None or outcome not in ("failed", "partial"):
+            return
+        try:
+            await hook(job, outcome, note.get("reason") or "", now)
+        except Exception:
+            logger.warning("cron job %s: failure notice failed", job.id, exc_info=True)
 
     def set_yield_hook(self, hook) -> None:
         """056 WS5: ``async hook(job) -> list[goal_id]`` — the goal dispatcher's
@@ -251,7 +270,7 @@ class CronScheduler:
                 if not (yielded and not is_interactive_busy()):
                     return TickResult(skipped_busy=True, yielded=yielded)
             # C2: also hold the cross-process workspace lock so a cron run in this
-            # process doesn't mutate the shared CWD workspace while a `rob` REPL in
+            # process doesn't mutate the shared CWD workspace while a `polyrob` REPL in
             # another process is mid-turn. Non-blocking (timeout=0). Acquire is
             # fail-open (any lock error -> defer the tick); errors from the run
             # itself propagate normally (not masked by the lock handling).
@@ -331,6 +350,7 @@ class CronScheduler:
                 continue
             self._approval_deferred = False
             self._record(job, now, success)
+            await self._tell_failure(job, now, success)
             (result.ran if success else result.failed).append(job.id)
         return result
 
@@ -365,7 +385,9 @@ class CronScheduler:
                                   duration_s=round(time.time() - started, 3))
                 return False
             logger.warning("cron job %s timed out after %ss", job.id, cap)
-            from agents.task.runtime.stop_reason import StopReason
+            from agents.task.runtime.stop_reason import StopReason, describe_stop_reason
+            job.run_note = {"outcome": "failed",
+                            "reason": f"{describe_stop_reason(StopReason.WALL_CLOCK)} ({cap:g}s)"}
             self._terminal_ev(job, "cut_by_cap", f"{cap}s",
                               cap_s=cap, stop_reason=StopReason.WALL_CLOCK.value,
                               duration_s=round(time.time() - started, 3))
@@ -379,6 +401,8 @@ class CronScheduler:
             raise
         except Exception as e:  # runner blew up — never crash the tick
             logger.error("cron job %s raised: %s", job.id, e, exc_info=True)
+            job.run_note = {"outcome": "failed",
+                            "reason": f"the run raised {type(e).__name__}: {str(e)[:80]}"}
             self._terminal_ev(job, "failed", f"{type(e).__name__}: {str(e)[:120]}",
                               duration_s=round(time.time() - started, 3))
             return False
@@ -449,9 +473,13 @@ class CronScheduler:
                 *, deferred: bool = False) -> None:
         # 080 WS-2: the last outcome lives on the job row (a recurring job is
         # back to 'scheduled' after every run, so status alone cannot say).
+        # Routines review 2026-10-29: with the reason a run did not finish.
+        note = job.run_note or {}
+        outcome = ("deferred" if deferred
+                   else note.get("outcome") or ("done" if success else "failed"))
         try:
-            self.store.record_outcome(
-                job.id, "deferred" if deferred else ("done" if success else "failed"), now)
+            self.store.record_outcome(job.id, outcome, now,
+                                      reason=None if deferred else note.get("reason"))
         except Exception:
             logger.debug("last-outcome write failed for %s", job.id, exc_info=True)
         if job.one_shot:

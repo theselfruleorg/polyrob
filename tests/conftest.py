@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the ROB test suite."""
+"""Shared pytest fixtures for the POLYROB test suite."""
 import asyncio
 import importlib
 import itertools

@@ -44,7 +44,8 @@ class KeywordRecallMixin:
                       sort: str = None, allow_browse: bool = True,
                       exclude_session_id: str = None, before_id: int = None,
                       scope=None, demote_automation: bool = True,
-                      prefer_job_id: str = None, prefer_goal_id: str = None) -> list:
+                      prefer_job_id: str = None, prefer_goal_id: str = None,
+                      max_age_days: float = None, drop_unverified: bool = False) -> list:
         """FTS5 recall -> ranked list of ``{"content", "ts", "rowid"}`` dicts (no
         formatting). ``ts`` comes from the B2 provenance sidecar (None for legacy
         rows). Discover when `query` has >=3-char terms; otherwise browse
@@ -95,10 +96,27 @@ class KeywordRecallMixin:
         Provenance is fetched in a SECOND query by rowid (not a JOIN) — FTS5 MATCH
         does not compose reliably with JOIN/aliasing, and rank ordering must stay
         exactly as before.
+
+        F7 (prod review 2026-10-29): an owner-chat reader passes ``max_age_days``
+        (an EPISODIC row — ``recall_rank.EPISODIC_MARK`` — only when its
+        provenance stamp is that recent; a durable fact has no age limit) and ``drop_unverified`` (no ``[unverified]`` row). Both are
+        WHERE predicates, so the candidate pool is filled from the rows that
+        qualify, not cut after ranking.
         """
         terms = self._query_terms(query)
         _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
         _excl_arg = (exclude_session_id,) if exclude_session_id else ()
+        if drop_unverified:
+            from modules.memory.recall_rank import UNVERIFIED_MARK
+            _excl_sql += " AND substr(m.content, 1, ?) != ?"
+            _excl_arg += (len(UNVERIFIED_MARK), UNVERIFIED_MARK)
+        if max_age_days is not None and float(max_age_days) > 0:
+            # Review M5: only an episodic row (a run's phase summary) ages out;
+            # a durable fact (an address, a handle, a preference) never does.
+            from modules.memory.recall_rank import EPISODIC_MARK
+            _excl_sql += (" AND (instr(m.content, ?) = 0 OR m.rowid IN "
+                          "(SELECT mem_rowid FROM mem_provenance WHERE ts >= ?))")
+            _excl_arg += (EPISODIC_MARK, int(time.time() - float(max_age_days) * 86400))
         _before_sql = " AND m.rowid < ?" if before_id is not None else ""
         _before_arg = (before_id,) if before_id is not None else ()
         # 025: the scope predicate rides the cursor slot on all three shapes.
@@ -164,6 +182,13 @@ class KeywordRecallMixin:
                 logger.debug("mem provenance lookup skipped: %s", e)
         out = [{"content": r["content"], "ts": ts_by_rowid.get(r["rowid"]),
                 "rowid": r["rowid"]} for r in rows]
+        if drop_unverified:
+            # One stored row can join several summaries; drop the unverified lines.
+            from modules.memory.recall_rank import strip_unverified
+            for o in out:
+                o["content"] = strip_unverified(o["content"])
+            keep = [i for i, o in enumerate(out) if o["content"]]
+            out, rows = [out[i] for i in keep], [rows[i] for i in keep]
         if terms and sort not in ("newest", "oldest"):
             from modules.memory.recall_rank import rerank
             keys = rows[0].keys() if rows else ()

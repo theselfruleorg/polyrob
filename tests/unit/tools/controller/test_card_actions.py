@@ -26,20 +26,22 @@ class _Controller:
     def __init__(self, sid="s-owner", public=False):
         self.registry = _Registry()
         self.container = type("C", (), {"get_service": staticmethod(lambda name: None)})()
-        self.user_id = "rob"
+        self.user_id = "alice"
         self.session_id = sid
         self.orchestrator = type("O", (), {"_public_session": public,
                                            "_forged_turn_kind": None})()
 
 
 def _ctx(sid="s-owner", role="orchestrator", is_sub_agent=False):
-    return type("Ctx", (), {"user_id": "rob", "role": role, "is_sub_agent": is_sub_agent,
+    return type("Ctx", (), {"user_id": "alice", "role": role, "is_sub_agent": is_sub_agent,
                             "session_id": sid, "metadata": {}})()
 
 
 @pytest.fixture(autouse=True)
 def _owner(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
+    # A /send proposal reads a spend-grade price; never the network in a test.
+    monkeypatch.setattr("tools.controller.card_actions._SEND_PRICE_FN", lambda c, a: None)
     sent = []
 
     async def _deliver(container, user_id, text, **kw):
@@ -64,9 +66,9 @@ def test_choice_returns_the_tapped_option_into_the_turn(_owner):
 
     def _tap_soon():
         for _ in range(100):
-            open_ = cards.store().open_cards("rob")
+            open_ = cards.store().open_cards("alice")
             if open_:
-                cards.press(open_[0].card_id, "2", "rob")
+                cards.press(open_[0].card_id, "2", "alice")
                 return
             time.sleep(0.05)
 
@@ -86,7 +88,7 @@ def test_choice_times_out_closed_without_an_answer(monkeypatch):
     res = asyncio.run(fn(model(question="Which one?", options=["A", "B"], wait_seconds=10),
                          execution_context=_ctx()))
     assert "No pick" in res.extracted_content
-    assert cards.store().open_cards("rob") == []
+    assert cards.store().open_cards("alice") == []
 
 
 def test_choice_uses_the_terminal_prompt_when_there_is_one(monkeypatch, _owner):
@@ -142,10 +144,10 @@ def test_proposal_is_a_card_with_no_confirm(_owner):
     res = asyncio.run(fn(model(command=f"/send 0.5 native to {addr} on base",
                                why="rebalance to base"), execution_context=_ctx()))
     assert res.error is None and "NOTHING was sent" in res.extracted_content
-    card, = cards.store().open_cards("rob")
+    card, = cards.store().open_cards("alice")
     assert card.kind == cards.KIND_PROPOSAL and card.origin == cards.ORIGIN_AGENT
     assert not any(a.command.endswith("_ok") for a in cards.card_actions(card))
-    assert cards.press(card.card_id, "re", "rob").run == f"/send 0.5 native to {addr} on base"
+    assert cards.press(card.card_id, "re", "alice").run == f"/send 0.5 native to {addr} on base"
 
 
 @pytest.mark.parametrize("command", [

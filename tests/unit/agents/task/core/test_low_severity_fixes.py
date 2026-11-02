@@ -3,10 +3,8 @@
 1. A judge completion whose structured output failed to bind went UNBILLED — the
    early return jumped over the metering call, even though the provider had run and
    charged for the completion.
-2. The `<environment>` block's "Tools loaded this session:" line has never rendered:
-   it read `getattr(self, "tool_ids", None)` on the Agent, which has no such
-   attribute (only SystemPrompt and MessageManager do), so the value was always None
-   and the `if tool_ids:` guard never fired.
+2. The `<environment>` block listed the loaded tools a second time (095 P0.1: the
+   line was deleted — `<tool-catalog>` marks each loaded tool `[loaded]`).
 3. A browser-state exception set `state = None` while both sibling branches build a
    minimal BrowserState. Downstream consumers dereference it unconditionally, so the
    "don't fail - just continue" comment actually described an uncaught AttributeError
@@ -62,35 +60,18 @@ async def test_meter_judge_call_is_fail_open():
 
 # --- 2. environment block tool list ------------------------------------------
 
-def test_environment_block_gets_the_real_loaded_toolset():
-    """Must read the controller (the actual source), not a non-existent Agent attr."""
-    from agents.task.agent.core import construction
+def test_environment_block_does_not_list_the_loaded_tools():
+    """095 P0.1 (SK-12): the catalog already marks every loaded tool; the
+    environment block takes no tool list, so the construction call passes none."""
+    from agents.task.agent.core import construction, env_context
 
+    assert "tool_ids" not in inspect.signature(
+        env_context.build_environment_context).parameters
+    assert "Tools loaded this session" not in inspect.getsource(env_context)
     tree = ast.parse(inspect.getsource(construction))
-    found = False
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = node.func
-        name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
-        if name != "build_environment_context":
-            continue
-        for kw in node.keywords:
-            if kw.arg == "tool_ids":
-                rendered = ast.unparse(kw.value)
-                assert "list_tools" in rendered, (
-                    f"tool_ids={rendered} — the Agent has no `tool_ids` attribute, so "
-                    "the 'Tools loaded this session' line never renders"
-                )
-                found = True
-    assert found, "build_environment_context call not found — test needs updating"
-
-
-def test_agent_still_has_no_tool_ids_attribute():
-    """Pins the premise: if an Agent.tool_ids ever appears, revisit the fix above."""
-    from agents.task.agent.service import Agent
-
-    assert not hasattr(Agent, "tool_ids")
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", getattr(n.func, "attr", "")) == "build_environment_context"]
+    assert calls and all(k.arg != "tool_ids" for n in calls for k in n.keywords)
 
 
 # --- 3. browser-state fallback ------------------------------------------------

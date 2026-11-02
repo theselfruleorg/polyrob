@@ -83,12 +83,12 @@ async def test_match_finds_exact_amount_pending_invoice(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=12.34, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=12.34, purpose="p", db=db)
         match = await invoicing.match_pending_invoice_by_amount(12.34, TREASURY, db=db)
         assert match is not None
         assert match["request_id"] == inv["request_id"]
         assert match["session_id"] == "s1"
-        assert match["user_id"] == "rob"
+        assert match["user_id"] == "alice"
     finally:
         await db.close()
 
@@ -98,7 +98,7 @@ async def test_match_returns_none_for_no_amount_match(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=12.34, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=12.34, purpose="p", db=db)
         assert await invoicing.match_pending_invoice_by_amount(99.99, TREASURY, db=db) is None
     finally:
         await db.close()
@@ -109,7 +109,7 @@ async def test_match_ignores_non_pending_rows(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         assert await invoicing.match_pending_invoice_by_amount(5.0, TREASURY, db=db) is None
     finally:
@@ -121,9 +121,9 @@ async def test_match_oldest_first_on_equal_amount_collision(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         older = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_old", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_old", amount_usd=5.0, purpose="a", db=db)
         newer = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_new", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_new", amount_usd=5.0, purpose="b", db=db)
         match = await invoicing.match_pending_invoice_by_amount(5.0, TREASURY, db=db)
         assert match["request_id"] == older["request_id"]
         assert match["request_id"] != newer["request_id"]
@@ -136,7 +136,7 @@ async def test_match_is_treasury_scoped(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p", db=db)
         assert await invoicing.match_pending_invoice_by_amount(
             5.0, "0xsome-other-treasury", db=db) is None
     finally:
@@ -154,9 +154,9 @@ async def test_jitter_inert_when_detection_disabled(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=7.5, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=7.5, purpose="a", db=db)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=7.5, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=7.5, purpose="b", db=db)
         assert first["amount_usd"] == 7.5
         assert second["amount_usd"] == 7.5
     finally:
@@ -170,9 +170,9 @@ async def test_jitter_nudges_colliding_amount_when_detection_on(tmp_path, monkey
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=7.5, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=7.5, purpose="a", db=db)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=7.5, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=7.5, purpose="b", db=db)
         assert first["amount_usd"] == 7.5
         assert second["amount_usd"] != 7.5
         assert round(second["amount_usd"] - 7.5, 6) == 0.0001
@@ -198,9 +198,9 @@ async def test_jitter_flag_off_is_overridden_when_detection_on(tmp_path, monkeyp
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=3.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=3.0, purpose="a", db=db)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=3.0, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=3.0, purpose="b", db=db)
         assert first["amount_usd"] == 3.0
         assert second["amount_usd"] != 3.0  # forced jitter, flag notwithstanding
         assert round(second["amount_usd"] - 3.0, 6) == 0.0001
@@ -218,7 +218,7 @@ async def test_jitter_forced_on_logs_a_notice(tmp_path, monkeypatch, caplog):
     try:
         with caplog.at_level("WARNING", logger="modules.x402.invoicing"):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s1", amount_usd=1.0, purpose="a", db=db)
+                user_id="alice", session_id="s1", amount_usd=1.0, purpose="a", db=db)
         assert any("forcing" in r.message.lower() and "jitter" in r.message.lower()
                    for r in caplog.records)
     finally:
@@ -234,9 +234,9 @@ async def test_jitter_flag_off_stays_inert_when_detection_also_off(tmp_path, mon
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=3.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=3.0, purpose="a", db=db)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=3.0, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=3.0, purpose="b", db=db)
         assert first["amount_usd"] == second["amount_usd"] == 3.0
     finally:
         await db.close()
@@ -301,9 +301,9 @@ async def test_concurrent_creates_same_amount_end_with_distinct_amounts(tmp_path
     try:
         results = await asyncio.gather(
             invoicing.create_payment_request(
-                user_id="rob", session_id="s1", amount_usd=9.0, purpose="a", db=db),
+                user_id="alice", session_id="s1", amount_usd=9.0, purpose="a", db=db),
             invoicing.create_payment_request(
-                user_id="rob", session_id="s2", amount_usd=9.0, purpose="b", db=db),
+                user_id="alice", session_id="s2", amount_usd=9.0, purpose="b", db=db),
         )
         amounts = {r["amount_usd"] for r in results}
         assert len(amounts) == 2, (
@@ -315,7 +315,7 @@ async def test_concurrent_creates_same_amount_end_with_distinct_amounts(tmp_path
         # metadata.tenant_id) — match on that instead of the column.
         rows = await db.fetch_all(
             "SELECT amount_usd FROM x402_payment_requests "
-            "WHERE json_extract(metadata, '$.tenant_id') = 'rob'")
+            "WHERE json_extract(metadata, '$.tenant_id') = 'alice'")
         row_amounts = {r["amount_usd"] for r in rows}
         assert row_amounts == amounts  # persisted amounts match what was returned
     finally:
@@ -336,9 +336,9 @@ async def test_concurrent_creates_distinct_amounts_are_unaffected_by_the_lock(
 
         results = await asyncio.gather(
             invoicing.create_payment_request(
-                user_id="rob", session_id="s1", amount_usd=11.0, purpose="a", db=db),
+                user_id="alice", session_id="s1", amount_usd=11.0, purpose="a", db=db),
             invoicing.create_payment_request(
-                user_id="rob", session_id="s2", amount_usd=22.0, purpose="b", db=db),
+                user_id="alice", session_id="s2", amount_usd=22.0, purpose="b", db=db),
         )
         amounts = {r["amount_usd"] for r in results}
         assert amounts == {11.0, 22.0}
@@ -360,14 +360,14 @@ async def test_jitter_never_exceeds_cap(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=10.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=10.0, purpose="a", db=db)
         assert first["amount_usd"] == 10.0
         # 10.0 collides; 10.0001 > cap -> no unique candidate -> refuse.
         with pytest.raises(ValueError):
             await invoicing.create_payment_request(
-                user_id="rob", session_id="s2", amount_usd=10.0, purpose="b", db=db)
+                user_id="alice", session_id="s2", amount_usd=10.0, purpose="b", db=db)
         # And the invariant holds: no pending invoice over the cap was created.
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert all(r["amount_usd"] <= 10.00005 for r in rows)
         assert len([r for r in rows if r["status"] == "pending"]) == 1
     finally:
@@ -381,12 +381,12 @@ async def test_jitter_only_compares_against_pending_rows(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="a", db=db)
         await invoicing.settle_payment_request(first["request_id"], db=db)
         # first is now 'completed' — a fresh invoice at the same amount has
         # no PENDING collision to disambiguate, so it keeps the exact amount
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=4.0, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=4.0, purpose="b", db=db)
         assert second["amount_usd"] == 4.0
     finally:
         await db.close()

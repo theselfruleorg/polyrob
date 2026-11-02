@@ -22,7 +22,7 @@ from core.status_render import (
     render_agent_health_note, render_health_lines, render_status_lines, render_status_text,
 )
 
-OWNER = "rob"
+OWNER = "alice"
 
 
 def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True):
@@ -38,8 +38,8 @@ def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True):
     if asks:
         board.create_ask(user_id=OWNER, what="Unblock goal: deploy one x402 endpoint",
                          why="need a public HTTPS endpoint", blocks_goal_ids=[])
-    # another tenant's ask must never leak into rob's snapshot
-    board.create_ask(user_id="someone-else", what="Not rob's ask", why="", blocks_goal_ids=[])
+    # another tenant's ask must never leak into alice's snapshot
+    board.create_ask(user_id="someone-else", what="Not alice's ask", why="", blocks_goal_ids=[])
     return board
 
 
@@ -149,7 +149,7 @@ def test_degraded_fixture_renders_every_condition(degraded):
     assert "2 cron run(s) rerouted off the pin" in text
     assert "cron: 1 enabled / 1 disabled" in text
     # tenant scoping: the other tenant's ask is invisible
-    assert "Not rob's ask" not in text
+    assert "Not alice's ask" not in text
     # money is labelled, never merged
     assert "treasury cash flow (income − spend; open positions NOT included): net $+0.50" in text
     assert "runtime cost (owner's compute bill): $2.00 last 24h · $40.00 total" in text

@@ -1,0 +1,30 @@
+{
+  "function": {
+    "description": "Read your typed preferences and settings (read-only here). operation='list' shows every preference (value/source/applies); 'get' with `key` shows one; 'explain' with `key` shows the provenance chain of ANY setting (preference or env flag) — use it to answer 'why is X off?'. A change is the owner's: propose_setting.",
+    "name": "preferences",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "default": null,
+          "description": "Setting key (e.g. 'style.verbosity'); explain also takes an env flag (e.g. 'TWITTER_ENABLED')",
+          "nullable": true,
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "list",
+            "get",
+            "explain"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

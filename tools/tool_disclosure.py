@@ -69,6 +69,13 @@ def disclosure_ceiling(controller):
         return frozenset()
 
 
+def seat_probe(controller):
+    """The seat probe ``core.security.policy_order.install_session_gates``
+    stored on *controller* (095 W2), or None."""
+    probe = getattr(controller, "_seat_denies", None)
+    return probe if callable(probe) else None
+
+
 @dataclass(frozen=True)
 class ToolStatus:
     """Resolved status for one display tool id."""
@@ -89,17 +96,16 @@ class ToolStatus:
 #: stops flipping on a 900 s TTL (which cost a cold prompt cache every time), and
 #: the rejection is told HERE instead of by silently removing the tool.
 CREDENTIAL_GATED_TOOLS = {
-    "email": ("smtp", "SMTP credentials were rejected (535). The owner must fix "
-                      "GMAIL_* / EMAIL_* credentials, or switch EMAIL_PROVIDER to "
-                      "agentmail. Do not retry this rail until then — say so and "
-                      "use another channel."),
+    "email": ("smtp", "smtp-rejected"),
 }
 
 
 def register_credential_gate(tool_id: str, kind: str, remedy: str) -> None:
     """A pack tool's row in :data:`CREDENTIAL_GATED_TOOLS` (067 P3b: the X pack
     registers ``twitter`` -> ``twitter_api`` from its registrar). ``kind`` is a
-    ``core.credential_verdicts`` verdict kind. Last registration wins."""
+    ``core.credential_verdicts`` verdict kind; ``remedy`` is a KEY of
+    ``core.tool_gates.REMEDIES`` (095 W2: one text home, one actor row).
+    Last registration wins."""
     CREDENTIAL_GATED_TOOLS[tool_id] = (kind, remedy)
 
 
@@ -123,7 +129,9 @@ def _credential_verdict_status(display_id: str) -> Optional["ToolStatus"]:
             return None
     except Exception:
         return None
-    return ToolStatus(display_id, "gated", "credentials-rejected", remedy)
+    from core.tool_gates import REMEDIES
+    return ToolStatus(display_id, "gated", "credentials-rejected",
+                      remedy_text(remedy) if remedy in REMEDIES else remedy)
 
 
 def _container_has_tool(container, display_id: str) -> bool:
@@ -169,17 +177,33 @@ def resolve_tool_status(
     loaded_ids: Set[str],
     is_leaf: bool = False,
     allowed_ids: Optional[Set[str]] = None,
+    seat_denies=None,
 ) -> ToolStatus:
     """Resolve the honest status of one tool id for this session.
 
     Order matters: an explicitly-granted (already loaded) tool reports ``loaded``
     even if it is a money tool — the grant happened at creation through the
     explicit channel; the money gate here only closes the *self-serve* load path.
+
+    ``seat_denies`` (095 W2) is the session's seat probe (``controller.
+    _seat_denies``, stored by ``core.security.policy_order.install_session_gates``):
+    ``tool_id -> "room" | "correspondent" | None``. A tool the seat refuses on
+    every call is ``gated:seat-<seat>`` first, so the catalog never offers a
+    ``load_tool`` or an operator lever the seat cannot use.
     """
     from tools.descriptors import TOOL_DESCRIPTORS, get_tool_display_name
     from core.tool_capabilities import TOOL_CAPABILITIES
 
     display = get_tool_display_name((tool_id or "").strip())
+
+    seat = None
+    if seat_denies is not None:
+        try:
+            seat = seat_denies(display)
+        except Exception:
+            seat = None
+    if seat in ("room", "correspondent"):
+        return ToolStatus(display, "gated", f"seat-{seat}", remedy_text(f"seat-{seat}"))
 
     # A browser-bearing tool in a custody process is only as available as the
     # remote browser rail. Checked BEFORE `loaded`: a loaded tool that refuses
@@ -213,6 +237,11 @@ def resolve_tool_status(
     if display in loaded_ids:
         return ToolStatus(display, "loaded")
 
+    pack = _withheld_pack(display)
+    if pack is not None:
+        return ToolStatus(display, "gated", "pack-not-loaded",
+                          remedy_text("pack-not-loaded", pack=pack[0], state=pack[1]))
+
     caps = TOOL_CAPABILITIES.get(display)
     if caps is None and display not in TOOL_DESCRIPTORS:
         return ToolStatus(display, "gated", "unknown-tool", remedy_text("unknown-tool"))
@@ -242,6 +271,15 @@ def resolve_tool_status(
             return ToolStatus(display, "gated", "leaf-blocked", remedy_text("leaf-blocked"))
 
     if _container_has_tool(container, display):
+        # 095 W3: "loadable" names load_tool; a seat that refuses load_tool on
+        # every call (room, correspondent) cannot load anything.
+        try:
+            load_seat = seat_denies("load_tool") if seat_denies is not None else None
+        except Exception:
+            load_seat = None
+        if load_seat in ("room", "correspondent"):
+            return ToolStatus(display, "gated", f"seat-{load_seat}",
+                              remedy_text(f"seat-{load_seat}"))
         return ToolStatus(display, "loadable", "", remedy_text("load_tool", tool=display))
 
     gate = _gate_line(display)
@@ -252,9 +290,26 @@ def resolve_tool_status(
         return ToolStatus(display, "gated", "unavailable-on-this-deploy", gate)
     desc = TOOL_DESCRIPTORS.get(display) or TOOL_DESCRIPTORS.get(tool_id)
     required = list(getattr(desc, "required_config", None) or [])
-    remedy = (remedy_text("needs-config", flag=", ".join(required)) if required
-              else remedy_text("not-constructed"))
-    return ToolStatus(display, "gated", "unavailable-on-this-deploy", remedy)
+    if required:
+        return ToolStatus(display, "gated", "unavailable-on-this-deploy",
+                          remedy_text("needs-config", flag=", ".join(required)))
+    return ToolStatus(display, "gated", "not-constructed", remedy_text("not-constructed"))
+
+
+def _withheld_pack(display: str) -> Optional[Tuple[str, str]]:
+    """``(pack id, its state)`` when *display* is a tool of a pack that is not
+    loaded, else None (the probe ``describe_missing_tool`` used to own). Fail-open."""
+    try:
+        from core.packs import state as _packs
+        if _packs.tool_withheld(display):
+            pack_id = str(_packs.pack_of_tool(display) or "?")
+            rec = _packs.record(pack_id)
+            state = (f"{rec.status}" + (f": {rec.reason}" if rec.reason else "")
+                     if rec else "not loaded")
+            return pack_id, state
+    except Exception:
+        logger.debug("pack probe failed for %r", display, exc_info=True)
+    return None
 
 
 def _gate_line(display: str) -> str:
@@ -349,7 +404,7 @@ def not_loaded_text(action_name: str, controller, *, is_leaf: bool = False) -> s
     st = resolve_tool_status(
         tid, container=getattr(controller, "container", None),
         loaded_ids=set(controller.list_tools() or ()), is_leaf=is_leaf,
-        allowed_ids=disclosure_ceiling(controller))
+        allowed_ids=disclosure_ceiling(controller), seat_denies=seat_probe(controller))
     if st.status == "loaded":
         return (f"'{name}' is not an action of the loaded tool '{tid}'. "
                 f"tool_describe(\"{tid}\") lists its actions.")
@@ -365,6 +420,7 @@ def render_tool_catalog(
     loaded_ids: Iterable[str],
     is_leaf: bool = False,
     allowed_ids: Optional[Set[str]] = None,
+    seat_denies=None,
 ) -> str:
     """Render the compact ``<tool-catalog>`` block — one line per display tool.
 
@@ -384,13 +440,26 @@ def render_tool_catalog(
             continue
         seen.add(display)
         st = resolve_tool_status(
-            display, container=container, loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
+            display, container=container, loaded_ids=loaded, is_leaf=is_leaf,
+            allowed_ids=allowed_ids, seat_denies=seat_denies)
         desc = _one_liner(TOOL_DESCRIPTORS[name].description)
         if st.status == "gated" and st.reason == "money":
             money_notes.setdefault(st.remedy.replace(f"'{display}'", "'<id>'"), []).append(display)
             lines.append(f"- {display}: {desc} [gated:money — see the money note]")
             continue
         lines.append((display, desc, st))
+    # A gated tool with no descriptor (e.g. x402_pay before it is constructed)
+    # still gets its one catalog line, so no tool status lives anywhere else.
+    from core.tool_capabilities import gate_disclosure_map
+    for display in sorted(set(gate_disclosure_map()) - seen):
+        st = resolve_tool_status(
+            display, container=container, loaded_ids=loaded, is_leaf=is_leaf,
+            allowed_ids=allowed_ids, seat_denies=seat_denies)
+        if st.status == "gated" and st.reason == "money":
+            money_notes.setdefault(st.remedy.replace(f"'{display}'", "'<id>'"), []).append(display)
+            lines.append(f"- {display}: [gated:money — see the money note]")
+        else:
+            lines.append((display, "", st))
     # 093: a gate text two or more tools share (an exec backend that cannot start
     # gates shell + process + code_execution) is stated ONCE, like the money note.
     _shared = {}
@@ -398,20 +467,10 @@ def render_tool_catalog(
         if isinstance(item, tuple) and item[2].status == "gated" and item[2].remedy:
             _shared.setdefault((item[2].reason, item[2].remedy), []).append(item[0])
     _shared = {k: v for k, v in _shared.items() if len(v) > 1}
-    lines = [(f"- {i[0]}: {i[1]} [gated:{i[2].reason} — see the {i[2].reason} note]"
-              if (i[2].reason, i[2].remedy) in _shared else f"- {i[0]}: {i[1]} {_status_suffix(i[2])}")
+    lines = [(f"- {i[0]}: " + (f"{i[1]} " if i[1] else "")
+              + (f"[gated:{i[2].reason} — see the {i[2].reason} note]"
+                 if (i[2].reason, i[2].remedy) in _shared else _status_suffix(i[2])))
              if isinstance(i, tuple) else i for i in lines]
-    # A gated tool with no descriptor (e.g. x402_pay before it is constructed)
-    # still gets its one catalog line, so no tool status lives anywhere else.
-    from core.tool_capabilities import gate_disclosure_map
-    for display in sorted(set(gate_disclosure_map()) - seen):
-        st = resolve_tool_status(
-            display, container=container, loaded_ids=loaded, is_leaf=is_leaf, allowed_ids=allowed_ids)
-        if st.status == "gated" and st.reason == "money":
-            money_notes.setdefault(st.remedy.replace(f"'{display}'", "'<id>'"), []).append(display)
-            lines.append(f"- {display}: [gated:money — see the money note]")
-        else:
-            lines.append(f"- {display}: {_status_suffix(st)}")
     for (reason, remedy), tools in _shared.items():
         lines.append(f"Note {reason} ({', '.join(tools)}): {remedy}")
     move = "\n" + remedy_text("money_owner_move")
@@ -444,7 +503,8 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
         display,
         container=getattr(controller, "container", None),
         loaded_ids=set(controller.list_tools()),
-        is_leaf=is_leaf, allowed_ids=disclosure_ceiling(controller))
+        is_leaf=is_leaf, allowed_ids=disclosure_ceiling(controller),
+        seat_denies=seat_probe(controller))
 
     if st.status == "loaded":
         if display == "mcp" and hasattr(controller, "sync_mcp_session"):
@@ -484,6 +544,9 @@ async def perform_load_tool(controller, tool_id: str, execution_context=None):
                    f"{why or 'no reason was recorded'}"))
 
     n_actions = len(getattr(loaded[display], "actions", None) or ()) or None
+    # 095 W4: the skill index may change with the loaded set — the agent's next
+    # step boundary re-renders it into the <state-delta> skills part.
+    controller._skill_index_stale = True
     return ActionResult(
         extracted_content=load_result_text(display, n_actions, _bridge_armed(controller)),
         include_in_memory=True)

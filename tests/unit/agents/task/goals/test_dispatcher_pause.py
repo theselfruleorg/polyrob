@@ -21,7 +21,7 @@ def home(tmp_path, monkeypatch):
 async def test_paused_dispatch_holds_inflight_once(home):
     from core import autonomy_control as ac
     board = GoalBoard(str(home / "goals.db"))
-    g = board.create(user_id="rob", title="long")
+    g = board.create(user_id="alice", title="long")
     d = GoalDispatcher(board, task_agent=object())
     assert board.claim(g.id, d._worker, ttl_seconds=60)
     started = asyncio.Event()
@@ -57,7 +57,7 @@ async def test_retry_after_pause_never_runs_two_copies(home):
     next heartbeat."""
     from core.goal_owner_verbs import pause_goal, retry_goal
     board = GoalBoard(str(home / "goals.db"))
-    g = board.create(user_id="rob", title="long")
+    g = board.create(user_id="alice", title="long")
     d = GoalDispatcher(board, task_agent=object())
     assert board.claim(g.id, d._worker, ttl_seconds=60)
 
@@ -66,8 +66,8 @@ async def test_retry_after_pause_never_runs_two_copies(home):
 
     old = asyncio.create_task(hang())
     d._goal_tasks[g.id] = old
-    assert pause_goal(board, user_id="rob", goal=board.get(g.id)).ok
-    assert retry_goal(board, user_id="rob", goal=board.get(g.id)).ok
+    assert pause_goal(board, user_id="alice", goal=board.get(g.id)).ok
+    assert retry_goal(board, user_id="alice", goal=board.get(g.id)).ok
     d._run_goal = hang
     assert await d.dispatch_once() == 1
     await asyncio.sleep(0)

@@ -66,4 +66,6 @@ def test_a_legacy_refusals_row_still_renders():
 def test_no_error_keeps_the_summary_shape():
     e = EpisodeRecord(ts=1_760_000_000, user_id="u1", session_id="s3", kind="cron",
                       outcome="done", summary="Checked the den; only joins.", meta={})
-    assert ED._render_run(e).endswith("DONE: Checked the den; only joins.")
+    line = ED._render_run(e)
+    assert line.endswith("$0.00: Checked the den; only joins.")
+    assert " DONE verified=- useful=- stop=- skills=- " in line

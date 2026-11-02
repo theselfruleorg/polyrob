@@ -44,7 +44,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:]
         # API6: only a JWT-shaped token (three dot-separated parts) is ours to
-        # judge. A `Bearer rob_…` API key or the operator service token was
+        # judge. A `Bearer <api-key>` API key or the operator service token was
         # 401'd here as "Invalid token" before the key validators and the
         # fallback gate (both further in) could accept it.
         if token.count(".") != 2:

@@ -28,7 +28,7 @@ NOW = time.time()
 def _job(**kw):
     base = dict(
         id="j-room", task="Service room The Den", schedule_spec="30m",
-        user_id="rob", next_run_at=None, one_shot=False, skip_memory=True,
+        user_id="alice", next_run_at=None, one_shot=False, skip_memory=True,
         max_duration_seconds=180,
         payload=kw.pop("payload", {"group": {"surface": "telegram",
                                              "chat_id": "-1001"}}),
@@ -81,9 +81,14 @@ def rig(tmp_path, monkeypatch):
     log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
     monkeypatch.setattr(el, "event_log_enabled", lambda: True)
+    # The <previous-runs> block reads the process-global memory provider: another
+    # test's registered provider (its run history) must not leak into the task text.
+    from modules.memory.registry import reset_memory_registry
+    reset_memory_registry()
     container = _Container(tmp_path)
     agent = _FakeTaskAgent(container)
-    return agent, container, log, str(tmp_path)
+    yield agent, container, log, str(tmp_path)
+    reset_memory_registry()
 
 
 @pytest.mark.asyncio
@@ -173,7 +178,7 @@ async def test_a_muted_room_is_a_typed_skip_event(rig, monkeypatch):
     agent, container, log, data_dir = rig
     container.ledger.append(_row(7, "anyone?", NOW - 30))
     from core.surfaces import chat_policy
-    ok, msg = chat_policy.set(data_dir, "rob", "telegram", "-1001",
+    ok, msg = chat_policy.set(data_dir, "alice", "telegram", "-1001",
                               "chat.mute_until", NOW + 3600)
     assert ok, msg
     assert await make_agent_runner(agent, data_dir=data_dir)(_job()) is True

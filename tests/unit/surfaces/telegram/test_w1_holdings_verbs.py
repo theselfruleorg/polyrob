@@ -17,10 +17,10 @@ REAL = "0x5555555555555555555555555555555555555555"
 
 @pytest.fixture(autouse=True)
 def _stores(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     pins = str(tmp_path / "wallet" / "token_pins.db")
     monkeypatch.setattr(token_pins, "token_pins_db_path", lambda data_home=None: pins)
-    op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
+    op.apply_delta("alice", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
                                            symbol="TKN", qty=1000.0, cost_usd=134.54),
                    db_path=str(tmp_path / "open_positions.db"))
     return tmp_path
@@ -30,15 +30,15 @@ def _stores(tmp_path, monkeypatch):
 async def test_writeoff_previews_then_records(_stores):
     from surfaces.telegram.holdings_ops import writeoff_verb
     data_dir = str(_stores)
-    text = await writeoff_verb(user_id="rob", data_dir=data_dir,
+    text = await writeoff_verb(user_id="alice", data_dir=data_dir,
                                args=["robinhood", FAKE])
     assert "Realized loss: $134.54" in text and "/writeoff robinhood" in text
     db = str(_stores / "open_positions.db")
-    assert op.get_position("rob", "robinhood", FAKE, db_path=db).status == "open"
-    text = await writeoff_verb(user_id="rob", data_dir=data_dir,
+    assert op.get_position("alice", "robinhood", FAKE, db_path=db).status == "open"
+    text = await writeoff_verb(user_id="alice", data_dir=data_dir,
                                args=["robinhood", FAKE, "go", "airdropped", "look-alike"])
     assert text.startswith("✅ Written off")
-    pos = op.get_position("rob", "robinhood", FAKE, db_path=db)
+    pos = op.get_position("alice", "robinhood", FAKE, db_path=db)
     assert pos.status == "written_off" and "airdropped look-alike" in pos.status_reason
 
 
@@ -46,25 +46,25 @@ async def test_writeoff_previews_then_records(_stores):
 async def test_unquarantine_undoes_a_quarantine(_stores):
     from surfaces.telegram.holdings_ops import unquarantine_verb
     db = str(_stores / "open_positions.db")
-    op.set_status("rob", "robinhood", FAKE, "quarantined", reason="look-alike", db_path=db)
-    text = await unquarantine_verb(user_id="rob", data_dir=str(_stores),
+    op.set_status("alice", "robinhood", FAKE, "quarantined", reason="look-alike", db_path=db)
+    text = await unquarantine_verb(user_id="alice", data_dir=str(_stores),
                                    args=["robinhood", FAKE])
     assert "Confirm" in text
-    text = await unquarantine_verb(user_id="rob", data_dir=str(_stores),
+    text = await unquarantine_verb(user_id="alice", data_dir=str(_stores),
                                    args=["robinhood", FAKE, "go"])
     assert "open again" in text
-    assert op.get_position("rob", "robinhood", FAKE, db_path=db).status == "open"
+    assert op.get_position("alice", "robinhood", FAKE, db_path=db).status == "open"
 
 
 def test_wallet_tokens_and_trust_ride_the_wallet_verb(_stores, monkeypatch):
     from surfaces.telegram import owner_ops
     monkeypatch.setattr("core.wallet.authority.owner_refusal", lambda uid: None)
-    text = owner_ops.wallet_reply(["tokens"], user_id="rob", data_dir=str(_stores))
+    text = owner_ops.wallet_reply(["tokens"], user_id="alice", data_dir=str(_stores))
     assert "Tokens I trust" in text
-    text = owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN"], user_id="rob",
+    text = owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN"], user_id="alice",
                                   data_dir=str(_stores))
     assert "Confirm" in text and token_pins.all_pins() == []
-    owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN", "go"], user_id="rob",
+    owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN", "go"], user_id="alice",
                            data_dir=str(_stores))
     assert token_pins.owner_pin("robinhood", REAL)["source"] == "owner_approved"
 
@@ -72,7 +72,7 @@ def test_wallet_tokens_and_trust_ride_the_wallet_verb(_stores, monkeypatch):
 @pytest.mark.asyncio
 async def test_the_repl_twin_says_the_same_thing(_stores, monkeypatch):
     from cli.ui.commands import h_holdings
-    monkeypatch.setattr("cli.ui.commands.h_owner._tenant", lambda ctx: "rob")
+    monkeypatch.setattr("cli.ui.commands.h_owner._tenant", lambda ctx: "alice")
     monkeypatch.setattr("cli.ui.commands.h_owner._admin_data_dir",
                         lambda ctx=None, write=None: str(_stores))
     out = []

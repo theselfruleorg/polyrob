@@ -24,7 +24,7 @@ def test_pinned_provider_exempt_from_intersection():
 
 
 def test_cli_store_default_skipped_when_keyless():
-    # The stale ~/.rob/cli.json bug: a keyless stored provider falls through.
+    # The stale ~/.polyrob/cli.json bug: a keyless stored provider falls through.
     assert resolve_runtime_config(
         None, None, cli_store_default=("nvidia", "kimi"),
         available_keys={"OPENROUTER_API_KEY"},
@@ -70,7 +70,7 @@ def test_last_resort_overridable():
 
 
 def test_server_path_never_reads_cli_store(monkeypatch):
-    # When cli_store_default is None (server), there is no ~/.rob/cli.json read at all.
+    # When cli_store_default is None (server), there is no ~/.polyrob/cli.json read at all.
     import core.runtime_config as rc
     # If the function tried to read a stored default itself, this guard would be moot;
     # the contract is that the caller injects it. With None + a key present -> first-key.

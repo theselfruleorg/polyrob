@@ -32,7 +32,7 @@ const COPY = {
   class_cron: "On a clock",
   class_money: "Money",
   class_message: "Messages to you",
-  class_system: "Rob itself",
+  class_system: "The agent itself",
   class_tool: "Tools it used",
   raw: "Show the raw record",
   raw_hide: "Hide the raw record",
@@ -198,7 +198,7 @@ describe("the chips are the class set, plus Everything", () => {
     const labels = nodes.map((n) => n.textContent);
     expect(labels[0]).toBe("Everything");
     expect(labels.slice(1)).toEqual(
-      ["Its own work", "On a clock", "Money", "Messages to you", "Rob itself",
+      ["Its own work", "On a clock", "Money", "Messages to you", "The agent itself",
         "Tools it used"]);
   });
 

@@ -119,7 +119,7 @@ def test_the_notice_carries_a_tap_and_no_shell_command():
     from core.self_evolution import build_pending_notification
 
     text = build_pending_notification([
-        {"kind": "skill", "id": "dm-conversation", "preview": "How Rob handles DMs"},
+        {"kind": "skill", "id": "dm-conversation", "preview": "How the agent handles DMs"},
         {"kind": "skill", "id": "meme-candidate-sourcing", "preview": "Hunting candidates"},
     ])
 

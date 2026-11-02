@@ -1,6 +1,8 @@
 """086 W3: the hunt's $0 skip signal shares the entry step's rules (one rule set)."""
 import pytest
 
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
+
 from core import trading_mandate as tm
 from core.money.mandate_gate import hunt_refusal
 from core.open_positions import PositionDelta, apply_delta
@@ -18,7 +20,7 @@ def paths(tmp_path):
 @pytest.fixture
 def mandate(paths):
     return tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=10.0, chains=["base", "solana"],
-                     slots=2, path=paths[0], now=T0)
+                     slots=2, path=paths[0], now=T0, preset="longtail")
 
 
 def _buy(book, token, cost, ts=T0 + 10):
@@ -50,7 +52,7 @@ def test_full_slots_are_not_ready(mandate, paths):
 
 def test_a_used_allocation_is_not_ready(paths):
     m = tm.create("u1", actor=tm.OWNER_SEAT, budget_usd=3.0, chains=["base"], slots=5,
-                  path=paths[0], now=T0)
+                  path=paths[0], now=T0, preset="longtail")
     _buy(paths[1], MEME, 2.5)
     r = hunt_refusal(m.id, user_id="u1", now=T0 + 100, path=paths[0], book_path=paths[1])
     assert r.ready is False and "allocation" in r.reason

@@ -298,3 +298,16 @@ async def test_token_info_carries_the_block_and_never_the_name():
     assert block and block[0].startswith("  survivability:")
     assert not any("EVIL" in l for l in block)
     assert "EVIL" not in repr(md)
+
+
+def test_unreadable_custom_lines_hold_a_clean_token_at_c(tmp_path, monkeypatch):
+    """Review fix: an install's lines that cannot be read may be stricter than the
+    defaults, so the result is PARTIAL and the ceiling is held at the lowest tier."""
+    from core import trading_presets as tp
+    path = tmp_path / tp.INSTANCE_FILE
+    path.write_text('{"screen": {"survival": {"tier_b_liquidity_usd": NaN}}}')
+    monkeypatch.setattr(tp, "instance_presets_path", lambda: str(path))
+    r = sv.assess("evm", screen=_evm_clean(), holders=_holders(), quote=QUOTE,
+                  pools=_pools(age_h=100))
+    assert r["tier_ceiling"] == "C" and "screen_lines" in r["unknown"]
+    assert "not a finite number" in r["screen_lines_error"]

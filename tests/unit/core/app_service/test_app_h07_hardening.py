@@ -44,20 +44,20 @@ def _sql(reg, sql, args):
 def test_forged_approval_is_sent_back_to_pending(rig):  # noqa: F811
     # A db writer (any polyrob-data identity) flips a PENDING row to approved.
     _sql(rig.reg, "UPDATE app_services SET status='pending', approval_mac=NULL "
-                  "WHERE slug='rob-status'", ())
-    _sql(rig.reg, "UPDATE app_services SET status='approved' WHERE slug='rob-status'", ())
+                  "WHERE slug='demo-status'", ())
+    _sql(rig.reg, "UPDATE app_services SET status='approved' WHERE slug='demo-status'", ())
     asyncio.run(rig.sup.tick())
-    row = rig.reg.get("rob-status", "owner-1")
+    row = rig.reg.get("demo-status", "owner-1")
     assert row["status"] == "pending"
     assert "not signed" in row["last_failure_error"]
     assert rig.docker.argv_of(["run", "-d"]) == []
 
 
 def test_config_moved_under_a_signed_approval_is_refused(rig):  # noqa: F811
-    _sql(rig.reg, "UPDATE app_services SET cmd=? WHERE slug='rob-status'",
+    _sql(rig.reg, "UPDATE app_services SET cmd=? WHERE slug='demo-status'",
          ('["sh", "-c", "evil"]',))
     asyncio.run(rig.sup.tick())
-    assert rig.reg.get("rob-status", "owner-1")["status"] == "pending"
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "pending"
     assert rig.docker.argv_of(["run", "-d"]) == []
 
 
@@ -65,10 +65,10 @@ def test_tampered_digest_never_reaches_the_filesystem(rig, tmp_path):  # noqa: F
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / "keep").write_text("x")
-    _sql(rig.reg, "UPDATE app_services SET workspace_digest=? WHERE slug='rob-status'",
+    _sql(rig.reg, "UPDATE app_services SET workspace_digest=? WHERE slug='demo-status'",
          (str(victim),))
     asyncio.run(rig.sup.tick())
-    row = rig.reg.get("rob-status", "owner-1")
+    row = rig.reg.get("demo-status", "owner-1")
     assert row["status"] == "failed" and "refused by supervisor" in row["last_failure_error"]
     assert (victim / "keep").read_text() == "x"
     assert rig.docker.argv_of(["run", "-d"]) == []
@@ -81,25 +81,25 @@ def test_symlinked_apps_tree_is_refused_not_followed(rig, tmp_path):  # noqa: F8
     apps.mkdir(parents=True, exist_ok=True)
     os.symlink(str(outside), str(apps / "owner-1"))
     asyncio.run(rig.sup.tick())
-    row = rig.reg.get("rob-status", "owner-1")
+    row = rig.reg.get("demo-status", "owner-1")
     assert row["status"] == "failed"
     assert list(outside.iterdir()) == []
 
 
 def test_apps_dirs_lose_group_write(rig):  # noqa: F811
     asyncio.run(rig.sup.tick())
-    assert rig.reg.get("rob-status", "owner-1")["status"] == "live"
-    for p in ("apps", "apps/owner-1", "apps/owner-1/rob-status",
-              "apps/owner-1/rob-status/snapshots"):
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "live"
+    for p in ("apps", "apps/owner-1", "apps/owner-1/demo-status",
+              "apps/owner-1/demo-status/snapshots"):
         assert not (os.stat(rig.tmp / "data" / p).st_mode & 0o022), p
 
 
 def test_logs_refresh_does_not_follow_a_planted_symlink(rig, tmp_path):  # noqa: F811
     asyncio.run(rig.sup.tick())
-    assert rig.reg.get("rob-status", "owner-1")["status"] == "live"
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "live"
     target = tmp_path / "shadow"
     target.write_text("root-owned secret\n")
-    logs = rig.tmp / "data" / "apps" / "owner-1" / "rob-status" / "logs.txt"
+    logs = rig.tmp / "data" / "apps" / "owner-1" / "demo-status" / "logs.txt"
     if logs.exists() or logs.is_symlink():
         logs.unlink()
     os.symlink(str(target), str(logs))
@@ -112,10 +112,10 @@ def test_logs_refresh_does_not_follow_a_planted_symlink(rig, tmp_path):  # noqa:
 def test_row_container_name_is_never_used(rig):  # noqa: F811
     asyncio.run(rig.sup.tick())
     _sql(rig.reg, "UPDATE app_services SET container_name='polyrob-sandbox-victim', "
-                  "status='stopped' WHERE slug='rob-status'", ())
+                  "status='stopped' WHERE slug='demo-status'", ())
     asyncio.run(rig.sup.tick())
     rms = [a for a in rig.docker.log if a[:2] == ["rm", "-f"]]
-    assert rms and all(a[2] == "polyrob-app-owner-1-rob-status" for a in rms)
+    assert rms and all(a[2] == "polyrob-app-owner-1-demo-status" for a in rms)
 
 
 def test_owner_seat_without_the_key_cannot_approve(tmp_path):
@@ -173,8 +173,8 @@ def test_health_probe_does_not_follow_redirects():
 
 
 def test_source_moved_under_signed_approval_is_refused(rig):
-    _sql(rig.reg, "UPDATE app_services SET source_dir=? WHERE slug='rob-status'",
+    _sql(rig.reg, "UPDATE app_services SET source_dir=? WHERE slug='demo-status'",
          (str(rig.proj.parent),))
     asyncio.run(rig.sup.tick())
-    assert rig.reg.get("rob-status", "owner-1")["status"] == "pending"
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "pending"
     assert rig.docker.argv_of(["run", "-d"]) == []

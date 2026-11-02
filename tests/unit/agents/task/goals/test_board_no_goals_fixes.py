@@ -25,30 +25,30 @@ def _done(board, uid, title, **kw):
 # --- list_recent / status_counts ---------------------------------------------
 
 def test_list_recent_returns_newest_first_regardless_of_priority(board):
-    old_high = board.create(user_id="rob", title="old high priority", priority=9, force=True)
-    new_low = board.create(user_id="rob", title="new low priority", priority=2, force=True)
-    rows = board.list_recent(user_id="rob", limit=10)
+    old_high = board.create(user_id="alice", title="old high priority", priority=9, force=True)
+    new_low = board.create(user_id="alice", title="new low priority", priority=2, force=True)
+    rows = board.list_recent(user_id="alice", limit=10)
     assert [g.id for g in rows] == [new_low.id, old_high.id]
 
 
 def test_list_recent_filters_statuses_and_honours_limit(board):
     for i in range(5):
-        _done(board, "rob", f"done {i}")
-    live = board.create(user_id="rob", title="still ready", force=True)
-    rows = board.list_recent(user_id="rob", statuses=(STATUS_READY,), limit=10)
+        _done(board, "alice", f"done {i}")
+    live = board.create(user_id="alice", title="still ready", force=True)
+    rows = board.list_recent(user_id="alice", statuses=(STATUS_READY,), limit=10)
     assert [g.id for g in rows] == [live.id]
-    assert len(board.list_recent(user_id="rob", limit=3)) == 3
+    assert len(board.list_recent(user_id="alice", limit=3)) == 3
 
 
 def test_list_recent_is_tenant_scoped(board):
     board.create(user_id="other", title="not yours", force=True)
-    mine = board.create(user_id="rob", title="mine", force=True)
-    assert [g.id for g in board.list_recent(user_id="rob", limit=10)] == [mine.id]
+    mine = board.create(user_id="alice", title="mine", force=True)
+    assert [g.id for g in board.list_recent(user_id="alice", limit=10)] == [mine.id]
 
 
 def test_status_counts_counts_every_row_not_a_window(board):
     for i in range(3):
-        _done(board, "rob", f"done {i}")
-    board.create(user_id="rob", title="ready one", force=True)
-    board.create_ask(user_id="rob", what="an ask")  # not a goal
-    assert board.status_counts(user_id="rob") == {STATUS_DONE: 3, STATUS_READY: 1}
+        _done(board, "alice", f"done {i}")
+    board.create(user_id="alice", title="ready one", force=True)
+    board.create_ask(user_id="alice", what="an ask")  # not a goal
+    assert board.status_counts(user_id="alice") == {STATUS_DONE: 3, STATUS_READY: 1}

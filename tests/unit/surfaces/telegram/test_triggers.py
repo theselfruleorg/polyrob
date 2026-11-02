@@ -27,7 +27,7 @@ def test_caption_entities_count():
 
 
 def test_text_mention_by_numeric_id():
-    msg = {"text": "Rob help", "entities": [{"type": "text_mention", "offset": 0, "length": 3,
+    msg = {"text": "Nova help", "entities": [{"type": "text_mention", "offset": 0, "length": 4,
                                              "user": {"id": 1, "is_bot": True}}]}
     assert message_mentions_bot(msg, bot_username="robbot", bot_id=1) is True
 

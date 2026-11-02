@@ -14,7 +14,7 @@
  *      value no store carries reads `—` WITH its reason, never `$0.00` and
  *      never a blank — a confident zero on the page where a wrong number costs
  *      real money is the worst failure the screen has.
- *   3. the CHAINS Rob checked, with the cache age. An unreadable chain is a
+ *   3. the CHAINS the agent checked, with the cache age. An unreadable chain is a
  *      dashed group with its reason; the positions total then names what it
  *      left out. A read that failed is `unverified`, never zero, never green.
  *
@@ -279,7 +279,7 @@ export function positionsSection(data, copy) {
 }
 
 /**
- * The chains Rob checked, and when. A chain that read is shown plainly; a chain
+ * The chains the agent checked, and when. A chain that read is shown plainly; a chain
  * whose read failed is a DASHED group with its reason — never a zero balance,
  * which would read exactly like an empty wallet. This is the read STATE of each
  * money chain from the reader's `chains` block, with the cache age; spendable
@@ -466,7 +466,7 @@ function moneyNode(value, reason) {
 
 function byId(id) { return document.getElementById(id); }
 
-// --- Moves: in flight (bridges) + recent moves + what Rob has made ---------- #
+// --- Moves: in flight (bridges) + recent moves + what the agent has made ---------- #
 
 /** One open cross-chain bridge. A bridge past its deadline is 'in flight', never
  *  'failed' — a re-sent bridge pays twice — so this states that plainly and
@@ -582,7 +582,7 @@ export function recentMovesSection(data, copy, nowMs) {
   return section;
 }
 
-/** One creation Rob made on-chain: the verb, the chain, the address, when, and
+/** One creation the agent made on-chain: the verb, the chain, the address, when, and
  *  its cost. The address links out when the reader could build an explorer URL. */
 export function creationRow(c, copy, nowMs) {
   const tr = el("tr");
@@ -611,7 +611,7 @@ export function creationRow(c, copy, nowMs) {
   return tr;
 }
 
-/** What Rob has made — creations over the SAME wallet_spend events the status
+/** What the agent has made — creations over the SAME wallet_spend events the status
  *  snapshot reads. Unavailable (creations === null) is dashed with its reason;
  *  "nothing deployed" and "cannot see what I created" are different facts. */
 export function madeSection(data, copy, nowMs) {
@@ -655,7 +655,7 @@ export function madeSection(data, copy, nowMs) {
   return section;
 }
 
-/** Draw Moves: in flight (bridges), recent moves (wallet_spend), what Rob made
+/** Draw Moves: in flight (bridges), recent moves (wallet_spend), what the agent made
  *  (creations). Each is its own reader, so one failing is dashed on its own and
  *  never blanks the others. */
 export function renderMoves(root, bridges, moves, creations, copy, opts = {}) {
@@ -821,7 +821,7 @@ function cashBook(cls, what, whose, figure, figureReason, lines) {
   return book;
 }
 
-/** One row of "what it costs you to run Rob". A failed read is `—` with its
+/** One row of "what it costs you to run the agent". A failed read is `—` with its
  *  reason; the aside carries the call count or the balance note. */
 function runtimeRow(label, value, reason, aside) {
   const tr = el("tr");
@@ -856,7 +856,7 @@ function ledgerReason(ledger) {
 
 /**
  * Draw Cash. `ledger` is the /api/webgate/ledger body. TWO blocks that are
- * NEVER summed: treasury (Rob's cash flow) and runtime (the owner's compute
+ * NEVER summed: treasury (the agent's cash flow) and runtime (the owner's compute
  * bill). The `no-sum` line sits exactly where a naive design would put a total.
  * `available === false` renders the figures `—` with the ledger's own reason.
  */
@@ -936,7 +936,7 @@ export function renderCash(root, ledger, copy, opts = {}) {
   return "cash";
 }
 
-// --- Invoices: who owes Rob money, and the A20 machine-income gap ------------ #
+// --- Invoices: who owes the agent money, and the A20 machine-income gap ------------ #
 
 /** The typed state pill for an invoice, from its status (and deadline for a
  *  pending one). A completed invoice is the only "paid" branch. */
@@ -1217,7 +1217,7 @@ function bind() {
     if (bookState) bookState.hidden = true;
     if (bookPane) render(bookPane, data, copy, { onRecheck: reloadBook, readOnly });
   }
-  // W1: the tokens Rob trusts, under the book; its buttons and the book's
+  // W1: the tokens the agent trusts, under the book; its buttons and the book's
   // Write off / Undo buttons redraw both after the server answers.
   const tokensPane = byId("money-tokens");
   function reloadTokens() {

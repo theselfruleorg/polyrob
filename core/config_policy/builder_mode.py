@@ -16,6 +16,7 @@ access (``AGENT_COMPUTE_POSTURE``) or secrets.
 """
 import logging
 import os
+import stat
 from typing import Optional
 
 _MODES = ("off", "build", "ship")
@@ -44,15 +45,49 @@ def cert_dir_for(domain: str) -> str:
     return f"/etc/letsencrypt/live/{domain}" if domain else ""
 
 
+#: The remedy for a certificate this uid cannot reach. certbot creates
+#: ``live/`` and ``archive/`` 0700 root; the private keys inside stay 0600.
+CERT_TRAVERSE_HINT = ("certbot keeps /etc/letsencrypt/live and /etc/letsencrypt/archive "
+                      "at 0700 — run: chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive "
+                      "(the private keys stay 0600)")
+
+
+def _this_user() -> str:
+    try:
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except Exception:  # noqa: BLE001 — a name for a message only
+        return f"uid {getattr(os, 'geteuid', lambda: '?')()}"
+
+
+def cert_problem(cert: str) -> Optional[str]:
+    """Why *cert* (a ``fullchain.pem`` path) is not usable by THIS process, or None.
+
+    "Absent" and "present but not readable by this user" are different owner
+    fixes, so they are different texts: a stat that fails with EACCES means a
+    parent directory is not traversable (certbot's default), not a missing file.
+    """
+    try:
+        st = os.stat(cert)
+    except (FileNotFoundError, NotADirectoryError):
+        return f"no certificate at {cert}"
+    except PermissionError:
+        return f"certificate at {cert} is not readable by {_this_user()} ({CERT_TRAVERSE_HINT})"
+    except OSError as exc:
+        return f"certificate at {cert} cannot be checked ({exc.strerror or exc})"
+    if not stat.S_ISREG(st.st_mode):
+        return f"no certificate at {cert}"
+    if not os.access(cert, os.R_OK):
+        return f"certificate at {cert} is not readable by {_this_user()} ({CERT_TRAVERSE_HINT})"
+    return None
+
+
 def ship_clamp_reason() -> Optional[str]:
     """Why ``ship`` would clamp on THIS deployment (None = it would be granted)."""
     domain = base_domain()
     if not domain:
         return "APP_SERVICE_BASE_DOMAIN is not set"
-    cert = os.path.join(cert_dir_for(domain), "fullchain.pem")
-    if not os.path.isfile(cert):
-        return f"no certificate at {cert}"
-    return None
+    return cert_problem(os.path.join(cert_dir_for(domain), "fullchain.pem"))
 
 
 def effective_builder_mode() -> str:

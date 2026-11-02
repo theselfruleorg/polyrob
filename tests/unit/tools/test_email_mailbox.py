@@ -120,7 +120,7 @@ def _al():
 
 class _Ctx:
     def __init__(self, session_id="s1"):
-        self.user_id = "rob"
+        self.user_id = "alice"
         self.session_id = session_id
         self.is_sub_agent = False
         self.role = "orchestrator"
@@ -245,7 +245,7 @@ async def test_reply_to_an_allowed_sender_is_threaded(monkeypatch):
     monkeypatch.delenv("POLYROB_OWNER_EMAIL", raising=False)
     monkeypatch.delenv("BOT_OWNER_EMAIL", raising=False)
     al = _al()
-    al.allow("rob", "email", "noreply@ethereum-magicians.org", note="test")
+    al.allow("alice", "email", "noreply@ethereum-magicians.org", note="test")
     tool = _tool(container=_FakeContainer(allowlist=al))
     tool.smtp_connection = smtp = _FakeSMTP()
     res = await tool.email_reply(EmailReplyAction(uid="42", body="done"), execution_context=_Ctx())
@@ -397,7 +397,7 @@ async def test_agentmail_read_accepts_a_gmail_message_id():
     mid = "<CAJx+Ab=cD_e-F@mail.gmail.com>"
 
     class _AM:
-        address = "rob@agentmail.to"
+        address = "alice@agentmail.to"
 
         async def get_message(self, message_id):
             assert message_id == mid

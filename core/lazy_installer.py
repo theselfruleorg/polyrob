@@ -119,6 +119,11 @@ def child_env() -> Dict[str, str]:
     env = {k: os.environ[k] for k in keep if k in os.environ and not SECRET_KEY_RE.search(k)}
     env.setdefault("PATH", "/usr/bin:/bin")
     env["PYTHONNOUSERSITE"] = "1"
+    if "TMPDIR" not in env:
+        from core.runtime_paths import install_tmp_dir
+        tmp = install_tmp_dir()  # pip unpacks wheels there: never a small tmpfs /tmp
+        if tmp is not None:
+            env["TMPDIR"] = str(tmp)
     return env
 
 

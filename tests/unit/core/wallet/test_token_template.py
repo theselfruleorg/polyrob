@@ -77,9 +77,9 @@ def _decode(args_hex: str):
 
 
 def test_constructor_args_round_trip():
-    args = T.encode_constructor_args(name="Rob Coin", symbol="ROB",
+    args = T.encode_constructor_args(name="Demo Coin", symbol="DEMO",
                                      decimals=18, supply_raw=10 ** 27)
-    assert _decode(args) == ("Rob Coin", "ROB", 18, 10 ** 27)
+    assert _decode(args) == ("Demo Coin", "DEMO", 18, 10 ** 27)
 
 
 def test_a_multibyte_name_refuses():

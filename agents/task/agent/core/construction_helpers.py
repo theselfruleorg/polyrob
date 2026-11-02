@@ -318,6 +318,10 @@ class AgentConstructionHelpersMixin:
 		self._recent_action_names = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # names, for _has_active_browser_usage
 		self._action_repetition_counter = 0
 		self._max_allowed_repetitions = LoopDetectionConfig.MAX_ALLOWED_REPETITIONS
+		self._loop_escalation = None  # the identical-call escalation (loop_detection.py)
+		self._loop_blocked_step = False
+		self._loop_stop_text = None
+		self._last_step_key = None
 		self._last_browser_states = deque(maxlen=3)  # MODIFIED: Use bounded deque instead of list
 		self._unchanged_state_count = 0
 		self._state_change_threshold = LoopDetectionConfig.STATE_CHANGE_THRESHOLD

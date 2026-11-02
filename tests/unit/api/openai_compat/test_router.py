@@ -9,7 +9,7 @@ class _FakeAgent:
     def __init__(self): self.calls = []
     async def chat_once(self, user_id, text, chat_id=None, provider=None, model=None):
         self.calls.append((user_id, text, chat_id, provider, model))
-        return "hello from rob"
+        return "hello from alice"
 
 
 class _FakeContainer:
@@ -48,7 +48,7 @@ def test_chat_completions_non_streaming(client_and_agent):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["object"] == "chat.completion"
-    assert body["choices"][0]["message"]["content"] == "hello from rob"
+    assert body["choices"][0]["message"]["content"] == "hello from alice"
     # last user message forwarded; chat_id = the OpenAI `user` field; B3:
     # body.model="gpt-4" is mapped by map_model() to (openai, gpt-4) and
     # threaded through to chat_once.
@@ -107,7 +107,7 @@ def test_stream_true_returns_sse(client_and_agent):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert '"object":"chat.completion.chunk"' in resp.text
-    assert '"content":"hello from rob"' in resp.text
+    assert '"content":"hello from alice"' in resp.text
     assert "data: [DONE]" in resp.text
 
 

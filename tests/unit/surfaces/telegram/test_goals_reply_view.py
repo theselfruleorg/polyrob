@@ -10,7 +10,7 @@ from surfaces.telegram.harness import _goals_reply
 
 
 def _done(board, title, priority=5):
-    g = board.create(user_id="rob", title=title, priority=priority, force=True)
+    g = board.create(user_id="alice", title=title, priority=priority, force=True)
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_success(g.id, result="ok", claim_token=board.get(g.id).claim_token)
     return g
@@ -20,11 +20,11 @@ def test_goals_reply_counts_every_row_and_lists_open_newest_first(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
     for i in range(1200):
         _done(board, f"finished {i}")
-    older = board.create(user_id="rob", title="older ready", priority=9, force=True)
-    newer = board.create(user_id="rob", title="Treasury: refresh the watchlist",
+    older = board.create(user_id="alice", title="older ready", priority=9, force=True)
+    newer = board.create(user_id="alice", title="Treasury: refresh the watchlist",
                          priority=2, force=True)
 
-    text = _goals_reply("rob", str(tmp_path), board=board)
+    text = _goals_reply("alice", str(tmp_path), board=board)
 
     assert "1202 goal(s)" in text
     assert "done=1200" in text and "ready=2" in text
@@ -33,4 +33,4 @@ def test_goals_reply_counts_every_row_and_lists_open_newest_first(tmp_path):
 
 def test_goals_reply_empty_board(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
-    assert _goals_reply("rob", str(tmp_path), board=board) == "No goals yet."
+    assert _goals_reply("alice", str(tmp_path), board=board) == "No goals yet."

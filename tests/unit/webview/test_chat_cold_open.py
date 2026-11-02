@@ -4,7 +4,7 @@ What a person met on opening the console was a FORM: a model picker, a tool
 checkbox grid and a max-steps slider, before a single word had been exchanged
 ("the cold open is a
 config form"). The cold open is now one true sentence made of real numbers, in
-Rob's voice, and a composer.
+the agent's voice, and a composer.
 
 So the tests here are of two kinds:
 

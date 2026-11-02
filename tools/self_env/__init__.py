@@ -3,15 +3,14 @@
 The narrow, audited path for the agent to manage its OWN service — distinct
 approvable verbs, NEVER raw bash, so each host-touching action is individually
 gated and logged:
-- ``self_env_install_dep`` / ``self_env_patch_source`` — create exact, durable
-  maintenance proposals only; they never install packages or edit live code;
 - ``self_env_read_source`` — reads bounded, install-tree-confined source with
   secrets/config hard-denied;
 - ``self_env_restart_service`` — after the owner approves the call, asks the
   running service for a drained restart (077, ``core.lifecycle``); the service
-  finishes its work, exits 75 and its supervisor starts it again;
-- ``self_env_git_pull`` — refuses and directs the owner to ``/update`` (the
-  trusted update path: snapshot, migrate, verify, rollback).
+  finishes its work, exits 75 and its supervisor starts it again.
+
+Updates and dependency changes are the owner's ``/update`` (the trusted update
+path: snapshot, migrate, verify, rollback); the agent has no verb for them.
 
 Gated by ``compute_posture_allows(ctx, 2)`` AND (via the Controller's posture-2
 approval wiring, WS-6) an owner approval decision. Registered only at
@@ -48,8 +47,8 @@ def register_self_env_tool(force: bool = False) -> bool:
         SelfEnvTool,
         ToolDescriptor(
             name="self_env",
-            description="Review agent source and create maintenance proposals; live updates "
-                        "require the trusted supervisor (approval-gated)",
+            description="Read agent source and ask for a restart of its own service; "
+                        "updates are the owner's /update (approval-gated)",
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,

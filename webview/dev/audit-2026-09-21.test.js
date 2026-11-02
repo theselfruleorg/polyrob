@@ -96,8 +96,8 @@ describe("A19 (superseded) — the face section has no control", () => {
   // The keep/reroll ceremony is gone with the generator: the avatar is one
   // image set from the CLI, Telegram or the agent, and the console only shows it.
   const COPY = {
-    id_face_title: "Rob's face", id_face_body: "One image, used everywhere.",
-    id_persona_title: "How Rob should behave", id_learned_title: "What Rob learned",
+    id_face_title: "The agent's face", id_face_body: "One image, used everywhere.",
+    id_persona_title: "How the agent should behave", id_learned_title: "What the agent learned",
   };
 
   it("draws the face section with no reroll or keep button", () => {
@@ -416,10 +416,10 @@ describe("A24 — a file can be attached again", () => {
 // --- revalidation, 2026-09-21: residue found re-reading the audit commit ---- #
 
 describe("A9 residue — 'not configured' is not 'unreadable'", () => {
-  const COPY = { mem_kb_title: "What Rob has read", mem_kb_aside: "{count} sources",
+  const COPY = { mem_kb_title: "What the agent has read", mem_kb_aside: "{count} sources",
                  mem_kb_unreadable: "I could not read the sources.",
                  mem_kb_unreadable_why: "Why",
-                 mem_kb_empty: "Rob has not read any sources yet." };
+                 mem_kb_empty: "The agent has not read any sources yet." };
 
   it("draws the empty state with the server's reason when nothing is configured",
     async () => {

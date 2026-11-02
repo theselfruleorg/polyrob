@@ -38,7 +38,7 @@ def test_explicit_rows_report_action_confidence():
     v = classify_effect("twitter", "twitter_dm")
     assert (v.effect, v.confidence) == ("comms", "action")
     assert classify_effect("git", "git_push").effect == "public"
-    assert classify_effect("self_env", "self_env_patch_source").effect == "self"
+    assert classify_effect("self_env", "self_env_restart_service").effect == "self"
     assert classify_effect("defi_trade", "defi_trade_swap").effect == "money"
 
 

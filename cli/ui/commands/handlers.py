@@ -645,84 +645,10 @@ async def _pick_model_interactive(preselect: Optional[tuple]):
 
 
 async def _h_model(ctx: CommandContext) -> None:
-    """Swap the running session's model live + persist as the new-session default.
-
-    No args launches an interactive picker; all paths (explicit args,
-    ``provider/model`` shorthand, and the picker) converge on the same
-    persist+swap logic below.
-    """
-    from cli.config_store import (
-        set_default_model, check_provider_model, resolve_model_alias, _provider_for_model,
-        env_default_override_note,
-    )
-
-    args = ctx.args
-    if not args:
-        picked = await _pick_model_interactive(_current_model_tuple(ctx))
-        if not picked:
-            ctx.emit("Cancelled.")
-            return
-        provider, model = picked
-    elif len(args) == 1 and "/" in args[0]:
-        provider, model = args[0].split("/", 1)
-    elif len(args) == 1:
-        # No slash, single token: the only valid shape left is a `model_aliases`
-        # name (B6, e.g. `/model fav`) — expand it to (provider, model). Provider
-        # may be missing from the alias value (bare-model alias); infer it the same
-        # way an explicit `-m <model>` does.
-        alias = resolve_model_alias(args[0])
-        if not alias or not alias[1]:
-            ctx.emit(
-                f"Unknown alias '{args[0]}'. "
-                "Usage: /model <provider> <model>, /model <provider>/<model>, "
-                "or define it under model_aliases."
-            )
-            return
-        alias_provider, model = alias
-        provider = alias_provider or _provider_for_model(model)
-        if not provider:
-            ctx.emit(f"Alias '{args[0]}' has no provider and none could be inferred from '{model}'.")
-            return
-    elif len(args) >= 2:
-        provider, model = args[0], args[1]
-    else:
-        ctx.emit("Usage: /model <provider> <model>")
-        return
-    # Validate the provider (an unknown one is silently dropped on the next launch, so
-    # 'set' would be a lie) — matches the `polyrob model set-default` twin.
-    known, warning = check_provider_model(provider, model)
-    if not known:
-        ctx.emit(f"Unknown provider '{provider}'. Try /model <provider> <model> with a known provider.")
-        return
-    if warning:
-        ctx.emit(warning)
-    set_default_model(provider, model)
-    # Honest persistence: an env pin (CHAT_/DEFAULT_PROVIDER) outranks cli.json for
-    # new sessions, so don't claim "saved as the default" without the caveat.
-    override = env_default_override_note(provider)
-
-    def _with_note(msg: str) -> str:
-        return f"{msg}\n{override}" if override else msg
-
-    agent = ctx.agent
-    if agent is not None and hasattr(agent, "swap_model"):
-        res = await agent.swap_model(provider, model)
-        if res.get("ok"):
-            # Repaint the frame/toolbar NOW: SessionState.model is only set from an
-            # LLMCall event when still unset, so without this the bar would show the
-            # PRE-swap model until (and if) a later turn happened to reset it.
-            if ctx.state is not None:
-                ctx.state.model = res.get("model") or model
-                ctx.state.provider = res.get("provider") or provider
-            ctx.emit(_with_note(
-                f"Model swapped live: {model} ({provider}). Also saved as the default for new sessions."))
-            return
-        ctx.emit(_with_note(
-            f"Saved default {model} ({provider}); live swap failed ({res.get('error')}); "
-            "current session keeps its model."))
-        return
-    ctx.emit(_with_note(
-        f"Default model set: {model} ({provider}). Applies to NEW sessions (no live session to swap)."))
+    """``/model`` — the shared 094 grammar on the REPL (``cli/ui/commands/h_model.py``);
+    bare ``/model`` opens the picker."""
+    from cli.ui.commands.h_model import handle
+    await handle(ctx, pick_fn=_pick_model_interactive)
 
 
 def _h_cwd(ctx: CommandContext) -> None:
@@ -1552,7 +1478,7 @@ def build_default_registry() -> CommandRegistry:
     ))
     reg.register(Command(
         "job", h_job,
-        "Add, change, pause, resume, run now, or stop one scheduled job",
+        "Add, change, grant, pause, resume, run, or stop one scheduled job",
         usage="new <when> <what> | show|edit|pause|resume|run|stop <id>",
         group="work", raw_arguments=True,
         help_long=HELP_JOB[0], elsewhere=HELP_JOB[1],

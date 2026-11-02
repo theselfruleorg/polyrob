@@ -8,7 +8,7 @@
  *   Files    = GET /api/webgate/artifacts  (the ledger: what THIS chat wrote)
  *            + GET /api/session/{id}/workspace/tree?path=inbound  (what you gave)
  *              in three tiers: READY for you (page/report/data, with a verdict),
- *              Rob's WORKING files (code/file, newest 8 + Show all), and FROM
+ *              the agent's WORKING files (code/file, newest 8 + Show all), and FROM
  *              YOU. The folder behind the chat — on a server the ONE shared
  *              project folder — is one link with its count (070 W0.15).
  *   Timeline = GET /api/session/{id}/feed/events, one narrated line per action,
@@ -76,7 +76,7 @@ export function verdictLabel(verdict, copy) {
 }
 
 /** The ledger kinds that are a deliverable ("Ready for you"); every other kind
- *  (code, file, …) is one of Rob's working files. */
+ *  (code, file, …) is one of the agent's working files. */
 const READY_KINDS = new Set(['page', 'report', 'data']);
 
 /** How many rows a long list shows before "Show all {count}". */
@@ -87,7 +87,7 @@ export const SHOW_FIRST = 8;
  * artifact ledger only — the folder tree is no longer a source of them:
  *   - `ready`   — ledger rows of kind page / report / data, with their verdict;
  *   - `working` — every other ledger row (code, file), newest first;
- *   - `given`   — the `inbound/` folder: what you handed Rob.
+ *   - `given`   — the `inbound/` folder: what you handed the agent.
  * `artifacts` is the ledger's rows (`name`, `path` relative to this chat's
  * workspace or null, `kind`, `verdict`); `inbound` is the `?path=inbound` tree.
  */

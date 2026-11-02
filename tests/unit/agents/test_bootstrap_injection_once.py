@@ -65,6 +65,7 @@ class _FakeAgent(RunLoopMixin, MemoryPrefetchMixin):
         self._handle_control_flags = AsyncMock(return_value=False)
         self._check_context_overflow = MagicMock(return_value=False)
         self._too_many_failures = MagicMock(return_value=False)
+        self._sync_reflection_summaries = AsyncMock()   # MemoryWriterMixin's run-end drain
 
         self.history = MagicMock()
         self.history.history = []

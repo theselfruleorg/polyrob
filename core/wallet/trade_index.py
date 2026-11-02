@@ -113,7 +113,7 @@ def own_transfers_to(counterparty: Optional[str], data_dir: Optional[str] = None
                      path: Optional[str] = None) -> Optional[List[dict]]:
     """Our own recorded outbound transfers to *counterparty*, oldest first.
 
-    Answers "did we pay X?" from the ledger (prod 2026-10-05: Rob found "no
+    Answers "did we pay X?" from the ledger (prod 2026-10-05: the agent found "no
     record" of an 80 USDC payment it had made itself, then invented a cause).
     Every outbound payment action counts (:data:`PAYMENT_ACTIONS`): a Solana
     send is recorded as ``solana_transfer``, and reading ``transfer`` alone

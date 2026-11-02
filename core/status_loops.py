@@ -59,7 +59,7 @@ def _live_started_loops(rows: List[Dict[str, Any]]) -> tuple[Optional[List[str]]
 
     *rows* are ``autonomy_started`` rows, NEWEST FIRST. One row is one process
     start, so the newest row is simply the last process to boot — which on a
-    local-mode box is routinely a short-lived `rob` REPL, not the service. Take
+    local-mode box is routinely a short-lived `polyrob` REPL, not the service. Take
     the newest row PER PID, drop a pid the kernel says is gone, and union what
     survives. A row with no usable pid is legacy (written before the field
     existed) and is always kept: it cannot be attributed, and an unattributable
@@ -249,10 +249,15 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
         sec.data.update({"cron_total": len(jobs), "cron_enabled": len(enabled),
                          "next_cron": upcoming[0] if upcoming else None})
         # The live job list for the agent's <operations> block (render_operations_block).
+        # Routines review 2026-10-29: with how its last run ended and where it
+        # reports — the agent saw "next 10-31" and not "failed 10-28, nothing posted".
         sec.data["jobs"] = [
             {"id": str(j.get("id") or ""), "name": _job_name(j),
              "schedule": str(j.get("schedule_spec") or ""),
-             "next_run_at": j.get("next_run_at"), "status": str(j.get("status") or "")}
+             "next_run_at": j.get("next_run_at"), "status": str(j.get("status") or ""),
+             "last_outcome": _job_payload(j).get("last_outcome"),
+             "last_run_at": j.get("last_run_at"),
+             "deliver": _job_payload(j).get("deliver")}
             for j in sorted(enabled, key=lambda j: str(j.get("next_run_at") or "~"))]
         line = f"cron: {len(enabled)} enabled / {len(jobs) - len(enabled)} disabled"
         if upcoming:
@@ -279,6 +284,16 @@ def autonomy_idle_reason() -> Optional[str]:
     if not cron_on and not goals_on:
         return "autonomy is off"
     return None
+
+
+def _job_payload(job: Dict[str, Any]) -> Dict[str, Any]:
+    """The job row's payload; an unreadable one says so in its last outcome."""
+    try:
+        p = json.loads(job.get("payload") or "{}") or {}
+    except Exception as e:
+        return {"last_outcome": {"outcome": "unknown",
+                                 "reason": f"payload unreadable: {type(e).__name__}"}}
+    return p if isinstance(p, dict) else {}
 
 
 def _job_name(job: Dict[str, Any]) -> str:
@@ -540,7 +555,7 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
     #
     # ⚠️ 043 T3: read the recent rows and union the LIVE PROCESSES, never
     # "whoever wrote last". Each row is one process start, so on a box
-    # where the owner opens a `rob` REPL beside the service — what local
+    # where the owner opens a `polyrob` REPL beside the service — what local
     # mode is FOR — the REPL's newer row named its own loops and the
     # service's curator/settlement/bridge checks silently stopped
     # happening. See `_live_started_loops`.
@@ -558,7 +573,7 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
     # ⚠️ The window is ONE ROW PER PROCESS, never the newest N rows and
     # never a time slice — both of those lose a LIVE process's row:
     #   * a count window (this was `LIMIT 20`) is evicted by process
-    #     STARTS, so a couple of dozen short `rob` REPL runs push the
+    #     STARTS, so a couple of dozen short `polyrob` REPL runs push the
     #     service's own row out and `expected` narrows back to
     #     gate-derived with no signal — a quieter copy of the very defect
     #     this read exists to fix;

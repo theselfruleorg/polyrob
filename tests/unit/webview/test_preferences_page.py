@@ -74,7 +74,7 @@ def test_patch_safe_key_writes_immediately(monkeypatch, tmp_path):
                      json={"key": "style.verbosity", "value": "terse"})
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True and body["applies"] == "next-turn"
+    assert body["ok"] is True and body["applies"] == "next-step"
     assert load_preferences(tmp_path, "u1").get("style.verbosity") == "terse"
 
 

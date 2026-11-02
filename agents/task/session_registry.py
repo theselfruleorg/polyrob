@@ -5,7 +5,7 @@ looked up and mutated. Today it wraps a plain in-process dict, which is what
 forces ``UVICORN_WORKERS=1`` in production (an orchestrator created in one
 worker is invisible to another). Keeping every access behind this interface
 means the future swap to a cross-process, SQLite-backed registry (WAL mode,
-jittered retry — see ``docs/ROB_CORE_SERVER_SPLIT_SPEC.md`` Phase E) is
+jittered retry — see the core/server split spec, Phase E) is
 mechanical rather than a scavenger hunt through ``task_agent_lite``.
 
 The interface is intentionally small and dict-flavoured so callers read

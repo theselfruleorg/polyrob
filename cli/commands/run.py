@@ -223,7 +223,7 @@ async def _run_session(
         click.echo(no_key_message(), err=True)
         sys.exit(1)
     if resolved_model is None:
-        # Single source of truth for provider defaults (matches `rob model list`).
+        # Single source of truth for provider defaults (matches `polyrob model list`).
         from modules.llm.llm_client_registry import get_default_model as _registry_default
         resolved_model = _registry_default(resolved_provider)
 

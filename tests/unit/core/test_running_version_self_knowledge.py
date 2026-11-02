@@ -23,6 +23,16 @@ def test_running_version_line_names_the_deployed_sha(code_root):
     assert v.running_version_line() == f"v{v.get_version()} (deployed 0123456789ab)"
 
 
+def test_running_version_is_the_imported_one_and_names_a_newer_disk(code_root, monkeypatch):
+    """095 W1a (SK-9): "running" is the version this process imported; the tree on
+    disk is named only when it differs (an upgrade not yet restarted)."""
+    monkeypatch.setattr(v, "__version__", "1.0.0")
+    monkeypatch.setattr(v, "get_version", lambda: "1.0.0")
+    assert v.running_version_line() == "v1.0.0"
+    monkeypatch.setattr(v, "get_version", lambda: "1.1.0")
+    assert v.running_version_line() == "v1.0.0; on disk: v1.1.0"
+
+
 def test_release_notes_absent_is_said_honestly(code_root):
     assert "not shipped with this install" in v.release_notes()
 
@@ -39,7 +49,10 @@ def test_release_notes_returns_one_section_capped(code_root, monkeypatch):
     assert "first" in v.release_notes("v1.0.0")
     assert "next" in v.release_notes("unreleased")
     assert "Known: unreleased, 1.1.0, 1.0.0" in v.release_notes("9.9")
-    assert "[truncated at 20 chars]" in v.release_notes("1.1.0", max_chars=20)
+    capped = v.release_notes("1.1.0", max_chars=20)
+    full = v.release_notes("1.1.0", max_chars=10_000)
+    # 095 W7 (SK-8): the marker names how much was cut.
+    assert f"[truncated at 20 chars; {len(full) - 20} more chars cut]" in capped
 
 
 def test_release_notes_on_a_deploy_lead_with_unreleased(code_root, monkeypatch):
@@ -105,7 +118,7 @@ def test_bootstrap_describe_labels_the_install_version(tmp_path):
 
 def test_identity_section_reports_the_running_version(tmp_path):
     from core.status_snapshot import _identity_section
-    sec = _identity_section("rob", str(tmp_path))
+    sec = _identity_section("alice", str(tmp_path))
     assert sec.data["version"] == v.get_version()
     assert any(line.startswith(f"running: v{v.get_version()}") for line in sec.lines)
 
@@ -141,13 +154,13 @@ def test_absent_self_context_stays_empty(tmp_path):
 
 def test_unreadable_self_md_is_not_silent(tmp_path):
     from core.instance import load_self_doc, self_tier_root
-    root = self_tier_root(tmp_path, "owner1", "rob")
+    root = self_tier_root(tmp_path, "owner1", "alice")
     root.mkdir(parents=True)
     (root / "self.md").write_bytes(b"\xff\xfe not utf-8")
-    out = load_self_doc(tmp_path, "owner1", "rob")
+    out = load_self_doc(tmp_path, "owner1", "alice")
     assert "self.md is UNREADABLE" in out
     (root / "self.md").unlink()
-    assert load_self_doc(tmp_path, "owner1", "rob") == ""
+    assert load_self_doc(tmp_path, "owner1", "alice") == ""
 
 
 def test_release_notes_drop_trailing_link_definitions(tmp_path, monkeypatch):
@@ -166,3 +179,76 @@ def test_unreadable_note_is_not_exported_or_counted_loaded():
     from core.instance import _unreadable_note, is_unreadable_note
     note = _unreadable_note(Path("self.md"), PermissionError("x"))
     assert is_unreadable_note(note) and not is_unreadable_note("my notes")
+
+
+# --- 095 W7: pending deploy + release notes since the previous deploy -----------
+
+_CL = ("## [Unreleased]\n\n### Added\n- next\n\n"
+       "## [1.1.0] — 2026-10-01\n\n### Fixed\n- this\n\n"
+       "## [1.0.0] — 2026-09-01\n\n### Added\n- first\n")
+
+
+def test_pending_deploy_line_compares_disk_to_the_startup_stamp(code_root, monkeypatch):
+    monkeypatch.setattr(v, "_STARTUP_SHA", "aaaaaaaaaaaa")
+    monkeypatch.setattr(v, "get_version", lambda: v.__version__)
+    (code_root / ".deployed_sha").write_text("aaaaaaaaaaaa\n")
+    assert v.pending_deploy_line() == ""
+    (code_root / ".deployed_sha").write_text("bbbbbbbbbbbb\n")
+    line = v.pending_deploy_line()
+    assert "commit bbbbbbbbbbbb" in line and "runs aaaaaaaaaaaa" in line
+    assert "next restart" in line
+    monkeypatch.setattr(v, "get_version", lambda: "99.0.0")
+    assert "version v99.0.0" in v.pending_deploy_line()
+
+
+def test_deployed_from_parses_and_treats_none_as_absent(code_root):
+    assert v.deployed_from() == {}
+    (code_root / ".deployed_from").write_text("sha=abc1234\nprevious=none\nsubject=x=y\n")
+    rec = v.deployed_from()
+    assert rec["sha"] == "abc1234" and "previous" not in rec and rec["subject"] == "x=y"
+
+
+def test_since_previous_without_a_record_says_it_cannot_tell(code_root):
+    (code_root / "CHANGELOG.md").write_text(_CL)
+    out = v.release_notes("since_previous")
+    assert out.startswith("Cannot tell") and "no .deployed_from" in out
+    (code_root / ".deployed_from").write_text("sha=bbbbbbb\nprevious=none\n")
+    assert "records no previous deploy" in v.release_notes("since_previous")
+
+
+def test_since_previous_without_git_or_version_is_honest(code_root):
+    (code_root / "CHANGELOG.md").write_text(_CL)
+    (code_root / ".deployed_from").write_text("sha=bbbbbbb\nprevious=aaaaaaa\n")
+    out = v.release_notes("since-previous")
+    assert out.startswith("Cannot tell") and "aaaaaaa" in out and "no git history" in out
+
+
+def test_since_previous_with_a_recorded_previous_version(code_root, monkeypatch):
+    monkeypatch.setattr(v, "__version__", "1.1.0")
+    (code_root / "CHANGELOG.md").write_text(_CL)
+    (code_root / ".deployed_from").write_text(
+        "sha=bbbbbbb\nprevious=aaaaaaa\nprevious_version=1.0.0\n")
+    out = v.release_notes("since_previous")
+    assert "aaaaaaa -> bbbbbbb" in out and "next" in out and "this" in out
+    assert "first" not in out
+
+
+def test_since_previous_reads_the_git_diff(code_root, monkeypatch):
+    (code_root / "CHANGELOG.md").write_text(_CL)
+    (code_root / ".deployed_from").write_text("sha=bbbbbbb\nprevious=aaaaaaa\n")
+    seen = {}
+
+    def _fake(prev, cur):
+        seen["args"] = (prev, cur)
+        return ["### Added", "- the new thing"]
+
+    monkeypatch.setattr(v, "_git_changelog_added", _fake)
+    out = v.release_notes("since_previous")
+    assert seen["args"] == ("aaaaaaa", "bbbbbbb")
+    assert out.endswith("### Added\n- the new thing")
+    monkeypatch.setattr(v, "_git_changelog_added", lambda p, c: [])
+    assert "No CHANGELOG.md line changed" in v.release_notes("since_previous")
+
+
+def test_git_changelog_refuses_a_ref_that_is_not_a_sha(code_root):
+    assert v._git_changelog_added("--output=/tmp/x", "HEAD") is None

@@ -1,20 +1,20 @@
 /**
  * agent.js — the Agent destination: six tabs (043 WS-AF1 / phase 4).
  *
- * Who Rob is, what it can do, what it remembers, and the rules it runs under —
+ * Who the agent is, what it can do, what it remembers, and the rules it runs under —
  * one screen, six panes:
  *
  *   - Overview — the ranked health block leads (the same build_status_snapshot
- *     every seat renders), then Rob's face and name, then the posture axes
+ *     every seat renders), then the agent's face and name, then the posture axes
  *     as one sentence per axis (never printed twice in two vocabularies, which is
  *     what doctor and /autonomy do today), then what it is connected to.
  *   - Identity — the name and face, the persona you wrote (read-only, frozen),
- *     and what Rob has learned about itself as a reviewable change. An edit is
+ *     and what the agent has learned about itself as a reviewable change. An edit is
  *     ALWAYS a proposal: it lands in a review queue, never live, and this says so.
  *   - Capabilities — skills, tools and connected services as ONE list, because
  *     to a person they are one idea: what it does, whether it is on, where it
  *     came from and when it was last used. Plus the read-only helpers.
- *   - Memory — what Rob remembers about you (its notes, add and forget here),
+ *   - Memory — what the agent remembers about you (its notes, add and forget here),
  *     what it works out on its own (recall), and what it has read.
  *   - Settings — the preferences people actually change, grouped by intent, and
  *     the money limits it cannot go past. Everything else is in Advanced.
@@ -113,7 +113,7 @@ function section(titleText, asideText) {
 
 // --- Overview --------------------------------------------------------------- #
 // The ranked health block leads (this IS A8's health card), then the face and
-// name, then the posture axes, then what Rob is connected to.
+// name, then the posture axes, then what the agent is connected to.
 
 //: The health severity → entry class. Health items are only crit or warn today
 //: (core.status_snapshot); an unknown severity is drawn as unknown, never green.
@@ -189,7 +189,7 @@ export function madeOn(iso) {
 }
 
 /**
- * Draw Rob's face and name from `/avatar.json` — the one avatar slot
+ * Draw the agent's face and name from `/avatar.json` — the one avatar slot
  * (`core/avatar.py`). The console only SHOWS the face; it is set from the CLI
  * (`polyrob avatar set`), Telegram or the agent.
  *
@@ -352,7 +352,7 @@ export function renderConnected(root, doctor, copy) {
 }
 
 // --- Identity --------------------------------------------------------------- #
-// The persona you wrote (read-only, frozen) and what Rob has learned about
+// The persona you wrote (read-only, frozen) and what the agent has learned about
 // itself (a reviewable change, edited into a review queue and never live).
 
 /** Draw the identity tab from /api/webgate/identity. `readOnly` hides the write
@@ -371,7 +371,7 @@ export function renderIdentity(root, data, copy, opts = {}) {
   const faceSec = section(copy && copy.id_face_title, copy && copy.id_face_body);
   root.appendChild(faceSec);
 
-  // The persona you wrote — READ-ONLY. It is the one document Rob never edits.
+  // The persona you wrote — READ-ONLY. It is the one document the agent never edits.
   // WV2: a failed read of either document is "could not read" with its reason
   // — never "nothing written yet", which reads as an empty document.
   const soulSec = section(copy && copy.id_persona_title, copy && copy.id_persona_aside);
@@ -386,7 +386,7 @@ export function renderIdentity(root, data, copy, opts = {}) {
   }
   root.appendChild(soulSec);
 
-  // What Rob has learned about itself — a reviewable change. Editing it proposes
+  // What the agent has learned about itself — a reviewable change. Editing it proposes
   // a new version into the review queue; it is never live until you keep it.
   const selfSec = section(copy && copy.id_learned_title, copy && copy.id_learned_aside);
   if (data.self_error) {
@@ -581,7 +581,7 @@ export function renderCapabilities(root, data, copy, opts = {}) {
 }
 
 // --- Memory ----------------------------------------------------------------- #
-// What Rob remembers about you (its notes; add and forget here), what it works
+// What the agent remembers about you (its notes; add and forget here), what it works
 // out on its own (recall), and what it has read (the knowledge base).
 
 /** One curated note row: what, when, and Forget (unless read-only). */
@@ -608,7 +608,7 @@ export function noteRow(note, copy, nowMs, readOnly) {
   return tr;
 }
 
-/** One recall snippet — what Rob worked out on its own. Recall is a string. */
+/** One recall snippet — what the agent worked out on its own. Recall is a string. */
 function recallRow(text, copy) {
   const tr = el("tr");
   const what = el("td", "what");
@@ -618,7 +618,7 @@ function recallRow(text, copy) {
   return tr;
 }
 
-/** One knowledge-base source — what Rob has read. */
+/** One knowledge-base source — what the agent has read. */
 function kbRow(item, copy) {
   const tr = el("tr");
   const what = el("td", "what");
@@ -635,7 +635,7 @@ function kbRow(item, copy) {
   return tr;
 }
 
-/** Draw the notes section (what Rob remembers about you). Add opens the composer;
+/** Draw the notes section (what the agent remembers about you). Add opens the composer;
  *  Forget archives one. An unavailable provider is named, never an empty list. */
 export function renderNotes(root, data, copy, opts = {}) {
   const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
@@ -699,7 +699,7 @@ export function noteComposer(copy) {
   return sec;
 }
 
-/** Draw recall (what Rob works out on its own). */
+/** Draw recall (what the agent works out on its own). */
 export function renderRecall(root, data, copy) {
   root.replaceChildren();
   const sec = section(copy && copy.mem_recall_title, copy && copy.mem_recall_aside);
@@ -727,7 +727,7 @@ export function renderRecall(root, data, copy) {
   return "recall";
 }
 
-/** Draw the knowledge base (what Rob has read). `data` is /knowledge/kb. */
+/** Draw the knowledge base (what the agent has read). `data` is /knowledge/kb. */
 export function renderKb(root, data, copy) {
   root.replaceChildren();
   // ⚠️ A9 (2026-09-21): the knowledge readers distinguish two answers that used
@@ -759,7 +759,7 @@ export function renderKb(root, data, copy) {
 
 // --- Settings --------------------------------------------------------------- #
 // The preferences people actually change, grouped by intent, plus the money
-// limits Rob cannot go past. Writes use the existing guarded preference service.
+// limits the agent cannot go past. Writes use the existing guarded preference service.
 
 /** Group preference rows by their `applies` field (the intent). */
 export function groupPreferences(items) {

@@ -37,7 +37,7 @@ def _telemetry_row(outcome, **attrs):
         "id": 7,
         "ts": 1751800000.0,
         "kind": "goal_run",
-        "user_id": "rob",
+        "user_id": "alice",
         "session_id": "",
         "source": "goal",
         "attrs": json.dumps({"goal_id": GOAL_ID, "outcome": outcome, **attrs}),

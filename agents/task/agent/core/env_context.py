@@ -63,8 +63,21 @@ def build_workspace_note(session_id: str, user_id: Optional[str]) -> Optional[st
         return None
 
 
-def build_environment_context(session_id: str, user_id: Optional[str],
-                              tool_ids=None) -> Optional[str]:
+def _status_sentence(status_tool: bool, live_health: bool) -> list:
+    """095 W3: name ``agent_status`` and ``<live-health>`` only where they exist
+    (``live_health.has_status_tool`` / ``live_health_injected``)."""
+    if not status_tool:
+        return []
+    line = "For live status (steps/tools/context/budget/health) call agent_status."
+    if live_health:
+        line += (" The latest <live-health> note carries the same health facts "
+                 "the owner's /status shows.")
+    return [line]
+
+
+def build_environment_context(session_id: str, user_id: Optional[str], *,
+                              status_tool: bool = True,
+                              live_health: bool = True) -> Optional[str]:
     """Return the rendered <environment> block, or None (disabled / server / error)."""
     try:
         if not _enabled():
@@ -73,8 +86,8 @@ def build_environment_context(session_id: str, user_id: Optional[str],
                                            autonomy_posture, compute_posture)
         from core.instance import resolve_instance_id
 
-        from core.runtime_paths import data_dir_or_home
-        data_dir = data_dir_or_home(os.getenv("POLYROB_DATA_DIR"))
+        from core.runtime_paths import prefs_home_dir
+        data_dir = prefs_home_dir()
         shared = bool(os.getenv("POLYROB_PROJECT_DIR"))
         persistence = (
             "Files you write in the workspace PERSIST on this machine across "
@@ -100,36 +113,27 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             f"when OFF you act only on the user's messages (no self-wake, goal "
             f"scheduling, or skill self-editing).",
             f"Host executables visible to enabled exec tools: {_host_capabilities()}.",
-            "For live status (steps/tools/context/budget/health) call agent_status. "
-            "A <live-health> note at the start of each turn carries the same health "
-            "facts the owner's /status shows.",
-            "</environment>",
         ]
         # 062: how this install was made, and what it cannot do. Without these
         # the agent can report a refusal but never explain it.
         try:
             from core.install_facts import install_lines
-            for _line in install_lines():
-                lines.insert(-2, _line)
+            lines.extend(install_lines())
         except Exception:
             pass
 
         from core.config_policy.policy import autonomous_run_budget_usd, run_budget_usd
         _budget = run_budget_usd()
         if _budget > 0:
-            lines.insert(-2, f"Run budget: RUN_BUDGET_USD=${_budget:.2f} session provider-spend "
-                             "ceiling — the run halts at the cap (value at session start).")
+            lines.append(f"Run budget: RUN_BUDGET_USD=${_budget:.2f} session provider-spend "
+                         "ceiling — the run halts at the cap (value at session start).")
         # 083 WS-3: install-wide (the block is the same for every session).
         _run_cap = autonomous_run_budget_usd()
         if _run_cap > 0:
-            lines.insert(-2, f"Autonomous run budget: AUTONOMOUS_RUN_BUDGET_USD=${_run_cap:.2f} "
-                             "provider spend per cron/goal run, sub-agents included — the "
-                             "run halts at the cap.")
-        if tool_ids:
-            # Positive tool list (018 P4): <tool-availability> enumerates only
-            # ABSENT tools; the loaded set previously cost an agent_status call.
-            lines.insert(-2, "Tools loaded this session: "
-                         + ", ".join(sorted(str(t) for t in tool_ids)) + ".")
+            lines.append(f"Autonomous run budget: AUTONOMOUS_RUN_BUDGET_USD=${_run_cap:.2f} "
+                         "provider spend per cron/goal run, sub-agents included — the "
+                         "run halts at the cap.")
+        lines += _status_sentence(status_tool, live_health) + ["</environment>"]
         text = "\n".join(lines)
         try:
             from core.secret_scrub import scrub_secret_shapes

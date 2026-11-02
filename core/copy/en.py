@@ -76,7 +76,7 @@ STRINGS = {
     "status.section.apps": "apps",
     "status.section.groups": "group chats",
     "status.section.room_actions": "paid actions in group chats",
-    "status.section.creations": "tokens Rob created",
+    "status.section.creations": "tokens the agent created",
     "status.section.collectibles": "NFTs",
     "status.section.liquidity": "pool deposits",
     "status.section.wallet": "wallet",

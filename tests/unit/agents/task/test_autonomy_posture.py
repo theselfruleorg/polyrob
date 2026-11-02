@@ -17,7 +17,7 @@ import tools.cronjob_tools as cj
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in ("AUTONOMY_POSTURE", "AUTONOMY_MODE", "AUTONOMY_ENABLED",
-              "POLYROB_LOCAL", "ROB_LOCAL",
+              "POLYROB_LOCAL",
               "GOAL_COMPLETION_JUDGE", "GOAL_BLOCKER_ESCALATION",
               "GOAL_SELF_WAKE_ENABLED", "AUTONOMOUS_CONTINUITY_BRIDGE", "CRON_ENABLED",
               "WAKE_CHANGE_GATE", "EPISODIC_MEMORY_ENABLED", "EPISODIC_DIGEST_INJECT",

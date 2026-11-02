@@ -7,7 +7,7 @@ Rules for writing durable, safe system skills in this codebase. All shipped `SKI
 ## 1. Shape
 
 - **Start with a single `# Title` heading.** The heading is the skill's human-readable name.
-- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt). Only a session's PINNED skills load at session start: a cron job's or goal's `payload.skills`, `TaskSessionConfig.skills`, the persona seeds, and their `requires` prerequisites. They are pinned in full while their bodies fit a 20,000-char budget (`SkillManager.EAGER_INJECT_BUDGET_CHARS`), prerequisites first; a pin that does not fit is listed `LOAD FIRST` in the `<skill-catalog>`. Every other skill is one index line the agent pulls with `load_skill` — there is no keyword matcher. A `load_skill` result over 24,000 chars is cut on the wire, so keep a body under 20,000 chars and move detail to `references/` (a test holds every shipped body to it; `treasury-trading` is the worked example).
+- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt). Only a session's PINNED skills load at session start: a cron job's or goal's `payload.skills`, `TaskSessionConfig.skills`, the persona seeds, and their `requires` prerequisites. They are pinned in full while their bodies fit a 20,000-char budget (`SkillManager.EAGER_INJECT_BUDGET_CHARS`), prerequisites first; a pin that does not fit is listed `LOAD FIRST` in the `<skill-catalog>`. Every other skill is one index line the agent pulls with `load_skill` — there is no keyword matcher. A `load_skill` result over 24,000 chars is cut on the wire, so keep a body under 20,000 chars and move detail to `references/` (a test holds every shipped body to it; `pre-trade-check` keeps its chain table in `references/`).
 - **Write in the second person, active voice.** "Use `anysite` to query LinkedIn profiles" not "The agent should use anysite to query LinkedIn profiles."
 
 ## 2. Advisory + tool-graceful
@@ -61,7 +61,7 @@ anysite_api(endpoint='/api/linkedin/get_profile', params={"user": "..."})
 
 ## 5. No hardcoded absolute paths
 
-- No `/home/user/...`, no `/opt/rob/...`, no `~/.anysite/schema.json`.
+- No `/home/user/...`, no `/opt/polyrob/...`, no `~/.anysite/schema.json`.
 - All file operations must be relative to the workspace (use `write_file`, `read_file` with relative paths, or rely on the path manager).
 - The schema file is NOT on disk in the workspace. Never instruct the agent to read it from disk.
 
@@ -121,7 +121,7 @@ license: MIT
 metadata:
   polyrob-when: 'Moving funds between chains (bridge)'   # the index line, <= 60 chars
   polyrob-priority: '6'            # lower = higher priority; see 9c for the ranges
-  polyrob-auto-activate: 'true'    # 'false' = gated: listed and loadable only with every tool_id loaded
+  polyrob-auto-activate: 'false'   # optional; omit it (default true). 'false' = gated: listed and loadable only with every tool_id loaded
   polyrob-triggers: '{"tool_ids":["defi_trade"]}'   # optional; the gate domain, see 9a
   polyrob-requires: '["token-identity"]'   # optional prerequisite skill ids, see 9b
   polyrob-version: '1'
@@ -142,13 +142,14 @@ skill: it is an index line with no rule.
 ### 9a. How a skill reaches the model
 
 - **A pin loads it.** A job's or goal's `payload.skills`, `TaskSessionConfig.skills` and the persona seeds load at session start (`SkillManager.get_pinned_skills`). A pin is explicit intent: it loads even when its rule is gated. An owner chat seat pins `OWNER_SEAT_SKILLS` (`agents/task/agent/core/construction.py`: the generated `harness-manual`); a delegated sub-agent does not. The cron lane stop keys on a job's first pinned id, so a pinned id is never renamed or retired.
+- **A programme's own pinned skill is its one source of truth.** A standing programme of several jobs keeps its terms (amounts, asset, windows, cadence, rubric) in its own pinned skill only (a shared procedure such as `dca` is not that skill: one job's parameters stay in that job's text). A job's task text names the skill and the part it runs ("follow Part B of the pinned `<id>` skill") and never restates a term, so a change is one skill edit, not a hunt through job texts and `owner.md`. A version marker such as "v2 terms" belongs in the skill body, not only in a job text.
 - **Otherwise the model chooses.** Every other session — owner chat, room, correspondent, a goal or cron run with no pin — gets the short `<skill-catalog>` index and calls `load_skill` for the line that fits the task.
 - **Money gate.** A rule that declares a MONEY tool (`core.tool_capabilities.ids_with("money")`, e.g. `defi_trade`) in `tool_ids` is an index line (and a pullable prerequisite) only when the session holds a declared money tool or a declared read tool with no `high_impact` capability (e.g. `defi_data`). A declared action tool that moves no funds (`cronjob`) does not open it.
 
 ### 9b. `requires` — prerequisite procedures
 
 ```yaml
-  polyrob-requires: '["token-identity","pre-trade-check"]'   # treasury-trading
+  polyrob-requires: '["token-identity","pre-trade-check"]'   # trade-execution
 ```
 
 - Every pinned skill pulls in its `requires` ids, at most 2 per session (`MAX_PREREQUISITES`).

@@ -73,3 +73,28 @@ def test_ship_never_moves_money_or_host(monkeypatch, tmp_path):
     for flag in ("X402_PAY_ENABLED", "DEFI_TRADE_ENABLED", "AGENT_COMPUTE_POSTURE",
                  "SELF_ENV_ENABLED", "HF_DEPLOY_ENABLED"):
         assert bm._builder_capability_default(flag) is False, flag
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() == 0,
+                    reason="root traverses a 0700 directory")
+def test_ship_clamp_names_an_unreadable_cert_apart_from_an_absent_one(monkeypatch, tmp_path):
+    """certbot keeps live/ at 0700: the file EXISTS but the agent cannot traverse to it.
+    That is "not readable by <user>", never "no certificate"."""
+    import os
+    live = tmp_path / "live"
+    (live / "apps.example.test").mkdir(parents=True)
+    (live / "apps.example.test" / "fullchain.pem").write_text("x")
+    monkeypatch.setenv("AGENT_BUILDER_MODE", "ship")
+    monkeypatch.setenv("APP_SERVICE_BASE_DOMAIN", "apps.example.test")
+    monkeypatch.setenv("APP_SERVICE_CERT_DIR", str(live / "apps.example.test"))
+    os.chmod(live, 0o700 & ~0o100)  # no traverse for the owner either
+    try:
+        reason = bm.ship_clamp_reason()
+        assert reason and "not readable by" in reason and "no certificate" not in reason
+        assert "chmod 755" in reason
+        assert bm.cert_problem(str(live / "apps.example.test" / "fullchain.pem")) == reason
+        assert bm.effective_builder_mode() == "build"
+    finally:
+        os.chmod(live, 0o755)
+    assert bm.ship_clamp_reason() is None
+    assert bm.cert_problem(str(tmp_path / "nope" / "fullchain.pem")).startswith("no certificate at")

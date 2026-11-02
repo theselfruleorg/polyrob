@@ -20,7 +20,7 @@ from modules.llm.messages import MessageOrigin, make_control_message
 
 BLOCKS = (
 	("awareness", "You act on behalf of OWNER A."),
-	("soul", "SOUL: I am Rob."),
+	("soul", "SOUL: I am Nova."),
 	("owner_rules", "## Owner facts\n\nNo public bug-fix reports."),
 	("contract", ""),
 	("self_doc", "SELF: I learned X."),

@@ -46,7 +46,7 @@ def test_knowledge_is_a_section_of_the_one_snapshot():
 
 def test_every_knowledge_store_reports_even_when_absent(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "sessions"))
-    sec = knowledge_section("rob", str(tmp_path))
+    sec = knowledge_section("alice", str(tmp_path))
 
     assert set(sec.data) == KNOWLEDGE_STORES, (
         f"stores reported {sorted(sec.data)} vs expected {sorted(KNOWLEDGE_STORES)} "

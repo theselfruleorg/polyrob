@@ -26,7 +26,7 @@ class _Agent:
     def get_orchestrator(self, session_id):
         return self._orch
 
-    def _extract_chat_reply(self, session_id):
+    def _extract_chat_reply(self, session_id, since=None):
         return self._reply
 
 

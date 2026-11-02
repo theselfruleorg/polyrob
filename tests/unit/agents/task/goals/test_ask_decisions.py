@@ -19,15 +19,15 @@ def board(tmp_path):
 
 
 def test_decide_ask_approve_is_equivalent_to_fulfill(board):
-    g = board.create(user_id="rob", title="Post the launch thread")
+    g = board.create(user_id="alice", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="no access", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="no access",
         claim_token=board.get(g.id).claim_token)  # trips breaker -> blocked
-    a = board.create_ask(user_id="rob", what="Grant access", blocks_goal_ids=[g.id])
+    a = board.create_ask(user_id="alice", what="Grant access", blocks_goal_ids=[g.id])
 
-    ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=True)
+    ok, unblocked = board.decide_ask(a.id, user_id="alice", approved=True)
 
     assert ok is True and unblocked == 1
     row = board.get(a.id)
@@ -37,14 +37,14 @@ def test_decide_ask_approve_is_equivalent_to_fulfill(board):
 
 
 def test_decide_ask_reject_never_unblocks(board):
-    g = board.create(user_id="rob", title="Post the launch thread")
+    g = board.create(user_id="alice", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="no access", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="no access", claim_token=board.get(g.id).claim_token)
-    a = board.create_ask(user_id="rob", what="Grant access", blocks_goal_ids=[g.id])
+    a = board.create_ask(user_id="alice", what="Grant access", blocks_goal_ids=[g.id])
 
-    ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=False)
+    ok, unblocked = board.decide_ask(a.id, user_id="alice", approved=False)
 
     assert ok is True and unblocked == 0
     row = board.get(a.id)
@@ -54,24 +54,24 @@ def test_decide_ask_reject_never_unblocks(board):
 
 
 def test_decide_ask_wrong_tenant_noop(board):
-    a = board.create_ask(user_id="rob", what="Grant access")
+    a = board.create_ask(user_id="alice", what="Grant access")
     ok, unblocked = board.decide_ask(a.id, user_id="mallory", approved=True)
     assert ok is False and unblocked == 0
     assert board.get(a.id).status == ASK_OPEN
 
 
 def test_decide_ask_already_decided_is_a_noop(board):
-    a = board.create_ask(user_id="rob", what="Grant access")
-    ok1, _ = board.decide_ask(a.id, user_id="rob", approved=True)
+    a = board.create_ask(user_id="alice", what="Grant access")
+    ok1, _ = board.decide_ask(a.id, user_id="alice", approved=True)
     assert ok1 is True
-    ok2, _ = board.decide_ask(a.id, user_id="rob", approved=False)  # can't flip a decided ask
+    ok2, _ = board.decide_ask(a.id, user_id="alice", approved=False)  # can't flip a decided ask
     assert ok2 is False
     assert board.get(a.id).status == ASK_FULFILLED  # the FIRST decision wins
 
 
 def test_fulfill_ask_still_works_unchanged(board):
-    a = board.create_ask(user_id="rob", what="Grant access")
-    ok, unblocked = board.fulfill_ask(a.id, user_id="rob")
+    a = board.create_ask(user_id="alice", what="Grant access")
+    ok, unblocked = board.fulfill_ask(a.id, user_id="alice")
     assert ok is True and unblocked == 0
     assert board.get(a.id).status == ASK_FULFILLED
 
@@ -79,7 +79,7 @@ def test_fulfill_ask_still_works_unchanged(board):
 # --- create_ask: extra_payload + force ----------------------------------------------
 
 def test_create_ask_extra_payload_is_stored(board):
-    a = board.create_ask(user_id="rob", what="Approve x402_request? [abc123]",
+    a = board.create_ask(user_id="alice", what="Approve x402_request? [abc123]",
                          extra_payload={"ask_kind": "tool_approval", "request_hash": "abc123"},
                          force=True)
     row = board.get(a.id)
@@ -93,26 +93,26 @@ def test_create_ask_force_skips_fuzzy_dedup(board, monkeypatch):
     title ("Approve x402_request?") — force=True must NOT fuzzy-merge them into
     one ask (an exact-hash caller already did its own precise dedup)."""
     monkeypatch.setattr("core.config_policy.goal_flags.GOAL_DEDUP_THRESHOLD", 0.3)  # aggressive, to prove force wins
-    a1 = board.create_ask(user_id="rob", what="Approve x402_request? [aaa111]",
+    a1 = board.create_ask(user_id="alice", what="Approve x402_request? [aaa111]",
                           extra_payload={"request_hash": "aaa111"}, force=True)
-    a2 = board.create_ask(user_id="rob", what="Approve x402_request? [bbb222]",
+    a2 = board.create_ask(user_id="alice", what="Approve x402_request? [bbb222]",
                           extra_payload={"request_hash": "bbb222"}, force=True)
     assert a1.id != a2.id
-    assert len(board.asks(user_id="rob", status=ASK_OPEN)) == 2
+    assert len(board.asks(user_id="alice", status=ASK_OPEN)) == 2
 
 
 def test_create_ask_without_force_still_dedups_by_default(board):
     """Backward compatibility: existing callers (budget gate, blocker escalation)
     never pass force — the original fuzzy dedup behavior is untouched."""
-    a1 = board.create_ask(user_id="rob", what="Grant Twitter write access")
-    a2 = board.create_ask(user_id="rob", what="Grant twitter WRITE access!")
+    a1 = board.create_ask(user_id="alice", what="Grant Twitter write access")
+    a2 = board.create_ask(user_id="alice", what="Grant twitter WRITE access!")
     assert a2.id == a1.id
 
 
 # --- consume_ask_grant: atomic one-shot claim ----------------------------------------
 
 def test_consume_ask_grant_wins_once(board):
-    a = board.create_ask(user_id="rob", what="Approve x402_request? [xyz]",
+    a = board.create_ask(user_id="alice", what="Approve x402_request? [xyz]",
                          extra_payload={"grant_consumed": False}, force=True)
     assert board.consume_ask_grant(a.id) is True
     assert board.consume_ask_grant(a.id) is False  # already consumed
@@ -120,7 +120,7 @@ def test_consume_ask_grant_wins_once(board):
 
 
 def test_consume_ask_grant_no_flag_present_is_a_noop(board):
-    a = board.create_ask(user_id="rob", what="Grant access")  # no grant_consumed key at all
+    a = board.create_ask(user_id="alice", what="Grant access")  # no grant_consumed key at all
     assert board.consume_ask_grant(a.id) is False
 
 
@@ -143,7 +143,7 @@ def test_consume_ask_grant_survives_payload_compaction(board):
     to prove ``consume_ask_grant``'s fix is robust to it landing later."""
     from core.sqlite_util import execute_retry
 
-    a = board.create_ask(user_id="rob", what="Approve x402_request? [xyz]",
+    a = board.create_ask(user_id="alice", what="Approve x402_request? [xyz]",
                          extra_payload={"grant_consumed": False}, force=True)
 
     # Recompact the payload blob the way a future json_set-based dedup would.
@@ -176,14 +176,14 @@ def test_decide_ask_answer_rides_into_the_unblocked_goal(board):
     dependent goal's owner_unblocked stamp, and the retry prompt renders it —
     an unblocked run learns WHAT the owner said, not only that it was unblocked."""
     from agents.task.goals.context import build_goal_run_task
-    g = board.create(user_id="rob", title="Post the launch thread")
+    g = board.create(user_id="alice", title="Post the launch thread")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="which key?", claim_token=board.get(g.id).claim_token)
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="which key?", claim_token=board.get(g.id).claim_token)
-    a = board.create_ask(user_id="rob", what="Which API key?", blocks_goal_ids=[g.id])
+    a = board.create_ask(user_id="alice", what="Which API key?", blocks_goal_ids=[g.id])
 
-    ok, unblocked = board.decide_ask(a.id, user_id="rob", approved=True,
+    ok, unblocked = board.decide_ask(a.id, user_id="alice", approved=True,
                                      answer="  use the SANDBOX key \n please ")
 
     assert ok is True and unblocked == 1
@@ -198,14 +198,14 @@ def test_decide_ask_answer_rides_into_the_unblocked_goal(board):
 
 
 def test_decide_ask_empty_answer_writes_nothing(board):
-    a = board.create_ask(user_id="rob", what="Grant access")
-    ok, _ = board.decide_ask(a.id, user_id="rob", approved=False, answer="   ")
+    a = board.create_ask(user_id="alice", what="Grant access")
+    ok, _ = board.decide_ask(a.id, user_id="alice", approved=False, answer="   ")
     assert ok is True
     assert "answer" not in board.get(a.id).payload
 
 
 def test_decide_ask_refused_decision_records_no_answer(board):
-    a = board.create_ask(user_id="rob", what="Grant access")
+    a = board.create_ask(user_id="alice", what="Grant access")
     ok, _ = board.decide_ask(a.id, user_id="someone-else", approved=True, answer="x")
     assert ok is False
     assert "answer" not in (board.get(a.id).payload or {})

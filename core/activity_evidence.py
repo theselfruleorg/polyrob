@@ -1,6 +1,6 @@
 """Shared owner-facing activity-evidence reads (audit T8, 2026-07-16).
 
-``cron/digest.py`` (daily owner digest) and ``core/recap.py`` (``polyrob recap``)
+``cron/digest.py`` (daily owner digest) and ``core/recap.py`` (``/recap``)
 previously reimplemented the SAME ledger/episode reads; a fix in one silently
 missed the other and the owner's money/activity numbers could diverge. Both now
 delegate here (their module-level ``_ledger``/``_episodes`` seams stay, as thin

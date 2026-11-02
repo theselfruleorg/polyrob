@@ -43,7 +43,7 @@ def _cmd(text, user="alice", session_id="s-chat"):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "carol")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     return tmp_path

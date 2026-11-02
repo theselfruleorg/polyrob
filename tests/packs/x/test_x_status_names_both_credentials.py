@@ -26,11 +26,11 @@ def test_missing_browser_session_names_capture_session_and_what_it_unlocks():
 
 
 def test_api_login_line_says_it_covers_dms():
-    text = "\n".join(status_lines(_snap(_OAUTH_OK, {"stored": True, "handle": "rob"})))
+    text = "\n".join(status_lines(_snap(_OAUTH_OK, {"stored": True, "handle": "alice"})))
     line = next(l for l in text.splitlines() if l.startswith("• API login"))
     assert "DMs" in line
 
 
 def test_stored_browser_session_does_not_print_the_capture_remedy():
-    text = "\n".join(status_lines(_snap(_OAUTH_OK, {"stored": True, "handle": "rob"})))
+    text = "\n".join(status_lines(_snap(_OAUTH_OK, {"stored": True, "handle": "alice"})))
     assert "capture-session" not in text

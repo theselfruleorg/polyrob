@@ -20,18 +20,18 @@ def _memory_db(home, *, recall=0, curated=0, episodes=(), kb=()):
     con.execute("CREATE VIRTUAL TABLE memories USING fts5("
                 "user_id UNINDEXED, session_id UNINDEXED, content)")
     for i in range(recall):
-        con.execute("INSERT INTO memories VALUES (?,?,?)", ("rob", "s1", f"fact {i}"))
+        con.execute("INSERT INTO memories VALUES (?,?,?)", ("alice", "s1", f"fact {i}"))
     con.execute("CREATE TABLE curated_memory (user_id TEXT, content TEXT)")
     for i in range(curated):
-        con.execute("INSERT INTO curated_memory VALUES (?,?)", ("rob", f"note {i}"))
+        con.execute("INSERT INTO curated_memory VALUES (?,?)", ("alice", f"note {i}"))
     con.execute("CREATE TABLE episodes (user_id TEXT, kind TEXT, ts INTEGER, "
                 "surfaced INTEGER)")
     for kind, ts, surfaced in episodes:
-        con.execute("INSERT INTO episodes VALUES (?,?,?,?)", ("rob", kind, ts, surfaced))
+        con.execute("INSERT INTO episodes VALUES (?,?,?,?)", ("alice", kind, ts, surfaced))
     con.execute("CREATE TABLE kb_sources (user_id TEXT, collection TEXT, "
                 "source_path TEXT)")
     for collection, path in kb:
-        con.execute("INSERT INTO kb_sources VALUES (?,?,?)", ("rob", collection, path))
+        con.execute("INSERT INTO kb_sources VALUES (?,?,?)", ("alice", collection, path))
     con.commit()
     con.close()
     return db
@@ -42,10 +42,10 @@ def _artifacts_db(home, n, *, binaries=0):
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE artifacts (id TEXT, user_id TEXT, path TEXT)")
     for i in range(n):
-        con.execute("INSERT INTO artifacts VALUES (?,?,?)", (str(i), "rob", f"/p/{i}.md"))
+        con.execute("INSERT INTO artifacts VALUES (?,?,?)", (str(i), "alice", f"/p/{i}.md"))
     for i in range(binaries):
         con.execute("INSERT INTO artifacts VALUES (?,?,?)",
-                    (f"b{i}", "rob", f"/p/shot{i}.PNG"))
+                    (f"b{i}", "alice", f"/p/shot{i}.PNG"))
     con.commit()
     con.close()
     return db
@@ -58,7 +58,7 @@ def _skill_usage_db(home, rows):
                 "load_count INTEGER, last_used_at REAL)")
     for skill_id, count in rows:
         con.execute("INSERT INTO skill_usage VALUES (?,?,?,?)",
-                    (skill_id, "rob", count, 1_700_000_000.0))
+                    (skill_id, "alice", count, 1_700_000_000.0))
     con.commit()
     con.close()
     return db
@@ -78,7 +78,7 @@ def test_counts_every_store_and_leads_with_one_headline(home):
     _artifacts_db(home, 10)
     _skill_usage_db(home, [("web-research", 3), ("never", 0)])
 
-    sec = knowledge_section("rob", home, now=1_700_000_300)
+    sec = knowledge_section("alice", home, now=1_700_000_300)
 
     assert sec.state == STATE_OK and not sec.health
     body = "\n".join(sec.lines)
@@ -93,7 +93,7 @@ def test_counts_every_store_and_leads_with_one_headline(home):
 
 def test_an_absent_store_is_not_a_zero_and_is_not_a_fault(home):
     # No memory.db, no artifacts.db, no skill_usage.db, no session root.
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
 
     assert sec.health == []                      # absent is not a defect
     assert sec.lines == ["nothing recorded yet"]
@@ -106,7 +106,7 @@ def test_an_unreadable_store_says_so_and_raises_one_health_item(home):
         fh.write(b"this is not a database")
     _artifacts_db(home, 4)
 
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
 
     keys = [h.key for h in sec.health]
     assert keys and set(keys) == {"knowledge_unreadable"}
@@ -120,12 +120,12 @@ def test_an_unreadable_store_says_so_and_raises_one_health_item(home):
 
 def test_the_distilled_store_being_empty_is_stated_not_implied(home):
     _memory_db(home, recall=5, curated=0)
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
     assert any("curated: 0 notes — nothing distilled yet" in ln for ln in sec.lines)
 
 
 def test_sessions_are_counted_and_aged_never_sized(home, tmp_path):
-    root = tmp_path / "sessions" / "rob"
+    root = tmp_path / "sessions" / "alice"
     root.mkdir(parents=True)
     fresh, stale = root / "new", root / "old"
     fresh.mkdir()
@@ -133,7 +133,7 @@ def test_sessions_are_counted_and_aged_never_sized(home, tmp_path):
     old = 1_700_000_000 - 200 * 86400
     os.utime(stale, (old, old))
 
-    sec = knowledge_section("rob", home, now=1_700_000_000)
+    sec = knowledge_section("alice", home, now=1_700_000_000)
 
     got = sec.data["sessions"]
     assert got["trees"] == 2 and got["older"] == 1
@@ -147,7 +147,7 @@ def test_tenant_scoped(home):
     con.commit()
     con.close()
 
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
     assert any("recall: 3 rows" in ln for ln in sec.lines)
 
 
@@ -155,7 +155,7 @@ def test_unindexed_documents_raise_one_health_item_naming_a_verb(home):
     _memory_db(home, recall=1, kb=[("default", "a.md")])
     _artifacts_db(home, 50)                      # 1 of 50 indexed = 2%
 
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
 
     items = [h for h in sec.health if h.key == "knowledge_unindexed"]
     assert len(items) == 1
@@ -166,27 +166,27 @@ def test_unindexed_documents_raise_one_health_item_naming_a_verb(home):
 def test_no_index_health_item_without_a_knowledge_base(home):
     """An instance with no KB is not failing to index — it has nowhere to."""
     _artifacts_db(home, 50)                      # no memory.db at all
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
     assert [h.key for h in sec.health] == []
 
 
 def test_no_index_health_item_below_the_floor(home):
     _memory_db(home, kb=[])
     _artifacts_db(home, 5)
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
     assert [h.key for h in sec.health] == []
 
 
 def test_unretained_sessions_raise_one_health_item(home, tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "90")
-    root = tmp_path / "sessions" / "rob"
+    root = tmp_path / "sessions" / "alice"
     root.mkdir(parents=True)
     stale = root / "old"
     stale.mkdir()
     old = 1_700_000_000 - 200 * 86400
     os.utime(stale, (old, old))
 
-    sec = knowledge_section("rob", home, now=1_700_000_000)
+    sec = knowledge_section("alice", home, now=1_700_000_000)
 
     items = [h for h in sec.health if h.key == "sessions_unretained"]
     assert len(items) == 1
@@ -196,14 +196,14 @@ def test_unretained_sessions_raise_one_health_item(home, tmp_path, monkeypatch):
 
 def test_retention_off_is_a_choice_not_a_defect(home, tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "0")
-    root = tmp_path / "sessions" / "rob"
+    root = tmp_path / "sessions" / "alice"
     root.mkdir(parents=True)
     stale = root / "old"
     stale.mkdir()
     old = 1_700_000_000 - 200 * 86400
     os.utime(stale, (old, old))
 
-    sec = knowledge_section("rob", home, now=1_700_000_000)
+    sec = knowledge_section("alice", home, now=1_700_000_000)
 
     assert [h.key for h in sec.health] == []
     assert any("no retention policy" in ln for ln in sec.lines)
@@ -216,7 +216,7 @@ def test_the_indexed_ratio_counts_text_documents_not_screenshots(home):
     _memory_db(home, kb=[("default", f"{i}.md") for i in range(9)])
     _artifacts_db(home, 10, binaries=90)
 
-    sec = knowledge_section("rob", home)
+    sec = knowledge_section("alice", home)
 
     body = "\n".join(sec.lines)
     assert "100 registered (10 text), 9 indexed (90%)" in body

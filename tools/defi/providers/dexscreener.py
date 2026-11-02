@@ -141,7 +141,7 @@ def parse_pair(payload: Optional[Dict[str, Any]], address: str) -> PriceInfo:
 
     Caught in live verification: ``/tokens/<USDC>`` returns 30 pools, 6 with USDC
     as the quote. Taking the deepest pool regardless of side priced USDC at
-    $0.44 — the AERO price from the deepest USDC-quoted pool. In a valuation
+    $0.44 — the price of the other token in the deepest USDC-quoted pool. In a valuation
     path that understates a USDC holding by more than half, and at T3 it would
     corrupt cap arithmetic.
 

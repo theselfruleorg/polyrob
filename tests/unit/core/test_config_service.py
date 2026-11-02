@@ -20,7 +20,7 @@ def home(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch, tmp_path):
-    for var in ("GOAL_DAILY_QUOTA", "GOALS_ENABLED", "POLYROB_LOCAL", "ROB_LOCAL",
+    for var in ("GOAL_DAILY_QUOTA", "GOALS_ENABLED", "POLYROB_LOCAL",
                 "AUTONOMY_POSTURE", "ANYSITE_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "polyrob-home"))

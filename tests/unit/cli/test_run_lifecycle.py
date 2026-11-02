@@ -250,8 +250,8 @@ def test_plain_renderer_on_turn_end_receives_final_result_not_generic_string():
 
     out = buf.getvalue()
 
-    # The real answer must appear exactly once, in the rob: dialog block.
-    assert "rob:" in out
+    # The real answer must appear exactly once, in the agent's dialog block.
+    assert "polyrob:" in out
     assert out.count("Replied with 'hello'.") == 1
 
     # The generic string must NOT be rendered when final_result is set.

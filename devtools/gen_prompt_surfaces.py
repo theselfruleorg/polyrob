@@ -26,6 +26,11 @@ a second child under the prod posture (:data:`PROD_ENV` — full autonomy with t
 owner's grants: the armed money rail, compute posture 1, the X rails), so the
 owner's first call is measured at the size prod sends, not the bare install's.
 
+Variant ``server_owner_telegram_dm`` (095 P0.4): the prod posture with
+``POLYROB_LOCAL=0`` — the server posture no other seat renders. The prod and
+server seats run with memory ON (``sqlite``), the wallet ON and an install
+record (:data:`INSTALL_MARKER`).
+
 Determinism: the render runs in a CHILD process with a scrubbed environment
 (``HOME``/``POLYROB_DATA_DIR`` in a fresh temp dir, ``TZ=UTC``, a fixed hash
 seed, cwd an empty project dir) and pins, inside the child, the posture
@@ -83,9 +88,27 @@ PROD_ENV = {
     "TWITTER_ENABLED": "true", "TWITTER_OAUTH2_ACCESS_TOKEN": "golden-not-a-token",
     "X_BROWSER_ENABLED": "true", "MCP_ENABLED": "true",
     "EMAIL_PROVIDER": "agentmail", "AGENTMAIL_API_KEY": "golden-not-a-key",
+    # 095 P0.4: prod-faithful — cross-session memory ON (``sqlite``, never
+    # ``local_vector``: that needs the memory-vector extra) and the wallet ON.
+    # The agent unit holds a seed and explicit operator caps (the guard reads
+    # neither as a default); seed and figures here are placeholders.
+    "MEMORY_BACKEND": "sqlite", "AGENT_WALLET_ENABLED": "true",
+    "AGENT_WALLET_MASTER_SEED": "golden-not-a-seed-golden-not-a-seed",
+    "AGENT_WALLET_MAX_PER_TX_USD": "250", "WALLET_DAILY_CAP_USD": "500",
 }
 PROD_SURFACES = ("owner_telegram_dm",)
 PROD_PREFIX = "prod_"
+
+#: 095 P0.4: the same prod grants with ``POLYROB_LOCAL=0`` — the real server
+#: posture (every other seat pins the local one), rendered as ``server_<surface>``.
+SERVER_SURFACES = ("owner_telegram_dm",)
+SERVER_PREFIX = "server_"
+SERVER_UNSET = ("POLYROB_LOCAL",)
+
+#: 095 P0.4: the install record a prod/server seat finds (``core.bootstrap_marker``);
+#: a fixed date, so the clock normaliser leaves it as written.
+INSTALL_MARKER = {"schema_version": 1, "version": "0.0.0-golden", "install_method": "git",
+                  "extras": [], "completed_at": "2026-01-01T00:00:00Z"}
 
 #: The env the child starts from: process plumbing + the pinned posture only.
 _PINNED_ENV = {
@@ -106,8 +129,11 @@ def render(out: Path) -> None:
     """Render every surface into ``out`` (replaced): the base posture in one
     scrubbed child, the prod-like variant in a second one."""
     rendered = dict(_render_child({}, SURFACES))
-    for surface, value in _render_child(PROD_ENV, PROD_SURFACES).items():
+    for surface, value in _render_child(PROD_ENV, PROD_SURFACES, marker=True).items():
         rendered[PROD_PREFIX + surface] = value
+    for surface, value in _render_child(PROD_ENV, SERVER_SURFACES, unset=SERVER_UNSET,
+                                        marker=True).items():
+        rendered[SERVER_PREFIX + surface] = value
     with tempfile.TemporaryDirectory(prefix="psurf-out-") as tmp:
         staging = Path(tmp) / "out"
         _write(staging, rendered)
@@ -116,21 +142,29 @@ def render(out: Path) -> None:
         shutil.copytree(staging, out)
 
 
-def _render_child(extra_env: Dict[str, str], surfaces) -> dict:
-    """One scrubbed child: ``{surface: (blocks, tools)}``, already normalised."""
+def _render_child(extra_env: Dict[str, str], surfaces, *, unset=(),
+                  marker: bool = False) -> dict:
+    """One scrubbed child: ``{surface: (blocks, tools)}``, already normalised.
+    ``unset`` turns pinned keys off ("0"); ``marker`` seeds :data:`INSTALL_MARKER`."""
     with tempfile.TemporaryDirectory(prefix="psurf-") as tmp:
         root = Path(os.path.realpath(tmp))
         for d in ("home", "data", "proj", "tmp"):
             (root / d).mkdir()
         env = dict(_PINNED_ENV)
         env.update(extra_env)
+        for key in unset:
+            # 095 W1c: "0", not absent — the CLI bootstrap the render builds on
+            # does ``setdefault("POLYROB_LOCAL", "1")``, so an absent key rendered
+            # the LOCAL posture under the server name; "0" is its documented opt-out.
+            env[key] = "0"
         env.update({"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "HOME": str(root / "home"), "POLYROB_DATA_DIR": str(root / "data"),
                     "TMPDIR": str(root / "tmp"), "PYTHONPATH": _pythonpath()})
         staging = root / "rendered.json"
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--child", str(staging),
-             "--root", str(root), "--surfaces", ",".join(surfaces)],
+             "--root", str(root), "--surfaces", ",".join(surfaces)]
+            + (["--install-marker"] if marker else []),
             cwd=str(root / "proj"), env=env, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError("prompt-surface render failed:\n"
@@ -191,7 +225,7 @@ def _pin_process() -> None:
         pass
 
 
-def _child(out: Path, root: Path, surfaces) -> None:
+def _child(out: Path, root: Path, surfaces, *, marker: bool = False) -> None:
     sys.path.insert(0, str(REPO))
     import logging
     logging.disable(logging.CRITICAL)
@@ -199,6 +233,11 @@ def _child(out: Path, root: Path, surfaces) -> None:
     register_policies()
     _pin_process()
     _seed_stores()
+    if marker:
+        from core.bootstrap_marker import marker_path
+        path = marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(INSTALL_MARKER), encoding="utf-8")
     rendered = asyncio.run(_render_all(root, surfaces))
     out.write_text(json.dumps({
         surface: ([(key, normalise(text, root)) for key, text in blocks],
@@ -304,8 +343,8 @@ async def _render_surface(task_agent, surface: str):
             profile_id="executor", parent_session_id=sid)  # as delegate_task builds it
     else:
         agent = await orch.create_agent(task=task, llm=_StubLLM(), agent_name="executor")
-    for name in ("_maybe_prefetch_memory", "_maybe_inject_live_health",
-                 "_maybe_inject_operations", "_maybe_inject_episodic_digest",
+    for name in ("_maybe_prefetch_memory", "_maybe_update_state_delta",
+                 "_maybe_inject_episodic_digest",
                  "_maybe_inject_continuity_bridge", "_maybe_inject_owner_thread",
                  "_maybe_inject_autonomous_continuity"):
         fn = getattr(agent, name, None)
@@ -325,6 +364,10 @@ def _blocks(agent) -> List[Tuple[str, str]]:
         for i, msg in enumerate(msgs):
             key = layer.key if len(msgs) == 1 else f"{layer.key}[{i}]"
             out.append((key, _content(msg)))
+    # 095 W4: the <state-delta> is durable (history), not an ephemeral.
+    for managed in list(getattr(getattr(mm, "history", None), "messages", None) or []):
+        if "<state-delta " in _content(managed.message):
+            out.append(("step1:state_delta", _content(managed.message)))
     for msg in list(getattr(mm, "_ephemeral_messages", None) or []):
         md = getattr(msg, "metadata", None) or {}
         if md.get("per_call") or md.get("state_message"):
@@ -363,6 +406,8 @@ def normalise(text: str, root: Path, *, clock: bool = True) -> str:
                         (root / "proj", "<PROJECT>"), (root / "tmp", "<TMP>"),
                         (root, "<ROOT>")):
         text = text.replace(str(path), token)
+    # 095 W4: the <state-delta> hash covers render-time text (paths, clocks).
+    text = re.sub(r'(<state-delta [^>]*hash=")[0-9a-f]+"', r'\1<HASH>"', text)
     if clock:
         dates = _clock_dates()
         text = _STAMP.sub(lambda m: "<NOW>" if m.group(1) in dates else m.group(0), text)
@@ -468,10 +513,12 @@ def main(argv=None) -> int:
     ap.add_argument("--child", help=argparse.SUPPRESS)
     ap.add_argument("--root", help=argparse.SUPPRESS)
     ap.add_argument("--surfaces", help=argparse.SUPPRESS)
+    ap.add_argument("--install-marker", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.child:
         _child(Path(args.child), Path(args.root),
-               tuple(s for s in (args.surfaces or "").split(",") if s) or SURFACES)
+               tuple(s for s in (args.surfaces or "").split(",") if s) or SURFACES,
+               marker=args.install_marker)
         return 0
     if args.check:
         with tempfile.TemporaryDirectory() as tmp:

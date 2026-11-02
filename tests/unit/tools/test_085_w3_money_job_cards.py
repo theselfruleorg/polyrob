@@ -24,7 +24,7 @@ TARGET = {"chain": "robinhood", "address": ADDR}
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     cards.set_store(cards.CardStore(str(tmp_path / "cards.db")))
     sent = []
 
@@ -38,7 +38,7 @@ def _env(monkeypatch, tmp_path):
 
 
 def _owner_turn():
-    return types.SimpleNamespace(user_id="rob", role="orchestrator", is_sub_agent=False,
+    return types.SimpleNamespace(user_id="alice", role="orchestrator", is_sub_agent=False,
                                  metadata={"owner_text": "set it up"}, session_id=None,
                                  parent_session_id=None)
 
@@ -56,13 +56,13 @@ def _cron_tool(tmp_path):
 
 
 def _only_card():
-    open_ = cards.store().open_cards("rob")
+    open_ = cards.store().open_cards("alice")
     assert len(open_) == 1
     return open_[0]
 
 
 def _confirm(card):
-    p = cards.press(card.card_id, "ok", "rob")
+    p = cards.press(card.card_id, "ok", "alice")
     assert p.run == card.line and not p.run.endswith(" go")
     return p.run.split()
 
@@ -78,7 +78,7 @@ def test_owner_turn_money_rig_goal_is_a_card_and_no_row(tmp_path, _env):
     assert card.kind == cards.KIND_JOB and card.card_id in res.extracted_content
     assert card.line.startswith("/goal new buy back the token hourly")
     assert "rig=money_rail" in card.args
-    assert tool._resolve_board().list_recent(user_id="rob", limit=5) == []
+    assert tool._resolve_board().list_recent(user_id="alice", limit=5) == []
     assert _env and _env[0][2]["card_id"] == card.card_id      # the owner saw it
 
 
@@ -90,9 +90,9 @@ def test_confirm_writes_the_goal_with_the_owner_seat(tmp_path):
                          target_token=TARGET), _owner_turn()))
     card = _only_card()
     words = _confirm(card)
-    reply = goal_reply("rob", str(tmp_path), words[1:], board=tool._resolve_board())
+    reply = goal_reply("alice", str(tmp_path), words[1:], board=tool._resolve_board())
     assert reply.startswith("✅"), reply
-    goal = tool._resolve_board().list_recent(user_id="rob", limit=1)[0]
+    goal = tool._resolve_board().list_recent(user_id="alice", limit=1)[0]
     assert goal.payload["actor"] == "owner_seat"
     assert "defi_trade" in goal.payload["tools"]
     assert goal.payload["target_token"]["address"].lower() == ADDR.lower()
@@ -106,15 +106,15 @@ def test_non_money_owner_goal_writes_at_once(tmp_path):
         GoalCreateAction(title="draft the weekly research note", tools=["web_fetch"]),
         _owner_turn()))
     assert res.error is None and "Created goal" in res.extracted_content
-    goal = tool._resolve_board().list_recent(user_id="rob", limit=1)[0]
+    goal = tool._resolve_board().list_recent(user_id="alice", limit=1)[0]
     assert goal.payload["actor"] == "owner_seat"
-    assert cards.store().open_cards("rob") == []
+    assert cards.store().open_cards("alice") == []
 
 
 def test_owner_goal_update_with_a_money_tool_is_a_card(tmp_path):
     tool = _goal_tool(tmp_path)
     asyncio.run(tool.goal_create(GoalCreateAction(title="watch the pool"), _owner_turn()))
-    goal = tool._resolve_board().list_recent(user_id="rob", limit=1)[0]
+    goal = tool._resolve_board().list_recent(user_id="alice", limit=1)[0]
     res = asyncio.run(tool.goal_update(
         GoalUpdateAction(goal_id=goal.id, tools=["defi_trade"], acceptance="a report"),
         _owner_turn()))
@@ -125,7 +125,7 @@ def test_owner_goal_update_with_a_money_tool_is_a_card(tmp_path):
     card = _only_card()
     assert card.args[:2] == ["grant", goal.id]
     from surfaces.telegram.owner_ops import goal_reply
-    reply = goal_reply("rob", str(tmp_path), _confirm(card)[1:], board=tool._resolve_board())
+    reply = goal_reply("alice", str(tmp_path), _confirm(card)[1:], board=tool._resolve_board())
     assert reply.startswith("✅"), reply
     granted = tool._resolve_board().get(goal.id).payload
     assert granted["tools"] == ["defi_trade"] and granted["actor"] == "owner_seat"
@@ -142,14 +142,14 @@ def test_owner_turn_money_job_is_a_card_and_confirm_schedules_it(tmp_path, monke
                            rig="money_rail", target_token=TARGET, skills=["rebuy"]),
         execution_context=_owner_turn()))
     assert res.error is None and "NOT written" in res.extracted_content
-    assert tool._cron_service.list_jobs(user_id="rob") == []
+    assert tool._cron_service.list_jobs(user_id="alice") == []
     card = _only_card()
     assert card.line.startswith("/job new 0 */6 * * * | buy back the token")
     words = _confirm(card)
     monkeypatch.setattr("surfaces.telegram.job_ops._service", lambda d: tool._cron_service)
-    reply = jobs_reply("rob", str(tmp_path), words[1:], via="telegram")
+    reply = jobs_reply("alice", str(tmp_path), words[1:], via="telegram")
     assert reply.startswith("✅"), reply
-    job = tool._cron_service.list_jobs(user_id="rob")[0]
+    job = tool._cron_service.list_jobs(user_id="alice")[0]
     assert job.payload["rig"] == "money_rail" and job.payload["actor"] == "owner_seat"
     assert job.payload["target_authored_by"] == "owner"
     assert job.payload["skills"] == ["rebuy"]
@@ -162,9 +162,9 @@ def test_non_money_owner_job_writes_at_once(tmp_path):
                            rig="research"),
         execution_context=_owner_turn()))
     assert res.error is None and "Scheduled" in res.extracted_content
-    job = tool._cron_service.list_jobs(user_id="rob")[0]
+    job = tool._cron_service.list_jobs(user_id="alice")[0]
     assert job.payload["actor"] == "owner_seat"
-    assert cards.store().open_cards("rob") == []
+    assert cards.store().open_cards("alice") == []
 
 
 def test_owner_job_edit_to_a_money_rig_is_a_card(tmp_path, monkeypatch):
@@ -173,7 +173,7 @@ def test_owner_job_edit_to_a_money_rig_is_a_card(tmp_path, monkeypatch):
     asyncio.run(tool.cronjob_schedule(
         CronScheduleAction(task="summarise the week for the owner", schedule="1d"),
         execution_context=_owner_turn()))
-    job = tool._cron_service.list_jobs(user_id="rob")[0]
+    job = tool._cron_service.list_jobs(user_id="alice")[0]
     res = asyncio.run(tool.cronjob_edit(CronEditAction(job_id=job.id, rig="money_rail"),
                                         execution_context=_owner_turn()))
     assert res.error is None and "NOT written" in res.extracted_content
@@ -181,7 +181,7 @@ def test_owner_job_edit_to_a_money_rig_is_a_card(tmp_path, monkeypatch):
     card = _only_card()
     assert card.args[:3] == ["edit", job.id, "grant"]
     monkeypatch.setattr(job_ops, "_service", lambda data_dir: tool._cron_service)
-    reply = job_ops.jobs_reply("rob", str(tmp_path), _confirm(card)[1:], via="telegram")
+    reply = job_ops.jobs_reply("alice", str(tmp_path), _confirm(card)[1:], via="telegram")
     assert reply.startswith("✅"), reply
     assert tool._cron_service.store.get(job.id).payload["rig"] == "money_rail"
 
@@ -191,11 +191,11 @@ def test_a_plain_owner_job_edit_writes_at_once(tmp_path):
     asyncio.run(tool.cronjob_schedule(
         CronScheduleAction(task="summarise the week for the owner", schedule="1d"),
         execution_context=_owner_turn()))
-    job = tool._cron_service.list_jobs(user_id="rob")[0]
+    job = tool._cron_service.list_jobs(user_id="alice")[0]
     res = asyncio.run(tool.cronjob_edit(CronEditAction(job_id=job.id, schedule="2d"),
                                         execution_context=_owner_turn()))
     assert res.error is None and "Edited" in res.extracted_content
-    assert cards.store().open_cards("rob") == []
+    assert cards.store().open_cards("alice") == []
 
 
 # --- the card itself ----------------------------------------------------------
@@ -205,15 +205,15 @@ def test_a_job_card_carries_only_the_seat_write_verbs(tmp_path):
     for bad in (["/send", "1", "native"], ["/goal", "stop", "abc"], ["/job", "run", "abc"],
                 ["/job", "edit", "abc", "schedule", "1d"], ["/wallet", "autonomous", "500"]):
         with pytest.raises(ValueError):
-            cards.job_card("rob", bad, title="t", st=st)
-    card = cards.job_card("rob", ["/job", "new", "1d", "|", "go", "execute", "it"],
+            cards.job_card("alice", bad, title="t", st=st)
+    card = cards.job_card("alice", ["/job", "new", "1d", "|", "go", "execute", "it"],
                           title="t", st=st)
     assert [a.label for a in cards.card_actions(card)] == ["Confirm", "Dismiss"]
-    assert cards.press(card.card_id, "re", "rob", st=st).run is None
+    assert cards.press(card.card_id, "re", "alice", st=st).run is None
     assert cards.press(card.card_id, "ok", "other", st=st).run is None   # one owner
-    first = cards.press(card.card_id, "ok", "rob", st=st)
+    first = cards.press(card.card_id, "ok", "alice", st=st)
     assert first.run == "/job new 1d | go execute it"
-    assert cards.press(card.card_id, "ok", "rob", st=st).run is None     # once
+    assert cards.press(card.card_id, "ok", "alice", st=st).run is None     # once
 
 
 def test_card_words_strip_what_a_command_cannot_carry():

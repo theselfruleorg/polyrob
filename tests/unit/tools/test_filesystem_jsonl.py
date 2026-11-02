@@ -1,6 +1,6 @@
-"""056 WS2 — JSONL verbs shaped like Rob's data, and dict→string coercion.
+"""056 WS2 — JSONL verbs shaped like the agent's data, and dict→string coercion.
 
-Prod 2026-09-18/19: Rob edits `targets.jsonl` (642 rows) and `contact-log.jsonl`.
+Prod 2026-09-18/19: the agent edits `targets.jsonl` (642 rows) and `contact-log.jsonl`.
 The tools offered `append_file` (string) and `coding_str_replace` (string), so a
 JSON OBJECT passed as `old_string` was rejected 31 times, thinking loops followed,
 and one pretty-printed 17-line record corrupted the store (22:51Z). A row is one

@@ -1,7 +1,7 @@
 """'Did we pay X?' is answered from our own audit ledger (intel 2026-10-05 08:10Z).
 
-Prod 2026-10-05: Rob sent 80 USDC to 0x19Be…7da6 at 04:17 on the owner's order;
-the row is in wallet/audit.jsonl. At 08:04 Rob found "no record", then told the
+Prod 2026-10-05: the agent sent 80 USDC to a known address at 04:17 on the owner's order;
+the row is in wallet/audit.jsonl. At 08:04 the agent found "no record", then told the
 owner the payment was made outside its rails. Nothing it could call read the
 ledger by recipient.
 """

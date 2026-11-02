@@ -290,6 +290,8 @@ async def run_surface(
         if not watcher_task.done():
             watcher_task.cancel()
         click.echo("\n" + click.style(stopping_message, dim=True))
+        from cli.commands._lifecycle import close_chat_episodes
+        await close_chat_episodes(task_agent)
         if autonomy_handles is not None:
             try:
                 await autonomy_handles.stop()

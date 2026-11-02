@@ -169,6 +169,22 @@ def resolve_owner_alias(router, surface, target, owner_targets):
     return target
 
 
+def message_input_error(action: Optional[str], text: Optional[str],
+                        media_paths: Optional[List[str]]) -> Optional[str]:
+    """The `message` call's validation error, or None. A send/reply with no text
+    and no attachment sends nothing: it is a bad call, not a send attempt, and
+    is refused before any gate (cooldown, pause, tier) reads it — prod
+    2026-10-28 met 69 empty sends with the cooldown text, which read like a
+    delivered message."""
+    act = (action or "send").strip().lower()
+    if act in ("delete", "posts"):
+        return None
+    if not (text or "").strip() and not media_paths:
+        return ("message not sent: `text` is empty and there is no media_paths — "
+                "a send needs the message text (or a file to attach)")
+    return None
+
+
 async def perform_message_action(*, action="send", text="", media_paths=None,
                                  post=None, last=None, **kw) -> dict:
     """The `message` action's one entry: ``delete``/``posts`` (0008) go to
@@ -183,9 +199,10 @@ async def perform_message_action(*, action="send", text="", media_paths=None,
             return await perform_message_posts(last=last, **common)
         return await perform_message_delete(
             message_id=kw.get("message_id"), post=post, last=last, **common)
-    if not (text or "").strip() and not media_paths:
+    invalid = message_input_error(act, text, media_paths)
+    if invalid:
         return {"success": False, "tier": None, "surface": kw.get("surface"),
-                "target": kw.get("target"), "error": "nothing to send: text is empty"}
+                "target": kw.get("target"), "error": invalid}
     return await perform_message_send(action=action, text=text,
                                       media_paths=media_paths, **kw)
 
@@ -207,7 +224,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # matched byte-exact); only the actual send uses the normalized form.
     send_target = normalize_surface_target(surface, target)
     # C8 (2026-09-15): a target of the wrong SHAPE for its surface can never be
-    # delivered. Prod marked `telegram / rob@example.org` dead after handing
+    # delivered. Prod marked `telegram / alice@example.org` dead after handing
     # an email address to the Bot API. Refuse with the surface that WOULD work,
     # before the send is spent and the address is durably marked dead.
     wrong_shape = wrong_surface_target_reason(surface, send_target)
@@ -489,8 +506,12 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         from core.surfaces.outbound_policy import notify_first_contact
         await notify_first_contact(container, user_id, session_id, surface, target)
 
+    # The receipt says WHY a send failed (a dead target's mark and how it clears,
+    # or the surface's own error): "send returned false" alone sent the agent to
+    # retry spellings (prod 2026-10-19..28).
+    why = getattr(receipt, "error", None) if receipt is not None else None
     result = {"success": bool(ok), "tier": tier, "surface": surface, "target": target,
-            "error": None if ok else "send returned false"}
+              "error": None if ok else (why or "send returned false")}
     # 057 WS-E: the proof rule travels WITH the receipt. Without it the agent
     # went looking for its own channel post to "confirm" a send Telegram will
     # never echo back, and then reported a delivered post as unconfirmed.

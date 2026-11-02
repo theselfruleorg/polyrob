@@ -12,7 +12,7 @@ Normalized message dict shape (produced by the harness):
       "sender_authenticated": False,    # the MX's Authentication-Results proved From
       "subject":     "Re: ...",
       "body":        "...",             # plain-text body (quoted history is truncated here)
-      "in_reply_to": "<out@rob>",       # In-Reply-To header (the thread anchor)
+      "in_reply_to": "<out@agent>",       # In-Reply-To header (the thread anchor)
       "references":  "<root> <out>",    # References header (fallback thread anchor)
       "attachments": [{"filename": ..., "mime": ..., "data": b"..."}],
     }

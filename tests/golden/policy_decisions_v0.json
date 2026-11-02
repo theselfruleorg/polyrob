@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 400
+  "universe_size": 396
  },
  "actions": {
   "": {
@@ -3195,6 +3195,53 @@
    ],
    "room": {
     "is_room_denied_call(name, None)": false,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "cronjob_run_now": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "cronjob"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
    },
    "spend_exemption": {},
@@ -12184,61 +12231,6 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
-  "mcp_install": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "queued"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": [
-     "self",
-     "action"
-    ],
-    "classify_effect(owner)": [
-     "self",
-     "action"
-    ],
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": true,
-    "live_default_env": false,
-    "live_twitter_enabled": false,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
-    "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": null,
-    "metering_gate.MONEY_TOOLS∋owner": null,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": true,
-    "is_untrusted_tool(name, owner)": true
-   }
-  },
   "mcp_list_resources": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -12648,53 +12640,6 @@
    }
   },
   "memory": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": true,
-    "live_default_env": false,
-    "live_twitter_enabled": false,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": null,
-    "metering_gate.MONEY_TOOLS∋owner": null,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "memory_search": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -16304,171 +16249,6 @@
    "room": {
     "is_room_denied_call(name, None)": false,
     "is_room_denied_call(name, owner)": false
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "self_env_git_pull": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "queued"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": [
-     "self",
-     "action"
-    ],
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {
-     "self_env": "self"
-    }
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
-    "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "self_env"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "self_env_install_dep": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "queued"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": [
-     "self",
-     "action"
-    ],
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {
-     "self_env": "self"
-    }
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
-    "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "self_env"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "self_env_patch_source": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "queued"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": [
-     "self",
-     "action"
-    ],
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {
-     "self_env": "self"
-    }
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
-    "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "self_env"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
    },
    "spend_exemption": {},
    "untrusted": {
@@ -21285,10 +21065,6 @@
     "git_push",
     "github_merge_pr",
     "github_open_pr",
-    "mcp_install",
-    "self_env_git_pull",
-    "self_env_install_dep",
-    "self_env_patch_source",
     "self_env_restart_service",
     "self_modify",
     "shell_run",
@@ -21497,7 +21273,7 @@
    "tool_availability.compute_gate('code_execution')": [
     "CODE_EXEC_ENABLED=false (posture 2 already met)",
     "disabled",
-    "operator sets CODE_EXEC_ENABLED=true — raising the posture changes nothing here"
+    "operator runs `polyrob config set CODE_EXEC_ENABLED true` — raising the posture changes nothing here"
    ],
    "tool_availability.compute_gate('shell')": [
     "SHELL_TOOLS_ENABLED=true, posture 2",
@@ -22311,7 +22087,7 @@
    "GATED_TOOL_REGISTRY": [
     "CODING_TOOLS_ENABLED",
     "disabled",
-    "operator sets POLYROB_OVERRIDES=CODING_TOOLS_ENABLED=true"
+    "operator runs `polyrob config set CODING_TOOLS_ENABLED true`"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CODING_TOOLS_ENABLED",
@@ -22404,7 +22180,7 @@
    "GATED_TOOL_REGISTRY": [
     "CRON_ENABLED (AUTONOMY_POSTURE>=full)",
     "disabled",
-    "operator raises AUTONOMY_POSTURE or sets POLYROB_OVERRIDES=CRON_ENABLED=true"
+    "operator raises AUTONOMY_POSTURE or sets `polyrob config set CRON_ENABLED true`"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "CRON_ENABLED",
@@ -22970,7 +22746,7 @@
    "GATED_TOOL_REGISTRY": [
     "GOALS_ENABLED",
     "disabled",
-    "operator sets POLYROB_OVERRIDES=GOALS_ENABLED=true"
+    "operator runs `polyrob config set GOALS_ENABLED true`"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "GOALS_ENABLED",
@@ -23114,7 +22890,7 @@
    "GATED_TOOL_REGISTRY": [
     "money",
     "reserved",
-    "money tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips money tools by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
+    "these tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips them by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": null,
@@ -23198,7 +22974,7 @@
    "GATED_TOOL_REGISTRY": [
     "KB_ENABLED",
     "disabled",
-    "operator sets POLYROB_OVERRIDES=KB_ENABLED=true"
+    "operator runs `polyrob config set KB_ENABLED true`"
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": "KB_ENABLED",
@@ -23309,7 +23085,7 @@
    "GATED_TOOL_REGISTRY": [
     "MCP_ENABLED + an MCP server",
     "disabled",
-    "operator sets POLYROB_OVERRIDES=MCP_ENABLED=true, then the owner adds a server with /mcp add <id> <https-url>"
+    "operator runs `polyrob config set MCP_ENABLED true`, then the owner adds a server with /mcp add <id> <https-url>"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "MCP_ENABLED",
@@ -23544,7 +23320,7 @@
    "GATED_TOOL_REGISTRY": [
     "money",
     "reserved",
-    "money tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips money tools by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
+    "these tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips them by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
    ],
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": null,
@@ -23970,7 +23746,7 @@
     "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 10,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 19,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 25,
-    "posture2:approval.resolve_gated_actions().actions": 10,
+    "posture2:approval.resolve_gated_actions().actions": 6,
     "posture2:bootstrap.cli_unavailable_tools(all)": 10,
     "posture2:delegation.get_blocked_child_tools()": 19,
     "posture2:room_policy._forbidden_tool_ids()": 25,
@@ -23995,7 +23771,7 @@
    "GATED_TOOL_REGISTRY": [
     "TWITTER_ENABLED",
     "disabled",
-    "operator configures X user credentials; POLYROB_OVERRIDES=TWITTER_ENABLED=true unlocks writes"
+    "operator configures X user credentials; `polyrob config set TWITTER_ENABLED true` unlocks writes"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,
@@ -24275,7 +24051,7 @@
    "GATED_TOOL_REGISTRY": [
     "X402_INVOICE_ENABLED",
     "disabled",
-    "operator sets POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true (auto-ON in autonomous mode)"
+    "operator runs `polyrob config set X402_INVOICE_ENABLED true` (auto-ON in autonomous mode)"
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": "X402_INVOICE_ENABLED",
@@ -24345,7 +24121,7 @@
    "GATED_TOOL_REGISTRY": [
     "money",
     "reserved",
-    "money tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips money tools by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
+    "these tools are explicit-grant-only: load_tool never loads one. A goal you create yourself can NEVER carry one — goal_create strips them by design, so do not retry by adding it to your own goal payload. Only the owner/operator grants it: on a goal THEY seeded, or at session creation. If you have a candidate and no grant, record it where the granted run will read it and say so plainly — then escalate ONCE, not every run."
    ],
    "HIGH_IMPACT_TOOL_IDS": true,
    "TOOL_GATE_FLAGS": null,

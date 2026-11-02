@@ -15,6 +15,7 @@ stringizing those annotations silently breaks that routing. Same rule as
 `action_registration.py` — see AGENTS.md.
 """
 import logging
+import re
 from typing import Optional
 
 from pydantic import BaseModel
@@ -28,17 +29,13 @@ from tools.controller.turn_origin import _is_forged_or_autonomous_turn
 logger = logging.getLogger(__name__)
 
 
-def _rules_immediate(is_forged: bool) -> bool:
-	"""Model-authored rules always require review through the owner seat.
+def _write_doc(writer, params, *, user_id: str, created_by: str):
+	"""One write path for both identity docs: update|patch, always a draft.
 
-	An owner conversation can contain untrusted tool results; its origin is
-	not proof that the owner wrote or approved the proposed rule.
-	"""
-	return False
-
-
-def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool):
-	"""One write path for both identity docs: update|patch, immediate or queued.
+	A model-written line is never in force before the owner reviews it: an
+	owner conversation can carry untrusted tool results, so its origin is not
+	proof that the owner wrote the line (095 W10 deleted the dead "apply now"
+	branches).
 
 	057 WS-D: `source`/`observed_at` ride through to the writer, which stamps the
 	NEW or CHANGED lines ` [from: <source> <date>]`. Both are optional — with
@@ -49,20 +46,110 @@ def _write_doc(writer, params, *, user_id: str, created_by: str, immediate: bool
 	if params.action == "update":
 		if not params.content:
 			return None, "update requires `content`."
-		if immediate:
-			return writer.apply_now(params.content, user_id=user_id,
-			                        created_by=created_by, **prov), None
 		return writer.propose(params.content, user_id=user_id,
 		                      created_by=created_by, pending=True, **prov), None
 	if params.old_string is None or params.new_string is None:
 		return None, "patch requires `old_string` and `new_string`."
-	res = writer.patch(user_id=user_id, old_string=params.old_string,
-	                   new_string=params.new_string, replace_all=params.replace_all,
-	                   created_by=created_by, pending=not immediate, **prov)
-	if immediate and res.ok and not res.pending:
-		# same honesty rule as apply_now: a superseded draft must leave the queue
-		writer.retire_pending(user_id=user_id)
-	return res, None
+	return writer.patch(user_id=user_id, old_string=params.old_string,
+	                    new_string=params.new_string, replace_all=params.replace_all,
+	                    created_by=created_by, pending=True, **prov), None
+
+
+#: F4 (prod review 2026-10-29): above this share of the cap a write tells the
+#: model to replace the rule a directive changes, not to append beside it.
+_NEAR_CAP_RATIO = 0.9
+NOTHING_WRITTEN = "Nothing was written. "
+_REPLACE_HINT = ("When the owner's new directive changes a standing rule, REPLACE that "
+                 "rule: action='replace_rule', rule_start=<its first words>, "
+                 "new_string=<the new rule>. The old text moves under '## Superseded' "
+                 "and stops counting toward the cap. Never append a second rule beside it.")
+_RULE_PREFIX = re.compile(r"^[\s#>*_`-]+")
+
+
+def _norm_rule(text: str) -> str:
+	return " ".join(_RULE_PREFIX.sub("", text or "").lower().split())
+
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+
+
+def _is_heading(line: str) -> bool:
+	return line.lstrip().startswith("#")
+
+
+def find_rule(editable: str, rule_start: str) -> list:
+	"""The ACTIVE rule text(s) that ``rule_start`` names. Pure.
+
+	A heading line is never part of a rule. In a paragraph that is a list, a rule
+	is ONE item (the bullet and its indented continuation lines) — never the
+	whole block, so the sibling rules stay where they are. A prose paragraph
+	whose first body line starts with ``rule_start`` is one rule. Else any
+	single non-heading line that does."""
+	key = _norm_rule(rule_start)
+	if not key:
+		return []
+	paragraphs = [p.strip("\n") for p in re.split(r"\n[ \t]*\n", editable or "") if p.strip()]
+	hits = []
+	for para in paragraphs:
+		raw = para.split("\n")
+		body = [i for i, ln in enumerate(raw) if ln.strip() and not _is_heading(ln)]
+		if not body:
+			continue
+		if any(_LIST_ITEM.match(raw[i]) for i in body):
+			for n, i in enumerate(body):
+				if not (_LIST_ITEM.match(raw[i]) and _norm_rule(raw[i]).startswith(key)):
+					continue
+				end = i + 1
+				while (end < len(raw) and raw[end].strip() and not _is_heading(raw[end])
+				       and not _LIST_ITEM.match(raw[end]) and raw[end][:1] in (" ", "\t")):
+					end += 1
+				hits.append("\n".join(raw[i:end]))
+		elif _norm_rule(raw[body[0]]).startswith(key):
+			# A prose rule ends at the next heading: a doc with no blank lines must
+			# never carry the following section into the replace.
+			end = body[0] + 1
+			while end < len(raw) and not _is_heading(raw[end]):
+				end += 1
+			hits.append("\n".join(raw[body[0]:end]).rstrip("\n"))
+	if hits:
+		return hits
+	return [ln for para in paragraphs for ln in para.split("\n")
+	        if ln.strip() and not _is_heading(ln) and _norm_rule(ln).startswith(key)]
+
+
+def _draft_or_active(writer, user_id: str) -> str:
+	"""The text a patch edits: the pending draft when one exists, else the active doc."""
+	try:
+		uid = writer._require_user(user_id)
+		pending = writer._pending_file(uid) if uid else None
+		if pending is not None and pending.is_file():
+			return pending.read_text(encoding="utf-8")
+	except Exception:
+		pass
+	return writer.read_active(user_id)
+
+
+def _headroom_note(writer, res, doc_name: str, *, replace_hint: bool) -> str:
+	"""``owner.md rules: 21,300/24,000 chars (2,700 left).`` after a write, and near
+	the cap the instruction to replace instead of append. Fail-open to ""."""
+	try:
+		from pathlib import Path
+		body = Path(res.path).read_text(encoding="utf-8") if getattr(res, "path", None) else ""
+		used, cap = writer._capped_len(body), int(writer._MAX_CHARS)
+		note = f"\n{doc_name}: {used:,}/{cap:,} chars ({max(cap - used, 0):,} left)."
+		if used >= _NEAR_CAP_RATIO * cap:
+			note += (" Near the cap. " + (_REPLACE_HINT if replace_hint else
+			         "Replace or tighten an older note instead of appending a new one."))
+		return note
+	except Exception:
+		return ""
+
+
+def _rejected(label: str, errors, *, replace_hint: bool) -> str:
+	text = f"{NOTHING_WRITTEN}{label} rejected: {'; '.join(errors)}"
+	if replace_hint and any("chars" in str(e) and "/" in str(e) for e in errors or ()):
+		text += " " + _REPLACE_HINT
+	return text
 
 
 def _identity_location(writer, user_id: str) -> str:
@@ -99,9 +186,10 @@ def _sweep_report(controller, rule: str, user_id: str, data_dir: str) -> str:
 
 def _sweep_new_rules(controller, before: str, after: str, user_id: str,
                      data_dir: str) -> str:
-	"""After an owner rule is in effect, name what it overrides (advisory).
-	Empty when nothing contradicts it or the sweep cannot run — the write
-	already succeeded, and a sweep fault must not read as a failed write."""
+	"""After an owner-rule draft is written, name what its new lines would
+	override (advisory; 095 W10 X-21: every owner.md write is swept). Empty when
+	nothing contradicts it or the sweep cannot run — the write already
+	succeeded, and a sweep fault must not read as a failed write."""
 	try:
 		from core.doc_claims import changed_lines, split_superseded, strip_stamp
 		added = [strip_stamp(l).strip() for l in
@@ -117,14 +205,6 @@ def _sweep_new_rules(controller, before: str, after: str, user_id: str,
 		return ""
 
 
-def _applied_now_text(label: str, summary: str) -> str:
-	"""035 P1-11 — report-after. The owner asked for this on THIS turn, so the
-	report belongs in the reply, not in another proactive push competing for the
-	daily cap."""
-	return (f"{label} IS IN EFFECT NOW (applied directly — you asked for it on this "
-	        f"turn, so it needed no approval step).\nWhat changed: {summary}")
-
-
 def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0) -> str:
 	"""035 P0-4 — "saved" read as DONE. On 09-08/09-09 the agent reported exactly
 	that for two owner directives, which then sat inert in `.pending/` for two
@@ -135,7 +215,7 @@ def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0) -> s
 	and offers the one command that clears it. A queue of four unreviewed
 	proposals is what the incident actually looked like from the owner's side.
 
-	⚠ 2026-09-21: the token printed here was `/approve owner_doc:rob`, which is
+	⚠ 2026-09-21: the token printed here was `/approve owner_doc:<instance>`, which is
 	NOT TAPPABLE. Telegram auto-links exactly one `/word` of `[A-Za-z0-9_]` and
 	the argument is neither linked nor sent, so the only tappable half did
 	nothing. On 09-20 the owner tapped three times over eight minutes and
@@ -170,6 +250,66 @@ def skill_saved_text(skill_id: str, where: str) -> str:
 	        + "\nDo not tell the owner it is fixed or live until they approve it.")
 
 
+#: The most owner.md lines one programme-term change may retire (the writer's
+#: structure guard refuses more anyway).
+_MAX_SUPERSEDE = 3
+
+
+def draft_owner_supersede(controller, skill_id: str, new_text: str, *, user_id: str,
+                          created_by: str, link: bool = True) -> str:
+	"""095 W10 step 4 (R8 — supersede, do not overwrite). A programme-term change
+	in a lane's pinned skill also drafts the retire of the owner.md line(s) on the
+	same subject, and LINKS the two drafts: one owner tap promotes both or
+	neither (``core.pending_links``). Only on an owner turn, only for a skill an
+	enabled job or live goal pins, only when owner.md is writable here. The lines
+	are found by the rules sweep's matcher (``rules_sweep.same_subject_lines``).
+	Returns the sentence for the skill_manage result ("" when nothing was drafted).
+	Fail-open: the skill draft stands either way."""
+	try:
+		from core.config_policy import AutonomyConfig
+		if not AutonomyConfig.owner_doc_writable():
+			return ""
+		from core.doc_claims import split_superseded_raw
+		from core.instance import resolve_instance_id
+		from core.owner_doc_writer import OwnerDocWriter
+		from core.runtime_paths import cron_db_path, goals_db_path
+		from core.rules_sweep import pinned_by_a_rail, same_subject_lines
+		_cfg = getattr(getattr(controller, 'container', None), 'config', None)
+		data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
+		if not pinned_by_a_rail(skill_id, user_id, cron_db_path(data_dir), goals_db_path(data_dir)):
+			return ""
+		instance_id = resolve_instance_id()
+		writer = OwnerDocWriter(data_dir, instance_id=instance_id)
+		editable = split_superseded_raw(_draft_or_active(writer, user_id))[0]
+		rules = []
+		for line in same_subject_lines(new_text, skill_id, editable):
+			hits = find_rule(editable, line[:80])
+			if len(hits) == 1 and hits[0] not in rules:
+				rules.append(hits[0])
+		retired = []
+		for rule in rules[:_MAX_SUPERSEDE]:
+			res = writer.patch(user_id=user_id, old_string=rule, new_string="",
+			                   created_by=created_by, pending=True,
+			                   source=f"superseded by skill {skill_id}")
+			if res.ok:
+				retired.append(rule.strip().split("\n")[0][:100])
+		if not retired:
+			return ""
+		text = ("\nAlso drafted: the retire of the owner.md line(s) on the same subject "
+		        "(moved under '## Superseded' on approval): "
+		        + " | ".join(f'"{r}"' for r in retired) + ".")
+		if not link:  # the skill change is already active: the retire waits alone
+			return text + " It is in /pending."
+		from core import pending_links
+		pending_links.link(user_id, ("skill", skill_id), ("owner_doc", user_id),
+		                   home_dir=data_dir, instance_id=instance_id)
+		return text + (" Both drafts are ONE decision: approving either promotes both, "
+		               "rejecting either rejects both.")
+	except Exception as e:
+		logger.warning("owner.md supersede draft for skill %s failed: %s", skill_id, e)
+		return ""
+
+
 def _queue_depth(user_id: str, data_dir, instance_id: str) -> int:
 	"""How many proposals are waiting on the owner (035 P1-8). Fail-open to 0."""
 	try:
@@ -177,57 +317,6 @@ def _queue_depth(user_id: str, data_dir, instance_id: str) -> int:
 		return len(list_pending(user_id, home_dir=data_dir, instance_id=instance_id))
 	except Exception:
 		return 0
-
-
-def perform_rules_propose(text: str, *, user_id: str, data_dir, instance_id: str,
-                          is_forged: bool):
-	"""Record a durable operating RULE in the owner RULES doc. Returns an
-	``ActionResult``.
-
-	035 P1-7: `contract.md` had a real reader (`load_contract_doc`,
-	CONTRACT_DOC_ENABLED default ON) and, over the whole measured life of the
-	subsystem on prod, ZERO writes — a dead lane behind live plumbing, costing a
-	document kind, a writer and a tool-description slot. An owner-authored prose
-	rule and an "operating contract" are the same thing, so
-	`preferences(contract_propose)` now routes here and writes `owner.md`. The
-	rule is a draft on every turn, an owner turn too (`_rules_immediate` is
-	False): the owner confirms it with `/pending`.
-
-	No NEW contract draft is ever created. An EXISTING one stays listable and
-	promotable via `/pending` for one release (035 §6 migration step 2); the
-	physical removal of ContractWriter/KIND_CONTRACT lands after that, so this
-	release cannot orphan a queued proposal.
-
-	Lives HERE, not in `action_registration.py`: that file is a god-file under a
-	shrink-only size ratchet, and this is the same concern its sibling
-	doc-authoring write paths already implement.
-	"""
-	from core.owner_doc_writer import OwnerDocWriter
-	from core.self_context_writer import PROVENANCE_AGENT, PROVENANCE_BACKGROUND
-	created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-	writer = OwnerDocWriter(data_dir, instance_id=instance_id)
-	immediate = _rules_immediate(is_forged)
-	before = writer.read_active(user_id) if immediate else ""
-	if immediate:
-		res = writer.apply_now(text, user_id=user_id, created_by=created_by)
-	else:
-		res = writer.propose(text, user_id=user_id, created_by=created_by,
-		                     pending=True)
-	if not res.ok:
-		return res, ActionResult(
-			error=f"Operating rule rejected: {'; '.join(res.errors)}",
-			include_in_memory=True)
-	if not res.pending:
-		from core.self_evolution import summarize_doc_change
-		return res, ActionResult(
-			extracted_content=_applied_now_text(
-				"Operating rule", summarize_doc_change(
-					before, writer.read_active(user_id))),
-			include_in_memory=True)
-	return res, ActionResult(
-		extracted_content=_queued_text("Operating rule", "owner_doc", user_id,
-		                               _queue_depth(user_id, data_dir, instance_id)),
-		include_in_memory=True)
 
 
 class DocAuthoringMixin:
@@ -269,14 +358,15 @@ class DocAuthoringMixin:
 			source: Optional[str] = None
 			observed_at: Optional[str] = None
 
+		from core.prompt_text import owner_route
+
 		@self.registry.action(
-			"Refine your evolving SELF context — YOUR OWN durable notes: lessons "
+			owner_route("self_doc") + " YOUR OWN durable notes: lessons "
 			"learned, conventions you follow, what worked and what did not. "
 			"action='read' "
 			f"returns the current text; action='update' replaces it (≤{SELF_DOC_MAX_CHARS} chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
-			"Draft activation requires owner review through /pending. On any "
-			"turn an update/patch is queued for review. This is NOT your core "
+			"Every update/patch is a draft the owner reviews (/pending). This is NOT your core "
 			"identity/boundaries (those are operator-owned). "
 			"Pass source= (where it came from: 'measured', 'owner said', 'room_read') "
 			"and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line "
@@ -336,28 +426,20 @@ class DocAuthoringMixin:
 					include_in_memory=True)
 
 			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-			immediate = _rules_immediate(is_forged)
-			before = writer.read_active(user_id) if immediate else ""
 			try:
-				res, err = _write_doc(writer, params, user_id=user_id,
-				                      created_by=created_by, immediate=immediate)
+				res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
 				if err:
-					return ActionResult(error=err, include_in_memory=True)
+					return ActionResult(error=NOTHING_WRITTEN + err, include_in_memory=True)
 			except Exception as e:
 				self.logger.debug(f"self_context_manage failed: {e}")
-				return ActionResult(error=f"self_context_manage failed: {e}", include_in_memory=True)
+				return ActionResult(error=f"{NOTHING_WRITTEN}self_context_manage failed: {e}",
+				                    include_in_memory=True)
 
 			if not res.ok:
-				return ActionResult(error=f"Self-context rejected: {'; '.join(res.errors)}",
+				return ActionResult(error=_rejected("Self-context", res.errors, replace_hint=False),
 				                    include_in_memory=True)
+			_room = _headroom_note(writer, res, "self.md", replace_hint=False)
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
-			if not res.pending:
-				from core.self_evolution import summarize_doc_change
-				return ActionResult(
-					extracted_content=_applied_now_text(
-						"Self-context", summarize_doc_change(before, writer.read_active(user_id))),
-					include_in_memory=True,
-				)
 			# §7.1: proactively tell the owner a proposal is waiting (fail-open,
 			# gated SELF_EVOLUTION_TRANSPARENCY). Closes the "owner never told" gap.
 			try:
@@ -370,7 +452,7 @@ class DocAuthoringMixin:
 			return ActionResult(
 				extracted_content=_queued_text(
 					"Self-context", "self_context", user_id,
-					_queue_depth(user_id, data_dir, resolve_instance_id())),
+					_queue_depth(user_id, data_dir, resolve_instance_id())) + _room,
 				include_in_memory=True,
 			)
 
@@ -395,11 +477,12 @@ class DocAuthoringMixin:
 		from typing import Literal as _Literal
 
 		class OwnerDocManageAction(BaseModel):
-			action: _Literal["update", "patch", "read", "promote", "sweep"]
-			content: Optional[str] = None      # update: full owner.md body (≤1600 chars)
+			action: _Literal["update", "patch", "replace_rule", "read", "promote", "sweep"]
+			content: Optional[str] = None      # update: full owner.md body (≤OWNER_DOC_MAX_CHARS)
 			old_string: Optional[str] = None   # patch: exact text to replace
-			new_string: Optional[str] = None   # patch: replacement
+			new_string: Optional[str] = None   # patch / replace_rule: replacement
 			replace_all: bool = False
+			rule_start: Optional[str] = None   # replace_rule: the first words of ONE active rule
 			# 057 WS-D — provenance. `source` = where this came from (free text:
 			# 'room_read', 'owner said', 'measured'); `observed_at` = the ISO date
 			# it was true (defaults to today). Given, they stamp every NEW or
@@ -408,28 +491,24 @@ class DocAuthoringMixin:
 			source: Optional[str] = None
 			observed_at: Optional[str] = None
 
+		from core.prompt_text import owner_route
+
 		@self.registry.action(
-			"Record the OWNER's durable facts and STANDING RULES — their timezone, "
-			"projects, and how they want you to operate (a small owner.md, "
-			f"≤{OWNER_DOC_MAX_CHARS} chars). "
-			"It holds preferences and policy, NOT on/off switch states or job ids. "
-			"It is the file owner.md in your identity directory "
-			"(<data_dir>/identity/<instance>/user_<id>/, next to self.md); "
+			"Record the OWNER's durable facts and STANDING RULES — timezone, projects, "
+			"how they want you to operate (owner.md in your identity directory, "
+			f"≤{OWNER_DOC_MAX_CHARS} chars). " + owner_route("owner_doc") + " "
 			"action='read' returns it with its path — never search the disk for it. "
-			"action='update' replaces it (consolidate, keep "
-			"only durable facts); action='patch' edits the ACTIVE rules by exact-string "
-			"replace (the '## Superseded' history is never patched); "
-			"Draft activation requires owner review through /pending. On any "
-			"turn an update/patch is queued for review. "
-			"Pass source= (where the fact came from: 'owner said', 'measured', "
-			"'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or "
-			"changed line is written with its provenance; that stamp counts toward the "
-			"char cap. A line that CLAIMS something about the world (broken, blocked, "
-			"disabled, lacks permission, since …) may be refused without a source. "
-			"action='sweep' with content=<a rule> lists every standing instruction "
-			"that appears to contradict it — owner rules, SOUL, skills, cron/goal task "
-			"text and workspace docs marked `kind: instruction` (records are never "
-			"swept). Advisory: it changes nothing. A rule you record is swept for you.",
+			"action='update' replaces the whole doc; action='patch' edits the ACTIVE "
+			"rules by exact-string replace; action='replace_rule' (rule_start=<first "
+			"words of ONE active rule>, new_string=<the new rule>, none = retire it) "
+			"replaces that rule in place; the old text moves under '## Superseded' (off "
+			"the cap). Every write reports the chars left. "
+			"Pass source= ('owner said', 'measured') and observed_at=YYYY-MM-DD to stamp "
+			"new lines (counts toward the cap); a line CLAIMING a world fact (broken, "
+			"since …) may be refused without a source. action='sweep' content=<a rule> "
+			"lists standing instructions (owner rules, SOUL, skills, job/goal text, "
+			"`kind: instruction` docs) that seem to contradict it; advisory; every write "
+			"is swept too.",
 			param_model=OwnerDocManageAction,
 		)
 		async def owner_doc_manage(params: OwnerDocManageAction, execution_context=None) -> ActionResult:
@@ -485,31 +564,44 @@ class DocAuthoringMixin:
 					error="Promotion requires owner review through /pending; a model tool call cannot approve its draft.",
 					include_in_memory=True)
 
+			if params.action == "replace_rule":
+				# F4: one rule, found by its first words, through the patch path —
+				# so the old text is superseded (dated, kept) and leaves the cap.
+				from core.doc_claims import split_superseded_raw
+				editable = split_superseded_raw(_draft_or_active(writer, user_id))[0]
+				hits = find_rule(editable, params.rule_start or "")
+				if len(hits) != 1:
+					why = (f"no active rule starts with {params.rule_start!r} — "
+					       "action='read' shows the rules" if not hits else
+					       f"{len(hits)} active rules start with {params.rule_start!r} — "
+					       "give more of the first words: "
+					       + " | ".join(h.split(chr(10))[0][:60] for h in hits[:4]))
+					return ActionResult(error=NOTHING_WRITTEN + why, include_in_memory=True)
+				_new = (params.new_string or "").strip()
+				_bullet = _LIST_ITEM.match(hits[0])
+				if _new and _bullet and not _LIST_ITEM.match(_new):
+					_new = _bullet.group(0) + _new   # a list item stays a list item
+				params = params.model_copy(update={
+					"action": "patch", "old_string": hits[0],
+					"new_string": _new, "replace_all": False})
+
 			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-			immediate = _rules_immediate(is_forged)
-			before = writer.read_active(user_id) if immediate else ""
 			try:
-				res, err = _write_doc(writer, params, user_id=user_id,
-				                      created_by=created_by, immediate=immediate)
+				res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
 				if err:
-					return ActionResult(error=err, include_in_memory=True)
+					return ActionResult(error=NOTHING_WRITTEN + err, include_in_memory=True)
 			except Exception as e:
 				self.logger.debug(f"owner_doc_manage failed: {e}")
-				return ActionResult(error=f"owner_doc_manage failed: {e}", include_in_memory=True)
+				return ActionResult(error=f"{NOTHING_WRITTEN}owner_doc_manage failed: {e}",
+				                    include_in_memory=True)
 
 			if not res.ok:
-				return ActionResult(error=f"Owner-facts doc rejected: {'; '.join(res.errors)}",
+				return ActionResult(error=_rejected("Owner-facts doc", res.errors, replace_hint=True),
 				                    include_in_memory=True)
+			_room = _headroom_note(writer, res, "owner.md rules", replace_hint=True)
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
-			if not res.pending:
-				from core.self_evolution import summarize_doc_change
-				after = writer.read_active(user_id)
-				return ActionResult(
-					extracted_content=_applied_now_text(
-						"Owner-facts doc", summarize_doc_change(before, after))
-					+ _sweep_new_rules(self, before, after, user_id, data_dir),
-					include_in_memory=True,
-				)
+			_swept = _sweep_new_rules(self, writer.read_active(user_id),
+			                          _draft_or_active(writer, user_id), user_id, data_dir)
 			try:
 				from core import self_evolution as _se
 				await _se.maybe_notify_owner_pending(
@@ -520,6 +612,6 @@ class DocAuthoringMixin:
 			return ActionResult(
 				extracted_content=_queued_text(
 					"Owner-facts", "owner_doc", user_id,
-					_queue_depth(user_id, data_dir, resolve_instance_id())),
+					_queue_depth(user_id, data_dir, resolve_instance_id())) + _room + _swept,
 				include_in_memory=True,
 			)

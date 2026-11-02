@@ -76,7 +76,7 @@ def _cmd(agent, result):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("ROOM_ACTIONS_ENABLED", "true")
@@ -209,7 +209,7 @@ def test_the_dispatcher_admits_paid_from_a_member_only_with_the_grant(env):
     container = _Container(str(env))
     assert "/paid" in _MEMBER_GRANTABLE_COMMANDS
     assert not _member_verb_granted(container, "telegram", "-100", "/paid")
-    ok, msg = chat_policy.set(str(env), "rob", "telegram", "-100",
+    ok, msg = chat_policy.set(str(env), "alice", "telegram", "-100",
                               "chat.member_verbs", ["help", "paid"])
     assert ok, msg
     assert _member_verb_granted(container, "telegram", "-100", "/paid")

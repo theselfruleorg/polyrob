@@ -59,8 +59,8 @@ def test_owner_login_wrong_password_401(own_ops_owner_client):
 def test_the_page_says_sign_in_to_rob(own_ops_owner_client):
     """070 E.32: the page speaks through the copy layer."""
     text = own_ops_owner_client.get("/owner-login").text
-    assert "<title>Sign in – Rob" in text
-    assert "Sign in to Rob" in text
+    assert "<title>Sign in – POLYROB" in text
+    assert "Sign in to POLYROB" in text
     assert ">Sign in</button>" in text
     assert "Owner Login" not in text
     assert "Log in" not in text

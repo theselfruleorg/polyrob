@@ -38,6 +38,10 @@ class SendReceipt:
     status: str
     message_ids: list = field(default_factory=list)
     post: Optional[int] = None
+    #: Why a ``failed`` send failed, in words the agent can act on (a dead
+    #: target's mark and how it clears, or the surface's own error); None when
+    #: not known.
+    error: Optional[str] = None
 
 
 class MessageRouter:
@@ -567,11 +571,13 @@ class MessageRouter:
                         "send_message: enqueue no-op for %s — the queued copy was "
                         "dead-lettered; delivery failed", idem)
             logger.warning("send_message: no surface %s registered — delivery failed", surface_id)
-            return SendReceipt("failed")
-        if (self._dt is not None and dead_target_registry_enabled()
-                and self._dt.is_dead(surface_id, chat_id or "")):
+            return SendReceipt("failed", error=f"no {surface_id} surface is running in any process")
+        dead = (self._dt.get(surface_id, chat_id or "")
+                if self._dt is not None and dead_target_registry_enabled() else None)
+        if dead:
             logger.info("send_message: dead-target SKIP surface=%s dest=%s", surface_id, chat_id)
-            return SendReceipt("failed")
+            from core.surfaces.dead_targets import describe_dead_target
+            return SendReceipt("failed", error=describe_dead_target(dead))
         try:
             result = await surface.send(OutboundMessage(
                 session_key=f"direct:{surface_id}:{chat_id}", text=text,
@@ -579,7 +585,7 @@ class MessageRouter:
             ))
         except Exception as e:
             logger.error("send_message shim failed: %s", e, exc_info=True)
-            return SendReceipt("failed")
+            return SendReceipt("failed", error=f"{surface_id} send raised: {e}"[:400])
         if getattr(result, "success", True) is False:
             if self._dt is not None and dead_target_registry_enabled():
                 reason = classify_dead_error(surface_id, getattr(result, "error", None))
@@ -601,10 +607,25 @@ class MessageRouter:
                     # kicked from must mark it left exactly as a room reply does.
                     if reason in ROOM_DEATH_REASONS and self._is_room(surface_id, chat_id):
                         self._mark_room_left(surface_id, chat_id, reason)
-            return SendReceipt("failed")
+            return SendReceipt("failed", error=(
+                f"{surface_id} refused the send: {getattr(result, 'error', None) or 'no reason given'}"
+            )[:400])
         self._record_effect("router_send_message", surface_id, chat_id, text)
         self._record_proactive_room_post(surface_id, chat_id, text, media)
+        self._clear_dead_on_success(surface_id, chat_id)
         return SendReceipt("sent", self._ids_of(result), self._record_post(surface_id, chat_id, result, text))
+
+    def _clear_dead_on_success(self, surface_id, chat_id) -> None:
+        """A delivered send proves the target alive: drop any stale mark, so an
+        aged-out single failure does not count toward a second one months later
+        (a broadcast channel never writes in, so inbound never revives it).
+        Fail-open."""
+        if self._dt is None or not dead_target_registry_enabled():
+            return
+        try:
+            self._dt.clear(surface_id, chat_id or "")
+        except Exception as e:
+            logger.debug("send_message: dead-target clear failed surface=%s: %s", surface_id, e)
 
     def _record_proactive_room_post(self, surface_id, chat_id, text, media) -> None:
         """A DELIVERED `message(target=<room>)` post joins the room log too.

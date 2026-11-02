@@ -112,7 +112,7 @@ def test_the_seed_seam_loads_a_pinned_skill():
 
 
 def test_the_rules_section_names_a_missed_pin(tmp_path, monkeypatch):
-	monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+	monkeypatch.setenv("POLYROB_INSTANCE_ID", "demo")
 	from core.status_rules import rules_section
 	from core.status_snapshot import Section
 	tele = Section(name="telemetry", data={"rows": [

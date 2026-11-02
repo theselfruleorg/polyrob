@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Driving a website: scrape, click, fill forms'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Browser Automation Workflows

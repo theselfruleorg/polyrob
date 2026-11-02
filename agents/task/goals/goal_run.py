@@ -774,12 +774,23 @@ class GoalRunMixin:
                            meta: Optional[Dict[str, Any]] = None) -> None:
         """The goal's run record for one exit path (2026-10-13 review R3)."""
         from agents.task.agent.core.episodic_digest import record_run
-        await record_run(regime=_GOAL_REGIME, kind="goal", session_id=session_id,
-                         user_id=goal.user_id, rail_id=f"goal:{goal.id}",
-                         task=getattr(goal, "title", None), outcome=outcome,
-                         reason=reason, error=error, run=run, summary=summary,
-                         goal_id=goal.id, meta={"source": "goal", **(meta or {})},
-                         mandate=(getattr(goal, "payload", None) or {}).get("mandate"))
+        stored = await record_run(regime=_GOAL_REGIME, kind="goal", session_id=session_id,
+                                  user_id=goal.user_id, rail_id=f"goal:{goal.id}",
+                                  task=getattr(goal, "title", None), outcome=outcome,
+                                  reason=reason, error=error, run=run, summary=summary,
+                                  goal_id=goal.id, meta={"source": "goal", **(meta or {})},
+                                  mandate=(getattr(goal, "payload", None) or {}).get("mandate"))
+        # 095 W13: the reviewer runs AFTER the run, outside its budget and cap.
+        try:
+            from agents.task.agent.core.background_review import schedule_review_after_run
+            from core.config_policy.rigs import pinned_skills
+            schedule_review_after_run(getattr(self, "task_agent", None), regime=_GOAL_REGIME,
+                                      session_id=session_id,
+                                      user_id=goal.user_id, rail_id=f"goal:{goal.id}",
+                                      outcome=outcome, meta=stored,
+                                      pinned=pinned_skills(getattr(goal, "payload", None) or {}))
+        except Exception:
+            logger.debug("after-run review not scheduled", exc_info=True)
 
     def _own_pre_sid(self, ctx: _GoalRunCtx) -> Optional[str]:
         """The pre-generated session id when the run really took it (the marker

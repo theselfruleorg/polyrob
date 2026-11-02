@@ -110,6 +110,7 @@ CONFIRMABLE_VERBS = frozenset({
     "/send", "/swap", "/bridge", "/pay", "/claim", "/launch", "/deploy",
     "/nft", "/identity", "/writeoff", "/unquarantine", "/wallet",
     "/restart", "/update",  # 077: restart / update the agent, quote -> owner confirm
+    "/model",  # 094: a switch to a much pricier model is quoted first
 })
 
 #: Confirmable verbs whose BARE form already quotes (``/restart`` → "To restart:
@@ -814,7 +815,7 @@ _NOT_SENT_MARK = "RESULT: NOT SENT"
 
 #: Confirmable verbs with no dry run under them (no guard verdict to read), so
 #: the refusal check never applies: the quote IS the plan.
-_NO_GUARD_VERBS = frozenset({"/restart", "/update"})
+_NO_GUARD_VERBS = frozenset({"/restart", "/update", "/model"})
 
 
 def refused_quote(text: Any) -> bool:
@@ -1111,6 +1112,7 @@ SETTING_CARD_SUBCOMMANDS = {
     "/config": frozenset({"set"}),
     "/goal": frozenset({"grant"}),
     "/job": frozenset({"edit"}),
+    "/model": frozenset({"default"}),   # 095 W1c: /model <name> default (3rd word)
 }
 MAX_SETTING_WORDS = 40
 
@@ -1125,9 +1127,11 @@ def setting_card(user_id: str, words: List[str], *, title: str, body: str = "",
     words = [str(w) for w in (words or []) if str(w).strip()]
     verb = words[0].lower() if words else ""
     shape = SETTING_CARD_SUBCOMMANDS.get(verb)
-    if shape is None or len(words) < 3 or words[1].lower() not in shape:
+    sub = words[-1] if verb == "/model" else words[1] if len(words) > 1 else ""
+    if (shape is None or len(words) < 3 or sub.lower() not in shape
+            or (verb == "/model" and len(words) != 3)):
         raise ValueError("a setting card carries only /mcp add, /config set, "
-                         "/goal grant or /job edit <id> grant")
+                         "/goal grant, /job edit <id> grant or /model <name> default")
     if verb == "/job" and (len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a setting card edits a job only as /job edit <id> grant …")
     args = words[1:]
@@ -1226,8 +1230,8 @@ def tap_line(text: str, user_id: str, *, st: Optional[CardStore] = None) -> str:
             return card.line
         if act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL):
             return card.refresh_line
-        if act == "no":
-            return f"(cancelled the card: {card.title})"
+        if act == "no":   # memory F9: the id and the whole line, never the title alone
+            return f"(cancelled card {card.card_id}: {card.line or card.title})"
         if act.isdigit() and 1 <= int(act) <= len(card.options):
             return f"(picked \"{card.options[int(act) - 1]}\" on the card: {card.title})"
     except Exception:
@@ -1341,6 +1345,57 @@ def close_choices_for_text(user_id: str, session_id: str, text: str, *,
     return closed
 
 
+# ── the push ────────────────────────────────────────────────────────────────
+
+#: Prod 10-19 / 10-28: 14 card pushes were held by the hourly message limit and
+#: the owner got nothing. The held pushes of a burst collapse into ONE line, at
+#: most once per window, on the exempt lane (it neither spends nor is denied by
+#: the owner budget). The cards themselves stay in ``/cards``.
+HELD_PUSH_WINDOW_S = 3600.0
+HELD_PUSH_DELAY_S = 10.0
+_HELD_PUSHES: dict = {}
+
+
+async def push(container: Any, user_id: str, card: Card, *,
+               session_id: Optional[str] = None) -> str:
+    """Show ``card`` to the owner through the one delivery rail. Returns the
+    rail's outcome; a ``rate_limited`` push is counted into the held line."""
+    from core.surfaces.user_delivery import deliver_user_message
+    outcome = await deliver_user_message(container, user_id, render_text(card),
+                                         source="action_card", session_id=session_id or None,
+                                         card_id=card.card_id)
+    if outcome == "rate_limited":
+        _note_held_push(container, str(user_id))
+    return outcome
+
+
+def _note_held_push(container: Any, user_id: str) -> None:
+    held = _HELD_PUSHES.setdefault(user_id, {"n": 0, "pending": False, "last": 0.0})
+    held["n"] += 1
+    if held["pending"] or time.time() - held["last"] < HELD_PUSH_WINDOW_S:
+        return
+    held["pending"] = True
+    from core.async_bridge import spawn_retained
+    spawn_retained(_send_held_line(container, user_id, held))
+
+
+async def _send_held_line(container: Any, user_id: str, held: dict) -> None:
+    import asyncio
+    try:
+        await asyncio.sleep(HELD_PUSH_DELAY_S)       # the rest of the burst joins
+        n, held["n"] = held["n"], 0
+        noun = "card waits" if n == 1 else "cards wait"
+        from core.surfaces.user_delivery import PRIORITY_EXEMPT, deliver_user_message
+        await deliver_user_message(
+            container, user_id, f"📋 {n} more {noun} in /cards — the hourly message "
+                                f"limit held the push.", source="action_card",
+            priority=PRIORITY_EXEMPT)
+    except Exception:
+        logger.warning("held card push line not sent", exc_info=True)
+    finally:
+        held["pending"], held["last"] = False, time.time()
+
+
 def wait_for_answer(card_id: str, timeout_s: float, *, poll_s: float = 1.0,
                     st: Optional[CardStore] = None) -> Optional[Card]:
     """Block (a worker thread) until the card leaves ``open`` or the time is up."""
@@ -1360,6 +1415,6 @@ __all__ = [
     "KIND_PROPOSAL",
     "KIND_QUOTE", "Press", "add_listener", "card_actions", "card_token", "choice_card", "close_choices_for_text",
     "confirm_line_in", "finish", "list_reply", "parse_card_token", "press",
-    "proposal_card", "quote_card", "refused_quote", "remove_listener", "render_text",
+    "proposal_card", "push", "quote_card", "refused_quote", "remove_listener", "render_text",
     "set_store", "store", "tap_line", "wait_for_answer", "with_go_hint",
 ]

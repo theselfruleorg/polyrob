@@ -68,7 +68,7 @@ async def test_a_non_stable_asset_is_never_sized_at_par(x402_db, pnl_asset):
     """⚠️ No quoter must REFUSE, not mint `usd * 10**decimals` raw units."""
     with pytest.raises(ValueError) as e:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             chain="robinhood", asset_id="tkn", quoter=None, db=x402_db)
     msg = str(e.value).lower()
     assert "price" in msg and "tkn" in msg
@@ -78,7 +78,7 @@ async def test_a_non_stable_asset_is_never_sized_at_par(x402_db, pnl_asset):
 async def test_a_quoted_non_stable_asset_is_sized_from_the_price(x402_db, pnl_asset):
     q = _Quoter(usd_per_token=0.00006364)
     inv = await invoicing.create_payment_request(
-        user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+        user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
         chain="robinhood", asset_id="tkn", quoter=q, db=x402_db)
     assert q.calls == 1
     # 5 / 0.00006364 = 78566.94... tokens, at 18 decimals.
@@ -91,7 +91,7 @@ async def test_a_wash_pool_is_refused_rather_than_priced(x402_db, pnl_asset):
     q = _Quoter(verdict="WASH")
     with pytest.raises(ValueError) as e:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             chain="robinhood", asset_id="tkn", quoter=q, db=x402_db)
     assert "WASH" in str(e.value)
 
@@ -102,7 +102,7 @@ async def test_a_raising_quoter_refuses_and_never_falls_back_to_par(
     """An indexer outage costs an invoice; it must not give one away."""
     with pytest.raises(ValueError):
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             chain="robinhood", asset_id="tkn", quoter=_Quoter(raises=True),
             db=x402_db)
 
@@ -117,7 +117,7 @@ async def test_the_asset_min_amount_floor_still_applies_after_sizing(
         min_amount_raw=10 ** 30, source="operator"))
     with pytest.raises(ValueError) as e:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
             chain="robinhood", asset_id="tkn", quoter=_Quoter(), db=x402_db)
     assert "floor" in str(e.value)
 
@@ -128,7 +128,7 @@ async def test_the_asset_min_amount_floor_still_applies_after_sizing(
 async def test_a_dollar_pegged_asset_never_consults_the_quoter(x402_db):
     q = _Quoter()
     inv = await invoicing.create_payment_request(
-        user_id="rob", session_id="s1", amount_usd=1.25, purpose="p",
+        user_id="alice", session_id="s1", amount_usd=1.25, purpose="p",
         quoter=q, db=x402_db)
     assert q.calls == 0
     assert inv["amount_raw"] == 1_250_000
@@ -138,7 +138,7 @@ async def test_a_dollar_pegged_asset_never_consults_the_quoter(x402_db):
 async def test_an_explicit_amount_raw_still_wins(x402_db, pnl_asset):
     q = _Quoter()
     inv = await invoicing.create_payment_request(
-        user_id="rob", session_id="s1", amount_usd=5.0, purpose="p",
+        user_id="alice", session_id="s1", amount_usd=5.0, purpose="p",
         chain="robinhood", asset_id="tkn", amount_raw=7 * 10 ** 22,
         quoter=q, db=x402_db)
     assert q.calls == 0

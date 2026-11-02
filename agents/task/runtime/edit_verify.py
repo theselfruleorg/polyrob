@@ -25,9 +25,8 @@ from core.action_names import action_names
 # The REGISTERED keys (``coding_str_replace``), not the bare method names: the
 # ledger records what the Controller registered. Matching the bare names left
 # this check dead in production (coding-agent review B1, 2026-09-24).
-_EDIT_ACTIONS = (action_names("coding", "str_replace", "apply_patch", "create_file",
-                              "move_file", "delete_file")
-                 | action_names("self_env", "self_env_patch_source"))
+_EDIT_ACTIONS = action_names("coding", "str_replace", "apply_patch", "create_file",
+                             "move_file", "delete_file")
 _TEST_ACTIONS = action_names("coding", "run_tests")
 
 # Public contract name (R-4): external consumers (tools/hf_deploy/digest.py's

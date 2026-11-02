@@ -27,8 +27,8 @@ class FakeDB:
 @pytest.mark.asyncio
 async def test_treasury_net_excludes_runtime_cost():
     """THE regression test for the merge bug: the owner's API bill must never
-    enter Rob's net. Historically net_usd = earned - (api_cost + wallet)."""
-    led = await build_ledger("rob", days=1, db=FakeDB(api_usd=2.47, settled_usd=5.0))
+    enter the agent's net. Historically net_usd = earned - (api_cost + wallet)."""
+    led = await build_ledger("alice", days=1, db=FakeDB(api_usd=2.47, settled_usd=5.0))
     assert led["treasury"]["income_usd"] == 5.0
     assert led["treasury"]["spend_usd"] == 0.0          # no wallet events
     assert led["treasury"]["net_usd"] == 5.0            # income - spend, NOT minus 2.47
@@ -56,7 +56,7 @@ async def test_treasury_unavailable_when_wallet_metering_broken(monkeypatch):
         return {"wallet_spend_usd": 0.0, "wallet_payments": 0, "wallet_metering": "error"}
 
     monkeypatch.setattr(ul, "_wallet_leg", _broken_wallet_leg)
-    led = await build_ledger("rob", days=1, db=FakeDB(settled_usd=5.0))
+    led = await build_ledger("alice", days=1, db=FakeDB(settled_usd=5.0))
     assert led["treasury"]["income_usd"] == 5.0         # income leg read fine
     assert led["treasury"]["spend_usd"] == 0.0          # fabricated zero from the broken leg
     assert led["treasury"]["available"] is False        # must NOT look healthy
@@ -64,7 +64,7 @@ async def test_treasury_unavailable_when_wallet_metering_broken(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_runtime_window_and_total_are_independent():
-    led = await build_ledger("rob", days=1, db=FakeDB(api_usd=2.47, api_total=13.97,
+    led = await build_ledger("alice", days=1, db=FakeDB(api_usd=2.47, api_total=13.97,
                                                       calls=100, calls_total=561))
     assert led["runtime"]["spend_window_usd"] == 2.47
     assert led["runtime"]["spend_total_usd"] == 13.97
@@ -75,14 +75,14 @@ async def test_runtime_window_and_total_are_independent():
 @pytest.mark.asyncio
 async def test_balances_omitted_by_default_and_no_network_read():
     """include_balances defaults False: both balance fields are None and no probe runs."""
-    led = await build_ledger("rob", days=1, db=FakeDB())
+    led = await build_ledger("alice", days=1, db=FakeDB())
     assert led["treasury"]["balance_usd"] is None
     assert led["runtime"]["provider_balance_usd"] is None
 
 
 @pytest.mark.asyncio
 async def test_no_treasury_key_uses_legacy_names():
-    led = await build_ledger("rob", days=1, db=FakeDB())
+    led = await build_ledger("alice", days=1, db=FakeDB())
     assert "earned_usd" not in led["treasury"]
     assert "spent_usd" not in led["treasury"]
     assert "spent_window_usd" not in led["runtime"]
@@ -92,7 +92,7 @@ async def test_no_treasury_key_uses_legacy_names():
 async def test_merged_fields_are_gone():
     """No alias: a surviving total_spend_usd would let a consumer silently keep
     reading the merge. Deleting makes any straggler fail loudly."""
-    led = await build_ledger("rob", days=1, db=FakeDB())
+    led = await build_ledger("alice", days=1, db=FakeDB())
     assert "total_spend_usd" not in led
     assert "net_usd" not in led            # top level; treasury.net_usd remains
     assert "earned_usd" not in led

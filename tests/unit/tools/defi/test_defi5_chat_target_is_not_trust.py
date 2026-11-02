@@ -22,14 +22,14 @@ TARGET = {"chain": "robinhood", "address": ADDR}
 
 @pytest.fixture(autouse=True)
 def _owner(monkeypatch):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
 
 
 def _turn(owner_text=None):
     meta = {}
     if owner_text is not None:
         meta["owner_text"] = owner_text
-    return types.SimpleNamespace(user_id="rob", role="orchestrator", is_sub_agent=False,
+    return types.SimpleNamespace(user_id="alice", role="orchestrator", is_sub_agent=False,
                                  metadata=meta, session_id=None, parent_session_id=None)
 
 
@@ -40,7 +40,7 @@ def _goal(tmp_path, ctx):
         GoalCreateAction(title="buy back the token weekly", target_token=TARGET), ctx))
     assert res.error is None, res.error
     assert "NOT written" not in res.extracted_content, res.extracted_content
-    return tool._resolve_board().list_recent(user_id="rob", limit=1)[0].payload
+    return tool._resolve_board().list_recent(user_id="alice", limit=1)[0].payload
 
 
 def _job(tmp_path, ctx):
@@ -51,7 +51,7 @@ def _job(tmp_path, ctx):
                            target_token=TARGET), execution_context=ctx))
     assert res.error is None, res.error
     assert "NOT written" not in res.extracted_content, res.extracted_content
-    return tool._cron_service.list_jobs(user_id="rob")[0].payload
+    return tool._cron_service.list_jobs(user_id="alice")[0].payload
 
 
 def _trusted(payload) -> bool:
@@ -84,7 +84,7 @@ def test_an_owner_turn_target_waits_for_the_owner_card(tmp_path, make, monkeypat
     try:
         with pytest.raises(AssertionError, match="NOT written"):
             make(tmp_path, _turn(owner_text=f"buy back {ADDR.lower()} every 6h"))
-        (card,) = cards.store().open_cards("rob")
+        (card,) = cards.store().open_cards("alice")
         assert f"target={ADDR}" in card.args and "chain=robinhood" in card.args
     finally:
         cards.set_store(None)
@@ -120,12 +120,12 @@ def test_owner_create_stamps_owner_and_overrides_a_forged_agent_stamp(tmp_path, 
     extra = {PAYLOAD_KEY: dict(TARGET), "target_authored_by": "agent"}
     if seat == "goal":
         board = GoalBoard(str(tmp_path / "goals.db"))
-        payload = create_goal(board, user_id="rob", title="buy back",
+        payload = create_goal(board, user_id="alice", title="buy back",
                               extra_payload=extra).payload
     else:
         svc = CronService(CronJobStore(str(tmp_path / "cron.db")))
         payload = create_cron(svc, task="buy back", schedule_spec="0 */6 * * *",
-                              user_id="rob", extra_payload=extra).payload
+                              user_id="alice", extra_payload=extra).payload
     assert payload["target_authored_by"] == "owner"
     assert _trusted(payload)
 
@@ -133,6 +133,6 @@ def test_owner_create_stamps_owner_and_overrides_a_forged_agent_stamp(tmp_path, 
 def test_owner_create_without_a_target_carries_no_stamp(tmp_path):
     from core.owner_create import create_goal
     board = GoalBoard(str(tmp_path / "goals.db"))
-    payload = create_goal(board, user_id="rob", title="tidy",
+    payload = create_goal(board, user_id="alice", title="tidy",
                           extra_payload={"target_authored_by": "owner"}).payload
     assert "target_authored_by" not in (payload or {})

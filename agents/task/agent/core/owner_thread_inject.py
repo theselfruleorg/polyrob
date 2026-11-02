@@ -119,6 +119,9 @@ class OwnerThreadInjectMixin:
                     row = referent(container, user_id, via=ref[0], mid=ref[1])
                     if row:
                         self._owner_thread_push(render_block([row], kind="referent"))
+                    elif len(ref) > 2 and ref[2]:
+                        # Not an owner-thread line: the platform's own copy.
+                        self._owner_thread_push(str(ref[2]))
                 except Exception:
                     pass
         except Exception as e:
@@ -175,17 +178,22 @@ class OwnerThreadInjectMixin:
     def _inject_owner_thread_referents(self, messages: List[dict]) -> None:
         """A drained STEER batch: render the referent of each quote-reply."""
         try:
-            refs = [(m.get("metadata") or {}).get("owner_thread_reply_to")
+            refs = [((m.get("metadata") or {}).get("owner_thread_reply_to"),
+                     (m.get("metadata") or {}).get("reply_quote"))
                     for m in (messages or []) if isinstance(m, dict)]
-            refs = [r for r in refs if r]
+            refs = [r for r in refs if r[0]]
             if not refs or not self._owner_thread_applicable():
                 return
             from core.surfaces.owner_thread import referent, render_block
             container = getattr(self, "container", None)
             user_id = getattr(self, "user_id", "")
-            for via, mid in refs[:3]:
+            for (via, mid), quoted in refs[:3]:
                 row = referent(container, user_id, via=str(via), mid=str(mid))
                 if row:
                     self._owner_thread_push(render_block([row], kind="referent"))
+                elif quoted:
+                    # A line the owner thread never held (a forward, a third
+                    # party's message, an old one): the platform's own copy.
+                    self._owner_thread_push(str(quoted))
         except Exception as e:
             self.logger.debug(f"owner thread referent skipped: {e}")

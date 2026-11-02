@@ -68,7 +68,7 @@ def tool(tmp_path, monkeypatch):
     t = FilesystemTool.__new__(FilesystemTool)
     t._enabled = True
     t.session_id = None
-    t.user_id = "rob"
+    t.user_id = "alice"
     t.workspace_dir = str(tmp_path)
     t.logger = __import__("logging").getLogger("test.fs")
     t.name = "filesystem"

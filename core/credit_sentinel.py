@@ -303,7 +303,7 @@ def release(provider: Optional[str] = None) -> bool:
     ⚠️ The window exists so an unattended night costs one paid probe per
     release window instead of a permanent halt. It is NOT a penalty: the moment
     the account is topped up the reason is gone, and waiting out the remaining
-    hours keeps Rob dead for nothing (2026-09-24, a 06:22Z trip against a
+    hours keeps the agent dead for nothing (2026-09-24, a 06:22Z trip against a
     12:22Z auto-release).
 
     Per provider, because the latch is. The documented remedy used to be

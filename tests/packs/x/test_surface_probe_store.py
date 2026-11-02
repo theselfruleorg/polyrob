@@ -14,10 +14,10 @@ async def test_probe_uses_the_store_token_not_only_the_env(monkeypatch):
 
     async def _http(method, url, headers=None, json=None):
         seen["auth"] = headers["Authorization"]
-        return 200, {"data": {"username": "rob"}}, ""
+        return 200, {"data": {"username": "alice"}}, ""
     monkeypatch.setattr(mod, "http_json", _http)
     res = await mod.probe({})
-    assert res.state == "ok" and "@rob" in res.detail
+    assert res.state == "ok" and "@alice" in res.detail
     assert seen["auth"] == "Bearer store-token"
 
 
@@ -41,7 +41,7 @@ async def test_static_env_token_still_works_without_a_store(monkeypatch):
 
     async def _http(method, url, headers=None, json=None):
         seen["auth"] = headers["Authorization"]
-        return 200, {"data": {"username": "rob"}}, ""
+        return 200, {"data": {"username": "alice"}}, ""
     monkeypatch.setattr(mod, "http_json", _http)
     res = await mod.probe({"TWITTER_OAUTH2_ACCESS_TOKEN": "env-tok"})
     assert res.state == "ok" and seen["auth"] == "Bearer env-tok"

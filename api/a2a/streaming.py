@@ -388,7 +388,7 @@ async def stream_message(
     # B28: the ONE permissive auth policy, not a fourth inlined copy. The
     # hand-rolled block here drifted from `get_user_permissive`: it never
     # accepted an API-key session (`request.state.authenticated` with no JWT),
-    # so a machine caller holding a valid rob_xxx key was 401'd on the stream
+    # so a machine caller holding a valid self-service API key was 401'd on the stream
     # while the same key worked on every other A2A route.
     user_id = await get_user_permissive(request)
 

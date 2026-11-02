@@ -131,9 +131,9 @@ async def test_filesystem_read_file_allows_ordinary_file(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("rel", [
-    "identity/rob/user_1/preferences.toml",
-    "identity/rob/user_1/contract.md",
-    "Identity/rob/user_1/preferences.toml",  # case-insensitive filesystems (APFS/Windows)
+    "identity/alice/user_1/preferences.toml",
+    "identity/alice/user_1/contract.md",
+    "Identity/alice/user_1/preferences.toml",  # case-insensitive filesystems (APFS/Windows)
 ])
 def test_coding_confine_blocks_identity_protected_files(tmp_path, rel):
     from tools.coding.tool import CodingError
@@ -148,15 +148,15 @@ def test_coding_confine_allows_other_identity_files(tmp_path):
     root = tmp_path / "ws"
     root.mkdir()
     tool = _coding_tool()
-    target = tool._confine("identity/rob/user_1/notes.md", str(root))
+    target = tool._confine("identity/alice/user_1/notes.md", str(root))
     assert target.startswith(str(root))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rel", [
-    "identity/rob/user_1/preferences.toml",
-    "identity/rob/user_1/contract.md",
-    "Identity/rob/user_1/preferences.toml",  # case-insensitive filesystems (APFS/Windows)
+    "identity/alice/user_1/preferences.toml",
+    "identity/alice/user_1/contract.md",
+    "Identity/alice/user_1/preferences.toml",  # case-insensitive filesystems (APFS/Windows)
 ])
 async def test_filesystem_write_file_refuses_identity_protected(tmp_path, monkeypatch, rel):
     tool = _fs_tool(tmp_path)
@@ -173,12 +173,12 @@ async def test_filesystem_write_file_refuses_identity_protected(tmp_path, monkey
 @pytest.mark.asyncio
 async def test_filesystem_write_file_allows_other_identity_files(tmp_path, monkeypatch):
     tool = _fs_tool(tmp_path)
-    target = tmp_path / "identity" / "rob" / "user_1" / "notes.md"
+    target = tmp_path / "identity" / "alice" / "user_1" / "notes.md"
     monkeypatch.setattr(tool, "_normalize_path", lambda p: str(target))
     monkeypatch.setattr(tool, "ensure_initialized", _anoop, raising=False)
 
     from tools.filesystem import WriteFileAction
-    await tool.write_file(WriteFileAction(file_path="identity/rob/user_1/notes.md", content="hello"))
+    await tool.write_file(WriteFileAction(file_path="identity/alice/user_1/notes.md", content="hello"))
     assert target.read_text() == "hello"
 
 

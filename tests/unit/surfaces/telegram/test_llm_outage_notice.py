@@ -69,13 +69,13 @@ class _FakeAgent:
         return self.reply
 
 
-async def _drive(agent, session_id="sess-1", notice_key="agent:main:telegram:dm:42:rob"):
+async def _drive(agent, session_id="sess-1", notice_key="agent:main:telegram:dm:42:alice"):
     sent = []
 
     async def deliver(text):
         sent.append(text)
 
-    await harness._run_and_deliver(agent, "rob", session_id, deliver,
+    await harness._run_and_deliver(agent, "alice", session_id, deliver,
                                    notice_key=notice_key)
     return sent
 
@@ -97,7 +97,7 @@ async def test_exhaustion_failure_sends_exactly_one_static_notice():
 @pytest.mark.asyncio
 async def test_second_failure_within_cooldown_sends_nothing():
     """A 402 storm must not spam: at most ONE notice per surface+chat per 30 min."""
-    key = "agent:main:telegram:dm:42:rob"
+    key = "agent:main:telegram:dm:42:alice"
     first = await _drive(_FakeAgent(), notice_key=key)
     second = await _drive(_FakeAgent(), notice_key=key)
     assert first == [PROVIDER_EXHAUSTED_NOTICE]
@@ -111,7 +111,7 @@ async def test_goal_run_failure_sends_nothing():
     an exhaustion failure there produces no notice and never touches the
     cooldown state."""
     agent = _FakeAgent()
-    status = await agent.run_session("rob", "goal-sess-1")  # the goal-path shape
+    status = await agent.run_session("alice", "goal-sess-1")  # the goal-path shape
     assert status == EXHAUSTED_STATUS
     assert llm_outage_notice._last_notice_at == {}, (
         "the goal-run path must not touch the outage-notice seam"
@@ -189,13 +189,12 @@ async def test_notice_includes_reason_phrase_for_402_shaped_status():
 
 @pytest.mark.asyncio
 async def test_non_outage_failure_keeps_legacy_generic_notice():
-    """A failed run that is NOT an LLM outage still gets the pre-existing generic
-    'couldn't answer' notice (unchanged legacy behaviour) and never consumes the
-    outage cooldown."""
+    """A failed run that is NOT an LLM outage gets the owner-turn end notice
+    (the stop reason and how to resume) and never consumes the outage cooldown."""
     sent = await _drive(_FakeAgent(status="Session failed: Unknown error"))
     assert len(sent) == 1
     assert sent[0] != OUTAGE_NOTICE_TEXT
-    assert "couldn't answer" in sent[0]
+    assert "My turn ended early" in sent[0] and "continue" in sent[0]
     assert llm_outage_notice._last_notice_at == {}
 
 
@@ -212,11 +211,11 @@ def test_classifier_matches_all_known_exhaustion_shapes():
 
 
 def test_cooldown_window_expires():
-    key = "agent:main:telegram:dm:42:rob"
+    key = "agent:main:telegram:dm:42:alice"
     assert should_send_llm_outage_notice(key, now=1000.0)
     assert not should_send_llm_outage_notice(key, now=1000.0 + 100)
     # A DIFFERENT chat has its own bucket.
-    assert should_send_llm_outage_notice("agent:main:slack:dm:7:rob", now=1000.0 + 100)
+    assert should_send_llm_outage_notice("agent:main:slack:dm:7:alice", now=1000.0 + 100)
     # The original chat frees up after the window.
     assert should_send_llm_outage_notice(key, now=1000.0 + LLM_OUTAGE_COOLDOWN_SEC + 1)
 

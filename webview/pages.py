@@ -29,6 +29,7 @@ import asyncio
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -842,8 +843,11 @@ async def api_positions(request: Request, chain: str = "base"):
 
 
 @money_router.get("/api/webgate/liquidity")
-async def api_liquidity(request: Request, chain: str = "robinhood", onchain: bool = False):
-    """Read the shared liquidity snapshot section; chain enumeration is opt-in."""
+async def api_liquidity(request: Request, chain: Optional[str] = None, onchain: bool = False):
+    """Read the shared liquidity snapshot section; chain enumeration is opt-in.
+
+    No ``chain`` reads every chain with a pinned v3 position manager — core has
+    no default chain of its own."""
     from dataclasses import asdict
     from core.instance import resolve_owner_user_id
     from core.status_snapshot import _guarded
@@ -860,10 +864,17 @@ async def api_liquidity(request: Request, chain: str = "robinhood", onchain: boo
             wallet = get_agent_wallet()
             if wallet is None:
                 raise ValueError("agent wallet is not enabled")
+            from core.wallet import dex_registry
             owner = wallet.operational_signer().address
-            rpc = _default_rpc_for(chain)
-            return [dict(asdict(position(rpc, chain, i)), chain=chain)
-                    for i in owned_position_ids(rpc, chain, owner)]
+            chains = [chain] if chain else [
+                c for c in dex_registry.supported("v3")
+                if dex_registry.row_for(c, "v3").position_manager]
+            rows = []
+            for c in chains:
+                rpc = _default_rpc_for(c)
+                rows += [dict(asdict(position(rpc, c, i)), chain=c)
+                         for i in owned_position_ids(rpc, c, owner)]
+            return rows
     section = await asyncio.to_thread(_guarded, "liquidity", liquidity_section,
                                       user_id, _data_dir(), enumerate_fn)
     return JSONResponse(asdict(section))
@@ -1701,7 +1712,7 @@ async def api_doctor(request: Request):
         checks_error = _safe_reason(e)
         logger.warning("api_doctor: doctor_report failed — %s", checks_error, exc_info=True)
     provider, model = _provider_model()
-    rob_local = local_flag_on(env, absent_means_on=False)
+    local_mode = local_flag_on(env, absent_means_on=False)
     # 2026-08-28 status SSOT: the same snapshot Telegram /status renders — for
     # the CALLER's tenant (W13). It used to build it for webgate.local_owner_id()
     # in EVERY posture, so an authenticated multitenant tenant was served the
@@ -1734,7 +1745,7 @@ async def api_doctor(request: Request):
         health = {"overall": "unavailable", "items": [], "unverified": [],
                   "lines": [f"Health: unavailable ({unbound_reason})"]}
         return JSONResponse(_doctor_payload(
-            checks, health, status_lines, env, provider, model, rob_local,
+            checks, health, status_lines, env, provider, model, local_mode,
             checks_error=checks_error,
             unbound_reason=unbound_reason))
     try:
@@ -1753,7 +1764,7 @@ async def api_doctor(request: Request):
         health = {"overall": "unavailable", "items": [], "unverified": [],
                   "lines": [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]}
     return JSONResponse(_doctor_payload(
-        checks, health, status_lines, env, provider, model, rob_local,
+        checks, health, status_lines, env, provider, model, local_mode,
         checks_error=checks_error))
 
 
@@ -1770,7 +1781,7 @@ def _section_words(unavailable) -> list:
     return out
 
 
-def _doctor_payload(checks, health, status_lines, env, provider, model, rob_local,
+def _doctor_payload(checks, health, status_lines, env, provider, model, local_mode,
                     *, unbound_reason: str = "", checks_error: str = None) -> dict:
     """The ONE doctor body, so the bound and unbound answers cannot drift apart.
 
@@ -1785,7 +1796,7 @@ def _doctor_payload(checks, health, status_lines, env, provider, model, rob_loca
         "version": _version(),
         "provider": provider,
         "model": model,
-        "memory_backend": resolve_memory_backend(env, rob_local),
+        "memory_backend": resolve_memory_backend(env, local_mode),
         # W13: a console that booted with half its control plane missing used to
         # say nothing at all — the mount block logged and moved on. Report the
         # failures the operator can act on.

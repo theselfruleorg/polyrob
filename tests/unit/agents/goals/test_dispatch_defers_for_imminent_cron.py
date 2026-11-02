@@ -19,7 +19,7 @@ def _store(tmp_path, next_run_at):
     from cron.jobs import CronJob, CronJobStore
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(CronJob(id="exit0001", task="EXIT RAIL", schedule_spec="every 2h",
-                      user_id="rob", next_run_at=next_run_at))
+                      user_id="alice", next_run_at=next_run_at))
     return store
 
 
@@ -82,7 +82,7 @@ def _money_store(tmp_path, next_run_at, *, money=True):
     from cron.jobs import CronJob, CronJobStore
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(CronJob(id="exit0001", task="EXIT RAIL", schedule_spec="every 2h",
-                      user_id="rob", next_run_at=next_run_at,
+                      user_id="alice", next_run_at=next_run_at,
                       payload={"priority": "money"} if money else {}))
     return store
 

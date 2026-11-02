@@ -11,7 +11,7 @@ Design constraints (mirrors ``blocks.py``):
 - Pure builders: ``banner_panel`` returns a Rich renderable; ``banner_plain``
   returns deterministic plain text.  No I/O, no Console — snapshot-testable.
 - ``provider_key_status`` reads configuration and returns provider NAMES only,
-  never secret values (kept for ``rob model list``-style callers; the banner
+  never secret values (kept for ``polyrob model list``-style callers; the banner
   itself no longer displays key status).
 - ``print_banner`` is the one I/O entry point: it picks Rich vs plain based on
   the renderer type and prints once.

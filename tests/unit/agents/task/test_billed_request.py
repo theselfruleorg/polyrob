@@ -30,7 +30,8 @@ def test_preconstructed_request_is_rechecked(billed):
     request = object.__new__(SessionRequest)
     request.model = "gpt-5"
     request.provider = "openai"
-    request.max_steps = 51
+    from core.config_policy import INTERACTIVE_MAX_STEPS
+    request.max_steps = INTERACTIVE_MAX_STEPS + 1
     with pytest.raises(ValueError, match="max_steps"):
         validate_billed_request(request)
 
@@ -92,7 +93,8 @@ async def test_non_http_legacy_session_cannot_skip_reservations(tier):
 async def test_credit_session_creation_limits_without_http_context():
     from core.billing_context import is_billed
     from agents.task.task_agent_support import build_session_metadata
-    request = SessionRequest(task='hello', model='gpt-5', provider='openai', max_steps=51)
+    from core.config_policy import INTERACTIVE_MAX_STEPS
+    request = SessionRequest(task='hello', model='gpt-5', provider='openai', max_steps=INTERACTIVE_MAX_STEPS + 1)
     with pytest.raises(ValueError, match='max_steps'):
         validate_billed_request(request, required=True)
     request.max_steps = 5

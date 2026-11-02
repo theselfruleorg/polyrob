@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Editing code: read, plan, edit, run tests, iterate'
   polyrob-priority: '3'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Coding Workflow

@@ -427,6 +427,54 @@ class BoardAsksMixin:
         self._event(ask_id, "ask_obsolete", ev)
         return True
 
+    def close_settled_config_asks(self, *, in_effect=None,
+                                  ttl_days: Optional[float] = None) -> int:
+        """095 W8 (SC-11): an operator ``config_change`` ask closes by itself.
+
+        Closes-when: its ``payload.setting`` (``KEY=value``) is the effective
+        value in this process (``core.setting_proposals.setting_in_effect``) —
+        the operator applied it and restarted — or it passed its
+        ``payload.expires_at`` (else ``created_at`` + the TTL). Closed as
+        OBSOLETE, never "fulfilled" (no owner decided it). An unreadable value
+        keeps the ask open until it expires. Cross-tenant; never raises.
+        """
+        from core.goal_vocab import ASK_KIND_CONFIG_CHANGE
+        from core.setting_proposals import CONFIG_ASK_TTL_DAYS, setting_in_effect
+        in_effect = in_effect or setting_in_effect
+        ttl = (CONFIG_ASK_TTL_DAYS if ttl_days is None else ttl_days) * 86400
+        try:
+            rows = execute_retry(
+                self.db_path,
+                "SELECT * FROM goals WHERE kind=? AND status=? "
+                "AND json_extract(payload, '$.ask_kind')=?",
+                (KIND_ASK, ASK_OPEN, ASK_KIND_CONFIG_CHANGE), fetch="all") or []
+        except Exception:
+            logger.debug("config_change ask sweep: unreadable", exc_info=True)
+            return 0
+        now, closed = self._now(), 0
+        for r in rows:
+            ask = Goal.from_row(r)
+            payload = dict(ask.payload or {})
+            setting = str(payload.get("setting") or "")
+            reason = ""
+            try:
+                if setting and in_effect(setting) is True:
+                    reason = f"applied: {setting} is in effect"
+            except Exception:
+                logger.debug("config_change ask sweep: %s unreadable", setting, exc_info=True)
+            if not reason:
+                try:
+                    expires = float(payload.get("expires_at") or (ask.created_at + ttl))
+                except (TypeError, ValueError):
+                    expires = ask.created_at + ttl
+                if now >= expires:
+                    reason = f"expired: {setting or payload.get('line') or 'the change'} " \
+                             f"was not applied in time"
+            if reason and self._obsolete_ask(ask.id, user_id=ask.user_id, reason=reason,
+                                             payload=payload):
+                closed += 1
+        return closed
+
     def fulfill_ask(self, ask_id: str, *, user_id: str) -> tuple:
         """Mark an ask fulfilled and flip its BLOCKED dependent goals back to ready.
 

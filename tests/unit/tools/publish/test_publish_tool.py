@@ -28,7 +28,7 @@ class _AlwaysDeny:
         return False
 
 
-def _ctx(user_id="rob", *, leaf=False, forged=False):
+def _ctx(user_id="alice", *, leaf=False, forged=False):
     return SimpleNamespace(
         user_id=user_id, session_id="s1", role="leaf" if leaf else "orchestrator",
         is_sub_agent=leaf, workspace_dir=None,
@@ -39,13 +39,13 @@ def _ctx(user_id="rob", *, leaf=False, forged=False):
 @pytest.fixture
 def tool(tmp_path, monkeypatch):
     # A real owner principal — the gate is genuinely exercised, not bypassed.
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     store = PublishStore(db_path=str(tmp_path / "pub.db"),
                          root=str(tmp_path / "publish"),
                          base_url="https://pub.example.com")
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    (workspace / "index.html").write_text("<html>rob status</html>")
+    (workspace / "index.html").write_text("<html>alice status</html>")
 
     t = object.__new__(PublishTool)
     t._store = store
@@ -60,50 +60,50 @@ def _run(coro):
 
 
 def test_first_publish_of_a_new_slug_returns_a_url(tool):
-    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                             execution_context=_ctx()))
 
-    assert "https://pub.example.com/rob-status/" in str(res.extracted_content)
-    assert tool._store.is_live("rob-status") is True
+    assert "https://pub.example.com/demo-status/" in str(res.extracted_content)
+    assert tool._store.is_live("demo-status") is True
 
 
 def test_a_denied_first_publish_is_not_served(tool):
     tool._approval_provider = _AlwaysDeny()
 
-    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                             execution_context=_ctx()))
 
-    assert tool._store.is_live("rob-status") is False
+    assert tool._store.is_live("demo-status") is False
     assert "approval" in str(res.error).lower()
 
 
 def test_a_second_publish_of_an_approved_slug_skips_approval(tool):
-    _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                       execution_context=_ctx()))
     tool._approval_provider = _AlwaysDeny()   # would refuse a NEW slug
 
-    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                             execution_context=_ctx()))
 
-    assert tool._store.is_live("rob-status") is True
-    assert "https://pub.example.com/rob-status/" in str(res.extracted_content)
+    assert tool._store.is_live("demo-status") is True
+    assert "https://pub.example.com/demo-status/" in str(res.extracted_content)
 
 
 def test_a_leaf_subagent_can_never_publish(tool):
-    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                             execution_context=_ctx(leaf=True)))
 
     assert res.error
-    assert tool._store.is_live("rob-status") is False
+    assert tool._store.is_live("demo-status") is False
 
 
 def test_a_forged_turn_can_never_publish(tool):
     """A self-wake or delegation-result re-entry is not an owner asking to ship."""
-    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                             execution_context=_ctx(forged=True)))
 
     assert res.error
-    assert tool._store.is_live("rob-status") is False
+    assert tool._store.is_live("demo-status") is False
 
 
 def test_a_hostile_slug_is_refused(tool):
@@ -122,22 +122,22 @@ def test_a_file_outside_the_workspace_is_refused(tool):
 
 
 def test_unpublish_takes_the_page_down(tool):
-    _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                       execution_context=_ctx()))
 
-    _run(tool.unpublish(UnpublishParams(slug="rob-status"), execution_context=_ctx()))
+    _run(tool.unpublish(UnpublishParams(slug="demo-status"), execution_context=_ctx()))
 
-    assert tool._store.is_live("rob-status") is False
+    assert tool._store.is_live("demo-status") is False
 
 
 def test_publish_list_shows_the_url_and_status(tool):
-    _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                       execution_context=_ctx()))
 
     out = str(_run(tool.publish_list(SimpleNamespace(), execution_context=_ctx())).extracted_content)
 
-    assert "rob-status" in out
-    assert "https://pub.example.com/rob-status/" in out
+    assert "demo-status" in out
+    assert "https://pub.example.com/demo-status/" in out
     assert "live" in out
 
 
@@ -145,7 +145,7 @@ def test_a_failed_promotion_is_reported_not_announced(tool, monkeypatch):
     # Codex review 2026-09-25: approve() returning False (promotion rolled
     # back) was ignored and the tool still said "Published".
     monkeypatch.setattr(tool._store, "approve", lambda *a, **k: False)
-    res = _run(tool.publish(PublishParams(slug="rob-status", files=["index.html"]),
+    res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
                             execution_context=_ctx()))
     assert res.error and "could not be promoted" in res.error
     assert not res.extracted_content

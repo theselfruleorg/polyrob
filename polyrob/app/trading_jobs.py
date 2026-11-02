@@ -36,8 +36,6 @@ logger = logging.getLogger(__name__)
 ROLE_KEY = "mandate_job"
 HUNT, EXIT, REVIEW, CLOSE_ALL = "hunt", "exit", "review", "close_all"
 
-#: The preset's doctrine skill (086 §3.9). The numbers stay in the preset.
-PRESET_SKILLS = {"memecoin": "treasury-trading", "dca": "dca"}
 EXIT_SKILLS = ["exits", "trade-execution", "post-trade-verify"]
 MONEY_RIG = "money_rail"
 REVIEW_RIG = "research"
@@ -60,11 +58,24 @@ def _key(chain: Any, account: Any, address: Any) -> Tuple[str, str, str]:
 
 # -- payloads -----------------------------------------------------------------------
 
+def doctrine_skill(m) -> Optional[str]:
+    """The preset's doctrine skill (086 §3.9; ``Preset.doctrine_skill``), or None —
+    also None when the mandate's preset no longer resolves (its run then refuses
+    entries with the remedy). The numbers stay in the preset."""
+    from core.trading_presets import PresetError, get_preset
+    try:
+        return get_preset(m.preset).doctrine_skill
+    except PresetError:
+        logger.warning("trading mandate %s: preset %r does not resolve", m.id, m.preset)
+        return None
+
+
 def hunt_payload(m) -> Dict[str, Any]:
     skills = ["trading-mandate"]
-    if PRESET_SKILLS.get(m.preset):
-        skills.append(PRESET_SKILLS[m.preset])
-    skills += ["pre-trade-check", "trade-execution"]
+    doctrine = doctrine_skill(m)
+    if doctrine and doctrine not in skills:
+        skills.append(doctrine)
+    skills += [s for s in ("pre-trade-check", "trade-execution") if s not in skills]
     return {"mandate": m.id, ROLE_KEY: HUNT, "skills": skills, "rig": MONEY_RIG,
             "precheck": {"verb": "defi_data.discovery_count",
                          "params": {"chains": list(m.chains)},

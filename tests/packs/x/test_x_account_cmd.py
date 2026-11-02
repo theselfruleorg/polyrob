@@ -134,11 +134,11 @@ def test_import_session_from_storage_state_file(monkeypatch, tmp_path):
     f.write_text(json.dumps(st))
     store = _RecStore()
     monkeypatch.setattr(mod, "_store", lambda: store)
-    monkeypatch.setattr(mod, "_user_id", lambda: "rob")
+    monkeypatch.setattr(mod, "_user_id", lambda: "alice")
     res = CliRunner().invoke(mod.x_account, ["import-session", str(f), "--handle", "robbot"])
     assert res.exit_code == 0, res.output
     uid, kw = store.saved
-    assert uid == "rob"
+    assert uid == "alice"
     assert kw["storage_state"] == st
     assert kw["handle"] == "robbot"
     assert "imported" in res.output.lower()
@@ -148,7 +148,7 @@ def test_import_session_from_cookie_values(monkeypatch):
     from polyrob_x.commands import x_account as mod
     store = _RecStore()
     monkeypatch.setattr(mod, "_store", lambda: store)
-    monkeypatch.setattr(mod, "_user_id", lambda: "rob")
+    monkeypatch.setattr(mod, "_user_id", lambda: "alice")
     res = CliRunner().invoke(mod.x_account, ["import-session", "--cookies"],
                              input="x" * 40 + "\n" + "y" * 32 + "\n")
     assert res.exit_code == 0, res.output
@@ -170,7 +170,7 @@ def test_import_session_refuses_file_without_login_cookie(monkeypatch, tmp_path)
                                           "path": "/"}], "origins": []}))
     store = _RecStore()
     monkeypatch.setattr(mod, "_store", lambda: store)
-    monkeypatch.setattr(mod, "_user_id", lambda: "rob")
+    monkeypatch.setattr(mod, "_user_id", lambda: "alice")
     res = CliRunner().invoke(mod.x_account, ["import-session", str(f)])
     assert res.exit_code == 1
     assert "auth_token" in res.output
@@ -181,7 +181,7 @@ def test_import_session_needs_a_source(monkeypatch):
     from polyrob_x.commands import x_account as mod
     store = _RecStore()
     monkeypatch.setattr(mod, "_store", lambda: store)
-    monkeypatch.setattr(mod, "_user_id", lambda: "rob")
+    monkeypatch.setattr(mod, "_user_id", lambda: "alice")
     res = CliRunner().invoke(mod.x_account, ["import-session"])
     assert res.exit_code != 0
     assert store.saved is None

@@ -38,8 +38,8 @@ def launchpad_enabled() -> bool:
 
 class LaunchParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    name: str = Field(..., description="Token name, e.g. 'Rob Coin'.")
-    symbol: str = Field(..., description="Ticker, e.g. 'ROB'.")
+    name: str = Field(..., description="Token name, e.g. 'Demo Coin'.")
+    symbol: str = Field(..., description="Ticker, e.g. 'DEMO'.")
     description: str = Field("", description="Short description shown on the launchpad.")
     logo: str = Field("", description="Logo URI (ipfs://… or https://…).")
     twitter: str = Field("", description="Optional X/Twitter URL.")

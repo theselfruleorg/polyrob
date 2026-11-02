@@ -8,9 +8,10 @@ of one of them. Never call a job a "rail", a "stream" or an "objective": those
 words are retired.
 
 Everything here is opt-in and off by default outside the `POLYROB_LOCAL`
-single-user CLI profile (which turns the safe subset on as a group). This file
-describes the mechanisms, not this session's live state: confirm what is on
-with `agent_status`. Every owner verb, with its help line, is in
+single-user CLI profile. How autonomy is turned on, which loop belongs to
+which setting, and the run limits: `references/configuration.md` (generated).
+This file describes the mechanisms, not this session's live state: confirm
+what is on with `agent_status`. Every owner verb, with its help line, is in
 `references/verbs.md`.
 
 ## Which one does the owner want?
@@ -28,16 +29,17 @@ with `agent_status`. Every owner verb, with its help line, is in
 - `/job new <when> <what>` creates one: quote a schedule that has spaces, or put
   `|` between the schedule and the work. `tools=a,b` grants it tools;
   `target=<token address> chain=<chain>` is the one token it may buy.
-- `/job edit <id> schedule <when>` or `/job edit <id> task <text>` changes one
-  field and keeps the rest; `/job pause <id>` / `/job resume <id>` is the job's
-  own switch; `/job run <id>` runs it once now; `/job stop <id>` removes it.
+- `/job edit <id> schedule <when>`, `/job edit <id> what <text>` or
+  `/job edit <id> grant tools=a,b` changes one field and keeps the rest;
+  `/job pause <id>` / `/job resume <id>` is the job's own switch;
+  `/job run <id>` runs it on the next scheduler pass; `/job stop <id>` removes it.
 - A schedule is a duration (`30m`), a weekday time (`every monday 09:00`), a
   five-field cron expression, or an ISO time for a one-time run.
-- Needs `CRON_ENABLED` (on by itself at `AUTONOMY_POSTURE=full`). A job runs
-  the full agent loop (`CRON_RUN_LOOP`). Delivery of the result to
-  Telegram/email/Twitter is a separate opt-in (`CRON_DELIVERY_ENABLED`). At
-  `full`, `WAKE_CHANGE_GATE` lets a `change_gated` job skip its paid model
-  call when nothing it watches changed — a $0 run.
+- A job runs only while the scheduler is on (`/jobs` says so when it is not,
+  and names the fix). Delivery of the result to Telegram/email/Twitter is a
+  separate opt-in (`CRON_DELIVERY_ENABLED`). At `AUTONOMY_POSTURE=full` a
+  `change_gated` job skips its paid model call when nothing it watches
+  changed — a $0 run.
 - Your own tools: `cronjob_schedule/list/show/edit/cancel` (the tool must be in
   this session's tool_ids). To change a live job, `cronjob_show` it and
   `cronjob_edit` it (patch `old_text` → `new_text`) — never cancel and re-type it.
@@ -54,7 +56,8 @@ with `agent_status`. Every owner verb, with its help line, is in
   back in the queue.
 - `/goal stop <id>` stops this run once; `--forever` switches the title OFF (no
   job adds it again and you cannot create it again). `/goal allow <id|title>`
-  turns it back on.
+  turns it back on. `/goal grant <id> tools=a,b` is the owner's grant of tools
+  to a goal that already exists.
 - A goal has a title, a body (the instructions the run reads), a priority
   `1`–`10` (higher first), an optional acceptance line (what *done* must prove —
   a goal that cannot be verified completes as *done (unverified)*), and an
@@ -117,53 +120,22 @@ goal moves funds unattended.
 
 ## Other loops
 
-- **Self-wake** (`SELF_WAKE_ENABLED`) — re-enters an idle chat as a forged
-  continuation turn (e.g. after a background delegation finishes). Bounded by
+- **Self-wake** — re-enters an idle chat as a forged continuation turn (e.g.
+  after a background delegation finishes). Bounded by
   `SELF_WAKE_MAX_REENTRIES` and `SELF_WAKE_IDLE_BACKOFF_SEC`. A self-wake turn
   is always framed as untrusted content — it can never auto-activate a skill
   or write active identity docs.
-- **Background review** (`BACKGROUND_REVIEW_ENABLED`) — a cheap auxiliary
-  reviewer every `BG_REVIEW_INTERVAL` productive turns; leaf, non-blocking.
-- **Curator** (`CURATOR_ENABLED`) — a no-LLM tick that ages out unused
-  self-authored skills (`CURATOR_STALE_DAYS`, `CURATOR_ARCHIVE_DAYS`).
+- **Background review** — a cheap auxiliary reviewer every
+  `BG_REVIEW_INTERVAL` productive turns; leaf, non-blocking.
+- **Curator** — a no-LLM tick that ages out unused self-authored skills
+  (`CURATOR_STALE_DAYS`, `CURATOR_ARCHIVE_DAYS`).
 - **Owner digest** (`OWNER_DIGEST_ENABLED`) — a $0 periodic summary on the
   owner's channel (`digest.channel`), outside `digest.quiet_hours`.
 
-## The two posture axes
-
-Two independent knobs decide how much initiative and compute you have —
-neither is the deployment posture (local/own_ops/multitenant, that's the web
-console's auth model, see `references/surfaces.md`):
-
-- **`AUTONOMY_POSTURE`** (`silent` default | `owner-visible` | `full`) — how
-  much your autonomous work is verified and surfaced to the owner. `silent`:
-  today's defaults, autonomy runs but isn't specially verified or narrated.
-  `owner-visible`: your autonomous work becomes evidence-verified and
-  reported (episodic digest, reflection on session close). `full`:
-  owner-visible PLUS time-based initiative (the cron ticker actively runs),
-  plus the wake change-gate.
-- **`AGENT_COMPUTE_POSTURE`** (0-3) — how much host/compute capability you
-  have, independent of trust or autonomy. `0 confined`: today's ephemeral
-  docker sandbox, no persistent shell. `1 sandbox-dev`: a persistent,
-  installable, HTTP-testable dev sandbox (`shell`/`process` tools, pip
-  installs actually stick, publishes a few loopback ports so you can test
-  your own server). `2 self-maintain`: posture 1 plus the `self_env` tool
-  (install_dep/read_source/patch_source/git_pull/restart_service — approval-
-  gated, never raw bash; an approved restart_service asks the service for the
-  drained restart — it finishes this turn, restarts and reports to the owner). `3 host`: full host access, single-tenant/local-only,
-  not yet wired as a distinct backend.
-
-## Compute-spend backstop
-
-There is no rate-based compute budget cap — a trailing-window ceiling can't
-protect a finite provider balance, so nothing throttles LLM-call burn rate by
-itself. The backstop is reactive instead: a **credit sentinel**
-(`CREDIT_SENTINEL_ENABLED`, on by default) latches after a real
-billing/quota failure (e.g. a provider 402) from an autonomous run so it
-doesn't keep retrying a dead credit line; it auto-releases after
-`CREDIT_SENTINEL_RELEASE_HOURS`. Wallet spend (a different pocket — the
-agent's own crypto, not the owner's API bill) stays gated separately: see
-"Budgets" in `references/money-and-safety.md`.
+Which setting turns each loop on, and the limits that stop a run (steps and
+AI cost per run): `references/configuration.md`. The credit sentinel
+(`CREDIT_SENTINEL_ENABLED`) stops autonomous runs after a real provider
+billing failure and releases after `CREDIT_SENTINEL_RELEASE_HOURS`.
 
 ## Notes
 

@@ -42,7 +42,7 @@ async def _model_list(as_json: bool = False):
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
-    # local_mode=True so `rob model list` sees keys wherever the CLI does (./.polyrob,
+    # local_mode=True so `polyrob model list` sees keys wherever the CLI does (./.polyrob,
     # ~/.polyrob, and the config/.env.* backfill) — not just a bare server-mode load.
     load_env()
 

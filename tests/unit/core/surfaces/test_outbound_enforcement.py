@@ -64,7 +64,7 @@ def test_open_policy_unknown_recipient_sends_seeds_and_reports(monkeypatch):
 
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="new-guy", text="hi",
+        user_id="alice", surface="telegram", target="new-guy", text="hi",
         session_id="s1", container=_Container(corr, convo)))
 
     assert res["success"] is True
@@ -72,9 +72,9 @@ def test_open_policy_unknown_recipient_sends_seeds_and_reports(monkeypatch):
     assert router.sent == [("telegram", "new-guy", "hi")]
     assert corr.resolve(surface="telegram", address="new-guy") is not None, \
         "correspondent must be seeded on a first-contact open send"
-    assert convo.get("rob", "telegram", "new-guy") is not None, \
+    assert convo.get("alice", "telegram", "new-guy") is not None, \
         "the outbound must be recorded in the conversation store"
-    assert notified and notified[0][0] == "rob"
+    assert notified and notified[0][0] == "alice"
     assert notified[0][2] == "outbound_open_send"
 
 
@@ -89,13 +89,13 @@ def test_open_policy_seed_refused_blocks_send(monkeypatch):
 
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="telegram", target="new-guy", text="hi",
+        user_id="alice", surface="telegram", target="new-guy", text="hi",
         session_id="s1", container=_Container(corr, convo)))
 
     assert res["success"] is False
     assert "cap" in res["error"].lower()
     assert router.sent == [], "a refused seed must never be orphaned by a send"
-    assert convo.get("rob", "telegram", "new-guy") is None, \
+    assert convo.get("alice", "telegram", "new-guy") is None, \
         "a blocked send must not be recorded"
 
 
@@ -106,12 +106,12 @@ def test_open_policy_daily_send_cap_blocks(monkeypatch):
     monkeypatch.setenv("OUTBOUND_DAILY_SEND_CAP", "1")
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     corr, allowlist, convo = _fixtures()
-    convo.record_outbound("rob", "telegram", "someone-else", "prior send")
+    convo.record_outbound("alice", "telegram", "someone-else", "prior send")
     router = _Router()
 
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="telegram", target="new-guy", text="hi",
+        user_id="alice", surface="telegram", target="new-guy", text="hi",
         session_id="s1", container=_Container(corr, convo)))
 
     assert res["success"] is False
@@ -127,12 +127,12 @@ def test_open_policy_daily_send_cap_not_reached_still_sends(monkeypatch):
     monkeypatch.setenv("OUTBOUND_DAILY_SEND_CAP", "5")
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     corr, allowlist, convo = _fixtures()
-    convo.record_outbound("rob", "telegram", "someone-else", "prior send")
+    convo.record_outbound("alice", "telegram", "someone-else", "prior send")
     router = _Router()
 
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="telegram", target="new-guy", text="hi",
+        user_id="alice", surface="telegram", target="new-guy", text="hi",
         session_id="s1", container=_Container(corr, convo)))
 
     assert res["success"] is True
@@ -147,7 +147,7 @@ def test_allowlist_policy_denied_text_byte_identical(monkeypatch):
 
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={},
-        user_id="rob", surface="telegram", target="stranger", text="hi",
+        user_id="alice", surface="telegram", target="stranger", text="hi",
         session_id="s1", container=_Container(corr, convo)))
 
     assert res["success"] is False
@@ -161,18 +161,18 @@ def test_allowlist_policy_denied_text_byte_identical(monkeypatch):
 def test_off_policy_owner_only(monkeypatch):
     monkeypatch.setenv("OUTBOUND_POLICY", "off")
     corr, allowlist, convo = _fixtures()
-    allowlist.allow("rob", "telegram", "friend")
+    allowlist.allow("alice", "telegram", "friend")
     router = _Router()
 
     denied = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="friend", text="hi",
+        user_id="alice", surface="telegram", target="friend", text="hi",
         session_id="s1", container=_Container(corr, convo)))
     assert denied["success"] is False, "off policy denies even an allowlisted target"
 
     allowed = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="999", text="hi",
+        user_id="alice", surface="telegram", target="999", text="hi",
         session_id="s1", container=_Container(corr, convo)))
     assert allowed["success"] is True, "the owner is always reachable"
 
@@ -190,7 +190,7 @@ def test_autonomous_turn_open_policy_falls_through(monkeypatch):
         role = "leaf"
         metadata = {}
         session_id = "s1"
-        user_id = "rob"
+        user_id = "alice"
 
     class _Controller:
         _is_sub_agent = False
@@ -212,7 +212,7 @@ def test_supervised_autonomous_turn_still_refused(monkeypatch):
         role = "leaf"
         metadata = {}
         session_id = "s1"
-        user_id = "rob"
+        user_id = "alice"
 
     class _Controller:
         _is_sub_agent = False
@@ -220,7 +220,7 @@ def test_supervised_autonomous_turn_still_refused(monkeypatch):
 
     res = _autonomous_message_refusal(_Ctx(), _Controller())
     assert res is not None
-    assert "not permitted" in res.extracted_content
+    assert "not permitted" in res.error
 
 
 # --- case 8: correspondent taint blocks BEFORE any policy logic ----------------
@@ -258,7 +258,7 @@ def test_allowlist_policy_first_contact_allowlisted_no_open_report(monkeypatch):
     monkeypatch.delenv("OUTBOUND_POLICY", raising=False)  # supervised (default)
     _enable_corr(monkeypatch)
     corr, allowlist, convo = _fixtures()
-    allowlist.allow("rob", "telegram", "friend")
+    allowlist.allow("alice", "telegram", "friend")
     router = _Router()
     notified = []
 
@@ -270,7 +270,7 @@ def test_allowlist_policy_first_contact_allowlisted_no_open_report(monkeypatch):
 
     res = asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="friend", text="hello",
+        user_id="alice", surface="telegram", target="friend", text="hello",
         session_id="s1", container=_Container(corr, convo)))
 
     assert res["success"] is True
@@ -279,7 +279,7 @@ def test_allowlist_policy_first_contact_allowlisted_no_open_report(monkeypatch):
     # username is a guaranteed "chat not found" against the real Bot API.
     # Allowlist matching above still used the raw "friend" (tier proves it).
     assert router.sent == [("telegram", "@friend", "hello")]
-    assert convo.get("rob", "telegram", "friend") is not None, \
+    assert convo.get("alice", "telegram", "friend") is not None, \
         "the outbound must be recorded in the conversation store"
     # KEY ASSERTIONS: no outbound_open_send event, no owner notice
     assert not any(n[2] == "outbound_open_send" for n in notified), \

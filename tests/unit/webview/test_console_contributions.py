@@ -8,7 +8,7 @@ MONEY_PATHS = {"/api/webgate/wallet", "/api/webgate/ledger", "/api/webgate/posit
                "/api/webgate/liquidity", "/api/webgate/book", "/api/webgate/invoices",
                "/api/webgate/invoices/{request_id}/settle", "/api/webgate/bridges",
                "/api/webgate/creations", "/api/webgate/moves",
-               # W1: the tokens Rob trusts + the owner's word on one
+               # W1: the tokens the agent trusts + the owner's word on one
                "/api/webgate/tokens", "/api/webgate/tokens/{action}"}
 
 

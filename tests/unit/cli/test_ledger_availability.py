@@ -28,7 +28,7 @@ def test_missing_tables_mark_legs_unavailable(tmp_path, monkeypatch):
         db = DatabaseConnection(db_path)
         await db.connect()
         try:
-            return await build_ledger("rob", days=7, db=db)
+            return await build_ledger("alice", days=7, db=db)
         finally:
             await db.close()
 
@@ -55,7 +55,7 @@ def test_present_tables_mark_inbound_available(tmp_path):
     async def run():
         db = await setup()
         try:
-            return await build_ledger("rob", days=7, db=db)
+            return await build_ledger("alice", days=7, db=db)
         finally:
             await db.close()
 
@@ -69,7 +69,7 @@ def test_present_tables_mark_inbound_available(tmp_path):
 
 def test_note_flags_wallet_metering_off():
     led = {
-        "user_id": "rob", "window_days": 7,
+        "user_id": "alice", "window_days": 7,
         "llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
         "costs_available": True,
         "wallet_spend_usd": 0.0, "wallet_payments": 0, "wallet_metering": "disabled",

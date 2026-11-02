@@ -72,7 +72,7 @@ def _corr():
 
 class _Ctx:
     """A genuine owner turn (the main agent's step loop sets role='orchestrator')."""
-    def __init__(self, user_id="rob", session_id="s1"):
+    def __init__(self, user_id="alice", session_id="s1"):
         self.user_id = user_id
         self.session_id = session_id
         self.is_sub_agent = False
@@ -129,7 +129,7 @@ async def test_allowlisted_target_is_sent(monkeypatch):
     monkeypatch.delenv("POLYROB_OWNER_EMAIL", raising=False)
     monkeypatch.delenv("BOT_OWNER_EMAIL", raising=False)
     allowlist = _al()
-    allowlist.allow("rob", "email", "partner@example.com", note="battle-test")
+    allowlist.allow("alice", "email", "partner@example.com", note="battle-test")
     tool = _tool(container=_FakeContainer(allowlist=allowlist))
     smtp = _FakeSMTP()
     tool.smtp_connection = smtp
@@ -175,7 +175,7 @@ async def test_open_policy_unknown_recipient_sends_and_reports(monkeypatch):
     assert len(smtp.sent) == 1
     assert result.error is None
     assert notified and notified[0][2] == "outbound_open_send"
-    assert convo.get("rob", "email", "stranger@example.com") is not None
+    assert convo.get("alice", "email", "stranger@example.com") is not None
     assert corr.resolve(surface="email", address="stranger@example.com") is not None, \
         "correspondent must be seeded on a first-contact open send"
 
@@ -189,7 +189,7 @@ async def test_open_policy_daily_cap_blocks_email(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
 
     convo = _convo()
-    convo.record_outbound("rob", "email", "already@x.com", "prior")
+    convo.record_outbound("alice", "email", "already@x.com", "prior")
     tool = _tool(container=_FakeContainer(allowlist=_al(), convo=convo))
     smtp = _FakeSMTP()
     tool.smtp_connection = smtp
@@ -315,7 +315,7 @@ async def test_the_scrubbed_body_is_the_one_string_recorded(monkeypatch):
     await tool.email_send(
         EmailSendAction(to="owner@example.com", subject="k", body=f"x {secret}"),
         execution_context=_Ctx())
-    rows = convo.history("rob", "email", "owner@example.com")
+    rows = convo.history("alice", "email", "owner@example.com")
     assert rows and secret not in rows[-1]["body"]
 
 
@@ -328,7 +328,7 @@ async def test_a_non_owner_send_anchors_its_message_id(monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     monkeypatch.setenv("CORRESPONDENT_REQUIRE_APPROVAL", "false")
     al = _al()
-    al.allow("rob", "email", "them@acme.com")
+    al.allow("alice", "email", "them@acme.com")
     corr = _corr()
     tool = _tool(container=_FakeContainer(allowlist=al, convo=_convo(), corr=corr))
     tool.smtp_connection = _FakeSMTP()
@@ -336,7 +336,7 @@ async def test_a_non_owner_send_anchors_its_message_id(monkeypatch):
         EmailSendAction(to="them@acme.com", subject="hello", body="the quote"),
         execution_context=_Ctx())
     assert res.error is None
-    anchored = [r for r in corr.list("rob") if r.get("thread_id")]
+    anchored = [r for r in corr.list("alice") if r.get("thread_id")]
     assert anchored, "the outbound Message-ID was never bound to the session"
 
 
@@ -353,7 +353,7 @@ async def test_an_autonomous_turn_is_refused_like_message_when_the_gate_is_close
     res = await tool.email_send(
         EmailSendAction(to="owner@example.com", subject="s", body="b"),
         execution_context=_ForgedCtx())
-    assert res.error and "email_send: not permitted" in res.error
+    assert res.error and "email_send NOT sent: not permitted" in res.error
     assert "MESSAGE_AUTONOMOUS_ALLOWLISTED" in res.error
     assert smtp.sent == []
 

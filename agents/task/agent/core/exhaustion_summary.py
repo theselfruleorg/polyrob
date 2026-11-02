@@ -1,23 +1,33 @@
-"""The last report at the step limit (083 WS-2).
+"""The last report at the step limit (083 WS-2), at a loop stop, and at the
+dollar cap (095 W1d).
 
-When the run loop runs out of steps (the ``for … else`` in ``run_loop.py``),
+When the run loop runs out of steps (the ``for … else`` in ``run_loop.py``) or
+the loop breaker ends the run (``StopReason.LOOP``, ``LOOP_SUMMARY_REQUEST``),
 the agent gets ONE extra model call to report what it finished, what remains
 and what is blocked. The reply is recorded as the agent's words and nothing in
 it runs — not even ``done``: an exhausted run is never a board success (T2-01).
+
+At the dollar cap the call is bounded by ``BUDGET_REPORT_MAX_TOKENS`` output
+tokens; its cost is billed like any call and named in the halt text.
 
 The call keeps the SAME tools: a tools-free call breaks the Anthropic history
 rule for tool_use turns and drops the cached prefix
 (``messages/compactor.py``). The request rides the ephemeral rail, so it is
 never left in history.
 
-Scope: autonomous runs (goal / cron) and sub-agents. Interactive chat skips the
-call (owner decision: a chat turn already replies through ``send_message``).
+Scope: autonomous runs (goal / cron), sub-agents, and an owner chat turn that
+published nothing (prod 2026-10-28: a turn enrolled the agent as a merchant,
+hit the cap and said nothing — the premise that "a chat turn already replies
+through ``send_message``" did not hold). The owner-turn end notice carries the
+report (``run_outcome.session_turn_end_notice``). A room or a correspondent
+session never gets the call.
 Fail-open everywhere: any error leaves today's behaviour. ``CancelledError``
 re-raises.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, Optional
 
@@ -30,17 +40,38 @@ EXHAUSTION_SUMMARY_REQUEST = (
     "(with evidence), what remains and the next step, and what is blocked. Put the "
     "report in the `done` text. Start no new work."
 )
+#: The same last report when the loop breaker ended the run (StopReason.LOOP).
+LOOP_SUMMARY_REQUEST = (
+    "This run is stopped because you repeated the same tool call with the same result; "
+    "no more tools will run. Report what you finished (with evidence), what remains and "
+    "the next step, and what blocked you. Put the report in the `done` text. Start no "
+    "new work."
+)
+#: The same last report when a dollar cap ended the run (StopReason.RUN_BUDGET).
+BUDGET_SUMMARY_REQUEST = (
+    "The cost budget of this run is reached; no more tools will run. Report what you "
+    "finished (with evidence), what remains and the next step, and what is blocked. Put "
+    "the report in the `done` text, briefly. Start no new work."
+)
+#: Fixed output bound on the dollar-cap report call (no flag).
+BUDGET_REPORT_MAX_TOKENS = 1500
 SUMMARY_TIMEOUT_S = 90
 _MAX_CHARS = 4000
 
 
 def summary_turn_applies(agent: Any) -> bool:
-    """True for a sub-agent or an autonomous (goal / cron) session."""
+    """True for a sub-agent, an autonomous (goal / cron) session, or an owner
+    chat turn that has published no reply."""
     if getattr(agent, "_is_sub_agent", False) is True:
         return True
     try:
-        from agents.task.session_class import budget_class_autonomous
-        return bool(budget_class_autonomous(getattr(agent, "session_id", None)))
+        from agents.task.session_class import OWNER_CHAT, budget_class_autonomous, session_regime
+        if budget_class_autonomous(getattr(agent, "session_id", None)):
+            return True
+        if session_regime(agent) != OWNER_CHAT:
+            return False
+        from core.surfaces.turn_reply import spoke_this_turn
+        return not spoke_this_turn(getattr(agent, "orchestrator", None))
     except Exception:
         return False
 
@@ -102,8 +133,37 @@ def _cleanup_call(agent: Any, mm: Any, request: Any) -> None:
         pass
 
 
-async def run_exhaustion_summary(agent: Any, max_steps: int) -> Optional[str]:
-    """One extra call at the step limit; returns the recorded report or None."""
+async def run_budget_stop_report(agent: Any, max_steps: int, halt: str) -> str:
+    """095 W1d: the one last report at the dollar cap. Returns *halt* with the
+    report's own cost appended when it was measured."""
+    try:
+        from agents.task.agent.core.run_budget import _session_spend
+        before = await _session_spend(agent)
+        text = await run_exhaustion_summary(agent, max_steps, request=BUDGET_SUMMARY_REQUEST,
+                                            budget_stop=True)
+        if text is None or before is None:
+            return halt
+        after = await _session_spend(agent)
+        if after is None:
+            return halt
+        cost = max(0.0, after - before)
+        _emit(agent, "exhaustion_summary_cost", {"report_cost_usd": round(cost, 6)})
+        return f"{halt}; the last report cost ${cost:.4f}"
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug("dollar-cap last report: cost not measured", exc_info=True)
+        return halt
+
+
+async def run_exhaustion_summary(agent: Any, max_steps: int,
+                                 request: str = EXHAUSTION_SUMMARY_REQUEST,
+                                 *, budget_stop: bool = False) -> Optional[str]:
+    """One extra call at the step limit (or at a loop stop, with *request* =
+    ``LOOP_SUMMARY_REQUEST``); returns the recorded report or None.
+
+    ``budget_stop``: the dollar cap ended the run — the budget guard is skipped
+    (the cap is the reason for the call) and the output is bounded."""
     try:
         if not summary_turn_applies(agent):
             return None
@@ -114,7 +174,7 @@ async def run_exhaustion_summary(agent: Any, max_steps: int) -> Optional[str]:
         if not await control_checkpoint(agent):
             return None
         from agents.task.agent.core.run_budget import check_run_budget
-        if await check_run_budget(agent) is not None:
+        if not budget_stop and await check_run_budget(agent) is not None:
             return None
     except asyncio.CancelledError:
         raise
@@ -123,12 +183,17 @@ async def run_exhaustion_summary(agent: Any, max_steps: int) -> Optional[str]:
         return None
 
     mm = getattr(agent, "message_manager", None)
-    request = make_control_message(EXHAUSTION_SUMMARY_REQUEST, MessageOrigin.INTERVENTION)
+    request = make_control_message(request, MessageOrigin.INTERVENTION)
     try:
         mm.push_ephemeral_message(request)
         try:
-            model_output = await asyncio.wait_for(
-                agent.get_next_action(mm.get_messages()), SUMMARY_TIMEOUT_S)
+            # Per call (a context variable), never a stamp on the shared client.
+            from modules.llm.output_budget import bounded_output
+            bound = (bounded_output(BUDGET_REPORT_MAX_TOKENS)
+                     if budget_stop else contextlib.nullcontext())
+            with bound:
+                model_output = await asyncio.wait_for(
+                    agent.get_next_action(mm.get_messages()), SUMMARY_TIMEOUT_S)
         finally:
             _cleanup_call(agent, mm, request)
         text = summary_text(model_output)

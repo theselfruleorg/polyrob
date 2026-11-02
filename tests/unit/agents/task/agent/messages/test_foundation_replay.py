@@ -42,9 +42,9 @@ def _dress(mm, suffix="", rules_suffix=""):
 
     2026-10-13 A2: ``suffix`` varies the layers that REPLAY (identity, project
     context, tool catalog); ``rules_suffix`` varies the ``refresh_on_reload``
-    layers (environment, self-context, skills), whose differing fresh render
-    stands on reload."""
-    mm.set_runtime_identity(f"model{suffix}", f"provider{suffix}")
+    layers (identity since 095 W1a, environment, self-context, skills), whose
+    differing fresh render stands on reload."""
+    mm.set_runtime_identity(f"model{rules_suffix}", f"provider{rules_suffix}")
     mm.set_environment_message(f"the environment as rendered{rules_suffix}")
     mm.set_self_context_message(f"who I am{rules_suffix}")
     mm.set_project_context_message(f"the project rules{suffix}")
@@ -118,7 +118,7 @@ def test_a_changed_model_warns_and_keeps_the_fresh_render(tmp_data_root, caplog)
     assert serialize_messages(
         after.get_messages_for_llm(consume_ephemeral=False)) == fresh
     warnings = [r for r in caplog.records
-                if "foundation rebuilt (model/provider/cwd changed)" in r.getMessage()]
+                if "foundation rebuilt (model/provider/cwd/version changed)" in r.getMessage()]
     assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
 
 
@@ -256,3 +256,33 @@ def test_an_unchanged_catalog_refresh_does_not_undo_the_replay(tmp_data_root):
     # The live environment renders the SAME catalog it rendered at construction.
     after.set_tool_catalog_message("- done: finish [ready] FRESH")
     assert after._tool_catalog_message.content == replayed
+
+
+def test_resumed_session_after_deploy_states_running_version(tmp_data_root, monkeypatch, caplog):
+    """095 W1a (SK-2/SK-9): a foundation saved under the previous deploy rebuilds
+    once, so the resumed chat states the version that RUNS, not the stored one."""
+    import core.version as v
+    monkeypatch.setattr(v, "running_version_line", lambda: "v1.0.0 (deployed aaaaaaaaaaaa)")
+    _dress(_mm()).save_to_disk(SESSION, USER)
+    blob = json.loads(_history_file().read_text())["foundation"]
+    assert blob["version"] == "v1.0.0 (deployed aaaaaaaaaaaa)"
+
+    monkeypatch.setattr(v, "running_version_line", lambda: "v1.0.1 (deployed bbbbbbbbbbbb)")
+    after = _dress(_mm())
+    with caplog.at_level("WARNING"):
+        after.load_from_disk(SESSION, USER)
+    ident = after._runtime_identity_message.content
+    assert "v1.0.1 (deployed bbbbbbbbbbbb)" in ident and "v1.0.0" not in ident
+    assert any("version changed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_blob_without_a_version_rebuilds_not_torn(tmp_data_root, caplog):
+    """A pre-W1a blob has no ``version`` key: one rebuild, never "incomplete"."""
+    from agents.task.agent.messages.foundation_replay import replay_foundation, capture_foundation
+    mm = _dress(_mm())
+    blob = capture_foundation(mm)
+    blob.pop("version")
+    with caplog.at_level("WARNING"):
+        assert replay_foundation(mm, blob) is False
+    assert any("version changed" in r.getMessage() for r in caplog.records)
+    assert not any("incomplete" in r.getMessage() for r in caplog.records)

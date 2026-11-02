@@ -7,7 +7,7 @@ from agents.task.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
 
 
 def _blocked_goal():
-    return Goal(id="g1", user_id="rob", title="Draft enterprise outreach asset",
+    return Goal(id="g1", user_id="alice", title="Draft enterprise outreach asset",
                 status=STATUS_BLOCKED, consecutive_failures=2, max_retries=2,
                 last_failure_error="run did not complete (refusal or empty)")
 
@@ -58,7 +58,7 @@ async def test_escalate_only_when_blocked(monkeypatch):
     sink = _FakeSink()
     agent = _FakeAgent(_FakeContainer(sink))
     # a non-blocked (ready) goal must NOT escalate
-    ready = Goal(id="g2", user_id="rob", title="x", status=STATUS_READY)
+    ready = Goal(id="g2", user_id="alice", title="x", status=STATUS_READY)
     assert await escalation.maybe_escalate_blocked(agent, ready) is False
     assert sink.sent == []
     # a blocked goal DOES escalate
@@ -113,7 +113,7 @@ async def test_blocked_goal_creates_ask_even_when_push_flag_off(tmp_path, monkey
     from agents.task.goals.dispatcher import GoalDispatcher
 
     board = GoalBoard(str(tmp_path / "g.db"))
-    g = board.create(user_id="rob", title="Post the announcement")
+    g = board.create(user_id="alice", title="Post the announcement")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="needs twitter write access",
         claim_token=board.get(g.id).claim_token)
@@ -128,6 +128,6 @@ async def test_blocked_goal_creates_ask_even_when_push_flag_off(tmp_path, monkey
     disp = GoalDispatcher(board, _Agent())
     await disp._maybe_escalate_blocked(board.get(g.id))
 
-    asks = board.asks(user_id="rob", status=ASK_OPEN)
+    asks = board.asks(user_id="alice", status=ASK_OPEN)
     assert asks, "a blocked goal must leave a durable ask even with the push flag off"
     assert any("Unblock goal" in a.title for a in asks)

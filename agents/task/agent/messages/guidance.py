@@ -330,6 +330,13 @@ Incorporate this guidance while maintaining brain state format (JSON + tool call
 			# conversation deque regardless of where in the deque this message
 			# lands.
 
+			# 095 W1a (D5 a): the route note from the CURRENT model's capability —
+			# the frozen prompt claims nothing, a swap or fallback re-resolves it.
+			from core.surfaces.inbound_attachments import image_route_note
+			frame = (f"{frame}\n\n" + image_route_note(
+				bool(getattr(self, "_include_vision", False)),
+				str(getattr(self, "model_name", "") or ""),
+				[m.get('text', '') for m in messages]))
 			# Build multimodal content array: [text, image1, image2, ...]
 			content_parts = [
 				{'type': 'text', 'text': frame}

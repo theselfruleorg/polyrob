@@ -266,6 +266,131 @@ class SessionCleanupMixin:
             return True
         return False
 
+    async def write_chat_episode(self, *, status: str, source: str,
+                                 use_llm: bool = True) -> bool:
+        """Write this OWNER chat session's episode — one row per session, upserted.
+
+        Called at EVERY boundary that ends an owner chat (F5, prod review
+        2026-10-29): full cleanup / eviction (``source="session_end"``), ``/new``
+        (``"new"``), the idle/daily reset (``"reset"``) and a drained restart
+        (``"restart"``). Before, only eviction wrote one, so most sessions left
+        the continuity bridge nothing. The summary covers the whole session
+        (``agents.task.session.chat_episode.summarize_session``).
+
+        Goal/cron runs record their OWN episode at the dispatcher/runner site;
+        a room and a correspondent-facing session write none. A boundary that
+        finds nothing new since this session's last write writes nothing.
+        Returns True when a row was written. Fail-open: a memory error must
+        NEVER block a boundary.
+        """
+        try:
+            from core.autonomy_marker import is_autonomous
+            from core.surfaces.room_policy import is_public_session
+            _episode_session_id = getattr(self, "session_id", None)
+            # 044 C5: a PUBLIC (room) session writes NO episode. The episodic
+            # store is owner-tenant state — it is read back by the
+            # session-start digest, the continuity bridge and the recap, all
+            # of which run in the owner's DM. A room session runs AS the owner
+            # tenant (whoever opened it), so without this guard a stranger's
+            # room conversation became a row in the owner's own history.
+            from agents.task.session_class import regime_policy
+            if is_public_session(self):
+                self.logger.debug("public (room) session: no episodic write")
+                return False
+            if not regime_policy(orchestrator=self,
+                                 session_id=_episode_session_id).owner_memory:
+                # AGT-6 / DATA-9: a session a correspondent drives (created for
+                # one, or tainted by one) is not the owner's history either.
+                self.logger.debug("correspondent-facing session: no episodic write")
+                return False
+            if is_autonomous(_episode_session_id):
+                return False
+            # The eviction status ("suspended") is not an account of the
+            # turn — ask the closing turn itself whether it finished.
+            outcome = _resolve_chat_outcome(status, self)
+            if outcome is None:
+                return False
+            _agent = _primary_agent(self)
+            _mark = len(getattr(_agent_history(_agent), "history", None) or ())
+            if _mark and getattr(self, "_chat_episode_mark", None) == _mark and (
+                    getattr(self, "_chat_episode_llm", False) or not use_llm):
+                # Nothing happened since this session's last episode (an LLM
+                # write may still upgrade an extract written at the same mark).
+                return False
+            _inflight = self.__dict__.setdefault("_chat_episode_inflight", set())
+            if _mark and (_mark, bool(use_llm)) in _inflight:
+                return False   # L3: another boundary writes this same account now
+            _inflight.add((_mark, bool(use_llm)))
+        except Exception:
+            self.logger.warning("chat episodic write failed", exc_info=True)
+            return False
+        try:
+            return await self._write_chat_episode_row(
+                status=status, source=source, use_llm=use_llm, outcome=outcome,
+                mark=_mark, session_id=_episode_session_id)
+        finally:
+            _inflight.discard((_mark, bool(use_llm)))
+
+    async def _write_chat_episode_row(self, *, status: str, source: str, use_llm: bool,
+                                      outcome: str, mark: int, session_id) -> bool:
+        """The write itself, for :meth:`write_chat_episode` (which decided it is due)."""
+        _mark, _episode_session_id = mark, session_id
+        try:
+            from modules.memory.episodic import finalize_episode
+            # The whole-session summary, ONLY when the continuity bridge is
+            # enabled (the flag-off path keeps summary None).
+            _summary = None
+            try:
+                from core.config_policy import AutonomyConfig
+                if AutonomyConfig.continuity_bridge_enabled():
+                    from agents.task.session.chat_episode import summarize_session
+                    _summary = await summarize_session(self, use_llm=use_llm)
+            except Exception:
+                _summary = None
+            # P2-5: chat episodes were written with no task, no spend, and
+            # no steps, so the session-start digest rendered every chat row
+            # as `- chat:done $0.00 ""`. Pass the main agent's task and
+            # collect_provenance. Fail-open.
+            _task = None
+            try:
+                for _a in (getattr(self, "agents", None) or {}).values():
+                    _t = getattr(_a, "task", None)
+                    if _t:
+                        _task = str(_t)[:500]
+                        break
+            except Exception:
+                _task = None
+            _prov = {"spend_usd": 0.0, "steps": 0, "artifacts": []}
+            try:
+                from modules.memory.episodic import collect_provenance
+                _prov = await collect_provenance(self)
+            except Exception:
+                pass
+            if (not use_llm and getattr(self, "_chat_episode_mark", None) == _mark
+                    and getattr(self, "_chat_episode_llm", False)):
+                return False   # an LLM account of this same mark landed meanwhile
+            await finalize_episode(
+                session_id=_episode_session_id,
+                user_id=getattr(self, "user_id", None),
+                kind="chat",
+                task=_task,
+                outcome=outcome,
+                summary=_summary,
+                spend_usd=_prov.get("spend_usd", 0.0),
+                steps=_prov.get("steps", 0),
+                artifacts=_prov.get("artifacts", []),
+                skills_loaded=_prov.get("skills_loaded"),
+                skills_activation=_prov.get("skills_activation"),
+                thread_key=getattr(self, "_chat_session_key", None),
+                meta={"source": source, "status": status},
+            )
+            self._chat_episode_mark = _mark
+            self._chat_episode_llm = bool(use_llm)
+            return True
+        except Exception:
+            self.logger.warning("chat episodic write failed", exc_info=True)
+            return False
+
     async def cleanup(
         self,
         preserve_workspace: bool = False,
@@ -296,84 +421,15 @@ class SessionCleanupMixin:
                     user_id=getattr(self, "user_id", None),
                     status=status,
                 )
-            # Episodic-memory write: one row per genuine CHAT session completion.
-            # Goal/cron runs already record their OWN episode at the dispatcher/
-            # runner site — they're marked via autonomy_marker.mark_autonomous, so
-            # skip them here to avoid a double-recorded episode for the same run.
-            # Fail-open: a memory error must NEVER block session teardown.
-            try:
-                from core.autonomy_marker import is_autonomous
-                from core.surfaces.room_policy import is_public_session
-                _episode_session_id = getattr(self, "session_id", None)
-                # 044 C5: a PUBLIC (room) session writes NO episode. The episodic
-                # store is owner-tenant state — it is read back by the
-                # session-start digest, the continuity bridge and the recap, all
-                # of which run in the owner's DM. A room session runs AS the owner
-                # tenant (whoever opened it), so without this guard a stranger's
-                # room conversation became a row in the owner's own history, and
-                # `skip_memory` for a room was only ever half true.
-                from agents.task.session_class import regime_policy
-                if is_public_session(self):
-                    self.logger.debug("public (room) session: no episodic write")
-                elif not regime_policy(orchestrator=self,
-                                       session_id=_episode_session_id).owner_memory:
-                    # AGT-6 / DATA-9: a session a correspondent drives (created for
-                    # one, or tainted by one) is not the owner's history either.
-                    self.logger.debug("correspondent-facing session: no episodic write")
-                elif not is_autonomous(_episode_session_id):
-                    # The eviction status ("suspended") is not an account of the
-                    # turn — ask the closing turn itself whether it finished.
-                    outcome = _resolve_chat_outcome(status, self)
-                    if outcome is not None:
-                        from modules.memory.episodic import finalize_episode
-                        # Task 6 Part A: best-effort H-MEM summary of the closing
-                        # session, ONLY when the continuity bridge is enabled (keeps
-                        # the flag-off path byte-identical: summary stays None).
-                        _summary = None
-                        try:
-                            from core.config_policy import AutonomyConfig
-                            if AutonomyConfig.continuity_bridge_enabled():
-                                _summary = _derive_closing_chat_summary(self)
-                        except Exception:
-                            _summary = None
-                        # P2-5: chat episodes were written with no task, no spend, and
-                        # no steps, so the session-start digest rendered every chat row
-                        # as `- chat:done $0.00 ""` (and under-reported total spend).
-                        # Pass the main agent's task and collect_provenance (the goal
-                        # path already does this). Fail-open — a provenance hiccup must
-                        # never block the episode write.
-                        _task = None
-                        try:
-                            for _a in (getattr(self, "agents", None) or {}).values():
-                                _t = getattr(_a, "task", None)
-                                if _t:
-                                    _task = str(_t)[:500]
-                                    break
-                        except Exception:
-                            _task = None
-                        _prov = {"spend_usd": 0.0, "steps": 0, "artifacts": []}
-                        try:
-                            from modules.memory.episodic import collect_provenance
-                            _prov = await collect_provenance(self)
-                        except Exception:
-                            pass
-                        await finalize_episode(
-                            session_id=_episode_session_id,
-                            user_id=getattr(self, "user_id", None),
-                            kind="chat",
-                            task=_task,
-                            outcome=outcome,
-                            summary=_summary,
-                            spend_usd=_prov.get("spend_usd", 0.0),
-                            steps=_prov.get("steps", 0),
-                            artifacts=_prov.get("artifacts", []),
-                            skills_loaded=_prov.get("skills_loaded"),
-                            skills_activation=_prov.get("skills_activation"),
-                            thread_key=getattr(self, "_chat_session_key", None),
-                            meta={"source": "session_end", "status": status},
-                        )
-            except Exception:
-                self.logger.warning("chat episodic write failed", exc_info=True)
+            # Episodic-memory write: the closing chat episode (the continuity
+            # bridge's source). The SAME method runs at every other boundary
+            # (/new, the idle/daily reset, a drained restart — F5).
+            # L2: at process shutdown (TaskAgent._cleanup sets the flag) the
+            # structured extract only — one aux-LLM call per session, in
+            # sequence, could outlast the supervisor's stop timeout.
+            await self.write_chat_episode(
+                status=status, source="session_end",
+                use_llm=not getattr(self, "_episode_extract_only", False))
 
             # Computer-use posture: release this session's persistent shell sandbox
             # container + revoke its published loopback ports (best-effort, no-op
@@ -501,10 +557,16 @@ class SessionCleanupMixin:
                                 # froze the loop up to ~30s (and deadlocked its own metering).
                                 # Mirrors the per-step reflection offload (memory_writer.py).
                                 import asyncio as _asyncio
+                                try:  # 095 W9: the regime may ask for close-time reflection
+                                    from agents.task.session_class import regime_policy
+                                    _reflect = bool(regime_policy(agent).reflect_on_close)
+                                except Exception:
+                                    _reflect = False
                                 closed, _drained = await _asyncio.to_thread(
                                     agent.task_context_manager.close_session_and_drain,
                                     self.session_id,
                                     self.user_id,
+                                    _reflect,
                                 )
                                 if closed:
                                     self.logger.info(f"💾 Saved + released hierarchical memory for agent {agent_id}")
@@ -512,7 +574,15 @@ class SessionCleanupMixin:
                                     # findings to the cross-session store (same path the
                                     # per-step loop uses). Previously discarded at close.
                                     from agents.task.session_class import regime_policy
-                                    if _drained and regime_policy(
+                                    from agents.task.runtime.stop_reason import memory_worthy
+                                    _last_stop = getattr(getattr(agent, 'state', None), 'stop_reason', None)
+                                    if _drained and not memory_worthy(_last_stop):
+                                        # F7: the last run stopped at the step limit / after
+                                        # failures / in a loop — its summaries stay in H-MEM.
+                                        self.logger.info(
+                                            f"close-time memory sync skipped: {len(_drained)} "
+                                            f"summary(ies) from a run that stopped ({_last_stop})")
+                                    elif _drained and regime_policy(
                                             orchestrator=self,
                                             session_id=getattr(self, "session_id", None)).owner_memory:
                                         try:

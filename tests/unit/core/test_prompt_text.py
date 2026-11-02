@@ -29,11 +29,16 @@ BLOCK_MAX_CHARS = {
     # 093 review: + the owner-seat /mcp add line (owner_add, ~20 tokens).
     "mcp_tools": 1720,
     "message_shape": 1100,
-    "owner_instructions": 950,
+    # 2026-10-29: + the standing-programme bullet (one source of truth per
+    # programme: its pinned skill), the other bullets trimmed to pay for it.
+    # 095 W4: + "applies from your next step, unless 'list' says next session"
+    # (the state-delta channel); W4 removed more than it added (owner seat -56).
+    "owner_instructions": 1150,
     "response_format": 1850,
     "rules": 650,
     "security": 950,
-    "source_precedence": 3300,
+    # 095 W10: + a lane's pinned skill outranks owner.md on its programme terms.
+    "source_precedence": 3350,
     "subtask_delegation": 650,
     "surface": 2700,
     "using_your_tools": 750,
@@ -90,6 +95,7 @@ def _render_matrix(monkeypatch):
         monkeypatch.setattr(cp, name, lambda: True)
     monkeypatch.setattr(cp.AutonomyConfig, "owner_doc_writable", staticmethod(lambda: True))
     monkeypatch.setattr(cp.AutonomyConfig, "self_context_writable", staticmethod(lambda: True))
+    monkeypatch.setattr(cp.AutonomyConfig, "skills_writable", staticmethod(lambda: True))
     dm = {"surface_id": "telegram", "max_message_bytes": 4096, "media_out": True,
           "supports_interactive_ask": True, "chat_type": "dm"}
     surfaces = (None, dm, {**dm, "media_out": False, "supports_interactive_ask": False},
@@ -109,6 +115,10 @@ def _render_matrix(monkeypatch):
     # 093 review: an owner seat with no MCP server gets the /mcp add line.
     SystemPrompt("a", use_native_tools=True, tool_ids=["web_fetch"],
                  owner_seat=True).get_system_message()
+    # 095 W9: a seat whose registry names no status tool; memory on and off.
+    for backend in ("sqlite", "none"):
+        monkeypatch.setenv("MEMORY_BACKEND", backend)
+        SystemPrompt("- foo: x", use_native_tools=True, tool_ids=[]).get_system_message()
 
 
 def test_every_text_is_used_and_every_used_key_exists(monkeypatch):

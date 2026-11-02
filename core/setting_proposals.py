@@ -5,8 +5,9 @@ There are three answers, and only three:
 
 * ``card`` — the line is an EXISTING owner verb the owner can already type,
   in an allowed shape: ``/mcp add <id> <https-url>``, ``/config set <key>
-  <value>`` for a safe preference or a remote-writable flag, or a non-money
-  tool grant (``/goal grant <id> tools=…``, ``/job edit <id> grant tools=…``).
+  <value>`` for a safe preference or a remote-writable flag, a non-money
+  tool grant (``/goal grant <id> tools=…``, ``/job edit <id> grant tools=…``),
+  or the owner's new-chat model (``/model <name> default``).
   The card holds the line; Confirm runs it on the seat as if the owner typed
   it, so every gate under the verb runs again (a card adds no authority).
 * ``operator`` — a setting no chat seat can write (the env file, a backend, a
@@ -30,12 +31,19 @@ REFUSED = "refused"
 
 #: The shapes, as the refusal names them.
 SHAPES = ("/mcp add <id> <https-url>", "/config set <key> <value>",
-          "/goal grant <id> tools=<a,b>", "/job edit <id> grant tools=<a,b>")
+          "/goal grant <id> tools=<a,b>", "/job edit <id> grant tools=<a,b>",
+          "/model <name> default")
 
 MCP_RISK = ("Risk: the server's tools gain network reach from this agent, and what "
             "they return is untrusted input; the server sees every argument the agent "
             "sends it.")
 CONFIG_RISK = "Risk: it changes how the agent behaves; /config set reverts it."
+#: 095 W1c: a bundle switch turns many posture members on or off at once.
+BUNDLE_RISK = ("Risk: a bundle switch — it turns many loops and tools on or off at once "
+               "(`/config explain <key>` lists them); /config set reverts it.")
+_BUNDLE_KEYS = frozenset({"AUTONOMY_ENABLED", "AUTONOMY_POSTURE"})
+MODEL_RISK = ("Risk: every NEW owner chat starts on this model (cost and quality change); "
+              "the operator's DEFAULT_MODEL stays the floor; /model reset default reverts it.")
 GRANT_RISK = ("Risk: the run can use these tools without asking again; no money "
               "tool is on this line.")
 #: An ``exec`` tool on a grant line (``core.tool_capabilities``).
@@ -57,9 +65,10 @@ _EXPOSURE_PREFIXES = ("UVICORN_",)
 _SERVER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,127}$")
 _REF = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,127}$")
 
 #: ``core.config_service`` applies -> the ``core.tool_gates.APPLIES`` word.
-_APPLIES = {"live": "now", "next-turn": "next-turn", "next-session": "new-session",
+_APPLIES = {"live": "now", "next-step": "now", "next-turn": "next-turn", "next-session": "new-session",
             "restart": "restart"}
 
 
@@ -73,6 +82,7 @@ class SettingProposal:
     who: str = ""
     when: str = ""
     reason: str = ""                                 # refused: why
+    setting: str = ""                                # KEY=value the line changes (dedupe)
 
     @property
     def line(self) -> str:
@@ -142,10 +152,12 @@ def _flag_refusal(key: str, value: str) -> Optional[str]:
     try:
         info = config_service.describe(key)
     except KeyError:
-        return config_service.unknown_key_message(key)
+        # SC-7 (095 W2): a fix that names no settable key is an owner_ask, not a card.
+        return (config_service.unknown_key_message(key)
+                + "; if the fix is not a setting, raise ONE owner_ask instead")
     if getattr(info, "secret", False):
         return (f"'{key}' holds a secret — it is never on a card or in a message; the "
-                f"operator sets it on the host")
+                f"operator sets it on the host (raise ONE owner_ask if it is missing)")
     stop = _never_proposed(key)
     if stop:
         return stop
@@ -190,26 +202,69 @@ def _config(words: List[str]) -> SettingProposal:
             return _refused(f"'{key}' is a guarded preference — the owner sets it with "
                             f"/config set and approves it on /pending")
         return SettingProposal(CARD, words=["/config", "set", key, *words[3:]],
+                               setting=f"{key}={value}",
                                change=f"Set the preference {key} = {value}.",
                                risk=CONFIG_RISK, who="owner-verb",
                                when=_applies_word(spec.applies))
     stop = _flag_refusal(key, value)
     if stop:
         return _refused(stop)
-    if key == "POLYROB_OVERRIDES":
-        stop = _overrides_refusal(value)
+    from core.config_policy.members import OVERRIDES_ENV, _raw_overrides, is_member, with_override
+    if key == OVERRIDES_ENV:
+        stop = _overrides_refusal(value) or _overrides_drop(value)
         if stop:
             return _refused(stop)
     info = config_service.describe(key)
+    # 095 W1c (SC-2): a member line MERGES into the running override line —
+    # ``set_line`` would print a line that drops every other member.
+    env_line = (f"{OVERRIDES_ENV}={with_override(_raw_overrides(), key, value)}"
+                if is_member(key) else f"{key}={value}")
     if config_service.remote_write_refused(key, value):
-        from core.config_policy.members import set_line
-        env_line = set_line(key, value)
-        return SettingProposal(OPERATOR, env_line=env_line,
+        return SettingProposal(OPERATOR, env_line=env_line, setting=f"{key}={value}",
                                change=f"Set {env_line} in the operator's env file.",
                                who="operator-env", when="restart")
+    # 095 W1c (SC-15): a value a higher layer pins is never a (decorative) card.
+    pinned = config_service.shadowed_write_refusal(key, value)
+    if pinned:
+        return SettingProposal(OPERATOR, env_line=env_line, setting=f"{key}={value}",
+                               change=f"Set {env_line} where it is pinned ({pinned}).",
+                               who="operator-env", when="restart")
     return SettingProposal(CARD, words=["/config", "set", key, *words[3:]],
-                           change=f"Set {key} = {value}.", risk=CONFIG_RISK,
+                           change=f"Set {key} = {value}.", setting=f"{key}={value}",
+                           risk=BUNDLE_RISK if key in _BUNDLE_KEYS else CONFIG_RISK,
                            who="owner-verb", when=_applies_word(info.applies))
+
+
+def _overrides_drop(value: str) -> Optional[str]:
+    """095 W1c (SC-2): a pasted ``POLYROB_OVERRIDES`` line REPLACES the running
+    one; refuse a line that drops a member set today, and print the merged line."""
+    from core.config_policy.members import OVERRIDES_ENV, _raw_overrides, overrides, with_override
+    current = _raw_overrides()
+    named = {e.partition("=")[0].strip().upper() for e in str(value).split(",") if e.strip()}
+    dropped = sorted(n for n in overrides() if n not in named)
+    if not dropped:
+        return None
+    merged = current
+    for entry in str(value).split(","):
+        name, _sep, val = entry.partition("=")
+        if name.strip():
+            merged = with_override(merged, name, val.strip())
+    return (f"this line drops {', '.join(dropped)} from the running {OVERRIDES_ENV}; "
+            f"propose the merged line instead: {OVERRIDES_ENV}={merged}")
+
+
+def _model_default(words: List[str]) -> SettingProposal:
+    """095 W1c (SC-16): ``/model <name> default`` — the owner's default for every
+    new chat — is a card; the operator's ``DEFAULT_MODEL`` stays an env line."""
+    if (len(words) != 3 or words[2].lower() != "default" or not _MODEL.match(words[1])
+            or words[1].lower() in ("reset", "alias", "aliases", "default", "go")):
+        return _refused("a model card carries exactly /model <name> default (the "
+                        "owner's default for new chats; DEFAULT_MODEL is the operator's)")
+    return SettingProposal(CARD, words=["/model", words[1], "default"],
+                           setting=f"model.default={words[1]}",
+                           change=f"Make {words[1]} the model every new owner chat starts on "
+                                  f"(this chat switches too).",
+                           risk=MODEL_RISK, who="owner-verb", when="now")
 
 
 def _grant(words: List[str]) -> SettingProposal:
@@ -284,6 +339,38 @@ def with_current_tools(p: SettingProposal, current: Optional[List[str]]) -> Sett
     return replace(p, change=change)
 
 
+#: 095 W8 (SC-11): an operator ``config_change`` ask closes by itself after
+#: this many days (the goal-board sweep), if the setting never takes effect.
+CONFIG_ASK_TTL_DAYS = 14
+
+
+def setting_in_effect(setting: str) -> Optional[bool]:
+    """095 W8 (SC-11): is ``KEY=value`` the effective value in THIS process now
+    (the ``config_service`` read every status view uses)? ``None`` when it
+    cannot be read — the caller then keeps the ask open."""
+    key, sep, want = str(setting or "").partition("=")
+    key, want = key.strip(), want.strip()
+    if not sep or not key:
+        return None
+    from core.config_policy.members import OVERRIDES_ENV
+    if key == OVERRIDES_ENV:
+        # The override line holds other members too: each named member must hold.
+        parts = [x.strip() for x in want.split(",") if x.strip()]
+        verdicts = [setting_in_effect(x) if "=" in x else None for x in parts]
+        if not verdicts or None in verdicts:
+            return None
+        return all(verdicts)
+    try:
+        from core import config_service
+        have = config_service.effective(key)
+    except Exception:
+        return None
+    if isinstance(have, bool):
+        from core.env import parse_bool
+        return parse_bool(want, not have) == have
+    return str(have if have is not None else "").strip().lower() == want.lower()
+
+
 def classify(command: str) -> SettingProposal:
     """The ONE decision: card, operator, or refused (see the module doc)."""
     words = str(command or "").split()
@@ -299,9 +386,13 @@ def classify(command: str) -> SettingProposal:
         return _config(words)
     if head in (("/goal", "grant"), ("/job", "edit")):
         return _grant(words)
+    if words[0] == "/model":
+        return _model_default(words)
     return _refused("propose_setting carries only: " + "; ".join(SHAPES)
                     + ". A money move is propose_action.")
 
 
-__all__ = ["CARD", "OPERATOR", "REFUSED", "SHAPES", "MCP_RISK", "EXEC_RISK", "SettingProposal",
-           "classify", "grant_parts", "with_current_tools"]
+__all__ = ["CARD", "OPERATOR", "REFUSED", "SHAPES", "MCP_RISK", "EXEC_RISK", "BUNDLE_RISK",
+           "MODEL_RISK", "SettingProposal",
+           "CONFIG_ASK_TTL_DAYS", "classify", "grant_parts", "setting_in_effect",
+           "with_current_tools"]

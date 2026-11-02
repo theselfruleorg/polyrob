@@ -205,3 +205,21 @@ def test_a_lost_wake_row_reopens_the_group_and_the_sweep_heals_it(st, monkeypatc
     assert _wakes(st).pending_count() == 1
     assert G.heal(st) == 0
 
+
+
+def test_a_cancel_tap_names_the_card_and_its_whole_line(st):
+    """Prod 10-29 03:35: the thread said "(cancelled the card: Proposed: /send)" —
+    no id, no recipient, no amount — and the agent could not say what was cancelled."""
+    p = _propose(st)
+    text = cards.tap_line(cards.card_token(p.card_id, "no"), U, st=st)
+    assert text == f"(cancelled card {p.card_id}: {p.line})"
+    assert "0x" + "cd" * 20 in text and "24" in text
+
+
+def test_a_cancel_in_a_group_still_open_is_in_the_outcomes_block(st):
+    cancelled, _waiting = _propose(st), _propose(st)
+    cards.press(cancelled.card_id, "no", U)
+    text = G.take_outcomes(session_id=S, user_id=U, st=st)
+    assert "Still waiting on the owner: 1" in text
+    assert f"- {cancelled.line} → DISMISSED (card {cancelled.card_id})" in text
+    assert G.groups(st).get(cancelled.group_id)["state"] == G.G_OPEN   # still waits

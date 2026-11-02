@@ -48,6 +48,12 @@ def _event_aggregate(user_id: str, since_ts: Optional[float]) -> Dict[str, Any]:
     return get_event_log().aggregate(since_ts=since_ts, user_id=user_id) or {}
 
 
+def _proposals(user_id: str, since_ts: float, data_dir: Optional[str]) -> List[str]:
+    """The curator's owner proposal lines (095 W12) — the recap's one reader."""
+    from core.recap import curator_proposals
+    return curator_proposals(user_id, since_ts, data_dir)
+
+
 def _outward(user_id: str, since_ts: float, data_dir: Optional[str]) -> str:
     """033: what the agent did to the outside world, by effect class — every
     tool, surface and MCP server, not a closed kind list. Seam kept for test
@@ -68,7 +74,57 @@ def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
     out = []
     for a in rows:
         get = (a.get if isinstance(a, dict) else lambda k, d=None: getattr(a, k, d))
-        out.append({"title": get("title") or get("what") or ""})
+        out.append({"id": get("id") or "", "title": get("title") or get("what") or "",
+                    "created_at": get("created_at")})
+    return out
+
+
+def _failed_jobs(user_id: str, data_dir: Optional[str]) -> List[Any]:
+    """Owner-armed jobs whose LAST run failed or ended partial (routines review
+    2026-10-29: the 10-28 announce failure was not on the 10-29 digest's visible
+    lines, below five housekeeping items). Raises on an unreadable store."""
+    from core.cron_outcome import FAILED_OUTCOMES, agent_armed
+    from core.runtime_paths import cron_db_path, data_dir_or_home
+    from cron.jobs import CronJobStore
+    path = cron_db_path(data_dir_or_home(data_dir))
+    if not os.path.exists(path):
+        return []
+    out = []
+    for job in CronJobStore(path).list(user_id=user_id) or []:
+        p = job.payload or {}
+        if job.status == "cancelled" or agent_armed(p) or p.get("digest"):
+            continue
+        if (p.get("last_outcome") or {}).get("outcome") in FAILED_OUTCOMES:
+            out.append(job)
+    return out
+
+
+def _failed_job_lines(jobs: Optional[List[Any]], since_ts: float) -> List[str]:
+    """The FIRST section after the header: a job of the owner's that failed in
+    the window outranks every housekeeping line below it."""
+    if not jobs:
+        return []
+    from datetime import datetime
+    from cron.service import last_outcome, next_run_text
+    recent = []
+    for job in jobs:
+        at = str(((job.payload or {}).get("last_outcome") or {}).get("at") or "")
+        try:
+            ts = datetime.fromisoformat(at).timestamp()
+        except ValueError:
+            ts = None  # a failure with no readable time is still shown
+        if ts is None or ts >= since_ts:
+            recent.append(job)
+    if not recent:
+        return []
+    out = [f"• ⚠ Your jobs that failed ({len(recent)}) — their work did not finish:"]
+    for job in recent[:5]:
+        p = job.payload or {}
+        out.append(f"   - {job.id[:8]} \"{_short(p.get('name') or job.task, 50)}\" "
+                   f"{last_outcome(job)} · deliver: {p.get('deliver') or 'none'} · "
+                   f"next {next_run_text(job)} — /job show {job.id[:8]}")
+    if len(recent) > 5:
+        out.append(f"   … and {len(recent) - 5} more (/jobs)")
     return out
 
 
@@ -140,6 +196,8 @@ def _read(failures: List[str], source: str, fn, *args):
         return None
 
 
+#: How many curator proposal lines the digest quotes.
+PROPOSALS_MAX_LINES = 5
 #: How many suppressed owner messages the digest quotes in full; the rest are counted.
 MISSED_MAX_LINES = 8
 #: How many rows to read back — bounded, the window filter runs on top.
@@ -215,6 +273,25 @@ def _trading_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
     return [head] + [f"   {ln}" for ln in view.get("lines") or []]
 
 
+#: An ask open this long is named as possibly obsolete (it led every digest of
+#: 10-17..10-29 for a contract the programme no longer used).
+ASK_STALE_DAYS = 7
+
+
+def _ask_age(ask: Dict[str, Any]) -> str:
+    """`` (open 12.8 d)`` — and, past ASK_STALE_DAYS, how to close it."""
+    if ask.get("created_at") in (None, ""):
+        return ""
+    try:
+        days = (time.time() - float(ask.get("created_at"))) / 86400
+    except (TypeError, ValueError) as e:
+        return f" (age unknown: {type(e).__name__})"
+    text = f" (open {days:.1f} d)" if days >= 1 else ""
+    if days >= ASK_STALE_DAYS and ask.get("id"):
+        text += f" — still needed? if not, tell me to withdraw ask {ask['id']}"
+    return text
+
+
 async def compose_digest(user_id: str, *, days: int = 1,
                          data_dir: Optional[str] = None, db=None) -> str:
     """Build the digest text from evidence. Pure-ish (all reads fail-open)."""
@@ -225,6 +302,8 @@ async def compose_digest(user_id: str, *, days: int = 1,
     asks = _read(failures, "open asks", _open_asks, user_id, data_dir)
     episodes = _read(failures, "episodes", _episodes, user_id, since_ts)
     top_cost = _read(failures, "AI cost records", _top_cost, user_id, data_dir, days)
+    failed_jobs = _read(failures, "job store", _failed_jobs, user_id, data_dir)
+    proposals = _read(failures, "curator proposals", _proposals, user_id, since_ts, data_dir)
 
     from core.event_kinds import GOAL_COMPLETION, GOAL_RUN, SELF_MODIFICATION
 
@@ -241,12 +320,14 @@ async def compose_digest(user_id: str, *, days: int = 1,
     # 080 WS-4: the window is ROLLING, not the calendar day — say so.
     period = "last 24 h" if days == 1 else f"last {days} days"
     lines = [f"Daily digest — {period}:"]
+    lines.extend(_failed_job_lines(failed_jobs, since_ts))
     # 2026-08-28 status SSOT: the digest leads with the same health block
     # /status renders. A degraded instance is the first thing the owner reads;
     # a builder failure is one honest line, never a silently clean digest.
     lines.extend(_health_lines(user_id, data_dir))
     lines.append(f"• Activity: {sessions} session(s), {_n(n_goals, agg is None)} goal event(s), "
                  f"{_n(n_self_mods, agg is None)} self-change(s)")
+    lines.extend(f"• {p}" for p in (proposals or [])[:PROPOSALS_MAX_LINES])
     if failures:
         lines.append("• Could not read: " + "; ".join(failures)
                      + " — a '?' or a missing line here is NOT a zero")
@@ -312,7 +393,7 @@ async def compose_digest(user_id: str, *, days: int = 1,
         lines.append(f"• Pending approvals ({len(asks)}):")
         for a in asks[:5]:
             title = (a.get("title") or "").strip().replace("\n", " ")[:80]
-            lines.append(f"   - {title}")
+            lines.append(f"   - {title}{_ask_age(a)}")
     else:
         lines.append("• Pending approvals: none")
     lines.extend(_missed_lines(user_id, data_dir, since_ts))

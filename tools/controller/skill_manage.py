@@ -14,17 +14,19 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from agents.task.loop_types.controller_types import ActionResult
+from core.prompt_text import owner_route
 
 SKILL_MANAGE_DESCRIPTION = (
 	"Author your own durable SKILLS (procedures you can reload in future sessions). "
 	"create: a new SKILL.md (markdown, a # heading) plus when = the index line that "
-	"says when to load it (<= 60 chars). patch: exact-string replace. "
+	"says when to load it (<= 60 chars). patch: exact-string replace, or `when` "
+	"alone to change an existing skill's index line. "
 	"edit: replace the whole body. delete: archive. patch/edit/delete need "
 	"expected_sha256 = the sha256 load_skill returned for the body you read. "
 	"rollback: restore an archived revision (to_sha, default the one the last change "
 	"replaced). A background delete names absorbed_into. promote is owner-only. New and "
 	"edited skills wait for review before they activate; a bundled skill's fix waits "
-	"for the owner."
+	"for the owner. " + owner_route("programme")
 )
 
 
@@ -39,7 +41,7 @@ class SkillManageAction(BaseModel):
 	expected_sha256: Optional[str] = None  # patch/edit/delete: sha256 of the body you read
 	to_sha: Optional[str] = None           # rollback: the revision (8+ char prefix)
 	absorbed_into: Optional[str] = None    # delete: the skill that now holds this one
-	when: Optional[str] = None             # create: the index line (<= 60 chars)
+	when: Optional[str] = None             # create / patch alone: the index line (<= 60 chars)
 
 
 _NEEDS_READ = ("patch", "edit", "delete")
@@ -86,6 +88,23 @@ def _with_when(skill_id: str, content: str, when: Optional[str], description: st
 	return head + "metadata:\n" + line + tail
 
 
+def _set_when(skill_id: str, current: str, when: str) -> str:
+	"""An existing skill's index line replaced (or added) in its frontmatter;
+	the body is untouched."""
+	import json
+	import re
+	if current.startswith("---"):
+		end = current.find("\n---", 3)
+		if end >= 0:
+			head, tail = current[:end + 1], current[end + 1:]
+			pat = re.compile(r"^([ \t]*)polyrob-when:.*$", re.MULTILINE)
+			if pat.search(head):
+				head = pat.sub(lambda m: f"{m.group(1)}polyrob-when: {json.dumps(when)}",
+				               head, count=1)
+				return head + tail
+	return _with_when(skill_id, current, when, "")
+
+
 def _refusal(res) -> str:
 	text = f"Skill rejected: {'; '.join(res.errors)}"
 	if res.revision and any("revision conflict" in e for e in res.errors):
@@ -119,6 +138,7 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 			error=(f"{params.action} needs expected_sha256: call load_skill('{params.skill_id}') "
 			       f"and pass the sha256 it returns for the body you read."),
 			include_in_memory=True)
+	new_terms = params.new_string or ""  # patch: the changed span
 	try:
 		from agents.task.agent.skill_manager import get_skill_manager
 		sm = get_skill_manager()
@@ -136,10 +156,27 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 					f"or 'patch' with its sha256."), include_in_memory=True)
 			res = sm.create_skill(params.skill_id, content, user_id=user_id,
 			                      description=params.description, created_by=created_by)
+		elif (params.action == "patch" and params.old_string is None
+		      and params.new_string is None and (params.when or "").strip()):
+			# The index line lives in the frontmatter, which load_skill strips and
+			# edit keeps: `when` alone is the one way to change it.
+			from core.skills.frontmatter import MAX_WHEN_CHARS
+			when = " ".join(params.when.split())
+			if len(when) > MAX_WHEN_CHARS:
+				return ActionResult(error=(
+					f"`when` is {len(when)} chars; the index line is <= {MAX_WHEN_CHARS}. "
+					f"Shorten it — the body says the rest."), include_in_memory=True)
+			new_terms = ""
+			res = sm.edit_skill(params.skill_id, "", user_id=user_id,
+			                    description=params.description, created_by=created_by,
+			                    expected_revision=params.expected_sha256,
+			                    keep_frontmatter=lambda cur, _c: _set_when(
+			                        params.skill_id, cur, when))
 		elif params.action == "patch":
 			if params.old_string is None or params.new_string is None:
-				return ActionResult(error="patch requires `old_string` and `new_string`.",
-				                    include_in_memory=True)
+				return ActionResult(error=(
+					"patch requires `old_string` and `new_string` — or `when` alone to "
+					"change the skill's index line."), include_in_memory=True)
 			res = sm.patch_skill(params.skill_id, user_id=user_id,
 			                     old_string=params.old_string, new_string=params.new_string,
 			                     replace_all=params.replace_all, created_by=created_by,
@@ -147,6 +184,9 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 		elif params.action == "edit":
 			if not params.content:
 				return ActionResult(error="edit requires `content`.", include_in_memory=True)
+			from core.doc_claims import changed_lines
+			new_terms = "\n".join(changed_lines(
+				sm._load_skill_content(params.skill_id, user_id=user_id) or "", params.content))
 			res = sm.edit_skill(params.skill_id, params.content, user_id=user_id,
 			                    description=params.description, created_by=created_by,
 			                    expected_revision=params.expected_sha256,
@@ -173,6 +213,14 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 	# The body just changed: let the next `load_skill` re-emit it.
 	forget_activated_skill(controller, params.skill_id)
 	_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by)
+	superseded = ""
+	if not is_forged and params.action in ("patch", "edit") and new_terms.strip():
+		# 095 W10 (R8): a lane's programme terms changed — retire the owner.md line
+		# on the same subject in a linked draft (before the owner is notified).
+		from tools.controller.doc_authoring import draft_owner_supersede
+		superseded = draft_owner_supersede(controller, params.skill_id, new_terms,
+		                                   user_id=user_id, created_by=created_by,
+		                                   link=bool(res.pending))
 	if res.pending:  # §7.1: notify the owner (fail-open, gated)
 		try:
 			from core import self_evolution as _se
@@ -187,6 +235,7 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 			controller.logger.debug(f"self-evolution notify skipped: {_e}")
 	from tools.controller.doc_authoring import skill_saved_text
 	text = skill_saved_text(params.skill_id, where)
+	text += superseded
 	if res.revision:
 		text += f"\nsha256: {res.revision}"
 	if res.warnings:

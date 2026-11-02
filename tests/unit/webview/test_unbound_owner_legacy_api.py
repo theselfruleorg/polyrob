@@ -92,7 +92,7 @@ def test_the_refusal_is_never_an_empty_list(client, path):
 
 @pytest.mark.parametrize("path", LEGACY_READS)
 def test_a_bound_console_reads_its_stores_normally(client, monkeypatch, path):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     resp = client.get(path)
     assert resp.status_code == 200, (path, resp.text)
 
@@ -100,12 +100,12 @@ def test_a_bound_console_reads_its_stores_normally(client, monkeypatch, path):
 def test_a_bound_console_answers_for_the_bound_owner(client, monkeypatch):
     """Not just "a 200" — the 200 is scoped to the owner that was bound."""
     import webview.pages as pages
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
     class Req:
         state = type("S", (), {})()
 
-    assert pages._effective_user_id(Req()) == "rob"
+    assert pages._effective_user_id(Req()) == "alice"
 
 
 # --- the other two postures -------------------------------------------------- #

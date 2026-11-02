@@ -44,10 +44,10 @@ def test_no_non_allowlisted_ambient_var_is_inherited(monkeypatch):
 def test_process_launch_vars_survive(monkeypatch):
     """npx/uvx-launched servers need these or they cannot start."""
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    monkeypatch.setenv("HOME", "/home/rob")
+    monkeypatch.setenv("HOME", "/home/alice")
     env = build_mcp_child_env(None)
     assert env["PATH"] == "/usr/bin:/bin"
-    assert env["HOME"] == "/home/rob"
+    assert env["HOME"] == "/home/alice"
 
 
 def test_explicitly_configured_secret_is_passed(monkeypatch):

@@ -139,5 +139,5 @@ def test_the_chat_overlay_is_not_a_tenant_preference():
     from core.prefs import CHAT_PREF_SCHEMA, PREF_SCHEMA, write_preference
 
     assert not (set(CHAT_PREF_SCHEMA) & set(PREF_SCHEMA))
-    ok, err = write_preference("/tmp/does-not-matter", "rob", "chat.mode", "active")
+    ok, err = write_preference("/tmp/does-not-matter", "alice", "chat.mode", "active")
     assert not ok and "per-room" in err

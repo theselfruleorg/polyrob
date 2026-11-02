@@ -9,7 +9,7 @@ def board(tmp_path):
 
 
 def _claimed(board):
-    g = board.create(user_id="rob", title="claimed goal")
+    g = board.create(user_id="alice", title="claimed goal")
     board.claim(g.id, "w1", ttl_seconds=60)
     return g
 

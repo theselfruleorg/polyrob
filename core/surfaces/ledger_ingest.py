@@ -153,6 +153,19 @@ def record_inbound_to_ledger(container: Any, inbound: Any, *, role: str, is_owne
         return False
 
 
+def _room_thread_id(msg: dict):
+    """The routable forum thread id, the same rule as the surface's
+    ``effective_thread_id`` (core cannot import the surface): a forum's General
+    topic is ``"1"`` and a plain group's reply anchor is NOT a thread. A raw
+    ``message_thread_id`` put an anonymous General line at NULL, where the
+    General turn's context (``thread_id='1'``) never shows it."""
+    chat = msg.get("chat") or {}
+    raw = msg.get("message_thread_id")
+    if raw is not None and (chat.get("is_forum") or msg.get("is_topic_message")):
+        return str(raw)
+    return "1" if chat.get("is_forum") else None
+
+
 def record_anonymous_to_ledger(container: Any, *, surface: str,
                                raw_update: dict) -> bool:
     """Record an ANONYMOUS-SENDER room line (D57).
@@ -207,8 +220,7 @@ def record_anonymous_to_ledger(container: Any, *, surface: str,
         reply = (msg.get("reply_to_message") or {}).get("message_id")
         row = LedgerRow(
             surface=surface, chat_id=chat_id,
-            thread_id=(str(msg.get("message_thread_id"))
-                       if msg.get("message_thread_id") is not None else None),
+            thread_id=_room_thread_id(msg),
             message_id=str(mid), ts=float(msg.get("date") or time.time()),
             sender_id="", sender_name=name, sender_is_bot=False,
             role_at_write="member", kind=kind, text=text,

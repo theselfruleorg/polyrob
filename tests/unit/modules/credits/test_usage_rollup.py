@@ -48,14 +48,14 @@ async def _insert(db, user_id, session_id, api_cost_usd, cost=1.0, timestamp=Non
 async def test_tenant_scoped_no_cross_tenant_leak(tmp_path):
     db = await _setup_db(tmp_path)
     try:
-        await _insert(db, "rob", "s1", 0.10)
+        await _insert(db, "alice", "s1", 0.10)
         await _insert(db, "other", "s2", 5.00)
 
-        rob = await usage_rollup("rob", db=db)
+        alice = await usage_rollup("alice", db=db)
         other = await usage_rollup("other", db=db)
 
-        assert rob["api_cost_usd"] == pytest.approx(0.10)
-        assert rob["calls"] == 1
+        assert alice["api_cost_usd"] == pytest.approx(0.10)
+        assert alice["calls"] == 1
         assert other["api_cost_usd"] == pytest.approx(5.00)
         assert other["calls"] == 1
     finally:
@@ -66,15 +66,15 @@ async def test_tenant_scoped_no_cross_tenant_leak(tmp_path):
 async def test_session_filter_narrows(tmp_path):
     db = await _setup_db(tmp_path)
     try:
-        await _insert(db, "rob", "s1", 0.10)
-        await _insert(db, "rob", "s2", 0.20)
+        await _insert(db, "alice", "s1", 0.10)
+        await _insert(db, "alice", "s2", 0.20)
 
-        narrowed = await usage_rollup("rob", session_id="s1", db=db)
+        narrowed = await usage_rollup("alice", session_id="s1", db=db)
         assert narrowed["api_cost_usd"] == pytest.approx(0.10)
         assert narrowed["calls"] == 1
         assert "by_session" not in narrowed  # only computed when session_id absent
 
-        total = await usage_rollup("rob", db=db)
+        total = await usage_rollup("alice", db=db)
         assert total["api_cost_usd"] == pytest.approx(0.30)
         assert total["calls"] == 2
         assert {r["session_id"] for r in total["by_session"]} == {"s1", "s2"}
@@ -86,14 +86,14 @@ async def test_session_filter_narrows(tmp_path):
 async def test_since_filter_narrows(tmp_path):
     db = await _setup_db(tmp_path)
     try:
-        await _insert(db, "rob", "s1", 0.10, timestamp="2020-01-01 00:00:00")
-        await _insert(db, "rob", "s1", 0.20, timestamp="2030-01-01 00:00:00")
+        await _insert(db, "alice", "s1", 0.10, timestamp="2020-01-01 00:00:00")
+        await _insert(db, "alice", "s1", 0.20, timestamp="2030-01-01 00:00:00")
 
-        recent = await usage_rollup("rob", since="2025-01-01", db=db)
+        recent = await usage_rollup("alice", since="2025-01-01", db=db)
         assert recent["api_cost_usd"] == pytest.approx(0.20)
         assert recent["calls"] == 1
 
-        everything = await usage_rollup("rob", db=db)
+        everything = await usage_rollup("alice", db=db)
         assert everything["api_cost_usd"] == pytest.approx(0.30)
         assert everything["calls"] == 2
     finally:
@@ -109,7 +109,7 @@ async def test_error_fails_open_to_zeros():
         async def fetch_all(self, *a, **k):
             raise RuntimeError("nope")
 
-    rollup = await usage_rollup("rob", db=_Broken())
+    rollup = await usage_rollup("alice", db=_Broken())
     assert rollup["api_cost_usd"] == 0.0
     assert rollup["credits"] == 0.0
     assert rollup["calls"] == 0
@@ -120,7 +120,7 @@ async def test_error_fails_open_to_zeros():
 async def test_empty_tenant_never_widens_to_all_tenants(tmp_path):
     db = await _setup_db(tmp_path)
     try:
-        await _insert(db, "rob", "s1", 1.0)
+        await _insert(db, "alice", "s1", 1.0)
         rollup = await usage_rollup("", db=db)
         assert rollup["api_cost_usd"] == 0.0
         assert rollup["calls"] == 0
@@ -137,7 +137,7 @@ async def test_no_db_service_fails_open(monkeypatch):
             return None
 
     monkeypatch.setattr(DependencyContainer, "get_instance", lambda: _NoServiceContainer())
-    rollup = await usage_rollup("rob")
+    rollup = await usage_rollup("alice")
     assert rollup["api_cost_usd"] == 0.0
     assert rollup["calls"] == 0
 

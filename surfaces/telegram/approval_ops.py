@@ -109,25 +109,48 @@ async def pending_verb(c) -> str:
     Chat used to build this join by hand while the bare `/approve` shortcut read
     only the first of the three sources; see `approval_queue.all_pending`."""
     from core import self_evolution
+    from core.pending_review import summary_line
     pending = _pending_set(c.user_id, c.data_dir, c.instance_id, c.board)
+    if c.args and c.args[0].lower() != "all":
+        return _review_one(c, pending, c.args[0])
     rest = _elsewhere(c, "pending")
     if not pending.items:
         return "\n".join(x for x in (pending.degraded_line() or "No pending approvals.",
                                        rest) if x)
     lines = [f"{len(pending.items)} pending approval(s):"]
     for it in pending.items:
-        preview = (it.get("preview") or "").strip()
-        if len(preview) > 160:
-            preview = preview[:157] + "…"
-        lines.append(f"• {it['kind']}:{it['id']} — {preview}")
+        lines.append(f"• {it['kind']}:{it['id']} — {summary_line(it)}")
         lines.append(f"   {self_evolution.pending_tap_token('approve', it)}   "
-                     f"{self_evolution.pending_tap_token('reject', it)}")
+                     f"{self_evolution.pending_tap_token('reject', it)}   "
+                     f"see it all: {self_evolution.pending_tap_token('pending', it)}")
     lines.append("Everything at once: /approve_all")
     if pending.degraded_line():
         lines.append(pending.degraded_line())
     if rest:
         lines.append(rest)
     return "\n".join(lines)
+
+
+def _review_one(c, pending, target: str) -> str:
+    """`/pending <id>` or the tapped `/pending_p_<hex>`: ONE item, in full.
+
+    The notice and the list can only summarize; this is where the owner reads
+    what a skill update changes (a diff against the live skill) before the tap
+    that decides it. A queued tool approval or a contact has no draft body:
+    its whole record is its list line."""
+    from core import self_evolution
+    from tools.controller.approval_queue import resolve_pending_target
+    match = resolve_pending_target(target, pending)
+    if match is None:
+        return f"No pending item '{target}' — see /pending."
+    if match.get("kind") not in self_evolution.PENDING_KIND_LABELS:
+        from core.pending_review import summary_line
+        return (f"{match['kind']}:{match['id']} — {summary_line(match)}\n"
+                f"{self_evolution.pending_tap_token('approve', match)}   "
+                f"{self_evolution.pending_tap_token('reject', match)}")
+    ok, text = self_evolution.review(match["kind"], str(match["id"]), user_id=c.user_id,
+                                     home_dir=c.data_dir, instance_id=c.instance_id)
+    return text if ok else f"Could not open it: {text}"
 
 
 def _elsewhere(c, view_name: str) -> str:
@@ -166,9 +189,8 @@ async def decide_verb(c) -> str:
         _lines = [f"{_n} pending — tap {'it' if _n == 1 else 'the one you mean'}"
                   f" to {cmd.lstrip('/')}:"]
         for _it in pending.items:
-            _preview = " ".join(str(_it.get("preview") or "").split())
-            if len(_preview) > 120:
-                _preview = _preview[:117] + "…"
+            from core.pending_review import summary_line
+            _preview = summary_line(_it)
             _lines.append(
                 f"  {self_evolution.pending_tap_token(cmd.lstrip('/'), _it)}"
                 f" — {_it['kind']}:{_it['id']}"

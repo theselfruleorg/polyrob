@@ -547,11 +547,12 @@ class Registry:
 
 	def get_prompt_description(self) -> str:
 		"""Get a description of all actions for the prompt"""
-		return self.registry.get_prompt_description()
+		return self.registry.get_prompt_description(exclude=frozenset(self.exclude_actions))
 
 	def get_prompt_action_index(self) -> str:
-		"""Compact one-line-per-action index for native tool mode (T1-03)."""
-		return self.registry.get_prompt_action_index()
+		"""Compact one-line-per-action index for native tool mode (T1-03). An
+		excluded action (a seat-refused schema) is not listed (095 W9)."""
+		return self.registry.get_prompt_action_index(exclude=frozenset(self.exclude_actions))
 
 	def get_action_schema(self, action_name: str) -> Dict[str, Any]:
 		"""Get the expected schema for a specific action

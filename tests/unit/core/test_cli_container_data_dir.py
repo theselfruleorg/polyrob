@@ -1,4 +1,4 @@
-"""P2: build_cli_container must set config.data_dir under .rob/ (data-root unification)."""
+"""P2: build_cli_container must set config.data_dir under .polyrob/ (data-root unification)."""
 import ast
 import inspect
 
@@ -6,7 +6,7 @@ import pytest
 
 
 def test_cli_container_data_dir_under_rob_source():
-    """Source-inspection test: build_cli_container must assign config.data_dir = str(rob_dir).
+    """Source-inspection test: build_cli_container must assign config.data_dir = str(cli_data_dir).
 
     We use source inspection rather than actually constructing the container (which
     needs a real LLM key and network) to keep this test fast and dependency-free.
@@ -14,17 +14,17 @@ def test_cli_container_data_dir_under_rob_source():
     """
     import polyrob.app.bootstrap as bootstrap
     src = inspect.getsource(bootstrap.build_cli_container)
-    # The fix must contain both the assignment target and rob_dir reference
+    # The fix must contain both the assignment target and cli_data_dir reference
     assert "config.data_dir" in src, (
-        "build_cli_container must set config.data_dir to keep CLI state under .rob/"
+        "build_cli_container must set config.data_dir to keep CLI state under .polyrob/"
     )
-    assert "rob_dir" in src, (
-        "build_cli_container must reference rob_dir when setting config.data_dir"
+    assert "cli_data_dir" in src, (
+        "build_cli_container must reference cli_data_dir when setting config.data_dir"
     )
 
 
 def test_cli_container_data_dir_assignment_is_str_rob_dir():
-    """Parse the AST of build_cli_container and confirm config.data_dir = str(rob_dir) is present."""
+    """Parse the AST of build_cli_container and confirm config.data_dir = str(cli_data_dir) is present."""
     import polyrob.app.bootstrap as bootstrap
     src = inspect.getsource(bootstrap.build_cli_container)
     # Dedent (inspect may return indented source for nested functions)
@@ -34,7 +34,7 @@ def test_cli_container_data_dir_assignment_is_str_rob_dir():
 
     found = False
     for node in ast.walk(tree):
-        # Look for: config.data_dir = str(rob_dir)
+        # Look for: config.data_dir = str(cli_data_dir)
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
@@ -47,5 +47,5 @@ def test_cli_container_data_dir_assignment_is_str_rob_dir():
             break
     assert found, (
         "build_cli_container must contain `config.data_dir = ...` assignment "
-        "to unify CLI autonomy/memory DBs under .rob/"
+        "to unify CLI autonomy/memory DBs under .polyrob/"
     )

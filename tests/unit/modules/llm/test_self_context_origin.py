@@ -16,7 +16,7 @@ def test_self_context_origin_exists():
 
 
 def test_self_context_control_message_is_enveloped():
-    msg = make_control_message("You are ROB.", MessageOrigin.SELF_CONTEXT)
+    msg = make_control_message("You are NOVA.", MessageOrigin.SELF_CONTEXT)
     assert isinstance(msg, HumanMessage)
     assert msg.origin == MessageOrigin.SELF_CONTEXT
-    assert msg.content == "<self-context>\nYou are ROB.\n</self-context>"
+    assert msg.content == "<self-context>\nYou are NOVA.\n</self-context>"

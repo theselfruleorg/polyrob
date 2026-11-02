@@ -124,7 +124,7 @@ def input_height_dimension(line_count: Optional[int] = None, max_rows: int = MAX
 
 
 def separator_label(state: SessionState) -> str:
-    """The ``rob · model · provider`` label shown on the thin separator rule.
+    """The ``agent · model · provider`` label shown on the thin separator rule.
 
     Replaces the old 4-sided ``Frame`` title — the agent identity + active model
     sit on the rule above the input instead of a heavy box edge. Pure.
@@ -478,7 +478,7 @@ def build_app(
         dont_extend_height=True,
         wrap_lines=True,
     )
-    # A thin titled rule above the input: ``─ rob · model · provider ───────``.
+    # A thin titled rule above the input: ``─ agent · model · provider ───────``.
     separator = VSplit(
         [
             Window(

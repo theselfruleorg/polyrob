@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'A key, password or token shows up in the work'
   polyrob-priority: '4'
-  polyrob-auto-activate: 'true'
   polyrob-version: '2'
 ---
 # Secret Handling

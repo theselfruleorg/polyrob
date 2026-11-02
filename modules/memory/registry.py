@@ -89,7 +89,8 @@ class MemoryReadError(RuntimeError):
 #: The reader description a recall router forwards when the provider declares it
 #: (2026-10-13 review D2): the agents tier resolves the session regime and passes
 #: plain values — ``modules`` never imports ``agents``.
-_READER_KWARGS = ("demote_automation", "prefer_job_id", "prefer_goal_id")
+_READER_KWARGS = ("demote_automation", "prefer_job_id", "prefer_goal_id",
+                  "max_age_days", "drop_unverified")
 
 
 def _reader_kwargs(method, reader: dict) -> dict:
@@ -109,7 +110,8 @@ async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str]
 
     ``user_id`` scopes recall to the tenant (P0-0) so one user's memory never leaks
     into another's recall in a multi-tenant deployment. ``reader`` (any of
-    ``demote_automation`` / ``prefer_job_id`` / ``prefer_goal_id``) is forwarded
+    ``_READER_KWARGS``: ``demote_automation`` / ``prefer_job_id`` /
+    ``prefer_goal_id`` / ``max_age_days`` / ``drop_unverified``) is forwarded
     when the provider declares it. ``raise_errors=True`` turns a provider failure
     into ``MemoryReadError`` instead of '' (D3).
     """

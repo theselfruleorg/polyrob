@@ -97,10 +97,14 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   `WalletSigningUnavailable`. No flag — absence of the seed is the signal; with no record
   published, an unconfigured deploy still fails fast exactly as before.
 - **A seed in a readable file is not isolated.** A local `polyrob wallet init` writes the
-  seed to `~/.polyrob/.env` (0600, but Rob's own OS user can read it). While a seed
+  seed to `~/.polyrob/.env` (0600, but the agent's own OS user can read it). While a seed
   came from an env file this user can read, the host refuses model-written code
-  (`run_tests`, `run_code`, the host shell) and names the fix: move the seed to the signer
-  (`polyrob signer install`) or run code in a sandbox backend (`CODE_EXEC_BACKEND=docker`).
+  (`run_tests`, `run_code`, the host shell) and names the fix: run code in the Docker
+  sandbox (`CODE_EXEC_BACKEND=docker`; `polyrob doctor` lists the setup steps), or take the
+  seed out of that file (back it up with `polyrob wallet export`, delete the key lines, and
+  give the key to the agent through a root-owned service env file or the `polyrob-signer`
+  unit). A `systemctl --user` install has no env file out of its own user's reach, so the
+  sandbox is its fix.
   Git, LSP, `rg` and `MCP stdio` children stay allowed: they do not run code the model
   wrote. A seed from the process env (the systemd `EnvironmentFile`) is no file gap.
 - **Network** — `AGENT_WALLET_NETWORK` (default `testnet`). On mainnet, `x402_wallet_status`
@@ -131,7 +135,7 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   refused until the ledger is repaired. A seedless process neither seals nor verifies;
   under `WALLET_SIGNER=remote` the signer's own ledger is the authoritative one.
 - **Address poisoning** — a transfer to an address that only looks like a payee of the
-  last 30 days, one of `OWNER_WALLET_ADDRESSES` or Rob's own wallet (matching first
+  last 30 days, one of `OWNER_WALLET_ADDRESSES` or the agent's own wallet (matching first
   and last characters, a different body) is refused, and unreadable payment history
   refuses the send. The same check runs on `nft_transfer` and on the payee of a generic
   call (§10.8). Copy an address from its source, not from the wallet's history.
@@ -170,14 +174,14 @@ never the per-transaction limit) and an x402 daily limit. Under `remote`, an aut
 waits for the same on-box root approval as an EVM send: `x402_fetch` answers with the approval id and
 pays nothing; after `sudo polyrob owner promote signer_approval <id>` (it prints the signer's review of
 the request and asks `y`), a retry of that same payment (same payee, same amount) signs once. Under
-`shadow` Rob signs locally, so it refuses a payment above either limit before it pays.
+`shadow` the agent signs locally, so it refuses a payment above either limit before it pays.
 
 An unknown value reads as `local`. On a server, install the `polyrob-signer` unit (it runs
 from its own venv, never the agent's), set `shadow`, and change to `remote` only after a
 clean week of shadow results. The installer checks that week in the signer's own decision
 log, which the agent cannot rewrite: a refused verdict, no agreed verdict, fewer than 7 days
 of data or an unreadable log stops the cut-over. The cut-over writes `WALLET_SIGNER=remote`
-only into `/etc/polyrob/agent-signer.env`, which only Rob's own units load, so the x402-api
+only into `/etc/polyrob/agent-signer.env`, which only the agent's own units load, so the x402-api
 unit stays signer-free. The
 `WALLET_SIGNER` row in the configuration reference has the full detail.
 
@@ -497,10 +501,10 @@ known ids echoed back.
 chat verb that writes one):
 
 ```bash
-polyrob wallet asset add --id rob --chain robinhood \
+polyrob wallet asset add --id demo --chain base \
   --address 0xYourToken --verify --min-amount 1000000000000000000
 polyrob wallet asset list
-polyrob wallet asset verify rob
+polyrob wallet asset verify demo
 ```
 
 `--verify` reads `decimals()` and `symbol()` on-chain **once** and freezes them.
@@ -957,7 +961,16 @@ Nine ordered gates, every one fail-closed:
    (`/send … anyway` typed by the owner, or Confirm on the quote — the model cannot
    set it); the send is valued at the weaker
    exit price, else charged the spend-without-asking limit plus a cent, and only the
-   owner's own turn runs it — when Rob asks for it, the owner decides.
+   owner's own turn runs it — when the agent asks for it, the owner decides.
+   **Dollar amounts.** `/send 22 <token> …` sends 22 TOKENS. To send a dollar value,
+   write `/send $22 <token> …` (also `$22.50`, `22usd`): the agent converts the dollars at
+   the same spend-grade price this step uses, shows the token count and the price on
+   the quote, and holds the send to the dollars + 5% (or your `max`). The Confirm
+   converts again at the price of that moment. A token with no spend-grade price
+   cannot take a dollar amount — the send refuses and asks for a token amount; the
+   model never converts by hand. A `/send` that the agent suggests for your decision shows
+   the token amount and its USD value, and warns when its reason names a dollar
+   figure more than 10x off.
 8. **Caps** — the per-tx ceiling, rolling daily cap and replay guard, held under a
    reservation across authorize → broadcast → record so two concurrent transfers cannot
    both clear a nearly-exhausted cap.
@@ -977,7 +990,7 @@ still tapped once by the owner, because the model wrote the address; a payout-sh
 `call` or an endowed deploy is tapped at ANY value, in the owner's turn too. The per-tx cap,
 the daily cap, the simulation and the declared bound bind everyone. A call with no
 context (the remote signer, an internal call) is never treated as the owner. Once the
-owner has made every decision a run asked for, Rob continues by itself: one wake per
+owner has made every decision a run asked for, the agent continues by itself: one wake per
 group of decisions, carrying each outcome. A failed Confirm offers its extra check as a
 new decision, and Refresh works on an expired quote.
 
@@ -1013,7 +1026,7 @@ buckets, and a new verb must land in one or the other or a contract test fails:
   waits. A payout-shaped `call` (§10.8) is never exempt.
 - **Always owner-approved** — `transfer`, `solana_transfer` and `nft_transfer`. A plain
   send can pay any address, so no flag exempts it; the one exception is a genuine owner
-  turn that sends to the owner's own address or Rob's wallet (§2). An NFT has no reliable
+  turn that sends to the owner's own address or the agent's wallet (§2). An NFT has no reliable
   price, so a USD limit cannot bound it, and a limit that cannot bound what it limits is
   worse than none because it reads as protection.
 
@@ -1103,7 +1116,7 @@ The book it compares against is the rail's position store (`open_positions.db`);
 an unreadable book is an error, never a clean verdict.
 
 **Closing a record of a holding that is gone.** `/book retire <chain> <address> [go]`
-(Telegram and the REPL) and Rob's `defi_data.retire_row(chain, address)` share one path: it
+(Telegram and the REPL) and the agent's `defi_data.retire_row(chain, address)` share one path: it
 reads the wallet's balance of that token now, refuses anything but zero or dust (under
 $1 at a high-confidence price), and stores the measurement as proof. An unreadable
 balance or an unpriced non-zero balance refuses — unknown is never zero. A holding that
@@ -1139,7 +1152,7 @@ real token); *not trusted* means the agent never buys it and never asks again.
 
 The ticket follows the token at risk. On a **sell** (a token into USDC, a stable or
 the wrapped native) that is the token sold: if it is not trusted and no price check
-agrees, a sell above $5 needs you. Rob suggests the `/swap` as a decision, and your
+agrees, a sell above $5 needs you. The agent suggests the `/swap` as a decision, and your
 Confirm runs it. A `/swap` you type yourself is not held. An exit is never refused
 outright, and a sell whose price check DISAGREES is always refused.
 
@@ -1257,8 +1270,8 @@ A deployment sends nothing, so its cost is the FEE: priced as endowment +
 worst-case sized gas and charged to the same caps.
 
 ```bash
-polyrob wallet deploy-token ROB 1000000000 Rob Coin --chain base   # quote
-polyrob wallet deploy-token ROB 1000000000 Rob Coin --chain base --execute   # deploy
+polyrob wallet deploy-token DEMO 1000000000 Demo Coin --chain base   # quote
+polyrob wallet deploy-token DEMO 1000000000 Demo Coin --chain base --execute   # deploy
 ```
 
 **Names and supply.** A token's name and symbol are printable ASCII only (no
@@ -1303,7 +1316,7 @@ uri right before `--execute`.
 ⚠️ A few older AMMs do not support Token-2022. Jupiter and the major venues do.
 
 ```bash
-polyrob wallet deploy-token ROB 1e9 Rob Coin --chain solana   # quote
+polyrob wallet deploy-token DEMO 1e9 Demo Coin --chain solana   # quote
 ```
 
 ### 10.8 Calling any contract (`DEFI_CALL_ENABLED`, default OFF)
@@ -1347,7 +1360,7 @@ own record and from nowhere else.
 refuses above 100 bps rather than paying it; a launch exempts its own recipient.
 
 ```bash
-polyrob wallet launch ROB Rob Coin --buy 0.05     # quote the launch + opening buy
+polyrob wallet launch DEMO Demo Coin --buy 0.05     # quote the launch + opening buy
 polyrob wallet curve 0xToken… --buy 0.1           # price a curve trade
 ```
 
@@ -1408,28 +1421,28 @@ unavailable, and the sum of deposits is not that basis. The USD charged for
 ### 10.12 Agent NFT accounts (`AGENT_NFT_ENABLED`, default OFF)
 
 An NFT can have its own wallet: an ERC-6551 token-bound account. Whoever owns the NFT
-controls that account. Rob acts through an NFT's account **only by owning the NFT on its
-own wallet address** — a person transfers it in, mints it to that address, or Rob mints
+controls that account. The agent acts through an NFT's account **only by owning the NFT on its
+own wallet address** — a person transfers it in, mints it to that address, or the agent mints
 it. There are no grants, bindings or operator keys.
 
 `AGENT_NFT_ENABLED` arms `agent_nft` (`agent_nft_snapshot`, `_inspect`, `_journal`,
 `_bind_identity`, `_revoke_all`, `_withdraw_token`, `_collection_reveal`, `_adopt`,
 `_collection_mint`) and the `account=` / `nft=` argument on `defi_trade.transfer`,
 `defi_trade.swap`, `launchpad_claim` and `defi_data.portfolio`. That argument makes the
-call from the NFT's account: Rob's key signs and the account holds, through the same
+call from the NFT's account: the agent's key signs and the account holds, through the same
 `tx_guard` (`TxIntent.via_account`), recorded against the account. Account-admin calls
 (such as `lock`) refuse, and every pre-flight read — the pinned code, the lock state,
 that the signing wallet IS the NFT's owner — fails closed.
 
 - **Collections are pinned, none by default.** The owner pins one from chat with
-  `/nft trust <collection> on <chain> [go]` (a read-only fact check first): Rob may then
+  `/nft trust <collection> on <chain> [go]` (a read-only fact check first): the agent may then
   watch it and act from its accounts, never mint or reveal. Only the system
   administrator's root-owned `/etc/polyrob/agent_nft_collections.json` can grant `mint`
   or `reveal`. A malformed or writable registry refuses as a whole.
 - **Always owner-approved:** `agent_nft_collection_mint`, `agent_nft_withdraw_token` (the
   owner's `/nft send <id> <to> on <chain>`), `agent_nft_adopt` and `agent_nft_bind_identity`.
 - A holdings watch (every 300 s, no model turn) tells the owner once when an NFT of a
-  pinned collection arrives in or leaves Rob's wallet; `/nft` lists them with their
+  pinned collection arrives in or leaves the agent's wallet; `/nft` lists them with their
   accounts.
 - The collection mint and the `adopt` picture, holdings and brief live in a separately
   installed agent-NFT package; without it those verbs refuse and name the remedy.
@@ -1442,15 +1455,15 @@ the networks, a preset and the breakers. There is one live mandate at a time. A 
 holds intent, never a limit — the per-transaction and daily limits still bind every trade.
 
 ```
-/trade start 150 solana,robinhood memecoin   # ONE card with every number; Confirm creates it
-/trade start budget=<usd> chains=<a,b> preset=memecoin|majors ticket=<usd> slots=<n>
+/trade start 150 base majors                 # ONE card with every number; Confirm creates it
+/trade start budget=<usd> chains=<a,b> preset=<name> ticket=<usd> slots=<n>
 /trade status                                # positions, exit coverage, breaker, realized P&L
 /trade pause | resume                        # entries off or on; exits keep running
 /trade stop                                  # final; a card offers "close all"
 /trade release                               # clear a latched breaker (owner only)
 ```
 
-The same verbs run on Telegram and in the REPL; a group refuses them. Rob can also
+The same verbs run on Telegram and in the REPL; a group refuses them. The agent can also
 propose a mandate (the `trading-mandate` skill ends in the same decision) — only the
 owner's Confirm creates one.
 
@@ -1470,9 +1483,12 @@ owner's Confirm creates one.
 - **Breakers stop entries, never exits.** Daily loss, drawdown and AI cost over the
   allocation latch until `/trade release`; consecutive losses start a cooldown that
   expires. A latch pauses the hunt and asks the owner one decision.
-- **Presets** hold the numbers: `memecoin` ($3 tickets, up to 8 open, a hunt every 30
-  min), `majors` (5–10 % of the allocation per ticket, up to 3 open) and `dca`. Rob may
-  only tighten a number; the owner may tune any on the intake decision.
+- **Presets** hold the numbers. Core ships `majors` (5–10 % of the allocation per ticket,
+  up to 3 open) and `dca`; there is no default, so the intake asks. An install adds its
+  own presets (and its own screen lines, `screen.pool` / `screen.survival`) in
+  `trading_presets.json` in its data home; a mandate whose preset is gone refuses entries
+  and names that file. The agent may only tighten a number; the owner may tune any on the
+  intake decision.
 
 The status snapshot and the daily digest carry a $0 **Trading** block: holdings, exit
 coverage (PROTECTED / UNPROTECTED), the breaker state, realized P&L with the close reason
@@ -1491,7 +1507,7 @@ signs those texts — and only those. Every request is classified first:
 
 | Class | Example | Result |
 |---|---|---|
-| A — login / challenge bound to its site | SIWE for the site Rob is talking to; a challenge Rob fetched itself | signed |
+| A — login / challenge bound to its site | SIWE for the site the agent is talking to; a challenge the agent fetched itself | signed |
 | B — value-moving typed data | an order, a Permit2 transfer | refused (planned) |
 | C — authority, or a text not bound to its site | an ERC-2612 permit; "prove you own this wallet" handed over from elsewhere | refused (an owner decision is planned) |
 | D — blind | a hex hash, an encoded transaction, opaque bytes | refused, always |
@@ -1500,7 +1516,7 @@ signs those texts — and only those. Every request is classified first:
 challenge URL (POST or GET), signs the exact text the site returned, and POSTs the
 signature to the site's `submit_url` — `{challenge.challengeId}`, `{signature}` and
 `{address}` fill the body, and a login cookie the challenge set rides along. A
-signature made without `submit_url` is sent nowhere; Rob is told so, and a second one
+signature made without `submit_url` is sent nowhere; the agent is told so, and a second one
 for the same site refuses. A key or login cookie the site returns is stored
 encrypted and shown only as a fingerprint; `wallet_sign_api_call` uses it, and only on
 that site. A site that returns only a nonce gets a Sign-In With Ethereum/Solana
@@ -1510,7 +1526,7 @@ class-A texts per site and 30 in all per day, must send the signature straight b
 to the site, and never signs a challenge that does not name its site; a sign-in
 nonce is never signed twice. A text that derives a key (an L2 or trading key), that
 authorizes or spends, or that names another site is refused. The key is
-Rob's operational wallet; under `WALLET_SIGNER=remote` the signer
+the agent's operational wallet; under `WALLET_SIGNER=remote` the signer
 re-classifies every request itself (`sign.classified`).
 
 ## 11. Crypto trading tools (the `markets` pack: `packs/markets/`)

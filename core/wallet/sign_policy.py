@@ -104,7 +104,7 @@ def _negated_clause_re(verbs: str) -> "re.Pattern":
                       rf"(?:{verbs})\b.*?{_CLAUSE_END}", re.IGNORECASE)
 
 
-#: A negated grant ("It does not authorize a payment" — 402Mob's own challenge;
+#: A negated grant ("It does not authorize a payment" — a paid site's own challenge;
 #: "does not authorize any transfer") says the opposite of a grant: the whole
 #: clause the negation governs is removed before ``_AUTHORITY_RE`` looks. A real
 #: grant elsewhere (after "but", or in the next sentence) still matches.

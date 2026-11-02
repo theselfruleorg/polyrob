@@ -1,6 +1,6 @@
 """3.11 (O5, 2026-07-14 review) — a pairing code must be approvable from the CLI.
 
-core/pairing.py documented `rob pair approve <code>` but no such command existed
+core/pairing.py documented `polyrob pair approve <code>` but no such command existed
 anywhere: with POLYROB_REQUIRE_PAIRING=true a stranger was issued a code no CLI
 could approve. `polyrob owner pair {pending,approve,revoke}` is the thin wrapper
 over the same PairingStore (same data-home resolution as the surface daemons).
@@ -62,5 +62,5 @@ def test_pair_revoke_unpairs(data_home):
 def test_pairing_docstring_matches_real_command():
     """The module doc must name the command that actually exists."""
     import core.pairing as p
-    assert "rob pair approve" not in (p.__doc__ or "")
+    assert "polyrob pair approve" not in (p.__doc__ or "")
     assert "polyrob owner pair approve" in (p.__doc__ or "")

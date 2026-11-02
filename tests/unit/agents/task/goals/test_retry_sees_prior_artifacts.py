@@ -14,7 +14,7 @@ from agents.task.goals.context import build_goal_run_task
 
 
 def test_prior_artifacts_appear_in_the_retry_prompt():
-    goal = Goal(id="g1", user_id="rob", title="x402 Round 4",
+    goal = Goal(id="g1", user_id="alice", title="x402 Round 4",
                 payload={"attempts": [{"error": "ran out of steps", "ts": 1}]})
 
     task = build_goal_run_task(
@@ -28,7 +28,7 @@ def test_prior_artifacts_appear_in_the_retry_prompt():
 
 
 def test_the_prompt_tells_the_run_to_continue_not_restart():
-    goal = Goal(id="g1", user_id="rob", title="x402 Round 4",
+    goal = Goal(id="g1", user_id="alice", title="x402 Round 4",
                 payload={"attempts": [{"error": "ran out of steps", "ts": 1}]})
 
     task = build_goal_run_task(goal,
@@ -41,7 +41,7 @@ def test_the_prompt_tells_the_run_to_continue_not_restart():
 
 def test_no_prior_artifacts_leaves_the_prompt_unchanged():
     """Byte-identical when the previous attempt produced nothing."""
-    goal = Goal(id="g1", user_id="rob", title="x402 Round 4",
+    goal = Goal(id="g1", user_id="alice", title="x402 Round 4",
                 payload={"attempts": [{"error": "ran out of steps", "ts": 1}]})
 
     assert build_goal_run_task(goal, prior_artifacts=[]) == \
@@ -49,6 +49,6 @@ def test_no_prior_artifacts_leaves_the_prompt_unchanged():
 
 
 def test_a_first_attempt_is_unchanged():
-    goal = Goal(id="g1", user_id="rob", title="x402 Round 4")
+    goal = Goal(id="g1", user_id="alice", title="x402 Round 4")
 
     assert "ALREADY PRODUCED" not in build_goal_run_task(goal)

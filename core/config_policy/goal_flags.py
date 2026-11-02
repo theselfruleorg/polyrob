@@ -15,10 +15,15 @@ from core.env import int_env as _int_env
 GOAL_DEDUP_THRESHOLD = 0.6
 
 #: 083: the ONE default step budget of an interactive request — ``polyrob run``,
-#: the HTTP task API, A2A, ``SessionRequest`` and the billed ceiling. Not an env
-#: flag. Autonomous runs use ``AutonomyConfig.autonomous_max_steps()``; a chat
-#: turn uses ``CHAT_MAX_STEPS``; the REPL uses ``DEFAULT_TURN_BUDGET``.
-INTERACTIVE_MAX_STEPS = 50
+#: the HTTP task API, A2A, ``SessionRequest``, an owner chat turn on a surface
+#: and the billed ceiling. Env ``INTERACTIVE_MAX_STEPS`` (read at import; a value
+#: below 1 keeps 100). Autonomous runs use ``AutonomyConfig.autonomous_max_steps()``;
+#: ``chat_once`` uses ``CHAT_MAX_STEPS``; the REPL turn uses this budget too.
+#: 2026-10-29: 50 → 100 — owner turns that judge, pay and report legitimately ran
+#: past 50; the loop breaker (StopReason.LOOP) now ends a degenerate turn early.
+INTERACTIVE_MAX_STEPS = _int_env("INTERACTIVE_MAX_STEPS", 100)
+if INTERACTIVE_MAX_STEPS < 1:
+    INTERACTIVE_MAX_STEPS = 100
 
 
 class GoalFlagsMixin:

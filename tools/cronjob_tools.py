@@ -74,34 +74,28 @@ class CronScheduleAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task: str = Field(..., description="The task the scheduled agent should perform.", min_length=10)
     schedule: str = Field(..., description="When to run: '30m'/'2h'/'1d', 'every monday 09:00', "
-                                           "5-field cron '*/15 * * * *', or an ISO timestamp (one-shot).")
+                                           "5-field cron '*/15 * * * *', an ISO timestamp (one-shot), "
+                                           "or a fixed N-day cycle 'every 3d from 2026-10-26T18:00Z'.")
     max_duration_seconds: int = Field(default=600, ge=60, le=1800,
                                       description="Hard cap per run (60-1800s; default 600). A money rail "
-                                                  "that reconciles, quotes, gates, swaps and reports needs "
-                                                  "~15-25 min at 1-5 min/step — the 600 s ceiling cut the "
-                                                  "an hourly swap job at step 6 before its swap (2026-09-18).")
+                                                  "that quotes, swaps and reports needs ~15-25 min.")
     deliver: Optional[str] = Field(default=None,
                                    description="Optional out-of-band delivery sink for the result: "
                                                "'telegram' or 'email' (to the owner), or 'twitter' — a "
                                                "PUBLIC post on the agent's X account, when the X pack "
                                                "is enabled. Omit to keep silent.")
     deliver_target: Optional[str] = Field(default=None,
-                                          description="Optional explicit recipient. IGNORED unless the "
-                                                      "operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET; "
-                                                      "by default delivery always goes to the owner's own "
-                                                      "channel.")
+                                          description="Optional explicit recipient; ignored unless the "
+                                                      "operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET.")
     wake_agent: bool = Field(default=True,
                              description="If false, this tick runs without invoking the LLM "
                                          "(a $0 no-op tick). Default true = normal agent run.")
     rig: Optional[str] = Field(default=None,
                                description="Optional named tool rig for this job's runs: "
                                            "'money_rail', 'social', 'research', 'ops', or 'full' "
-                                           "(everything this deploy grants an autonomous run). "
-                                           "A narrow rig ships far fewer tool schemas per step, "
-                                           "which is most of the cost of a recurring job. A rig "
-                                           "is a REQUEST, not a grant: a rig with a tool an "
-                                           "agent-created job cannot carry is REFUSED with the "
-                                           "rigs you can use. Omit to use this deploy's default.")
+                                           "(everything this deploy grants). A narrow rig ships "
+                                           "fewer tool schemas per step. A rig is a request, not "
+                                           "a grant. Omit for this deploy's default.")
     skills: Optional[List[str]] = Field(default=None,
                                         description="Optional skill ids this job's runs must load (its "
                                                     "doctrine, e.g. ['x-engagement']). Pinned skills load "
@@ -134,17 +128,15 @@ class CronScheduleAction(BaseModel):
                     "attached. Use it on every price/pool watch.")
     write_verb: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="OWNER TURN ONLY: make this a deterministic WRITE job — the one allowlisted "
-                    "write verb, no LLM turn per tick: {'verb': 'agent_nft.agent_nft_collection_reveal', 'params': "
-                    "{'chain': 'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': "
-                    "'alert'}. It SPENDS gas from the treasury (at most AGENT_NFT_REVEAL_MAX_GAS_USD "
-                    "per run; no value, no asset) and runs only while CRON_WRITE_JOBS_ENABLED=true. "
-                    "Omitting dry_run=false only simulates. May recur every minute.")
+        description="OWNER TURN ONLY: a deterministic WRITE job, no LLM turn per tick: "
+                    "{'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': "
+                    "'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. "
+                    "It spends gas (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run) while "
+                    "CRON_WRITE_JOBS_ENABLED=true; without dry_run=false it only simulates.")
     pause_windows: Optional[List[List[Any]]] = Field(
         default=None,
         description="Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 "
-                    "UTC. A tick inside a window is a $0 skip (e.g. hold a recurring swap "
-                    "from T-1h to 24h after a mint window).")
+                    "UTC. A tick inside a window is a $0 skip.")
 
 
 class CronListAction(BaseModel):
@@ -160,6 +152,11 @@ class CronCancelAction(BaseModel):
                            "created until the owner re-arms it (/job allow <lane>).")
 
 
+class CronRunNowAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(..., description="The job id.")
+
+
 class CronShowAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str = Field(..., description="The id of the cron job to show in full.")
@@ -169,18 +166,18 @@ class CronEditAction(BaseModel):
     """Amend a live job IN PLACE. Pass only the fields to change."""
     model_config = ConfigDict(extra="forbid")
     job_id: str = Field(..., description="The id of the cron job to edit.")
+    append_text: Optional[str] = Field(default=None,
+                                       description="Text to ADD at the END of the task (no copy needed).")
+    prepend_text: Optional[str] = Field(default=None,
+                                        description="Text to ADD at the START of the task.")
     old_text: Optional[str] = Field(default=None,
-                                    description="Exact passage of the CURRENT task to replace "
-                                                "(copy it from cronjob_show; must occur exactly "
-                                                "once). The rest of the task is kept verbatim — "
-                                                "never re-type a whole task to change one value.")
+                                    description="Exact passage of the current task to change or "
+                                                "delete (from cronjob_show; must occur once).")
     new_text: Optional[str] = Field(default=None,
                                     description="Replacement for old_text ('' deletes the passage).")
     schedule: Optional[str] = Field(default=None,
-                                    description="New schedule spec; the next run is recomputed from now. "
-                                                "This is how you run a job SOONER: set a one-shot ISO "
-                                                "time a minute ahead. A one-shot spec makes a recurring "
-                                                "job one-shot — set its recurring spec back after that run.")
+                                    description="New schedule spec (next run recomputed). To run "
+                                                "once now, use cronjob_run_now.")
     max_duration_seconds: Optional[int] = Field(default=None, ge=60, le=1800,
                                                 description="New hard cap per run (60-1800s).")
     rig: Optional[str] = Field(default=None,
@@ -252,6 +249,44 @@ def _provider_line(payload: dict) -> str:
     return line
 
 
+def _fmt_runs(runs) -> str:
+    return ", ".join(r.strftime("%Y-%m-%d %H:%M") for r in runs) or "-"
+
+
+def _job_runs(job, n: int = 3) -> list:
+    """The job's next *n* fire times from its stored next run (none when it has none)."""
+    if job.next_run_at is None:
+        return []
+    from cron.schedule import next_runs, parse_schedule
+    try:
+        sched = parse_schedule(job.schedule_spec)
+    except Exception:
+        return [job.next_run_at]
+    return [job.next_run_at] + next_runs(sched, job.next_run_at, n - 1)
+
+
+def _timing_lines(svc, job, user_id) -> list:
+    """What the agent must see to time a job against its siblings (routines §2):
+    the next 3 fire times, a day-of-month step note, the jobs that fire the same
+    minute, and the next runs of every live job that pins one of its skills."""
+    from cron.schedule import dom_step_note
+    out = [f"next runs: {_fmt_runs(_job_runs(job))}"] if job.next_run_at else []
+    out += [dom_step_note(job.schedule_spec), _same_minute_line(svc, job, user_id)]
+    skills = set((job.payload or {}).get("skills") or [])
+    if skills:
+        try:
+            sibs = [j for j in svc.list_jobs(user_id=user_id)
+                    if j.id != job.id and j.status in ("scheduled", "paused")
+                    and skills & set((j.payload or {}).get("skills") or [])]
+        except Exception:
+            sibs = []
+        for j in sibs[:5]:
+            shared = ", ".join(sorted(skills & set((j.payload or {}).get("skills") or [])))
+            out.append(f"shares skill {shared} with `{j.id}` ({j.task[:40].strip()}) "
+                       f"[{j.schedule_spec}] next runs: {_fmt_runs(_job_runs(j))}")
+    return [ln for ln in out if ln]
+
+
 def _same_minute_line(svc, job, user_id) -> str:
     """Name every other live job whose next run is this job's next run (2026-10-17:
     a judge "24h after the announce" had the announce's own spec), or ''."""
@@ -269,6 +304,32 @@ def _same_minute_line(svc, job, user_id) -> str:
             "they fire together, not one after the other.")
 
 
+_JOB_ID_RE = __import__("re").compile(r"\b[0-9a-f]{12}\b")
+
+
+def stale_job_refs(svc, job, user_id) -> List[str]:
+    """The job ids this job's task text names that are no longer live
+    (routines review §12: X ENGAGEMENT still named the cancelled judge
+    c7a49d1cdea0 a week after the live one replaced it). A note, never a refusal."""
+    ids = [i for i in dict.fromkeys(_JOB_ID_RE.findall(job.task or "")) if i != job.id]
+    if not ids:
+        return []
+    try:
+        rows = {j.id: j for j in svc.list_jobs(user_id=user_id)}
+    except Exception:
+        return []
+    return [f"{i} ({rows[i].status})" for i in ids
+            if i in rows and rows[i].status in ("cancelled", "done", "failed")]
+
+
+def _stale_line(svc, job, user_id) -> str:
+    stale = stale_job_refs(svc, job, user_id)
+    if not stale:
+        return ""
+    return (f"⚠ its task names job(s) that no longer run: {', '.join(stale)} — "
+            f"update the reference with cronjob_edit (old_text -> new_text).")
+
+
 def _tools_line(payload: Optional[dict]) -> str:
     """The tools this job's runs actually carry — the runner's own resolver
     (2026-10-14 review C-9: the agent told the owner a job "posts by itself"
@@ -281,6 +342,32 @@ def _tools_line(payload: Optional[dict]) -> str:
         return "its runs carry: no tools"
     return (f"its runs carry: {', '.join(ids)} — a run can only do what these tools do; "
             f"never tell the owner it will post, trade or send with a tool not listed here")
+
+
+def _early_run_refusal(job) -> Optional[str]:
+    """Review 2026-10-29 (L1): off an owner turn, ``cronjob_run_now`` may not run a
+    money job early, nor run any job again inside its own schedule's gap (a daily
+    job is not a once-a-minute job because a run keeps asking). None = allowed."""
+    from cron.jobs import is_money_job
+    if is_money_job(job):
+        return (f"Job `{job.id}` is a money job: only an owner turn runs it early "
+                f"(/job run {job.id[:8]}). Its schedule is unchanged.")
+    last = getattr(job, "last_run_at", None)
+    if last is None:
+        return None
+    try:
+        from datetime import datetime
+        from cron.schedule import parse_schedule
+        from cron.service import min_recurrence_seconds
+        now = datetime.now(last.tzinfo) if getattr(last, "tzinfo", None) else datetime.now()
+        gap = min_recurrence_seconds(parse_schedule(job.schedule_spec), now)
+        since = (now - last).total_seconds()
+    except Exception:
+        return None
+    if gap and since < gap:
+        return (f"Job `{job.id}` ran {int(since // 60)} min ago and its schedule runs it "
+                f"every {int(gap // 60)} min — it cannot run again early off an owner turn.")
+    return None
 
 
 class CronJobTool(BaseTool):
@@ -345,8 +432,8 @@ class CronJobTool(BaseTool):
         # Carry delivery routing in the free-form payload the runner reads (W3). The
         # action model stays extra="forbid" — these are typed fields, validated here.
         payload = {}
-        if params.deliver:
-            payload["deliver"] = params.deliver
+        if params.deliver is not None:
+            payload["deliver"] = params.deliver  # validated by CronService.schedule
         if params.deliver_target:
             payload["deliver_target"] = params.deliver_target
         if not params.wake_agent:
@@ -408,6 +495,7 @@ class CronJobTool(BaseTool):
         # 085 W8 A4: who wrote the job — the dispatch re-check reads it. A model
         # call stamps the owner seat only for work that is not money (above).
         payload["actor"] = "owner_seat" if owner_turn else "agent"
+        payload["armed_by"] = payload["actor"]  # who owns it; never moves on edit
         try:
             job = self._resolve_service().schedule(
                 task=params.task, schedule_spec=params.schedule,
@@ -426,9 +514,12 @@ class CronJobTool(BaseTool):
         kind = "one-shot" if job.one_shot else "recurring"
         from core.cron_lanes import schedule_notes
         notes = "".join(f" {n}" for n in schedule_notes(job))
+        timing = "\n".join(_timing_lines(self._resolve_service(), job,
+                                          self._user(execution_context)))
         return ActionResult(
             extracted_content=(f"Scheduled {kind} cron job `{job.id}` — next run {when}; "
-                               f"{_tools_line(job.payload)}.{notes}"),
+                               f"{_tools_line(job.payload)}.{notes}"
+                               + (f"\n{timing}" if timing else "")),
             include_in_memory=True,
         )
 
@@ -467,11 +558,16 @@ class CronJobTool(BaseTool):
         jobs = self._resolve_service().list_jobs(user_id=self._user(execution_context))
         if not jobs:
             return ActionResult(extracted_content="No scheduled cron jobs.", include_in_memory=True)
-        lines = [
-            f"- `{j.id}` [{j.status}] {j.schedule_spec} -> "
-            f"{j.next_run_at.isoformat() if j.next_run_at else '-'}: {j.task[:60]}"
-            for j in jobs
-        ]
+        from cron.service import last_outcome
+        svc, user = self._resolve_service(), self._user(execution_context)
+        lines = []
+        for j in jobs:
+            stale = stale_job_refs(svc, j, user) if j.status != "cancelled" else []
+            lines.append(
+                f"- `{j.id}` [{j.status}] {j.schedule_spec} -> "
+                f"{j.next_run_at.isoformat() if j.next_run_at else '-'} · last: {last_outcome(j)} · "
+                f"deliver: {(j.payload or {}).get('deliver') or 'none'}: {j.task[:60]}"
+                + (f" · ⚠ names stopped job(s) {', '.join(stale)}" if stale else ""))
         return ActionResult(extracted_content="Scheduled cron jobs:\n" + "\n".join(lines),
                             include_in_memory=True)
 
@@ -483,11 +579,12 @@ class CronJobTool(BaseTool):
         if job is None:
             return ActionResult(error=f"No such cron job `{params.job_id}`.", include_in_memory=True)
         p = job.payload or {}
+        from cron.service import last_outcome
         lines = [
             f"Cron job `{job.id}` [{job.status}] — {'one-shot' if job.one_shot else 'recurring'}",
             f"schedule: {job.schedule_spec}",
             f"next run: {job.next_run_at.isoformat() if job.next_run_at else '-'}",
-            f"last run: {job.last_run_at.isoformat() if job.last_run_at else '-'}",
+            f"last run: {last_outcome(job)}",
             f"max duration: {job.max_duration_seconds}s",
             f"rig: {p.get('rig') or '(default)'}",
             _tools_line(p),
@@ -499,8 +596,8 @@ class CronJobTool(BaseTool):
         if job.status == "cancelled":
             lines.append(_cancel_line(job.id))
         else:
-            lines.append(_same_minute_line(self._resolve_service(), job,
-                                           self._user(execution_context)))
+            lines += _timing_lines(self._resolve_service(), job, self._user(execution_context))
+            lines.append(_stale_line(self._resolve_service(), job, self._user(execution_context)))
         lines = [ln for ln in lines if ln]
         lines += [
             "task:",
@@ -508,11 +605,10 @@ class CronJobTool(BaseTool):
         ]
         return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
 
-    @BaseTool.action("Amend a live cron job IN PLACE — patch its task (old_text -> new_text, "
-                     "the rest kept verbatim), or change its schedule, cap, rig, delivery or "
-                     "pinned skills. Use this instead of cancel + re-schedule, which re-types "
-                     "the task and loses its rules. To run a job sooner, set a new schedule "
-                     "(e.g. a one-shot ISO time a minute ahead).", param_model=CronEditAction)
+    @BaseTool.action("Amend a live cron job in place: add to its task (append_text / "
+                     "prepend_text), change a passage (old_text -> new_text), or change its "
+                     "schedule, cap, rig, delivery or skills. Never cancel + re-schedule.",
+                     param_model=CronEditAction)
     async def cronjob_edit(self, params: CronEditAction, execution_context=None) -> ActionResult:
         # Same seat rule as cronjob_schedule: an edit changes what a job that
         # outlives this run will do.
@@ -548,9 +644,8 @@ class CronJobTool(BaseTool):
                     return ActionResult(error=refusal, include_in_memory=True)
                 updates["rig"] = rig
         if params.deliver is not None:
-            # Validated against the delivery allowlist by CronService.edit.
-            target = params.deliver.strip().lower()
-            updates["deliver"] = None if target in ("none", "", "-") else target
+            # 'none' drops it; normalized + validated by CronService.edit.
+            updates["deliver"] = params.deliver
         if params.skills is not None:
             from core.config_policy.rigs import pinned_skills
             updates["skills"] = pinned_skills({"skills": params.skills}) or None
@@ -593,6 +688,13 @@ class CronJobTool(BaseTool):
             updates["actor"] = "owner_seat"
         elif "rig" in updates and not owner_turn and not (job.payload or {}).get("tools"):
             updates["actor"] = "agent"
+        # ``actor`` now names the rig's writer; who OWNS the job (failure notice,
+        # digest) stays where it was — a row from before ``armed_by`` keeps its
+        # creating actor there before the rig edit moves ``actor``.
+        if "actor" in updates and owner_turn:
+            updates["armed_by"] = "owner_seat"   # the owner adopts what he edits
+        elif "actor" in updates and not (job.payload or {}).get("armed_by"):
+            updates["armed_by"] = (job.payload or {}).get("actor") or "owner_seat"
         # 0011: an edit may not pin a lane the owner stopped (on any turn).
         if "skills" in updates or "rig" in updates:
             from core.cron_lanes import check_pinned_skills, gated_lanes, lane_gate
@@ -609,6 +711,7 @@ class CronJobTool(BaseTool):
             changed = svc.edit(
                 job.id, user_id=user, via="agent",
                 old_text=params.old_text, new_text=params.new_text,
+                append_text=params.append_text, prepend_text=params.prepend_text,
                 schedule_spec=params.schedule,
                 max_duration_seconds=params.max_duration_seconds,
                 payload_updates=updates or None)
@@ -616,20 +719,21 @@ class CronJobTool(BaseTool):
             return ActionResult(error=f"Edit refused: {e}", include_in_memory=True)
         if not changed:
             return ActionResult(error="Nothing to change: every value you passed is already "
-                                      "the job's current value (or none was passed). To add or "
-                                      "change task text, pass BOTH old_text (the exact passage "
-                                      "from cronjob_show) and new_text (to ADD text, make new_text the same "
-                                      "passage plus your addition); other fields: schedule, "
-                                      "max_duration_seconds, rig, deliver, skills, target_token, "
-                                      "read_verb, precheck, write_verb or pause_windows.",
+                                      "the job's current value (or none was passed). Do not "
+                                      "repeat this call. To ADD a step to the task, pass "
+                                      "append_text (or prepend_text) with only the new text; to "
+                                      "change a passage, pass old_text + new_text; other fields: "
+                                      "schedule, max_duration_seconds, rig, deliver, skills, "
+                                      "target_token, read_verb, precheck, write_verb or "
+                                      "pause_windows.",
                                 include_in_memory=True)
         edited = svc.store.get(job.id, user_id=user) or job
         when = edited.next_run_at.isoformat() if edited.next_run_at else "-"
-        twin = _same_minute_line(svc, edited, user)
+        timing = "\n".join(_timing_lines(svc, edited, user))
         return ActionResult(
             extracted_content=(f"Edited cron job `{job.id}`: {', '.join(changed)}; "
                                f"next run {when}; {_tools_line(edited.payload)}."
-                               + (f" {twin}" if twin else "")),
+                               + (f"\n{timing}" if timing else "")),
             include_in_memory=True)
 
     async def _money_edit_card(self, job, updates: dict, target, reasons,
@@ -647,6 +751,55 @@ class CronJobTool(BaseTool):
                     + [f"Grant: {w}" for w in grant],
             not_carried=others,
             later="call cronjob_edit again with only those fields (no rig or target).")
+
+    @BaseTool.action("Run a job on the next scheduler pass; its schedule is kept.",
+                     param_model=CronRunNowAction)
+    async def cronjob_run_now(self, params: CronRunNowAction,
+                              execution_context=None) -> ActionResult:
+        # The same seat rule as cronjob_edit: it starts a run that outlives this turn.
+        refusal = self._self_scheduling_refusal(execution_context)
+        if refusal:
+            return ActionResult(error=refusal.replace("cronjob_schedule", "cronjob_run_now"),
+                                include_in_memory=True)
+        from tools.goal_tools import owner_seat_turn
+        svc = self._resolve_service()
+        user = self._user(execution_context)
+        job = svc.store.get(params.job_id, user_id=user)
+        if job is None:
+            return ActionResult(error=f"No such cron job `{params.job_id}`.", include_in_memory=True)
+        if (job.payload or {}).get("mandate") and not owner_seat_turn(execution_context):
+            return ActionResult(error=_MANDATE_JOB_OWNER_ONLY.replace("cronjob_edit",
+                                                                      "cronjob_run_now"),
+                                include_in_memory=True)
+        early = None if owner_seat_turn(execution_context) else _early_run_refusal(job)
+        if early:
+            return ActionResult(error=early, include_in_memory=True)
+        from core.cron_lanes import OWNER_TURN_VIA
+        why = svc.run_now(job.id, user_id=user,
+                          via=OWNER_TURN_VIA if owner_seat_turn(execution_context) else "agent")
+        if why == "paused":
+            return ActionResult(error=f"Job `{job.id}` is paused — only the owner resumes it "
+                                      f"(/job resume {job.id[:8]}).", include_in_memory=True)
+        if why:
+            return ActionResult(error=f"Job `{job.id}` is {why} — it cannot run now.",
+                                include_in_memory=True)
+        from cron.service import scheduler_off_note
+        off = scheduler_off_note()
+        drift = ""
+        try:
+            from cron.schedule import parse_schedule
+            sched = parse_schedule(job.schedule_spec)
+            if sched.kind == "interval" and sched.anchor is None:
+                every = job.schedule_spec.strip()
+                every = every[6:] if every.lower().startswith("every ") else every
+                drift = (f" Its interval counts from each run, so the runs after this one "
+                         f"move too; 'every {every} from <ISO time>' keeps fixed slots.")
+        except Exception:
+            pass
+        return ActionResult(
+            extracted_content=(f"Job `{job.id}` runs on the next scheduler pass; its schedule "
+                               f"({job.schedule_spec}) is kept.{drift}" + (f" {off}" if off else "")),
+            include_in_memory=True)
 
     @BaseTool.action("Cancel a scheduled cron job by id.", param_model=CronCancelAction)
     async def cronjob_cancel(self, params: CronCancelAction, execution_context=None) -> ActionResult:
@@ -683,7 +836,7 @@ class CronJobTool(BaseTool):
 
 def _cancel_line(job_id: str) -> str:
     """When and through which surface a job was cancelled, from the cron audit
-    event (2026-10-06: the owner asked who cancelled a job and Rob could only
+    event (2026-10-06: the owner asked who cancelled a job and the agent could only
     guess). Fail-open: an unreadable log says so rather than inventing a cause."""
     try:
         from core.event_log import open_event_log
@@ -734,7 +887,7 @@ def register_cronjob_tool(force: bool = False) -> bool:
         CronJobTool,
         ToolDescriptor(
             name="cronjob",
-            description="Schedule durable recurring/one-shot agent runs (cronjob_schedule/list/show/edit/cancel)",
+            description="Schedule durable recurring/one-shot agent runs (cronjob_schedule/list/show/edit/run_now/cancel)",
             category=ToolCategory.INTEGRATION,
             required_config=[],
             init_priority=80,

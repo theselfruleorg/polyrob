@@ -18,7 +18,7 @@ def _ctx(args):
 
 def _home(monkeypatch, tmp_path):
     monkeypatch.setattr("cli.commands.avatar._home",
-                        lambda write=None: (str(tmp_path), "rob"))
+                        lambda write=None: (str(tmp_path), "alice"))
 
 
 def test_show_reports_the_default(monkeypatch, tmp_path):

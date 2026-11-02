@@ -3,7 +3,7 @@
 ``MCPClient.connect`` used to do ``{**os.environ, **(self.env or {})}``, handing
 every stdio MCP server the whole process environment — including
 ``AGENT_WALLET_MASTER_SEED``, which controls the treasury. A hostile or
-compromised MCP package is the entire threat model for ``mcp_install``.
+compromised MCP package is the entire threat model for ``/mcp add``.
 
 This is deliberately NOT ``tools/code_exec/env_policy.py::build_child_env``.
 That one also strips secret-named keys from the caller's ``extra``, which is

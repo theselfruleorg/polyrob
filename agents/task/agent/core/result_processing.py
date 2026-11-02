@@ -83,6 +83,8 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			logger.debug("paging probe failed", exc_info=True)
 		return None
 
+	from agents.task.agent.core.result_budget import ERROR_WAY_OUT
+
 	def _entry(ar, tc_id=None):
 		if ar.error:
 			# UP-06: an untrusted tool can control its own error string, so the error
@@ -90,7 +92,8 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			# injected instructions in a tool's error reach the model unframed.
 			# An untrusted tool controls its own error string too (UP-06), so it
 			# gets the same cap — and before the wrap, for the same reason.
-			content = truncate_tool_result(f"Error: {ar.error}", way_out=_way_out(tc_id))
+			# 095 W2 (HI-15): an error has no offset/limit to page with.
+			content = truncate_tool_result(f"Error: {ar.error}", way_out=ERROR_WAY_OUT)
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
 				stamp_result_source(ar, action_name, tool)

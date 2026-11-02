@@ -21,7 +21,7 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "data" / "streams" / "streams.yaml"
-SKILL = ROOT / "data" / "prompts" / "skills" / "treasury-trading" / "SKILL.md"
+SKILL = ROOT / "data" / "prompts" / "skills" / "trade-execution" / "SKILL.md"
 
 # The stream manifest is operator-authored instance data (it is the ONE place a
 # money verb may be granted) and is deliberately excluded from the public
@@ -81,18 +81,17 @@ def test_the_trading_stream_reads_the_solana_balance_every_run():
 
 
 def test_the_trading_skill_marks_solana_as_money_capable():
-    text = (SKILL.parent / "references" / "chains.md").read_text(encoding="utf-8")
-    row = next(l for l in text.splitlines()
-               if l.startswith("| **solana**"))
-    assert "solana_swap" in row, \
-        "the chain table must name the verb that moves value on Solana"
-    assert "SOL" in row, "the row must say which asset pays Solana gas"
+    text = SKILL.read_text(encoding="utf-8")
+    assert "solana_swap" in text, \
+        "the execution skill must name the verb that moves value on Solana"
+    pre = (SKILL.parent.parent / "pre-trade-check" / "SKILL.md").read_text(encoding="utf-8")
+    assert "SOL" in pre, "the native-coin row names the asset that pays Solana gas"
 
 
 def test_the_skill_is_an_index_line_for_the_money_rail():
-    """The one skill that governs trading is in the index of a session that holds
+    """The skill that governs a trade is in the index of a session that holds
     the money rail (081 Q2: the model loads it; no keyword matcher)."""
     from agents.task.agent.skill_manager import SkillManager
     got = [m.skill_id for m in SkillManager().get_catalog_skills(
         tool_ids=["defi_trade", "defi_data"], max_skills=500)]
-    assert "treasury-trading" in got
+    assert "trade-execution" in got

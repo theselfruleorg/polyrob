@@ -69,7 +69,8 @@ import logging
 import threading
 from typing import Any, Callable, Dict, Optional
 
-from tools.controller.approval import ApprovalProvider, register_approval_provider
+from tools.controller.approval import (ApprovalOutcome, ApprovalProvider, not_created,
+                                      register_approval_provider)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,9 @@ def _is_money(action_name: str) -> bool:
 
 class InteractiveCLIApprover(ApprovalProvider):
     """Prompt the local operator to approve/deny a gated action via the ladder."""
+
+    #: A bare ``False`` here is the owner's own answer at the prompt (095 W1b).
+    false_outcome = "denied_by_owner"
 
     def __init__(self, input_fn: Optional[Callable[[str], str]] = None,
                  user_id: Optional[str] = None, home_dir: Any = None) -> None:
@@ -375,7 +379,7 @@ class InteractiveCLIApprover(ApprovalProvider):
                 "approval prompt already in flight -> deny '%s' (single stdin reader)",
                 action_name,
             )
-            return False
+            return not_created("busy")
 
         prompt = self._prompt(action_name, params)
         input_fn = self._input_fn
@@ -400,7 +404,7 @@ class InteractiveCLIApprover(ApprovalProvider):
             raise
         except Exception as e:
             logger.error("approval prompt error for '%s': %s -> deny", action_name, e)
-            return False
+            return ApprovalOutcome("crashed", reason=f"prompt error: {type(e).__name__}")
 
         # Everything past this point runs AFTER asyncio.to_thread already
         # returned — i.e. after the point where wait_for could have cancelled

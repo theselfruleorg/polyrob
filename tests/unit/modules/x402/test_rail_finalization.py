@@ -148,7 +148,7 @@ async def test_matching_network_scans_normally(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_ok", amount_usd=4.44, purpose="p", db=db)
+            user_id="alice", session_id="s_ok", amount_usd=4.44, purpose="p", db=db)
         chain = _FakeChain(chain_id=BASE_ID, head=1000)
         watcher = SettlementWatcher(_WakeAgent(), db=db, rpc_call=chain.rpc)
         await watcher.tick_once()          # seed

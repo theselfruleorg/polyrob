@@ -111,7 +111,7 @@ def _enable_full(monkeypatch):
     of the `env=` mapping resolve_access_tier takes for its own fields."""
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     from agents.task import constants
     constants.reset_autonomy_mode_warnings()
 
@@ -168,7 +168,7 @@ def test_group_member_tier_name():
 
 def test_blocked_member_is_denied(workdir):
     _allow(workdir)
-    _roles(workdir).grant("discord", "chan-1", "u_bad", "blocked", granted_by="rob")
+    _roles(workdir).grant("discord", "chan-1", "u_bad", "blocked", granted_by="alice")
     c = _Container(workdir)
     env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(c, _identity("u_bad"), env=env) == AccessTier.DENIED
@@ -186,7 +186,7 @@ def test_blocked_owner_row_cannot_demote_the_owner(workdir):
 
 def test_chat_role_is_stamped_on_the_identity(workdir):
     _allow(workdir)
-    _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="rob")
+    _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="alice")
     c = _Container(workdir)
     env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
 
@@ -209,7 +209,7 @@ def test_roles_key_on_the_raw_platform_id(workdir):
     from core.surfaces.envelopes import Identity, SessionSource
 
     _allow(workdir)
-    _roles(workdir).grant("discord", "chan-1", "9911", "admin", granted_by="rob")
+    _roles(workdir).grant("discord", "chan-1", "9911", "admin", granted_by="alice")
     c = _Container(workdir)
     env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
     ident = Identity(user_id="u_internal",
@@ -231,7 +231,7 @@ def test_a_role_store_fault_reads_as_blocked_never_as_member(workdir, monkeypatc
     """
     import core.surfaces.access as access
     _allow(workdir)
-    _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="rob")
+    _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="alice")
 
     import core.surfaces.group_roles as gr
 

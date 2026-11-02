@@ -1,4 +1,4 @@
-"""W1: Money › Book — the tokens Rob trusts, and the owner's word on one.
+"""W1: Money › Book — the tokens the agent trusts, and the owner's word on one.
 
 The console reaches the SAME ``core.wallet.token_trust`` functions the
 Telegram / REPL verbs call; only the wallet owner may read or write.
@@ -18,13 +18,13 @@ FAKE = "0x3535353535353535353535353535353535353535"
 def client(tmp_path, monkeypatch):
     import webview.pages as pages
     import webview.tokens_routes as routes
-    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "rob")
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "alice")
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
     monkeypatch.setattr("core.wallet.authority.owner_refusal", lambda uid: None)
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     pins = str(tmp_path / "wallet" / "token_pins.db")
     monkeypatch.setattr(token_pins, "token_pins_db_path", lambda data_home=None: pins)
-    op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
+    op.apply_delta("alice", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
                                            symbol="TKN", qty=5.0, cost_usd=134.54),
                    db_path=op.open_positions_db_path(str(tmp_path)))
     app = FastAPI()
@@ -34,7 +34,7 @@ def client(tmp_path, monkeypatch):
 
 def test_the_view_lists_sources_and_holdings(client):
     body = client.get("/api/webgate/tokens").json()
-    assert body["user_id"] == "rob"
+    assert body["user_id"] == "alice"
     assert isinstance(body["trusted"], list) and body["unreadable"] == []
 
 
@@ -51,7 +51,7 @@ def test_trust_then_untrust_then_writeoff(client, tmp_path):
     r = client.post("/api/webgate/tokens/writeoff",
                     json={"chain": "robinhood", "address": FAKE, "reason": "rug"}).json()
     assert r["ok"], r
-    pos = op.get_position("rob", "robinhood", FAKE,
+    pos = op.get_position("alice", "robinhood", FAKE,
                           db_path=op.open_positions_db_path(str(tmp_path)))
     assert pos.status == "written_off"
 

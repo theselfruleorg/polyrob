@@ -44,7 +44,7 @@ async def test_proof_referencing_settled_invoice_is_verified(tmp_path, monkeypat
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xfeed", db=db)
 
@@ -84,7 +84,7 @@ async def test_proof_referencing_pending_unsettled_invoice_rejected(tmp_path, mo
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         # NEVER settled — still pending. A sybil claiming a tx hash that was
         # never actually recorded as a settlement must be rejected even
         # though the request_id itself is real.
@@ -148,7 +148,7 @@ async def test_replayed_proof_is_rejected_on_second_use(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xreplay", db=db)
 
@@ -177,11 +177,11 @@ async def test_different_settled_tx_is_still_accepted_after_a_replay_rejection(t
     db = await _setup_db(tmp_path)
     try:
         inv_x = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv_x["request_id"], transaction_hash="0xtxX", db=db)
         inv_y = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s2", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv_y["request_id"], transaction_hash="0xtxY", db=db)
 
@@ -229,7 +229,7 @@ async def test_replay_guard_rejects_varied_agent_id_bypass(tmp_path, monkeypatch
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xshared", db=db)
 
@@ -302,7 +302,7 @@ async def test_rejected_submission_does_not_consume_the_proof(tmp_path, monkeypa
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xretry", db=db)
 
@@ -336,7 +336,7 @@ async def test_proof_toaddress_mismatch_rejected(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xwrongto", db=db)
 
@@ -360,7 +360,7 @@ async def test_proof_toaddress_case_insensitive_match_accepted(tmp_path, monkeyp
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xcasetx", db=db)
 
@@ -388,7 +388,7 @@ async def test_proof_missing_toaddress_rejected(tmp_path, monkeypatch):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="consulting", db=db)
         await invoicing.settle_payment_request(
             inv["request_id"], transaction_hash="0xnoaddr", db=db)
 

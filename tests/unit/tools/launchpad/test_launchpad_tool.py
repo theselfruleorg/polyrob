@@ -233,7 +233,7 @@ async def test_a_launch_declares_a_native_outflow_of_fee_plus_buy(monkeypatch):
     captured = []
     tool, _ = _tool(monkeypatch, captured=captured)
     res = await tool.launchpad_launch(LaunchParams(
-        name="Rob Coin", symbol="ROB", buy_amount=0.1, max_spend_usd=500.0,
+        name="Demo Coin", symbol="DEMO", buy_amount=0.1, max_spend_usd=500.0,
         dry_run=True))
     assert res.error is None, res.error
     intent = captured[0]
@@ -414,7 +414,7 @@ async def test_status_reports_graduation_progress(monkeypatch):
 
 @pytest.mark.parametrize("model,kw", [
     (TradeParams, dict(token=TOKEN, amount=1.0, max_spend_usd=5.0)),
-    (LaunchParams, dict(name="Rob Coin", symbol="ROB", max_spend_usd=5.0)),
+    (LaunchParams, dict(name="Demo Coin", symbol="DEMO", max_spend_usd=5.0)),
 ])
 def test_launchpad_slippage_is_capped_at_1000_bps(model, kw):
     """CR-M12 capped every swap verb at 1000 bps; the launchpad kept 5000 (50%)."""

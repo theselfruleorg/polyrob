@@ -519,6 +519,25 @@ def test_the_chain_field_teaches_the_agent_how_to_choose():
     described = SP.model_fields["chain"].description
     assert "ethereum" in described and "base" in described
     assert "gas" in described.lower()
+    assert "Full guidance:" in described and "robinhood (id" in described
+
+
+def test_the_per_chain_guidance_renders_once_in_the_family():
+    """095 P0.1: every defi_trade verb ships in one tools[]; the per-chain
+    guidance (~800 tokens) renders on swap only, and every other verb keeps the
+    short chooser text and points at swap — never a second full copy."""
+    from tools.defi import trade_params as tp
+    models = [m for m in vars(tp).values() if isinstance(m, type)
+              and issubclass(m, tp.BaseModel) and "chain" in m.model_fields
+              and "CHOOSE IT DELIBERATELY" in (m.model_fields["chain"].description or "")]
+    full = [m.__name__ for m in models if "Full guidance:" in m.model_fields["chain"].description]
+    assert full == ["SwapParams"]
+    for m in models:
+        described = m.model_fields["chain"].description
+        assert " on on " not in described, m.__name__
+        assert "gas" in described.lower(), m.__name__
+        if m.__name__ != "SwapParams":
+            assert "defi_trade.swap" in described, m.__name__
 
 
 # --- quote freshness (§1.3) -------------------------------------------------

@@ -25,7 +25,7 @@ class _C:
 
 def test_allow_here_writes_allowlist_and_name(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.allow_here(c, "telegram", "-1", "The Lobby", owner_uid="rob")
+    out = group_admin.allow_here(c, "telegram", "-1", "The Lobby", owner_uid="alice")
     assert "allowed" in out.lower() and "The Lobby" in out
     from core.surfaces.group_allowlist import GroupAllowlist
     assert GroupAllowlist(str(tmp_path / "group_allowlist.db")).is_allowed("telegram", "-1")
@@ -33,13 +33,13 @@ def test_allow_here_writes_allowlist_and_name(tmp_path):
 
 def test_allow_here_with_no_title_still_allows(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.allow_here(c, "telegram", "-2", "", owner_uid="rob")
+    out = group_admin.allow_here(c, "telegram", "-2", "", owner_uid="alice")
     assert "allowed" in out.lower()
 
 
 def test_deny_here_revokes(tmp_path):
     c = _C(tmp_path)
-    group_admin.allow_here(c, "telegram", "-1", "Den", owner_uid="rob")
+    group_admin.allow_here(c, "telegram", "-1", "Den", owner_uid="alice")
     out = group_admin.deny_here(c, "telegram", "-1")
     assert "denied" in out.lower()
     from core.surfaces.group_allowlist import GroupAllowlist
@@ -54,57 +54,57 @@ def test_deny_here_when_not_active_says_so(tmp_path):
 
 def test_set_mode_and_role_and_list(tmp_path):
     c = _C(tmp_path)
-    group_admin.allow_here(c, "telegram", "-1", "Den", owner_uid="rob")
-    assert "active" in group_admin.set_mode(c, "rob", "telegram", "-1", "active")
-    assert "admin" in group_admin.set_role(c, "telegram", "-1", "9911", "admin", by="rob")
-    assert "Den" in group_admin.list_rooms(c, "rob")
+    group_admin.allow_here(c, "telegram", "-1", "Den", owner_uid="alice")
+    assert "active" in group_admin.set_mode(c, "alice", "telegram", "-1", "active")
+    assert "admin" in group_admin.set_role(c, "telegram", "-1", "9911", "admin", by="alice")
+    assert "Den" in group_admin.list_rooms(c, "alice")
 
 
 def test_bad_mode_is_a_sentence(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.set_mode(c, "rob", "telegram", "-1", "loud")
+    out = group_admin.set_mode(c, "alice", "telegram", "-1", "loud")
     assert "mention, active, listen, off" in out
 
 
 def test_bad_role_echoes_the_vocabulary(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.set_role(c, "telegram", "-1", "9911", "superadmin", by="rob")
+    out = group_admin.set_role(c, "telegram", "-1", "9911", "superadmin", by="alice")
     assert "❌" in out
     assert "admin" in out and "member" in out and "blocked" in out
 
 
 def test_list_rooms_when_none_allowed(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.list_rooms(c, "rob")
+    out = group_admin.list_rooms(c, "alice")
     assert "no group chats" in out.lower()
 
 
 def test_set_key_writes_and_unset_clears(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.set_key(c, "rob", "telegram", "-1", "chat.tone", "playful")
+    out = group_admin.set_key(c, "alice", "telegram", "-1", "chat.tone", "playful")
     assert "chat.tone" in out and "playful" in out
     from core.surfaces.chat_policy import load
-    assert load(tmp_path, "rob", "telegram", "-1").tone == "playful"
-    out2 = group_admin.set_key(c, "rob", "telegram", "-1", "chat.tone", "unset")
+    assert load(tmp_path, "alice", "telegram", "-1").tone == "playful"
+    out2 = group_admin.set_key(c, "alice", "telegram", "-1", "chat.tone", "unset")
     assert "unset" in out2.lower()
-    assert load(tmp_path, "rob", "telegram", "-1").tone == ""
+    assert load(tmp_path, "alice", "telegram", "-1").tone == ""
 
 
 def test_set_key_unset_clears_a_value_a_bare_set_cannot(tmp_path):
     """`chat.quiet_hours` refuses an empty string at the coercer — `unset` is
     the only way to clear it."""
     c = _C(tmp_path)
-    group_admin.set_key(c, "rob", "telegram", "-1", "chat.quiet_hours", "23-08")
+    group_admin.set_key(c, "alice", "telegram", "-1", "chat.quiet_hours", "23-08")
     from core.surfaces.chat_policy import load
-    assert load(tmp_path, "rob", "telegram", "-1").quiet_hours == "23-08"
-    out = group_admin.set_key(c, "rob", "telegram", "-1", "chat.quiet_hours", "unset")
+    assert load(tmp_path, "alice", "telegram", "-1").quiet_hours == "23-08"
+    out = group_admin.set_key(c, "alice", "telegram", "-1", "chat.quiet_hours", "unset")
     assert out.startswith("✅")
-    assert load(tmp_path, "rob", "telegram", "-1").quiet_hours == ""
+    assert load(tmp_path, "alice", "telegram", "-1").quiet_hours == ""
 
 
 def test_set_key_rejects_a_non_chat_key(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.set_key(c, "rob", "telegram", "-1", "style.tone", "x")
+    out = group_admin.set_key(c, "alice", "telegram", "-1", "style.tone", "x")
     assert "❌" in out
 
 
@@ -153,10 +153,10 @@ def test_tail_reads_an_existing_store_without_a_registered_service(tmp_path):
 
 def test_mute_writes_mute_until_and_mode_reads_as_listen(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.mute(c, "rob", "telegram", "-1", "2h")
+    out = group_admin.mute(c, "alice", "telegram", "-1", "2h")
     assert "muted" in out.lower() and "2h" in out
     from core.surfaces.chat_policy import load, mode_allows_trigger
-    pol = load(tmp_path, "rob", "telegram", "-1")
+    pol = load(tmp_path, "alice", "telegram", "-1")
     assert pol.mute_until > 0
     # A mute makes even a `mention`-mode room require owner/admin + addressed —
     # this is the live behaviour `chat_policy.mode_allows_trigger` already
@@ -168,5 +168,5 @@ def test_mute_writes_mute_until_and_mode_reads_as_listen(tmp_path):
 
 def test_mute_bad_duration_is_a_sentence(tmp_path):
     c = _C(tmp_path)
-    out = group_admin.mute(c, "rob", "telegram", "-1", "soon")
+    out = group_admin.mute(c, "alice", "telegram", "-1", "soon")
     assert "bad duration" in out.lower()

@@ -95,7 +95,7 @@ async def test_detection_off_by_default_no_scan_no_tables_touched(tmp_path, monk
     db = await _setup_db(tmp_path)
     try:
         await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=12.34, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=12.34, purpose="p", db=db)
         chain = _FakeChain()
         chain.logs = [_log("0xpay", "0xPayer0000000000000000000000000000000001",
                             12_340000, 500)]
@@ -167,7 +167,7 @@ async def test_matched_transfer_settles_and_wakes_same_tick(tmp_path, monkeypatc
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess_oc", amount_usd=12.34, purpose="widget", db=db)
+            user_id="alice", session_id="sess_oc", amount_usd=12.34, purpose="widget", db=db)
 
         chain = _FakeChain(head=1000)
         agent = _WakeAgent()
@@ -184,7 +184,7 @@ async def test_matched_transfer_settles_and_wakes_same_tick(tmp_path, monkeypatc
         assert out["settled_notified"] == 1  # SAME-tick wake, via the EXISTING path
         assert len(agent.wakes) == 1
         sid, uid, text, meta = agent.wakes[0]
-        assert sid == "sess_oc" and uid == "rob"
+        assert sid == "sess_oc" and uid == "alice"
         assert "SETTLED" in text and "0xpay1" in text
         assert meta["kind_hint"] == "payment_settled"
 
@@ -203,9 +203,9 @@ async def test_equal_amount_pending_oldest_settled_newer_stays_pending(tmp_path,
     db = await _setup_db(tmp_path)
     try:
         older = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_old", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_old", amount_usd=5.0, purpose="a", db=db)
         newer = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_new", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_new", amount_usd=5.0, purpose="b", db=db)
 
         chain = _FakeChain(head=1000)
         watcher = SettlementWatcher(_WakeAgent(), db=db, rpc_call=chain.rpc, usdc_addr=USDC)
@@ -244,7 +244,7 @@ async def test_unmatched_transfer_emits_event_and_settles_nothing(tmp_path, monk
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=9.99, purpose="p", db=db)
+            user_id="alice", session_id="s1", amount_usd=9.99, purpose="p", db=db)
 
         chain = _FakeChain(head=1000)
         watcher = SettlementWatcher(_WakeAgent(), db=db, rpc_call=chain.rpc, usdc_addr=USDC)
@@ -349,12 +349,12 @@ async def test_replayed_tx_hash_never_settles_a_different_invoice(tmp_path, monk
     db = await _setup_db(tmp_path)
     try:
         inv_a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
         await invoicing.settle_payment_request(
             inv_a["request_id"], transaction_hash="0xreplay", db=db)
 
         inv_b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
 
         watcher = SettlementWatcher(_WakeAgent(), db=db)
         transfer = {"tx_hash": "0xreplay", "from": "0xPayerReplay",
@@ -379,12 +379,12 @@ async def test_settle_payment_request_refuses_a_reused_tx_hash_directly(tmp_path
     db = await _setup_db(tmp_path)
     try:
         inv_a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
+            user_id="alice", session_id="s_a", amount_usd=5.0, purpose="a", db=db)
         assert await invoicing.settle_payment_request(
             inv_a["request_id"], transaction_hash="0xdupe", db=db) is True
 
         inv_b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
+            user_id="alice", session_id="s_b", amount_usd=5.0, purpose="b", db=db)
         assert await invoicing.settle_payment_request(
             inv_b["request_id"], transaction_hash="0xdupe", db=db) is False
 
@@ -404,9 +404,9 @@ async def test_one_transfer_failure_does_not_block_others_in_the_batch(tmp_path,
     db = await _setup_db(tmp_path)
     try:
         good = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_good", amount_usd=7.0, purpose="good", db=db)
+            user_id="alice", session_id="s_good", amount_usd=7.0, purpose="good", db=db)
         bad = await invoicing.create_payment_request(
-            user_id="rob", session_id="s_bad", amount_usd=8.0, purpose="bad", db=db)
+            user_id="alice", session_id="s_bad", amount_usd=8.0, purpose="bad", db=db)
 
         real_claim = invoicing.claim_for_settlement
 

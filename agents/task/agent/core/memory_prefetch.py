@@ -139,11 +139,20 @@ def recall_reader(agent=None, *, orchestrator=None, session_id: Optional[str] = 
     for the regime itself (layering), so the agents tier passes plain values.
     Fail-open to {} (the provider's legacy default)."""
     try:
-        from agents.task.session_class import CHILD, REGIME_POLICY, session_regime
+        from agents.task.session_class import CHILD, OWNER_CHAT, REGIME_POLICY, session_regime
         regime = CHILD if is_sub_agent else session_regime(
             agent, orchestrator=orchestrator, session_id=session_id)
         pol = REGIME_POLICY[regime]
         reader = {"demote_automation": bool(pol.demote_automation_recall)}
+        if regime == OWNER_CHAT:
+            # F7 (prod review 2026-10-29): the owner asks about the current state
+            # ("did we pay?"); a two-week-old row and a guess the run could not
+            # check answered it. Recent run accounts only (a durable fact has
+            # no age limit; a message that names an older date lifts the cap —
+            # build_prefetch_message) and no [unverified] row.
+            from modules.memory.recall_rank import OWNER_RECALL_MAX_AGE_DAYS
+            reader["max_age_days"] = OWNER_RECALL_MAX_AGE_DAYS
+            reader["drop_unverified"] = True
         sid = session_id or getattr(agent, "session_id", None)
         if pol.recall_own_runs_first and sid:
             from core.autonomy_marker import cron_job_for_session, goal_for_session
@@ -261,6 +270,14 @@ async def build_prefetch_message(query: str, *, session_id: str,
     """
     if not query or not query.strip():
         return None
+    if reader and reader.get("max_age_days"):
+        try:
+            from modules.memory.recall_rank import names_older_date
+            if names_older_date(query, max_age_days=reader["max_age_days"]):
+                # The owner named an older day: that day's rows are the answer.
+                reader = {k: v for k, v in reader.items() if k != "max_age_days"}
+        except Exception as e:  # a parse fault keeps the cap
+            logger.debug("recall date probe skipped: %s", e)
     read_error = None
     try:
         from modules.memory.registry import MemoryReadError, memory_prefetch

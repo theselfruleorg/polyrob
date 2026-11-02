@@ -1,4 +1,5 @@
-"""A model with no vision must say so, not guess (owner decision, 2026-09-13).
+"""A model with no vision must say so, not guess (owner decision, 2026-09-13);
+095 W1a (D5 a): the frozen prompt claims nothing, the image turn carries a route note.
 
 Prod runs glm-5 via zai-coding, declared ``supports_vision=False``: every session
 logs "use_vision disabled … has no vision support" and the image content it
@@ -20,32 +21,48 @@ def _prompt(**kwargs) -> str:
     return SystemPrompt("actions", tool_ids=[], **kwargs).get_system_message().content
 
 
-def test_a_vision_model_is_told_it_can_see():
-    content = _prompt(include_vision=True)
-    assert "YOU HAVE VISION" in content
+def test_the_frozen_prompt_claims_no_vision_either_way():
+    """095 W1a (D5 a): the prompt outlives the model (a /model switch, a provider
+    fallback), so it never says "you can" or "you cannot" see."""
+    for include_vision in (True, False):
+        content = _prompt(include_vision=include_vision)
+        assert "YOU HAVE VISION" not in content and "NO VISION" not in content
+        assert "route note" in content
 
 
-def test_a_blind_model_is_told_plainly_that_it_cannot_see():
-    content = _prompt(include_vision=False)
-    assert "NO VISION" in content
-    assert "[IMAGE]" in content
+def test_the_prompt_keeps_the_honest_refusal_rule():
+    content = _prompt(include_vision=False).lower()
+    assert "never guess, describe or infer" in content
+    assert "cannot see images" in content
+    assert "filesystem_read_file" in content
 
 
-def test_a_blind_model_is_told_never_to_guess_image_content():
-    content = _prompt(include_vision=False)
-    lowered = content.lower()
-    assert "never guess" in lowered or "do not guess" in lowered
+def test_route_note_follows_the_current_model():
+    from core.surfaces.inbound_attachments import IMAGE_PATH_MARKER, image_route_note
+    text = f"look\n\n[Attached image: a.png (1 KB)]\n{IMAGE_PATH_MARKER}inbound/a.png"
+    seeing = image_route_note(True, "gpt-5", [text])
+    assert "image attached natively" in seeing and "gpt-5" in seeing
+    blind = image_route_note(False, "glm-5", [text])
+    assert "your current model (glm-5) cannot see images" in blind
+    assert "saved at inbound/a.png" in blind and "natively" not in blind
+    assert "path named above" in image_route_note(False, "", ["no marker"])
 
 
-def test_a_blind_model_is_told_the_file_is_still_in_the_workspace():
-    content = _prompt(include_vision=False)
-    assert "inbound/" in content
-    assert "filesystem" in content.lower()
-
-
-def test_a_blind_model_is_not_told_it_has_vision():
-    content = _prompt(include_vision=False)
-    assert "YOU HAVE VISION" not in content
+def test_image_turn_carries_the_route_note_from_include_vision():
+    """The note rides the turn the image is attached to, read from the manager's
+    CURRENT ``_include_vision`` (a model change re-resolves it)."""
+    from agents.task.agent.message_manager.service import MessageManager
+    from core.surfaces.inbound_attachments import IMAGE_PATH_MARKER
+    from modules.llm.messages import HumanMessage
+    mm = MessageManager(llm=None, task="t", action_descriptions="x", include_vision=True,
+                        system_prompt_class=SystemPrompt, max_input_tokens=100000)
+    mm._include_vision = False  # a swap to a blind model
+    img = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    mm.inject_user_guidance([{"text": f"see\n{IMAGE_PATH_MARKER}inbound/b.png", "kind": "comment",
+                           "metadata": {"image_attachments": [img]}}])
+    last = [m.message for m in mm.history.messages if isinstance(m.message, HumanMessage)][-1]
+    text = last.content[0]["text"]
+    assert "cannot see images" in text and "inbound/b.png" in text
 
 
 def test_the_media_surface_rule_names_the_one_file_delivery_rule(monkeypatch):

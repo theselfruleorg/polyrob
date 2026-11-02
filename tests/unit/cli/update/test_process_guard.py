@@ -229,3 +229,44 @@ def test_ps_parse_rejoins_an_executable_path_with_a_space():
     parsed = list(_parse_ps_lines(out))
     assert parsed == [(77, ["/Users/A B/venv/bin/polyrob", "telegram"])]
     assert server_process_alive(exclude_pid=1, _cmdlines=parsed) is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 managed user-mode upgrade: the account NAME `polyrob` in a
+# `sudo -u polyrob …` wrapper is an option value, not the executable. The
+# guard must read the executable position only and look through sudo/env and
+# a `bash -lc "<command>"` string.
+# ---------------------------------------------------------------------------
+
+_BIN = "/home/polyrob/.polyrob/venv/bin/polyrob"
+
+
+def test_sudo_dash_u_polyrob_update_is_not_a_running_agent():
+    cmdlines = [(5, ["sudo", "-u", "polyrob", _BIN, "update", "--apply", "-y"])]
+    assert server_process_alive(exclude_pid=1, _cmdlines=cmdlines) is False
+
+
+def test_sudo_iu_bash_lc_update_is_not_a_running_agent():
+    cmdlines = [
+        (5, ["sudo", "-iu", "polyrob", "bash", "-lc", f"{_BIN} update --apply -y"]),
+        (6, ["bash", "-lc", f"{_BIN} update --apply -y"]),
+        (7, ["sudo", "--user=polyrob", "env", "TMPDIR=/x", _BIN, "update", "--apply"]),
+    ]
+    assert server_process_alive(exclude_pid=1, _cmdlines=cmdlines) is False
+
+
+def test_sudo_wrapped_server_is_still_detected():
+    for argv in (
+        ["sudo", "-u", "polyrob", _BIN, "gateway"],
+        ["sudo", "-iu", "polyrob", "bash", "-lc", f"{_BIN} telegram"],
+        ["sudo", "-u", "polyrob", _BIN],  # the bare REPL
+        ["/home/polyrob/.polyrob/venv/bin/python", "-I", "-m", "cli.polyrob", "gateway"],
+    ):
+        assert server_process_alive(exclude_pid=1, _cmdlines=[(5, argv)]) is True, argv
+
+
+def test_polyrob_as_an_option_value_is_not_the_executable():
+    cmdlines = [(5, ["sudo", "-u", "polyrob", "ls", "/tmp"]),
+                (6, ["su", "polyrob"]),
+                (7, ["chown", "polyrob", "/x"])]
+    assert server_process_alive(exclude_pid=1, _cmdlines=cmdlines) is False

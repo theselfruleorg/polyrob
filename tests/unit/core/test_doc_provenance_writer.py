@@ -1,6 +1,6 @@
 """057 WS-D — the identity-doc writers stamp provenance and never refuse a
 write for its wording. Covers BOTH docs (owner.md + self.md) and both write paths
-(update via propose/apply_now, and patch)."""
+(update via propose, and patch)."""
 import pytest
 
 from core.doc_claims import stamp_of

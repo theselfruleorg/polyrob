@@ -1,0 +1,32 @@
+{
+  "function": {
+    "description": "Recall YOUR OWN recent activity — the goals, cron jobs, and chats you ran, newest-first, with outcome and spend. USE THIS (not the filesystem, not notes) for 'what did I do', 'what ran since X', 'what have I been up to'. Optional `since` ('8h'/'2d'/ISO), `kind` ('goal'/'cron'/'chat'), `limit` (1-20).",
+    "name": "recent_activity",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "limit": {
+          "default": 20,
+          "type": "integer"
+        },
+        "since": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "until": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

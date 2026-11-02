@@ -46,7 +46,7 @@ def select_renderer(
         console:  Optional Rich ``Console`` override (tests).
         live_allowed: When False (the REPL, which runs under prompt_toolkit's
             ``patch_stdout``) the Rich renderer suppresses its in-place ``Live``
-            regions to avoid cursor corruption — see ``RichRenderer``. ``rob run``
+            regions to avoid cursor corruption — see ``RichRenderer``. ``polyrob run``
             leaves this True. No effect on the plain renderer.
     """
     if use_rich(plain=plain, stream=stream):

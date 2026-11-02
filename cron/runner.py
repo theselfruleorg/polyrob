@@ -416,11 +416,21 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                       error: str = "", summary=None) -> None:
         """The job's run record for one exit path (2026-10-13 review R3)."""
         from agents.task.agent.core.episodic_digest import record_run
-        await record_run(regime=_CRON_REGIME, kind="cron", session_id=session_id,
-                         user_id=job.user_id, rail_id=f"cron:{job.id}", task=job.task,
-                         outcome=outcome, reason=reason, error=error, run=run,
-                         summary=summary, meta={"source": "cron", "job_id": job.id},
-                         mandate=(job.payload or {}).get("mandate"))
+        stored = await record_run(regime=_CRON_REGIME, kind="cron", session_id=session_id,
+                                  user_id=job.user_id, rail_id=f"cron:{job.id}", task=job.task,
+                                  outcome=outcome, reason=reason, error=error, run=run,
+                                  summary=summary, meta={"source": "cron", "job_id": job.id},
+                                  mandate=(job.payload or {}).get("mandate"))
+        # 095 W13: the reviewer runs AFTER the run, outside its budget and cap.
+        try:
+            from agents.task.agent.core.background_review import schedule_review_after_run
+            from core.config_policy.rigs import pinned_skills
+            schedule_review_after_run(task_agent, regime=_CRON_REGIME, session_id=session_id,
+                                      user_id=job.user_id, rail_id=f"cron:{job.id}",
+                                      outcome=outcome, meta=stored,
+                                      pinned=pinned_skills(job.payload or {}))
+        except Exception:
+            logger.debug("after-run review not scheduled", exc_info=True)
 
     async def _record_cut_run(job: CronJob, session_id, *, idle_outcome: str = "cancelled",
                               reason: str = "cut by an owner pause before done()",
@@ -619,6 +629,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         except ValueError as exc:
             logger.error("cron job %s: invalid %s — run refused: %s", job.id, PAYLOAD_KEY, exc)
             _cron_ev(job, "skipped", "invalid_target_token")
+            job.run_note = {"outcome": "failed", "reason": "invalid target_token on the job"}
             return False
         if _target:
             # W0: a target the owner typed is trust for this run.
@@ -721,8 +732,10 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 await _record(job, session_id, "failed", run=run,
                               reason="the run was refused or produced nothing",
                               error=str(run.status or ""))
+                job.run_note = {"outcome": "failed",
+                                "reason": "the run was refused or produced nothing"}
                 _cron_ev(job, "failed", "refusal_or_empty", session_id=session_id,
-                         duration_s=round(time.time() - _t0, 3),
+                         duration_s=round(time.time() - _t0, 3), model=model,
                          **run_ev_attrs(run, session_id, data_dir))
                 return False
 
@@ -744,6 +757,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 from agents.task.runtime.stop_reason import label_last_report
                 _stop = run.stop_description
                 _out = "partial" if _partial else "failed"
+                job.run_note = {"outcome": _out, "reason": str(_stop or "")}
                 # 083 WS-2: the agent's last report at the step limit (its words).
                 _last = label_last_report(getattr(run, "exhausted_summary", None), 1500)
                 await _record(job, session_id, _out, run=run,
@@ -752,7 +766,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                                        f" | {_last}") if _last else None)
                 _cron_ev(job, "partial" if _partial else "failed", "incomplete_no_done",
                          session_id=session_id, duration_s=round(time.time() - _t0, 3),
-                         spend_usd=run.spend_usd, steps=run.steps,
+                         spend_usd=run.spend_usd, steps=run.steps, model=model,
                          **run_ev_attrs(run, session_id, data_dir))
                 return False
 
@@ -766,6 +780,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             # C-11: a run that closed by declaring BLOCKED or SKIPPED did not
             # do the job; its record and its event say so instead of "done".
             _declared, _why = declared_outcome(run)
+            if _declared != "done":
+                job.run_note = {"outcome": _declared, "reason": _why}
             try:
                 # Provenance was collected into the envelope while the
                 # orchestrator was resident (run_task_to_outcome).
@@ -773,7 +789,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                               summary=final[:2000] if final else None)
                 _cron_ev(job, _declared, _why or None, session_id=session_id,
                          duration_s=round(time.time() - _t0, 3),
-                         spend_usd=run.spend_usd, steps=run.steps,
+                         spend_usd=run.spend_usd, steps=run.steps, model=model,
                          **run_ev_attrs(run, session_id, data_dir))
             except Exception:
                 logger.warning("cron episodic write failed", exc_info=True)
@@ -831,6 +847,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             return True
         except Exception as e:
             logger.error("cron job %s session failed: %s", job.id, e, exc_info=True)
+            job.run_note = {"outcome": "failed",
+                            "reason": f"the run raised {type(e).__name__}: {str(e)[:80]}"}
             _cron_ev(job, "failed", "exception", session_id=session_id or _run_sid,
                      duration_s=round(time.time() - _t0, 3), error=str(e)[:200])
             if session_id:
@@ -870,4 +888,10 @@ def build_cron_ticker(
     scheduler = CronScheduler(
         store, runner, lock_path=os.path.join(data_dir, "cron.tick.lock")
     )
+
+    async def _tell_owner(job, outcome, reason, at):
+        from cron.delivery import notify_failed_run
+        await notify_failed_run(task_agent, job, outcome, reason, at)
+
+    scheduler.set_failure_hook(_tell_owner)
     return CronTicker(scheduler, interval_seconds=interval_seconds)

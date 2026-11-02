@@ -109,7 +109,7 @@ server that holds a wallet seed, provision the seedless installer unit once (the
 `polyrob-deps` user and its systemd units, as the production deployer does): the agent then only requests a
 feature through `/var/lib/polyrob-deps/requests`, and the separate `polyrob-deps`
 user installs it, wheel-only, into that protected overlay. This directory is a
-sibling of the shared data home (`/srv/rob-deps` for a data home of `/srv/rob`),
+sibling of the shared data home (`/srv/polyrob-deps` for a data home of `/srv/polyrob`),
 under a root-owned parent that is not group/world writable. The agent can read
 the overlay and write only its request spool. Without that unit, a custody server refuses lazy installs and names
 the extra to add. `LAZY_DEPS_MODE=off` seals it.

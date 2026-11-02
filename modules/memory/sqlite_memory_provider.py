@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 from modules.memory.wikilinks import _WIKILINK_RE, parse_wikilinks  # noqa: F401  (re-exported)
 from modules.memory.sqlite_curated_store import CuratedNotesStoreMixin
-from modules.memory.recall_consolidation import RecallConsolidationMixin
 from modules.memory.sqlite_kb_store import KbStoreMixin
 from modules.memory.sqlite_episodes_store import EpisodeStoreMixin
 from modules.memory.sqlite_scope_store import ScopeStoreMixin
@@ -47,10 +46,9 @@ def _require_user_id() -> bool:
 
 
 class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMixin,
-                           EpisodeStoreMixin, RecallConsolidationMixin, ScopeStoreMixin,
-                           MemoryProvider):
-    """Turn store + FTS5 recall core; curated notes, KB, episodes and recall
-    consolidation are mixins sharing this class's connection helpers and guards."""
+                           EpisodeStoreMixin, ScopeStoreMixin, MemoryProvider):
+    """Turn store + FTS5 recall core; curated notes, KB, episodes and scopes are
+    mixins sharing this class's connection helpers and guards."""
 
     def __init__(self, db_path: str, *, top_k: int = 5):
         parent = os.path.dirname(db_path)
@@ -283,24 +281,22 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
             raise
         return self._format_recall_rows(rows, with_ids=with_ids)
 
-    async def prefetch(self, query: str, *, session_id: str, user_id=None,
-                       scope=None, demote_automation: bool = True,
-                       prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
+    async def prefetch(self, query: str, *, session_id: str, user_id=None, scope=None,
+                       demote_automation: bool = True, prefer_job_id: str = None,
+                       prefer_goal_id: str = None, max_age_days: float = None,
+                       drop_unverified: bool = False) -> str:
         # Rank-ordered, top_k, "" on anon-block or no significant terms (NO browse-on-
         # empty — automatic prefetch must not inject recent rows when the query is empty).
         # P2-1: calls _keyword_contents DIRECTLY (not search()) so it can exclude the
         # CURRENT session — the explicit search action stays all-sessions.
-        if self._anon_blocked(user_id):
-            return ""
-        terms = self._query_terms(query)
-        if not terms:
+        if self._anon_blocked(user_id) or not self._query_terms(query):
             return ""
         try:
             rows = await self._run_blocking(
                 self._keyword_rows, query, norm_user=self._norm_user(user_id),
                 limit=self.top_k, exclude_session_id=session_id, scope=scope,
                 demote_automation=demote_automation, prefer_job_id=prefer_job_id,
-                prefer_goal_id=prefer_goal_id)
+                prefer_goal_id=prefer_goal_id, max_age_days=max_age_days, drop_unverified=drop_unverified)
         except Exception as e:
             logger.warning("sqlite memory prefetch failed: %s", e)
             raise  # D3: an unreadable store is not an empty one

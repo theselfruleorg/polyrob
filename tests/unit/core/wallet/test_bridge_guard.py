@@ -145,34 +145,34 @@ def test_a_deadline_that_passes_ends_the_wait():
 
 def test_the_record_is_written_and_listed_before_settlement(tmp_path):
     db = str(tmp_path / "bridges.db")
-    bid = bg.record_pending(user_id="rob", quote=_Q(), amount_usd=50.9,
+    bid = bg.record_pending(user_id="alice", quote=_Q(), amount_usd=50.9,
                             balance_before=0, db_path=db)
-    rows = bg.open_bridges("rob", db_path=db)
+    rows = bg.open_bridges("alice", db_path=db)
     assert len(rows) == 1 and rows[0]["id"] == bid
     assert rows[0]["state"] == bg.STATE_PENDING
 
 
 def test_a_settled_bridge_leaves_the_open_list(tmp_path):
     db = str(tmp_path / "bridges.db")
-    bid = bg.record_pending(user_id="rob", quote=_Q(), amount_usd=1.0,
+    bid = bg.record_pending(user_id="alice", quote=_Q(), amount_usd=1.0,
                             balance_before=0, db_path=db)
     bg.settle(bid, state=bg.STATE_ARRIVED, detail="ok", db_path=db)
-    assert bg.open_bridges("rob", db_path=db) == []
+    assert bg.open_bridges("alice", db_path=db) == []
 
 
 def test_an_in_flight_bridge_STAYS_in_the_open_list(tmp_path):
     """It is the owner's open question; it must not disappear from the list."""
     db = str(tmp_path / "bridges.db")
-    bid = bg.record_pending(user_id="rob", quote=_Q(), amount_usd=1.0,
+    bid = bg.record_pending(user_id="alice", quote=_Q(), amount_usd=1.0,
                             balance_before=0, db_path=db)
     bg.settle(bid, state=bg.STATE_IN_FLIGHT, detail="not confirmed", db_path=db)
-    rows = bg.open_bridges("rob", db_path=db)
+    rows = bg.open_bridges("alice", db_path=db)
     assert len(rows) == 1 and rows[0]["state"] == bg.STATE_IN_FLIGHT
 
 
 def test_bridges_are_tenant_scoped(tmp_path):
     db = str(tmp_path / "bridges.db")
-    bg.record_pending(user_id="rob", quote=_Q(), amount_usd=1.0,
+    bg.record_pending(user_id="alice", quote=_Q(), amount_usd=1.0,
                       balance_before=0, db_path=db)
     assert bg.open_bridges("someone_else", db_path=db) == []
 
@@ -181,5 +181,5 @@ def test_listing_bridges_never_creates_the_store(tmp_path):
     """A read must not CREATE a db in whatever data home resolved (status-SSOT rule)."""
     import os
     db = str(tmp_path / "bridges.db")
-    assert bg.open_bridges("rob", db_path=db) == []
+    assert bg.open_bridges("alice", db_path=db) == []
     assert not os.path.exists(db), "a read created the store"

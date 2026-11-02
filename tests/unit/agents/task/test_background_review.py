@@ -58,23 +58,16 @@ def test_spawn_is_fail_open(monkeypatch):
     h._maybe_spawn_background_review(turn_was_productive=True)  # must not raise
 
 
-def test_review_prompt_excludes_self_context_when_flag_off(monkeypatch):
-    # polyrob Phase E: the reviewer only proposes SELF-context refinements when
-    # SELF_CONTEXT_WRITABLE is on. Off => skills-only prompt (byte-identical legacy).
-    monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "false")
+def test_review_prompt_never_invites_self_or_owner_docs(monkeypatch):
+    # 095 W10 step 3 / 078 D7: the reviewer writes skills only — the self.md
+    # addendum is gone, whatever SELF_CONTEXT_WRITABLE says.
     from agents.task.agent.core.background_review import build_review_prompt
-    p = build_review_prompt()
-    assert "self_context_manage" not in p
-    assert "skill_manage" in p
-
-
-def test_review_prompt_includes_self_context_when_flag_on(monkeypatch):
-    monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "true")
-    from agents.task.agent.core.background_review import build_review_prompt
-    p = build_review_prompt()
-    assert "self_context_manage" in p
-    # it must frame the proposal as quarantined/consolidated, not auto-applied
-    assert "quarantin" in p.lower() or "review" in p.lower()
+    for flag in ("true", "false"):
+        monkeypatch.setenv("SELF_CONTEXT_WRITABLE", flag)
+        p = build_review_prompt()
+        assert "self_context_manage" not in p
+        assert "owner_doc_manage" not in p
+        assert "skill_manage" in p
 
 
 # --- the reviewer sees a bounded digest of the parent's steps ------------------

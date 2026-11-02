@@ -89,6 +89,9 @@ def test_load_tool_refusal_carries_the_gate_remedy(monkeypatch, key):
     monkeypatch.setattr(td, "disclosure_ceiling", lambda c: None)
     text = remedy_text(key, tool="web_fetch", flag="SOME_FLAG")
     res = asyncio.run(perform_load_tool(_controller(f"gated:{key} — {text}"), "web_fetch"))
+    if key == "load-failed":  # a load that should have worked is an error result
+        assert text in res.error
+        return
     assert res.error is None
     assert text in res.extracted_content
     assert "session logs" not in res.extracted_content

@@ -56,7 +56,7 @@ def test_a_bound_siwe_message_is_a():
 
 
 def test_a_fetch_bound_challenge_is_a_even_when_it_does_not_name_the_site():
-    text = "Enroll wallet as merchant Rob. Nonce 6f1c2a. Expires in 5 minutes."
+    text = "Enroll wallet as merchant Nova. Nonce 6f1c2a. Expires in 5 minutes."
     v = _cls(text, origin="https://evidence.example", fetch_bound=True)
     assert v.cls == A and v.owner_turn_only
 
@@ -285,7 +285,7 @@ def test_a_challenge_naming_another_site_is_c():
 
 
 def test_an_unnamed_fetched_challenge_is_owner_turn_only():
-    v = _cls("Enroll wallet as merchant Rob. Nonce 6f1c2a99", fetch_bound=True)
+    v = _cls("Enroll wallet as merchant Nova. Nonce 6f1c2a99", fetch_bound=True)
     assert v.cls == A and v.owner_turn_only
     v2 = classify(SignRequest("eip191", "Enroll wallet. Nonce 6f1c2a99", "app.example.com", True),
                   SignContext(holder=HOLDER, now=NOW, trust_fetch_bound=False))
@@ -317,7 +317,7 @@ def test_phantoms_standard_sign_in_statement_is_a():
 
 
 MOB = ("402Mob merchant enrollment\nOrigin: https://evidence.example\nWallet: {w}\n"
-       "Merchant name: Rob\nChallenge: f7e654fd-11a1-4e31-9fcf-f8ae1a3d57f5\n"
+       "Merchant name: Nova\nChallenge: f7e654fd-11a1-4e31-9fcf-f8ae1a3d57f5\n"
        "Issued: 2026-10-27T16:52:40.260Z\nExpires: 2026-10-27T16:57:40.260Z\n"
        "Transaction proof address: 0xd73f6b2aef6c6e948d9aae6073cb8546e748575c\n"
        "This creates or replaces a merchant API key. It does not authorize a payment.")

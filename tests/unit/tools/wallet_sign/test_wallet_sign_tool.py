@@ -72,9 +72,9 @@ def _run(coro):
 
 def _enroll(**over):
     base = dict(challenge_url=f"https://{HOST}/v1/merchants/enrollment-challenges",
-                challenge_body_json='{"wallet": "{address}", "name": "Rob"}',
+                challenge_body_json='{"wallet": "{address}", "name": "Nova"}',
                 submit_url=f"https://{HOST}/v1/merchants/enrollments",
-                submit_body_json=('{"wallet": "{address}", "name": "Rob", '
+                submit_body_json=('{"wallet": "{address}", "name": "Nova", '
                                   '"challengeId": "{challenge.challengeId}", '
                                   '"signature": "{signature}"}'))
     base.update(over)
@@ -86,7 +86,7 @@ def test_enrollment_signs_submits_and_stores_the_key(tool):
     assert res.error is None, res.error
     challenge, submit = tool.fetch.calls
     address = tool._wallet.signer.address
-    assert challenge["body"] == {"wallet": address, "name": "Rob"}
+    assert challenge["body"] == {"wallet": address, "name": "Nova"}
     assert submit["body"]["challengeId"] == "c-123"
     sig = submit["body"]["signature"]
     msg = f"402Mob merchant enrollment\nWallet: {address}\nNonce: 7c1e9a52"
@@ -312,14 +312,14 @@ def test_a_deep_parsed_json_body_is_accepted(tool):
     the site."""
     params = ChallengeParams(
         challenge_url=f"https://{HOST}/v1/merchants/enrollment-challenges",
-        challenge_body_json={"wallet": "{address}", "name": "Rob"},
+        challenge_body_json={"wallet": "{address}", "name": "Nova"},
         submit_url=f"https://{HOST}/v1/merchants/enrollments",
         submit_body_json={"wallet": "{address}", "challengeId": "{challenge.challengeId}",
                           "signature": "{signature}"})
     assert isinstance(params.challenge_body_json, str)
     res = _run(tool.wallet_sign_challenge(params))
     assert res.error is None, res.error
-    assert tool.fetch.calls[0]["body"] == {"wallet": tool._wallet.signer.address, "name": "Rob"}
+    assert tool.fetch.calls[0]["body"] == {"wallet": tool._wallet.signer.address, "name": "Nova"}
     assert ApiCallParams(url=f"https://{HOST}/x", credential_id=1,
                          body_json={"a": 1}).body_json == '{"a": 1}'
 

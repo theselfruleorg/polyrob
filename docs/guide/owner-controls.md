@@ -75,9 +75,9 @@ job still runs inside its time limit, so a long pause can end the run. To pause
 or stop the job or goal itself, use `/job pause|stop <id>` or `/goal pause|stop
 <id>` ([streams.md](streams.md)).
 
-The trading mandate is how you let Rob trade on its own.
+The trading mandate is how you let the agent trade on its own.
 `/trade start <budget> <chain,chain> [preset]` (for example
-`/trade start 150 solana,base memecoin`) shows one decision with every number;
+`/trade start 150 base majors`) shows one decision with every number;
 Confirm creates the mandate and its jobs: a hunt, an exit job for each open
 trade, and a daily review. `/trade status` shows it, `/trade resume` lifts its
 pause, and `/trade release` clears a loss stop that a breaker latched. A pause
@@ -254,7 +254,7 @@ answers. A refusal names the HTTP status and the server's first line (for
 example `HTTP 401: missing api key`). **HTTPS URLs only.** A local command (`npx …`) is
 refused: saving one would save arbitrary code execution on this box, which is
 the whole threat model for installing an MCP server. If you genuinely need a
-local server, put a reviewed entry in `MCP_INSTALL_CATALOG_FILE` on the box.
+local server, the operator adds it to `config/mcp_config.json` on the box.
 
 What an added server can and cannot do: its tools become callable, and
 everything they return is framed as untrusted data rather than instructions. It
@@ -314,7 +314,7 @@ back a second time. The answer is kept on the ask too, so you can see later
 what you said.
 
 You can also answer in plain words in the chat ("A", "use the second
-account"). Rob records that answer on the ask, but only with words you typed in
+account"). The agent records that answer on the ask, but only with words you typed in
 that message: text from a page, a mail or a search result cannot decide an
 ask.
 
@@ -364,7 +364,7 @@ apply. The per-transaction cap, the daily cap and the simulation always do, and
 the quote shows them before you type `go`.
 
 ```
-/send <amount> <native|token-address> to <address> on <chain> [max <usd>] [go]   # send
+/send <amount>|$<usd> <native|token-address> to <address> on <chain> [max <usd>] [go]   # send ($22 = dollars)
 /swap <amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]
 /cards                              # open action cards: confirm, refresh, cancel, answer
 /claim <token> [go]                 # collect the creator fees a launchpad owes me
@@ -398,11 +398,11 @@ send or swap from pickers (chain, a token I trust, a recent recipient) and answe
 the same card. The agent uses cards too: `propose_action` puts a
 money verb to you whose only button gets the real quote (the agent never writes a
 confirm), and `present_choice` asks you to pick one of a few options and waits for
-the tap. When Rob lacks something you can fix, `propose_setting` puts the fix
+the tap. When the agent lacks something you can fix, `propose_setting` puts the fix
 behind a Confirm button — `/mcp add`, a safe `/config set`, or a grant without
 money — and Confirm runs that line as if you typed it; a change only the operator can
-make is filed as an ask in `/asks`. `/cards` lists what is open. When you have made every decision Rob
-raised in a chat, Rob continues by itself: it gets each outcome (sent, failed,
+make is filed as an ask in `/asks`. `/cards` lists what is open. When you have made every decision the agent
+raised in a chat, the agent continues by itself: it gets each outcome (sent, failed,
 dismissed, expired) and reports back, without you telling it. It still cannot
 spend on that turn — a next payment comes to you as a new decision.
 

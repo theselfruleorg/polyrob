@@ -200,7 +200,7 @@ def test_background_feed_events_cannot_flip_idle_status():
     s = SessionState()
     # Simulate a stream of feed events with no user turn in flight.
     s.update(SessionStart(model_name="m", agent_id="x"))
-    s.update(Step(step=1, raw={"data": {"agent_name": "rob"}}))
+    s.update(Step(step=1, raw={"data": {"agent_name": "alice"}}))
     s.update(LLMCall(prompt_tokens=10, completion_tokens=5, token_count=15))
     # The lifecycle stays idle; the derived word is never 'working'.
     assert s.lifecycle.is_active() is False

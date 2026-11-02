@@ -283,8 +283,8 @@ class DockerBackend(ExecutionBackend):
         if _explicit_image:
             self.image = _explicit_image
         elif dev_mode:
-            self.image = os.getenv(
-                "CODE_EXEC_DEV_IMAGE", "nikolaik/python-nodejs:python3.11-nodejs20")
+            from core.container_hardening import DEV_IMAGE_DEFAULT
+            self.image = os.getenv("CODE_EXEC_DEV_IMAGE", DEV_IMAGE_DEFAULT)
         else:
             self.image = "python:3.12-slim"
         self.memory_mb = int(os.getenv("CODE_EXEC_CONTAINER_MEMORY_MB", "1024"))
@@ -762,7 +762,7 @@ class DockerBackend(ExecutionBackend):
         wrote landed root-owned 0644 and an in-container `shell_run` editing it
         hard-failed EACCES (9,246 such files under the live project tree; the
         journal shows ship-software runs burning steps on `PermissionError:
-        '/workspace/rob-status/trackrecord.html'`). Widening is derived from the
+        '/workspace/demo-status/trackrecord.html'`). Widening is derived from the
         file's OWN mode (`widen_mode_for_container`) rather than a flat 0o666, so a
         script stays executable and a non-executable file never gains an exec bit.
 
@@ -953,7 +953,7 @@ class DockerBackend(ExecutionBackend):
                     self._session_id, exc_info=True,
                 )
         fallback = os.path.join(
-            tempfile.gettempdir(), f"rob_docker_persistent_{self._session_id or 'anon'}"
+            tempfile.gettempdir(), f"polyrob_docker_persistent_{self._session_id or 'anon'}"
         )
         os.makedirs(fallback, exist_ok=True)
         return fallback
@@ -1032,7 +1032,7 @@ class DockerBackend(ExecutionBackend):
                 exit_code=2, backend=self.name,
             )
         timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
-        workdir = request.workdir or tempfile.mkdtemp(prefix="rob_docker_")
+        workdir = request.workdir or tempfile.mkdtemp(prefix="polyrob_docker_")
         created_tmp = request.workdir is None
         os.makedirs(workdir, exist_ok=True)
         if self._workspace_needs_chmod:

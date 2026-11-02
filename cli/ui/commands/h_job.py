@@ -62,7 +62,7 @@ def h_job(ctx: CommandContext) -> None:
 
 HELP_JOB = (
     "  Scheduled jobs: work that runs at set times and survives a restart.\n"
-    "  Each run is its own chat with Rob.\n"
+    "  Each run is its own chat with the agent.\n"
     "\n"
     "    /jobs                          what is scheduled, next run, last outcome\n"
     "    /job new 30m <what>            every 30 minutes\n"
@@ -73,6 +73,7 @@ HELP_JOB = (
     "    /job show <id>                 one job and the instruction it runs\n"
     "    /job edit <id> schedule 2h     change one field; the rest is kept\n"
     "    /job edit <id> what <text>\n"
+    "    /job edit <id> grant tools=a,b    change the tools it may use\n"
     "    /job pause <id> · /job resume <id>\n"
     "    /job run <id>                  run it on the next scheduler pass\n"
     "    /job stop <id>                 end it for good\n"

@@ -25,7 +25,7 @@ REAL = "0x5555555555555555555555555555555555555555"
 FAKE = "0x3535353535353535353535353535353535353535"
 
 
-def _ctx(target=None, uid="rob"):
+def _ctx(target=None, uid="alice"):
     meta = {"money_target": target} if target else {}
     return types.SimpleNamespace(user_id=uid, metadata=meta, role="orchestrator",
                                  is_sub_agent=False)
@@ -45,7 +45,7 @@ def _stores(tmp_path, monkeypatch):
     book = str(tmp_path / "open_positions.db")
     monkeypatch.setattr(op, "open_positions_db_path", lambda data_dir=None: book)
     # the look-alike bought by mistake on 2026-09-25, $134.54
-    op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
+    op.apply_delta("alice", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
                                            symbol="TKN", qty=33_700_000.0,
                                            cost_usd=134.54))
     yield book
@@ -59,7 +59,7 @@ def _buy(ctx=None, ident=None, usd=50.0, verdict="UNAVAILABLE"):
 
 
 def _status(address=FAKE):
-    return op.get_position("rob", "robinhood", address).status
+    return op.get_position("alice", "robinhood", address).status
 
 
 def test_today_neither_side_is_trusted_and_the_buy_is_refused_without_a_shell_command():
@@ -73,7 +73,7 @@ def test_today_neither_side_is_trusted_and_the_buy_is_refused_without_a_shell_co
 def test_our_own_launch_passes_and_quarantines_the_lookalike():
     tp.record_own_token("robinhood", REAL, kind="launchpad_launch", evidence="tx")
     assert _buy() is None
-    e = op.get_position("rob", "robinhood", FAKE)
+    e = op.get_position("alice", "robinhood", FAKE)
     assert e.status == "quarantined" and "look-alike" in e.status_reason
     assert e.entry_usd == pytest.approx(134.54)          # honest P&L kept
     assert _buy() is None                                 # and the next cycle too
@@ -120,7 +120,7 @@ def test_a_trusted_claimant_is_never_quarantined():
 
 
 def test_a_quarantined_row_is_no_longer_a_claim():
-    op.set_status("rob", "robinhood", FAKE, "quarantined", reason="x")
+    op.set_status("alice", "robinhood", FAKE, "quarantined", reason="x")
     # the real token is untrusted here; only rule 3 (the $5 ticket) applies now
     assert _buy(usd=5.0) is None
     why = _buy(usd=50.0)
@@ -130,7 +130,7 @@ def test_a_quarantined_row_is_no_longer_a_claim():
 
 def test_buying_the_lookalike_itself_is_still_refused_under_the_owner_target():
     tp.record_own_token("robinhood", REAL, kind="launchpad_launch")
-    op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=REAL.lower(),
+    op.apply_delta("alice", op.PositionDelta(chain="robinhood", address=REAL.lower(),
                                            symbol="TKN", qty=1.0, cost_usd=1.0))
     why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=_ident(),
                                max_spend_usd=50.0, route_verdict="UNAVAILABLE",
@@ -193,8 +193,7 @@ def test_a_child_job_never_inherits_the_owner_stamp():
 def test_the_skills_never_send_the_owner_to_the_server_cli():
     root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..",
                         "data", "prompts", "skills")
-    for name in ("token-identity", "treasury-trading", "dca", "stable-cash",
-                 "robinhood-chain"):
+    for name in ("token-identity", "treasury-trading", "dca", "stable-cash"):
         path = os.path.join(root, name, "SKILL.md")
         if not os.path.isfile(path):
             continue

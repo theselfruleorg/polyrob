@@ -751,7 +751,7 @@ class EmailTool(EmailMailboxMixin, BaseTool):
         refusal = _autonomous_message_refusal(execution_context, None)
         if refusal is not None:
             return ActionResult(
-                error=(refusal.extracted_content or "").replace("message:", f"{action}:", 1),
+                error=(refusal.error or "").replace("message NOT sent:", f"{action} NOT sent:", 1),
                 include_in_memory=True)
 
         from core.instance import resolve_owner_email
@@ -850,6 +850,8 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                     # loosen the gate, it kills it while it still looks present.
                     text=body)
                 if cooldown_refusal is not None:
+                    cooldown_refusal.error = (cooldown_refusal.error or "").replace(
+                        "message NOT sent:", f"{action} NOT sent:", 1)
                     return cooldown_refusal
         except Exception:
             self.logger.debug("%s owner cooldown check skipped (fail-open)", action,

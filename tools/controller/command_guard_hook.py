@@ -156,6 +156,21 @@ def _unattended(context: Any) -> bool:
         return True
 
 
+def _unattended_kind(context: Any) -> str:
+    """The run-time refusal kind (095 W2) for an unattended run: a goal run, a
+    cron run, or another autonomous run."""
+    try:
+        from core.autonomy_marker import cron_job_for_session, goal_for_session
+        sid = getattr(context, "session_id", None)
+        if goal_for_session(sid):
+            return "unattended:goal"
+        if cron_job_for_session(sid):
+            return "unattended:cron"
+    except Exception:
+        pass
+    return "unattended:run"
+
+
 def _unattended_sandbox_ok(action_name: str, context: Any) -> bool:
     """D2: the owner's ``unattended_dangerous_shell`` row is ``sandbox`` AND this
     command runs in a sandbox. ``shell_run`` asks the shell backend; ``run_code``
@@ -299,17 +314,19 @@ def make_command_guard_hook(*, shell_gated: bool, deny_globs: Sequence[str] = ()
                 return None  # the exemption lets it skip the owner wait
             from core.security import settings
             from core.security.refusals import record_refusal
+            from core.tool_gates import refusal_text
+            kind = _unattended_kind(context)
             record_refusal("approval_denied", tool=action_name,
                            user_id=getattr(context, "user_id", None) or "",
                            session_id=getattr(context, "session_id", None) or "",
-                           detail=f"unattended dangerous shell command: {verdict.reason}")
+                           detail=f"unattended dangerous shell command: {verdict.reason}",
+                           kind=kind)
             if settings.value("unattended_dangerous_shell") == "refuse":
                 why = settings.refusal_note("unattended_dangerous_shell")
             else:
                 why = ("it would run on the host, and an unattended run runs the dangerous "
                        "class only in a sandbox")
-            return (f"refused: this command {verdict.reason} in an unattended run; {why}. "
-                    "Do it another way, or leave it for an owner turn.")
+            return refusal_text(kind, reason=verdict.reason, why=why)
         if mode == "smart" and llm_factory is not None:
             decision = await smart_triage(command, verdict.reason, llm_factory, context)
             if decision == "deny":

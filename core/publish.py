@@ -1,6 +1,6 @@
 """The ship rail's store: a slug, a served directory, and an owner decision.
 
-Rob could build a page or an API and had no way to give anyone a URL. Every
+The agent could build a page or an API and had no way to give anyone a URL. Every
 "ship" goal therefore terminated in a request to the owner: "Ship x402 ecosystem
 map: static HTML visualization" completed with a file nobody could reach, and
 "Owner deploy package: mainnet-ready x402 endpoint for api.example.org"

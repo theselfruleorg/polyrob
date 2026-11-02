@@ -13,10 +13,10 @@ A first-party POLYROB pack for prediction markets and perpetuals:
   in the core database; the tables self-create and are never dropped);
 - the API routes, mounted at `/api/packs/markets/polymarket/*` and
   `/api/packs/markets/hyperliquid/*`;
-- six skills: `polymarket-market-research`, `polymarket-portfolio-review`,
+- seven skills: `polymarket-market-research`, `polymarket-portfolio-review`,
   `polymarket-trading`, `hyperliquid-market-data`, `hyperliquid-account-review`,
-  `hyperliquid-trading`. The `crypto-trading-safety` skill stays in core (it
-  also covers the on-chain treasury rail).
+  `hyperliquid-trading`, and `crypto-trading-safety` (the venue rail's safety
+  doctrine, which the two trading skills require).
 
 It ships inside the `polyrob` distribution: there is nothing separate to
 install. Its SDKs (hyperliquid-python-sdk, py-clob-client-v2 (and the wallet)) are the `crypto` extra:

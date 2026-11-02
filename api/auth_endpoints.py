@@ -391,15 +391,15 @@ async def create_api_key(request: Request, key_request: CreateAPIKeyRequest):
 
     Response:
         {
-            "api_key": "rob_abc123...",  // SAVE THIS!
+            "api_key": "<api-key>",  // SAVE THIS!
             "name": "My Agent",
-            "prefix": "rob_abc123",
+            "prefix": "<key-prefix>",
             "expires_at": "2025-03-05T12:00:00",
             "warning": "Store this key securely - it won't be shown again!"
         }
 
     Usage:
-        curl -H "X-API-KEY: rob_abc123..." https://your-polyrob-host.example/a2a/rpc
+        curl -H "X-API-KEY: <api-key>" https://your-polyrob-host.example/a2a/rpc
     """
     # B45: `hasattr(request.state, 'user_id')` is True whenever ANY middleware
     # touched the attribute — including when it set it to None or "" — so an
@@ -456,7 +456,7 @@ async def revoke_api_key(request: Request, key_prefix: str):
     Revoke an API key.
 
     Args:
-        key_prefix: The key prefix (e.g., "rob_abc123")
+        key_prefix: The key prefix (the first 12 characters of the key)
     """
     # B45 (revalidation): same strict gate as create/list — see above.
     from api.dependencies import get_user_strict

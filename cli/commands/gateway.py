@@ -361,6 +361,8 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
         if not watcher_task.done():
             watcher_task.cancel()
         click.echo("\n" + click.style("stopping gateway…", dim=True))
+        from cli.commands._lifecycle import close_chat_episodes
+        await close_chat_episodes(task_agent)
         await _stop_runtime()
         for _spec, got in launched:
             if got.stop is not None:

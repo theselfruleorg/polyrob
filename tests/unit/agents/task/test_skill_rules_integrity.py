@@ -77,7 +77,7 @@ def test_the_prerequisites_still_ride_with_their_parents():
     """R5 of 081: `requires` is live on the seed path. The frontmatter carries it."""
     by_id = {sid: rule_from_frontmatter(parse_frontmatter(md.read_text(encoding="utf-8"))[0])
              for sid, md in SHIPPED}
-    assert by_id["treasury-trading"]["requires"] == ["token-identity", "pre-trade-check"]
+    assert by_id["trade-execution"]["requires"] == ["token-identity", "pre-trade-check"]
     assert by_id["hyperliquid-trading"]["requires"] == ["crypto-trading-safety"]
     assert by_id["polymarket-trading"]["requires"] == ["crypto-trading-safety"]
 

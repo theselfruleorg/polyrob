@@ -13,9 +13,9 @@ from surfaces.telegram.interactive_tools import owner_interactive_tool_ids
 
 
 def test_owner_gets_the_board_and_a_web_read(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
-    tools = owner_interactive_tool_ids("rob")
+    tools = owner_interactive_tool_ids("alice")
     assert tools is not None
     assert "goal" in tools          # can introspect the board (no more filesystem-guessing)
     assert "cronjob" in tools       # the owner chat is where scheduling is asked about
@@ -23,14 +23,14 @@ def test_owner_gets_the_board_and_a_web_read(monkeypatch):
 
 
 def test_non_owner_keeps_default(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     assert owner_interactive_tool_ids("u_deadbeef") is None
 
 
 def test_owner_tool_ids_env_overridable(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("INTERACTIVE_TOOL_IDS", "goal,filesystem,task")
-    tools = owner_interactive_tool_ids("rob")
+    tools = owner_interactive_tool_ids("alice")
     assert tools == ["goal", "filesystem", "task"]
 
 
@@ -42,7 +42,7 @@ def test_owner_tool_ids_env_overridable(monkeypatch):
 def _enable_full(monkeypatch):
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
 
 def test_supervised_interactive_default_is_the_owner_rig(monkeypatch):

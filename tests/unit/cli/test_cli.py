@@ -1,20 +1,20 @@
-"""Tests for the rob CLI entry point."""
+"""Tests for the polyrob CLI entry point."""
 
 import pytest
 from click.testing import CliRunner
 
 
 def test_version_command():
-    """rob version prints version info without spinning up uvicorn."""
+    """polyrob version prints version info without spinning up uvicorn."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["version"])
     assert result.exit_code == 0
-    assert "rob" in result.output.lower()
+    assert "polyrob" in result.output.lower()
 
 
 def test_cli_help():
-    """rob --help shows available commands."""
+    """polyrob --help shows available commands."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])
@@ -50,7 +50,7 @@ def test_chat_help():
 
 
 def test_session_subgroup():
-    """rob session --help shows list/tail/cancel subcommands."""
+    """polyrob session --help shows list/tail/cancel subcommands."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["session", "--help"])
@@ -71,7 +71,7 @@ def test_sessions_alias():
 
 
 def test_model_list_help():
-    """rob model list --help exists."""
+    """polyrob model list --help exists."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["model", "--help"])
@@ -99,7 +99,7 @@ def test_tools_catalog_json():
 
 
 def test_model_list_shows_providers():
-    """rob model list displays provider/status table."""
+    """polyrob model list displays provider/status table."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["model", "list"])
@@ -120,7 +120,7 @@ def test_run_requires_task_argument():
 
 
 def test_session_tail_requires_id():
-    """rob session tail without ID shows usage error."""
+    """polyrob session tail without ID shows usage error."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["session", "tail"])
@@ -128,7 +128,7 @@ def test_session_tail_requires_id():
 
 
 def test_session_cancel_requires_id():
-    """rob session cancel without ID shows usage error."""
+    """polyrob session cancel without ID shows usage error."""
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["session", "cancel"])

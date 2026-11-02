@@ -24,7 +24,7 @@
         },
         "name": {
           "default": "",
-          "description": "Token name, e.g. 'Rob Coin'. Written ON-CHAIN via Token-2022 metadata, so every explorer and wallet shows it. Defaults to the symbol. Max 64 characters, printable ASCII only.",
+          "description": "Token name, e.g. 'Demo Coin'. Written ON-CHAIN via Token-2022 metadata, so every explorer and wallet shows it. Defaults to the symbol. Max 64 characters, printable ASCII only.",
           "type": "string"
         },
         "supply": {
@@ -32,7 +32,7 @@
           "type": "string"
         },
         "symbol": {
-          "description": "Ticker, e.g. 'ROB'. Written ON-CHAIN alongside the name. Max 16 characters, printable ASCII only.",
+          "description": "Ticker, e.g. 'DEMO'. Written ON-CHAIN alongside the name. Max 16 characters, printable ASCII only.",
           "type": "string"
         },
         "uri": {

@@ -176,7 +176,7 @@ def workspace_turn_lock(timeout: Optional[float] = None):
     """Cross-process advisory lock around project-root workspace mutation (C2).
 
     The in-process busy-gate (below) only serializes a ticker against the live turn
-    WITHIN one process; this file lock extends that across processes (a 2nd `rob`,
+    WITHIN one process; this file lock extends that across processes (a 2nd `polyrob`,
     or an autonomy ticker in another process). No-op unless enabled + configured.
     Blocking acquire; raises TimeoutError on contention (fail-loud serialization,
     never silent racing). On NFS the underlying flock is best-effort.
@@ -258,7 +258,7 @@ def interactive_turn():
     """Mark the process busy + hold the cross-process workspace lock for a turn.
 
     busy-depth serializes the in-process tickers; workspace_turn_lock serializes a
-    second `rob` process / out-of-process ticker. On cross-process contention the
+    second `polyrob` process / out-of-process ticker. On cross-process contention the
     lock raises TimeoutError (fail-loud) rather than racing the workspace files.
     """
     # Only the OUTERMOST turn acquires the (non-reentrant) cross-process lock;

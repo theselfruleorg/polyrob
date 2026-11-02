@@ -5,7 +5,6 @@ license: MIT
 metadata:
   polyrob-when: 'Making a slide deck (reveal.js)'
   polyrob-priority: '2'
-  polyrob-auto-activate: 'true'
   polyrob-version: '1'
 ---
 # Presentation Creator

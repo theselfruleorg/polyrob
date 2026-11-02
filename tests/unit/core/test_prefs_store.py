@@ -204,20 +204,20 @@ def test_valid_language_and_quiet_hours_accepted(tmp_path):
 # ---------------------------------------------------------------------------
 # owner-UX P2-4 final review, item 1: instance_id default resolves via
 # core.instance.resolve_instance_id() instead of the hardcoded
-# DEFAULT_INSTANCE_ID ("rob"). Nearly every enforcement consumer (approval
+# DEFAULT_INSTANCE_ID. Nearly every enforcement consumer (approval
 # provider, tool denylist, wallet caps, delivery caps, goal/budget caps,
 # digest) calls core.prefs functions WITHOUT an explicit instance_id, while
 # the agent-facing writers (construction.py, telegram, init) always resolve
 # and pass one explicitly — so under a non-default POLYROB_INSTANCE_ID, a
 # chat-written pref used to be displayed (writer path resolves explicitly)
-# but never enforced (reader path fell back to the "rob" literal default).
+# but never enforced (reader path fell back to a hardcoded literal default).
 # ---------------------------------------------------------------------------
 
 
 def test_prefs_round_trip_under_custom_instance_id(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "custom")
     # Neither call passes instance_id explicitly — both must resolve the SAME
-    # custom instance from the environment, not the "rob" literal default.
+    # custom instance from the environment, not a hardcoded literal default.
     ok, err = write_preference(tmp_path, "u1", "goals.daily_quota", "4")
     assert ok, err
     prefs = load_preferences(tmp_path, "u1")

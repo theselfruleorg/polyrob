@@ -311,10 +311,13 @@ class MarksReadsMixin:
         actionable = None if (ready is None or all_down) else out["count"]
         meta.update(count=out["count"], unavailable_chains=out["unavailable_chains"],
                     complete=out["complete"], actionable=actionable,
-                    candidates=out["candidates"][:10], rejected=out["rejected"])
+                    candidates=out["candidates"][:10], rejected=out["rejected"],
+                    screen_lines_error=out.get("screen_lines_error"))
         text = (f"{out['count']} candidate(s) on {', '.join(chains) or 'no chain'}"
                 + (f"; UNAVAILABLE (not empty): {', '.join(out['unavailable_chains'])}"
                    if out["unavailable_chains"] else "")
+                + (f"; PARTIAL: {out['screen_lines_error']}"
+                   if out.get("screen_lines_error") else "")
                 + (f". Mandate readiness UNKNOWN: {reason}" if ready is None else "") + ".")
         return self._ar(content=text, metadata=meta)
 

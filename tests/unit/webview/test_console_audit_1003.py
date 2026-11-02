@@ -91,7 +91,7 @@ def test_agent_memory_body_broken_backend_is_named(monkeypatch):
     import asyncio
     from webview.pages_new import _memory_search_body
     _broken_memory(monkeypatch)
-    body = asyncio.run(_memory_search_body("rob", "", 10))
+    body = asyncio.run(_memory_search_body("alice", "", 10))
     assert body["unavailable"] is False
     assert body["recall"] is None and "malformed" in body["recall_error"]
     assert body["notes"] is None and "malformed" in body["notes_error"]

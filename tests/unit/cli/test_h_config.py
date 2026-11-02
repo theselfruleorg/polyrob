@@ -39,7 +39,7 @@ def _ctx(tmp_path):
 def test_set_and_get_pref(tmp_path):
     from cli.ui.commands.h_config import cmd_config
     out = cmd_config(_ctx(tmp_path), ["set", "style.verbosity", "terse"])
-    assert "terse" in out and "next-turn" in out            # applies shown
+    assert "terse" in out and "next-step" in out            # applies shown
     assert load_preferences(tmp_path, "u1")["style.verbosity"] == "terse"
     out = cmd_config(_ctx(tmp_path), ["get", "style.verbosity"])
     assert "pref" in out
@@ -82,7 +82,7 @@ def test_list_groups_keys_and_shows_source_and_applies(tmp_path):
     assert "── budget" in out
     # every row: "key  value   (source, applies: <applies>)" (candy.kv_lines)
     assert "style.verbosity" in out
-    assert "applies: next-turn" in out
+    assert "applies: next-step" in out
     assert "(default" in out or "(pref" in out
 
 
@@ -92,7 +92,7 @@ def test_list_reflects_a_written_pref_with_pref_source(tmp_path):
     out = cmd_config(_ctx(tmp_path), ["list", "style"])
     assert "style.verbosity" in out and "detailed" in out
     # 018 P0.4: style.* rows carry the advisory label (prompt-only enforcement).
-    assert "(pref, applies: next-turn, advisory)" in out
+    assert "(pref, applies: next-step, advisory)" in out
     # group filter excludes other groups
     assert "── budget" not in out
 

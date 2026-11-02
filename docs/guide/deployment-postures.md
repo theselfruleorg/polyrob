@@ -331,13 +331,57 @@ APP_SERVICE_BASE_DOMAIN=apps.example.com
 ```
 
 `ship` clamps back to `build` (with a warning) until the base domain is set and its
-wildcard certificate exists. The serving side is a one-time owner setup on the box:
+wildcard certificate exists. When the certificate exists but the service account cannot
+read it, the reason says `not readable by <user>`, not `no certificate`: certbot creates
+`/etc/letsencrypt/live` and `/etc/letsencrypt/archive` as 0700 (root only). Run
+`chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive`; the private keys stay 0600,
+and only nginx (as root) reads them.
 
-1. Obtain a `*.apps.example.com` certificate (DNS-01 — one TXT record).
-2. Point an nginx server block for that wildcard at an include directory the
-   supervisor writes per-app stanzas into.
-3. Run `polyrob apps supervise` as a service under an account that may use docker
-   and reload nginx. The agent never has that privilege.
+The serving side is a one-time owner setup on the box. `polyrob apps install` renders it
+for the layout the box runs: the server layout under `/opt/polyrob`, or a user-mode
+install under `~/.polyrob` (`polyrob service install`):
+
+```
+polyrob apps install --domain apps.example.com --dry-run    # print the plan and the files
+polyrob apps install --domain apps.example.com              # as the service user: stage the files, print the sudo lines
+sudo polyrob apps install --domain apps.example.com --user polyrob   # as root: do every step
+```
+
+It checks docker, nginx, the certificate and the app image, then:
+
+- writes `polyrob-apps.service`. The supervisor runs as root. On a user-mode install it
+  cannot read the agent's `.env` (`InaccessiblePaths=`), so the wallet seed never reaches
+  it; it reads its settings from `/etc/polyrob/apps.env`, which holds only app-service lines;
+- creates the per-app include directory and the nginx include for it;
+- creates the static publish root (`/var/www/polyrob-publish`, owned by the service user,
+  readable by nginx) and the `static.<domain>` host that serves it (`--no-publish` skips it);
+- pulls the app image when it is missing, tests and reloads nginx, and starts the supervisor.
+
+It ends with the lines to add to the agent's env file: `AGENT_BUILDER_MODE=ship`,
+`APP_SERVICE_BASE_DOMAIN`, `PUBLISH_ROOT` and `PUBLISH_BASE_URL`. Without
+`PUBLISH_BASE_URL`, `publish` returns a relative `/<slug>/` link. `polyrob doctor`
+reports a publish root that nginx cannot read, a missing include directory, an
+unreadable certificate and an app image that is not pulled.
+
+### The wildcard certificate
+
+A wildcard certificate needs a DNS-01 challenge. The manual challenge
+(`certbot certonly --manual --preferred-challenges dns`) cannot renew without you. To
+renew without you on Cloudflare DNS, use the `certbot-dns-cloudflare` plugin with an API
+token that has `Zone:DNS:Edit` on the zone:
+
+```
+apt install python3-certbot-dns-cloudflare
+install -d -m 700 /root/.secrets
+install -m 600 /dev/null /root/.secrets/cloudflare.ini
+echo 'dns_cloudflare_api_token = <token>' > /root/.secrets/cloudflare.ini
+certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+  -d '*.apps.example.com' -d apps.example.com \
+  --deploy-hook 'systemctl reload nginx'
+```
+
+The certbot timer renews it, and the hook makes nginx load the new certificate. Other DNS
+providers have their own certbot plugins.
 
 The **first** deploy of each new slug waits for you — `polyrob apps approve <slug>`
 or Telegram `/apps approve <slug>`. The default console has no separate Apps page;

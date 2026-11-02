@@ -50,10 +50,10 @@ class _Board:
 
     def record_failure(self, gid, error=None, session_id=None, claim_token=None):
         self.failures.append((gid, error))
-        return Goal(id=gid, user_id="rob", title="t", status="ready")
+        return Goal(id=gid, user_id="alice", title="t", status="ready")
 
     def get(self, gid):
-        return Goal(id=gid, user_id="rob", title="t", status="running")
+        return Goal(id=gid, user_id="alice", title="t", status="running")
 
     def stamp_block_kind(self, *a, **kw):
         return True
@@ -69,20 +69,20 @@ async def test_a_cancelled_run_keeps_its_artefacts(tmp_path):
     produced.write_text("half the report")
     agent = _HangingAgent()
     disp = GoalDispatcher(_Board(), agent)
-    goal = Goal(id="g-yield", user_id="rob", title="Round 15",
+    goal = Goal(id="g-yield", user_id="alice", title="Round 15",
                 payload={"tools": ["filesystem"]})
 
     task = asyncio.create_task(disp._run_goal(goal))
     await asyncio.wait_for(agent.started.wait(), timeout=5)
     sid = disp._goal_sessions.get("g-yield")
     assert sid, "the dispatcher must know the session id before the run returns"
-    get_artifact_ledger().record("rob", str(produced), session_id=sid, kind="report")
+    get_artifact_ledger().record("alice", str(produced), session_id=sid, kind="report")
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    rows = get_artifact_ledger().list_for_goal("rob", "g-yield")
+    rows = get_artifact_ledger().list_for_goal("alice", "g-yield")
     assert [r.path for r in rows] == [str(produced)], \
         "a pre-empted run must keep the evidence it produced"
 
@@ -91,7 +91,7 @@ async def test_a_cancelled_run_keeps_its_artefacts(tmp_path):
 async def test_a_rail_yield_never_cancels_the_planner(tmp_path):
     """A2: the planner is not a workspace writer and not a board row."""
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", body="do things", priority=5)
+    g = board.create(user_id="alice", title="Round 15", body="do things", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     assert board.claim(g.id, disp._worker, ttl_seconds=900)
 
@@ -124,7 +124,7 @@ async def test_a_rail_yield_never_cancels_the_planner(tmp_path):
 async def test_an_owner_pause_still_holds_everything(tmp_path):
     """The pause shape is unchanged: planner included, rows back to ready."""
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", priority=5)
+    g = board.create(user_id="alice", title="Round 15", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     assert board.claim(g.id, disp._worker, ttl_seconds=900)
     ptask = asyncio.create_task(asyncio.sleep(3600))
@@ -143,7 +143,7 @@ async def test_an_owner_pause_still_holds_everything(tmp_path):
 @pytest.mark.asyncio
 async def test_a_rail_hold_is_labelled_rail_not_pause(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", priority=5)
+    g = board.create(user_id="alice", title="Round 15", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     assert board.claim(g.id, disp._worker, ttl_seconds=900)
 
@@ -164,7 +164,7 @@ async def test_a_yield_is_emitted_to_the_durable_event_log(tmp_path, monkeypatch
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: test_log)
 
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", priority=5)
+    g = board.create(user_id="alice", title="Round 15", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     assert board.claim(g.id, disp._worker, ttl_seconds=900)
     disp._goal_sessions[g.id] = "sess-15"
@@ -187,7 +187,7 @@ async def test_a_yield_is_emitted_to_the_durable_event_log(tmp_path, monkeypatch
 @pytest.mark.asyncio
 async def test_with_no_grace_the_run_is_cancelled_immediately(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", priority=5)
+    g = board.create(user_id="alice", title="Round 15", priority=5)
     disp = GoalDispatcher(board, None, lock_path=str(tmp_path / "t.lock"))
     assert board.claim(g.id, disp._worker, ttl_seconds=900)
     task = asyncio.create_task(asyncio.sleep(3600))
@@ -203,7 +203,7 @@ async def test_the_grace_asks_the_run_to_stop_at_its_step_boundary(tmp_path, mon
     """B8: ending on a boundary saves the step's state; a hard cancel throws it away."""
     monkeypatch.setenv("GOAL_YIELD_GRACE_SEC", "5")
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", priority=5)
+    g = board.create(user_id="alice", title="Round 15", priority=5)
 
     asked = []
     orch = SimpleNamespace(cancel=lambda: asked.append(True), agents={})
@@ -240,7 +240,7 @@ async def test_the_grace_asks_the_run_to_stop_at_its_step_boundary(tmp_path, mon
 async def test_a_run_that_overruns_the_grace_is_still_cancelled(tmp_path, monkeypatch):
     monkeypatch.setenv("GOAL_YIELD_GRACE_SEC", "1")
     board = GoalBoard(str(tmp_path / "goals.db"))
-    g = board.create(user_id="rob", title="Round 15", priority=5)
+    g = board.create(user_id="alice", title="Round 15", priority=5)
     orch = SimpleNamespace(cancel=lambda: None, agents={})
 
     class _Agent:

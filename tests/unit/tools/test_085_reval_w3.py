@@ -20,7 +20,7 @@ TARGET = {"chain": "robinhood", "address": ADDR}
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     cards.set_store(cards.CardStore(str(tmp_path / "cards.db")))
 
     async def _deliver(container, user_id, text, **kw):
@@ -33,7 +33,7 @@ def _env(monkeypatch, tmp_path):
 
 
 def _turn(owner=True):
-    return types.SimpleNamespace(user_id="rob", role="orchestrator", is_sub_agent=False,
+    return types.SimpleNamespace(user_id="alice", role="orchestrator", is_sub_agent=False,
                                  metadata={"owner_text": "set it up"}, session_id=None,
                                  parent_session_id=None)
 
@@ -51,7 +51,7 @@ def _cron_tool(tmp_path):
 
 
 def _only_card():
-    open_ = cards.store().open_cards("rob")
+    open_ = cards.store().open_cards("alice")
     assert len(open_) == 1
     return open_[0]
 
@@ -110,7 +110,7 @@ def test_cli_attach_marks_the_turn_attachment_only(monkeypatch, tmp_path):
     monkeypatch.setattr(att, "stage_attachments", _stage)
     monkeypatch.setattr("agents.task.path.pm", lambda: types.SimpleNamespace(
         get_workspace_dir=lambda s, u: str(tmp_path)))
-    asyncio.run(att.attach_to_session(_Orch(), "s1", "rob", ["x.pdf"]))
+    asyncio.run(att.attach_to_session(_Orch(), "s1", "alice", ["x.pdf"]))
     assert queued[0][TYPED_TEXT_KEY] == "" and queued[0][ATTACHMENT_ONLY_KEY] is True
 
 
@@ -145,12 +145,12 @@ def test_job_card_line_round_trips_every_field(tmp_path, monkeypatch, split):
         execution_context=_turn()))
     assert res.error is None, res.error
     card = _only_card()
-    run = cards.press(card.card_id, "ok", "rob").run
+    run = cards.press(card.card_id, "ok", "alice").run
     words = split(run)
     monkeypatch.setattr(job_ops, "_service", lambda d: tool._cron_service)
-    reply = job_ops.jobs_reply("rob", str(tmp_path), words[1:], via="repl")
+    reply = job_ops.jobs_reply("alice", str(tmp_path), words[1:], via="repl")
     assert reply.startswith("✅"), reply
-    job = tool._cron_service.list_jobs(user_id="rob")[0]
+    job = tool._cron_service.list_jobs(user_id="alice")[0]
     assert job.schedule_spec == "0 9 * * 1-5"
     assert job.payload["rig"] == "money_rail" and job.payload["actor"] == "owner_seat"
     assert job.payload["skills"] == ["rebuy", "report"]
@@ -169,10 +169,10 @@ def test_goal_card_line_round_trips(tmp_path, split):
                          tools=["defi_trade", "web_fetch"], target_token=TARGET,
                          skills=["rebuy"]), _turn()))
     card = _only_card()
-    words = split(cards.press(card.card_id, "ok", "rob").run)
-    reply = goal_reply("rob", str(tmp_path), words[1:], board=tool._resolve_board())
+    words = split(cards.press(card.card_id, "ok", "alice").run)
+    reply = goal_reply("alice", str(tmp_path), words[1:], board=tool._resolve_board())
     assert reply.startswith("✅"), reply
-    goal = tool._resolve_board().list_recent(user_id="rob", limit=1)[0]
+    goal = tool._resolve_board().list_recent(user_id="alice", limit=1)[0]
     assert {"defi_trade", "web_fetch"} <= set(goal.payload["tools"])
     assert goal.payload["actor"] == "owner_seat" and goal.payload["skills"] == ["rebuy"]
     assert goal.payload["target_token"]["address"].lower() == ADDR.lower()
@@ -190,11 +190,11 @@ def test_legacy_rows_and_owner_seat_rows_keep_their_tools():
 def test_owner_goal_update_of_a_non_money_tool_is_the_owners_grant(tmp_path):
     tool = _goal_tool(tmp_path)
     board = tool._resolve_board()
-    goal = board.create(user_id="rob", title="watch the pool", payload=None, actor="agent",
+    goal = board.create(user_id="alice", title="watch the pool", payload=None, actor="agent",
                         tool_ceiling=[])
     res = asyncio.run(tool.goal_update(GoalUpdateAction(goal_id=goal.id, tools=["email"]),
                                        _turn()))
-    assert res.error is None and cards.store().open_cards("rob") == []
+    assert res.error is None and cards.store().open_cards("alice") == []
     after = board.get(goal.id)
     if "email" not in (after.payload.get("tools") or []):
         pytest.skip("email is outside the owner-turn ceiling on this build")
@@ -208,7 +208,7 @@ def test_owner_goal_update_of_a_non_money_tool_is_the_owners_grant(tmp_path):
 def test_agent_rig_edit_does_not_demote_an_owner_tool_grant(tmp_path, monkeypatch):
     tool = _cron_tool(tmp_path)
     svc = tool._cron_service
-    job = svc.schedule(task="buy back the token weekly", schedule_spec="1d", user_id="rob",
+    job = svc.schedule(task="buy back the token weekly", schedule_spec="1d", user_id="alice",
                        payload={"tools": ["defi_trade"], "actor": "owner_seat"})
     monkeypatch.setattr("tools.goal_tools.owner_seat_turn", lambda ctx: False)
     monkeypatch.setattr(CronJobTool, "_self_scheduling_refusal", staticmethod(lambda c: None))
@@ -221,10 +221,28 @@ def test_agent_rig_edit_does_not_demote_an_owner_tool_grant(tmp_path, monkeypatc
     assert resolve_cron_tools(payload) == ["defi_trade"]
 
 
+def test_agent_rig_edit_keeps_who_owns_the_job(tmp_path, monkeypatch):
+    # Review 2026-10-29 M1: ``actor`` moves to the rig's writer, ``armed_by`` keeps the
+    # owner, so the failure notice and the digest still treat it as the owner's job.
+    tool = _cron_tool(tmp_path)
+    svc = tool._cron_service
+    job = svc.schedule(task="post the weekly notes", schedule_spec="1d", user_id="alice",
+                       payload={"actor": "owner_seat"})
+    monkeypatch.setattr("tools.goal_tools.owner_seat_turn", lambda ctx: False)
+    monkeypatch.setattr(CronJobTool, "_self_scheduling_refusal", staticmethod(lambda c: None))
+    res = asyncio.run(tool.cronjob_edit(CronEditAction(job_id=job.id, rig="research"),
+                                        execution_context=_turn()))
+    assert res.error is None, res.error
+    payload = svc.store.get(job.id).payload
+    assert payload["actor"] == "agent" and payload["armed_by"] == "owner_seat"
+    from core.cron_outcome import agent_armed
+    assert not agent_armed(payload)
+
+
 def test_owner_turn_non_money_rig_edit_is_the_owners(tmp_path):
     tool = _cron_tool(tmp_path)
     svc = tool._cron_service
-    job = svc.schedule(task="summarise the week", schedule_spec="1d", user_id="rob",
+    job = svc.schedule(task="summarise the week", schedule_spec="1d", user_id="alice",
                        payload={"actor": "agent"})
     res = asyncio.run(tool.cronjob_edit(CronEditAction(job_id=job.id, rig="ops"),
                                         execution_context=_turn()))
@@ -243,7 +261,7 @@ def test_dismissed_job_card_writes_nothing(tmp_path):
         CronScheduleAction(task="buy back the token, report the fill", schedule="6h",
                            rig="money_rail"), execution_context=_turn()))
     card = _only_card()
-    p = cards.press(card.card_id, "no", "rob")
+    p = cards.press(card.card_id, "no", "alice")
     assert p.run is None
-    assert cards.press(card.card_id, "ok", "rob").run is None
-    assert tool._cron_service.list_jobs(user_id="rob") == []
+    assert cards.press(card.card_id, "ok", "alice").run is None
+    assert tool._cron_service.list_jobs(user_id="alice") == []

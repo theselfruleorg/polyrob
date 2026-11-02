@@ -18,6 +18,7 @@ from cron.jobs import CronJobStore
 from cron.service import CronService
 from polyrob.app import trading_jobs as tj
 from surfaces.telegram import trade_ops
+import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 U = "owner-1"
 
@@ -57,13 +58,13 @@ def _confirm(seat, reply):
 
 def test_bare_start_writes_nothing_and_names_the_presets(seat):
     out = seat("start")
-    assert "memecoin" in out and "majors" in out and "allocation" in out
+    assert "longtail" in out and "majors" in out and "allocation" in out
     assert tm.get_active(U, path=seat.mp) is None
     assert not tj.mandate_jobs(seat.svc)
 
 
 def test_start_with_fields_is_one_card_with_the_preset_numbers(seat):
-    reply = seat("start", "150", "robinhood,solana", "memecoin")
+    reply = seat("start", "150", "robinhood,solana", "longtail")
     text = reply_text(reply)
     assert reply.card_id
     for want in ("$150 allocation", "$3 tickets", "up to 8 open", "-50% stop",
@@ -75,7 +76,8 @@ def test_start_with_fields_is_one_card_with_the_preset_numbers(seat):
 
 
 def test_confirm_creates_the_mandate_and_its_jobs_in_one_line(seat):
-    reply = seat("start", "budget=150", "chains=solana", "ticket=2", "slots=4")
+    reply = seat("start", "budget=150", "chains=solana", "preset=longtail", "ticket=2",
+                 "slots=4")
     line = cards.store().get(reply.card_id).line
     out = _confirm(seat, reply)
     m = tm.get_active(U, path=seat.mp)
@@ -86,7 +88,7 @@ def test_confirm_creates_the_mandate_and_its_jobs_in_one_line(seat):
     assert sorted(tj.role(j) for j in jobs) == ["hunt", "review"]
     hunt = next(j for j in jobs if tj.role(j) == "hunt")
     assert hunt.payload["actor"] == "owner_seat" and hunt.payload["rig"] == "money_rail"
-    assert hunt.payload["skills"][:2] == ["trading-mandate", "treasury-trading"]
+    assert hunt.payload["skills"][:2] == ["trading-mandate", "sizing-and-risk"]  # doctrine_skill
     assert hunt.payload["precheck"]["verb"] == "defi_data.discovery_count"
     assert hunt.schedule_spec == "30m"
     review = next(j for j in jobs if tj.role(j) == "review")
@@ -104,12 +106,12 @@ def test_a_bad_field_is_refused_before_any_card(seat):
 
 
 def test_one_live_mandate(seat):
-    _confirm(seat, seat("start", "150", "solana"))
-    assert "one live mandate" in reply_text(seat("start", "50", "base"))
+    _confirm(seat, seat("start", "150", "solana", "longtail"))
+    assert "one live mandate" in reply_text(seat("start", "50", "base", "longtail"))
 
 
 def test_job_failure_leaves_no_mandate(seat, monkeypatch):
-    reply = seat("start", "150", "solana")
+    reply = seat("start", "150", "solana", "longtail")
 
     def boom(*a, **k):
         raise RuntimeError("cron store full")
@@ -120,7 +122,7 @@ def test_job_failure_leaves_no_mandate(seat, monkeypatch):
 
 
 def test_pause_resume_keep_exits_and_move_the_hunt(seat):
-    _confirm(seat, seat("start", "150", "solana"))
+    _confirm(seat, seat("start", "150", "solana", "longtail"))
     m = tm.get_active(U, path=seat.mp)
     assert "PAUSED" in seat("pause")
     assert tm.get(m.id, path=seat.mp).status == tm.PAUSED
@@ -131,7 +133,7 @@ def test_pause_resume_keep_exits_and_move_the_hunt(seat):
 
 
 def test_release_only_a_halted_mandate(seat):
-    _confirm(seat, seat("start", "150", "solana"))
+    _confirm(seat, seat("start", "150", "solana", "longtail"))
     m = tm.get_active(U, path=seat.mp)
     assert "not halted" in seat("release")
     tm.latch(m.id, "breaker:daily_loss", path=seat.mp)
@@ -142,7 +144,7 @@ def test_release_only_a_halted_mandate(seat):
 
 def test_stop_ends_hunt_and_review_and_offers_close_all(seat, monkeypatch):
     import core.money.mandate_gate as mg
-    _confirm(seat, seat("start", "150", "solana"))
+    _confirm(seat, seat("start", "150", "solana", "longtail"))
     m = tm.get_active(U, path=seat.mp)
     monkeypatch.setattr(mg, "read_mandate_book",
                         lambda mm, **kw: ([{"chain": "solana", "address": "Mint1"}], None))
@@ -159,14 +161,14 @@ def test_stop_ends_hunt_and_review_and_offers_close_all(seat, monkeypatch):
 
 
 def test_stop_with_nothing_open_needs_no_card(seat):
-    _confirm(seat, seat("start", "150", "solana"))
+    _confirm(seat, seat("start", "150", "solana", "longtail"))
     out = seat("stop")
     assert isinstance(out, str) and "nothing is left running" in out
 
 
 def test_status_is_the_one_renderer(seat):
     assert "no mandate" in seat("status")
-    _confirm(seat, seat("start", "150", "solana"))
+    _confirm(seat, seat("start", "150", "solana", "longtail"))
     assert "Trading:" in seat("status") and "ACTIVE" in seat("status")
 
 
@@ -185,7 +187,7 @@ def test_usage():
 
 def test_the_card_expires_with_its_draft(seat):
     from core import trading_intake as ti
-    ref, _ = ti.save_draft(U, {"budget_usd": 10, "chains": ["base"]}, origin="owner",
+    ref, _ = ti.save_draft(U, {"budget_usd": 10, "chains": ["base"], "preset": "dca"}, origin="owner",
                            path=seat.mp, now=time.time() - ti.DRAFT_TTL_S - 5)
     assert "expired" in seat("start", ref)
     assert "no mandate draft" in trade_ops.trade_reply("someone-else", "/tmp",

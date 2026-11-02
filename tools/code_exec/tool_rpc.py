@@ -93,7 +93,7 @@ RPC_TOOLS: Tuple[RpcTool, ...] = (
     RpcTool("web_search", "perplexity_search", "query", "Search the web (perplexity)."),
     RpcTool("kb_search", "knowledge_kb_search", "query", "Search the knowledge base."),
     RpcTool("kb_list", "knowledge_kb_list", None, "List knowledge-base sources."),
-    RpcTool("memory_search", "memory_search", "query", "Search long-term memory."),
+    RpcTool("memory_search", "session_search", "query", "Search past sessions (= session_search)."),
     RpcTool("session_search", "session_search", "query", "Search past sessions."),
     RpcTool("read_file", "filesystem_read_file", "file_path", "Read a workspace file."),
     RpcTool("write_file", "filesystem_write_file", "file_path", "Write a workspace file."),
@@ -109,7 +109,7 @@ _BY_ALIAS: Dict[str, RpcTool] = {t.alias: t for t in RPC_TOOLS}
 NEVER_ACTIONS = frozenset({
     "send_message", "message", "done",
     "delegate_task", "tool_call", "code_execution_run_code", "memory",
-    "skill_manage", "preferences", "mcp_install",
+    "skill_manage", "preferences",
 })
 #: ``high_impact`` tool ids a script MAY reach: read egress and the guarded shell.
 #: Their hooks (correspondent gate, command guard, approvals) still run per call.

@@ -36,7 +36,7 @@ class _Ctx:
     """An execution context shaped like the run loop's."""
 
     def __init__(self, *, role="orchestrator", is_sub_agent=False,
-                 session_id="s1", user_id="rob", metadata=None):
+                 session_id="s1", user_id="alice", metadata=None):
         self.role = role
         self.is_sub_agent = is_sub_agent
         self.session_id = session_id
@@ -67,7 +67,7 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _allowlist(user_id="rob", surface="telegram", target="friend"):
+def _allowlist(user_id="alice", surface="telegram", target="friend"):
     tmp = tempfile.mkdtemp()
     al = OutboundAllowlist(os.path.join(tmp, "surfaces.db"))
     al.allow(user_id, surface, target)
@@ -77,7 +77,7 @@ def _allowlist(user_id="rob", surface="telegram", target="friend"):
 def _send(router, *, target, ctx, allowlist=None):
     return asyncio.run(perform_message_send(
         router=router, allowlist=allowlist, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target=target, text="hi",
+        user_id="alice", surface="telegram", target=target, text="hi",
         session_id="s1", container=None,
         execution_context=ctx, controller=_Controller()))
 
@@ -161,7 +161,7 @@ def test_context_less_call_is_not_gated(home):
     router = _Router()
     res = asyncio.run(perform_message_send(
         router=router, allowlist=None, owner_targets={"telegram": "999"},
-        user_id="rob", surface="telegram", target="owner", text="hi",
+        user_id="alice", surface="telegram", target="owner", text="hi",
         session_id="s1", container=None))
     assert res["success"] is True, res
     assert router.sent == [("telegram", "999", "hi")]

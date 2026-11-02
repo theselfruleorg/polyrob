@@ -235,10 +235,8 @@ async def raise_job_card(tool: Any, execution_context, words: List[str], *, what
                             include_in_memory=True)
     outcome = "failed"
     try:
-        from core.surfaces.user_delivery import deliver_user_message
-        outcome = await deliver_user_message(
-            getattr(tool, "container", None), user_id, cards.render_text(card),
-            source="action_card", session_id=sid, card_id=card.card_id)
+        outcome = await cards.push(getattr(tool, "container", None), user_id, card,
+                                   session_id=sid)
     except Exception as exc:
         logger.warning("job card %s delivery failed: %s", card.card_id, exc)
     where = ("on the owner's chat" if outcome in ("sent", "queued")
@@ -296,7 +294,7 @@ def _infer_tools_from_text(*texts: Optional[str]) -> set:
 # check are the ones this function is forbidden from ever adding. The fix is to warn
 # loudly at create time instead of letting the goal dispatch, burn its step budget
 # trying to work around a tool it can never have, and die the identical way as its
-# 3+ predecessors in this exact family (evidenced live: rob-status/video-render goals).
+# 3+ predecessors in this exact family (evidenced live: status-page/video-render goals).
 _COMPUTE_TOOL_IDS = frozenset({"shell", "process", "code_execution"})
 
 
@@ -506,6 +504,28 @@ class GoalListAction(BaseModel):
 from core.goal_vocab import LIVE_STATUS_ORDER as GOAL_LIST_LIVE_STATUSES  # noqa: E402
 
 
+def _withdraw_ask(board, ask, user_id: str, owner_turn: bool) -> ActionResult:
+    """Routines review 2026-10-29 §11: an ask the work no longer needs (a v1
+    contract question after the programme moved on) led every digest for 13
+    days, because only the owner could answer it. The agent withdraws it as
+    OBSOLETE (``board.obsolete_ask`` — never "fulfilled", which would record an
+    owner decision). An ask that holds goals is the owner's to release, so
+    only an owner turn may withdraw that one."""
+    if ask.status != "open":
+        return ActionResult(extracted_content=f"Ask {ask.id} is already {ask.status}.",
+                            include_in_memory=True)
+    holds = list((ask.payload or {}).get("blocks_goal_ids") or [])
+    if holds and not owner_turn:
+        return ActionResult(error=f"Refused: ask {ask.id} holds goal(s) {', '.join(holds)} — "
+                                  f"only the owner may withdraw it. Tell the owner why it is "
+                                  f"no longer needed.", include_in_memory=True)
+    reason = "withdrawn: no longer needed" + (" (owner turn)" if owner_turn else "")
+    if not board.obsolete_ask(ask.id, user_id=user_id, reason=reason):
+        return ActionResult(error=f"Could not withdraw ask {ask.id}.", include_in_memory=True)
+    return ActionResult(extracted_content=f"Withdrew ask {ask.id} as no longer needed "
+                                          f"(obsolete, not fulfilled).", include_in_memory=True)
+
+
 class GoalShowAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     goal_id: str = Field(..., description="The goal id.")
@@ -513,7 +533,8 @@ class GoalShowAction(BaseModel):
 
 class GoalCancelAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    goal_id: str = Field(..., description="The goal id to stop.")
+    goal_id: str = Field(..., description="The goal id to stop (or an ask id to withdraw "
+                                          "an ask no longer needed).")
     forever: bool = Field(False, description=(
         "True ONLY when the owner said never again: the title is switched off, so "
         "no stream, planner or agent creates it again (until the owner's /goal "
@@ -940,6 +961,8 @@ class GoalTool(BaseTool):
                                       "good — stop it once, or ask the owner to run "
                                       "/goal stop <id> --forever.", include_in_memory=True)
         goal = board.get(params.goal_id, user_id=user_id)
+        if goal is not None and getattr(goal, "kind", "goal") == "ask":
+            return _withdraw_ask(board, goal, user_id, owner_seat_turn(execution_context))
         if goal is None or getattr(goal, "kind", "goal") != "goal":
             return ActionResult(extracted_content="Nothing to stop.", include_in_memory=True)
         from core.goal_suppressions import stop_goal

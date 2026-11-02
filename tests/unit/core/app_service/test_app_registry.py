@@ -13,7 +13,7 @@ from core.app_service.registry import (
 
 
 def _req(r, slug="st", uid="u1", **over):
-    kw = dict(source_dir="rob-status", cmd=["python", "server.py"], container_port=8765,
+    kw = dict(source_dir="demo-status", cmd=["python", "server.py"], container_port=8765,
               health_path="/api/status.json", egress="none", egress_allow=[],
               env={"PORT": "8765"}, workspace_digest="d1" * 12)
     kw.update(over)
@@ -303,7 +303,7 @@ def test_credential_shaped_values_are_refused_under_an_innocent_key(tmp_path, va
 
 
 @pytest.mark.parametrize("value", [
-    "info", "8765", "https://rob-status.apps.example.test/api/status.json",
+    "info", "8765", "https://demo-status.apps.example.test/api/status.json",
     "hello world, this is the greeting shown on the status page",
     "MyCompanyProductionEnvironmentNameForApp2026Abcd",
     "postgres-connection-pool-size-is-twenty-please",

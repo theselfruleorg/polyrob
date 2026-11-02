@@ -227,3 +227,20 @@ def test_held_tokens_are_excluded():
         discover_fn=_fn({("base", "new"): pools}))
     assert out["count"] == 0
     assert out["rejected"] == {"excluded (held or cooling down)": 1}
+
+
+def test_discovery_lines_come_from_the_install_and_fail_safe(tmp_path, monkeypatch):
+    """095 B4: the pre-screen numbers are neutral defaults an install overrides under
+    ``screen.discovery``; lines it cannot read make the count not complete."""
+    from core import trading_presets as tp
+    path = tmp_path / tp.INSTANCE_FILE
+    monkeypatch.setattr(tp, "instance_presets_path", lambda: str(path))
+    path.write_text('{"screen": {"discovery": {"min_liquidity_usd": 7777}}}')
+    lines, err = discovery.lines_checked()
+    assert err is None and lines["min_liquidity_usd"] == 7777.0
+    assert lines["max_age_h"] == discovery.DEFAULT_MAX_AGE_H
+    out = discovery.discovery_candidates(["base"], discover_fn=_fn({}))
+    assert out["screen_lines_error"] is None
+    path.write_text('{"screen": {"discovery": {"min_liquidity_usd": "lots"}}}')
+    out = discovery.discovery_candidates(["base"], discover_fn=_fn({}))
+    assert out["complete"] is False and "not a finite number" in out["screen_lines_error"]

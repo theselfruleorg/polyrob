@@ -14,7 +14,7 @@ import pytest
 # version -> (config.data_dir under POLYROB_DATA_DIR, a store under config.data_dir).
 # bot.db sat at <config.data_dir>/database/bot.db in every release.
 RELEASED_SERVER_LAYOUTS = {
-    "1.4.0": ("data", "characters/rob.json"),
+    "1.4.0": ("data", "characters/demo.json"),
 }
 
 

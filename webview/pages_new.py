@@ -192,7 +192,7 @@ def _pause_headline() -> str:
     Only a probe that cannot run at all is genuinely unknown.
 
     ⚠️ A pause has SCOPES. ``/pause trading`` leaves everything else running,
-    and every other seat says so; a console that renders it as a bare "Rob is
+    and every other seat says so; a console that renders it as a bare "The agent is
     paused." is confidently wrong on the one line that may never be. So the
     scope words are rendered whenever the pause is not ``all``.
     """
@@ -390,7 +390,7 @@ def _live_count(request: Request) -> tuple:
 
 def _headline(request: Request) -> str:
     """The pause half of the head truth, with the in-progress count folded in
-    when Rob is running ("Rob is running." over three mid-flight cron runs read
+    when the agent is running ("The agent is running." over three mid-flight cron runs read
     as idle, 2026-09-16). With nothing running and both loops off it says so
     (080: ``core.status_loops.autonomy_idle_reason``)."""
     headline = _pause_headline()
@@ -878,7 +878,7 @@ async def api_running(request: Request):
 
 # --- what is in progress right now (2026-09-16 audit, B1) ------------------- #
 # Work › Now drew only running GOALS + background delegations, so a console
-# beside an agent whose whole day is CRON runs said "Rob is not running anything
+# beside an agent whose whole day is CRON runs said "The agent is not running anything
 # right now." mid-run. This reader names every live actor the stores can PROVE:
 # running goals (goals.db), running cron jobs (cron.db — the CAS in cron/jobs.py
 # holds ``status='running'`` for the length of a run) and the live sessions the
@@ -1076,7 +1076,7 @@ def _profiles_section() -> dict:
     import yaml as _yaml
     items, error = [], None
     #: 043 A10: a profile file that will not parse is COUNTED, never silently
-    #: skipped. "Rob has three helpers" over a directory of five, two of them
+    #: skipped. "The agent has three helpers" over a directory of five, two of them
     #: broken, is the same confident answer an unreadable store gives.
     unreadable_rows = 0
     try:

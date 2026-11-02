@@ -121,7 +121,7 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
     # the same detector texts). What stays here is the guard's own lane: the
     # autonomous admission needs the TRADING flag too (``_autonomous_turn_allowed``)
     # and a refused forged turn may still EXIT under DEFI_MONITOR_EXITS.
-    from core.money.authorize import FORGED_TEXT, SpendIntent, authorize_spend
+    from core.money.authorize import FORGED_TEXTS, SpendIntent, authorize_spend
     autonomous_origin = False
     monitor_exit = False
     # 086 W2: a run that belongs to a trading mandate (``metadata["mandate"]``) has
@@ -139,7 +139,7 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
         _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                   detail=f"mandate: {verdict.reason}")
         return Decision(False, verdict.reason)
-    if verdict.refused and verdict.reason != FORGED_TEXT:
+    if verdict.refused and verdict.reason not in FORGED_TEXTS:
         # No detector, or the detector raised: the kernel's sentence, fail closed.
         return Decision(False, verdict.reason)
     if verdict.refused:
@@ -164,8 +164,10 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
                 record_refusal(
                     "forged_turn",
                     tool=getattr(tool_self, "name", None) or "",
-                    user_id=getattr(execution_context, "user_id", None) or "")
-                return Decision(False, FORGED_TEXT)
+                    user_id=getattr(execution_context, "user_id", None) or "",
+                    kind=("money:forged_text" if verdict.reason == FORGED_TEXTS[0]
+                          else "money:autonomous_unarmed"))
+                return Decision(False, verdict.reason)
         except Exception as exc:
             return Decision(False, f"refused: could not prove the turn is genuine ({exc})")
     # A genuine owner turn is not forged; only the unattended goal-dispatched

@@ -49,7 +49,7 @@ def check_playwright_browsers() -> bool:
         
         # Check other standard paths
         alternatives = [
-            Path("/opt/rob/.cache/ms-playwright"),  # Docker container path
+            Path("/opt/polyrob/.cache/ms-playwright"),  # Docker container path
             Path("/usr/local/share/ms-playwright"),  # System install path
         ]
         

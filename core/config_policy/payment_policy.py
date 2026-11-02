@@ -83,7 +83,7 @@ def payment_approval_mode() -> str:
 
       - ``"approve"``: every request (receive AND spend) queues through the durable,
         remote-capable ``owner_queue`` provider (`tools/controller/approval_queue.py`)
-        — a real owner tap that works over Telegram even though prod Rob is headless
+        — a real owner tap that works over Telegram even on a headless deployment
         (closes G-2: the only approver used to be a blocking stdin prompt).
       - ``"auto"``: the RECEIVE-side subset (``x402_request``) is NOT queued — it
         executes immediately (still bounded by `modules/x402/invoicing.py`'s own

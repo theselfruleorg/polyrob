@@ -26,7 +26,7 @@ async def _db(tmp_path):
 
 async def _sub(db):
     return await subs.create_subscription(
-        user_id="rob", correspondent_surface="email",
+        user_id="alice", correspondent_surface="email",
         correspondent_address="a@x.com", cron_job_id="job1",
         period_days=30, paid_through=int(time.time()), db=db)
 
@@ -56,10 +56,10 @@ async def test_cancel_expires_the_pending_renewal_invoice(tmp_path):
     try:
         sub = await _sub(db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=sub["amount_usd"],
+            user_id="alice", session_id="", amount_usd=sub["amount_usd"],
             purpose="renewal", subscription_id=sub["id"], db=db)
         rid = inv["request_id"] if isinstance(inv, dict) else inv
-        assert await subs.cancel_subscription(sub["id"], user_id="rob", db=db) is True
+        assert await subs.cancel_subscription(sub["id"], user_id="alice", db=db) is True
         row = await db.fetch_one(
             "SELECT status FROM x402_payment_requests WHERE id=?", (rid,))
         assert row["status"] == "expired"

@@ -40,6 +40,7 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/agent_status_action.py",  # extracted 2026-08-28 (status SSOT)
     "tools/controller/autonomy_control_action.py",  # 031: owner pause/resume (extracted)
     "tools/controller/doc_authoring.py",  # self_context_manage/owner_doc_manage (extracted 2026-09-08)
+    "tools/controller/preferences_action.py",  # preferences (extracted, 095 P0.2)
     "tools/controller/room_read_action.py",  # gated direct action; still a real runtime name
     "tools/controller/room_moderate_action.py",  # gated direct action (room_moderate)
     "tools/controller/owner_ask_action.py",  # H04: gated direct action (owner_ask)
@@ -235,7 +236,7 @@ def test_correspondent_reply_exemption_actions_are_real(runtime_action_names):
 # Verbs for tools that do not exist yet. Listing them early is fine (they gate the
 # day the tool lands), but they must be declared here so real typos can't hide among
 # them. Shrink this set when the tool ships; never grow it to silence a failure.
-ASPIRATIONAL_VERBS = frozenset({"self_modify", "mcp_install", "tool_manage"})
+ASPIRATIONAL_VERBS = frozenset({"self_modify", "tool_manage"})
 
 
 def test_default_approval_required_tools_are_real(runtime_action_names):
@@ -273,8 +274,6 @@ _NAME_PARITY_VERBS = (
     "hf_deploy_deploy",
     "hf_deploy_undeploy",
     "email_send",
-    "self_env_patch_source",
-    "self_env_install_dep",
     # 023 T3/T4: the on-chain money verbs — irreversible, self-custodial.
     "defi_trade_transfer",
     "defi_trade_swap",
@@ -315,7 +314,7 @@ def test_directly_registered_high_impact_actions_have_no_layer_2_to_fall_back_on
     from agents.task.agent.core.correspondent_gate import is_high_impact_call
 
     for name in ("owner_doc_manage", "contact_history", "session_search",
-                 "memory_search", "recent_activity", "load_tool", "agent_status",
+                 "recent_activity", "load_tool", "agent_status",
                  "usage_summary", "preferences", "message", "skill_manage",
                  "self_context_manage", "memory"):
         assert is_high_impact_call(name, None) is True, (

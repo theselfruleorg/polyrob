@@ -16,10 +16,10 @@ ROOT = Path(__file__).resolve().parents[4]
 SKILLS = sorted((ROOT / "data" / "prompts" / "skills").glob("*/SKILL.md"))
 
 #: The skills that handle money figures (positions, P&L, value, exits, sizing).
-MONEY_SKILLS = ("position-journal", "exits", "sizing-and-risk", "treasury-trading",
+MONEY_SKILLS = ("position-journal", "exits", "sizing-and-risk",
                 "post-trade-verify", "pre-trade-check", "trade-execution", "dca",
-                "stable-cash", "crypto-trading-safety", "robinhood-chain",
-                "defi-liquidity", "defi-bridge", "token-launch", "memecoin-scouting",
+                "stable-cash",
+                "defi-liquidity", "defi-bridge", "token-launch",
                 "trading-mandate")
 
 _NEGATION = re.compile(r"\b(never|not|no|don't|do not|without|instead of|stop)\b", re.I)
@@ -73,8 +73,8 @@ def test_the_book_skills_point_at_the_positions_verb():
 
 
 def _treasury_chains():
-    """treasury-trading's chain table lives in its references (081 WS-4.4)."""
-    path = ROOT / "data/prompts/skills/treasury-trading/references/chains.md"
+    """The chain table lives in pre-trade-check's references (095 B1)."""
+    path = ROOT / "data/prompts/skills/pre-trade-check/references/chains.md"
     return path.read_text(encoding="utf-8")
 
 
@@ -106,7 +106,7 @@ def test_every_chain_a_skill_calls_an_exit_chain_can_move_money():
 
 
 def test_treasury_chain_table_says_which_chains_are_read_only():
-    """Every chain in the treasury-trading table that the registry marks
+    """Every chain in the pre-trade-check table that the registry marks
     read-only is marked `no` in its Money column, and vice versa."""
     from core.wallet import chains
     text = _treasury_chains()

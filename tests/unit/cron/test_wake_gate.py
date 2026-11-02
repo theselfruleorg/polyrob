@@ -33,7 +33,7 @@ def data_dir(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for var in ("WAKE_CHANGE_GATE", "AUTONOMY_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL"):
+    for var in ("WAKE_CHANGE_GATE", "AUTONOMY_POSTURE", "POLYROB_LOCAL"):
         monkeypatch.delenv(var, raising=False)
 
 

@@ -49,6 +49,11 @@ _TAIL_HISTORY_RATIO = 0.40
 _MIN_KEEP_RECENT = 10        # floor for the protected tail
 _THRASH_SAVINGS_FLOOR = 0.10 # if last 2 compactions each saved < this, stop trying (B4)
 _STATIC_FALLBACK_CAP = 8000  # char ceiling for the deterministic fallback summary (A6)
+#: F8 (prod 2026-10-28): the cheap ageing pass spares the LLM summariser only when
+#: it brings the gauge back under the WARN band. "Under 85 %" by a hair (85.5 % ->
+#: 84.7 %) counted as a finished compaction, the summariser never ran, and the
+#: next step was over the band again for hours.
+from agents.task.constants import COMPACTION_WARN_PCT as AGEING_ENOUGH_PCT  # noqa: E402
 _COMPACTED_MARKER = "[COMPACTED SESSION HISTORY]"
 # F11 warm summariser: stamped on the CLIENT (the F4 `apply_cache_ttl` pattern) the
 # first time a provider refuses the warm shape, so one refusal is paid once per
@@ -633,14 +638,13 @@ class CompactorMixin:
 		# the band that called us, the expensive LLM summariser never runs and the
 		# raw conversation survives intact (DSH compaction-basic:323-327).
 		if self.age_old_tool_results():
-			from agents.task.constants import COMPACTION_LLM_PCT
 			usage_now = self._context_usage_percent_or_none()
-			if usage_now is not None and usage_now < COMPACTION_LLM_PCT:
+			if usage_now is not None and usage_now < AGEING_ENOUGH_PCT:
 				self._record_compaction_savings(original_tokens, self.history.total_tokens)
 				self.logger.info(
 					f"✅ Ageing old tool results was enough: {original_tokens:,} → "
 					f"{self.history.total_tokens:,} tokens ({usage_now:.1f}% of the window, "
-					f"under the {COMPACTION_LLM_PCT}% band) — skipping the LLM summariser"
+					f"under {AGEING_ENOUGH_PCT}%) — skipping the LLM summariser"
 				)
 				return True
 

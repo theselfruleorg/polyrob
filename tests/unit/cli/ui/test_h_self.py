@@ -48,7 +48,7 @@ def _unbind(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def _patch_instance(monkeypatch, *, instance="rob", owner=None, soul="", self_doc=""):
+def _patch_instance(monkeypatch, *, instance="carol", owner=None, soul="", self_doc=""):
     """Patch the core.instance loaders as imported by the handler module.
 
     ``owner=None`` means "leave the real resolution alone" and callers pair it
@@ -89,7 +89,7 @@ def test_preview_truncates_long_text():
 def test_self_shows_identity_and_docs(monkeypatch):
     _patch_instance(
         monkeypatch,
-        instance="rob",
+        instance="carol",
         owner="owner-42",
         soul="I am the SOUL of this instance.",
         self_doc="This is my evolving SELF note.",
@@ -97,7 +97,7 @@ def test_self_shows_identity_and_docs(monkeypatch):
     ctx, buf = _plain_ctx(user_id="alice")
     h_self(ctx)
     out = buf.getvalue()
-    assert "rob" in out                       # instance id
+    assert "carol" in out                       # instance id
     assert "owner-42" in out                  # bound owner
     assert "alice" in out                     # user id
     assert "SOUL of this instance" in out     # SOUL snippet
@@ -135,10 +135,10 @@ def test_self_names_a_bound_owner(monkeypatch):
 
 
 def test_self_marks_a_bound_owner_that_is_the_instance_itself(monkeypatch):
-    """Prod's shape (owner `rob` on instance `rob`): named, but marked so it does
+    """Prod's shape (owner `carol` on instance `carol`): named, but marked so it does
     not read as a second, distinct human owner."""
     _unbind(monkeypatch)
-    _patch_instance(monkeypatch, instance="rob", owner="rob", soul="s", self_doc="d")
+    _patch_instance(monkeypatch, instance="carol", owner="carol", soul="s", self_doc="d")
     ctx, buf = _plain_ctx()
     h_self(ctx)
     out = buf.getvalue()
@@ -207,7 +207,7 @@ def test_self_home_dir_mirrors_container_config(monkeypatch):
     construction.py pattern), not a hardcoded path."""
     seen = {}
 
-    monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "carol")
     _unbind(monkeypatch)
     monkeypatch.setattr(
         "core.instance.load_self_context",

@@ -35,7 +35,7 @@ def _plain():
     return PlainRenderer(state, stream=buf), state, buf
 
 
-def _tool_step(action_type="read_file", params=None, agent_name="rob"):
+def _tool_step(action_type="read_file", params=None, agent_name="alice"):
     return {
         "type": "step",
         "step": 1,
@@ -74,7 +74,7 @@ def _tool_exec(tool="filesystem", action="read_file", success=True,
     }
 
 
-def _register_main(state, name="rob"):
+def _register_main(state, name="alice"):
     state.update(normalize({"type": "agent_registration",
                             "data": {"agent_id": "main_1", "agent_name": name}}))
 
@@ -166,8 +166,8 @@ def test_send_message_not_rendered_as_tool_line_rich():
         "data": {"actions": [{"action_type": "send_message", "name": "message",
                               "service": "send",
                               "params": {"text": "hi there"}}],
-                 "agent_name": "rob"},
-        "agent_name": "rob",
+                 "agent_name": "alice"},
+        "agent_name": "alice",
     })
     state.update(sev)
     r.on_event(sev)
@@ -224,7 +224,7 @@ def test_secret_scrubbed_in_result_preview_rich():
 
 def test_subagent_tool_result_suppressed_in_default_view_rich():
     r, state, buf = _rich()
-    _register_main(state, "rob")
+    _register_main(state, "alice")
     # A sub-agent step sets last_step_sub_agent True.
     sev = normalize(_tool_step(agent_name="leaf_9"))
     state.update(sev)
@@ -240,7 +240,7 @@ def test_subagent_tool_result_suppressed_in_default_view_rich():
 def test_subagent_tool_result_shown_under_verbose_rich():
     r, state, buf = _rich()
     r.verbose = True
-    _register_main(state, "rob")
+    _register_main(state, "alice")
     sev = normalize(_tool_step(agent_name="leaf_9"))
     state.update(sev)
     buf.truncate(0); buf.seek(0)

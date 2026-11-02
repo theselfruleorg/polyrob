@@ -25,14 +25,14 @@ FAKE = "0x3535353535353535353535353535353535353535"
 def _stores(tmp_path, monkeypatch):
     tp._reset_for_tests()
     monkeypatch.setattr(tp, "_PROBES", {})
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "rob")
+    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     pins = str(tmp_path / "wallet" / "token_pins.db")
     monkeypatch.setattr(token_pins, "token_pins_db_path", lambda data_home=None: pins)
     monkeypatch.setattr(tp, "provenance_db_path",
                         lambda data_home=None: str(tmp_path / "wallet" / "prov.db"))
     book = str(tmp_path / "open_positions.db")
     monkeypatch.setattr(op, "open_positions_db_path", lambda data_dir=None: book)
-    op.apply_delta("rob", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
+    op.apply_delta("alice", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
                                            symbol="TKN", qty=33_700_000.0,
                                            cost_usd=134.54))
     yield pins
@@ -40,7 +40,7 @@ def _stores(tmp_path, monkeypatch):
 
 
 def _owner():
-    return tt.owner_seat_ctx("rob")
+    return tt.owner_seat_ctx("alice")
 
 
 def test_trust_writes_an_owner_approved_binding():
@@ -64,9 +64,9 @@ def test_identity_reads_the_approved_source(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("ctx", [
     None,
-    types.SimpleNamespace(user_id="rob", role="orchestrator", is_sub_agent=True, metadata={}),
-    types.SimpleNamespace(user_id="rob", role="leaf", is_sub_agent=False, metadata={}),
-    types.SimpleNamespace(user_id="rob", role="orchestrator", is_sub_agent=False,
+    types.SimpleNamespace(user_id="alice", role="orchestrator", is_sub_agent=True, metadata={}),
+    types.SimpleNamespace(user_id="alice", role="leaf", is_sub_agent=False, metadata={}),
+    types.SimpleNamespace(user_id="alice", role="orchestrator", is_sub_agent=False,
                           metadata={"turn_kind": "self_wake"}),
 ])
 def test_no_writer_accepts_anything_but_an_owner_turn(ctx):
@@ -77,18 +77,18 @@ def test_no_writer_accepts_anything_but_an_owner_turn(ctx):
         ok, msg = fn()
         assert not ok and ("denied" in msg or "requires" in msg)
     assert token_pins.all_pins() == []
-    assert op.get_position("rob", "robinhood", FAKE).status == "open"
+    assert op.get_position("alice", "robinhood", FAKE).status == "open"
 
 
 def test_untrust_records_rejection_quarantines_and_the_gate_refuses():
     ok, msg = tt.untrust(_owner(), "robinhood", FAKE)
     assert ok, msg
     assert token_pins.rejection("robinhood", FAKE) is not None
-    assert op.get_position("rob", "robinhood", FAKE).status == "quarantined"
+    assert op.get_position("alice", "robinhood", FAKE).status == "quarantined"
     from tools.defi.identity_gate import buy_identity_refusal
     ident = types.SimpleNamespace(symbol="TKN", name="Lookalike Token", verified=False,
                                   source="frozen")
-    ctx = types.SimpleNamespace(user_id="rob", metadata={}, role="orchestrator",
+    ctx = types.SimpleNamespace(user_id="alice", metadata={}, role="orchestrator",
                                 is_sub_agent=False)
     why = buy_identity_refusal(chain="robinhood", token_out=FAKE, id_out=ident,
                                max_spend_usd=1.0, route_verdict="AGREES",
@@ -107,11 +107,11 @@ def test_trust_clears_a_rejection_and_untrust_drops_a_pin():
 def test_write_off_confirms_then_books_the_cost_as_loss():
     ok, preview = tt.write_off(_owner(), "robinhood", FAKE)
     assert ok and "$134.54" in preview and "go" in preview
-    assert op.get_position("rob", "robinhood", FAKE).status == "open"
+    assert op.get_position("alice", "robinhood", FAKE).status == "open"
     ok, done = tt.write_off(_owner(), "robinhood", FAKE, reason="airdropped look-alike",
                             execute=True)
     assert ok, done
-    pos = op.get_position("rob", "robinhood", FAKE)
+    pos = op.get_position("alice", "robinhood", FAKE)
     assert pos.status == "written_off" and "134.54" in pos.status_reason
     assert pos.entry_usd == pytest.approx(134.54)  # the cost basis is kept
 
@@ -120,7 +120,7 @@ def test_unquarantine_lifts_the_status_and_the_rejection():
     tt.untrust(_owner(), "robinhood", FAKE)
     ok, _ = tt.unquarantine(_owner(), "robinhood", FAKE, execute=True)
     assert ok
-    assert op.get_position("rob", "robinhood", FAKE).status == "open"
+    assert op.get_position("alice", "robinhood", FAKE).status == "open"
     assert token_pins.rejection("robinhood", FAKE) is None
 
 
@@ -128,7 +128,7 @@ def test_trust_view_lists_every_source_and_the_quarantined_holding():
     tp.record_own_token("robinhood", REAL, kind="launchpad_launch")
     token_pins.pin("base", "0x" + "1" * 40, "ABC")
     tt.untrust(_owner(), "robinhood", FAKE)
-    view = tt.trust_view("rob")
+    view = tt.trust_view("alice")
     sources = {t["source"] for t in view["trusted"]}
     assert {"own_launch", "owner_pin"} <= sources
     assert view["holdings"][0]["status"] == "quarantined"
@@ -154,11 +154,11 @@ def test_a_pre_w1_pin_store_reads_owner_pin(tmp_path, _stores):
 
 
 def test_wallet_tokens_reply_needs_go_to_write():
-    text = tt.tokens_reply("rob", ["trust", "robinhood", REAL, "TKN"])
+    text = tt.tokens_reply("alice", ["trust", "robinhood", REAL, "TKN"])
     assert "Confirm" in text and token_pins.all_pins() == []
-    text = tt.tokens_reply("rob", ["trust", "robinhood", REAL, "TKN", "go"])
+    text = tt.tokens_reply("alice", ["trust", "robinhood", REAL, "TKN", "go"])
     assert "Trusted" in text
-    assert "Tokens I trust" in tt.tokens_reply("rob", ["tokens"])
+    assert "Tokens I trust" in tt.tokens_reply("alice", ["tokens"])
 
 
 @pytest.mark.parametrize("verb", ["trust", "untrust"])

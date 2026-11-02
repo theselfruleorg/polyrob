@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.config_service import SetResult
 
 
 # --- the one verb table ----------------------------------------------------- #
@@ -44,71 +43,45 @@ def test_money_comment_pins_no_count():
     assert "13 money verbs" not in inspect.getsource(verbs)
 
 
-# --- /model ----------------------------------------------------------------- #
+# --- /model (094: the live switch; the env pin is never written) ------------- #
 
-def _info(value, source):
-    return SimpleNamespace(effective=value, source=source)
-
-
-def test_model_reads_the_effective_model_and_its_source(monkeypatch):
+def test_model_verb_runs_the_shared_pipeline_with_the_chat_key(monkeypatch):
+    import agents.task.model_switch_service as svc
     from core import config_service
-    from surfaces.telegram import prefs_ops
-    monkeypatch.setattr(prefs_ops, "_effective_model",
-                        lambda: ("openrouter", "deepseek/deepseek-chat"))
-    pins = {"DEFAULT_PROVIDER": _info("openrouter", "env-file:/etc/polyrob/polyrob.env"),
-            "DEFAULT_MODEL": _info("deepseek/deepseek-chat", "env-file:/etc/polyrob/polyrob.env")}
-    monkeypatch.setattr(config_service, "describe",
-                        lambda key, **kw: pins.get(key, _info(None, "default")))
-    out = prefs_ops.model_reply("u1", [])
-    assert "Model: openrouter/deepseek/deepseek-chat" in out
-    assert "DEFAULT_MODEL = deepseek/deepseek-chat (env-file:/etc/polyrob/polyrob.env)" in out
-    assert "CHAT_MODEL" not in out
+    from surfaces.telegram import admin_verbs
+    seen = {}
 
+    async def fake(task_agent, **kw):
+        seen.update(kw)
+        return "ok"
 
-def test_model_with_no_pin_says_so(monkeypatch):
-    from core import config_service
-    from surfaces.telegram import prefs_ops
-    monkeypatch.setattr(prefs_ops, "_effective_model", lambda: ("openai", "gpt-5"))
-    monkeypatch.setattr(config_service, "describe", lambda key, **kw: _info(None, "default"))
-    assert "Nothing pins it" in prefs_ops.model_reply("u1", [])
-
-
-def test_model_write_goes_through_the_oracle_and_prints_its_message(monkeypatch):
-    from core import config_service
-    from surfaces.telegram import prefs_ops
-    calls = []
-
-    def fake_set(key, value, **kw):
-        calls.append((key, value, kw.get("surface")))
-        return SetResult(ok=True, outcome="written", message=f"set {key}")
-
-    monkeypatch.setattr(config_service, "set_value", fake_set)
-    out = prefs_ops.model_reply("u1", ["openrouter/deepseek/deepseek-chat"])
-    assert calls == [("DEFAULT_PROVIDER", "openrouter", "telegram"),
-                     ("DEFAULT_MODEL", "deepseek/deepseek-chat", "telegram")]
-    assert "set DEFAULT_PROVIDER" in out and "set DEFAULT_MODEL" in out
-
-
-def test_model_write_stops_at_the_first_refusal(monkeypatch):
-    from core import config_service
-    from surfaces.telegram import prefs_ops
-    calls = []
-
-    def refuse(key, value, **kw):
-        calls.append(key)
-        return SetResult(ok=False, outcome="refused", message="CHAT_PROVIDER shadows it")
-
-    monkeypatch.setattr(config_service, "set_value", refuse)
-    out = prefs_ops.model_reply("u1", ["openai", "gpt-5"])
-    assert calls == ["DEFAULT_PROVIDER"] and "❌ CHAT_PROVIDER shadows it" in out
-
-
-def test_model_refuses_an_unknown_provider(monkeypatch):
-    from core import config_service
-    from surfaces.telegram import prefs_ops
+    monkeypatch.setattr(svc, "model_command", fake)
     monkeypatch.setattr(config_service, "set_value",
-                        lambda *a, **k: pytest.fail("must not write"))
-    assert "Unknown provider" in prefs_ops.model_reply("u1", ["nosuchprov/x"])
+                        lambda *a, **k: pytest.fail("/model must not write the env"))
+    result = SimpleNamespace(
+        decision=SimpleNamespace(session_key="tg:dm:1", session_id="s-1"),
+        inbound=SimpleNamespace(identity=SimpleNamespace(
+            source=SimpleNamespace(surface_id="telegram"))))
+    call = admin_verbs.AdminCall(task_agent=object(), result=result, cmd="/model",
+                                 user_id="u1", data_dir="", instance_id="i",
+                                 args=["sonnet"], board=None)
+    import asyncio
+    assert asyncio.run(admin_verbs.handler_for("/model")(call)) == "ok"
+    assert seen == {"user_id": "u1", "words": ["sonnet"], "chat_key": "tg:dm:1",
+                    "session_id": "s-1", "seat": "telegram"}
+
+
+def test_model_verb_failure_is_a_reply_not_a_crash(monkeypatch):
+    import asyncio
+    import agents.task.model_switch_service as svc
+    from surfaces.telegram import prefs_ops
+
+    async def boom(task_agent, **kw):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(svc, "model_command", boom)
+    out = asyncio.run(prefs_ops.model_reply(object(), "u1", ["sonnet"]))
+    assert out.startswith("❌") and "Nothing changed" in out
 
 
 # --- /skills ---------------------------------------------------------------- #
@@ -148,17 +121,3 @@ def test_config_get_and_explain_read_the_one_describer(monkeypatch, tmp_path):
     assert "Where it comes from" in out
     assert "unknown setting" in _config_reply("u1", str(tmp_path), "i",
                                               ["get", "no.such.key"])
-
-
-def test_model_write_refuses_both_halves_when_a_higher_layer_pins_the_model(monkeypatch):
-    """A layer that pins only DEFAULT_MODEL must not let DEFAULT_PROVIDER land
-    alone (a new provider paired with another provider's model)."""
-    from core import config_service
-    from surfaces.telegram import prefs_ops
-    monkeypatch.setattr(config_service, "set_value",
-                        lambda *a, **k: pytest.fail("must not write either half"))
-    monkeypatch.setattr(config_service, "shadowed_write_refusal",
-                        lambda key, value: ("nothing written: `DEFAULT_MODEL` is pinned"
-                                            if key == "DEFAULT_MODEL" else None))
-    out = prefs_ops.model_reply("u1", ["openai/gpt-5"])
-    assert out.startswith("❌") and "DEFAULT_MODEL" in out

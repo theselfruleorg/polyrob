@@ -73,7 +73,8 @@ def neutralize_name(name: str) -> str:
     owner line. ``"`` is escaped to ``'`` because the chat name is rendered as
     an XML-ish attribute value.
     """
-    return _CTRL.sub(" ", _defang(name)).replace('"', "'").strip()[:64]
+    from core.surfaces.reply_ref import neutralize_name as _one
+    return _one(name)
 
 
 def neutralize_text(text: str) -> str:
@@ -97,6 +98,10 @@ def _line(row: Any) -> str:
     if media_path:
         marker = f"[media: {os.path.basename(str(media_path))}]"
         text = f"{text} {marker}".strip()
+    elif getattr(row, "kind", "") == "media":
+        # Ingest runs before any absorb, so a member's file has no path: name it
+        # by kind rather than render a blank attributed line (044 M-a).
+        text = f"{text} [media]".strip()
     line = (f"{who}|{getattr(row, 'sender_id', '')} "
             f"({getattr(row, 'role_at_write', 'member')}): {text}")
     if len(line) > CONTEXT_LINE_MAX_CHARS:
@@ -148,7 +153,7 @@ def render_context(rows: List[Any], *, chat_name: str, surface: str,
                       *body, "</group-context>"])
 
 
-def render_addressed(row: Any, *, role: str) -> str:
+def render_addressed(row: Any, *, role: str, reply_ref: Any = None) -> str:
     """The ``<addressed>`` line: who spoke to you, with their resolved role.
 
     A member's text is untrusted and is neutralized to one line; an owner's or
@@ -170,7 +175,14 @@ def render_addressed(row: Any, *, role: str) -> str:
         text = _defang(text)
     else:
         text = neutralize_text(text)
-    return f"<addressed>\n{who}|{sender} ({role}) → you: {text}\n</addressed>"
+    # The message this line REPLIES to rides INSIDE the block, after the line:
+    # "@bot what do you think?" means nothing without it. It is quoted DATA
+    # (somebody else's words) in every role, and a member's block stays one
+    # line per attributed speaker, so it is collapsed the same way.
+    from core.surfaces.reply_ref import render_reply_ref
+    quoted = render_reply_ref(reply_ref, one_line=role not in ("owner", "admin"))
+    tail = f"\n{quoted}" if quoted else ""
+    return f"<addressed>\n{who}|{sender} ({role}) → you: {text}{tail}\n</addressed>"
 
 
 @dataclass(frozen=True)
@@ -258,6 +270,23 @@ def mark_room_lines_answered(container: Any, *, surface: str, chat_id: str,
         return 0
 
 
+#: The newest room lines shown on every turn even when already answered.
+RECENT_LINES_ALWAYS = 10
+
+
+def _merge_rows(a: List[Any], b: List[Any]) -> List[Any]:
+    """Union by message id, oldest first."""
+    seen, out = set(), []
+    for row in list(a) + list(b):
+        mid = str(getattr(row, "message_id", ""))
+        if mid in seen:
+            continue
+        seen.add(mid)
+        out.append(row)
+    out.sort(key=lambda r: float(getattr(r, "ts", 0) or 0))
+    return out
+
+
 def build_room_turn(container: Any, inbound: Any, *, role: str, chat_name: str,
                     context_lines: int = 30) -> RoomTurn:
     """Resolve one triggered room line into what the model is shown.
@@ -274,6 +303,14 @@ def build_room_turn(container: Any, inbound: Any, *, role: str, chat_name: str,
         if ledger is not None:
             rows = ledger.tail(surface_id, chat_id, thread_id=src.thread_id,
                                limit=context_lines, unanswered_only=True)
+            # ⚠️ "Presented = handled" marks every line a turn was SHOWN, and the
+            # block is ephemeral, so a human line shown once vanished from every
+            # later turn while the agent's own replies stayed: "@bot re-read Bob's
+            # line" saw only the agent's answers, not the questions. The newest
+            # few lines always ride along, answered or not (bounded below).
+            recent = ledger.tail(surface_id, chat_id, thread_id=src.thread_id,
+                                 limit=min(int(context_lines), RECENT_LINES_ALWAYS))
+            rows = _merge_rows(rows, recent)[-max(int(context_lines), 0):] if context_lines else []
             rows = context_rows(container, surface_id, chat_id, rows)
     except Exception as e:
         logger.warning("room ledger read failed for %s:%s (%s) — answering without "
@@ -294,7 +331,8 @@ def build_room_turn(container: Any, inbound: Any, *, role: str, chat_name: str,
     addressed = render_addressed(SimpleNamespace(
         sender_name=name,
         sender_id=inbound.identity.raw_user_id or inbound.identity.user_id,
-        text=inbound.text or ""), role=role)
+        text=inbound.text or ""), role=role,
+        reply_ref=getattr(inbound, "reply_ref", None))
     return RoomTurn(
         context=ctx, addressed=addressed, surface=surface_id, chat_id=chat_id,
         shown_message_ids=tuple(str(getattr(r, "message_id", "")) for r in shown),

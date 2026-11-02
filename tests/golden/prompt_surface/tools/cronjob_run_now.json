@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Run a job on the next scheduler pass; its schedule is kept.",
+    "name": "cronjob_run_now",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The job id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

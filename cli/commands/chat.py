@@ -1,6 +1,6 @@
-"""rob interactive REPL (R6 + Phase 2).
+"""polyrob interactive REPL (R6 + Phase 2).
 
-`rob` with no subcommand opens a conversation loop driving Conversation.respond()
+`polyrob` with no subcommand opens a conversation loop driving Conversation.respond()
 once per line. The loop is factored behind an injectable `read_line` seam so it
 can be unit-tested without a TTY.
 
@@ -674,7 +674,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         "provider": provider,
         "tools": repl_tools,   # filesystem/task + enabled autonomy tools (local mode)
         # No max_steps: each turn runs Conversation.respond() with its own
-        # DEFAULT_TURN_BUDGET (20).
+        # DEFAULT_TURN_BUDGET (= INTERACTIVE_MAX_STEPS).
         "temperature": 0.0,
         "use_vision": False,
     }
@@ -783,7 +783,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
 
         # Start the autonomy background loops (cron / goals / curator) under the
         # local profile only, via the SAME shared runtime the server lifespan uses
-        # — so `rob` actually runs the loops it gates on. Each loop is independently
+        # — so `polyrob` actually runs the loops it gates on. Each loop is independently
         # gated + fail-open; stopped in the finally below. Fail-open: a problem here
         # must never break the interactive session.
         try:

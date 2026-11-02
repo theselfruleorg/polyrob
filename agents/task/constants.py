@@ -723,7 +723,9 @@ UNTRUSTED_TOOL_RESULT_WRAP = _core_bool_env('UNTRUSTED_TOOL_RESULT_WRAP', True)
 # comprehensive-default fallback (loads browser/mcp/etc). "task" is the harmless
 # TODO tool; chat mode otherwise relies on send_message/done + conversational-exit.
 CHAT_TOOL_IDS = [t.strip() for t in os.getenv('CHAT_TOOL_IDS', 'task').split(',') if t.strip()] or ['task']
-CHAT_MAX_STEPS = _int_env('CHAT_MAX_STEPS', 8)
+# 2026-10-29: 8 → 20 — a card wake that pays and closes out, or a chat turn that reads
+# then answers, did not fit in 8; the loop breaker ends a degenerate turn early.
+CHAT_MAX_STEPS = _int_env('CHAT_MAX_STEPS', 20)
 
 # Chat consolidation (HANDOFF-C, 2026-06-19): the HTTP /api/chat/message endpoint
 # is now served SOLELY by the unified task agent (TaskAgent.chat_once); the legacy

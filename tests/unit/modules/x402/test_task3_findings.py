@@ -84,11 +84,11 @@ async def test_m6_settled_renewal_while_subs_off_withholds_wake_and_retries(tmp_
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="p@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="sess1", amount_usd=10.0,
+            user_id="alice", session_id="sess1", amount_usd=10.0,
             purpose="renewal", subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
 
@@ -132,13 +132,13 @@ async def test_m8_apply_settlement_extends_atomically_ignoring_stale_read(tmp_pa
     try:
         now = int(time.time())
         sub = await subs.create_subscription(
-            user_id="rob", correspondent_surface="email",
+            user_id="alice", correspondent_surface="email",
             correspondent_address="p@x.com", cron_job_id="job1",
             period_days=30, paid_through=now, db=db)
         # One pending renewal per subscription at a time (the pending-unique
         # index), so create+settle inv1 before minting inv2.
         inv1 = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=10.0, purpose="r1",
+            user_id="alice", session_id="", amount_usd=10.0, purpose="r1",
             subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv1["request_id"], db=db)
         r1 = await subs.apply_settlement(sub["id"], inv1["request_id"], db=db)
@@ -146,7 +146,7 @@ async def test_m8_apply_settlement_extends_atomically_ignoring_stale_read(tmp_pa
         assert (await subs.get_subscription(sub["id"], db=db))["paid_through"] == now + 30 * 86400
 
         inv2 = await invoicing.create_payment_request(
-            user_id="rob", session_id="", amount_usd=11.0, purpose="r2",
+            user_id="alice", session_id="", amount_usd=11.0, purpose="r2",
             subscription_id=sub["id"], db=db)
         await invoicing.settle_payment_request(inv2["request_id"], db=db)
 
@@ -188,7 +188,7 @@ async def test_m5_index_retries_jitter_on_cross_process_collision(tmp_path, monk
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=7.5, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=7.5, purpose="a", db=db)
         assert first["amount_usd"] == 7.5
 
         # 046: the dedupe is now asset- and kind-scoped; the fake takes the
@@ -198,7 +198,7 @@ async def test_m5_index_retries_jitter_on_cross_process_collision(tmp_path, monk
 
         monkeypatch.setattr(invoicing, "_dedupe_amount_for_treasury", blind_dedupe)
         second = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=7.5, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=7.5, purpose="b", db=db)
         assert second["amount_usd"] == 7.5001  # bumped one jitter step by the retry
     finally:
         await db.close()
@@ -212,9 +212,9 @@ async def test_m5_no_index_when_detection_off_allows_legacy_duplicate(tmp_path, 
     db = await _setup_db(tmp_path)
     try:
         a = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=3.0, purpose="a", db=db)
+            user_id="alice", session_id="s1", amount_usd=3.0, purpose="a", db=db)
         b = await invoicing.create_payment_request(
-            user_id="rob", session_id="s2", amount_usd=3.0, purpose="b", db=db)
+            user_id="alice", session_id="s2", amount_usd=3.0, purpose="b", db=db)
         assert a["amount_usd"] == 3.0 and b["amount_usd"] == 3.0
         idx = await db.fetch_all(
             "SELECT name FROM sqlite_master WHERE type='index' AND name = ?",
@@ -230,7 +230,7 @@ async def test_m5_no_index_when_detection_off_allows_legacy_duplicate(tmp_path, 
 
 async def _make_due_sub(db, *, amount_usd=10.0):
     return await subs.create_subscription(
-        user_id="rob", correspondent_surface="email",
+        user_id="alice", correspondent_surface="email",
         correspondent_address="p@x.com", cron_job_id="job1",
         amount_usd=amount_usd, renewal_lead_days=5, grace_days=3,
         paid_through=int(time.time()) + 2 * 86400, db=db)
@@ -251,9 +251,9 @@ async def test_m11_renewal_grant_refused_on_amount_mismatch(tmp_path, monkeypatc
         await watcher.tick_once()  # queues an ask
 
         from agents.task.goals.board import ASK_OPEN
-        ask = board.asks(user_id="rob", status=ASK_OPEN)[0]
+        ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
         assert ask.payload["amount_usd"] == 10.0  # amount stamped (M11)
-        board.decide_ask(ask.id, user_id="rob", approved=True)
+        board.decide_ask(ask.id, user_id="alice", approved=True)
 
         # The subscription's charge changes AFTER approval.
         await db.execute("UPDATE subscriptions SET amount_usd = ? WHERE id = ?",
@@ -262,8 +262,8 @@ async def test_m11_renewal_grant_refused_on_amount_mismatch(tmp_path, monkeypatc
         out = await watcher.tick_once()
         # Stale-amount grant NOT consumed -> no invoice; a fresh ask at $20 queued.
         assert out["subscription_renewals_invoiced"] == 0
-        assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
-        open_asks = board.asks(user_id="rob", status=ASK_OPEN)
+        assert await invoicing.list_payment_requests(user_id="alice", db=db) == []
+        open_asks = board.asks(user_id="alice", status=ASK_OPEN)
         assert len(open_asks) == 1
         assert open_asks[0].payload["amount_usd"] == 20.0
     finally:
@@ -288,13 +288,13 @@ async def test_m11_renewal_grant_expired_by_ttl_not_consumed(tmp_path, monkeypat
         watcher = SettlementWatcher(agent, db=db, goal_board=board)
         await watcher.tick_once()
         from agents.task.goals.board import ASK_OPEN
-        ask = board.asks(user_id="rob", status=ASK_OPEN)[0]
-        board.decide_ask(ask.id, user_id="rob", approved=True)
+        ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
+        board.decide_ask(ask.id, user_id="alice", approved=True)
 
         out = await watcher.tick_once()
         # Expired grant -> not consumed -> no invoice minted.
         assert out["subscription_renewals_invoiced"] == 0
-        assert await invoicing.list_payment_requests(user_id="rob", db=db) == []
+        assert await invoicing.list_payment_requests(user_id="alice", db=db) == []
     finally:
         await db.close()
 
@@ -308,7 +308,7 @@ async def test_stale_settling_never_reopens_without_chain_proof(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="svc", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="svc", db=db)
         # Strand it in 'settling' with an OLD updated_at (>10 min).
         assert await invoicing.claim_for_settlement(inv["request_id"], db=db)
         await db.execute(
@@ -328,7 +328,7 @@ async def test_h7_reaper_leaves_recent_settling_untouched(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="svc", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="svc", db=db)
         assert await invoicing.claim_for_settlement(inv["request_id"], db=db)  # fresh 'settling'
         reverted = await invoicing.revert_stale_settling(max_age_seconds=600, db=db)
         assert reverted == []  # too young to be considered stranded
@@ -343,7 +343,7 @@ async def test_h7_sweep_wired_into_tick(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=5.0, purpose="svc", db=db)
+            user_id="alice", session_id="s1", amount_usd=5.0, purpose="svc", db=db)
         await invoicing.claim_for_settlement(inv["request_id"], db=db)
         await db.execute(
             "UPDATE x402_payment_requests SET updated_at = datetime('now', '-20 minutes') "
@@ -366,7 +366,7 @@ async def test_l8_kind_filter_matches_compact_metadata(tmp_path):
     db = await _setup_db(tmp_path)
     try:
         inv = await invoicing.create_payment_request(
-            user_id="rob", session_id="s1", amount_usd=4.0, purpose="svc", db=db)
+            user_id="alice", session_id="s1", amount_usd=4.0, purpose="svc", db=db)
         # Simulate the boot-time subscription dedup rewriting metadata via
         # SQLite json_set -> COMPACT JSON ("kind":"agent_invoice", no space).
         await db.execute(
@@ -381,7 +381,7 @@ async def test_l8_kind_filter_matches_compact_metadata(tmp_path):
         assert chk["k"] == "agent_invoice"  # json_extract (L8) still matches
 
         # The reader (json_extract-based) still finds it.
-        rows = await invoicing.list_payment_requests(user_id="rob", db=db)
+        rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert any(r["request_id"] == inv["request_id"] for r in rows)
     finally:
         await db.close()

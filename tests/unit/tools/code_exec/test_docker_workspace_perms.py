@@ -6,7 +6,7 @@ sandbox container to uid 65534 and `_ensure_workspace_writable` widens the
 workspace. It walked `dirs` only, so every file the host-side coding/filesystem
 tool wrote stayed root-owned 0644 — 9,246 of them under the live project tree —
 and an in-container `shell_run` editing one hard-failed EACCES (journal:
-`PermissionError: '/workspace/rob-status/trackrecord.html'`, repeatedly, with the
+`PermissionError: '/workspace/demo-status/trackrecord.html'`, repeatedly, with the
 agent burning steps on it).
 """
 import os
@@ -55,7 +55,7 @@ class TestEnsureWorkspaceWritable:
         monkeypatch.setattr(os, "lstat", _rooted(os.lstat))
 
     def test_host_written_files_become_container_writable(self, tmp_path, monkeypatch):
-        nested = tmp_path / "rob-status"
+        nested = tmp_path / "demo-status"
         nested.mkdir()
         page = nested / "trackrecord.html"
         page.write_text("<html></html>")

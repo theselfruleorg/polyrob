@@ -115,6 +115,25 @@ def _product_identity_line() -> str:
 	return f"You are POLYROB {ver}, instance \"{inst}\". "
 
 
+def _state_tag(name: str) -> str:
+	return str(name).replace("_", "-")
+
+
+def _state_hash(text: str) -> str:
+	"""Hash of a part's text, its render clock ("as of <stamp>") left out."""
+	import hashlib
+	import re
+	text = re.sub(r"as of [0-9T:\- ]+(?:Z|UTC)?", "as of", text)
+	return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _render_state_part(name: str, text: str, cap: int) -> str:
+	if len(text) > cap:
+		text = text[:cap].rstrip() + "\n… [cut — agent_status or the part's own tool has the rest]"
+	tag = _state_tag(name)
+	return f"<{tag}>\n{text}\n</{tag}>"
+
+
 class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, FiltersMixin, GuidanceMixin, MessageBuildersMixin, MessageRetrievalMixin):
 	__slots__ = (
 		'llm', 'system_prompt_class', 'history', 'task', 'action_descriptions',
@@ -132,6 +151,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_history_checkpoint',  # Checkpoint for message history rollback
 		'_checkpoint_token_count',  # Token count at checkpoint time
 		'_system_message',  # SystemMessage stored separately to prevent deque eviction
+		'_include_vision', '_custom_system_message',  # 094: what a swap rebuilds the prompt from
 		'_system_message_tokens',  # Token count for system message
 		'_initial_task_message',  # Initial task message stored separately to prevent deque eviction
 		'_initial_task_tokens',  # Token count for initial task message
@@ -181,6 +201,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_tool_catalog_source',   # S1: last catalog text, for the no-op check
 		'_tool_additions_announced',  # F9: late action names already surfaced by a
 		                          # <tool-addition> message (announce each ONCE)
+		'_state_delta',           # 095 W4: part -> (hash, ManagedMessage|None) last pushed
 		'_tool_schema_tokens',    # P4: emitted `tools` param cost
 		'_verbosity',             # C2 style.verbosity
 		'_results_in_tool_messages',  # F14: the result list the last step committed as ToolMessages
@@ -405,6 +426,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# a <tool-addition> message. Announcing one twice would append a second
 		# durable message for a tool the model already holds.
 		self._tool_additions_announced: set = set()
+		# 095 W4: the <state-delta> parts last pushed (see update_state_delta).
+		self._state_delta: dict = {}
 
 		# polyrob Phase C: SOUL/IDENTITY self-context is pinned as a frozen foundation
 		# user message (set later), NOT embedded in the system prompt — same rationale
@@ -454,56 +477,18 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# The system message is NOT added to self.history.messages because the deque has a max length
 		# and will automatically drop old messages, potentially losing the system message.
 		# Instead, we store it separately and prepend it when get_messages() is called.
+		# 095 W1a: also read by the image route note (guidance.py), so it is set
+		# on a profile-supplied prompt too; a model change re-resolves it.
+		self._include_vision = include_vision
 		if system_message is not None:
 			# Use the provided system message directly
 			self.logger.debug("Using provided system message from profile")
+			self._custom_system_message = True
 			self._system_message = system_message
 			self.system_prompt = system_message
 		else:
-			# Create system message from prompt class
-			# SystemPrompt accepts action_descriptions, max_actions_per_step, use_native_tools, model_name, provider, and mcp_servers
-			# Pass model_name and provider so SystemPrompt can inject model-specific instructions (e.g., for Grok)
-			# Pass mcp_servers so SystemPrompt can generate dynamic examples using actual server/tool names
-			_prompt_kwargs = dict(
-				max_actions_per_step=self.max_actions_per_step,
-				use_native_tools=use_native_tools,
-				model_name=self._model_name,
-				provider=self._provider_name,
-				mcp_servers=self.mcp_servers,
-				persona_block=self._persona_block,
-				tool_ids=self.tool_ids,
-				include_vision=include_vision,
-			)
-			# §3.3: an AUTONOMOUS session (goal/cron — pre-marked by
-			# run_task_to_outcome before construction) carries the communication
-			# contract. Only passed when true, so custom system_prompt_class
-			# implementations and interactive sessions stay byte-identical.
-			try:
-				from core.autonomy_marker import is_autonomous
-				if self.session_id and is_autonomous(self.session_id):
-					_prompt_kwargs["autonomous"] = True
-				# 081 WS-3.1: an owner seat pins the catalog whatever POLYROB_LOCAL says.
-				from core.autonomy_marker import is_owner_seat
-				if self.session_id and is_owner_seat(self.session_id):
-					_prompt_kwargs["owner_seat"] = True
-			except Exception:
-				pass
-			# G6: same policy for the surface block — only passed when a chat
-			# surface is bound, so surface-agnostic sessions and custom
-			# system_prompt_class implementations stay byte-identical.
-			if self._surface_profile:
-				_prompt_kwargs["surface"] = self._surface_profile
-			# C2: only passed when a pref is actually set, so a custom
-			# system_prompt_class and the default-verbosity build stay unchanged.
-			if self._verbosity:
-				_prompt_kwargs["verbosity"] = self._verbosity
-			prompt_instance = self.system_prompt_class(
-				self.action_descriptions,
-				**_prompt_kwargs,
-			)
-
-			# SystemPrompt has get_system_message() method that returns a SystemMessage
-			system_message = prompt_instance.get_system_message()
+			self._custom_system_message = False
+			system_message = self._build_system_message()
 			self._system_message = system_message
 			self.system_prompt = system_message
 		
@@ -973,6 +958,74 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			"This supersedes the earlier catalog lines for these tools.",
 			MessageOrigin.TOOL_CATALOG))
 
+	#: 095 W4: the most one part adds to one push; the tail says where the rest is.
+	STATE_DELTA_PART_CAP = 4000
+
+	def update_state_delta(self, parts: Dict[str, Optional[str]], *,
+	                       baseline: bool = False) -> bool:
+		"""095 W4 (R5/R11/R12): the ONE live self-facts channel, on the
+		:meth:`update_tool_catalog` pattern — a durable ``<state-delta>`` control
+		message at the TAIL of the context; the system prompt and the foundation
+		(the cached prefix) are never touched.
+
+		``parts`` maps a part name (``live_health``, ``operations``, ``self_facts``,
+		``style_prefs``, ``owner_rules``, ``self_notes``, ``skills_delta``) to its FULL
+		current text. A part is pushed only when its hash differs from the last
+		pushed one, or when the message that carried it left the history
+		(compaction, eviction). ``None`` = not computed this call. ``""`` = the part
+		no longer applies (SK-18: a seat tainted mid-session): every earlier copy is
+		scrubbed out of the history. ``baseline=True`` records the hashes of what
+		the foundation already says, without pushing. True = a message was pushed.
+		"""
+		state = self._state_delta
+		changed: Dict[str, str] = {}
+		for name, text in (parts or {}).items():
+			if text is None:
+				continue
+			text = str(text).strip()
+			if not text:
+				if name in state:
+					state.pop(name, None)
+					self._scrub_state_delta_part(name)
+				continue
+			digest = _state_hash(text)
+			if baseline:
+				state[name] = (digest, None)
+				continue
+			prev = state.get(name)
+			if prev is not None and prev[0] == digest and (
+					prev[1] is None or any(m is prev[1] for m in self.history.messages)):
+				continue
+			changed[name] = text
+		if not changed:
+			return False
+		body = "\n".join(_render_state_part(n, t, self.STATE_DELTA_PART_CAP)
+		                 for n, t in changed.items())
+		as_of = time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime())
+		self.push_control_message(make_control_message(
+			f'<state-delta as_of="{as_of}" hash="{_state_hash(body)}">\n{body}\n'
+			"</state-delta>\nThis is the current state; it supersedes every earlier "
+			"copy of these parts.", MessageOrigin.SYSTEM_NOTE))
+		managed = self.history.messages[-1] if self.history.messages else None
+		for name, text in changed.items():
+			state[name] = (_state_hash(text), managed)
+		return True
+
+	def _scrub_state_delta_part(self, name: str) -> None:
+		"""Remove part ``name`` from every ``<state-delta>`` in the history."""
+		import re
+		tag = _state_tag(name)
+		block = re.compile(rf"<{tag}>\n.*?\n</{tag}>\n?", re.DOTALL)
+		with self._history_lock:
+			for managed in self.history.messages:
+				content = getattr(managed.message, "content", None)
+				if not isinstance(content, str) or "<state-delta " not in content \
+						or f"<{tag}>" not in content:
+					continue
+				new = block.sub("", content)
+				managed.message = type(managed.message)(
+					content=new, origin=getattr(managed.message, "origin", None))
+
 	def set_self_context_message(self, content: Optional[str]) -> None:
 		"""polyrob Phase C: pin the SOUL/IDENTITY self-context as a frozen foundation
 		user message instead of the system prompt.
@@ -1031,14 +1084,90 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			self._project_context_message = None
 			self._project_context_tokens = 0
 
-	def set_runtime_identity(self, model: Optional[str], provider: Optional[str]) -> None:
+	def _build_system_message(self):
+		"""The SystemPrompt for the CURRENT model/provider/native-tools mode."""
+		# Create system message from prompt class
+		# SystemPrompt accepts action_descriptions, max_actions_per_step, use_native_tools, model_name, provider, and mcp_servers
+		# Pass model_name and provider so SystemPrompt can inject model-specific instructions (e.g., for Grok)
+		# Pass mcp_servers so SystemPrompt can generate dynamic examples using actual server/tool names
+		_prompt_kwargs = dict(
+			max_actions_per_step=self.max_actions_per_step,
+			use_native_tools=self.use_native_tools,
+			model_name=self._model_name,
+			provider=self._provider_name,
+			mcp_servers=self.mcp_servers,
+			persona_block=self._persona_block,
+			tool_ids=self.tool_ids,
+			include_vision=self._include_vision,
+		)
+		# §3.3: an AUTONOMOUS session (goal/cron — pre-marked by
+		# run_task_to_outcome before construction) carries the communication
+		# contract. Only passed when true, so custom system_prompt_class
+		# implementations and interactive sessions stay byte-identical.
+		try:
+			from core.autonomy_marker import is_autonomous
+			if self.session_id and is_autonomous(self.session_id):
+				_prompt_kwargs["autonomous"] = True
+			# 081 WS-3.1: an owner seat pins the catalog whatever POLYROB_LOCAL says.
+			from core.autonomy_marker import is_owner_seat
+			if self.session_id and is_owner_seat(self.session_id):
+				_prompt_kwargs["owner_seat"] = True
+		except Exception:
+			pass
+		# G6: same policy for the surface block — only passed when a chat
+		# surface is bound, so surface-agnostic sessions and custom
+		# system_prompt_class implementations stay byte-identical.
+		if self._surface_profile:
+			_prompt_kwargs["surface"] = self._surface_profile
+		# C2: only passed when a pref is actually set, so a custom
+		# system_prompt_class and the default-verbosity build stay unchanged.
+		if self._verbosity:
+			_prompt_kwargs["verbosity"] = self._verbosity
+		prompt_instance = self.system_prompt_class(
+			self.action_descriptions,
+			**_prompt_kwargs,
+		)
+
+		# SystemPrompt has get_system_message() method that returns a SystemMessage
+		return prompt_instance.get_system_message()
+
+	def rebuild_system_prompt(self, use_native_tools: Optional[bool] = None) -> bool:
+		"""094: rebuild the system prompt after a live model swap — the model-family
+		note and (native tools off) the JSON action list belong to the model. A
+		profile-supplied system message is the owner's text and is kept. False =
+		kept or the build failed (the old prompt stays)."""
+		if getattr(self, "_custom_system_message", True):
+			return False
+		previous = self.use_native_tools
+		if use_native_tools is not None:
+			self.use_native_tools = bool(use_native_tools)
+		try:
+			message = self._build_system_message()
+			if "{SKILLS_PLACEHOLDER}" in message.content:  # construction strips it too (PR13)
+				message = type(message)(content=message.content.replace("{SKILLS_PLACEHOLDER}", ""))
+		except Exception as e:
+			self.use_native_tools = previous
+			self.logger.debug(f"system prompt rebuild after swap failed: {e}")
+			return False
+		self._system_message = message
+		self.system_prompt = message
+		self._system_message_tokens = self._count_message_tokens(message)
+		return True
+
+	def set_runtime_identity(self, model: Optional[str], provider: Optional[str],
+	                         switched_from: Optional[str] = None, cause: Optional[str] = None,
+	                         reason: Optional[str] = None, at: Optional[float] = None) -> None:
 		"""Pin the model/provider the agent is ACTUALLY running on as a foundation message.
 
 		So the agent can answer "what model are you" truthfully instead of reading
 		config/.env (which leaked secrets). Set at session start from the built LLM
-		and refreshed on a live /model swap. Falsy model => clear (inert). Kept in the
+		and refreshed on every model change. Falsy model => clear (inert). Kept in the
 		foundation (not the system prompt) so the prompt stays cacheable; on a swap the
 		refreshed line is one short block, so the cache cost is negligible.
+
+		095 W1a: ``cause`` says WHO changed the model — only ``owner`` renders "The
+		owner switched you"; ``fallback`` names the failover and its ``reason``;
+		``api`` names the API request. ``at`` (epoch) re-renders a persisted switch.
 		"""
 		if model and str(model).strip():
 			prov = str(provider).strip() if provider else "unknown"
@@ -1048,6 +1177,18 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 				"State this if asked which model/provider you are — do NOT read env/config "
 				"files to answer; this line is authoritative."
 			)
+			if switched_from and switched_from != model:
+				import time as _time
+				when = _time.strftime('%H:%M', _time.gmtime(at)) + "Z"
+				if cause == "fallback":
+					content += (f" Your provider failed over from \"{switched_from}\" to it at "
+					            f"{when} (reason: {reason or 'provider error'}); the owner did "
+					            "not switch you.")
+				else:
+					who = {"owner": "The owner", "api": "An API request"}.get(cause or "", "The runtime")
+					# 094: earlier turns in this history were written by the previous model.
+					content += (f" {who} switched you to it from \"{switched_from}\" at "
+					            f"{when}; earlier turns of this chat were written by that model.")
 			self._runtime_identity_message = make_control_message(content, MessageOrigin.RUNTIME_IDENTITY)
 			self._runtime_identity_tokens = self._count_message_tokens(self._runtime_identity_message)
 		else:

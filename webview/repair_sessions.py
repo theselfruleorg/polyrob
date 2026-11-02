@@ -316,8 +316,7 @@ def main():
         possible_paths = [
             Path("/var/lib/polyrob/sessions"),
             Path("/opt/polyrob/data/sessions"),
-            Path("/opt/rob/data/sessions"),  # legacy install prefix
-            Path("./data/sessions"),
+                Path("./data/sessions"),
             Path("../data/sessions")
         ]
         

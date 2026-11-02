@@ -51,6 +51,17 @@ _DEDUP_WINDOW_S = 120.0   # an identical line inside this window is the same lin
 PLAIN_REPLY_WINDOW_S = 3600.0
 BLOCK_MAX_CHARS = 2000    # the rendered <owner-thread> block, whatever the row count
 LINE_MAX_CHARS = 400      # one rendered line
+#: F5 (prod review 2026-10-29): a FRESH owner session's tail — the one block that
+#: carries the conversation across /new, the daily reset and a restart — is larger
+#: than a per-turn delta, and inside it every row that is not the conversation
+#: (verb results, tx notices, cards, cron reports) is one short line.
+TAIL_BLOCK_MAX_CHARS = 6000
+COLLAPSED_LINE_MAX_CHARS = 160
+#: Outbound sources that ARE the agent talking to the owner. Every other source
+#: (owner_verb, tx_execution, action_card, cron, approvals, alerts) is a machine row.
+#: ``turn_fallback`` is the harness's notice when a turn could not finish.
+CONVERSATION_SOURCES = frozenset({"reply", "agent_send", "message_tool", "mirror",
+                                  "turn_fallback"})
 
 #: Outcomes of ``deliver_user_message`` that mean the owner actually SAW the
 #: text. ``queued`` is recorded later by the outbox on ``delivered``;
@@ -70,7 +81,7 @@ def tail_hours() -> float:
 
 
 def tail_rows() -> int:
-    return max(1, int_env("OWNER_THREAD_TAIL_ROWS", 12))
+    return max(1, int_env("OWNER_THREAD_TAIL_ROWS", 40))
 
 
 # --- store -------------------------------------------------------------------
@@ -214,6 +225,16 @@ class OwnerThreadStore:
             (str(user_id or ""), float(since_ts), str(exclude_session_id or "")),
             fetch="all") or []
         return int(dict(rows[0])["n"]) if rows else 0
+
+    def session_rows(self, user_id: str, session_id: str, *, limit: int) -> List[dict]:
+        """The newest ``limit`` rows of ONE session, oldest first."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM owner_thread WHERE user_id=? AND session_id=? "
+            "ORDER BY ts DESC, id DESC LIMIT ?",
+            (str(user_id or ""), str(session_id or ""), max(1, int(limit))),
+            fetch="all") or []
+        return [dict(r) for r in reversed(rows)]
 
     def last_inbound_ts(self, user_id: str, session_id: str) -> Optional[float]:
         row = execute_retry(
@@ -478,6 +499,19 @@ def record_owner_out(container: Any, user_id: str, text: str, *, via: str,
         return False
 
 
+def record_turn_fallback(container: Any, user_id: str, text: str, *, session_key: str,
+                         session_id: Optional[str]) -> bool:
+    """Record what a chat harness itself sent at the end of an owner turn (the
+    turn-end notice, an extracted reply on an unbound path) as
+    ``source="turn_fallback"``, so the thread and the next turn's tail know what
+    the owner saw. ``via`` is the surface named in ``session_key``
+    (``agent:main:<surface>:…``). Never raises."""
+    parts = str(session_key or "").split(":")
+    via = parts[2] if len(parts) > 2 and parts[0] == "agent" else (parts[0] or "chat")
+    return record_owner_out(container, user_id, text, via=via, session_id=session_id,
+                            source="turn_fallback")
+
+
 def record_owner_in(container: Any, user_id: str, text: str, *, via: str,
                     session_id: Optional[str], mid: Optional[str] = None,
                     reply_to_mid: Optional[str] = None, kind: str = "comment",
@@ -535,6 +569,20 @@ def thread_delta(container: Any, user_id: str, *, session_id: str, since_ts: flo
         return rows
     except Exception:
         logger.debug("owner thread: delta read failed (fail-open)", exc_info=True)
+        return []
+
+
+def thread_for_session(container: Any, user_id: str, session_id: str, *,
+                       limit: int = 120) -> List[dict]:
+    """What ONE owner session exchanged with the owner (oldest first) — the
+    source of the session's closing chat episode (F5). [] when unreadable."""
+    if not session_id:
+        return []
+    try:
+        store = resolve_store(container, create=False)
+        return store.session_rows(user_id, session_id, limit=limit) if store else []
+    except Exception:
+        logger.debug("owner thread: session read failed (fail-open)", exc_info=True)
         return []
 
 
@@ -668,11 +716,20 @@ def _origin(row: dict) -> str:
     return ", ".join(parts)
 
 
-def render_line(row: dict, *, this_session: str = "") -> str:
+def is_conversation_row(row: dict) -> bool:
+    """An owner comment, or the agent's own words to the owner. A rail's report
+    (a cron or goal send) is a machine row even when the agent wrote it."""
+    if row.get("direction") == "in":
+        return (row.get("kind") or "comment") not in ("command", "card_tap")
+    return (row.get("source") or "") in CONVERSATION_SOURCES and not row.get("rail_id")
+
+
+def render_line(row: dict, *, this_session: str = "",
+                max_body: int = LINE_MAX_CHARS) -> str:
     from core.surfaces.group_turn import _CTRL, defang
     body = _CTRL.sub(" ", defang(row.get("body") or "")).strip()
-    if len(body) > LINE_MAX_CHARS:
-        body = body[:LINE_MAX_CHARS - 1] + "…"
+    if len(body) > max_body:
+        body = body[:max_body - 1] + "…"
     same = " (this session)" if this_session and row.get("session_id") == this_session else ""
     if row.get("direction") == "in":
         if row.get("kind") == "card_tap":
@@ -708,26 +765,53 @@ _HEAD = {
 }
 
 
+def _collapsed_line(row: dict, *, this_session: str = "") -> str:
+    """A machine row in a fresh session's tail: one short line, same labels."""
+    if row.get("direction") == "out" and row.get("source") == "owner_verb":
+        from core.surfaces.group_turn import _CTRL, defang
+        body = _CTRL.sub(" ", defang(row.get("body") or "")).strip()
+        if len(body) > COLLAPSED_LINE_MAX_CHARS:
+            body = body[:COLLAPSED_LINE_MAX_CHARS - 1] + "…"
+        return (f"{_hhmm(row.get('ts'))} seat→owner (result of the owner's OWN command "
+                f"or card tap; not sent by you): {body}")
+    return render_line(row, this_session=this_session, max_body=COLLAPSED_LINE_MAX_CHARS)
+
+
 def render_block(rows: List[dict], *, kind: str, this_session: str = "",
-                 max_chars: int = BLOCK_MAX_CHARS) -> str:
-    """The ``<owner-thread>`` text — empty string for no rows."""
+                 max_chars: Optional[int] = None) -> str:
+    """The ``<owner-thread>`` text — empty string for no rows.
+
+    ``kind="tail"`` (a fresh owner session) gets ``TAIL_BLOCK_MAX_CHARS``, and
+    its conversation rows (:func:`is_conversation_row`) win the budget: they are
+    kept first, newest first; machine rows are one short line each and fill
+    what is left. Lines stay in time order."""
     if not rows:
         return ""
+    tail = kind == "tail"
+    if max_chars is None:
+        max_chars = TAIL_BLOCK_MAX_CHARS if tail else BLOCK_MAX_CHARS
     head = _HEAD.get(kind, _HEAD["tail"])
-    lines = [render_line(r, this_session=this_session) for r in rows]
+    if tail:
+        lines = [render_line(r, this_session=this_session) if is_conversation_row(r)
+                 else _collapsed_line(r, this_session=this_session) for r in rows]
+        passes = [[i for i, r in enumerate(rows) if is_conversation_row(r)],
+                  [i for i, r in enumerate(rows) if not is_conversation_row(r)]]
+    else:
+        lines = [render_line(r, this_session=this_session) for r in rows]
+        passes = [list(range(len(rows)))]
     # Keep the NEWEST lines when the block would overflow: the recent line is
     # the one the owner is answering.
     budget = max(200, int(max_chars) - len(head) - 64)
-    kept: List[str] = []
+    keep: set = set()
     used = 0
-    omitted = 0
-    for ln in reversed(lines):
-        if used + len(ln) + 1 > budget and kept:
-            omitted += 1
-            continue
-        kept.append(ln)
-        used += len(ln) + 1
-    kept.reverse()
+    for order in passes:
+        for i in reversed(order):
+            if used + len(lines[i]) + 1 > budget and keep:
+                continue
+            keep.add(i)
+            used += len(lines[i]) + 1
+    kept = [lines[i] for i in sorted(keep)]
+    omitted = len(lines) - len(kept)
     omitted += int(rows[0].get("_earlier") or 0)
     body = ([f"[{omitted} earlier lines omitted — /thread shows them]"] if omitted else []) + kept
     return "\n".join([f'<owner-thread kind="{kind}">', head, *body, "</owner-thread>"])
@@ -737,11 +821,11 @@ def render_transcript(rows: List[dict]) -> str:
     """The owner-seat rendering (``/thread``): one plain line per row."""
     out = []
     for r in rows:
-        who = "you" if r.get("direction") == "in" else "rob"
+        who = "you" if r.get("direction") == "in" else "agent"
         origin = _origin(r)
         body = (r.get("body") or "").strip().replace("\n", " ")
         if len(body) > 280:
             body = body[:279] + "…"
-        out.append(f"{_hhmm(r.get('ts'))} {who}" + (f" ({origin})" if origin and who == "rob" else "")
+        out.append(f"{_hhmm(r.get('ts'))} {who}" + (f" ({origin})" if origin and who == "agent" else "")
                    + f": {body}")
     return "\n".join(out)

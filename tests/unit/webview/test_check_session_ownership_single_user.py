@@ -25,7 +25,7 @@ def _reload_server(monkeypatch, multitenant: bool):
 
 
 def test_single_user_ownership_refuses_anonymous_client(monkeypatch):
-    monkeypatch.setenv("POLYROB_LOCAL_OWNER", "rob")
+    monkeypatch.setenv("POLYROB_LOCAL_OWNER", "alice")
     server = _reload_server(monkeypatch, multitenant=False)
     is_owner, current_user, session_owner = server._check_session_ownership(
         _FakeRequest(), "some-session-id"
@@ -144,7 +144,7 @@ def test_own_ops_ownership_owner_allowed_on_cli_created_session(monkeypatch):
     stop exercising the single-owner allowance it exists for."""
     server = _reload_server(monkeypatch, multitenant=False)
     monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
 
     owner_id = server.webgate.local_owner_id()
     assert owner_id != "local"  # sanity: the two identities really do differ

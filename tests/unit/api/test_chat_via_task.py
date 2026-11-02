@@ -20,11 +20,11 @@ def _container(reply=None, raises=None):
 
 
 def test_returns_reply_on_success():
-    container, ta = _container(reply="Hello from Rob")
+    container, ta = _container(reply="Hello from Nova")
     out = asyncio.run(handle_chat_via_task_agent(container, "u1", "hello", "c1"))
     assert isinstance(out, MessageResponse)
     assert out.success is True
-    assert out.text == "Hello from Rob"
+    assert out.text == "Hello from Nova"
     ta.chat_once.assert_awaited_once_with(user_id="u1", text="hello", chat_id="c1")
 
 

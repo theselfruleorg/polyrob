@@ -96,7 +96,7 @@ class RichRenderer(Renderer):
         # ``\`` artifacts.  When ``live_allowed`` is False (set by the REPL) the
         # activity line stays dormant (the pinned ``bottom_toolbar`` is the
         # in-flight indicator) and the streaming box runs buffer-only, printing
-        # the finalized answer once as a newline-terminated block.  ``rob run``
+        # the finalized answer once as a newline-terminated block.  ``polyrob run``
         # (no patch_stdout) keeps ``live_allowed=True`` for the activity line only.
         self._live_allowed = live_allowed
         # True when a persistent bottom status bar provides the live in-flight
@@ -226,7 +226,7 @@ class RichRenderer(Renderer):
         Default view: ONLY the agent message (if the step carries one) — no
         header, no reasoning panel, no tool lines.  Verbose: the full step
         block first, then the message.  A sub-agent's step never reaches the
-        dialog layer (its text isn't "rob" speaking): dim one-liner under
+        dialog layer (its text isn't "agent" speaking): dim one-liner under
         verbose, nothing by default.
         """
         identity = self._event_agent_identity(event)

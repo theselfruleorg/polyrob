@@ -6,7 +6,7 @@ Two tables:
   whether the turn was autonomous, and the sign-in nonce. It is the replay log
   (a ``(domain, nonce)`` pair signs once) and the autonomous rate count (090 D2).
   The signature itself is never stored.
-* ``credentials`` — a credential a site returned for a signature (402Mob's
+* ``credentials`` — a credential a site returned for a signature (e.g. a
   merchant key), Fernet-encrypted (``core.security.encryption``) under
   ``(origin, wallet, label)``. Only its fingerprint is ever shown.
 

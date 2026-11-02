@@ -38,11 +38,11 @@ def local_flag_on(env: dict, absent_means_on: bool = True) -> bool:
     return str(raw).strip().lower() not in _FALSEY
 
 
-def resolve_memory_backend(env: dict, rob_local: bool) -> str:
+def resolve_memory_backend(env: dict, local_on: bool) -> str:
     """One default with backend_factory via the policy SSOT (027 rider).
     An explicit MEMORY_BACKEND always wins."""
     from core.config_policy.policy import memory_backend_default
-    default = memory_backend_default(rob_local)
+    default = memory_backend_default(local_on)
     return env.get("MEMORY_BACKEND", default) or default
 
 
@@ -68,7 +68,7 @@ def server_extra_line() -> str:
             "run `pip install 'polyrob[server]'` before `polyrob serve`")
 
 
-def optional_extras_line(rob_local: bool = False) -> str:
+def optional_extras_line(local_on: bool = False) -> str:
     """058: which optional extras this install carries, and how a missing one
     arrives — on first use (``LAZY_DEPS_MODE`` trusted|legacy) or by `pip install`
     (mode ``off``). One line, never a guess: an extra is present only when EVERY
@@ -76,7 +76,7 @@ def optional_extras_line(rob_local: bool = False) -> str:
 
     067 P0.2: the mode is the one the runtime resolves (``lazy_deps_mode()``,
     default ``trusted`` on the CLI AND on a server), not a re-derivation from a
-    second boolean. ``rob_local`` is kept for the caller's
+    second boolean. ``local_on`` is kept for the caller's
     signature; the mode no longer depends on it."""
     from core.config_policy.capability_toggles import lazy_deps_mode
     from core.optional_extras import MODULES_FOR_EXTRA, extra_available
@@ -529,7 +529,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # The CLI (build_cli_container) does os.environ.setdefault("POLYROB_LOCAL", "1"),
     # so for run/chat an ABSENT value means ON. Resolved once here — the credential
     # provenance walk, the config-file line, and the footgun note all read it.
-    rob_local = local_flag_on(env, absent_means_on=local_absent_means_on)
+    local_on = local_flag_on(env, absent_means_on=local_absent_means_on)
     try:
         _env_layers = env_file_layers(env)
     except Exception:
@@ -747,11 +747,11 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     except Exception as e:
         lines.append(f"config file: unavailable ({type(e).__name__}: {e})")
 
-    # An ABSENT POLYROB_LOCAL means ON for run/chat (see rob_local above) —
+    # An ABSENT POLYROB_LOCAL means ON for run/chat (see local_on above) —
     # report that honestly (surfacing this footgun is doctor's job). An
     # explicitly-falsey value still reads off.
-    lines.append(f"POLYROB_LOCAL: {'ON' if rob_local else 'off'}")
-    if rob_local:
+    lines.append(f"POLYROB_LOCAL: {'ON' if local_on else 'off'}")
+    if local_on:
         lines.append("  ! POLYROB_LOCAL ON flips the INTERACTIVE tools (coding/git/KB/"
                      "RAG/project-context…) ON by default — intended for the single-user "
                      "CLI, NOT a multi-tenant server. The self-directed autonomy loops are "
@@ -762,8 +762,8 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # CLI local mode is the documented CWD-as-workspace exception (informational,
     # consistent with the POLYROB_LOCAL footgun note above) — not a failure.
     try:
-        paths = resolve_runtime_paths(local=rob_local)
-        if rob_local:
+        paths = resolve_runtime_paths(local=local_on)
+        if local_on:
             lines.append(
                 "workspace isolation: local CWD-as-workspace (consented Claude-Code-"
                 "style behavior — NOT a confinement bug)"
@@ -780,7 +780,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
 
     # Sourced from the passed-in `env` dict, not os.environ, to keep
     # doctor_report pure/testable.
-    lines.append(f"memory backend: {resolve_memory_backend(env, rob_local)}")
+    lines.append(f"memory backend: {resolve_memory_backend(env, local_on)}")
     try:  # 093 A3: which exec backends start for THIS process (the remedy names it)
         from tools.code_exec.backend_probe import doctor_backend_line
         lines.append(doctor_backend_line(env))
@@ -918,7 +918,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     has_embedder = importlib.util.find_spec("sentence_transformers") is not None
     lines.append("embedder: present" if has_embedder
                  else "embedder: absent (vector recall runs keyword-only — pip install 'polyrob[memory-vector]')")
-    lines.append(optional_extras_line(rob_local))
+    lines.append(optional_extras_line(local_on))
     lines.append(packs_line())
 
     # Environment checks (3.3, 2026-07-14 review): python floor, [server] extra,
@@ -961,6 +961,8 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
 
     # Setup completeness (avatar / surfaces / SOUL) — informational, never-failing.
     lines.extend(setup_lines(env))
+    from cli.commands.doctor_host import host_readiness_lines
+    lines.extend(host_readiness_lines(env))
 
     return lines
 
@@ -1176,6 +1178,9 @@ def status_snapshot_lines() -> list:
         data = {}
     if not data.get("live") and not data.get("usable"):
         lines.extend(credential_alert_lines(dict(os.environ)))
+    # A CRITICAL host item (a split data home) is a headline, not --full detail.
+    from cli.commands.doctor_host import host_readiness_lines
+    lines.extend(l for l in host_readiness_lines(dict(os.environ)) if l.startswith("CRITICAL"))
     return lines
 
 
@@ -1420,7 +1425,7 @@ def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
     check transcript (resolved providers/model, memory backend, config
     footguns) prints under --full."""
     # Load env the same way the REPL does (./.polyrob, ~/.polyrob, root .env, config/.env.*
-    # + the local-mode key backfill) so doctor reports the keys `rob` actually sees,
+    # + the local-mode key backfill) so doctor reports the keys `polyrob` actually sees,
     # not just the bare process environment.
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()

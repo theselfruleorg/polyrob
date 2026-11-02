@@ -106,7 +106,7 @@ export function cardLabel(act, copy) {
 }
 
 /** Session statuses, split by the receipt state they mean (070 W0.7).
- *  `suspended` is a `send_message(wait_for_response=True)` pause: Rob waits for
+ *  `suspended` is a `send_message(wait_for_response=True)` pause: the agent waits for
  *  the owner's answer — it is NOT stopped. */
 const WORKING_STATUS = new Set(['running', 'resumed', 'created', 'initializing']);
 const DONE_STATUS = new Set(['completed', 'done', 'finished']);
@@ -280,7 +280,7 @@ export class Transcript {
     // in arrival order after it (`flush`). `null` = not buffering.
     this.buffer = null;
     this.synthetic = 0; // act key when an event carries no call_id
-    this.turn = null; // the open rob turn, or null between turns
+    this.turn = null; // the open agent turn, or null between turns
     this.remoteNotice = null; // the one 409 "live in the agent" line, reused
     // False while a backfill is applied; true once the socket is live. A live
     // working turn counts up to now; otherwise a receipt ends at the turn's
@@ -449,7 +449,7 @@ export class Transcript {
   _ensureTurn(atMs) {
     if (this.turn) return this.turn;
     const at = Number.isFinite(atMs) ? atMs : this.now();
-    const root = el('div', 'turn turn-rob');
+    const root = el('div', 'turn turn-agent');
     const said = el('div', 'said');
     const acts = document.createElement('div');
     acts.style.marginTop = 'var(--s4)';
@@ -555,7 +555,7 @@ export class Transcript {
     this.lastStatus = state;
     const turn = this.turn;
     if (!turn) {
-      // A run that failed before Rob drew anything says so, once. A `stopped`
+      // A run that failed before the agent drew anything says so, once. A `stopped`
       // with no open turn (a REPL /exit after finished turns) draws nothing.
       if (state === 'failed') this._failedLine();
       return;
@@ -570,10 +570,10 @@ export class Transcript {
     this._receipt();
   }
 
-  /** "This chat failed before Rob could answer." — once, and only while Rob
-   *  has drawn no turn in this thread (otherwise Rob did answer). */
+  /** "This chat failed before the agent could answer." — once, and only while the agent
+   *  has drawn no turn in this thread (otherwise the agent did answer). */
   _failedLine() {
-    if (!this.thread || this.thread.querySelector('.turn-rob')) return;
+    if (!this.thread || this.thread.querySelector('.turn-agent')) return;
     if (this.thread.querySelector('[data-read-notice="failed"]')) return;
     const line = el('p', 'note is-failed', this.copy.turn_failed || '');
     line.dataset.readNotice = 'failed';
@@ -634,7 +634,7 @@ export class Transcript {
     const url = `/api/task/sessions/${encodeURIComponent(this.sessionId)}/cancel`;
     try {
       const res = await postJson(url, undefined, { fetcher: this.fetcher });
-      // A32: a 409 is not a failure — the session is live in Rob's OWN process,
+      // A32: a 409 is not a failure — the session is live in the agent's OWN process,
       // not this console, so the console cannot stop it from here. Render the
       // honest "live in the agent" line (same as send()), NEVER a silent no-op.
       if (res && res.status === 409) {
@@ -678,7 +678,7 @@ export class Transcript {
       // chat box acted and then looked exactly like a message that vanished.
       const note = this._commandNote(res && res.body);
       this._cardButtons(note, text, res && res.body);
-      // A32: a 409 is not a failure — the session is live in Rob's OWN process,
+      // A32: a 409 is not a failure — the session is live in the agent's OWN process,
       // not this console, so the console cannot steer it from here. Render the
       // honest "live in the agent" line (with owner_pid + a retry hint), NEVER a
       // failure bubble. LOCAL/here sessions never see this.
@@ -695,7 +695,7 @@ export class Transcript {
   /**
    * The one 409 line: this chat is live in the agent process, so the console
    * cannot steer it. It reuses a single `.note` node (repeated 409s replace it,
-   * they do not stack) and is NOT a `.turn-rob`/`.said` bubble — a 409 is a
+   * they do not stack) and is NOT a `.turn-agent`/`.said` bubble — a 409 is a
    * state, not the agent speaking, and not the `chat.failed.*` family. The
    * owner_pid rides on the guard's `detail` either shape it can arrive in
    * (a bare FastAPI 409 → `{detail:{owner_pid}}`, or the console's send wrapper
@@ -720,7 +720,7 @@ export class Transcript {
    * `/status` and friends on the SHARED owner-verb plane and answers
    * `{"success": true, "command_reply": "…"}`; the verb never reaches the
    * agent, so no feed event is ever written for it. Rendered as a `.note` in
-   * the thread — NOT a `.turn-rob`/`.said` bubble, because the console
+   * the thread — NOT a `.turn-agent`/`.said` bubble, because the console
    * answered, not the agent. Each verb leaves its own answer rather than
    * replacing the previous one.
    */

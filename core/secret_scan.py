@@ -2,7 +2,7 @@
 
 Used to WARN (or optionally refuse) when the agent's persistent workspace is the
 cwd default AND that cwd contains secrets/VCS — the launch-in-a-repo footgun
-(memory rob-glm-livetest-paramodel-bug-2026-06-20). This is a STEER, not a
+(a 2026-06-20 live-test finding). This is a STEER, not a
 read-denial guard; real per-read denial belongs at the filesystem/coding
 chokepoint in a separate hardening PR (analysis §8.3).
 """

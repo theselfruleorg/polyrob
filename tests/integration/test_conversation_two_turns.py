@@ -26,7 +26,7 @@ from modules.llm.messages import HumanMessage
 
 
 def _temp_env(monkeypatch, tmp_path):
-    """Point all data paths at a tmp dir so we don't touch /opt/rob or the repo."""
+    """Point all data paths at a tmp dir so we don't touch /opt/polyrob or the repo."""
     for k in ("DATA_DIR", "DATA_ROOT", "CHARACTERS_DIR", "KNOWLEDGE_DIR",
               "CACHE_DIR", "DB_PATH", "TELEMETRY_DATA_DIR"):
         monkeypatch.setenv(k, str(tmp_path / k.lower()))
@@ -41,7 +41,8 @@ def _temp_env(monkeypatch, tmp_path):
 # Synthetic per-step control content the agent injects into the LLM input (state
 # snapshot, prior-step memory). Not genuine user turns — skip when finding the
 # last real user message so the echo reflects the actual conversational input.
-_CONTROL_PREFIXES = ("[CURRENT STATE]", "[MEMORY FROM PREVIOUS STEP]")
+_CONTROL_PREFIXES = ("[CURRENT STATE]", "[MEMORY FROM PREVIOUS STEP]",
+                     "<system-note>")  # 095 W4: the <state-delta> rides at the tail
 
 
 def _latest_human_text(messages):

@@ -32,7 +32,7 @@ class _Router:
 
 
 def _orch(key):
-    return SimpleNamespace(_chat_session_key=key, _turn_reply_to=None, user_id="rob")
+    return SimpleNamespace(_chat_session_key=key, _turn_reply_to=None, user_id="alice")
 
 
 def test_the_action_model_accepts_reply_to():
@@ -44,7 +44,7 @@ def test_the_action_model_accepts_reply_to():
 def test_publish_context_prefers_the_explicit_reply_to():
     orch = _orch("agent:main:telegram:supergroup:-1001")
     orch._turn_reply_to = "1"
-    controller = SimpleNamespace(orchestrator=orch, session_id=None, user_id="rob")
+    controller = SimpleNamespace(orchestrator=orch, session_id=None, user_id="alice")
     assert publish_context(controller, reply_to="7").get("reply_to") == "7"
     # No explicit anchor => the live turn's anchor, unchanged.
     assert publish_context(controller).get("reply_to") == "1"
@@ -66,7 +66,7 @@ def test_a_dm_publish_records_nothing(monkeypatch):
     ledger, so a DM reply must never land in it."""
     monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
     replied = []
-    pub = build_discrete_publish(_Router(), "agent:main:telegram:dm:99:rob",
+    pub = build_discrete_publish(_Router(), "agent:main:telegram:dm:99:alice",
                                  reply_to="7", replied_ids=replied)
     asyncio.run(pub("hi"))
     assert replied == []

@@ -14,7 +14,7 @@ from cli.ui.commands.registry import CommandContext
 def _registry(seen):
     from cli.ui.commands.registry import Command, CommandRegistry
     reg = CommandRegistry()
-    for name in ("approve", "reject", "fulfill", "send"):
+    for name in ("approve", "reject", "fulfill", "send", "pending"):
         reg.register(Command(name, (lambda n: lambda ctx: seen.append((n, list(ctx.args))))(name),
                              name, raw_arguments=True))
     return reg
@@ -25,6 +25,7 @@ def _registry(seen):
     ("/approve_tap_abc123", ("approve", ["tap-abc123"])),
     ("/approve_all", ("approve", ["all"])),
     ("/reject_p_a1b2c3", ("reject", ["p-a1b2c3"])),
+    ("/pending_p_a1b2c3", ("pending", ["p-a1b2c3"])),
 ])
 def test_folded_tokens_run_their_verb(token, expect):
     seen, out = [], []
@@ -47,4 +48,4 @@ def test_a_card_token_is_a_card_press_not_unknown():
 def test_every_tappable_shape_the_grammar_accepts_is_routed():
     """The grammar and the REPL cannot drift: each accepted shape dispatches."""
     from core.surfaces.tappable import TAPPABLE_VERBS
-    assert set(TAPPABLE_VERBS) == {"/approve", "/reject"}
+    assert set(TAPPABLE_VERBS) == {"/approve", "/reject", "/pending"}

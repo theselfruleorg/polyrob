@@ -28,7 +28,6 @@ ALLOWED = {
     "tools/defi/spl_deploy_verb.py": 1,
     "tools/defi/trade_tool.py": 3,
     "tools/filesystem.py": 1,
-    "tools/mcp/self_install.py": 1,
     "cli/commands/whatsapp.py": 1,
 }
 

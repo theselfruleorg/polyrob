@@ -57,7 +57,7 @@ def delivered(monkeypatch):
 
 def _job(payload):
     return CronJob(id="j1", task="reveal due POLYROB ids (spends gas only)", schedule_spec="1m",
-                   user_id="rob", next_run_at=None, payload=payload, max_duration_seconds=120)
+                   user_id="alice", next_run_at=None, payload=payload, max_duration_seconds=120)
 
 
 @pytest.mark.asyncio
@@ -163,15 +163,15 @@ def _svc(tmp_path):
 def test_a_write_job_may_recur_every_minute_and_is_validated(tmp_path):
     svc, store = _svc(tmp_path)
     job = svc.schedule(task="reveal due POLYROB ids (gas only)", schedule_spec="*/1 * * * *",
-                       user_id="rob", payload={"write_verb": SPEC})
+                       user_id="alice", payload={"write_verb": SPEC})
     assert store.get(job.id).payload["write_verb"]["verb"] == "agent_nft.agent_nft_collection_reveal"
     with pytest.raises(ScheduleError, match="minimum"):
-        svc.schedule(task="a paid agent run", schedule_spec="*/1 * * * *", user_id="rob")
+        svc.schedule(task="a paid agent run", schedule_spec="*/1 * * * *", user_id="alice")
     with pytest.raises(ScheduleError, match="not an allowlisted write verb"):
-        svc.schedule(task="mint from cron", schedule_spec="1h", user_id="rob",
+        svc.schedule(task="mint from cron", schedule_spec="1h", user_id="alice",
                      payload={"write_verb": {"verb": "agent_nft.agent_nft_collection_mint"}})
     with pytest.raises(ScheduleError, match="not both"):
-        svc.schedule(task="both kinds at once", schedule_spec="1h", user_id="rob",
+        svc.schedule(task="both kinds at once", schedule_spec="1h", user_id="alice",
                      payload={"write_verb": SPEC, "read_verb": {
                          "verb": "defi_data.pool_metrics",
                          "params": {"chain": "robinhood", "token": "0x5555555555555555555555555555555555555555"}}})  # gitleaks:allow (token address)
@@ -180,9 +180,9 @@ def test_a_write_job_may_recur_every_minute_and_is_validated(tmp_path):
 def test_dropping_the_write_verb_from_a_one_minute_job_refuses(tmp_path):
     svc, _store = _svc(tmp_path)
     job = svc.schedule(task="reveal due POLYROB ids (gas only)", schedule_spec="*/1 * * * *",
-                       user_id="rob", payload={"write_verb": SPEC})
+                       user_id="alice", payload={"write_verb": SPEC})
     with pytest.raises(ScheduleError, match="faster than"):
-        svc.edit(job.id, user_id="rob", payload_updates={"write_verb": None})
+        svc.edit(job.id, user_id="alice", payload_updates={"write_verb": None})
 
 
 @pytest.mark.asyncio
@@ -193,17 +193,17 @@ async def test_the_agent_tool_accepts_write_verb_only_on_an_owner_turn(tmp_path,
     tool = T.CronJobTool.__new__(T.CronJobTool)
     tool._cron_service = svc
     monkeypatch.setattr(T.CronJobTool, "_self_scheduling_refusal", staticmethod(lambda ctx: None))
-    ctx = SimpleNamespace(user_id="rob")
+    ctx = SimpleNamespace(user_id="alice")
     params = T.CronScheduleAction(task="reveal due POLYROB ids (gas only)",
                                   schedule="*/1 * * * *", write_verb=SPEC)
 
     monkeypatch.setattr(goal_tools, "owner_seat_turn", lambda c: False)
     res = await tool.cronjob_schedule(params, execution_context=ctx)
-    assert res.error and "owner turn" in res.error and not store.list(user_id="rob")
+    assert res.error and "owner turn" in res.error and not store.list(user_id="alice")
 
     # A genuine owner turn schedules it (round-2 collateral restored).
     monkeypatch.setattr(goal_tools, "owner_seat_turn", lambda c: True)
     res = await tool.cronjob_schedule(params, execution_context=ctx)
     assert not res.error, res.error
-    (job,) = store.list(user_id="rob")
+    (job,) = store.list(user_id="alice")
     assert job.payload["write_verb"]["verb"] == "agent_nft.agent_nft_collection_reveal"

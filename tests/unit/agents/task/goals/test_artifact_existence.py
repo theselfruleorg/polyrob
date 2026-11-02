@@ -15,7 +15,7 @@ from agents.task.goals.context import build_goal_run_task, stamp_artifact_refere
 
 def test_stamp_missing_artifact_in_goal_task(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Follow up on design",
+    g = b.create(user_id="alice", title="Follow up on design",
                  body="Update drafts/DESIGN.md with the new section.")
     t = build_goal_run_task(g, workspace_root=tmp_path)
     assert "drafts/DESIGN.md [MISSING on disk]" in t
@@ -31,7 +31,7 @@ def test_stamp_present_artifact_in_goal_task(tmp_path):
     p.write_text("# Design\nsome content here")
     size = p.stat().st_size
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Follow up on design",
+    g = b.create(user_id="alice", title="Follow up on design",
                  body="Update drafts/DESIGN.md with the new section.")
     t = build_goal_run_task(g, workspace_root=tmp_path)
     assert f"drafts/DESIGN.md [present, {size} bytes]" in t
@@ -42,7 +42,7 @@ def test_stamp_present_artifact_via_acceptance(tmp_path):
     p.write_text("hello")
     size = p.stat().st_size
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Update notes", body="See notes.txt.",
+    g = b.create(user_id="alice", title="Update notes", body="See notes.txt.",
                  payload={"acceptance": "notes.txt reflects the change"})
     t = build_goal_run_task(g, workspace_root=tmp_path)
     assert f"notes.txt [present, {size} bytes]" in t
@@ -126,7 +126,7 @@ def test_stamp_bare_filename_stamped_present_when_it_exists(tmp_path):
 
 def test_build_goal_run_task_byte_identical_without_workspace_root(tmp_path):
     b = GoalBoard(str(tmp_path / "g.db"))
-    g = b.create(user_id="rob", title="Draft memory-arch thread",
+    g = b.create(user_id="alice", title="Draft memory-arch thread",
                  body="Update drafts/DESIGN.md with the new section.",
                  payload={"acceptance": "notes.txt reflects the change"})
     legacy = build_goal_run_task(g)

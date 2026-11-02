@@ -77,7 +77,7 @@ def test_cancel_unscoped_still_works_for_an_owner_seat(admin_ops):
     """Omitting the scope is the legacy call, reserved for the owner's own
     seats (the CLI and the console), which are not room-bounded."""
     adm, store = admin_ops
-    assert adm.cancel(None, "off-1", by="rob").startswith("✅")
+    assert adm.cancel(None, "off-1", by="alice").startswith("✅")
 
 
 # --- D23 --------------------------------------------------------------------
@@ -103,7 +103,7 @@ def _service_job(monkeypatch, tmp_path, **kwargs):
     monkeypatch.setattr(room_service, "_cron_service", lambda d: _Cron())
     monkeypatch.setattr(group_admin, "data_home", lambda c: str(tmp_path))
     monkeypatch.setattr(group_admin, "is_room_allowed", lambda c, s, cid: True)
-    out = room_service.service(None, "rob", "telegram", "-100", **kwargs)
+    out = room_service.service(None, "alice", "telegram", "-100", **kwargs)
     return out, scheduled
 
 

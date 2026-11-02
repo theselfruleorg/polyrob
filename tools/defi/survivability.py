@@ -1,11 +1,13 @@
 """Survivability fields on ``token_info`` — the hunt's hard screen (086 §3.6, W9).
 
-The Aug/Sep record: 6 of 18 Base tickets died in their pool within hours. The
+A fresh ticket most often dies with its pool, not its contract. The
 contract screen (``token_screen``) asks "can a holder sell and keep the
 balance"; this block asks "will the pool still be there". Each gate is ONE
 field with a status:
 
-* ``pass`` / ``fail`` — measured against the line in 086 §3.6;
+* ``pass`` / ``fail`` — measured against the line below (neutral defaults; an
+  install tunes them in ``<data_home>/trading_presets.json`` under
+  ``screen.survival``, ``core.trading_presets.screen_lines``);
 * ``unknown`` — no source answered. NEVER safe: any unknown gate lowers the
   tier ceiling by one step (A→B→C, never below C, never up);
 * ``info`` — a fact with no line drawn (``fresh_wallet_ratio``: no keyless
@@ -27,7 +29,7 @@ top-holder share       the holder report (top 10, contracts/programs excluded)
 bundled supply (SVM)   RugCheck full report: insider networks' current holding
 =====================  ===================================================
 
-The tier ceiling is a CEILING for sizing (the ``memecoin`` preset tiers:
+The tier ceiling is a CEILING for sizing (a preset's tier ladder; by default
 A ≥ $25k and ≥ 48 h; B ≥ $10k and ≥ 2 h; C ≥ $3k), not a buy signal. A
 ``fail`` anywhere — or a hard fail on the contract screen — is ``REJECT``.
 
@@ -44,8 +46,8 @@ logger = logging.getLogger(__name__)
 
 PASS, FAIL, UNKNOWN, INFO = "pass", "fail", "unknown", "info"
 
-#: The lines (086 §3.6; the memecoin preset tiers live here, not in a skill). Module constants, not
-#: flags: a mandate preset (W2) tightens them per strategy.
+#: The neutral default lines (086 §3.6). Not flags: an install sets its own under
+#: ``screen.survival`` in its ``trading_presets.json`` (:func:`lines`).
 LIQUIDITY_FLOOR_USD = 3_000.0
 TIER_B_LIQUIDITY_USD = 10_000.0
 TIER_A_LIQUIDITY_USD = 25_000.0
@@ -55,6 +57,35 @@ LP_LOCKED_MIN_PCT = 80.0
 SELL_TAX_MAX_PCT = 10.0
 TOP_HOLDERS_MAX_PCT = 30.0
 BUNDLED_MAX_PCT = 15.0
+
+#: The ``screen.survival`` keys an install may set, and their neutral defaults.
+DEFAULT_LINES = {
+    "liquidity_floor_usd": LIQUIDITY_FLOOR_USD,
+    "tier_b_liquidity_usd": TIER_B_LIQUIDITY_USD,
+    "tier_a_liquidity_usd": TIER_A_LIQUIDITY_USD,
+    "tier_b_age_h": TIER_B_AGE_H,
+    "tier_a_age_h": TIER_A_AGE_H,
+    "lp_locked_min_pct": LP_LOCKED_MIN_PCT,
+    "sell_tax_max_pct": SELL_TAX_MAX_PCT,
+    "top_holders_max_pct": TOP_HOLDERS_MAX_PCT,
+    "bundled_max_pct": BUNDLED_MAX_PCT,
+}
+
+
+def lines() -> Dict[str, float]:
+    """The lines in force: the defaults with the install's ``screen.survival`` over them."""
+    return lines_checked()[0]
+
+
+def lines_checked():
+    """``(lines, error)``; *error* names install lines that could not be applied."""
+    from core.trading_presets import screen_lines_checked
+    return screen_lines_checked("survival", DEFAULT_LINES)
+
+
+def _line(key: str) -> float:
+    return lines()[key]
+
 
 TIERS = ("A", "B", "C")
 REJECT = "REJECT"
@@ -111,9 +142,9 @@ def _liquidity(quote, pools) -> Dict[str, Any]:
         liq, src = (sum(known), "geckoterminal") if known else (None, None)
     if liq is None:
         return _f("liquidity_usd", UNKNOWN, reason="no source reported pool depth")
-    status = PASS if liq >= LIQUIDITY_FLOOR_USD else FAIL
+    status = PASS if liq >= _line('liquidity_floor_usd') else FAIL
     return _f("liquidity_usd", status, round(liq, 2), src,
-              None if status == PASS else f"below the ${LIQUIDITY_FLOOR_USD:,.0f} floor")
+              None if status == PASS else f"below the ${_line('liquidity_floor_usd'):,.0f} floor")
 
 
 def _lp_locked(family: str, screen, holders) -> Dict[str, Any]:
@@ -134,17 +165,17 @@ def _lp_locked(family: str, screen, holders) -> Dict[str, Any]:
         val = 100.0 * sum(h.percent for h in known
                           if h.is_locked is True or str(h.address).lower() in _BURN)
         src = "goplus"
-        if val < LP_LOCKED_MIN_PCT and any(h.is_nft_position for h in known):
+        if val < _line('lp_locked_min_pct') and any(h.is_nft_position for h in known):
             # Measured live 2026-10-23: a 594-day-old Base pool and a Robinhood
             # v4 pool both read 0% locked — their LP is NFT positions, whose
             # lockers GoPlus does not all know. Not seen is not "can be pulled".
             return _f("lp_locked_pct", UNKNOWN, round(val, 2), src,
                       "the LP is concentrated-liquidity positions; GoPlus does not "
                       "see every position locker")
-    status = PASS if val >= LP_LOCKED_MIN_PCT else FAIL
+    status = PASS if val >= _line('lp_locked_min_pct') else FAIL
     return _f("lp_locked_pct", status, round(val, 2), src,
               None if status == PASS else
-              f"under {LP_LOCKED_MIN_PCT:g}% of the LP is locked or burned — it can be pulled")
+              f"under {_line('lp_locked_min_pct'):g}% of the LP is locked or burned — it can be pulled")
 
 
 def _sell_sim(family: str, screen) -> Dict[str, Any]:
@@ -184,9 +215,9 @@ def _sell_tax(family: str, screen) -> Dict[str, Any]:
     if not vals:
         return _f("sell_tax_pct", UNKNOWN, reason="no source reported a sell tax")
     worst, src = max(vals)
-    status = PASS if worst <= SELL_TAX_MAX_PCT else FAIL
+    status = PASS if worst <= _line('sell_tax_max_pct') else FAIL
     return _f("sell_tax_pct", status, round(worst, 4), src,
-              None if status == PASS else f"over {SELL_TAX_MAX_PCT:g}%")
+              None if status == PASS else f"over {_line('sell_tax_max_pct'):g}%")
 
 
 def _authority(name: str, check: str, screen) -> Dict[str, Any]:
@@ -227,10 +258,10 @@ def _top_holders(holders, screen=None) -> Dict[str, Any]:
         jup = [c for c in _checks(screen).get("top_holders_pct", []) if c.source == "jupiter"]
         val = _pct_in(jup[0].result) if jup else None
         if val is not None:
-            status = PASS if val <= TOP_HOLDERS_MAX_PCT else FAIL
+            status = PASS if val <= _line('top_holders_max_pct') else FAIL
             return _f("top_holders_pct", status, round(val, 2), "jupiter",
                       "Jupiter's aggregate top-holder share" if status == PASS
-                      else f"the top holders hold over {TOP_HOLDERS_MAX_PCT:g}%")
+                      else f"the top holders hold over {_line('top_holders_max_pct'):g}%")
         return _f("top_holders_pct", UNKNOWN, reason=getattr(holders, "reason", None)
                   or "the holder report was not available")
     rows = [h for h in holders.top_holders
@@ -239,10 +270,10 @@ def _top_holders(holders, screen=None) -> Dict[str, Any]:
     if not holders.top_holders:
         return _f("top_holders_pct", UNKNOWN, reason="no holder rows were reported")
     val = 100.0 * sum(sorted((h.percent for h in rows), reverse=True)[:10])
-    status = PASS if val <= TOP_HOLDERS_MAX_PCT else FAIL
+    status = PASS if val <= _line('top_holders_max_pct') else FAIL
     return _f("top_holders_pct", status, round(val, 2), "holders",
               "top 10 wallets, contracts/programs and burns excluded" if status == PASS
-              else f"the top 10 wallets hold over {TOP_HOLDERS_MAX_PCT:g}%")
+              else f"the top 10 wallets hold over {_line('top_holders_max_pct'):g}%")
 
 
 def _bundled(family: str, insiders, insiders_error) -> Dict[str, Any]:
@@ -255,10 +286,10 @@ def _bundled(family: str, insiders, insiders_error) -> Dict[str, Any]:
     if insiders.networks_pct is None:
         return _f("bundled_supply_pct", UNKNOWN, reason="rugcheck's insider graph did not run")
     val = insiders.networks_pct
-    status = PASS if val <= BUNDLED_MAX_PCT else FAIL
+    status = PASS if val <= _line('bundled_max_pct') else FAIL
     return _f("bundled_supply_pct", status, round(val, 2), "rugcheck",
               f"{insiders.networks} insider network(s) — addresses, not people"
-              if status == PASS else f"insider networks hold over {BUNDLED_MAX_PCT:g}%")
+              if status == PASS else f"insider networks hold over {_line('bundled_max_pct'):g}%")
 
 
 # --------------------------------------------------------------------------
@@ -274,9 +305,9 @@ def _base_tier(liq: Optional[float], age: Optional[float]) -> str:
         return "C"
     liq_ok = lambda line: liq >= line  # noqa: E731
     age_ok = lambda line: age is None or age >= line  # noqa: E731
-    if liq_ok(TIER_A_LIQUIDITY_USD) and age_ok(TIER_A_AGE_H):
+    if liq_ok(_line('tier_a_liquidity_usd')) and age_ok(_line('tier_a_age_h')):
         return "A"
-    if liq_ok(TIER_B_LIQUIDITY_USD) and age_ok(TIER_B_AGE_H):
+    if liq_ok(_line('tier_b_liquidity_usd')) and age_ok(_line('tier_b_age_h')):
         return "B"
     return "C"
 
@@ -299,6 +330,9 @@ def assess(family: str, *, screen, holders, quote, pools=None, pools_error=None,
     fields += [_top_holders(holders, screen), _bundled(family, insiders, insiders_error),
                _f("fresh_wallet_ratio", INFO, None, None,
                   "no keyless source; reported, not gated")]
+    lines_error = lines_checked()[1]
+    if lines_error:
+        fields.append(_f("screen_lines", UNKNOWN, reason=lines_error))
     by = {f["name"]: f for f in fields}
     failed = [f["name"] for f in fields if f["status"] == FAIL]
     hard = list(getattr(screen, "hard_fails", []) or [])
@@ -309,8 +343,10 @@ def assess(family: str, *, screen, holders, quote, pools=None, pools_error=None,
     else:
         base = _base_tier(by["liquidity_usd"]["value"], by["pool_age_h"]["value"])
         tier = TIERS[min(TIERS.index(base) + 1, len(TIERS) - 1)] if unknown else base
+        if lines_error:
+            tier = TIERS[-1]  # PARTIAL: the install's lines may be stricter
     return {"tier_ceiling": tier, "failed": failed, "unknown": unknown,
-            "screen_hard_fails": hard, "fields": fields}
+            "screen_hard_fails": hard, "fields": fields, "screen_lines_error": lines_error}
 
 
 # --------------------------------------------------------------------------
@@ -389,6 +425,9 @@ def render(result: Dict[str, Any]) -> List[str]:
             f"{n} {_value_text(by[n])} ({by[n]['reason']})" for n in result["failed"]))
     if result["screen_hard_fails"]:
         lines.append("      the contract screen has a HARD FAIL (above).")
+    if result.get("screen_lines_error"):
+        lines.append(f"      PARTIAL: {result['screen_lines_error']} — the ceiling is held at "
+                     f"{TIERS[-1]}.")
     if result["unknown"]:
         lines.append("      unknown: " + ", ".join(result["unknown"])
                      + " — an unknown is not a pass; it lowers the ceiling one tier.")

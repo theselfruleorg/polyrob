@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 
 def _goal(**payload):
-    return SimpleNamespace(id="abcdef123456", title="Round 14 — X outreach", user_id="rob",
+    return SimpleNamespace(id="abcdef123456", title="Round 14 — X outreach", user_id="alice",
                            payload={"origin_session_id": "origin-1", **payload})
 
 

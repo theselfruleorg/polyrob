@@ -21,17 +21,17 @@ def _row(**kw):
 
 
 @pytest.fixture()
-def rob_asset(tmp_path, monkeypatch):
+def demo_asset(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     from core.payments.assets import AssetStore, PaymentAsset, store_path
     AssetStore(store_path(str(tmp_path))).upsert(PaymentAsset(
-        asset_id="rob", chain="robinhood", address="0x" + "bb" * 20,
-        decimals=18, symbol="ROB", rail="onchain_scan", source="operator"))
+        asset_id="demo", chain="robinhood", address="0x" + "bb" * 20,
+        decimals=18, symbol="DEMO", rail="onchain_scan", source="operator"))
 
 
-def test_an_onchain_scan_asset_serves_a_direct_transfer_challenge(rob_asset):
+def test_an_onchain_scan_asset_serves_a_direct_transfer_challenge(demo_asset):
     body, status = _challenge_for_invoice(_row(
-        chain="robinhood", asset_id="rob", asset_address="0x" + "bb" * 20,
+        chain="robinhood", asset_id="demo", asset_address="0x" + "bb" * 20,
         asset_decimals=18, amount_raw=str(7 * 10 ** 18), amount_usd=0.5))
     assert status == 402
     assert body["rail"] == "onchain_scan"
@@ -39,23 +39,23 @@ def test_an_onchain_scan_asset_serves_a_direct_transfer_challenge(rob_asset):
     assert body["token"] == "0x" + "bb" * 20
     assert body["amount_raw"] == str(7 * 10 ** 18)
     assert body["chain_id"] == 4663
-    assert body["symbol"] == "ROB"
+    assert body["symbol"] == "DEMO"
     assert body["uri"].startswith("ethereum:")
 
 
-def test_an_onchain_scan_challenge_carries_NO_accepts_block(rob_asset):
+def test_an_onchain_scan_challenge_carries_NO_accepts_block(demo_asset):
     """⚠️ The whole point. An `accepts` block asks the payer to sign a payment
     authorization; for an asset no facilitator knows, that signature is never
     verified by anyone and the payer has not paid."""
     body, _ = _challenge_for_invoice(_row(
-        chain="robinhood", asset_id="rob", asset_address="0x" + "bb" * 20,
+        chain="robinhood", asset_id="demo", asset_address="0x" + "bb" * 20,
         asset_decimals=18, amount_raw=str(10 ** 18)))
     assert "accepts" not in body
 
 
-def test_the_direct_transfer_challenge_says_not_to_sign_anything(rob_asset):
+def test_the_direct_transfer_challenge_says_not_to_sign_anything(demo_asset):
     body, _ = _challenge_for_invoice(_row(
-        chain="robinhood", asset_id="rob", asset_address="0x" + "bb" * 20,
+        chain="robinhood", asset_id="demo", asset_address="0x" + "bb" * 20,
         asset_decimals=18, amount_raw=str(10 ** 18)))
     assert "do not sign" in body["note"].lower()
 
@@ -93,16 +93,16 @@ def test_the_facilitator_challenge_is_unchanged(tmp_path, monkeypatch):
     assert body["amount_usd"] == 1.25
 
 
-def test_pay_is_refused_for_an_onchain_scan_asset(rob_asset):
+def test_pay_is_refused_for_an_onchain_scan_asset(demo_asset):
     """The facilitator cannot settle it, so accepting an X-PAYMENT header would
     take a signature and do nothing with it."""
     from api.x402_endpoints import _facilitator_refusal
     refusal = _facilitator_refusal(_row(
-        chain="robinhood", asset_id="rob", asset_address="0x" + "bb" * 20,
+        chain="robinhood", asset_id="demo", asset_address="0x" + "bb" * 20,
         asset_decimals=18, amount_raw=str(10 ** 18)))
     assert refusal is not None
     assert "DIRECT TRANSFER" in refusal
-    assert "ROB" in refusal
+    assert "DEMO" in refusal
 
 
 def test_pay_is_allowed_for_a_facilitator_asset(tmp_path, monkeypatch):
