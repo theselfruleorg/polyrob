@@ -69,21 +69,25 @@ def test_a_socket_in_a_held_group_is_reachable(sock):
     assert acc.exists and acc.reachable and acc.in_process_groups
 
 
+#: A uid that is never this process (a CI runner IS uid 1001 and owns the socket).
+_UID = 4242 if os.getuid() != 4242 else 4243
+
+
 def test_a_group_added_after_login_is_named_with_the_manager_restart(sock, monkeypatch):
     gid = os.stat(sock).st_gid
     monkeypatch.setattr(ss, "_user_in_group", lambda user, g: True)
-    acc = ss.socket_access(str(sock), uid=1001, user="polyrob", groups=set())
+    acc = ss.socket_access(str(sock), uid=_UID, user="polyrob", groups=set())
     assert acc.exists and not acc.reachable and acc.user_in_group
-    hint = ss.stale_group_hint(acc, uid=1001)
+    hint = ss.stale_group_hint(acc, uid=_UID)
     assert hint and "started before that" in hint
-    assert "`systemctl restart user@1001.service`" in hint
+    assert f"`systemctl restart user@{_UID}.service`" in hint
     assert str(acc.group or gid) in hint
 
 
 def test_no_stale_hint_when_the_user_is_not_in_the_group(sock, monkeypatch):
     monkeypatch.setattr(ss, "_user_in_group", lambda user, g: False)
-    acc = ss.socket_access(str(sock), uid=1001, user="polyrob", groups=set())
-    assert not acc.reachable and ss.stale_group_hint(acc, uid=1001) is None
+    acc = ss.socket_access(str(sock), uid=_UID, user="polyrob", groups=set())
+    assert not acc.reachable and ss.stale_group_hint(acc, uid=_UID) is None
 
 
 def test_a_missing_socket_says_so(tmp_path):
