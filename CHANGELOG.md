@@ -57,7 +57,8 @@ short, user-facing notes for each release are on its GitHub Release page.
 - Playwright 1.63.0 → 1.64.1 (floor `>=1.64.1`): the bundled Chromium moves to 156.0.8078.4, past the exploited
   CVE-2026-87491. After the upgrade run `python -m playwright install chromium` (isolated browser service:
   `sudo polyrob browser update`).
-- Dependency CVEs: pypdf 6.21.4 (7 crafted-PDF DoS), pyasn1 0.6.5 (4 BER-decode DoS); console rig vitest 4.1.12.
+- Dependency CVEs: pypdf 6.21.2 → 6.21.4 (7), pyasn1 0.6.4 → 0.6.5 (4); console test rig vitest 2.1.9 → 4.1.12
+  (7, one critical: attacker code execution).
 - oauthlib 3.3.1 → 4.0.1 (2 CVEs): tweepy 4.17.0 pins `oauthlib<4`, so the X pack carries tweepy itself
   (`polyrob_x/_vendor`); `[twitter]` installs requests-oauthlib, oauthlib>=4.0.1 and urllib3; every update path
   uninstalls the old tweepy so `pip check` passes.
