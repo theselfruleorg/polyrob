@@ -27,6 +27,7 @@ from core.optional_extras import IMPORT_TO_DIST  # noqa: E402
 #: ImportError``) and the code works without it. Shrink-only — a new row needs a
 #: reason; a row whose import is gone fails the stale check below.
 OPTIONAL_UNDECLARED = {
+    "bson": "packs/x/polyrob_x/_vendor/tweepy/cache.py: vendored tweepy's MongodbCache only, imported inside it; never used",
     "cachetools": "agents/task/path.py: the session LRU cache; a manual LRU fallback",
     "filelock": "core/file_lock.py: SafeFileLock; a plain lock-file fallback",
     "nest_asyncio": "modules/llm/adapters.py: the sync adapter's nested-loop patch; guarded",

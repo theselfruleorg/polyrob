@@ -5,6 +5,15 @@ one goal of ANOTHER tenant that must never show.
 Shared by ``test_goal_board_routes.py`` and the rendered-board check
 (``tests/integration/test_goal_board_render.py``)."""
 from agents.task.goals.board import GoalBoard
+from core.sqlite_util import execute_retry
+
+
+def force_status(b: GoalBoard, goal_id: str, status: str) -> None:
+    """Seed a status directly (a fixture, not a transition: the board's own
+    writes only take the edges ``GOAL_MACHINE`` lists — 098 AG-17)."""
+    done = status in ("done", "cancelled", "blocked")
+    execute_retry(b.db_path, "UPDATE goals SET status=?, completed_at=? WHERE id=?",
+                  (status, b._now() if done else None, goal_id))
 
 OWNER = "u1"
 OTHER = "u2"
@@ -18,7 +27,7 @@ def seed(db_path: str, owner: str = OWNER) -> dict:
     def mk(name, title, *, status=None, user=owner, **kw):
         g = b.create(user_id=user, title=title, force=True, **kw)
         if status and status != g.status:
-            b.update_status(g.id, status)
+            force_status(b, g.id, status)
         ids[name] = g.id
         return g
 

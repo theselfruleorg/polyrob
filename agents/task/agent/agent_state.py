@@ -10,12 +10,12 @@ OPTIMIZATION (Nov 14, 2025): Added 199 IQ loop detection fields
 
 import time
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, List
+
+from agents.task.agent.core.run_state import RunControl
 
 
 @dataclass
@@ -37,13 +37,11 @@ class AgentState:
 	max_steps: Optional[int] = None
 	total_actions_count: int = 0
 
-	# Execution control flags
-	paused: bool = False
-	stopped: bool = False
-	done: bool = False
-	# 083 WS-1: why the last run() stopped (a runtime.stop_reason.StopReason
-	# value; first writer wins via set_stop). Reset per run, never persisted.
-	stop_reason: Optional[str] = None
+	# 098 AG-01: run control (idle/running/paused/stopped, the stop reason, the
+	# pause clock, per-run counters) has ONE owner, never persisted. `stopped`
+	# and `stop_reason` below are views of it; RunControl.request_stop is the
+	# one writer of `stopped`.
+	run_control: RunControl = field(default_factory=RunControl, repr=False, compare=False)
 	# 083 WS-2: the agent's last report at the step limit (its words, never done()).
 	exhausted_summary: Optional[str] = None
 	# 083 WS-3: session provider spend when this run started (autonomous main agent
@@ -106,9 +104,34 @@ class AgentState:
 		"""Update last activity timestamp."""
 		self.last_activity_time = time.time()
 
+	@property
+	def stopped(self) -> bool:
+		"""Read-only view: the run was stopped (``run_control.request_stop``)."""
+		return self.run_control.stopped
+
+	@property
+	def stop_reason(self) -> Optional[str]:
+		"""083 WS-1: why the last run() stopped (first writer wins via set_stop)."""
+		return self.run_control.stop_reason
+
+	@stop_reason.setter
+	def stop_reason(self, value: Optional[str]) -> None:
+		self.run_control.stop_reason = value
+
+	def request_stop(self, reason: Any = None) -> bool:
+		"""The one writer of ``stopped`` (098 AG-01); names the stop reason."""
+		return self.run_control.request_stop(reason)
+
+	def begin_run(self) -> None:
+		"""098 AG-01: a run starts clean — a halt of the last run (stopped, the
+		failure count, the failed-provider list, the LLM breaker) is run-scoped."""
+		self.run_control.begin_run()
+		self.consecutive_failures = 0
+		self.reset_llm_errors(reset_circuit_breaker=True)
+
 	def should_stop(self) -> bool:
 		"""Check if agent should stop execution."""
-		return self.stopped or self.done
+		return self.stopped
 	
 	# OPTIMIZATION: Loop detection methods (Nov 14, 2025)
 	
@@ -257,13 +280,12 @@ class AgentState:
 			Dictionary representation of agent state
 		"""
 		return {
-			'version': '1.1',  # Updated for LLM error tracking
+			# 1.2 (098 AG-01): run-scoped control and LLM-error fields are not
+			# persisted — a restored session starts runnable with every provider.
+			'version': '1.2',
 			'n_steps': self.n_steps,
 			'max_steps': self.max_steps,
 			'total_actions_count': self.total_actions_count,
-			'paused': self.paused,
-			'stopped': self.stopped,
-			'done': self.done,
 			'consecutive_failures': self.consecutive_failures,
 			'total_failures': self.total_failures,
 			'max_failures': self.max_failures,
@@ -276,11 +298,6 @@ class AgentState:
 			'findings_last_n_steps': self.findings_last_n_steps,
 			'loop_warning_count': self.loop_warning_count,
 			'max_loop_warnings': self.max_loop_warnings,
-			# LLM error tracking (Dec 2025)
-			'llm_error_type_counts': self.llm_error_type_counts,
-			'llm_providers_failed': self.llm_providers_failed,
-			'last_llm_error_type': self.last_llm_error_type,
-			'llm_circuit_breaker_open': self.llm_circuit_breaker_open,
 			# Timestamps
 			'session_created_at': self.session_created_at.isoformat() if self.session_created_at else None,
 			'last_activity_time': self.last_activity_time,
@@ -300,9 +317,10 @@ class AgentState:
 		Raises:
 			ValueError: If version mismatch or invalid data
 		"""
-		# Validate version (support 1.0 and 1.1)
+		# Validate version (support 1.0, 1.1 and 1.2). Older files carry
+		# paused/stopped/done and llm_* — run-scoped, ignored on restore.
 		version = data.get('version')
-		if version not in ('1.0', '1.1'):
+		if version not in ('1.0', '1.1', '1.2'):
 			raise ValueError(f"Unsupported agent state version: {version}")
 
 		# Create instance with restored data
@@ -310,9 +328,6 @@ class AgentState:
 			n_steps=data.get('n_steps', 1),
 			max_steps=data.get('max_steps'),
 			total_actions_count=data.get('total_actions_count', 0),
-			paused=data.get('paused', False),
-			stopped=data.get('stopped', False),
-			done=data.get('done', False),
 			consecutive_failures=data.get('consecutive_failures', 0),
 			total_failures=data.get('total_failures', 0),
 			max_failures=data.get('max_failures', 3),
@@ -325,11 +340,6 @@ class AgentState:
 			findings_last_n_steps=data.get('findings_last_n_steps', 0),
 			loop_warning_count=data.get('loop_warning_count', 0),
 			max_loop_warnings=data.get('max_loop_warnings', 3),
-			# LLM error tracking (Dec 2025) - defaults for v1.0 compatibility
-			llm_error_type_counts=data.get('llm_error_type_counts', {}),
-			llm_providers_failed=data.get('llm_providers_failed', []),
-			last_llm_error_type=data.get('last_llm_error_type'),
-			llm_circuit_breaker_open=data.get('llm_circuit_breaker_open', False),
 			# Timestamps
 			session_created_at=datetime.fromisoformat(data['session_created_at']) if data.get('session_created_at') else None,
 			last_activity_time=data.get('last_activity_time', time.time()),
@@ -350,30 +360,12 @@ class AgentState:
 			filepath = Path(filepath)
 			filepath.parent.mkdir(parents=True, exist_ok=True)
 
-			# Atomic write using temp file + rename
-			temp_fd, temp_path = tempfile.mkstemp(
-				dir=filepath.parent,
-				prefix='.agent_state_',
-				suffix='.tmp'
-			)
-
-			try:
-				with os.fdopen(temp_fd, 'w') as f:
-					json.dump(self.to_dict(), f, indent=2)
-					f.flush()
-					os.fsync(f.fileno())
-
-				# Atomic rename
-				os.replace(temp_path, str(filepath))
-				# mkstemp births 0600; the shared data home needs group-write.
-				from core.data_perms import apply_birth_mode
-				apply_birth_mode(filepath)
-				return True
-			except Exception:
-				# Clean up temp file on error
-				if os.path.exists(temp_path):
-					os.unlink(temp_path)
-				raise
+			from core.state.files import atomic_write_json
+			atomic_write_json(str(filepath), self.to_dict())
+			# atomic_write_json births 0600; the shared data home needs group-write.
+			from core.data_perms import apply_birth_mode
+			apply_birth_mode(filepath)
+			return True
 
 		except Exception as e:
 			# Log error but don't crash agent
@@ -413,5 +405,5 @@ class AgentState:
 			f"steps={self.n_steps}/{self.max_steps or '∞'}, "
 			f"actions={self.total_actions_count}, "
 			f"failures={self.consecutive_failures}/{self.max_failures}, "
-			f"paused={self.paused}, stopped={self.stopped}, done={self.done})"
+			f"run={self.run_control.state})"
 		)

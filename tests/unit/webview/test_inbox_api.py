@@ -100,7 +100,7 @@ def test_decide_routes_a_self_evolution_item_to_the_shared_decider(
         client, inbox, monkeypatch):
     seen = {}
 
-    def fake(kind, item_id, kw, *, approved):
+    def fake(kind, item_id, kw, *, approved, rev=None):
         seen.update(kind=kind, item_id=item_id, approved=approved,
                     user_id=kw["user_id"])
         return True, "done"
@@ -115,7 +115,7 @@ def test_decide_routes_a_self_evolution_item_to_the_shared_decider(
 def test_reject_routes_with_approved_false(client, inbox, monkeypatch):
     seen = {}
     monkeypatch.setattr(inbox, "_decide_pending",
-                        lambda k, i, kw, *, approved: (seen.update(approved=approved)
+                        lambda k, i, kw, *, approved, rev=None: (seen.update(approved=approved)
                                                        or (True, "ok")))
     client.post("/api/webgate/inbox/skill/abc/reject")
     assert seen == {"approved": False}
@@ -172,7 +172,7 @@ def test_an_unknown_verb_is_not_a_route(client):
 
 def test_a_failed_decision_is_reported_not_raised(client, inbox, monkeypatch):
     monkeypatch.setattr(inbox, "_decide_pending",
-                        lambda k, i, kw, *, approved: (False, "no such item"))
+                        lambda k, i, kw, *, approved, rev=None: (False, "no such item"))
     resp = client.post("/api/webgate/inbox/skill/abc/decide")
     assert resp.status_code == 200
     assert resp.json() == {"ok": False, "message": "no such item"}

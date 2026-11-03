@@ -7,7 +7,6 @@ orchestrator.submit_user_message / record_decision etc. unchanged.
 """
 from __future__ import annotations
 
-import os
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -60,8 +59,9 @@ class HITLIngressMixin:
                 self._correspondent_taint_sources = set()
             self._correspondent_taint_sources.add(src)
             self._correspondent_tainted = True
-            sources = sorted(self._correspondent_taint_sources)
-        self._write_taint_sidecar(sources)
+            # 098 AG-07: the sidecar commits under the same lock as the flag, so
+            # memory and disk can never disagree after a set/clear interleave.
+            self._write_taint_sidecar(sorted(self._correspondent_taint_sources))
 
     def _clear_correspondent_taint(self) -> None:
         """A genuine owner turn re-opens the gate — clear the flag AND the sources.
@@ -79,9 +79,12 @@ class HITLIngressMixin:
         "is the owner driving?" question — one place, one answer.
         """
         with _TAINT_LOCK:
+            from core.security.taints import correspondent_tainted
+            was_tainted = correspondent_tainted(self)
             self._correspondent_tainted = False
             self._correspondent_taint_sources = set()
-        self._write_taint_sidecar(None)
+            if was_tainted:  # 098 AG-07: an untainted owner drain touches no disk
+                self._write_taint_sidecar(None)
 
     # --- M02: durable taint ---------------------------------------------------
     def _taint_sidecar_path(self):
@@ -106,12 +109,10 @@ class HITLIngressMixin:
                 except FileNotFoundError:
                     pass
                 return
-            import json
             import time
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"tainted": True, "ts": time.time(),
-                                       "sources": [list(x) for x in sources]}))
-            os.replace(tmp, path)
+            from core.state.files import atomic_write_json
+            atomic_write_json(str(path), {"tainted": True, "ts": time.time(),
+                                          "sources": [list(x) for x in sources]})
         except Exception as e:
             logger = getattr(self, "logger", None)
             if logger is not None:

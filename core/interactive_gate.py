@@ -7,18 +7,50 @@ of each turn, and the goal/cron executors skip a tick while busy (queued work ru
 on the next idle tick). Inert on the server: no REPL ever marks busy there, so
 ``is_interactive_busy()`` stays False and server-side execution is unaffected.
 
-A depth counter (not a bool) makes nested/re-entrant turns safe."""
+098 CO-01: the gate is a SET of live holders (token -> kind, session, human),
+not a depth. Concurrent async turns (an owner DM and a room on one event loop)
+do not nest, so a depth released the marker and the lock when the FIRST turn
+ended. The `turn.active` marker and the workspace lock follow the set of HUMAN
+holders (``turn_gate``: idle -> held -> idle); a goal run is a non-human holder
+and never hides or suppresses an owner turn."""
 from __future__ import annotations
 
 import contextlib
+import itertools
+import logging
 import os
-from typing import Optional
+import threading
+from dataclasses import dataclass
+from typing import Dict, Optional
 
-_busy_depth = 0
-# 2026-09-19: the `turn.active` marker follows the HUMAN-turn depth, not the busy
-# depth — a goal run (or a leaked busy mark) must never hide a live owner turn
-# from the deploy waiter (10:36Z: a deploy fired at step 4 of an owner turn).
-_turn_depth = 0
+from core.state.machine import StateMachine
+
+logger = logging.getLogger(__name__)
+
+TURN_GATE = StateMachine(
+    "turn_gate",
+    states=frozenset({"idle", "held"}),
+    transitions={"idle": frozenset({"held"}), "held": frozenset({"held", "idle"})},
+    initial=frozenset({"idle"}),
+)
+
+
+@dataclass(frozen=True)
+class Holder:
+    kind: str
+    session_id: Optional[str]
+    human: bool
+    started: float
+
+
+#: token -> live holder (owner turns, REPL turns, goal runs, woken runs).
+_holders: Dict[int, Holder] = {}
+_tokens = itertools.count(1)
+_mutex = threading.RLock()
+#: the workspace lock held while the gate is ``held`` (taken by the first human
+#: holder, released by the last one — whichever context that is).
+_gate_lock = None
+_gate_state = "idle"
 
 
 def _workspace_lock_path() -> Optional[str]:
@@ -94,26 +126,32 @@ def turn_marker_path() -> Optional[str]:
     return os.path.join(root, "turn.active")
 
 
-def _write_turn_marker(kind: str, session_id: Optional[str]) -> None:
-    import logging
+def _write_turn_marker(humans, session_id: Optional[str] = None) -> None:
+    """Write the marker for the live human holders: the oldest names ``kind`` /
+    ``session_id`` / ``started`` (the shape every reader knows), ``holders``
+    lists all; ``pid_start`` + ``boot_id`` make it a process identity (S5).
+    ``humans`` may also be a kind string (one holder, the older call shape)."""
+    if isinstance(humans, str):
+        import time
+        humans = [Holder(humans, session_id, True, time.time())]
     mp = turn_marker_path()
+    first = humans[0]
     if mp is None:
-        logging.getLogger(__name__).info(
-            "turn marker NOT written (no marker path: lock dir/data dir unset) "
-            "kind=%s session=%s", kind, session_id)
+        logger.info("turn marker NOT written (no marker path: lock dir/data dir unset) "
+                    "kind=%s session=%s", first.kind, first.session_id)
         return
-    import json
-    import time
     try:
-        os.makedirs(os.path.dirname(mp), exist_ok=True)
-        tmp = f"{mp}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"pid": os.getpid(), "kind": kind, "started": time.time(),
-                       "session_id": session_id or ""}, f)
-        os.replace(tmp, mp)
-        logging.getLogger(__name__).info(
-            "turn marker written pid=%s kind=%s session=%s path=%s",
-            os.getpid(), kind, session_id, mp)
+        from core.state.files import atomic_write_json
+        from core.state.proc import process_identity
+        me = process_identity()
+        atomic_write_json(mp, {
+            "pid": me.pid, "pid_start": me.start, "boot_id": me.boot,
+            "kind": first.kind, "started": first.started,
+            "session_id": first.session_id or "",
+            "holders": [{"kind": h.kind, "session_id": h.session_id or ""} for h in humans],
+        }, mode=0o644, indent=None)
+        logger.info("turn marker written pid=%s kind=%s session=%s holders=%d path=%s",
+                    me.pid, first.kind, first.session_id, len(humans), mp)
     except OSError:
         pass
 
@@ -133,15 +171,34 @@ def _clear_turn_marker() -> None:
         pass
     try:
         os.unlink(mp)
-        import logging
-        logging.getLogger(__name__).info("turn marker cleared pid=%s path=%s", os.getpid(), mp)
+        logger.info("turn marker cleared pid=%s path=%s", os.getpid(), mp)
     except OSError:
         pass
 
 
+def marker_is_live(m: dict) -> bool:
+    """098 CO-01: a marker names a live turn only while its writer runs — pid,
+    process start time and boot id all match (a reused pid is not proof of
+    life). A marker without ``pid_start`` (an older writer) falls back to the
+    pid check for one release."""
+    pid = int(m.get("pid") or 0)
+    if pid <= 0:
+        return False
+    if m.get("pid_start"):
+        from core.state.proc import ProcIdentity, is_alive
+        return is_alive(ProcIdentity(pid, str(m["pid_start"]), str(m.get("boot_id") or "")))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass  # alive, owned by another user
+    return True
+
+
 def read_turn_marker() -> Optional[dict]:
-    """The live turn marker, or None (absent, unreadable, or from a dead pid —
-    a crashed process must not read as a turn forever)."""
+    """The live turn marker, or None (absent, unreadable, or from a process that
+    no longer runs — a crashed process must not read as a turn forever)."""
     mp = turn_marker_path()
     if mp is None or not os.path.exists(mp):
         return None
@@ -149,17 +206,8 @@ def read_turn_marker() -> Optional[dict]:
     try:
         with open(mp, encoding="utf-8") as f:
             m = json.load(f)
-        pid = int(m.get("pid") or 0)
-        if pid <= 0:
-            return None
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return None
-        except PermissionError:
-            pass  # alive, owned by another user
-        return m
-    except (OSError, ValueError, TypeError):
+        return m if marker_is_live(m) else None
+    except (OSError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -192,88 +240,139 @@ def workspace_turn_lock(timeout: Optional[float] = None):
         yield lp
 
 
-def mark_busy() -> None:
-    global _busy_depth
-    _busy_depth += 1
+def mark_busy(kind: str = "busy", session_id: Optional[str] = None, *,
+              human: bool = False) -> int:
+    """Register a holder; returns its token for :func:`mark_idle`."""
+    import time
+    with _mutex:
+        token = next(_tokens)
+        _holders[token] = Holder(kind, session_id, human, time.time())
+        return token
 
 
-def mark_idle() -> None:
-    global _busy_depth
-    if _busy_depth > 0:
-        _busy_depth -= 1
+def mark_idle(token: Optional[int] = None) -> None:
+    """Release ``token``. An unknown token logs and releases nothing (it never
+    ends someone else's turn). No token (an older caller that kept none)
+    releases the newest NON-human holder only."""
+    with _mutex:
+        if token is None:
+            for t in sorted(_holders, reverse=True):
+                if not _holders[t].human:
+                    _holders.pop(t)
+                    return
+            logger.warning("interactive gate: mark_idle() without a token and no non-human holder")
+            return
+        holder = _holders.pop(token, None)
+        if holder is None:
+            logger.warning("interactive gate: mark_idle(%s) — unknown token, nothing released", token)
 
 
 def is_interactive_busy() -> bool:
-    return _busy_depth > 0
+    return bool(_holders)
 
 
-@contextlib.contextmanager
-def owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
-               lock_timeout: float = 5.0):
-    """A human turn on a HEADLESS surface (Telegram/email owner turn): mark the
-    process busy, write the `turn.active` marker, and try to take the cross-process
-    lock — but NEVER refuse the human. If another process holds the lock past
-    ``lock_timeout`` the turn proceeds without it (logged); the busy depth and the
-    marker still stop this process's cron/goal ticks and the deploy waiter.
+def _humans():
+    return [h for _, h in sorted(_holders.items()) if h.human]
 
-    056 WS3 (2026-09-19): until this existed the headless server's owner turns held
-    nothing, so a money rail could run under the owner's live turn on the same
-    shared workspace.
-    """
-    import logging
-    global _turn_depth
-    outermost = _turn_depth == 0
-    _turn_depth += 1
-    mark_busy()
-    if outermost:
-        _write_turn_marker(kind, session_id)
-    lock = None
-    try:
-        if outermost:
-            lp = _workspace_lock_path()
-            if lp is not None:
-                try:
-                    from core.file_lock import SafeFileLock
-                    lock = SafeFileLock(lp, timeout=lock_timeout)
-                    lock.__enter__()
-                except Exception as e:  # contention/timeout: proceed unlocked
-                    logging.getLogger(__name__).warning(
-                        "owner turn proceeds without the workspace lock: %s", e)
-                    lock = None
-        yield
-    finally:
+
+def _gate_enter(token: int, *, refuse_on_contention: bool, lock_timeout: Optional[float]) -> None:
+    """A human holder entered: ``idle -> held`` takes the lock and writes the
+    marker; ``held -> held`` rewrites the marker with every live holder."""
+    global _gate_lock, _gate_state
+    with _mutex:
+        humans = _humans()
+        to = "held"
+        TURN_GATE.check(_gate_state, to, ctx={"token": token})
+        first = _gate_state == "idle"
+        _gate_state = to
+        _write_turn_marker(humans)
+        if not first:
+            return
+        lp = _workspace_lock_path()
+        if lp is None:
+            return
+        from core.file_lock import SafeFileLock
+        timeout = _workspace_lock_timeout() if lock_timeout is None else lock_timeout
+        lock = SafeFileLock(lp, timeout=timeout)
+        try:
+            lock.__enter__()
+            _gate_lock = lock
+        except Exception as e:
+            if refuse_on_contention:
+                raise
+            logger.warning("owner turn proceeds without the workspace lock: %s", e)
+
+
+def _gate_leave(token: int) -> None:
+    """A human holder left: others remain -> rewrite the marker (``held``); the
+    last one -> release the lock and clear the marker (``idle``)."""
+    global _gate_lock, _gate_state
+    with _mutex:
+        mark_idle(token)
+        humans = _humans()
+        if humans:
+            _write_turn_marker(humans)
+            return
+        if _gate_state == "held":
+            TURN_GATE.check("held", "idle", ctx={"token": token})
+        _gate_state = "idle"
+        lock, _gate_lock = _gate_lock, None
         if lock is not None:
             try:
                 lock.__exit__(None, None, None)
             except Exception:
                 pass
-        _turn_depth = max(0, _turn_depth - 1)
-        if outermost:
-            _clear_turn_marker()
-        mark_idle()
+        _clear_turn_marker()
+
+
+@contextlib.contextmanager
+def owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
+               lock_timeout: float = 5.0):
+    """A human turn on a HEADLESS surface (Telegram/email owner turn): a human
+    holder of the gate — the process is busy, the `turn.active` marker names it,
+    and the first live human turn takes the cross-process lock — but NEVER
+    refuses the human. If another process holds the lock past ``lock_timeout``
+    the turn proceeds without it (logged); the holder and the marker still stop
+    this process's cron/goal ticks and the deploy waiter.
+
+    056 WS3 (2026-09-19): until this existed the headless server's owner turns held
+    nothing, so a money rail could run under the owner's live turn on the same
+    shared workspace.
+    """
+    token = mark_busy(kind, session_id, human=True)
+    try:
+        _gate_enter(token, refuse_on_contention=False, lock_timeout=lock_timeout)
+        yield
+    finally:
+        _gate_leave(token)
 
 
 @contextlib.contextmanager
 def interactive_turn():
-    """Mark the process busy + hold the cross-process workspace lock for a turn.
+    """A REPL turn: a human holder (busy, marker, cross-process lock).
 
-    busy-depth serializes the in-process tickers; workspace_turn_lock serializes a
-    second `polyrob` process / out-of-process ticker. On cross-process contention the
-    lock raises TimeoutError (fail-loud) rather than racing the workspace files.
+    The first live human turn takes the lock; on cross-process contention it
+    raises TimeoutError (fail-loud) rather than racing the workspace files. A
+    goal run holding the gate (non-human) no longer suppresses the marker or
+    the lock (098 CO-01).
     """
-    # Only the OUTERMOST turn acquires the (non-reentrant) cross-process lock;
-    # nested turns are the same turn and must not re-acquire it.
-    outermost = _busy_depth == 0
-    mark_busy()
-    if outermost:
-        _write_turn_marker("repl", None)
+    token = mark_busy("repl", None, human=True)
     try:
-        if outermost:
-            with workspace_turn_lock():
-                yield
-        else:
-            yield
+        _gate_enter(token, refuse_on_contention=True, lock_timeout=None)
+        yield
     finally:
-        if outermost:
-            _clear_turn_marker()
-        mark_idle()
+        _gate_leave(token)
+
+
+def reset_for_tests() -> None:
+    """Drop every holder and the gate lock (test isolation only)."""
+    global _gate_lock, _gate_state
+    with _mutex:
+        _holders.clear()
+        lock, _gate_lock = _gate_lock, None
+        _gate_state = "idle"
+    if lock is not None:
+        try:
+            lock.__exit__(None, None, None)
+        except Exception:
+            pass

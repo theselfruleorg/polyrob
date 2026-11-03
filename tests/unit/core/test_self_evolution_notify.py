@@ -113,6 +113,8 @@ def test_decide_all_promotes_every_pending_item(tmp_path):
                      user_id="alice", created_by="agent")
     _pending(tmp_path, "Learned: surface blockers to the owner proactively.")
     assert len(_items_all(tmp_path, mgr)) == 2
+    se.save_notified_state("alice", se.pending_notify_state(_items_all(tmp_path, mgr)),
+                           home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID)  # 098 CO-19
 
     ok, failed, msgs = se.decide_all(True, user_id="alice", home_dir=tmp_path,
                                      instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
@@ -128,6 +130,8 @@ def test_decide_all_on_empty_queue_is_not_an_error(tmp_path):
 
 def test_decide_all_can_reject(tmp_path):
     _pending(tmp_path, "Learned: surface blockers to the owner proactively.")
+    se.save_notified_state("alice", se.pending_notify_state(_items(tmp_path)),
+                           home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID)  # 098 CO-19
     ok, failed, _ = se.decide_all(False, user_id="alice", home_dir=tmp_path,
                                   instance_id=DEFAULT_INSTANCE_ID, skill_manager=None)
     assert ok == 1 and failed == 0

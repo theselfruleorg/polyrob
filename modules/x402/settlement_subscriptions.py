@@ -34,6 +34,12 @@ class SettlementSubscriptionsMixin:
                 logger.warning("settlement watcher: renewal step failed for "
                                "subscription %s", sub.get("id"), exc_info=True)
 
+        try:  # 098 MO-05: a subscription whose job is gone stops billing
+            for sub in await subs.reap_subscriptions(now=now, db=self._db):
+                logger.warning("settlement watcher: subscription %s canceled (%s)",
+                               sub.get("id"), sub.get("reason"))
+        except Exception:
+            logger.warning("settlement watcher: subscription reap failed", exc_info=True)
         graced = await subs.subscriptions_to_grace(now=now, db=self._db)
 
         suspended = await subs.subscriptions_to_suspend(now=now, db=self._db)

@@ -255,7 +255,7 @@ def test_refund_due_emits_a_durable_event(monkeypatch):
 
     class _DB:
         async def execute(self, *a, **k):
-            return None
+            return 1  # 098 MO-03: a guarded write; one row moved
 
     class _Container:
         def get_service(self, name):

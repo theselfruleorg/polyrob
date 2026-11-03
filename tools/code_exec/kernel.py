@@ -37,6 +37,9 @@ _cap = int(sys.argv[1]) if len(sys.argv) > 1 else 100000
 _g = {"__name__": "__main__", "__builtins__": __builtins__}
 _out = sys.stdout
 _in = sys.stdin
+import os as _os
+_out.write(json.dumps({"pid": _os.getpid()}) + "\n")
+_out.flush()
 def _clip(s):
     return s if len(s) <= _cap else s[:_cap] + "\n...[truncated %d chars]" % (len(s) - _cap)
 for _line in _in:
@@ -83,27 +86,61 @@ class KernelUnavailable(RuntimeError):
 
 
 class Kernel:
-    def __init__(self, argv: List[str], *, env: Optional[Dict[str, str]], cwd: Optional[str]):
-        self.argv = argv
-        self.env = env
-        self.cwd = cwd
+    """098 TS-11: the resource is the interpreter INSIDE the backend. Its argv
+    is built per start from the backend's CURRENT container (a re-created
+    sandbox gets a new kernel), the kernel reports its own pid, and a kill also
+    kills that inner pid in the container (``docker exec`` does not forward the
+    client's SIGKILL). ``execute`` and ``shutdown`` share one lock."""
+
+    def __init__(self, backend, workdir: Optional[str]):
+        self.backend = backend
+        self.workdir = workdir
         self.proc: Optional[asyncio.subprocess.Process] = None
+        self.inner_pid: Optional[int] = None
+        self.container: Optional[str] = None
+        self.generation = None
         self._seq = 0
         self._lock = asyncio.Lock()
 
     @property
     def alive(self) -> bool:
-        return self.proc is not None and self.proc.returncode is None
+        return (self.proc is not None and self.proc.returncode is None
+                and self.generation == getattr(self.backend, "generation", None))
 
     async def start(self) -> None:
+        argv, env, cwd = kernel_argv(self.backend, self.workdir)
+        self.container = getattr(self.backend, "_container", None)
+        self.generation = getattr(self.backend, "generation", None)
         self.proc = await asyncio.create_subprocess_exec(
-            *self.argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, env=self.env, cwd=self.cwd,
+            *argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, env=env, cwd=cwd,
             start_new_session=True, limit=8 * 1024 * 1024,
         )
+        self.inner_pid = None
+        try:
+            hello = json.loads(await asyncio.wait_for(self.proc.stdout.readline(), 30))
+            self.inner_pid = int(hello["pid"])
+        except Exception:
+            logger.debug("kernel: no pid line", exc_info=True)
+
+    async def _kill_inner(self) -> None:
+        pid, cname = self.inner_pid, self.container
+        self.inner_pid = None
+        runner = getattr(self.backend, "_docker", None)
+        if not pid or not cname or runner is None:
+            return
+        try:  # best effort, bounded: the container may already be gone
+            await asyncio.wait_for(runner(["exec", cname, "kill", "-9", str(pid)], timeout=5), 6)
+        except Exception:
+            logger.debug("kernel: inner kill failed", exc_info=True)
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            await self.kill()
 
     async def kill(self) -> None:
         proc, self.proc = self.proc, None
+        await self._kill_inner()
         if proc is None or proc.returncode is not None:
             return
         try:
@@ -123,6 +160,7 @@ class Kernel:
         async with self._lock:
             restarted = False
             if not self.alive:
+                await self.kill()  # a stale kernel of an old container
                 await self.start()
                 restarted = True
             self._seq += 1
@@ -195,12 +233,12 @@ async def run_cell(session_id: str, backend, code: str, *, timeout: float,
     sid = session_id or "kernel"
     k = _KERNELS.get(sid)
     if reset and k is not None:
-        await k.kill()
+        await k.shutdown()
         _KERNELS.pop(sid, None)
         k = None
     if k is None:
-        argv, env, cwd = kernel_argv(backend, workdir)
-        k = Kernel(argv, env=env, cwd=cwd)
+        kernel_argv(backend, workdir)  # raises KernelUnavailable before registering
+        k = Kernel(backend, workdir)
         _KERNELS[sid] = k
     return await k.execute(code, timeout=timeout)
 
@@ -208,7 +246,7 @@ async def run_cell(session_id: str, backend, code: str, *, timeout: float,
 async def shutdown_kernel(session_id: str) -> None:
     k = _KERNELS.pop(session_id or "kernel", None)
     if k is not None:
-        await k.kill()
+        await k.shutdown()
 
 
 __all__ = ["run_cell", "shutdown_kernel", "kernel_argv", "KernelUnavailable", "CellResult",

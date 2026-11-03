@@ -257,6 +257,15 @@ class HFDeployTool(BaseTool):
                     include_in_memory=True)
             registry.mark_approved(app_name, uid)
 
+        # 098 TS-30: ``deploying`` is on record BEFORE the Space is published, so
+        # a crash leaves an honest row the reconcile probes; a second deploy of
+        # the same app waits for this one.
+        if not registry.begin_deploy(app_name, uid, space_repo=space_repo):
+            now_row = registry.get(app_name, uid) or {}
+            return ActionResult(
+                error=f"a deploy of '{app_name}' is already in progress "
+                      f"(status {now_row.get('status') or 'unknown'})",
+                include_in_memory=True)
         registry.record_attempt(app_name, uid)
         broker = self._get_broker()
         try:
@@ -272,13 +281,25 @@ class HFDeployTool(BaseTool):
         except Exception:
             healthy = False
         if not healthy:
-            registry.record_failed(app_name, uid, error=f"health check failed: {check_url}")
+            # The Space IS published; the reconcile re-checks it and flips it
+            # live once it answers (a cold start is not a failed publish).
+            registry.record_unhealthy(
+                app_name, uid, error=f"health check failed: {check_url}",
+                set_cols={"public_url": url, "health_path": health_path,
+                          "space_repo": space_repo, "workspace_digest": digest,
+                          "last_deploy": time.time()})
             return ActionResult(
-                error=f"health check failed: {check_url} did not return 2xx after deploy",
+                error=f"health check failed: {check_url} did not return 2xx after deploy "
+                      f"(the Space is up but unhealthy; the reconcile re-checks it)",
                 include_in_memory=True)
 
-        registry.record_live(app_name, uid, space_repo=space_repo, public_url=url,
-                             health_path=health_path, workspace_digest=digest)
+        if not registry.record_live(app_name, uid, space_repo=space_repo, public_url=url,
+                                    health_path=health_path, workspace_digest=digest):
+            now_row = registry.get(app_name, uid) or {}
+            return ActionResult(
+                error=f"'{app_name}' was published to {url}, but its record changed "
+                      f"meanwhile (now {now_row.get('status') or 'gone'}) — not marked live",
+                include_in_memory=True)
         self_events.emit_self_modification(
             kind="hf_deploy", action="deploy", item_id=app_name,
             user_id=uid, session_id=sid, ok=True, source="hf_deploy_tool")
@@ -336,7 +357,9 @@ class HFDeployTool(BaseTool):
         if not rows:
             return ActionResult(extracted_content="No deployed apps.", include_in_memory=True)
         lines = [
-            f"- {r['app_name']} [{r['status']}] {r.get('public_url') or ''}".rstrip()
+            (f"- {r['app_name']} [{r['status']}] {r.get('public_url') or ''}".rstrip()
+             + (" — the Space is up but failed its health check"
+                if r['status'] == "unhealthy" else ""))
             for r in rows
         ]
         return ActionResult(extracted_content="Deployed apps:\n" + "\n".join(lines),

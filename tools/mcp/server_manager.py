@@ -6,25 +6,17 @@ import logging
 import os
 import time
 from typing import Dict, List, Optional, Any, Set, Tuple
-from enum import Enum
 from dataclasses import dataclass, field
 
 from core.exceptions import ServiceError, ConfigurationError, MCPError, MCPConnectionError, MCPProtocolError, MCPToolExecutionError
 from core.logging import get_component_logger
 from .config import MCPServerConfig, MCPServerType, resolve_environment_variables
 from .subscriptions import ResourceSubscriptionRegistry
+from .connection import ServerConnection, ServerStatus  # noqa: F401 (re-export)
+from core.state.lifecycle import ResourceClosed
 from .protocol import MCPClient, MCPStdioTransport, MCPSSETransport, MCPHTTPTransport, MCPStreamableHTTPTransport
 from .oauth_bridge import apply_oauth_headers, make_auth_refresh_callback, oauth_applies_to
 from utils.circuit_breaker import CircuitBreaker, get_circuit_breaker_registry, CircuitBreakerError
-
-
-class ServerStatus(str, Enum):
-    """MCP server connection status."""
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    ERROR = "error"
-    RECONNECTING = "reconnecting"
 
 
 @dataclass
@@ -49,23 +41,6 @@ class MCPResource:
     description: Optional[str]
     mime_type: Optional[str]
     server_name: str
-
-
-@dataclass
-class ServerConnection:
-    """Represents a connection to an MCP server."""
-    name: str
-    config: MCPServerConfig
-    status: ServerStatus = ServerStatus.DISCONNECTED
-    client: Optional[MCPClient] = None
-    circuit_breaker: Optional[CircuitBreaker] = None
-    last_error: Optional[str] = None
-    connected_at: Optional[float] = None
-    retry_count: int = 0
-    tools: List[MCPToolMetadata] = field(default_factory=list)
-    resources: List[MCPResource] = field(default_factory=list)
-    capabilities: Dict[str, Any] = field(default_factory=dict)
-    # NOTE: Message processing is handled internally by MCPClient (client._message_handler_task)
 
 
 class MCPServerManager:
@@ -101,7 +76,7 @@ class MCPServerManager:
         prefix = f"user_{user_id}::"
         return sum(
             1 for name, conn in self.connections.items()
-            if name.startswith(prefix) and conn.status == ServerStatus.CONNECTED
+            if name.startswith(prefix) and conn.is_active()
         )
     
     def can_add_user_connection(self, user_id: str) -> bool:
@@ -146,14 +121,14 @@ class MCPServerManager:
             if name in self.connections:
                 self.logger.warning(f"Server '{name}' already exists")
                 return False
-            
-            # Check concurrent connection limit
-            active_connections = sum(1 for conn in self.connections.values() 
-                                   if conn.status == ServerStatus.CONNECTED)
+
+            # Check concurrent connection limit. 098 TS-01: every row that holds
+            # or is about to hold a client counts, not only CONNECTED ones.
+            active_connections = sum(1 for conn in self.connections.values() if conn.is_active())
             if active_connections >= self.max_concurrent:
                 self.logger.error(f"Maximum concurrent connections ({self.max_concurrent}) reached")
                 return False
-            
+
             # FIX #13: Check per-user connection limit for user servers
             if name.startswith("user_") and "::" in name:
                 user_id = name.split("::")[0].replace("user_", "")
@@ -162,23 +137,24 @@ class MCPServerManager:
                         f"User {user_id} has reached maximum connections ({self.max_per_user})"
                     )
                     return False
-            
+
             # Create circuit breaker for this server
             circuit_breaker = self.circuit_breaker_registry.get_or_create(
                 f"mcp_server_{name}",
                 failure_threshold=config.retry_attempts if hasattr(config, 'retry_attempts') else 5,
                 recovery_timeout=config.retry_delay if hasattr(config, 'retry_delay') else 60.0
             )
-            
+
             connection = ServerConnection(name=name, config=config, circuit_breaker=circuit_breaker)
             self.connections[name] = connection
-            
-            if config.enabled:
-                return await self._connect_server(connection)
-            
+
+        if not config.enabled:
             self.logger.info(f"Server '{name}' added but disabled")
             return True
-    
+        # The handshake runs under the connection's own lock, not the manager
+        # lock: one slow server no longer blocks every other connect.
+        return await self._connect_server(connection)
+
     async def remove_server(self, name: str) -> bool:
         """Remove and disconnect from an MCP server.
         
@@ -189,70 +165,60 @@ class MCPServerManager:
             True if server was removed successfully
         """
         async with self._lock:
-            if name not in self.connections:
-                self.logger.warning(f"Server '{name}' not found")
-                return False
-            
-            connection = self.connections[name]
-            await self._disconnect_server(connection)
-            del self.connections[name]
-            # H10: genuine removal (not a transient disconnect) — drop the server's
-            # subscription callbacks so they don't leak for the manager's lifetime.
-            self._subscriptions.clear(name)
+            connection = self.connections.pop(name, None)
+        if connection is None:
+            self.logger.warning(f"Server '{name}' not found")
+            return False
+        # REMOVED is terminal: a reconnect in flight finishes first (same lock)
+        # and is then torn down; a later one raises ResourceClosed.
+        await connection.lifecycle.stop(remove=True)
+        # H10: genuine removal (not a transient disconnect) — drop the server's
+        # subscription callbacks so they don't leak for the manager's lifetime.
+        self._subscriptions.clear(name)
+        self.logger.info(f"Server '{name}' removed")
+        return True
 
-            self.logger.info(f"Server '{name}' removed")
-            return True
-    
     async def connect_server(self, name: str) -> bool:
-        """Connect to a specific server.
-        
-        Args:
-            name: Server name
-            
-        Returns:
-            True if connection was successful
-        """
-        async with self._lock:
-            if name not in self.connections:
-                self.logger.error(f"Server '{name}' not found")
-                return False
-            
-            connection = self.connections[name]
-            if connection.status == ServerStatus.CONNECTED:
-                self.logger.info(f"Server '{name}' already connected")
-                return True
-            
-            return await self._connect_server(connection)
-    
-    async def disconnect_server(self, name: str) -> bool:
-        """Disconnect from a specific server.
-        
-        Args:
-            name: Server name
-            
-        Returns:
-            True if disconnection was successful
-        """
-        async with self._lock:
-            if name not in self.connections:
-                self.logger.error(f"Server '{name}' not found")
-                return False
-            
-            connection = self.connections[name]
-            await self._disconnect_server(connection)
+        """Connect (or reconnect now, ignoring the backoff) to a server."""
+        connection = self.connections.get(name)
+        if connection is None:
+            self.logger.error(f"Server '{name}' not found")
+            return False
+        if connection.status == ServerStatus.CONNECTED:
+            self.logger.info(f"Server '{name}' already connected")
             return True
-    
+        return await self._connect_server(connection)
+
+    async def restart_server(self, name: str) -> bool:
+        """Close the live client and connect again, under one lock hold."""
+        connection = self.connections.get(name)
+        if connection is None:
+            self.logger.error(f"Server '{name}' not found")
+            return False
+        self._bind(connection)
+        try:
+            await connection.lifecycle.restart()
+            return True
+        except Exception as e:
+            self.logger.error(f"Restart of server '{name}' failed: {e}")
+            return False
+
+    async def disconnect_server(self, name: str) -> bool:
+        """Disconnect from a server. CLOSED is restartable by ``connect_server``."""
+        connection = self.connections.get(name)
+        if connection is None:
+            self.logger.error(f"Server '{name}' not found")
+            return False
+        await self._disconnect_server(connection)
+        return True
+
     async def disconnect_all_servers(self) -> None:
-        """Disconnect from all servers."""
-        async with self._lock:
-            tasks = []
-            for connection in self.connections.values():
-                if connection.status == ServerStatus.CONNECTED:
-                    tasks.append(self._disconnect_server(connection))
-            
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-    
+        """Stop every connection, whatever its state (098 TS-01: ERROR and
+        RECONNECTING rows hold clients too)."""
+        tasks = [self._disconnect_server(c) for c in list(self.connections.values())]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def get_server_status(self, name: str) -> Optional[ServerStatus]:
         """Get connection status for a server.
         
@@ -407,6 +373,7 @@ class MCPServerManager:
             raise MCPConnectionError(f"Server '{server_name}' is currently unavailable (circuit breaker open)")
         except Exception as e:
             self.logger.error(f"❌ Tool execution failed on '{server_name}.{tool_name}': {e}")
+            await self._degrade_if_transport_lost(connection, e)
             raise MCPToolExecutionError(f"Tool execution failed: {e}")
     
     async def read_resource(self, server_name: str, resource_uri: str) -> Any:
@@ -499,39 +466,53 @@ class MCPServerManager:
         """Dispatch a server-side resource update to registered callbacks. Returns count."""
         return await self._subscriptions.dispatch(server_name, resource_uri)
 
-    async def _restore_subscriptions(self, connection) -> None:
+    async def _restore_subscriptions(self, connection, client=None) -> None:
         """Re-wire the resource-update handler and re-send resources/subscribe for every
         uri still tracked for this server (H10 — after a (re)connect). Fail-open per uri.
         """
+        client = client or connection.client
         uris = self._subscriptions.uris_for(connection.name)
-        if not uris or not connection.client:
+        if not uris or not client:
             return
-        connection.client._resource_update_handler = self._make_client_handler(connection.name)
+        client._resource_update_handler = self._make_client_handler(connection.name)
         for uri in uris:
             try:
-                await connection.client.subscribe_resource(uri)
+                await client.subscribe_resource(uri)
                 self.logger.info(f"Re-subscribed resource '{uri}' on server '{connection.name}'")
             except Exception as e:
                 self.logger.warning(
                     f"resource re-subscribe failed server='{connection.name}' uri='{uri}': {e}"
                 )
 
+    def _bind(self, connection: ServerConnection) -> None:
+        if connection.opener is None:
+            connection.opener = self._open_client
+
     async def _connect_server(self, connection: ServerConnection) -> bool:
-        """Connect to a specific server (internal).
-        
-        Args:
-            connection: Server connection object
-            
-        Returns:
-            True if connection was successful
-        """
+        """Start the connection's lifecycle (internal). True when READY."""
+        self._bind(connection)
         try:
-            connection.status = ServerStatus.CONNECTING
+            await connection.lifecycle.start()
+            return True
+        except ResourceClosed:
+            self.logger.info(f"Server '{connection.name}' was removed; not connecting")
+            return False
+        except Exception as e:
+            connection.last_error = str(e)
+            self.logger.error(f"❌ Connection failed for server '{connection.name}': {e}")
+            return False
+
+    async def _open_client(self, connection: ServerConnection) -> MCPClient:
+        """The lifecycle's create hook: build the transport, handshake, discover
+        capabilities. A raise is a failed start; the partial client is closed
+        here (the lifecycle only owns a handle that this returned)."""
+        client: Optional[MCPClient] = None
+        try:
             self.logger.info(
                 f"🔌 Connecting to MCP server '{connection.name}' "
                 f"(type={connection.config.type.value}, timeout={connection.config.timeout}s)"
             )
-            
+
             # SECURITY (SSRF/DNS rebinding): user-registered servers must be
             # validated+pinned at connect time. Trusted operator-configured
             # global servers (anysite/dev) keep legacy behavior.
@@ -596,128 +577,53 @@ class MCPServerManager:
             else:
                 raise MCPConnectionError(f"Unsupported server type: {connection.config.type}")
 
-            # Create MCP client and connect
-            connection.client = MCPClient(transport)
-            self.logger.debug(f"Initiating connection for '{connection.name}'...")
-            await connection.client.connect()
+            client = MCPClient(transport)
+            await client.connect()
 
-            # NOTE: Message processing loop is started automatically by MCPClient.connect()
-            # No need to start it again here (was causing duplicate loops)
-
-            # Update connection status
-            connection.status = ServerStatus.CONNECTED
-            connection.connected_at = time.time()
-            connection.retry_count = 0
-            connection.last_error = None
-            
-            # Update tools and resources from client
-            await self._update_server_capabilities(connection)
-            
+            await self._update_server_capabilities(connection, client)
             # Wait a bit more if no tools discovered yet but server supports them
             if not connection.tools and "tools" in connection.capabilities:
                 self.logger.info(f"⏳ Waiting for tools discovery for server '{connection.name}'...")
                 await asyncio.sleep(2)  # Give extra time for async tool discovery
-                await self._update_server_capabilities(connection)
-            
+                await self._update_server_capabilities(connection, client)
+
             self.logger.info(
                 f"✅ Successfully connected to server '{connection.name}' "
                 f"({len(connection.tools)} tools, {len(connection.resources)} resources)"
             )
-
-            # H10: re-establish any resource subscriptions for this server. Subscriptions
-            # survive a transient disconnect (reconnect goes through _disconnect_server,
-            # which no longer drops them); a brand-new MCPClient has no handler wired and
-            # the server has no record of prior subscriptions, so without this updates
-            # silently stop after the first reconnect. No-op on a fresh connect.
-            await self._restore_subscriptions(connection)
-
-            return True
-                
-        except MCPConnectionError as e:
-            # Connection-specific errors (already logged by transport)
-            self.logger.error(
-                f"❌ Connection failed for server '{connection.name}': {e}"
-            )
-            connection.status = ServerStatus.ERROR
-            connection.last_error = str(e)
-            
-            # Clean up partial connection
-            if connection.client:
+            # H10: re-establish resource subscriptions on the new client.
+            await self._restore_subscriptions(connection, client)
+            return client
+        except BaseException:
+            if client is not None:
                 try:
-                    await connection.client.close()
+                    await client.close()
                 except Exception:
                     pass
-                connection.client = None
-
-            return False
-            
-        except Exception as e:
-            # Unexpected errors
-            self.logger.error(
-                f"❌ Unexpected error connecting to server '{connection.name}': {e}",
-                exc_info=True
-            )
-            connection.status = ServerStatus.ERROR
-            connection.last_error = str(e)
-            
-            # Clean up partial connection
-            if connection.client:
-                try:
-                    await connection.client.close()
-                except Exception:
-                    pass
-                connection.client = None
-
-            return False
+            raise
 
     async def _disconnect_server(self, connection: ServerConnection) -> None:
-        """Disconnect from a specific server (internal).
-        
-        Args:
-            connection: Server connection object
-        """
+        """Close the client; the connection stays restartable (CLOSED)."""
         try:
             self.logger.info(f"Disconnecting from server '{connection.name}'")
-
-            # Close MCP client (will handle cleanup of internal message handler)
-            if connection.client:
-                try:
-                    await connection.client.close()
-                except Exception as e:
-                    self.logger.error(f"Error closing MCP client for server '{connection.name}': {e}")
-                finally:
-                    connection.client = None
-            
-            # Reset connection state
-            connection.status = ServerStatus.DISCONNECTED
-            connection.connected_at = None
-            connection.tools.clear()
-            connection.resources.clear()
-            connection.capabilities.clear()
-            
-            self.logger.info(f"Disconnected from server '{connection.name}'")
-            
+            await connection.lifecycle.stop()
         except Exception as e:
             self.logger.error(f"Error disconnecting from server '{connection.name}': {e}")
-    
+
     # Legacy methods removed - now using proper MCP protocol implementation
     
-    async def _update_server_capabilities(self, connection: ServerConnection) -> None:
-        """Update server capabilities from MCP client.
-        
-        Args:
-            connection: Server connection object
-        """
+    async def _update_server_capabilities(self, connection: ServerConnection,
+                                          client: Optional[MCPClient] = None) -> None:
+        """Update server capabilities from the MCP client."""
         try:
-            if not connection.client:
+            client = client or connection.client
+            if not client:
                 return
-            
-            # Get capabilities from client
-            connection.capabilities = connection.client.capabilities
+            connection.capabilities = client.capabilities
             
             # Convert client tools to our format with name normalization
             connection.tools = []
-            for tool in connection.client.tools:
+            for tool in client.tools:
                 original_name = tool["name"]
 
                 # CANONICAL NAME: Always use {server}_{toolname} format
@@ -756,7 +662,7 @@ class MCPServerManager:
                     mime_type=resource.get("mimeType"),
                     server_name=connection.name
                 )
-                for resource in connection.client.resources
+                for resource in client.resources
             ]
             
             self.logger.info(
@@ -772,88 +678,60 @@ class MCPServerManager:
         except Exception as e:
             self.logger.error(f"Failed to update capabilities for server '{connection.name}': {e}")
     
-    def get_circuit_breaker_status(self) -> Dict[str, Dict[str, Any]]:
-        """Get status of all circuit breakers."""
-        return self.circuit_breaker_registry.get_all_status()
-    
-    async def reset_circuit_breaker(self, server_name: str) -> bool:
-        """Reset circuit breaker for a specific server."""
-        return await self.circuit_breaker_registry.reset_breaker(f"mcp_server_{server_name}")
-    
-    async def reset_all_circuit_breakers(self) -> None:
-        """Reset all circuit breakers."""
-        await self.circuit_breaker_registry.reset_all()
-    
     async def _health_check_loop(self) -> None:
-        """Health check loop for all servers (internal)."""
+        """Visit every non-closed connection (098 TS-01): a READY one is probed
+        (a dead transport tears the client down and degrades it); a DEGRADED one
+        is re-created once its backoff has elapsed. No attempt ceiling: the
+        backoff grows to a cap and resets on READY."""
         while not self._shutdown_event.is_set():
             try:
-                # Check each connected server
                 for connection in list(self.connections.values()):
-                    if connection.status == ServerStatus.CONNECTED:
-                        await self._health_check_server(connection)
-                
-                # Wait before next health check
+                    await self._health_check_server(connection)
                 await asyncio.sleep(30)  # Check every 30 seconds
-                
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 self.logger.error(f"Error in health check loop: {e}")
                 await asyncio.sleep(5)  # Wait a bit before retrying
-    
+
+    async def _degrade_if_transport_lost(self, connection: ServerConnection, error) -> None:
+        """A call that failed on a dead transport degrades the connection now
+        (the health loop re-creates it after the backoff)."""
+        client = connection.client
+        if client is not None and getattr(client.transport, "is_closed", False):
+            await connection.lifecycle.fail(error)
+
     async def _health_check_server(self, connection: ServerConnection) -> None:
-        """Perform health check on a single server (internal).
-        
-        Args:
-            connection: Server connection object
-        """
+        """One health visit (internal)."""
+        lc = connection.lifecycle
         try:
-            # Check if client is connected and transport is healthy
-            if connection.client and not connection.client.transport.is_closed:
-                # Connection seems healthy
+            if lc.is_ready():
+                if not await lc.probe():
+                    self.logger.warning(f"Server '{connection.name}' connection is unhealthy")
+                    connection.last_error = "Connection lost during health check"
                 return
-            
-            # Connection is unhealthy
-            if connection.status == ServerStatus.CONNECTED:
-                self.logger.warning(f"Server '{connection.name}' connection is unhealthy")
-                connection.status = ServerStatus.ERROR
-                connection.last_error = "Connection lost during health check"
-                
-                # Attempt reconnection if enabled
-                if connection.config.auto_reconnect:
-                    await self._attempt_reconnection(connection)
-                        
+            if lc.state == "degraded" and connection.config.auto_reconnect and lc.due():
+                await self._attempt_reconnection(connection)
         except Exception as e:
             self.logger.error(f"Health check failed for server '{connection.name}': {e}")
-    
-    async def _attempt_reconnection(self, connection: ServerConnection) -> None:
-        """Attempt to reconnect to a failed server (internal).
-        
-        Args:
-            connection: Server connection object
-        """
-        if connection.retry_count >= connection.config.retry_attempts:
-            self.logger.error(f"Max retry attempts reached for server '{connection.name}'")
-            return
-        
-        connection.retry_count += 1
-        connection.status = ServerStatus.RECONNECTING
-        
-        self.logger.info(f"Attempting reconnection to server '{connection.name}' (attempt {connection.retry_count})")
-        
-        # Wait before reconnecting
-        await asyncio.sleep(connection.config.retry_delay)
-        
-        # Cleanup existing connection
-        await self._disconnect_server(connection)
-        
-        # Reset circuit breaker to allow reconnection
+
+    async def _attempt_reconnection(self, connection: ServerConnection) -> bool:
+        """Re-create a degraded connection (internal). The lifecycle lock makes
+        it exclusive; a removed connection raises ResourceClosed, never revives."""
+        if self.connections.get(connection.name) is not connection:
+            return False
+        self.logger.info(f"Attempting reconnection to server '{connection.name}' "
+                         f"(attempt {connection.retry_count + 1})")
+        # 098 CL-31: CircuitBreaker.reset() is synchronous.
         if connection.circuit_breaker:
-            await connection.circuit_breaker.reset()
-        
-        # Attempt to reconnect
-        if await self._connect_server(connection):
+            connection.circuit_breaker.reset()
+        ok = await self._connect_server(connection)
+        if ok and self.connections.get(connection.name) is not connection:
+            await connection.lifecycle.stop(remove=True)  # removed while it connected
+            return False
+        if ok:
             self.logger.info(f"Successfully reconnected to server '{connection.name}'")
         else:
-            self.logger.error(f"Failed to reconnect to server '{connection.name}'")
+            self.logger.error(f"Failed to reconnect to server '{connection.name}' "
+                              f"(next try in {connection.lifecycle.retry_in():.0f}s)")
+        return ok

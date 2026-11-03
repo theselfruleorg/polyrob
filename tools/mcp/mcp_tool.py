@@ -170,7 +170,8 @@ class MCPTool(BaseTool):
             store = user_store(self)
         if store is not None and hasattr(store, "add_change_listener"):
             store.add_change_listener(self._on_user_server_change)
-        
+            from .user_servers import live_status  # 098 TS-03: listings read live state
+            store.live_status = lambda name: live_status(self, name)
         try:
             # Get optional cache manager
             self.cache_manager = self.get_service('cache_manager')
@@ -278,6 +279,8 @@ class MCPTool(BaseTool):
         self._user_mcp_service = service
         if service is not None and hasattr(service, "add_change_listener"):
             service.add_change_listener(self._on_user_server_change)
+            from .user_servers import live_status
+            service.live_status = lambda name: live_status(self, name)
         self.logger.debug("UserMCPService configured for MCPTool")
 
     async def _on_user_server_change(self, user_id: str, server_name: str, event: str) -> None:
@@ -357,8 +360,8 @@ class MCPTool(BaseTool):
         ]
 
         for server_name in servers_to_remove:
-            try:
-                await self.server_manager.disconnect_server(server_name)
+            try:  # 098 TS-03: remove (connection, breaker, subscriptions), not disconnect
+                await self.server_manager.remove_server(server_name)
                 unloaded_count += 1
                 self.logger.debug(f"Unloaded user MCP server: {server_name}")
             except Exception as e:
@@ -1065,10 +1068,9 @@ class MCPTool(BaseTool):
             return {"success": False, "error": _mcp_off_text()}
 
         try:
-            # Disconnect and reconnect
-            await self.server_manager.disconnect_server(params.server_name)
-            await asyncio.sleep(1)  # Brief pause
-            success = await self.server_manager.connect_server(params.server_name)
+            # 098 TS-01: one restart under the connection lock (no window in
+            # which a disconnected row can be raced by the health loop).
+            success = await self.server_manager.restart_server(params.server_name)
 
             if success:
                 self.logger.info(f"Successfully reloaded server '{params.server_name}'")

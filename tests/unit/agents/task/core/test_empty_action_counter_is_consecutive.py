@@ -138,17 +138,16 @@ def test_validate_and_intervene_returns_true_only_for_valid_output():
 
 
 def test_reset_for_continuation_clears_the_counter():
-    """A new conversational turn starts fresh; the counter lives on the Agent, so
-    state.consecutive_failures = 0 never reached it."""
-    import inspect
+    """A new conversational turn starts fresh. 098 AG-02: the counter lives in
+    RunControl and every run (and reset_for_continuation) calls begin_run."""
+    from agents.task.agent.agent_state import AgentState
+    from agents.task.agent.service import Agent
 
-    from agents.task.agent.core import safety_lifecycle
-
-    src = inspect.getsource(safety_lifecycle.SafetyLifecycleMixin.reset_for_continuation)
-    assert "_empty_action_counter = 0" in src, (
-        "reset_for_continuation does not clear _empty_action_counter — an empty "
-        "response in a previous turn still counts toward this turn's escalation"
-    )
+    a = object.__new__(Agent)
+    a.state = AgentState()
+    a._empty_action_counter = 2
+    a.state.begin_run()
+    assert a._empty_action_counter == 0
 
 
 def test_empty_action_texts_have_no_contradiction_and_no_absent_tools():

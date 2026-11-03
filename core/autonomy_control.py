@@ -105,8 +105,7 @@ KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
 #: keeps this set bidirectionally honest: a kind gains a caller, it comes out
 #: of here the same day; a kind loses its last caller, it goes back in.
 DORMANT_KINDS = frozenset({
-    "trade_exit", "oversight_seed", "oversight_dial",
-    "oversight_alert", "factory_build",
+    "trade_exit", "oversight_seed", "oversight_dial", "factory_build",
 })
 
 

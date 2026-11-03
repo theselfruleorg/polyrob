@@ -60,8 +60,18 @@ class ModalBackend(RemoteSandboxBackend):
                 "sleep", "infinity", app=app, image=self._image(modal),
                 timeout=MODAL_SANDBOX_TIMEOUT_SEC,
                 block_network=not self.network_enabled(), **extra)
-            proc = sb.exec("mkdir", "-p", self.workdir)
-            proc.wait()
+            self._record(sb)  # 098 CL-15: a record names the sandbox before anything can fail
+            try:
+                proc = sb.exec("mkdir", "-p", self.workdir)
+                proc.wait()
+            except BaseException:  # 098 CL-15: never a billed sandbox with no handle
+                try:
+                    sb.terminate()
+                    self._forget()
+                except Exception:
+                    logger.warning("modal backend: terminate after a failed setup failed",
+                                   exc_info=True)
+                raise
             return sb
 
         return await self.in_thread(_create)
@@ -99,8 +109,50 @@ class ModalBackend(RemoteSandboxBackend):
                     logger.warning("modal backend: snapshot failed; the next session "
                                    "starts from the base image", exc_info=True)
             handle.terminate()
+            self._forget()
 
         await self.in_thread(_stop)
+
+    # --- 098 CL-15: the sandbox record and the boot sweep's verb -----------------
+    def _snapshot_mode(self) -> bool:
+        # 098 review: the SAME rule as `_release` — only a persistent session
+        # snapshots; a record of "persist" for an ephemeral one made the boot
+        # sweep snapshot it, and the next session of that slug booted from it.
+        return bool(self.persistent) and bool_env("MODAL_SANDBOX_SNAPSHOT", False)
+
+    def _record(self, sb) -> None:
+        sid = getattr(sb, "object_id", "") or ""
+        if not sid:
+            return
+        from polyrob.sdk import process_identity
+        self.save_state({**self.load_state(), "phase": "created", "sandbox_id": sid,
+                         "mode": "persist" if self._snapshot_mode() else "ephemeral",
+                         "owner": process_identity().encode()})
+
+    def _forget(self) -> None:
+        """After a terminate: keep only the snapshot image id."""
+        rest = {k: v for k, v in self.load_state().items()
+                if k not in ("phase", "sandbox_id", "mode", "owner")}
+        self.save_state(rest) if rest else self.clear_state()
+
+    def reap_orphan(self, record: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """A Modal sandbox has no stop: persist (snapshot mode) snapshots the
+        filesystem first, so the session resumes from that image ("stopped");
+        ephemeral terminates ("deleted"). Raises on a provider error."""
+        modal = self._sdk()
+        client = self._client(modal)
+        extra: Dict[str, Any] = {"client": client} if client is not None else {}
+        sb = modal.Sandbox.from_id(record["sandbox_id"], **extra)
+        rest = {k: v for k, v in record.items()
+                if k not in ("phase", "sandbox_id", "mode", "owner")}
+        if record.get("mode") == "persist":
+            image_id = getattr(sb.snapshot_filesystem(), "object_id", None)
+            sb.terminate()
+            if image_id:
+                rest["image_id"] = image_id
+            return "stopped", (rest or None)
+        sb.terminate()
+        return "deleted", (rest or None)
 
 
 def _text(value) -> str:

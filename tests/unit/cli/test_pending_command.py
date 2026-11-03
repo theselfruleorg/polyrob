@@ -185,8 +185,11 @@ def test_pending_labels_contract_and_pref_change_correctly(tmp_path):
 
     ctx, rec = _ctx(tmp_path, [])
     _h_pending(ctx)
-    assert "[contract] contract:u1" in rec.text
-    assert "[pref change] pref_change:approvals.require" in rec.text
+    # 096 W7: the notice's own labels, and this seat's decide verbs per item.
+    assert "Operating contract" in rec.text
+    assert "Preference change 'approvals.require'" in rec.text
+    assert "/pending approve contract u1" in rec.text
+    assert "/pending approve pref_change approvals.require" in rec.text
     # never mislabeled as the generic pre-fix fallback
-    assert "[skill] contract:" not in rec.text
-    assert "[skill] pref_change:" not in rec.text
+    assert "Skill 'u1'" not in rec.text
+    assert "Skill 'approvals.require'" not in rec.text

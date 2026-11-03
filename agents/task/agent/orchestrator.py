@@ -435,10 +435,15 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         except Exception as e:
             self.logger.warning(f"Failed to register orchestrator with session manager: {e}")
         
-        # Update session status
+        # Update session status — 098 AG-14: only from a state the table lets
+        # (re)build; a recreate inside a run (status 'running') keeps 'running'.
         try:
-            self.session_manager.update_session_status(self.session_id, "initializing")
-            self.logger.debug("Updated session status to initializing")
+            from agents.task.agent.session import SESSION_MACHINE
+            cur = (self.session_manager.get_session_info(self.session_id) or {}).get('status')
+            if cur is None or SESSION_MACHINE.allowed(cur, "initializing"):
+                self.session_manager.update_session_status(self.session_id, "initializing")
+                self.logger.debug("Updated session status to initializing")
+            self.reopen_shell_sandbox()  # 098 TS-09: a (re)created session gets a fresh sandbox
         except Exception as e:
             self.logger.warning(f"Failed to update session status: {e}")
         
@@ -768,6 +773,19 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
             self.logger.error(f"Failed to initialize orchestrator: {e}")
             raise
 
+    def cancel_background_delegations(self, reason: str) -> None:
+        """098 review (O-01): an owner cancel also stops this session's background
+        delegations — a late result must not restart what the owner stopped.
+        Every owner-cancel path (the API/TaskAgent cancel and the durable control
+        mailbox behind ``/run stop`` and ``polyrob session cancel``) calls this.
+        Never raises."""
+        try:
+            reg = getattr(self, "async_delegation", None)
+            if reg is not None and hasattr(reg, "cancel_all"):
+                reg.cancel_all(reason)
+        except Exception as e:
+            self.logger.warning(f"cancel of background delegations failed: {e}")
+
     def cancel(self) -> None:
         """Cancel all agents in this session.
 
@@ -900,7 +918,8 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         # kick (never open the storm rail on an error).
         try:
             from agents.task.agent.core.self_wake import get_reentry_budget
-            if not get_reentry_budget().try_consume(self.session_id):
+            if not get_reentry_budget().try_consume(  # 098 AG-11: the real tenant on the row
+                    self.session_id, str(getattr(self, "user_id", "") or "")):
                 self.logger.info(
                     f"🛌 re-entry budget exhausted — parking async-delegation result "
                     f"without a wake kick for session {self.session_id}"

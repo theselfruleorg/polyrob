@@ -257,7 +257,7 @@ async def test_daytona_stop_and_resume(monkeypatch):
     b = DaytonaBackend(session_id="s1", dev_mode=True)
     await b.setup()
     await b.teardown()
-    assert ("stop",) in log and ("delete",) not in log and b.load_state() == {"sandbox_id": "sb-1"}
+    assert ("stop",) in log and ("delete",) not in log and b.load_state()["sandbox_id"] == "sb-1"
     log.clear()
     b2 = DaytonaBackend(session_id="s1", dev_mode=True)
     await b2.setup()

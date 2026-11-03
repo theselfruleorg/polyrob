@@ -74,6 +74,33 @@ STATE_FAILED = "failed"
 STATE_NEVER_SENT = "never_sent"
 UNSENT_STALE_SEC = 3600
 
+#: 098 CO-23: the ONE transition table for ``bridges.state``. Two drivers
+#: settle a row (the verb after its own wait, the watcher on its tick): every
+#: write is a guarded transition, so a late writer can never overwrite a
+#: terminal state another driver already proved.
+from core.state.machine import StateMachine  # noqa: E402
+
+BRIDGE = StateMachine(
+    name="bridge",
+    states=frozenset({STATE_PENDING, STATE_IN_FLIGHT, STATE_ARRIVED, STATE_FAILED,
+                      STATE_NEVER_SENT}),
+    transitions={
+        STATE_PENDING: frozenset({STATE_IN_FLIGHT, STATE_ARRIVED, STATE_FAILED,
+                                  STATE_NEVER_SENT}),
+        STATE_IN_FLIGHT: frozenset({STATE_IN_FLIGHT, STATE_ARRIVED, STATE_FAILED}),
+    },
+    terminal=frozenset({STATE_ARRIVED, STATE_FAILED, STATE_NEVER_SENT}),
+    initial=frozenset({STATE_PENDING}),
+)
+
+#: 098 CO-23: while the verb drives a row (broadcast → origin confirm → its own
+#: arrival wait) it holds a lease (``driver`` = process identity,
+#: ``driver_until``); the watcher leaves a row with a live lease alone.
+DRIVER_LEASE_SEC = 2 * DEFAULT_ARRIVAL_DEADLINE_SEC + 120
+#: A ``mark_sent`` that could not stamp the tx holds the row this long, so the
+#: never-sent sweep cannot close a broadcast bridge (fail-CLOSED for the sweep).
+UNSTAMPED_HOLD_SEC = 7 * 24 * 3600
+
 #: B-1: how far before the bridge row's ``created_at`` a delivering
 #: transaction's block time may be and still count (clock skew between this
 #: host and the chain). Anything older is an EARLIER transfer, not this one.
@@ -140,7 +167,8 @@ def _init(db_path: str) -> None:
     # Rows written before ``escalated_at`` existed gain it in place
     # (``ensure_columns``: only a duplicate-column race is swallowed).
     from core.sqlite_util import init_schema
-    init_schema(db_path, _SCHEMA, columns={"bridges": (("escalated_at", "REAL"),)})
+    init_schema(db_path, _SCHEMA, columns={"bridges": (
+        ("escalated_at", "REAL"), ("driver", "TEXT"), ("driver_until", "REAL"))})
 
 
 @dataclass(frozen=True)
@@ -268,30 +296,98 @@ def record_pending(*, user_id: str, quote, amount_usd: Optional[float],
     execute_retry(path, (
         "INSERT INTO bridges (id, user_id, request_id, origin_chain_id, "
         "dest_chain_id, recipient, currency_out, amount_in_raw, min_out_raw, "
-        "amount_usd, state, balance_before, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+        "amount_usd, state, balance_before, created_at, driver, driver_until) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
         (bid, str(user_id), quote.request_id, int(quote.origin_chain_id),
          int(quote.dest_chain_id), quote.recipient, quote.currency_out,
          str(quote.amount_in_raw), str(quote.min_out_raw),
          amount_usd, STATE_PENDING,
-         None if balance_before is None else str(balance_before), time.time()))
+         None if balance_before is None else str(balance_before), time.time(),
+         _driver_identity(), time.time() + DRIVER_LEASE_SEC))
     return bid
 
 
+def _driver_identity() -> str:
+    from core.state.proc import process_identity
+    try:
+        return process_identity().encode()
+    except Exception:
+        return ""
+
+
+def driver_is_live(row: Dict[str, Any], *, now: Optional[float] = None) -> bool:
+    """The row has a lease that has not run out AND whose process still runs.
+    A dead driver's lease is void: the watcher takes the row over."""
+    from core.state.proc import ProcIdentity, is_alive
+    try:
+        until = float(row.get("driver_until") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if until <= (time.time() if now is None else float(now)):
+        return False
+    try:
+        return is_alive(ProcIdentity.decode(row.get("driver")))
+    except Exception:
+        return False
+
+
+def hold_driver(bid: str, seconds: float, *, db_path: Optional[str] = None) -> bool:
+    """Extend this process's lease on an open row (before a long wait)."""
+    from core.sqlite_util import execute_retry
+    try:
+        return bool(execute_retry(db_path or bridges_db_path(), (
+            "UPDATE bridges SET driver=?, driver_until=? WHERE id=? AND state IN (?,?)"),
+            (_driver_identity(), time.time() + float(seconds), bid,
+             STATE_PENDING, STATE_IN_FLIGHT)))
+    except Exception:
+        logger.warning("bridge %s: could not extend the driver lease", bid, exc_info=True)
+        return False
+
+
 def settle(bid: str, *, state: str, detail: str = "", tx_ref: Optional[str] = None,
-           balance_after: Optional[int] = None, db_path: Optional[str] = None) -> None:
-    """Move a recorded bridge to a terminal-or-parked state. Fail-open."""
+           balance_after: Optional[int] = None, db_path: Optional[str] = None,
+           from_states=None) -> bool:
+    """Move a recorded bridge to a terminal-or-parked state (098 CO-23).
+
+    ONE guarded write: ``state IN (from_states)`` (default: every source the
+    :data:`BRIDGE` table lists), so a late driver never overwrites a state
+    another driver already proved. A None ``balance_after`` keeps a measured
+    value. The lease is released. True when the row moved; False on a lost
+    transition (the caller re-reads with :func:`state_of`) or a store error."""
     from core.sqlite_util import execute_retry
     path = db_path or bridges_db_path()
+    froms = BRIDGE.require_sources(state, from_states, ctx={"bridge": bid})
+    if not froms:
+        return False
     try:
-        execute_retry(path, (
+        n = execute_retry(path, (
             "UPDATE bridges SET state=?, detail=?, tx_ref=COALESCE(?, tx_ref), "
-            "balance_after=?, settled_at=? WHERE id=?"),
+            "balance_after=COALESCE(?, balance_after), settled_at=?, driver=NULL, "
+            f"driver_until=NULL WHERE id=? AND state IN ({','.join('?' * len(froms))})"),
             (state, detail[:2000], tx_ref,
              None if balance_after is None else str(balance_after),
-             time.time(), bid))
+             time.time(), bid, *froms))
     except Exception:
         logger.warning("bridge %s: could not record state %s", bid, state, exc_info=True)
+        return False
+    if n != 1:
+        logger.info("state.cas_miss bridge %s: expected %s -> %s", bid, list(froms), state)
+    return n == 1
+
+
+def state_of(bid: str, *, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The row's ``state``/``detail``/``balance_after`` now, or None."""
+    from core.sqlite_util import execute_retry
+    try:
+        row = execute_retry(db_path or bridges_db_path(),
+                            "SELECT state, detail, balance_after FROM bridges WHERE id=?",
+                            (bid,), fetch="one")
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return dict(row) if not isinstance(row, tuple) else {
+        "state": row[0], "detail": row[1], "balance_after": row[2]}
 
 
 def created_at_of(bid: str, *, db_path: Optional[str] = None) -> Optional[float]:
@@ -313,12 +409,22 @@ def mark_sent(bid: str, tx_ref: str, *, db_path: Optional[str] = None) -> None:
     broadcast. Without it a crash during phase 2 leaves a ``pending`` row with no
     tx, which the L-6 sweep would close as never sent. Fail-open."""
     from core.sqlite_util import execute_retry
+    path = db_path or bridges_db_path()
     try:
-        execute_retry(db_path or bridges_db_path(),
-                      "UPDATE bridges SET tx_ref=COALESCE(tx_ref, ?) WHERE id=?",
-                      (str(tx_ref), bid))
+        execute_retry(path, "UPDATE bridges SET tx_ref=COALESCE(tx_ref, ?), "
+                            "driver_until=? WHERE id=?",
+                      (str(tx_ref), time.time() + DRIVER_LEASE_SEC, bid))
+        return
     except Exception:
         logger.warning("bridge %s: could not stamp the origin tx", bid, exc_info=True)
+    # 098 CO-23: fail-CLOSED for the never-sent sweep — a broadcast bridge with
+    # no stamped tx must not be closed as never sent (one more write attempt).
+    try:
+        execute_retry(path, "UPDATE bridges SET tx_ref=COALESCE(tx_ref, ?), "
+                            "driver_until=? WHERE id=?",
+                      (str(tx_ref), time.time() + UNSTAMPED_HOLD_SEC, bid))
+    except Exception:
+        logger.error("bridge.mark_sent_failed %s: tx %s is NOT on the record", bid, tx_ref)
 
 
 def close_stale_unsent(*, status: Optional[Callable[[str], tuple]] = None,
@@ -346,8 +452,10 @@ def close_stale_unsent(*, status: Optional[Callable[[str], tuple]] = None,
         rows = execute_retry(path, (
             "SELECT id, user_id, request_id, origin_chain_id, dest_chain_id, "
             "amount_usd FROM bridges WHERE state=? AND "
-            "(tx_ref IS NULL OR tx_ref='') AND created_at<?"),
-            (STATE_PENDING, cutoff), fetch="all") or []
+            "(tx_ref IS NULL OR tx_ref='') AND created_at<? "
+            "AND COALESCE(driver_until, 0)<?"),
+            (STATE_PENDING, cutoff, now if now is not None else time.time()),
+            fetch="all") or []
     except Exception:
         logger.warning("bridge store: stale-row sweep could not read", exc_info=True)
         return 0
@@ -368,8 +476,10 @@ def close_stale_unsent(*, status: Optional[Callable[[str], tuple]] = None,
         try:
             n = execute_retry(path, (
                 "UPDATE bridges SET state=?, detail=?, settled_at=? WHERE id=? "
-                "AND state=? AND (tx_ref IS NULL OR tx_ref='')"),
-                (STATE_NEVER_SENT, detail, time.time(), row["id"], STATE_PENDING))
+                "AND state=? AND (tx_ref IS NULL OR tx_ref='') "
+                "AND COALESCE(driver_until, 0)<?"),
+                (STATE_NEVER_SENT, detail, time.time(), row["id"], STATE_PENDING,
+                 now if now is not None else time.time()))
             count += int(n or 0)
             if n and closed is not None:
                 closed.append(dict(row, state=STATE_NEVER_SENT, detail=detail))
@@ -489,7 +599,8 @@ def _migrate_existing(path: str) -> None:
 _OPEN_COLUMNS = ("id, user_id, request_id, origin_chain_id, dest_chain_id, "
                  "recipient, currency_out, "
                  "amount_in_raw, min_out_raw, amount_usd, state, tx_ref, "
-                 "balance_before, created_at, escalated_at, detail")
+                 "balance_before, created_at, escalated_at, detail, driver, "
+                 "driver_until")
 
 
 def open_bridges_all(*, db_path: Optional[str] = None) -> list:

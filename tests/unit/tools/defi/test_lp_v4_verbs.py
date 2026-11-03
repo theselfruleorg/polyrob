@@ -68,3 +68,23 @@ async def test_permit2_on_a_chain_without_a_pinned_v4_refuses(tool):
     t, captured = tool
     res = await t.approve_token(_params(chain="solana"))
     assert res.error and not captured
+
+
+def test_a_reverted_lp_add_leaves_the_lp_caps(monkeypatch):
+    """098 review (TS-23): a reverted add moved nothing; it no longer fills
+    LP_ETH_CAP / LP_ETH_DAILY_CAP."""
+    import time as _t
+    from types import SimpleNamespace
+    from core.money.receipt_state import voided_refs
+    from tools.defi.lp_v4_verbs import caps_refusal
+    monkeypatch.setenv("LP_ETH_CAP", "1")
+    monkeypatch.setenv("LP_ETH_DAILY_CAP", "1")
+    monkeypatch.setenv("LP_ETH_FLOOR", "0")
+    now = _t.time()
+    audit = [{"action": "lp_add", "native_raw": str(10 ** 18), "ts": now, "result_ref": "0xa",
+              "receipt_state": "pending_receipt"},
+             {"action": "receipt", "result_ref": "0xa", "receipt_state": "reverted", "ts": now}]
+    gate = SimpleNamespace(audit_log=audit, _voided=lambda: voided_refs(audit))
+    assert caps_refusal(gate, 10 ** 17, 10 ** 19, now=now) is None
+    gate_live = SimpleNamespace(audit_log=audit[:1], _voided=lambda: set())
+    assert "LP_ETH_CAP" in caps_refusal(gate_live, 10 ** 17, 10 ** 19, now=now)

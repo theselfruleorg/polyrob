@@ -150,9 +150,10 @@ polyrob kb add ~/.openclaw/workspace/memory
 polyrob kb search "deployment approval"
 ```
 
-POLYROB's own memory is on by default, cross-session and tenant-scoped.
-`MEMORY_BACKEND=local_vector` adds hybrid vector recall (`pip install
-"polyrob[memory-vector]"`); `/memory` in the REPL shows which provider is live.
+POLYROB's own memory is on by default, cross-session and tenant-scoped. On the CLI
+the default is hybrid keyword + vector recall (`local_vector`; it needs
+`pip install "polyrob[memory-vector]"` and falls back to keyword search without it);
+a server defaults to keyword search. `/memory` in the REPL shows which provider is live.
 
 ---
 

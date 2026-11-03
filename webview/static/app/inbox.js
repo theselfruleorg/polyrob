@@ -53,9 +53,14 @@ export function answerFor(card) {
  * endpoint records it only for an ask and treats a missing or empty one as no
  * answer — so an app approval sends no body and behaves exactly as before.
  */
-export async function decide(kind, id, verb, { fetcher, fallback, answer, refused } = {}) {
+export async function decide(kind, id, verb, { fetcher, fallback, answer, refused, rev } = {}) {
   try {
-    const payload = answer ? { answer } : undefined;
+    // 098 CO-19: `rev` is the identity-draft revision this card showed; the
+    // server refuses the decision when the draft changed since.
+    const sent = {};
+    if (answer) sent.answer = answer;
+    if (rev) sent.rev = rev;
+    const payload = Object.keys(sent).length ? sent : undefined;
     const { ok, status, body } = await postJson(
       decisionUrl(kind, id, verb), payload, { fetcher });
     if (body && typeof body.message === 'string') {
@@ -100,6 +105,42 @@ export function applyResult(card, result) {
   return line;
 }
 
+/** The route for one item's full review (096 W7). */
+export function reviewUrl(kind, id) {
+  return `/api/webgate/pending/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * GET one item's review. Returns `{ok, body}` — never throws. The body is the
+ * server's own text (Why, Changes, the diff), shown verbatim.
+ */
+export async function readReview(kind, id, { fetcher, fallback } = {}) {
+  try {
+    const res = await (fetcher || fetch)(reviewUrl(kind, id),
+                                         { credentials: 'same-origin' });
+    const body = await res.json();
+    return { ok: Boolean(body && body.ok), body: String((body && body.body) || '') };
+  } catch (err) {
+    console.error('[inbox] the review did not reach the console', err);
+    return { ok: false, body: fallback || '' };
+  }
+}
+
+/** Show (or hide again) the review under the card's body. */
+export function showReview(card, result) {
+  if (!card) return null;
+  let pre = card.querySelector('.entry-review');
+  if (!pre) {
+    pre = document.createElement('pre');
+    pre.className = 'entry-body entry-review';
+    const actions = card.querySelector('.entry-actions');
+    card.insertBefore(pre, actions || null);
+  }
+  pre.textContent = result.body || '';
+  pre.dataset.ok = result.ok ? 'true' : 'false';
+  return pre;
+}
+
 function copyFrom(node) {
   return node ? { ...node.dataset } : {};
 }
@@ -115,9 +156,22 @@ function bind() {
                                   button.dataset.verb,
                                   { fallback: copy.unreachable,
                                     refused: copy.refused,
-                                    answer: answerFor(card) });
+                                    answer: answerFor(card),
+                                    rev: button.dataset.rev || '' });
       applyResult(card, result);
       if (!result.ok) buttons.forEach((b) => { b.disabled = false; });
+    });
+  });
+  document.querySelectorAll('.entry-actions button[data-read]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const card = button.closest('.entry');
+      const open = card && card.querySelector('.entry-review');
+      if (open) { open.remove(); return; }
+      button.disabled = true;
+      const result = await readReview(button.dataset.kind, button.dataset.id,
+                                      { fallback: copy.unreachable });
+      showReview(card, result);
+      button.disabled = false;
     });
   });
 }

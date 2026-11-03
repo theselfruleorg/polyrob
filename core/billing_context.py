@@ -56,6 +56,63 @@ async def reserve_billed_call(model: str, provider: str) -> Optional[str]:
     return await reserve(model, provider)
 
 
+# --- 098 MO-08: open credit holds ------------------------------------------
+#: request_id -> (owning task, recorder). A hold is OPEN from the reservation
+#: until the metering path takes its id (:func:`hold_handed_off`). A call that
+#: raised never hands its id off: the next reservation in the same flow, or the
+#: agent's step-error handler, records it for the admin at once
+#: (:func:`record_orphaned_holds`). The 1 h reaper stays the backstop (a run
+#: that ends right after the exception). Never releases money.
+_OPEN_HOLDS: dict = {}
+_OPEN_HOLDS_MAX = 1000
+
+
+def note_open_hold(request_id: str, recorder: Callable[[list], Awaitable[int]],
+                   *, owned: bool = True) -> None:
+    """The credits reservation path registers a new hold and the async
+    ``recorder(request_ids)`` that writes ``hold_unresolved`` rows for it.
+    ``owned=False`` (a call made from a worker thread): no task follows the
+    call, so only the reaper records it."""
+    import asyncio
+    try:
+        task = asyncio.current_task() if owned else None
+    except RuntimeError:
+        task = None
+    if len(_OPEN_HOLDS) >= _OPEN_HOLDS_MAX:
+        _OPEN_HOLDS.pop(next(iter(_OPEN_HOLDS)))   # the reaper still covers it
+    _OPEN_HOLDS[request_id] = (task, recorder)
+
+
+def hold_handed_off(request_id: str) -> None:
+    """The metering path took this hold's id: it will settle (or record a failure)."""
+    _OPEN_HOLDS.pop(request_id, None)
+
+
+async def record_orphaned_holds() -> int:
+    """Record every open hold whose call is over without a hand-off: its task
+    is this task (calls in one task run one after another) or a finished task
+    (``asyncio.wait_for`` runs the call in its own task). Fail-open."""
+    import asyncio
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    by_recorder: dict = {}
+    for rid, (task, recorder) in list(_OPEN_HOLDS.items()):
+        if task is current or (task is not None and task.done()):
+            _OPEN_HOLDS.pop(rid, None)
+            by_recorder.setdefault(recorder, []).append(rid)
+    n = 0
+    for recorder, ids in by_recorder.items():
+        try:
+            n += int(await recorder(ids) or 0)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("credit holds: orphan record failed",
+                                                exc_info=True)
+    return n
+
+
 def billed_tool_refusal(tool_id: Optional[str]) -> Optional[str]:
     """Billed tenants may use the standard session profile, not operator rails."""
     if not is_billed() or tool_id in (None, "", "default", "controller"):

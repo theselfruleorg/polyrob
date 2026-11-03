@@ -50,16 +50,19 @@ def test_releasing_one_provider_leaves_the_other_latched(latch):
         "a top-up on one account says nothing about the other"
 
 
-def test_releasing_the_last_provider_removes_the_file(latch):
+def test_releasing_the_last_provider_empties_the_latch(latch):
     _write(latch, {"openrouter": _fresh()})
     assert cs.release("openrouter") is True
-    assert not os.path.exists(latch), "an empty latch file is a latch"
+    # 098 CO-11: an empty latch is written, never deleted (a delete cannot be
+    # fenced by the lock), and it latches nothing.
+    assert json.loads(latch.read_text()) == {"providers": {}}
+    assert cs.credit_sentinel_active() is False
 
 
 def test_releasing_everything_clears_the_latch(latch):
     _write(latch, {"openrouter": _fresh(), "zai-coding": _fresh()})
     assert cs.release() is True
-    assert not os.path.exists(latch)
+    assert json.loads(latch.read_text()) == {"providers": {}}
     assert cs.credit_sentinel_active() is False
 
 
@@ -101,7 +104,7 @@ def test_an_unreadable_latch_never_raises(latch, monkeypatch):
     def _boom(*a, **kw):
         raise OSError("disk gone")
 
-    monkeypatch.setattr(cs, "_read_latch", _boom)
+    monkeypatch.setattr(cs, "_load", _boom)
     assert cs.release("openrouter") is False
 
 

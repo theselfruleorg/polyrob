@@ -18,10 +18,29 @@ Returns the resulting state: "disabled" | "refused" | "refused_self" | "pending"
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+#: 096 C1: the delivery lane of the new-contact decision notice. Registered in
+#: ``core.surfaces.user_delivery._CRITICAL_SOURCES`` beside ``pending_approval``
+#: (the self-evolution decision notice): a decision the cap may not drop. The
+#: per-day new-correspondent cap bounds how many there can be.
+CONTACT_NOTICE_SOURCE = "correspondent_pending"
+
+#: The first message is shown whole up to this many chars (096 D1's inline
+#: bound for outbound text); a longer one says how much is not shown.
+FIRST_MESSAGE_INLINE_MAX_CHARS = 3000
+
+#: Strong refs to in-flight notice tasks (a bare ``create_task`` can be
+#: collected before it runs).
+_NOTICE_TASKS: set = set()
+
+_PROVENANCE_WHY = {
+    "owner": "an owner-directed send",
+}
 
 
 def _event_log():
@@ -92,6 +111,99 @@ def is_self_address(address: str) -> bool:
     return a in {folded for o in own if (folded := _fold(o))}
 
 
+def _contact_item(registry: Any, user_id: str, surface: str, address: str) -> dict:
+    """The contact as the pending union lists it, so the taps resolve through
+    the same alias (``pending_tap_token`` on the SAME ``kind:id``)."""
+    try:
+        from core.surfaces.correspondents import _norm_addr
+        want = f"{surface}:{_norm_addr(address)}"
+    except Exception:
+        want = f"{surface}:{address}"
+    try:
+        from core.surfaces.owner_admin import pending_correspondent_items
+        for it in pending_correspondent_items(registry, user_id):
+            if str(it.get("id")) == want:
+                return it
+    except Exception:
+        logger.debug("contact notice: pending item lookup failed", exc_info=True)
+    return {"kind": "correspondent", "id": want}
+
+
+def build_contact_notice(item: dict, *, surface: str, address: str,
+                         session_id: str, provenance: str,
+                         first_message: Optional[str] = None,
+                         more_tenant: Optional[str] = None) -> str:
+    """096 C1: the owner's decision notice for a new pending contact.
+
+    Who (surface + address), why the agent contacted them (the stored
+    provenance + the session), the first message sent (whole up to
+    :data:`FIRST_MESSAGE_INLINE_MAX_CHARS`, a longer one marked), and the
+    approve / reject / read taps of the ONE tap grammar. Pure.
+    """
+    from core.self_evolution import pending_tap_token
+    why = _PROVENANCE_WHY.get(str(provenance or ""),
+                              f"content the agent read named this address "
+                              f"(provenance: {provenance or 'unknown'})")
+    lines = [f"👤 New contact waiting for your approval: {surface} {address}",
+             f"Why: I contacted them in session {session_id or '?'} — {why}.",
+             "Until you approve, their replies do not reach me."]
+    msg = str(first_message or "").strip()
+    if msg:
+        shown = msg
+        tail = ""
+        if len(msg) > FIRST_MESSAGE_INLINE_MAX_CHARS:
+            shown = msg[:FIRST_MESSAGE_INLINE_MAX_CHARS].rstrip()
+            tail = f"(+{len(msg) - len(shown)} chars not shown here)"
+            if more_tenant is not None:
+                # 096: every cut is a tap — the whole message one tap away.
+                from core.surfaces.more_store import cut_line
+                tail = cut_line(more_tenant, len(msg) - len(shown), msg, what="chars")
+        lines += [f"First message ({len(msg)} chars):", "```",
+                  shown.replace("```", "ʼʼʼ"), "```"]
+        if tail:
+            lines.append(tail)
+    else:
+        lines.append("First message: (not recorded)")
+    lines.append(f"{pending_tap_token('approve', item)} · "
+                 f"{pending_tap_token('reject', item)} · "
+                 f"read it: {pending_tap_token('pending', item)}")
+    return "\n".join(lines)
+
+
+def _push_contact_notice(container: Any, user_id: str, session_id: str,
+                         text: str) -> None:
+    """Send *text* on the owner rail without blocking the outbound path.
+
+    The seed runs before the send, inside an async tool or surface; the notice
+    is scheduled on the running loop. With no loop (a sync caller) it runs on
+    the shared bridge, bounded. Fail-open: the seed and the send never wait on
+    or fail with the notice."""
+    try:
+        from core.surfaces.user_delivery import deliver_user_message
+        coro = deliver_user_message(container, str(user_id or ""), text,
+                                    source=CONTACT_NOTICE_SOURCE,
+                                    session_id=session_id or None)
+    except Exception:
+        logger.warning("contact notice: could not be built", exc_info=True)
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    try:
+        if loop is not None:
+            task = loop.create_task(coro)
+            _NOTICE_TASKS.add(task)
+            task.add_done_callback(_NOTICE_TASKS.discard)
+        else:
+            from core.async_bridge import run_coroutine_sync
+            run_coroutine_sync(coro, timeout=30)
+    except Exception:
+        coro.close()
+        logger.warning("contact notice: not sent (the contact is still in "
+                       "/pending)", exc_info=True)
+
+
 def maybe_seed_correspondent(
     container: Any,
     *,
@@ -102,7 +214,12 @@ def maybe_seed_correspondent(
     thread_id: Optional[str] = None,
     provenance: str = "owner",
     now: Optional[float] = None,
+    first_message: Optional[str] = None,
 ) -> str:
+    """Seed the reply binding for an address the agent contacts.
+
+    ``first_message`` (096 C1): the text being sent, shown whole in the
+    owner's decision notice when this contact is new and pending."""
     from core.surfaces.config import SurfaceConfig
     if not SurfaceConfig.correspondent_access_enabled():
         return "disabled"
@@ -153,6 +270,18 @@ def maybe_seed_correspondent(
                               attrs={"address": address, "provenance": provenance})
                 except Exception:
                     pass
+            # 096 C1 (D4): and PUSHED — a log line and an event are invisible
+            # to an owner on a phone, so the contact sat unroutable until the
+            # owner happened to type /pending.
+            try:
+                item = _contact_item(registry, user_id, surface, address)
+                _push_contact_notice(container, user_id, session_id, build_contact_notice(
+                    item, surface=surface, address=address, session_id=session_id,
+                    provenance=provenance, first_message=first_message,
+                    more_tenant=user_id))
+            except Exception:
+                logger.warning("contact notice failed (the contact is still in "
+                               "/pending)", exc_info=True)
         return state
     except Exception as e:  # fail-safe: never let a seed fault break the outbound path
         logger.debug("correspondent auto-seed failed: %s", e)

@@ -119,3 +119,23 @@ async def test_write_file_without_user_id_returns_a_plain_string(_pm, monkeypatc
 
     assert isinstance(res, str)
     assert get_artifact_ledger().list_for_session("alice", "s1") == []
+
+
+@pytest.mark.asyncio
+async def test_write_file_runs_the_artifact_hooks(_pm, monkeypatch):
+    """097 W1: write_file recorded through the ledger directly, so the KB
+    auto-ingest hook never ran for the agent's main write path."""
+    import core.artifacts as artifacts
+
+    monkeypatch.setattr(FileSystem, "ensure_initialized", lambda self: _noop(), raising=False)
+    heard = []
+    artifacts.clear_artifact_hooks()
+    artifacts.register_artifact_hook(
+        lambda uid, path, *, session_id="": heard.append((uid, path, session_id)))
+    try:
+        await _fs_tool().write_file(WriteFileAction(file_path="brief.md", content="# b\n"))
+    finally:
+        artifacts.clear_artifact_hooks()
+    assert len(heard) == 1
+    uid, path, sid = heard[0]
+    assert (uid, sid) == ("alice", "s1") and path.endswith("brief.md")

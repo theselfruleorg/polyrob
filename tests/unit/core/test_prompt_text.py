@@ -28,7 +28,7 @@ BLOCK_MAX_CHARS = {
     "input_format": 350,
     # 093 review: + the owner-seat /mcp add line (owner_add, ~20 tokens).
     "mcp_tools": 1720,
-    "message_shape": 1100,
+    "message_shape": 1160,  # 096 W6: + the phone-safe formatting line
     # 2026-10-29: + the standing-programme bullet (one source of truth per
     # programme: its pinned skill), the other bullets trimmed to pay for it.
     # 095 W4: + "applies from your next step, unless 'list' says next session"

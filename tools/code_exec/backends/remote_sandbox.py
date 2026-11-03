@@ -149,13 +149,17 @@ class RemoteSandboxBackend(ExecutionBackend):
                 self._handle = await self._provision()
 
     async def teardown(self) -> None:
-        handle, self._handle = self._handle, None
-        if handle is None:
-            return
-        try:
-            await self._release(handle)
-        except Exception:
-            logger.warning("%s backend: release failed", self.name, exc_info=True)
+        """098 CL-15: under the setup lock (a teardown waits for a provision in
+        flight). A failed release keeps the backend's resume record, which names
+        the sandbox for the next setup's dead-owner check."""
+        async with self._lock:
+            handle, self._handle = self._handle, None
+            if handle is None:
+                return
+            try:
+                await self._release(handle)
+            except Exception:
+                logger.warning("%s backend: release failed", self.name, exc_info=True)
 
     def _clamp_timeout(self, t, ceiling=None) -> float:
         cap = exec_timeout_cap(self.max_timeout, ceiling)

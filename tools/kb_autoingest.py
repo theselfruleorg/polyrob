@@ -35,26 +35,11 @@ from typing import Any, Dict, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-#: Generated artifacts are retained for explicit inspection but never enter the
-#: default recall pool merely because the model wrote a document.
-AUTO_COLLECTION = "artifacts_unreviewed"
-
-#: Text documents only. The ingest path skips binaries anyway; naming the set
-#: keeps a 200 MB video out of the ingest call entirely. Imported from the
-#: artifact vocabulary so the status section's "N of M indexed" ratio counts the
-#: SAME denominator this predicate accepts (downward import, core <- tools).
-from core.artifacts import TEXT_DOCUMENT_SUFFIXES as TEXT_SUFFIXES  # noqa: E402
-
-#: Name fragments that mean "this file is an append-only RECORD".
-_RECORD_NAME_HINTS = ("run-log", "runlog", "run_log", ".log", "-log-",
-                      "changelog", "journal", "transcript")
-
-#: A COPY is never knowledge. Prod carried 34 hand-made `.bak`/copy files under
-#: the project tree — one of them a 1.0 MB backup of a 97 KB ledger — sitting in
-#: the same directory the readers walk. Indexing a backup means recall answers
-#: with a stale version of a document it also holds live.
-_COPY_MARKERS = (".bak", ".old", ".orig", " copy.", "-copy.", ".archived",
-                 ".pending")
+#: The agent's own documents land in their own collection. Every search reads
+#: every collection (097 D1/D2 — the owner does not review or promote documents);
+#: the collection exists so a written document nobody reads can age out (D3)
+#: without touching what the owner ingested by hand.
+from modules.memory.sqlite_kb_store import WRITTEN_COLLECTION as AUTO_COLLECTION  # noqa: E402
 
 #: How much of the head is read to look for a declared kind marker.
 _MARKER_HEAD_BYTES = 400
@@ -98,16 +83,15 @@ def declared_kind(path: str) -> Optional[str]:
 
 def should_ingest(path: str) -> bool:
     """Is this produced file KNOWLEDGE (index it) or a RECORD (leave it)?"""
-    name = os.path.basename(path).lower()
-    if os.path.splitext(name)[1] not in TEXT_SUFFIXES:
+    from core.artifacts import is_knowledge_candidate
+    if not is_knowledge_candidate(path):
         return False
-    if any(hint in name for hint in _RECORD_NAME_HINTS):
-        return False
-    lowered = path.replace("\\", "/").lower()
-    if any(marker in lowered for marker in _COPY_MARKERS):
-        return False
+    # Only knowledge (declared or unmarked). An `instruction` document is a RULES
+    # surface (the rules sweep reads it, an owner edit supersedes it); a copy in
+    # the KB is one no supersede ever reaches (097 G7 — rules, skills and memory
+    # stay separate layers).
     kind = declared_kind(path)
-    if kind and kind != "instruction" and kind != "knowledge":
+    if kind and kind != "knowledge":
         return False
     return True
 
@@ -136,7 +120,7 @@ async def ingest_artifact(user_id: str, path: str, *, session_id: str = "",
         return None
     try:
         from tools.knowledge_ingest import kb_ingest
-        result = await kb_ingest(path, collection="default" if force else AUTO_COLLECTION,
+        result = await kb_ingest(path, collection=AUTO_COLLECTION,
                                  recursive=False, user_id=str(user_id),
                                  session_id=str(session_id or ""))
     except Exception as exc:

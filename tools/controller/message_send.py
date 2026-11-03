@@ -373,7 +373,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
             seed_state = maybe_seed_correspondent(
                 container, surface=surface, address=str(target),
                 session_id=session_id or "", user_id=user_id or "",
-                provenance="owner")
+                provenance="owner", first_message=text)
         except Exception as e:  # fail-soft: a seed fault must not block the send
             logger.debug("message-send correspondent seed skipped: %s", e)
             seed_state = None

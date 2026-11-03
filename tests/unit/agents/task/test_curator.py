@@ -233,7 +233,9 @@ async def test_run_once_does_phase1_only(usage, monkeypatch):
 # --- Task 7: episodic retention prune rides the curator tick ---------------
 
 @pytest.mark.asyncio
-async def test_run_once_prunes_episodes_on_curator_cadence(usage, monkeypatch):
+async def test_retention_prunes_episodes_on_its_own_tick(usage, monkeypatch):
+    """097 D4: retention left the curator — it runs on the always-on retention
+    tick, so a box with CURATOR_ENABLED off still keeps its windows."""
     monkeypatch.setenv("EPISODIC_RETENTION_DAYS", "90")
     now = 1_000_000.0
     calls = {}
@@ -249,9 +251,13 @@ async def test_run_once_prunes_episodes_on_curator_cadence(usage, monkeypatch):
 
     monkeypatch.setattr(
         "modules.memory.registry.get_memory_registry", lambda: _FakeRegistry())
-    c = _curator(usage, _FakeSM(), now=now)
-    await c.run_once()
+    from agents.task.agent.core.retention import RetentionSweeper
+    await RetentionSweeper(clock=lambda: now).run_once()
     assert calls["older_than_ts"] == int(now) - 90 * 86400
+    # and the curator no longer prunes anything
+    calls.clear()
+    await _curator(usage, _FakeSM(), now=now).run_once()
+    assert calls == {}
 
 
 @pytest.mark.asyncio

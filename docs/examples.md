@@ -115,7 +115,7 @@ polyrob owner inbox          # blocking items first, across every store
 polyrob owner asks           # what the agent needs to unblock work
 polyrob owner fulfill <id>   # supply it; the blocked goals go back to ready
 polyrob owner pending        # the agent's own proposals, waiting for promotion
-polyrob owner promote <kind> <id>   # kind: self_context | skill | tool_approval | all
+polyrob owner promote <kind> <id>   # the kind and id `owner pending` shows; `all` decides every item
 ```
 
 `/inbox` in the REPL and on Telegram render the same composition. A store that
@@ -141,8 +141,8 @@ An enabled surface with missing credentials is warned about and skipped, so read
 startup output. Bind yourself as owner before exposing anything:
 
 ```bash
-polyrob config set POLYROB_OWNER_TELEGRAM_ID 123456789
-polyrob config set ALLOWED_TELEGRAM_USER_IDS 123456789
+polyrob config set POLYROB_OWNER_TELEGRAM_ID <telegram_id>
+polyrob config set ALLOWED_TELEGRAM_USER_IDS <telegram_id>
 polyrob owner show
 ```
 
@@ -256,9 +256,9 @@ reported as stopped, never as a fabricated "done". The remaining budget is shown
 the agent so it can pace itself, and sub-agents share the parent's.
 
 Unattended work is bounded without you asking: every goal, job, sub-agent and
-worker run stops at `AUTONOMOUS_MAX_STEPS` (150 steps) and at
-`AUTONOMOUS_RUN_BUDGET_USD` ($2.00 of spend, sub-agents included), whichever comes
-first. Both are operator settings — no goal, job or tool argument sets them:
+worker run stops at `AUTONOMOUS_MAX_STEPS` and at `AUTONOMOUS_RUN_BUDGET_USD` of
+spend (sub-agents included), whichever comes first; the defaults are in
+[`docs/CONFIGURATION.md`](CONFIGURATION.md). Both are operator settings — no goal, job or tool argument sets them:
 
 ```bash
 polyrob config set AUTONOMOUS_RUN_BUDGET_USD 0.75
@@ -316,9 +316,10 @@ Every other turn — a goal, a cron job, a chat surface — keeps the sandbox, a
 failed sandbox never falls back to the host. The host is also refused while the
 process holds wallet signing credentials: run a separate development instance
 without them. The command guard still judges every
-line: a floor no approval lifts, and a dangerous command waits for your `y`.
-`SHELL_ALLOW` / `SHELL_DENY` (or the `[a]lways` / `[n]ever` answers at the prompt)
-tune that per command. `sudo` stays refused unless you set `SHELL_HOST_SUDO=prompt`,
+line: a floor no approval lifts, and a dangerous command waits for your answer —
+a slash token, `/once`, `/session`, `/always`, `/deny` or `/never` (plain text is
+chat, not an answer). `SHELL_ALLOW` / `SHELL_DENY` (or `/always` / `/never` at the
+prompt) tune that per command. `sudo` stays refused unless you set `SHELL_HOST_SUDO=prompt`,
 which asks for the password on the terminal for each command.
 
 ---
@@ -423,7 +424,7 @@ preset, and Confirm creates the standing work: a hunt job, a daily review, and a
 exit job for every position it opens.
 
 ```
-/trade start 150 solana,base memecoin   # one card with every number; nothing exists until Confirm
+/trade start 150 solana,base majors     # one card with every number; nothing exists until Confirm
 /trade status                           # positions, exit coverage, breaker, realized P&L
 /trade pause                            # entries off, exits stay on (resume to lift it)
 /trade stop                             # the hunt ends; each exit job runs until its position closes
@@ -514,7 +515,7 @@ approval-gated.
 
 ## More
 
-- [guide/getting-started.md](guide/getting-started.md) · [guide/cli.md](guide/cli.md) · [guide/api.md](guide/api.md)
+- [guide/getting-started.md](guide/getting-started.md) · [guide/cli.md](guide/cli.md) · [guide/chat-commands.md](guide/chat-commands.md) · [guide/api.md](guide/api.md)
 - [guide/configuration.md](guide/configuration.md) · [`docs/CONFIGURATION.md`](CONFIGURATION.md)
 - [guide/security-model.md](guide/security-model.md) · [guide/payments.md](guide/payments.md)
 - [GitHub Discussions](https://github.com/theselfruleorg/polyrob/discussions) ·

@@ -116,7 +116,8 @@ def test_the_telegram_room_and_background_sets_are_the_verb_rows():
         "/reject", "/run", "/allow", "/deny", "/config", "/prefs", "/mcp", "/apps",
         "/invoices", "/settle", "/job", "/goal", "/fulfill", "/contacts",
         "/thread", "/why", "/send", "/swap", "/writeoff", "/unquarantine", "/cards",
-        "/check", "/restart", "/update", "/model", "/skills"}
+        "/check", "/restart", "/update", "/model", "/skills",
+        "/more", "/rules"}  # 096 W5: owner reads (a kept tail; the owner rules)
     assert {v.name: v.background for v in V.VERB_TABLE if v.background} == {
         "/bridge": "Bridge", "/send": "Send", "/swap": "Swap", "/lp": "Liquidity move",
         "/claim": "Claim", "/nft": "NFT transaction", "/launch": "Launch",

@@ -142,7 +142,12 @@ async def test_cancel_means_no_call():
 @pytest.mark.asyncio
 async def test_stopped_state_means_no_call():
     agent, n = _agent()
-    agent.state.stopped = True
+    inner = agent.step.side_effect
+
+    async def _stop(step_info=None):  # 098 AG-01: run() starts clean; stop IN the run
+        await inner(step_info)
+        agent.state.request_stop()
+    agent.step.side_effect = _stop
     await _run(agent, n)
     agent.get_next_action.assert_not_called()
 

@@ -13,6 +13,7 @@ import subprocess
 from core.exceptions import MCPError, MCPConnectionError, MCPProtocolError, MCPToolExecutionError
 from core.security.pinned_resolver import PinnedResolver, is_ip_literal, url_host_key
 from core.logging import get_component_logger
+from .transport_state import CLOSED, OPEN, PEER_LOST, fail_future, fail_pending, mark
 
 _protocol_logger = get_component_logger("MCPTransportSecurity")
 
@@ -223,7 +224,7 @@ class MCPTransport:
     ):
         self.timeout = timeout
         self.logger = get_component_logger(self.__class__.__name__)
-        self._closed = False
+        self._tstate = OPEN  # 098 TS-02: OPEN -> PEER_LOST -> CLOSED
         # T2.4: optional 401-retry-once callback. None (the default, and the
         # only value every non-OAuth call site ever passes) preserves legacy
         # behaviour byte-for-byte — see _send_with_auth_retry.
@@ -241,12 +242,20 @@ class MCPTransport:
 
     async def close(self) -> None:
         """Close the transport."""
-        self._closed = True
+        mark(self, CLOSED)
+
+    @property
+    def _closed(self) -> bool:
+        return self._tstate != OPEN
 
     @property
     def is_closed(self) -> bool:
-        """Check if transport is closed."""
-        return self._closed
+        """True once closed locally OR the peer is lost."""
+        return self._tstate != OPEN
+
+    @property
+    def is_peer_lost(self) -> bool:
+        return self._tstate == PEER_LOST
 
     async def _send_with_auth_retry(self, do_send: Callable[[], Awaitable[None]]) -> None:
         """Run ``do_send()`` once; on a 401 (signalled via ``_MCPUnauthorized``),
@@ -265,36 +274,11 @@ class MCPTransport:
           surfaces the original 401's :class:`MCPProtocolError`.
 
         Any exception other than ``_MCPUnauthorized`` propagates unchanged —
-        this helper only ever intercepts 401s.
+        this helper only ever intercepts 401s. 098 TS-13: the callback gets the
+        Authorization the 401'd request carried (``tools/mcp/auth_retry.py``).
         """
-        try:
-            await do_send()
-            return
-        except _MCPUnauthorized as first:
-            if self._on_auth_refresh is None:
-                raise first.as_protocol_error()
-            self.logger.warning(
-                f"{self.__class__.__name__}: got 401, refreshing auth and retrying once"
-            )
-            try:
-                new_auth = await self._on_auth_refresh()
-            except Exception as refresh_exc:
-                self.logger.error(f"MCP auth refresh failed: {refresh_exc}")
-                raise first.as_protocol_error()
-            if new_auth:
-                headers = getattr(self, "headers", None)
-                if headers is not None:
-                    headers["Authorization"] = new_auth
-                session = getattr(self, "session", None)
-                if session is not None:
-                    try:
-                        session.headers["Authorization"] = new_auth
-                    except Exception:
-                        pass
-            try:
-                await do_send()
-            except _MCPUnauthorized as second:
-                raise second.as_protocol_error()
+        from tools.mcp.auth_retry import send_with_auth_retry
+        await send_with_auth_retry(self, do_send, _MCPUnauthorized)
 
 
 class MCPStdioTransport(MCPTransport):
@@ -417,6 +401,7 @@ class MCPStdioTransport(MCPTransport):
                                     self.logger.error(f"Subprocess stderr: {stderr}")
                             except Exception:
                                 pass
+                        mark(self, PEER_LOST)
                         break
 
                 await asyncio.sleep(5)  # Check every 5s
@@ -554,9 +539,9 @@ class MCPStdioTransport(MCPTransport):
                     timeout=receive_timeout
                 )
                 
-                if not line:
-                    return None
-                
+                if not line:  # EOF: the peer is gone (098 TS-02), not "no message"
+                    mark(self, PEER_LOST)
+                    raise MCPConnectionError("peer closed (stdio EOF)")
                 # Parse JSON
                 message_dict = json.loads(line.strip())
                 
@@ -592,6 +577,8 @@ class MCPStdioTransport(MCPTransport):
                 return None
             except json.JSONDecodeError as e:
                 raise MCPProtocolError(f"Invalid JSON received: {e}")
+            except (MCPConnectionError, MCPProtocolError):
+                raise
             except Exception as e:
                 raise MCPProtocolError(f"Failed to receive message: {e}")
     
@@ -784,6 +771,8 @@ class MCPSSETransport(MCPTransport):
                         
         except Exception as e:
             self.logger.error(f"Error reading SSE messages: {e}")
+        finally:  # the stream ended without close(): the peer is gone (098 TS-02)
+            mark(self, PEER_LOST)
     
     async def send_message(self, message: MCPMessage) -> None:
         """Send message via HTTP POST to the message endpoint.
@@ -886,11 +875,10 @@ class MCPSSETransport(MCPTransport):
             MCPMessage if received, None if timeout
         """
         receive_timeout = timeout if timeout is not None else self.timeout
+        if self.is_peer_lost and self._message_queue.empty():
+            raise MCPConnectionError("peer closed (SSE stream ended)")
         try:
-            return await asyncio.wait_for(
-                self._message_queue.get(),
-                timeout=receive_timeout
-            )
+            return await asyncio.wait_for(self._message_queue.get(), timeout=receive_timeout)
         except asyncio.TimeoutError:
             return None
     
@@ -1253,13 +1241,13 @@ class MCPClient:
                         if current_time > future._timeout_at:
                             stale_requests.append(req_id)
 
-                # Cancel stale requests
+                # Fail stale requests with an error — cancel() would raise
+                # CancelledError into the caller's task (098 TS-02).
                 for req_id in stale_requests:
                     future = self._pending_requests.pop(req_id, None)
-                    if future and not future.done():
-                        method = getattr(future, '_request_method', 'unknown')
-                        self.logger.warning(f"Cancelling stale request {req_id[:8]} ({method})")
-                        future.cancel()
+                    method = getattr(future, '_request_method', 'unknown')
+                    self.logger.warning(f"Failing stale request {req_id[:8]} ({method})")
+                    fail_future(future, MCPProtocolError(f"request {method} timed out"))
 
             except Exception as e:
                 self.logger.error(f"Error in cleanup task: {e}")
@@ -1392,9 +1380,12 @@ class MCPClient:
                     self.logger.debug(f"Received notification: {message.method}")
                     await self._handle_notification(message)
 
+            except MCPConnectionError as e:  # peer lost: exit, fail every waiter
+                self.logger.error(f"MCP transport lost: {e}")
+                fail_pending(self._pending_requests, MCPConnectionError(str(e)))
+                break
             except MCPProtocolError as e:
                 self.logger.error(f"Protocol error in message processing: {e}")
-                # Continue processing despite protocol errors
             except Exception as e:
                 self.logger.error(f"Error processing message: {e}", exc_info=True)
                 await asyncio.sleep(1)  # Brief pause before retrying
@@ -1455,12 +1446,9 @@ class MCPClient:
             except asyncio.CancelledError:
                 pass
         
-        # Cancel pending requests
-        for future in self._pending_requests.values():
-            if not future.done():
-                future.cancel()
-        self._pending_requests.clear()
-        
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+        fail_pending(self._pending_requests, MCPConnectionError("MCP client closed"))
         await self.transport.close()
         self.logger.info("MCP client closed")
     

@@ -95,6 +95,35 @@ class MandateError(ValueError):
     """A write the rules refuse (wrong actor, bad field, a second live mandate)."""
 
 
+#: The mandate lifecycle table (098 S1, CO-30). ``stopped`` is final.
+from core.state.machine import StateMachine as _SM  # noqa: E402
+
+MANDATE_MACHINE = _SM(
+    "trading_mandate", states=frozenset({ACTIVE, PAUSED, HALTED, STOPPED}),
+    initial=frozenset({ACTIVE}), terminal=frozenset({STOPPED}),
+    transitions={ACTIVE: {PAUSED, HALTED, STOPPED},
+                 PAUSED: {ACTIVE, HALTED, STOPPED},
+                 HALTED: {ACTIVE, STOPPED}})
+
+
+#: The promotion ladder (098 MO-18). The lifecycle moves one step (up on a
+#: passed probe or covered risk, down one on a breaker); an owner may set any
+#: stage. ``set_stage`` is a CAS on the stage it read, and writes
+#: ``stage_since`` (and ``demoted_at`` on a step down) in the same row.
+STAGE_MACHINE = _SM(
+    "trading_stage", states=frozenset(STAGES), initial=frozenset({"probe"}),
+    transitions={s: frozenset(set(STAGES) - {s}) for s in STAGES})
+
+
+class MandateChanged(MandateError):
+    """A guarded status edge lost to a concurrent writer (098 CO-30).
+    ``current`` is the mandate as it is now."""
+
+    def __init__(self, msg: str, *, current: "Mandate"):
+        super().__init__(msg)
+        self.current = current
+
+
 @dataclass(frozen=True)
 class Mandate:
     id: str
@@ -119,6 +148,8 @@ class Mandate:
     cooldown_until: Optional[float] = None
     released_at: Optional[float] = None
     stopped_by: Optional[str] = None
+    stage_since: Optional[float] = None
+    demoted_at: Optional[float] = None
 
     def effective_preset(self) -> Preset:
         """The named preset with this mandate's owner-tuned numbers applied."""
@@ -142,7 +173,8 @@ def init_schema(path: Optional[str] = None) -> str:
     from core.sqlite_util import init_schema as _init
     p = path or db_path()
     _init(p, _SCHEMA, mkdir=True,
-          columns={"trading_mandates": (("released_at", "REAL"),)})
+          columns={"trading_mandates": (("released_at", "REAL"), ("stage_since", "REAL"),
+                                        ("demoted_at", "REAL"))})
     return p
 
 
@@ -175,7 +207,9 @@ def _row_to_mandate(r) -> Mandate:
         stage=r["stage"] or "probe", halted_reason=r["halted_reason"],
         halted_at=r["halted_at"], cooldown_at=r["cooldown_at"],
         cooldown_until=r["cooldown_until"], stopped_by=r["stopped_by"],
-        released_at=r["released_at"] if "released_at" in r.keys() else None)
+        released_at=r["released_at"] if "released_at" in r.keys() else None,
+        stage_since=r["stage_since"] if "stage_since" in r.keys() else None,
+        demoted_at=r["demoted_at"] if "demoted_at" in r.keys() else None)
 
 
 # -- reads --------------------------------------------------------------------------
@@ -315,13 +349,36 @@ def _require(mandate_id: str, path: Optional[str]) -> Mandate:
 
 
 def _update(mandate_id: str, path: Optional[str], now: Optional[float], **cols) -> Mandate:
+    """A non-status column write (cooldown, stage). Status edges use :func:`_transition`."""
     from core.sqlite_util import execute_retry
     p = path or db_path()
     cols["updated_at"] = time.time() if now is None else float(now)
     sets = ", ".join(f"{k}=?" for k in cols)
-    execute_retry(p, f"UPDATE trading_mandates SET {sets} WHERE id=?",
-                  tuple(cols.values()) + (str(mandate_id),))
+    # 098 MO-18: a stopped mandate is final — no cooldown or stage write lands on it.
+    execute_retry(p, f"UPDATE trading_mandates SET {sets} WHERE id=? AND status != ?",
+                  tuple(cols.values()) + (str(mandate_id), STOPPED))
     return _require(mandate_id, path)
+
+
+def _transition(mandate_id: str, from_states, path: Optional[str], now: Optional[float],
+                **cols) -> Mandate:
+    """A guarded status edge (098 CO-30): the write lands only while the row is
+    still in one of ``from_states`` — the state the caller checked. A racing
+    writer (an owner Stop, a breaker latch) wins; the loser gets a
+    :class:`MandateError` naming the state now, so the seat re-renders."""
+    from core.sqlite_util import execute_retry
+    p = path or db_path()
+    froms = tuple(from_states)
+    cols["updated_at"] = time.time() if now is None else float(now)
+    sets = ", ".join(f"{k}=?" for k in cols)
+    marks = ",".join("?" * len(froms))
+    rc = execute_retry(
+        p, f"UPDATE trading_mandates SET {sets} WHERE id=? AND status IN ({marks})",
+        tuple(cols.values()) + (str(mandate_id),) + froms)
+    m = _require(mandate_id, path)
+    if rc != 1:
+        raise MandateChanged(f"the mandate changed: now {m.status}", current=m)
+    return m
 
 
 def set_status(mandate_id: str, status: str, *, actor: str, path: Optional[str] = None,
@@ -343,7 +400,7 @@ def set_status(mandate_id: str, status: str, *, actor: str, path: Optional[str] 
         raise MandateError("a halted mandate is released with release(), by the owner "
                            "(or stopped)")
     extra = {"stopped_by": actor} if status == STOPPED else {}
-    return _update(mandate_id, path, now, status=status, **extra)
+    return _transition(mandate_id, (m.status,), path, now, status=status, **extra)
 
 
 def latch(mandate_id: str, reason: str, *, path: Optional[str] = None,
@@ -354,8 +411,13 @@ def latch(mandate_id: str, reason: str, *, path: Optional[str] = None,
     if m.status in (HALTED, STOPPED):
         return m
     ts = time.time() if now is None else float(now)
-    return _update(mandate_id, path, now, status=HALTED, halted_reason=str(reason),
-                   halted_at=ts)
+    try:
+        return _transition(mandate_id, (ACTIVE, PAUSED), path, now, status=HALTED,
+                           halted_reason=str(reason), halted_at=ts)
+    except MandateChanged as e:
+        # Stopped or already halted meanwhile: both are at least as strict as
+        # the latch, and a stop is final — never revive it to halted.
+        return e.current
 
 
 def release(mandate_id: str, *, actor: str, path: Optional[str] = None,
@@ -368,8 +430,8 @@ def release(mandate_id: str, *, actor: str, path: Optional[str] = None,
     if m.status != HALTED:
         raise MandateError(f"mandate {mandate_id} is {m.status}, not halted")
     ts = time.time() if now is None else float(now)
-    return _update(mandate_id, path, now, status=ACTIVE, halted_reason=None, halted_at=None,
-                   released_at=ts)
+    return _transition(mandate_id, (HALTED,), path, now, status=ACTIVE, halted_reason=None,
+                       halted_at=None, released_at=ts)
 
 
 def set_cooldown(mandate_id: str, hours: float, *, path: Optional[str] = None,
@@ -381,11 +443,31 @@ def set_cooldown(mandate_id: str, hours: float, *, path: Optional[str] = None,
 
 
 def set_stage(mandate_id: str, stage: str, *, path: Optional[str] = None,
-              now: Optional[float] = None) -> Mandate:
+              now: Optional[float] = None, from_stage: Optional[str] = None) -> Mandate:
+    """Move the stage (098 MO-18): ONE write of ``stage`` + ``stage_since`` (+
+    ``demoted_at`` on a step down), a CAS on the stage read (``from_stage``,
+    default: the row's stage now) and on a non-stopped status. A lost CAS
+    raises :class:`MandateChanged` with the mandate as it is now."""
+    from core.sqlite_util import execute_retry
     if stage not in STAGES:
         raise MandateError(f"stage must be one of {STAGES} (got {stage!r})")
-    _require(mandate_id, path)
-    return _update(mandate_id, path, now, stage=stage)
+    m = _require(mandate_id, path)
+    frm = from_stage or m.stage
+    if frm == stage:
+        return m
+    STAGE_MACHINE.check(frm, stage, ctx={"mandate": mandate_id})
+    ts = time.time() if now is None else float(now)
+    down = STAGES.index(stage) < STAGES.index(frm) if frm in STAGES else False
+    extra = ", demoted_at=?" if down else ""
+    rc = execute_retry(
+        path or db_path(),
+        f"UPDATE trading_mandates SET stage=?, stage_since=?, updated_at=?{extra} "
+        "WHERE id=? AND stage=? AND status != ?",
+        (stage, ts, ts) + ((ts,) if down else ()) + (str(mandate_id), frm, STOPPED))
+    m = _require(mandate_id, path)
+    if rc != 1:
+        raise MandateChanged(f"the mandate changed: stage {m.stage}, {m.status}", current=m)
+    return m
 
 
 def record_entry(mandate_id: str, *, chain: str, token: str, usd: Optional[float] = None,

@@ -21,13 +21,15 @@ The entry point (`main.py` or `polyrob`) builds a **DI container** (`core/`) tha
 Services are resolved from the container. Imports run in one direction only:
 
 ```
-core <- modules <- agents <- tools <- cron <- polyrob.app <- {api, cli, surfaces, webview} <- packs
+{core, utils} <- modules <- agents <- tools <- cron <- {polyrob.app, migrations}
+  <- {api, cli, surfaces, webview} <- polyrob.sdk <- packs
 ```
 
 `polyrob/app/` is the composition root (env layering, the server and CLI
 containers, the background loops) and only the entry points call it. A lower tier
 never imports a higher one; it exposes a hook that the higher tier registers into.
-A test fails the build on a new upward import.
+`polyrob.sdk` is the one host surface a pack imports. A test fails the build on a
+new upward import.
 
 ---
 
@@ -120,11 +122,13 @@ prepare_step
 
 Each step is driven by the LLM's response. The agent loops until it calls `done()`, hits a budget cap, or the session is cancelled.
 
-The limits depend on who started the run. An interactive run (`polyrob run`, the API,
-another agent over the protocol) stops at `INTERACTIVE_MAX_STEPS` (100); a chat turn on a
-messaging app stops at `CHAT_MAX_STEPS` (20). A run that the agent starts by itself — a goal, a
-scheduled job, a helper — stops at one operator limit, `AUTONOMOUS_MAX_STEPS` (150), or at
-`AUTONOMOUS_RUN_BUDGET_USD` ($2.00) of spend, helpers included. No argument or job
+The limits depend on who started the run. An interactive run — your turn in the REPL
+or in a chat app, `polyrob run`, the HTTP task API, another agent over A2A — stops at
+`INTERACTIVE_MAX_STEPS`. A one-shot chat call (the REST chat endpoint and the
+OpenAI-compatible `/v1`) stops at `CHAT_MAX_STEPS`. A run that the agent starts by
+itself — a goal, a scheduled job, a helper — stops at one operator limit,
+`AUTONOMOUS_MAX_STEPS`, or at `AUTONOMOUS_RUN_BUDGET_USD` of spend, helpers included.
+The defaults are in [`docs/CONFIGURATION.md`](../CONFIGURATION.md). No argument or job
 payload sets a step budget. A run that stops before `done()` reports once and records why
 (`stop_reason`: `max_steps`, `run_budget`, …) in its run record, the CLI and the status.
 
@@ -151,10 +155,10 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 | HTTP write | `http_request` sends one POST/PUT/PATCH/DELETE with a JSON body through the same SSRF checks as `web_fetch`; it adds no cookie or stored key. A scheduled job or goal asks the owner once for each new domain |
 | Browser (`tools/browser/`) | Playwright: navigate, click, type, scroll, screenshot, extract DOM — opt-in (`browser` toolset/tool) |
 | Filesystem / docs | Create, read, edit files in the session workspace |
-| AnySite (the `discovery` pack, `packs/discovery/`) | Structured data from 200+ external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
+| AnySite (the `discovery` pack, `packs/discovery/`) | Structured data from external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
 | MCP (`tools/mcp/`) | Model Context Protocol — connect any MCP-compatible server (filesystem, GitHub, Slack, or your own); none are configured out of the box |
 | Crypto / x402 (`core/wallet/`, `tools/x402/`) | A native agent wallet that pays for external resources over x402 — opt-in (`X402_CLIENT_ENABLED`) |
-| DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`; the venues in the `markets` pack, `packs/markets/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [payments.md](payments.md) |
+| DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`; the venues in the `markets` pack, `packs/markets/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [onchain.md](onchain.md) |
 | Durable apps (`tools/app_service/`) | Runs an app the agent built as a supervised container behind a public URL — opt-in (`AGENT_BUILDER_MODE=ship`); see [deployment-postures.md](deployment-postures.md) |
 | Code execution (`tools/code_exec/`) | Runs code in a subprocess or a hardened container; opt-in (`CODE_EXEC_ENABLED`), never loaded by default. `run_code(persist=True)` keeps a per-session Python kernel; `run_code(tools=True)` lets a script call an allowlist of agent tools over a per-run RPC that re-enters the Controller, so every gate still applies (`CODE_EXEC_TOOL_CALLS`). `CODE_EXEC_NETWORK=proxy` puts the session sandbox behind one allowlist proxy |
 | Shell (`tools/shell/`) | A persistent `shell` and background `process` jobs (poll, wait, log, kill, stdin through `process_write`/`process_submit`/`process_close`, PTY, notify on exit or on a pattern). In the session sandbox from `AGENT_COMPUTE_POSTURE=1`; on the host only for the owner's own terminal turn at posture 3. Executors: docker or Podman, `ssh`, and the sandbox packs (`modal`, `daytona`, `vercel_sandbox`, `singularity`). Every line passes the command guard (`core/security/command_guard.py`) |
@@ -183,8 +187,8 @@ An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short su
 ## Surfaces
 
 Every surface implements one **Surface contract** for receiving input and sending
-output, so the same agent core powers all of them. Eight chat surfaces, plus two
-programmatic ones:
+output, so the same agent core powers all of them: the terminal, nine chat
+surfaces, the web console and the programmatic API.
 
 | Surface | Start it with | Notes |
 |---------|---------------|-------|
@@ -221,8 +225,9 @@ One function decides what an inbound message is —
 every surface, `surfaces/telegram/harness.py::act_on_inbound` (the module name is
 historical; it is not Telegram-specific). That is why the owner gets the same
 in-chat verbs everywhere, and why a decision made from a phone is the same
-primitive as the CLI's. The verb list and what each one does live in
-[owner-controls.md](owner-controls.md) and [cli.md](cli.md).
+primitive as the CLI's. The verb list is
+[chat-commands.md](chat-commands.md); what the controls do is
+[owner-controls.md](owner-controls.md).
 
 ---
 
@@ -264,7 +269,7 @@ the `supervised` money regime no goal or cron run moves funds unattended.
 A **trading mandate** is the one exception you start on purpose: one owner decision
 (`/trade start`) creates a hunt job, a daily review and an exit job for each token it buys.
 Code arms and cancels the exits, each entry is capped by its promotion stage's ticket,
-and `/trade status|pause|stop|release` controls it. See [payments.md](payments.md).
+and `/trade status|pause|stop|release` controls it. See [onchain.md](onchain.md).
 
 ---
 

@@ -22,6 +22,14 @@ class MCPActionRegistrar:
 
     def __init__(self, controller: Any) -> None:
         self._controller = controller
+        # 098 TS-04: ONE money gate per controller. The gated names grow; the
+        # pre-hook is registered once (OnceLatch) and reads the names at call
+        # time, so a server that leaves and re-enters adds no second gate.
+        from core.state.once import OnceLatch
+        self._money_gate_names: set = set()
+        self._money_gate_latch = OnceLatch()
+        self._money_approval = None
+        self._money_approval_names: frozenset = frozenset()
 
     @property
     def registry(self):
@@ -158,7 +166,8 @@ class MCPActionRegistrar:
 
             if registered_count:
                 self.logger.info(f"✅ Registered {registered_count} MCP tools as direct actions")
-            if money_actions:
+            # 098 TS-04: a sync also retries an approval wiring that failed.
+            if money_actions or (self._money_gate_names and self._money_approval is None):
                 self.install_money_gate(money_actions)
 
         except Exception as e:
@@ -178,29 +187,35 @@ class MCPActionRegistrar:
         from core.money.authorize import SpendIntent, authorize_spend
         from core.money.classify import register_money_actions
 
-        gated = frozenset(names)
+        self._money_gate_names |= {n for n in names if n}
+        gated = frozenset(self._money_gate_names)
         register_money_actions(gated)
         controller = self._controller
-        approval = None
-        try:
-            import tools.controller.approval_queue  # noqa: F401  (registers owner_queue)
-            from core.config_policy import payment_approval_timeout_sec
-            from core.security.taints import correspondent_probe
-            from tools.controller.approval import (
-                get_approval_provider_or_deny, make_approval_hook)
-            from tools.controller.approval_queue import OwnerQueueApprover
-            from tools.controller.policy_chain import _pref_home
-            provider = get_approval_provider_or_deny(
-                "owner_queue", user_id=controller.user_id, home_dir=_pref_home(controller))
-            if isinstance(provider, OwnerQueueApprover):
-                provider.set_taint_probe(correspondent_probe(controller.orchestrator))
-            approval = make_approval_hook(provider, gated,
-                                          timeout=payment_approval_timeout_sec())
-        except Exception as e:
-            self.logger.error(f"money MCP approval could not be wired: {e}")
+        if self._money_approval is None or self._money_approval_names != gated:
+            try:
+                import tools.controller.approval_queue  # noqa: F401  (registers owner_queue)
+                from core.config_policy import payment_approval_timeout_sec
+                from core.security.taints import correspondent_probe
+                from tools.controller.approval import (
+                    get_approval_provider_or_deny, make_approval_hook)
+                from tools.controller.approval_queue import OwnerQueueApprover
+                from tools.controller.policy_chain import _pref_home
+                provider = get_approval_provider_or_deny(
+                    "owner_queue", user_id=controller.user_id, home_dir=_pref_home(controller))
+                if isinstance(provider, OwnerQueueApprover):
+                    provider.set_taint_probe(correspondent_probe(controller.orchestrator))
+                self._money_approval = make_approval_hook(
+                    provider, gated, timeout=payment_approval_timeout_sec())
+                self._money_approval_names = gated
+            except Exception as e:
+                # The gate stays and refuses the names this wiring does not
+                # cover; the next sync retries the wiring.
+                self.logger.error(f"money MCP approval could not be wired: {e}")
+
+        registrar = self
 
         async def _money_mcp_gate(action_name, params, context):
-            if action_name not in gated:
+            if action_name not in registrar._money_gate_names:
                 return None
             verdict = authorize_spend(
                 SpendIntent.verb_gate("call a money MCP server", tool="mcp",
@@ -208,13 +223,17 @@ class MCPActionRegistrar:
                 context, session_user=controller.user_id)
             if verdict.refused:
                 return verdict.reason
-            if approval is None:
+            approval = registrar._money_approval
+            if approval is None or action_name not in registrar._money_approval_names:
                 return (f"denied: '{action_name}' is on a money MCP server and its "
                         "owner approval could not be wired this session")
             return await approval(action_name, params, context)
 
-        controller.register_pre_tool_call_hook(_money_mcp_gate, fail_mode="closed")
-        self.logger.info(f"🔒 Money MCP actions gated: {sorted(gated)}")
+        if self._money_gate_latch.run(lambda: controller.register_pre_tool_call_hook(
+                _money_mcp_gate, fail_mode="closed")):
+            self.logger.info(f"🔒 Money MCP actions gated: {sorted(gated)}")
+        else:
+            self.logger.info(f"🔒 Money MCP gate extended: {sorted(gated)}")
 
     def create_param_model(self, action_name: str, schema: Dict[str, Any]) -> Type[BaseModel]:
         """Create a dynamic Pydantic model from a JSON schema.

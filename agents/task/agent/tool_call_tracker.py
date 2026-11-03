@@ -7,11 +7,28 @@ during execution.
 """
 
 import logging
+from collections import OrderedDict
 from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import RLock
 import json
+
+from core.state.machine import StateMachine
+
+#: 098 AG-18: a call is ``pending`` until its result pairs (``completed`` /
+#: ``failed``) or its step closes unpaired (``abandoned``). All three are final.
+TOOL_CALL_MACHINE = StateMachine(
+    "tool_call",
+    states=frozenset({"pending", "completed", "failed", "abandoned"}),
+    transitions={"pending": frozenset({"completed", "failed", "abandoned"})},
+    terminal=frozenset({"completed", "failed", "abandoned"}),
+    initial=frozenset({"pending"}),
+)
+
+#: Bounds on the in-memory history (098 AG-18: it grew for the session's life).
+MAX_COMPLETED_CALLS = 500
+MAX_STEP_HISTORY = 50
 
 
 @dataclass
@@ -21,7 +38,7 @@ class ToolCallRecord:
     name: str
     args: Dict[str, Any]
     timestamp: datetime = field(default_factory=datetime.now)
-    status: str = "pending"  # pending, executing, completed, failed
+    status: str = "pending"  # TOOL_CALL_MACHINE: pending, completed, failed, abandoned
     result: Optional[Any] = None
     error: Optional[str] = None
     normalized_call: Optional[Dict[str, Any]] = None
@@ -35,15 +52,22 @@ class ToolCallTracker:
     state management system for tool calls.
     """
 
-    def __init__(self, session_id: str, logger: Optional[logging.Logger] = None):
+    def __init__(self, session_id: str, logger: Optional[logging.Logger] = None, *,
+                 user_id: Optional[str] = None, file_name: str = "tool_calls.json"):
         """
         Initialize the tracker.
 
         Args:
             session_id: Session identifier for context
             logger: Optional logger instance
+            user_id: the session's tenant (098 AG-18: the save resolves the same
+                directory the restore reads)
+            file_name: the state file — a sub-agent has its own (never the parent's)
         """
         self.session_id = session_id
+        self.user_id = user_id
+        self.file_name = file_name
+        self._dirty = False  # 098 AG-18: save only after a change
         
         # Use consistent logger initialization pattern (matches Agent, Controller, Registry, etc.)
         if logger:
@@ -54,7 +78,7 @@ class ToolCallTracker:
 
         # Core tracking structures
         self._active_calls: Dict[str, ToolCallRecord] = {}
-        self._completed_calls: Dict[str, ToolCallRecord] = {}
+        self._completed_calls: "OrderedDict[str, ToolCallRecord]" = OrderedDict()
         self._orphaned_calls: Set[str] = set()
 
         # Step-based tracking for the current execution
@@ -69,7 +93,8 @@ class ToolCallTracker:
             "total_calls": 0,
             "completed_calls": 0,
             "failed_calls": 0,
-            "orphaned_calls": 0
+            "orphaned_calls": 0,
+            "abandoned_calls": 0,
         }
 
         # MCP validation-failure tracking (schema-injection policy) now lives in
@@ -111,6 +136,7 @@ class ToolCallTracker:
                 registered_ids.append(call_id)
                 self._current_step_calls.append(call_id)
                 self._stats["total_calls"] += 1
+                self._dirty = True
 
                 self.logger.debug(f"Registered tool call: {call_id} ({record.name})")
 
@@ -148,8 +174,7 @@ class ToolCallTracker:
                 record.result = None
 
                 # Move to completed
-                self._completed_calls[call_id] = record
-                del self._active_calls[call_id]
+                self._retire(call_id, record)
 
                 self._stats["completed_calls"] += 1
                 self.logger.debug(f"Tool call {call_id} completed")
@@ -174,8 +199,7 @@ class ToolCallTracker:
                 record.error = error
 
                 # Move to completed (with failed status)
-                self._completed_calls[call_id] = record
-                del self._active_calls[call_id]
+                self._retire(call_id, record)
 
                 self._stats["failed_calls"] += 1
                 self.logger.warning(f"Tool call {call_id} failed: {error}")
@@ -183,29 +207,48 @@ class ToolCallTracker:
             return False
 
 
+    def _retire(self, call_id: str, record: ToolCallRecord) -> None:
+        """Move a finished call out of the active set into the BOUNDED history."""
+        self._active_calls.pop(call_id, None)
+        self._completed_calls[call_id] = record
+        while len(self._completed_calls) > MAX_COMPLETED_CALLS:
+            self._completed_calls.popitem(last=False)
+        self._dirty = True
+
     def complete_step(self) -> None:
-        """Complete the current step and start a new one."""
+        """Complete the current step and start a new one.
+
+        098 AG-18: a call of the closing step that never paired is ``abandoned``
+        (it used to stay ``pending`` for the life of the session, and every
+        later LLM call re-saved the file). The file is saved only when the
+        state changed since the last save."""
         with self._lock:
             if self._current_step_calls:
+                for call_id in self._current_step_calls:
+                    record = self._active_calls.get(call_id)
+                    if record is not None:
+                        record.status = "abandoned"
+                        self._retire(call_id, record)
+                        self._stats["abandoned_calls"] += 1
                 self._step_history.append(self._current_step_calls.copy())
+                del self._step_history[:-MAX_STEP_HISTORY]
                 self._current_step_calls.clear()
+                self._dirty = True
                 self.logger.debug(f"Completed step with {len(self._step_history[-1])} tool calls")
+            if not self._dirty:
+                return
 
-            # PERSISTENCE: best-effort auto-save of tool-call state (a durability
-            # backstop). P1 finalization: complete_step is called ~12x/step from the
-            # async step machinery, so it must NOT block the event loop. The old
-            # code retried a failed save with blocking time.sleep (up to 0.7s) while
-            # holding self._lock — a catastrophic loop freeze on any transient write
-            # error. A single best-effort attempt is enough: this file is a backstop,
-            # not the source of truth, and a miss is re-saved on the next step.
+            # PERSISTENCE: best-effort auto-save (a durability backstop, never the
+            # source of truth). P1 finalization: one attempt, no retry sleep — this
+            # runs on the event loop; a miss is re-saved at the next change.
             try:
                 from agents.task.path import pm
 
                 clean_session_id = pm().clean_session_id(self.session_id)
-                data_dir = pm().get_data_dir(clean_session_id)
-                state_file = data_dir / "tool_calls.json"
-                data_dir.mkdir(parents=True, exist_ok=True)
+                data_dir = pm().get_data_dir(clean_session_id, self.user_id)
+                state_file = data_dir / self.file_name
                 if self.save_to_file(state_file):
+                    self._dirty = False
                     self.logger.debug(f"✓ Auto-saved tool call state to {state_file}")
                 else:
                     self.logger.warning(f"tool call state save failed (non-fatal): {state_file}")
@@ -243,35 +286,13 @@ class ToolCallTracker:
                     'stats': self._stats
                 }
 
-                # Atomic write
-                import tempfile
-                import os
-
+                from core.state.files import atomic_write_json
                 filepath = Path(filepath)
-                filepath.parent.mkdir(parents=True, exist_ok=True)
-
-                temp_fd, temp_path = tempfile.mkstemp(
-                    dir=filepath.parent,
-                    prefix='.tool_calls_',
-                    suffix='.tmp'
-                )
-
-                try:
-                    with os.fdopen(temp_fd, 'w') as f:
-                        json.dump(state_data, f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())
-
-                    os.replace(temp_path, str(filepath))
-                    # mkstemp births 0600; the shared data home needs group-write.
-                    from core.data_perms import apply_birth_mode
-                    apply_birth_mode(filepath)
-                    return True
-
-                except Exception:
-                    if os.path.exists(temp_path):
-                        os.unlink(temp_path)
-                    raise
+                atomic_write_json(str(filepath), state_data)
+                # atomic_write_json births 0600; the shared data home needs group-write.
+                from core.data_perms import apply_birth_mode
+                apply_birth_mode(filepath)
+                return True
 
             except Exception as e:
                 self.logger.error(f"Failed to save tool call state: {e}")
@@ -305,20 +326,18 @@ class ToolCallTracker:
                     self.logger.warning(f"Session ID mismatch")
                     return False
 
-                # Restore active calls
+                # 098 AG-18: a call still active at save time never paired — after
+                # a restart it is `abandoned` history, not a live call.
                 for call_id, call_data in state_data.get('active_calls', {}).items():
                     record = ToolCallRecord(
                         id=call_data['id'],
                         name=call_data['name'],
                         args=call_data['args'],
                         timestamp=datetime.fromisoformat(call_data['timestamp']),
-                        status=call_data['status'],
+                        status="abandoned",
                         error=call_data.get('error')
                     )
-                    self._active_calls[call_id] = record
-
-                # Restore current step
-                self._current_step_calls = state_data.get('current_step_calls', [])
+                    self._retire(call_id, record)
 
                 # Restore stats
                 saved_stats = state_data.get('stats', {})
@@ -410,8 +429,10 @@ class ToolCallTracker:
                 "total_calls": 0,
                 "completed_calls": 0,
                 "failed_calls": 0,
-                "orphaned_calls": 0
+                "orphaned_calls": 0,
+                "abandoned_calls": 0,
             }
+            self._dirty = True
             self.logger.info(f"ToolCallTracker reset for session {self.session_id}")
 
     # ========== Issue #1 Fix: MCP Validation Failure Tracking ==========

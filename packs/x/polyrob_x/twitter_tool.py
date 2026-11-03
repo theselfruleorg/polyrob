@@ -4,7 +4,7 @@ import logging
 import asyncio
 import json
 from typing import List, Optional, Dict, Any, Union, Callable, Literal
-import tweepy  # type: ignore
+from polyrob_x._vendor import tweepy  # type: ignore
 from core.config import BotConfig
 import aiohttp
 from utils.rate_limit_manager import RateLimitManager
@@ -444,7 +444,8 @@ class TwitterTool(BaseTool):
                 wait_on_rate_limit=False)
                 if self.oauth2_access_token else self.client)
             if self.oauth2_access_token:
-                from polyrob_x.x_chat_client import XChatClient
+                from polyrob_x.x_chat_client import XChatClient, close_replaced_chat_client
+                close_replaced_chat_client(self.chat_client)  # 098 CL-13: never leak a session
                 self.chat_client = XChatClient(
                     self.oauth2_access_token,
                     private_keys_b64=self.chat_private_keys_b64,
@@ -528,10 +529,7 @@ class TwitterTool(BaseTool):
         state and the flags must stay consistent no matter which path ran.
         """
         try:
-            self.client = None
-            self.dm_client = None
-            self.api_v1 = None
-            self._initialized = False
+            await self.close()  # 098 CL-13: also closes the X Chat client session
             self.logger.info(f"{self.name} cleaned up successfully")
         except Exception as e:
             self.logger.error(f"Failed to cleanup {self.name}: {e}")
@@ -2621,7 +2619,8 @@ class TwitterTool(BaseTool):
         if self._initialized and self.client is not None:
             return
         await self._initialize()
-        self._initialized = True
+        # 098 CL-13: a recovery is HEALTHY too (the status said FAILED from boot).
+        self._initialized, self._status, self._error_message = True, ToolStatus.HEALTHY, None
 
     @BaseTool.action("Search for tweets on Twitter", param_model=TwitterSearchActionModel)
     async def twitter_search(self, params: TwitterSearchActionModel):

@@ -106,12 +106,16 @@ def running_version_line() -> str:
 
 def deployed_from() -> dict:
     """The deploy provenance (``.deployed_from``: ``sha=``, ``previous=``, ``at=``,
-    ``subject=``…) as a dict; ``{}`` when absent or unreadable (a dev checkout,
-    a pip install, a deploy older than 095 P0.3). ``previous=none`` reads as no key."""
+    ``subject=``…) as a dict; ``{}`` when absent (a dev checkout, a pip install,
+    a deploy older than 095 P0.3). An unreadable file is NOT absent: it returns
+    ``{"_unreadable": "<error class>"}`` so a reader can say so. ``previous=none``
+    reads as no key."""
     try:
         text = (_code_root() / ".deployed_from").read_text(encoding="utf-8")
-    except Exception:
+    except FileNotFoundError:
         return {}
+    except Exception as e:
+        return {"_unreadable": type(e).__name__}
     out = {}
     for raw in text.splitlines():
         key, sep, value = raw.partition("=")
@@ -246,6 +250,8 @@ def _since_previous(path: Path, sections: dict, order: list) -> str:
     previous, current = rec.get("previous"), rec.get("sha") or deployed_sha()
     if not previous:
         why = ("no .deployed_from next to the code" if not rec
+               else f".deployed_from is unreadable ({rec['_unreadable']})"
+               if rec.get("_unreadable")
                else ".deployed_from records no previous deploy")
         return (f"Cannot tell what changed since the previous deploy: {why}. "
                 "Read release_notes='latest' or 'unreleased' instead.")

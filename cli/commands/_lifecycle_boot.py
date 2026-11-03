@@ -62,6 +62,20 @@ def _apply_shielded(apply: Callable[[str], dict], channel: str,
             raise SystemExit(0)
 
 
+def _recover_direct_update(echo: Callable[[str], None]) -> None:
+    """098 CL-09: a `polyrob update --apply` killed mid-way (its journal is
+    open, its process gone) is rolled back before the code it left half-installed
+    builds anything. Never raises."""
+    try:
+        from cli.update.context import resolve_update_context
+        from cli.update.journal import recover_open_update
+        if recover_open_update(resolve_update_context().snapshots_root,
+                               echo=echo) == "rolled_back":
+            echo("[polyrob] the interrupted update was rolled back")
+    except Exception:
+        logger.debug("update journal recovery skipped", exc_info=True)
+
+
 def boot_step(command: str, *, data_home: Optional[Path] = None,
               apply: Optional[Callable[[str], dict]] = None,
               rollback: Optional[Callable[[dict], dict]] = None,
@@ -83,9 +97,13 @@ def boot_step(command: str, *, data_home: Optional[Path] = None,
         boot = lc.record_boot(command=command, data_home=data_home, role=role)
         if role:
             return None
+        _recover_direct_update(echo)
         # A request whose process stopped or crashed mid-drain was answered by
         # this very start: never drain and restart a second time for it.
         lc.settle_stale_request(float(boot.get("started_at") or 0), data_home=data_home)
+        # 098 CO-02: a parked update is reopened for the live drain (inside the
+        # supervised-restart window) or expires — never applied by this start.
+        lc.resolve_parked_request(data_home=data_home)
         req = lc.read_request(data_home=data_home)
     except Exception:
         logger.warning("lifecycle boot step: record unreadable — starting normally",
@@ -103,7 +121,8 @@ def boot_step(command: str, *, data_home: Optional[Path] = None,
         rb = rollback(res)
         res.update(in_progress=False, ok=False, boot_failed=True, rolled_back=bool(rb.get("ok")),
                    rollback=rb)
-        lc.set_request_state(lc.STATE_EXITING, data_home=data_home, update_result=res)
+        lc.set_request_state(lc.STATE_EXITING, data_home=data_home, request_id=req.id,
+                             expect=(lc.STATE_EXITING,), update_result=res)
         lc.reset_boot_attempts(data_home=data_home)
         reexec()
         return "rolled_back"
@@ -113,13 +132,15 @@ def boot_step(command: str, *, data_home: Optional[Path] = None,
         echo(f"[polyrob] applying the update the owner asked for ({req.describe()})…")
         sha, branch = lc.git_head()
         import time as _time
-        lc.set_request_state(lc.STATE_EXITING, data_home=data_home,
+        lc.set_request_state(lc.STATE_EXITING, data_home=data_home, request_id=req.id,
+                             expect=(lc.STATE_EXITING,),
                              update_result={"in_progress": True, "old_sha": sha or "",
                                             "old_branch": branch or "HEAD",
                                             "started_at": _time.time()})
         res = _apply_shielded(
             apply, req.channel or "stable",
             lambda r: lc.set_request_state(lc.STATE_EXITING, data_home=data_home,
+                                           request_id=req.id, expect=(lc.STATE_EXITING,),
                                            update_result=r))
         if res.get("ok"):
             echo(f"[polyrob] updated {res.get('from_version')} → {res.get('to_version')}; "
@@ -139,7 +160,8 @@ def boot_step(command: str, *, data_home: Optional[Path] = None,
         rb = rollback(res)
         res.update(boot_failed=True, rollback=rb, ok=False,
                    rolled_back=bool(rb.get("ok")))
-        lc.set_request_state(lc.STATE_EXITING, data_home=data_home, update_result=res)
+        lc.set_request_state(lc.STATE_EXITING, data_home=data_home, request_id=req.id,
+                             expect=(lc.STATE_EXITING,), update_result=res)
         lc.reset_boot_attempts(data_home=data_home)
         reexec()
         return "rolled_back"

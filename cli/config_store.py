@@ -65,28 +65,20 @@ def load_cli_config() -> Dict[str, Any]:
 
 
 def save_cli_config(data: Dict[str, Any]) -> None:
+    """Atomic (098 CL-05): a torn cli.json read as corrupt and lost the defaults."""
+    from core.state.files import atomic_write_json
     p = _config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, sort_keys=True))
+    atomic_write_json(str(p), data, mode=0o600)
 
 
 def set_default_model(provider: str, model: str) -> None:
-    cfg = load_cli_config()
-    cfg["default_provider"] = provider
-    cfg["default_model"] = model
-    save_cli_config(cfg)
-    # SSOT fix (G11, 2026-07-14): `polyrob init` persists DEFAULT_* env pins
-    # (precedence 2) which silently override this cli.json default (precedence 3).
-    # Keep the pin in lockstep so "/model … set-default" is what a fresh session
-    # actually picks. Fail-open: a write failure must never break the swap.
-    try:
-        from core.paths import polyrob_home
-        from cli.commands.config import _upsert_env   # local: avoid import cycle
-        env_path = polyrob_home() / ".env"
-        _upsert_env(env_path, "DEFAULT_PROVIDER", provider, secure=True)
-        _upsert_env(env_path, "DEFAULT_MODEL", model, secure=True)
-    except Exception:
-        pass
+    """``cli.json`` + the home ``.env`` pin (G11: the pin would otherwise
+    override cli.json). Delegates to :func:`cli.model_default.persist_default`;
+    a failed store is logged, never silently passed (098 CL-05)."""
+    from cli.model_default import persist_default
+    res = persist_default(provider, model)
+    if not res.ok:
+        logger.warning("%s", res.line())
 
 
 def get_default_model() -> Tuple[Optional[str], Optional[str]]:

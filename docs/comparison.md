@@ -27,7 +27,7 @@ appendix at the end for when each claim was verified.
 | **Subscription sign-in (OAuth)** | ✅ Claude Pro/Max, ChatGPT Codex, Copilot, SuperGrok, Qwen, MiniMax | ✅ Nous Portal, ChatGPT/Codex, Claude Max (extra credits only), SuperGrok, Qwen, MiniMax | ✅ ChatGPT/Codex OAuth, Claude CLI reuse |
 | **Persistent memory** | ✅ SQLite FTS5, optional local vector recall, tenant-scoped | ✅ Curated `MEMORY.md`/`USER.md`, FTS5 session search, Honcho user modelling, memory-provider plugins | ✅ Markdown memory files with hybrid embedding and keyword search |
 | **Durable task/goal board** | ✅ Goal board + scheduled jobs, all restart-surviving, every autonomous run under one step cap and one spend cap | ✅ Kanban board across profiles, plus a judge-checked `/goal` loop | ⚠️ Opt-in Workboard plugin (cards with dependency promotion and worker dispatch), restart-surviving session goals, scheduled automations |
-| **Proactive self-wake** | ✅ Wakes an idle session when observable state changes, with depth/backoff guards and a no-change gate | ✅ Timer-driven: `/heartbeat` and `/loop` re-enter an idle session; cron monitor jobs skip the model when nothing changed | ⚠️ Scheduled automations wake a session; standing intents fire when a matching event appears |
+| **Proactive self-wake** | ✅ Re-enters an idle session on an event (a goal or background result, a settlement, every card decided), with depth/backoff guards; a scheduled job can skip the model when nothing changed | ✅ Timer-driven: `/heartbeat` and `/loop` re-enter an idle session; cron monitor jobs skip the model when nothing changed | ⚠️ Scheduled automations wake a session; standing intents fire when a matching event appears |
 | **Skills system** | ✅ `SKILL.md` + install pipeline (local/git/URL, scanned and quarantined) | ✅ Autonomous skill creation, a curator, the Skills Hub | ✅ AgentSkills format, the ClawHub registry, a skill editor in the Control UI |
 | **Plugins / extensions** | ⚠️ Packs: seven first-party (X, markets, discovery, four sandbox backends); a third-party pack loads only when you name it | ✅ A reviewed plugin catalog (600 entries at v0.22.0, each pinned to a commit) | ✅ Official and external plugins, plus ClawHub |
 | **Messaging channels** | 8 — Telegram, WhatsApp, Email, Discord, Slack, Signal, Feishu / Lark, DingTalk — plus X DMs through the agent's X tools | ~29 built-in adapters (adds Matrix, Teams, iMessage, WeChat, LINE, SMS, …) plus platform plugins | ~33 (adds iMessage, Teams, Matrix, LINE, Nostr, X, Twitch, …) plus WebChat |
@@ -52,8 +52,7 @@ appendix at the end for when each claim was verified.
 | **Self-hosted** | ✅ | ✅ | ✅ |
 
 > **Licensing is table stakes, not a differentiator** — all three are MIT. POLYROB
-> ships the full engine under MIT, self-hosted: free forever, yours to fork and run,
-> with no limited "open core" held back behind a paid cloud. The POLYROB and Selfrule
+> ships the full engine in this repository under MIT, to fork and self-host. The POLYROB and Selfrule
 > *names* are trademarks ([TRADEMARK.md](../TRADEMARK.md)) — fork the code freely,
 > just rename your distribution.
 
@@ -91,17 +90,19 @@ capabilities neither upstream has built in:
   in a persisted queue that survives a restart and can be approved from a phone.
   Hermes' approval is an in-process wait with a timeout; OpenClaw's pending exec
   approval belongs to the live turn and dies with it.
-- **Change-driven self-wake.** POLYROB re-enters an idle session when observable
-  state changes, with depth and backoff guards and a change gate so a no-op wake
-  costs nothing. Hermes now has timer-driven `/heartbeat` and `/loop`, and OpenClaw
-  has scheduled automations — both wake on a clock, not on a change.
+- **Event-driven self-wake.** POLYROB re-enters an idle session when an event
+  arrives for it — a goal or background result, a settled invoice, or the last of
+  the action cards it raised being decided — and carries that outcome into the new
+  turn. A per-session depth and backoff budget stops a wake from re-triggering
+  itself. Scheduled work is clock-driven in all three projects; POLYROB's
+  scheduled jobs can skip the model call when nothing they watch has changed.
 - **Work that outlives the session.** An app the agent builds can be deployed behind
   a public URL and kept alive by an owner-run supervisor — the agent writes the
   registry row, the owner approves the address, and the privileged half (containers,
   nginx, egress rules) is never the agent's to hold.
 
-Portable identities are **not** on this list any more: Hermes' profiles now export to
-a file and install from git as well.
+Portable identities are **not** on this list: Hermes' profiles also export to
+a file and install from git.
 
 Where POLYROB **lags**, honestly:
 

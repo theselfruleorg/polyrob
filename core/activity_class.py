@@ -87,6 +87,10 @@ _MESSAGE_KINDS = frozenset({
     ek.CORRESPONDENT_PENDING,
     ek.CORRESPONDENT_RESUMED,
     ek.INBOUND_ROUTED,
+    # 098: an inbound message the surface could not take (quarantined / skipped / gap)
+    ek.EMAIL_QUARANTINED,
+    ek.X_DM_POISON,
+    ek.X_DM_CURSOR_LOST,
 })
 
 # --- tool ----------------------------------------------------------------------

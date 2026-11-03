@@ -176,7 +176,9 @@ def test_mark_settled_records_the_money_before_the_effect_is_attempted(rig):
     arriving and the effect landing, the row still says `paid` and the
     obligation is visible rather than lost."""
     container, store = rig
-    store.set_status("off_1", "pending")
+    from core.sqlite_util import execute_retry  # rewind the fixture row (not an edge)
+    execute_retry(store.db_path, "UPDATE room_action_offers SET status='pending' "
+                  "WHERE offer_id='off_1'", ())
     assert ra.mark_settled(container, "off_1", now=42.0) is True
     row = store.get("off_1")
     assert row.status == "paid" and row.settled_at == 42.0
@@ -195,3 +197,46 @@ def test_apply_is_not_pause_gated_and_offer_is():
     import inspect
     assert "allows(" in inspect.getsource(ra.offer)
     assert "allows(" not in inspect.getsource(ra.apply)
+
+
+# -- 098 W1 CO-31: paid -> applying is a CAS; apply refuses a pending offer ----
+
+def test_apply_refuses_pending_offer(rig):
+    import asyncio
+    from core.sqlite_util import execute_retry
+    container, store = rig
+    execute_retry(store.db_path, "UPDATE room_action_offers SET status='pending' "
+                  "WHERE offer_id='off_1'", ())
+    res = asyncio.run(ra.apply(container, "off_1", perform_fn=_never))
+    assert not res.ok and res.reason_code == "pending"
+    assert store.get("off_1").status == "pending"
+
+
+async def _never(row, eff, until):
+    raise AssertionError("a pending offer must never be actuated")
+
+
+def test_concurrent_apply_actuates_once(rig):
+    import asyncio
+    container, store = rig
+    calls = []
+
+    async def slow(row, eff, until):
+        calls.append(row.offer_id)
+        await asyncio.sleep(0.01)
+        return type("R", (), {"ok": True})()
+
+    async def both():
+        return await asyncio.gather(ra.apply(container, "off_1", perform_fn=slow),
+                                    ra.apply(container, "off_1", perform_fn=slow))
+    out = asyncio.run(both())
+    assert calls == ["off_1"] and store.get("off_1").status == "applied"
+    assert sum(1 for r in out if r.ok) >= 1
+
+
+def test_credit_after_applied_is_noop(rig):
+    container, store = rig
+    store.set_status("off_1", "applying", applied_at=1.0)
+    store.set_status("off_1", "applied", applied_at=2.0)
+    res = ra._credit(container, store, store.get("off_1"), "late failure", 3.0)
+    assert store.get("off_1").status == "applied" and res.ok

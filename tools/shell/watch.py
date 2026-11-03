@@ -126,10 +126,11 @@ class JobWatch:
             self.pattern = None
 
     # --- exit --------------------------------------------------------------------
-    async def _on_exit(self) -> None:
+    async def _on_exit(self, status: str = "done") -> None:
         from tools.shell.receipts import finalize_job
         await finalize_job(self.executor, self.job, session_id=self.session_id,
-                           user_id=self.user_id, registry=self.registry)
+                           user_id=self.user_id, registry=self.registry,
+                           status="lost" if status == "lost" else None)
         if self.notify is None or getattr(self.job, "status", "") == "killed":
             return  # the agent killed it itself: nothing to tell it
         try:
@@ -174,6 +175,9 @@ class JobWatch:
                 await self._scan()
                 await self._flush_pattern()
                 status = await self.executor.poll(self.job.id)
+                if self.registry is not None:  # 098 TS-10: unknown is not finished
+                    status = self.registry.observe(self.session_id, self.job.id, status,
+                                                   now=time.time())
                 errors = 0
             except asyncio.CancelledError:
                 raise
@@ -184,9 +188,9 @@ class JobWatch:
                     return  # the executor is gone (session torn down)
                 await asyncio.sleep(self.interval)
                 continue
-            if status != "running":
+            if status not in ("running", "unknown"):
                 try:
-                    await self._on_exit()
+                    await self._on_exit(status)
                 except Exception:
                     logger.debug("shell job watch exit handling failed", exc_info=True)
                 return

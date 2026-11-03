@@ -56,8 +56,10 @@ def test_overfetch_k_and_slice_to_limit(monkeypatch):
     out = prov._kb_vector_contents("some query", "user", "collB", limit=5)
 
     # k passed to sqlite-vec is the OVER-FETCH, not the requested limit.
-    assert sink["params"][3] == min(5 * lv._KB_VEC_OVERFETCH, lv._KB_VEC_OVERFETCH_CAP)
-    assert sink["params"][3] > 5
+    # params = (user, collection, collection, embedding, k) — the collection is
+    # bound twice for the "None = every collection" predicate (097).
+    assert sink["params"][4] == min(5 * lv._KB_VEC_OVERFETCH, lv._KB_VEC_OVERFETCH_CAP)
+    assert sink["params"][4] > 5
     # Final result is sliced back down to the requested limit.
     assert len(out) == 5
     assert out[0] == ("content0", "path0", 0)

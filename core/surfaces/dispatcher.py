@@ -71,6 +71,7 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/status", "/avatar", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
              "/cwd",   # C67: where I am working right now (read-only)
              "/missed",
+             "/more", "/rules",  # 096 W5: the rest of a cut; the owner rules (reads)
              "/run",     # 070 D1: pause/resume/stop ONE background run (core/run_control.py)
              "/apps",  # 032 durable app service (approve an address, health, kill, logs)
              "/mcp",   # per-tenant MCP servers; owner-only (core/mcp_admin.py)

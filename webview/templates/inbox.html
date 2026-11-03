@@ -51,7 +51,7 @@
              approved here from a one-line preview. #}
           <pre class="entry-body entry-card">{{ item.extra.card }}</pre>
 {%- elif item.body %}
-          <p class="entry-body">{{ item.body }}</p>
+          <p class="entry-body entry-lines">{{ item.body }}</p>
 {%- endif %}
 {%- if item.meta %}
           <p class="entry-meta">{{ item.meta }}</p>
@@ -85,7 +85,12 @@
 {%- if action.verb %}
             <button class="btn {% if action.primary %}btn-primary{% endif %}"
                     data-kind="{{ item.kind }}" data-id="{{ item.id }}"
+                    data-rev="{{ (item.extra or {}).get('rev') or '' }}"
                     data-verb="{{ action.verb }}">{{ action.label }}</button>
+{%- elif action.read %}
+            {# 096 W7: reads the whole item — it decides nothing. #}
+            <button class="btn" data-kind="{{ item.kind }}" data-id="{{ item.id }}"
+                    data-read="true">{{ action.label }}</button>
 {%- endif %}
 {%- endfor %}
           </div>

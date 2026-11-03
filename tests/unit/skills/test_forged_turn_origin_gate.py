@@ -136,6 +136,7 @@ async def test_genuine_turn_create_auto_activates_when_review_off(monkeypatch, t
     ctx = _ctx(turn_kind=None, role="orchestrator", is_sub=False)
     params = action.param_model(
         action="create", skill_id="genuine-skill", when="When a real user asks",
+        reason="the owner asked for it",
         content="# Genuine Skill\n\nA reusable procedure from a real user turn.\n",
     )
     res = await action.function(params, execution_context=ctx)

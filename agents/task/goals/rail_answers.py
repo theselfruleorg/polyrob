@@ -14,7 +14,6 @@ failed, was refused or was cut leaves the answer for the next one.
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any, List, Tuple
@@ -22,7 +21,6 @@ from typing import Any, List, Tuple
 import re
 
 from core.goal_vocab import ASK_FULFILLED, ASK_REJECTED, LIVE_STATUSES
-from core.sqlite_util import execute_retry
 
 logger = logging.getLogger(__name__)
 
@@ -220,16 +218,12 @@ def mark_rail_answers_consumed(board: Any, ask_ids: List[str], *, run_id: str = 
     n = 0
     for ask_id in ask_ids or []:
         try:
-            a = board.get(ask_id)
-            if a is None:
-                continue
-            p = dict(a.payload or {})
-            if p.get("consumed_by_run"):
-                continue
-            p["consumed_by_run"] = run_id or str(time.time())
-            execute_retry(board.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                          (json.dumps(p), a.id))
-            n += 1
+            # AG-21: one key, and only while unset — never the whole payload.
+            from agents.task.goals.payload_keys import patch
+            if patch(board.db_path, str(ask_id),
+                     set_keys={"consumed_by_run": run_id or str(time.time())},
+                     where_extra="json_extract(payload, '$.consumed_by_run') IS NULL"):
+                n += 1
         except Exception:
             logger.debug("rail answers: consume stamp failed for %s", ask_id, exc_info=True)
     return n

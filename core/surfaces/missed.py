@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import textwrap
 import time
 from typing import Dict, List
@@ -166,6 +167,29 @@ def format_notice_lines(ts: float, kind: str, text: str, *, gutter: str = "",
     """
     stamp = time.strftime("%m-%d %H:%M", time.gmtime(float(ts or 0)))
     prefix = f"{gutter}{stamp}Z — [{kind}] "
-    wrapped = textwrap.wrap(text, width=width, initial_indent=prefix,
-                            subsequent_indent=" " * len(prefix))
-    return wrapped or [prefix.rstrip()]
+    indent = " " * len(prefix)
+    # 096 W6 (D3): wrap PER LINE. One ``textwrap.wrap`` over the whole text
+    # replaced every newline with a space, so a recovered message's bullets,
+    # paragraphs and code fences collapsed into one run of prose. A fenced
+    # line is code: kept whole, never re-wrapped.
+    out: List[str] = []
+    in_fence = False
+    for raw in (text or "").strip("\n").split("\n"):
+        lead = prefix if not out else indent
+        if raw.strip().startswith("```"):
+            in_fence = not in_fence
+            out.append((lead + raw).rstrip())
+            continue
+        if in_fence or not raw.strip():
+            out.append((lead + raw).rstrip())
+            continue
+        bullet = _BULLET_LEAD_RE.match(raw)
+        hang = indent + " " * (len(bullet.group(0)) if bullet else 0)
+        out.extend(textwrap.wrap(raw, width=width, initial_indent=lead,
+                                 subsequent_indent=hang, replace_whitespace=False)
+                   or [lead.rstrip()])
+    return out or [prefix.rstrip()]
+
+
+#: A list item's marker (``- ``, ``• ``, ``1. ``) — its wrapped lines hang under the text.
+_BULLET_LEAD_RE = re.compile(r"^[ \t]*(?:[-*+•]|\d{1,3}[.)])[ \t]+")

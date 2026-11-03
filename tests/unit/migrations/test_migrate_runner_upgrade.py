@@ -128,3 +128,51 @@ def test_mixed_pending_set_applies_in_order(db, versions_dir):
         rows = asyncio.run(db.fetch_all(
             "SELECT version FROM schema_versions WHERE version = ?", (v,)))
         assert len(rows) == 1
+
+
+UNVERIFIED_BODY = '''
+VERSION = "9.7.0"
+DESCRIPTION = "test migration whose helper swallowed a failure"
+VERIFY_GATES = True
+
+async def upgrade(db, db_manager):
+    pass  # the ALTER "failed" and was only logged
+
+async def verify(db, db_manager):
+    return False
+'''
+
+
+def test_an_unverified_migration_is_not_recorded(db, versions_dir):
+    """098 review O-06: a migration whose verify() is False raises and is never
+    recorded, so the next run retries it."""
+    (versions_dir / "v9_7_0_unverified.py").write_text(UNVERIFIED_BODY)
+    vm = _version_mgr(db)
+    with pytest.raises(RuntimeError, match="did not verify"):
+        asyncio.run(apply_pending_migrations(db, None, vm, versions_dir))
+    assert not asyncio.run(vm.is_version_applied("9.7.0"))
+
+
+SELF_RECORDING_UNVERIFIED_BODY = '''
+VERSION = "9.6.0"
+DESCRIPTION = "self-recording test migration whose helper swallowed a failure"
+VERIFY_GATES = True
+
+async def upgrade(db, db_manager):
+    await db.execute(
+        "INSERT OR REPLACE INTO schema_versions (version, description, applied_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP)", (VERSION, DESCRIPTION))
+
+async def verify(db, db_manager):
+    return False
+'''
+
+
+def test_a_self_recorded_unverified_migration_is_taken_back(db, versions_dir):
+    """098 review: v1.12-v1.15 write their own row inside upgrade(); a failed
+    verify() must remove it, or every later run skips the migration."""
+    (versions_dir / "v9_6_0_selfrec_unverified.py").write_text(SELF_RECORDING_UNVERIFIED_BODY)
+    vm = _version_mgr(db)
+    with pytest.raises(RuntimeError, match="did not verify"):
+        asyncio.run(apply_pending_migrations(db, None, vm, versions_dir))
+    assert not asyncio.run(vm.is_version_applied("9.6.0"))

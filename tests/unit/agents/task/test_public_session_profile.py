@@ -27,7 +27,8 @@ def test_project_context_skips_public_sessions():
 
 def test_memory_injectors_skip_public_sessions():
     assert "is_public_session(" in _src(memory_prefetch.MemoryPrefetchMixin._maybe_prefetch_memory)
-    assert "is_public_session(" in _src(memory_prefetch.MemoryPrefetchMixin._maybe_inject_episodic_digest)
+    # 098 AG-22: the injector body runs under its once-per-session latch.
+    assert "is_public_session(" in _src(memory_prefetch.MemoryPrefetchMixin._maybe_inject_episodic_digest_body)
 
 
 def test_live_health_skips_public_sessions():
@@ -123,7 +124,7 @@ def test_live_health_behavioural_public_vs_private(monkeypatch):
 
 def test_autonomous_continuity_skips_public_sessions():
     assert "is_public_session(" in _src(
-        memory_prefetch.MemoryPrefetchMixin._maybe_inject_autonomous_continuity)
+        memory_prefetch.MemoryPrefetchMixin._maybe_inject_autonomous_continuity_body)
 
 
 def test_autonomous_continuity_behavioural_public_vs_private(monkeypatch):

@@ -107,3 +107,35 @@ def test_format_list_shows_replied_state_at_a_glance():
 def test_format_list_empty_tenant():
     s = _store()
     assert s.format_list("t-nobody") == ""
+
+
+def test_schema_has_no_state_column(tmp_path):
+    """098 CO-13: the dead ``conversations.state`` column is gone — also from a
+    legacy file that still has it."""
+    import sqlite3
+
+    from core.surfaces.conversations import ConversationStore
+    db = str(tmp_path / "c.db")
+    ConversationStore(db)
+    c = sqlite3.connect(db)
+    assert "state" not in [r[1] for r in c.execute("PRAGMA table_info(conversations)")]
+    c.close()
+    legacy = str(tmp_path / "legacy.db")
+    c = sqlite3.connect(legacy)
+    c.execute("CREATE TABLE conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+              "user_id TEXT NOT NULL, surface TEXT NOT NULL, address TEXT NOT NULL, "
+              "display_name TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'open', "
+              "session_id TEXT NOT NULL DEFAULT '', last_inbound_ts REAL, "
+              "last_outbound_ts REAL, last_inbound_mid TEXT NOT NULL DEFAULT '', "
+              "created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+              "UNIQUE (user_id, surface, address))")
+    c.execute("INSERT INTO conversations (user_id, surface, address, created_at, updated_at) "
+              "VALUES ('u', 'email', 'a@b.c', 1, 1)")
+    c.commit()
+    c.close()
+    store = ConversationStore(legacy)
+    c = sqlite3.connect(legacy)
+    assert "state" not in [r[1] for r in c.execute("PRAGMA table_info(conversations)")]
+    c.close()
+    assert [r["address"] for r in store.list("u")] == ["a@b.c"]   # the row survived
+    store.record_outbound("u", "email", "x@y.z", "hi")             # and writes still work

@@ -423,6 +423,19 @@ class GoalDispatcher(GoalRunMixin):
         #: 031: True once the paused edge was reconciled (hold + one log line).
         self._paused_seen = False
         self._quota_logged = False
+        # AG-17: an owner pause/cancel stops this process's run at once.
+        from agents.task.goals.run_cancel import register as _reg_cancel
+        if getattr(board, "db_path", None):
+            _reg_cancel(board.db_path, self)
+
+    def cancel_goal_run(self, goal_id: str) -> bool:
+        """Cancel this process's live run of *goal_id* (the owner moved the row
+        off ``running``). True when a run was cancelled."""
+        t = self._goal_tasks.get(goal_id)
+        if t is None or t.done():
+            return False
+        t.cancel()
+        return True
 
     def _home_dir(self) -> str:
         """Data-home for pref resolution (owner-UX P1 T4), derived from the
@@ -519,6 +532,13 @@ class GoalDispatcher(GoalRunMixin):
                 logger.info("goal dispatch: closed %d settled config_change ask(s)", settled)
         except Exception:
             logger.debug("config_change ask sweep skipped", exc_info=True)
+        # 098 TS-14: an owner ask past its `expires_at` closes as obsolete.
+        try:
+            expired = self.board.expire_open_asks()
+            if expired:
+                logger.info("goal dispatch: closed %d expired owner ask(s)", expired)
+        except Exception:
+            logger.debug("ask expiry sweep skipped", exc_info=True)
 
         if not AutonomyConfig.goals_enabled():
             return 0

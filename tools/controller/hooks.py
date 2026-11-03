@@ -24,12 +24,23 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from agents.task.loop_types.controller_types import ActionResult
 
 # A registered hook entry is normalised to ``(callable, fail_mode)``.
 HookEntry = Tuple[Callable, str]
+
+#: 098 TS-16: the only fail modes. Anything else raises AT REGISTRATION, so a
+#: typo ("close", "Closed") fails at boot instead of failing OPEN on a guardrail.
+FailMode = Literal["open", "closed"]
+FAIL_MODES = frozenset({"open", "closed"})
+
+
+def check_fail_mode(fail_mode: Any) -> str:
+    if fail_mode not in FAIL_MODES:
+        raise ValueError(f"hook fail_mode must be 'open' or 'closed', not {fail_mode!r}")
+    return fail_mode
 
 
 class HookPipeline:
@@ -40,6 +51,8 @@ class HookPipeline:
         self.pre: List = []
         self.post: List = []
         self.transform: List = []
+        #: (phase, key) -> the hook registered under that key (098 TS-16).
+        self._keyed: Dict[Tuple[str, str], Callable] = {}
 
     # -- helpers --------------------------------------------------------------
 
@@ -76,14 +89,37 @@ class HookPipeline:
 
     # -- registration ---------------------------------------------------------
 
-    def register_pre(self, hook: Callable, fail_mode: str = "open") -> None:
-        self.pre.append((hook, fail_mode))
+    def _register(self, phase: str, hook: Callable, fail_mode: FailMode,
+                  key: Optional[str]) -> None:
+        """Add one hook. An unknown ``fail_mode`` raises; the same callable twice
+        is refused (logged, not added); a ``key`` REPLACES the hook registered
+        under that key in place (one gate per controller, 098 TS-04)."""
+        check_fail_mode(fail_mode)
+        entries = getattr(self, phase)
+        if key is not None:
+            old = self._keyed.get((phase, key))
+            self._keyed[(phase, key)] = hook
+            for i, entry in enumerate(entries):
+                if old is not None and self.normalize(entry)[0] is old:
+                    entries[i] = (hook, fail_mode)
+                    return
+        elif any(self.normalize(e)[0] is hook for e in entries):
+            self.logger.warning(f"hook.duplicate phase={phase} hook={getattr(hook, '__name__', hook)} "
+                                f"— already registered, not added again")
+            return
+        entries.append((hook, fail_mode))
 
-    def register_post(self, hook: Callable, fail_mode: str = "open") -> None:
-        self.post.append((hook, fail_mode))
+    def register_pre(self, hook: Callable, fail_mode: FailMode = "open",
+                     key: Optional[str] = None) -> None:
+        self._register("pre", hook, fail_mode, key)
 
-    def register_transform(self, hook: Callable, fail_mode: str = "open") -> None:
-        self.transform.append((hook, fail_mode))
+    def register_post(self, hook: Callable, fail_mode: FailMode = "open",
+                      key: Optional[str] = None) -> None:
+        self._register("post", hook, fail_mode, key)
+
+    def register_transform(self, hook: Callable, fail_mode: FailMode = "open",
+                           key: Optional[str] = None) -> None:
+        self._register("transform", hook, fail_mode, key)
 
     # -- execution ------------------------------------------------------------
 

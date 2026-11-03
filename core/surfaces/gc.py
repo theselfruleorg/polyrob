@@ -46,6 +46,16 @@ def prune_surface_stores(registry) -> None:
                 logger.info("surface GC pruned %d correspondent thread anchor(s)", n)
     except Exception as e:
         logger.warning("surface GC: thread-anchor prune failed: %s", e)
+    try:  # 098 CO-14: unpaired rows with long-expired codes grew per sender
+        from core.runtime_paths import store_db_path
+        pairing_db = store_db_path("pairing.db", os.path.dirname(db_path) or ".")
+        if os.path.exists(pairing_db):
+            from core.pairing import PairingStore
+            n = PairingStore(pairing_db).purge_expired()
+            if n:
+                logger.info("surface GC purged %d expired pairing code(s)", n)
+    except Exception as e:
+        logger.warning("surface GC: pairing purge failed: %s", e)
 
 
 def purge_stale_safe(registry, queue, older_than_secs: float) -> int:

@@ -116,6 +116,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - APPROVAL_PROVIDER — default: auto — Approval provider: `auto`(allow)/`auto_notify`(allow + `tool_auto_approved` audit event + post-hoc owner notification — act-and-report)/`deny`/custom (`interactive_cli`, `owner_queue` self-register on import).
 - APPROVAL_TIMEOUT_SEC — default: 30 — Approval-request timeout (cancels provider on expiry).
 - PAYMENT_APPROVAL_MODE — default: approve (auto under AUTONOMY_MODE=autonomous) — the owner-legible switch for outward payment-creation actions (`PAYMENT_APPROVAL_TOOLS`), gated FIRST-CLASS independent of `APPROVAL_REQUIRED_TOOLS`. `approve`: every request (receive AND spend) queues through the durable, remote-capable `…
+- APPROVAL_ASK_TTL_HOURS — default: 72 (a money ask: the smaller of this and 24) — 098 TS-14: hours an owner `tool_approval` ask stays open.
 - APPROVAL_GRANT_TTL_HOURS — default: 24 — TTL for an `owner_queue` ONE-SHOT grant: an owner decision recorded AFTER the requester already timed out still lets the NEXT identical request (same tool+params+tenant hash) through without re-queuing — but only within this window, and on…
 - POLYROB_TOOL_DENYLIST — default: '' — Comma list of tools vetoed by the pre-tool-call guardrail (fail-closed).
 - POLYROB_AGENT_TOOLSET — default: unset — Named toolset driving the CLI session's tool list (`resolve_toolset`), same as `polyrob run --toolset <name>`.

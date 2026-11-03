@@ -50,6 +50,8 @@ class _FakeAgent(RunLoopMixin, MemoryPrefetchMixin):
 
         self.state = MagicMock()
         self.state.n_steps = 0
+        from agents.task.agent.core.run_state import RunControl
+        self.state.run_control = RunControl()  # 098 AG-01: run() owns begin/end
         self.state.consecutive_failures = 0
 
         self.telemetry_manager = MagicMock()

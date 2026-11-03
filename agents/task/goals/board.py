@@ -50,6 +50,9 @@ from agents.task.goals.board_types import (  # noqa: E402,F401 — re-exported b
 )
 from agents.task.goals.board_deps import BoardDepsMixin  # noqa: E402
 from agents.task.goals.board_asks import BoardAsksMixin  # noqa: E402
+from agents.task.goals.machines import GOAL_MACHINE  # noqa: E402,F401 — 098 S1
+from agents.task.goals.payload_keys import (  # noqa: E402
+    append_capped, patch as _patch_payload, payload_expr)
 from core.goal_vocab import normalize_title  # noqa: E402,F401 — the ONE title key
 
 #: A goal a rate guard deferred (``defer_run``) is not claimable before its
@@ -373,27 +376,27 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         reopens. Returns None (caller records a failure) for a stale claim or once
         the goal has been deferred :data:`MAX_RUN_DEFERRALS` times in a row (a
         recorded success or failure ends the row: both drop ``run_deferrals``)."""
-        g = self.get(goal_id)
-        if g is None:
-            return None
-        payload = dict(g.payload or {})
-        n = int(payload.get("run_deferrals") or 0)
-        if n >= self.MAX_RUN_DEFERRALS:
-            return None
-        payload["run_deferrals"] = n + 1
-        payload["not_before"] = self._now() + max(1, int(retry_after_sec))
+        # AG-17/AG-21: the two keys change inside the status CAS (json_set) —
+        # never a read-back write of the whole payload — and the deferral cap
+        # is part of the guard, so two deferrals cannot both pass it.
+        n_sql = "COALESCE(json_extract(payload, '$.run_deferrals'), 0)"
         row = execute_retry(
             self.db_path,
-            """UPDATE goals SET status='ready', claim_lock=NULL, claim_expires=NULL,
-                   payload=?
-                 WHERE id=? AND status='running' AND claim_token IS ? RETURNING *""",
-            (json.dumps(payload), goal_id, claim_token), fetch="one",
+            f"""UPDATE goals SET status='ready', claim_lock=NULL, claim_expires=NULL,
+                   payload=json_set(json_set(COALESCE(payload, '{{}}'),
+                       '$.run_deferrals', {n_sql} + 1), '$.not_before', ?)
+                 WHERE id=? AND status='running' AND claim_token IS ?
+                   AND {n_sql} < ? RETURNING *""",
+            (self._now() + max(1, int(retry_after_sec)), goal_id, claim_token,
+             int(self.MAX_RUN_DEFERRALS)), fetch="one",
         )
         if row is None:
             return None
+        g = Goal.from_row(row)
         self._event(goal_id, "deferred", {"retry_after_sec": int(retry_after_sec),
-                                          "deferrals": n + 1, "reason": str(reason)[:300]})
-        return Goal.from_row(row)
+                                          "deferrals": int((g.payload or {}).get("run_deferrals") or 0),
+                                          "reason": str(reason)[:300]})
+        return g
 
     def block_from_ready(self, goal_id: str, *, error: str) -> bool:
         """Flip a 'ready' goal straight to 'blocked' (agent-declared BLOCKED, §3.1).
@@ -426,51 +429,38 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         concurrency slot. Below max_retries -> 'ready' (retry); at/above -> 'blocked'.
         """
         now = self._now()
-        stale = "status='running' AND claim_expires IS NOT NULL AND claim_expires < ?"
-        # 1) Count the crash as a failure for every expired-claim row.
-        rc = execute_retry(
+        rows = execute_retry(
             self.db_path,
-            f"UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE {stale}",
-            (now,),
-        )
-        if not rc:
-            return 0
-        # 2) Trip the breaker for those that reached max_retries. T2.1 Task 2: this
-        #    is one of the two "breaker->blocked" sites whose dependents must
-        #    cascade to dep_failed, so it goes row-by-row (was one bulk UPDATE)
-        #    to know exactly which prerequisite ids just landed 'blocked'.
-        trip_rows = execute_retry(
-            self.db_path,
-            f"SELECT id FROM goals WHERE {stale} AND consecutive_failures >= max_retries",
+            "SELECT id, claim_lock, claim_expires FROM goals WHERE status='running' "
+            "AND claim_expires IS NOT NULL AND claim_expires < ?",
             (now,), fetch="all",
         ) or []
-        for r in trip_rows:
-            gid = r["id"]
-            # This per-row CAS deliberately does NOT repeat the
-            # `consecutive_failures >= max_retries` recheck from the `trip_rows`
-            # SELECT above — equivalent, not a gap: nothing decrements the
-            # counter while status stays 'running' (only step 1's increment
-            # touches it), so a row that qualified there still qualifies here;
-            # `{stale}` (status='running' AND claim_expires<now) is the only
-            # guard that can meaningfully change between the two queries (an
-            # owner cancel/pause moving it off 'running').
-            rc_trip = execute_retry(
+        n = 0
+        for r in rows:
+            # AG-17: ONE statement per row, keyed on the exact claim read — the
+            # failure count and the status move together, so a heartbeat that
+            # extends the claim in between (or a second reclaimer) changes nothing.
+            hit = execute_retry(
                 self.db_path,
-                f"""UPDATE goals SET status='blocked', claim_lock=NULL, claim_expires=NULL,
-                       completed_at=?, last_failure_error='reclaimed: worker crashed (stale claim)'
-                     WHERE id=? AND {stale}""",
-                (now, gid, now),
+                """UPDATE goals SET consecutive_failures=consecutive_failures+1,
+                       status=CASE WHEN consecutive_failures+1>=max_retries
+                                   THEN 'blocked' ELSE 'ready' END,
+                       completed_at=CASE WHEN consecutive_failures+1>=max_retries
+                                         THEN ? ELSE completed_at END,
+                       last_failure_error=CASE WHEN consecutive_failures+1>=max_retries
+                           THEN 'reclaimed: worker crashed (stale claim)'
+                           ELSE last_failure_error END,
+                       claim_lock=NULL, claim_expires=NULL
+                     WHERE id=? AND status='running' AND claim_lock IS ?
+                       AND claim_expires IS ? AND claim_expires < ? RETURNING status""",
+                (now, r["id"], r["claim_lock"], r["claim_expires"], now), fetch="one",
             )
-            if rc_trip == 1:
-                self._cascade_dep_failed(gid)
-        # 3) Re-queue the rest (still 'running' with an expired claim).
-        execute_retry(
-            self.db_path,
-            f"""UPDATE goals SET status='ready', claim_lock=NULL, claim_expires=NULL
-                 WHERE {stale} AND consecutive_failures < max_retries""",
-            (now,),
-        )
-        return rc or 0
+            if hit is None:
+                continue
+            n += 1
+            if hit["status"] == STATUS_BLOCKED:
+                self._cascade_dep_failed(r["id"])
+        return n
 
     def requeue_running_on_boot(self) -> int:
         """§5.1 cold-start sweep: re-queue ``running`` goals immediately at boot
@@ -636,17 +626,13 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         PRESERVED across the reset — the requeue-cap ledger must survive a
         block episode, only the discriminator itself is cleared.
         """
-        g = self.get(goal_id)
-        if g is None:
-            return False
-        payload = dict(g.payload or {})
-        payload.pop("block_kind", None)
+        expr, eparams = payload_expr(remove=("block_kind",))
         rc = execute_retry(
             self.db_path,
-            """UPDATE goals SET status='ready', consecutive_failures=0,
-                  claim_lock=NULL, claim_expires=NULL, completed_at=NULL, payload=?
+            f"""UPDATE goals SET status='ready', consecutive_failures=0,
+                  claim_lock=NULL, claim_expires=NULL, completed_at=NULL, payload={expr}
                 WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
-            (json.dumps(payload), goal_id, user_id),
+            (*eparams, goal_id, user_id),
         )
         if rc == 1:
             self._event(goal_id, "unblocked", {"rationale": str(rationale)[:500]})
@@ -684,18 +670,16 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
             return False
         if only_if_absent and existing:
             return False
-        payload["block_kind"] = block_kind
         # Idempotence predicate (2026-07-23 validation): this UPDATE changes no
         # status, so WHERE status='blocked' alone let two concurrent sweeps both
         # get rc=1 and double-emit the event (the maintenance sweeps run before
         # the TickLock). Gating on the STORED kind makes the loser rc=0 — and
         # rejects its stale-payload write wholesale.
-        rc = execute_retry(
-            self.db_path,
-            """UPDATE goals SET payload=? WHERE id=? AND status='blocked'
-                 AND json_extract(payload,'$.block_kind') IS NOT ?""",
-            (json.dumps(payload), goal_id, block_kind),
-        )
+        # AG-21: only this key, and the stored kind is still the one read.
+        rc = _patch_payload(
+            self.db_path, goal_id, set_keys={"block_kind": block_kind},
+            where_extra="status='blocked' AND json_extract(payload,'$.block_kind') IS ?",
+            where_params=(existing,))
         if rc == 1:
             self._event(goal_id, "block_kind_set", {"block_kind": block_kind})
         return rc == 1
@@ -704,19 +688,12 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         """Merge ``updates`` into a row's JSON payload, preserving every other key.
 
         ``stamp_block_kind`` does this for exactly one key on exactly one status;
-        this is the general form. Read-modify-write under a single
-        ``execute_retry``. The write is idempotent — a concurrent caller racing
-        this method re-applies the same merge rather than losing an update, so no
-        additional locking is needed.
+        this is the general form: ``json_set`` of exactly the keys in
+        ``updates`` (AG-21) — a concurrent writer of ANY other key keeps it.
         """
-        row = self.get(goal_id)
-        if row is None:
-            return False
-        payload = dict(row.payload or {})
-        payload.update(updates or {})
-        execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                      (json.dumps(payload), goal_id))
-        return True
+        if not updates:
+            return self.get(goal_id) is not None
+        return _patch_payload(self.db_path, goal_id, set_keys=updates)
 
     # T2.1 Task-3 review (finding #2): a bare CAS/breaker guard does NOT bound a
     # non-sentinel provider failure — every requeue resets consecutive_failures,
@@ -803,14 +780,15 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
                     continue  # still inside the short self-heal window
                 requeues = int(payload.get("provider_requeues") or 0)
                 if requeues < self._PROVIDER_OUTAGE_MAX_REQUEUES:
-                    payload["provider_requeues"] = requeues + 1
+                    expr, eparams = payload_expr({"provider_requeues": requeues + 1})
                     rc = execute_retry(
                         self.db_path,
-                        """UPDATE goals SET status='ready', consecutive_failures=0,
+                        f"""UPDATE goals SET status='ready', consecutive_failures=0,
                               claim_lock=NULL, claim_expires=NULL, completed_at=NULL,
-                              payload=?
-                            WHERE id=? AND status='blocked'""",
-                        (json.dumps(payload), g.id),
+                              payload={expr}
+                            WHERE id=? AND status='blocked'
+                              AND COALESCE(json_extract(payload,'$.provider_requeues'),0)=?""",
+                        (*eparams, g.id, requeues),
                     )
                     if rc == 1:
                         n += 1
@@ -825,14 +803,11 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
                 # sweeps too (2026-07-23 validation: the sweeps run before the
                 # TickLock, and a payload-only UPDATE gave both writers rc=1 —
                 # duplicate provider_retry_exhausted events).
-                payload["provider_retry_exhausted"] = True
-                rc = execute_retry(
-                    self.db_path,
-                    """UPDATE goals SET payload=? WHERE id=? AND status='blocked'
-                         AND json_extract(payload,'$.provider_retry_exhausted') IS NOT 1""",
-                    (json.dumps(payload), g.id),
-                )
-                if rc == 1:
+                rc = _patch_payload(
+                    self.db_path, g.id, set_keys={"provider_retry_exhausted": True},
+                    where_extra="status='blocked' AND "
+                                "json_extract(payload,'$.provider_retry_exhausted') IS NOT 1")
+                if rc:
                     self._event(g.id, "provider_retry_exhausted", {"requeues": requeues})
 
             # needs_input / dep_failed / absent / unknown / requeue-exhausted
@@ -914,16 +889,12 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
                     break
             if not dead:
                 continue  # still genuinely waiting on live work
-            g = self.get(gid)
-            if g is None or g.status != STATUS_WAITING:
-                continue
-            payload = dict(g.payload or {})
-            payload["block_kind"] = "dep_failed"
+            expr, eparams = payload_expr({"block_kind": "dep_failed"})
             rc = execute_retry(
                 self.db_path,
-                """UPDATE goals SET status='blocked', payload=?, completed_at=?
+                f"""UPDATE goals SET status='blocked', payload={expr}, completed_at=?
                     WHERE id=? AND kind='goal' AND status='waiting'""",
-                (json.dumps(payload), self._now(), gid),
+                (*eparams, self._now(), gid),
             )
             if rc == 1:
                 n += 1
@@ -938,20 +909,14 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         retries stop being amnesiac (the retry prompt + goal_show read it).
         Fail-open — ledger bookkeeping never breaks failure recording."""
         try:
-            g = self.get(goal_id)
-            if g is None:
-                return
-            merged = dict(g.payload or {})
-            attempts = list(merged.get("attempts") or [])
-            attempts.append({
+            # AG-21: a CAS on the one key — a concurrent writer of any other
+            # payload key keeps its write.
+            append_capped(self.db_path, goal_id, "attempts", {
                 "ts": self._now(),
                 # B9: head + tail — the detail a retry needs trails the error.
                 "error": clip_keep_end(error, 600),
                 "session_id": session_id,
-            })
-            merged["attempts"] = attempts[-self._MAX_ATTEMPTS_KEPT:]
-            execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                          (json.dumps(merged), goal_id))
+            }, self._MAX_ATTEMPTS_KEPT)
         except Exception:
             logger.debug("attempt-ledger append failed for %s", goal_id, exc_info=True)
 
@@ -976,14 +941,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         A direct payload write (NOT ``update_fields``, which refuses terminal rows) —
         this runs right after a goal completes, so it must work on a ``done`` row.
         """
-        g = self.get(goal_id)
-        if g is None:
-            return False
-        merged = dict(g.payload or {})
-        merged["outcome"] = outcome[:1000]
-        rc = execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                           (json.dumps(merged), goal_id))
-        return rc == 1
+        return _patch_payload(self.db_path, goal_id,
+                              set_keys={"outcome": str(outcome)[:1000]})
 
     def count_running(self) -> int:
         """Count goals currently claimed+running (excluding expired claims).
@@ -1013,7 +972,7 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
 
     def cancel(self, goal_id: str, *, user_id: Optional[str] = None) -> bool:
         # kind guard: only a goal row is cancelled — an ask has its own statuses.
-        sql = ("UPDATE goals SET status='cancelled', claim_lock=NULL "
+        sql = ("UPDATE goals SET status='cancelled', claim_lock=NULL, claim_token=NULL "
                "WHERE id=? AND kind='goal' AND status NOT IN ('done','cancelled')")
         params: tuple = (goal_id,)
         if user_id is not None:
@@ -1022,38 +981,47 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         rc = execute_retry(self.db_path, sql, params)
         if rc == 1:
             self._event(goal_id, "cancelled", {})
+            from agents.task.goals.run_cancel import cancel_local_run
+            cancel_local_run(self.db_path, goal_id)
             self._cascade_dep_failed(goal_id)
             self._release_asks(goal_id, "goal_cancelled")
         return rc == 1
 
-    def update_status(self, goal_id: str, new_status: str, *, reset_failures: bool = False,
-                      user_id: Optional[str] = None) -> bool:
-        """Update goal status, optionally resetting failure counters.
+    def transition(self, goal_id: str, to: str, *, from_states=None,
+                   user_id: Optional[str] = None, reset_failures: bool = False) -> bool:
+        """Move a goal ``from_states -> to`` in ONE guarded write (098 S2, AG-17).
 
-        T2.1 Task 5 hardening: ``user_id`` is an OPTIONAL tenant guard, default
-        ``None`` — every pre-existing internal caller (breaker/aging/sweep code
-        in this module, which already reasons about tenancy elsewhere) is
-        byte-identical. When a caller passes ``user_id`` (the CLI, `polyrob
-        goals pause/retry` — this was IDOR-shaped before: any
-        caller could flip any tenant's goal status by id), the UPDATE adds
-        ``AND user_id=?`` so a wrong/foreign tenant is a harmless no-op
-        (``rc=0``), not a cross-tenant mutation.
-        """
-        sets = ["status=?", "claim_lock=NULL", "claim_expires=NULL"]
-        params: List[Any] = [new_status, goal_id]
-        if reset_failures:
-            sets.append("consecutive_failures=0")
-            sets.append("last_failure_error=NULL")
-        sql = f"UPDATE goals SET {', '.join(sets)} WHERE id=?"
+        ``from_states`` is the status the caller decided on (an owner verb passes
+        its snapshot); ``None`` means every source :data:`GOAL_MACHINE` lists for
+        ``to``. A row that moved since (a cancel from another seat) is a CAS miss
+        -> ``False``, never a revival. The claim — lock, expiry AND token — is
+        cleared, so a run that was ``running`` can neither heartbeat nor record a
+        result after the owner moved it. ``user_id`` is the tenant guard."""
+        extra, extra_params = "kind='goal'", ()
         if user_id is not None:
-            sql += " AND user_id=?"
-            params.append(user_id)
-        rc = execute_retry(self.db_path, sql, tuple(params))
-        if rc == 1:
-            self._event(goal_id, f"status_{new_status}", {})
-            if new_status == STATUS_READY:
+            extra, extra_params = "kind='goal' AND user_id=?", (user_id,)
+        cols = {"claim_lock": None, "claim_expires": None, "claim_token": None}
+        if reset_failures:
+            cols.update(consecutive_failures=0, last_failure_error=None)
+        from core.state.sql import cas_transition
+        ok = cas_transition(self.db_path, "goals", key="id=?", key_params=(goal_id,),
+                            machine=GOAL_MACHINE, to=to, from_states=from_states,
+                            set_cols=cols, where_extra=extra, where_params=extra_params)
+        if ok:
+            self._event(goal_id, f"status_{to}", {})
+            if to == STATUS_READY:
                 self.release_auto_unblock_asks(goal_id)
-        return rc == 1
+            if to in (STATUS_PAUSED, STATUS_CANCELLED):
+                from agents.task.goals.run_cancel import cancel_local_run
+                cancel_local_run(self.db_path, goal_id)
+        return ok
+
+    def update_status(self, goal_id: str, new_status: str, *, reset_failures: bool = False,
+                      user_id: Optional[str] = None, from_states=None) -> bool:
+        """:meth:`transition` under its old name (every edge the table allows
+        into ``new_status`` unless ``from_states`` narrows it)."""
+        return self.transition(goal_id, new_status, from_states=from_states,
+                               user_id=user_id, reset_failures=reset_failures)
 
     # --- queries -------------------------------------------------------------
 
@@ -1206,13 +1174,17 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         if priority is not None:
             sets.append("priority=?"); params.append(int(priority))
         if payload_patch:
-            merged = dict(g.payload or {}); merged.update(payload_patch)
-            sets.append("payload=?"); params.append(json.dumps(merged))
+            # AG-21: only the patched keys (json_set), never the whole document.
+            expr, eparams = payload_expr(payload_patch)
+            sets.append(f"payload={expr}"); params.extend(eparams)
         if not sets:
             return False
         params.append(goal_id)
-        rc = execute_retry(self.db_path, f"UPDATE goals SET {', '.join(sets)} WHERE id=?",
-                           tuple(params))
+        rc = execute_retry(
+            self.db_path,
+            f"UPDATE goals SET {', '.join(sets)} WHERE id=? "
+            "AND status NOT IN ('done','cancelled','dropped')",
+            tuple(params))
         if rc == 1:
             self._event(goal_id, "edited", {k: True for k in
                         ("title" if title is not None else "",

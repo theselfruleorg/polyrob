@@ -12,10 +12,8 @@ The allowlist may only SHRINK. Current entries are all sanctioned:
 - wrappers/shims that DELEGATE to core.rate_limit (api middleware, MCP shim,
   RateLimitManager, webview delegator functions);
 - non-limiter types the name pattern also catches (RateLimitInfo model,
-  RateLimitError exceptions, XRateLimited marker);
-- the ONE deliberate non-consolidation: TelegramRateLimiter, which is not a
-  request-budget limiter — it only replays penalties Telegram already issued
-  via RetryAfter (grammY philosophy: never pre-throttle).
+  RateLimitError exceptions, XRateLimited marker).
+(TelegramRateLimiter was removed in 098 TS-18: nothing read its penalties.)
 """
 import re
 from pathlib import Path
@@ -39,7 +37,6 @@ ALLOWLISTED_RATE_LIMITER_DEFS = frozenset({
     ('api/models.py', 'RateLimitInfo'),              # response model, not a limiter
     ('core/exceptions.py', 'LLMRateLimitError'),     # exception, not a limiter
     ('core/exceptions.py', 'RateLimitError'),        # exception, not a limiter
-    ('surfaces/telegram/rate_limit.py', 'TelegramRateLimiter'),  # penalty tracker (documented exception)
     ('tools/mcp/rate_limit.py', 'MCPExecRateLimiter'),  # back-compat subclass shim
     ('packs/x/polyrob_x/surface/client.py', 'XRateLimited'),  # marker/exception, not a limiter
     ('utils/rate_limit_manager.py', 'RateLimitManager'),  # component wrapper over SlidingWindowLimiter

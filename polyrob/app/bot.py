@@ -27,6 +27,17 @@ from polyrob.app.initialization import (
 )
 from core.base_component import BaseComponent
 from core.container import DependencyContainer
+from core.state.machine import StateMachine
+
+#: 098 CL-17: one lifecycle instead of is_running + _initialized.
+BOT = StateMachine(
+    "app.bot",
+    states={"stopped", "starting", "running", "stopping", "failed", "stopped_degraded"},
+    transitions={"stopped": {"starting"}, "starting": {"running", "failed"},
+                 "running": {"stopping"}, "stopping": {"stopped", "stopped_degraded"},
+                 "failed": {"starting"}, "stopped_degraded": {"starting"}},
+    initial={"stopped"},
+)
 
 logger = logging.getLogger('Bot.bot')
 
@@ -56,16 +67,21 @@ class Bot(BaseComponent):
         self.container = DependencyContainer.get_instance(config)
         self.logger = get_component_logger("Bot")
 
-        try:
-            self._lock = asyncio.Lock()
-            self.is_running = False
+        self.state = "stopped"
+        #: phase -> "ok" | "timeout" | "error" for the last cleanup (098 CL-17).
+        self.cleanup_report: Dict[str, str] = {}
 
-        except Exception as e:
-            self.logger.error(f"Bot initialization failed: {e}")
-            raise BotError(f"Failed to initialize bot: {e}")
+    @property
+    def is_running(self) -> bool:
+        return self.state == "running"
+
+    def _move(self, to: str) -> None:
+        if self.state != to and BOT.check(self.state, to, ctx={"bot": self.name}):
+            self.state = to
 
     async def _initialize(self) -> None:
         """Implementation-specific initialization."""
+        self._move("starting")
         try:
             # Add a single clear marker for initialization start
             self.logger.info("")
@@ -105,11 +121,18 @@ class Bot(BaseComponent):
             self.logger.info("="*50)
             self.logger.info("")
 
-            self.is_running = True
+            self._move("running")
 
         except Exception as e:
+            self._move("failed")
             self.logger.error(f"Bot initialization failed: {e}", exc_info=True)
-            await self.cleanup()
+            # 098 CL-32: tear down what the failed phases started. cleanup() is
+            # guarded by _initialized (only success sets it), so call the
+            # implementation; a cleanup fault never masks the original error.
+            try:
+                await self._cleanup()
+            except Exception:
+                self.logger.error("cleanup after a failed init also failed", exc_info=True)
             raise BotError(f"Failed to initialize bot: {e}")
 
     async def initialize_server_services(self) -> None:
@@ -132,120 +155,78 @@ class Bot(BaseComponent):
             raise
 
     async def _cleanup(self) -> None:
-        """Clean up implementation-specific resources."""
-        try:
-            self.logger.info("Starting application cleanup...")
-            
-            # Set a total cleanup timeout to prevent hanging
-            cleanup_timeout = 60.0  # 60 seconds total cleanup time
-            start_time = asyncio.get_event_loop().time()
+        """Clean up implementation-specific resources. Each phase is bounded and
+        its outcome recorded; any phase that is not ``ok`` ends the bot in
+        ``stopped_degraded`` (098 CL-17), never a plain "completed"."""
+        from polyrob.app import initialization as init
+        if self.state == "running":
+            self._move("stopping")
+        report: Dict[str, str] = {}
+        self.cleanup_report = report
+        self.logger.info("Starting application cleanup...")
 
-            async def cleanup_with_timeout(cleanup_func, name: str, timeout: float = 10.0):
-                """Helper to run cleanup with timeout."""
-                try:
-                    await asyncio.wait_for(cleanup_func(self.container), timeout=timeout)
-                    self.logger.info(f"✓ {name} cleanup completed")
-                except asyncio.TimeoutError:
-                    self.logger.warning(f"⚠ {name} cleanup timed out after {timeout}s")
-                except Exception as e:
-                    self.logger.error(f"✗ Error during {name} cleanup: {e}")
+        async def phase(name: str, coro_fn, timeout: float) -> None:
+            try:
+                await asyncio.wait_for(coro_fn(), timeout=timeout)
+                report[name] = "ok"
+                self.logger.info(f"✓ {name} cleanup completed")
+            except asyncio.TimeoutError:
+                report[name] = "timeout"
+                self.logger.warning(f"⚠ {name} cleanup timed out after {timeout}s")
+            except Exception as e:
+                report[name] = "error"
+                self.logger.error(f"✗ Error during {name} cleanup: {e}")
 
-            # Stop payment services first (they have background tasks)
-            self.logger.info("Stopping payment services...")
-            deposit_monitor = self.container.get_service('deposit_monitor')
-            if deposit_monitor:
-                try:
-                    await asyncio.wait_for(deposit_monitor.stop(), timeout=5.0)
-                    self.logger.info("  ✓ Deposit monitor stopped")
-                except Exception as e:
-                    self.logger.warning(f"  ⚠ Error stopping deposit monitor: {e}")
+        # Stop payment services first (they have background tasks)
+        for svc_name in ("deposit_monitor", "treasury_sweeper"):
+            svc = self.container.get_service(svc_name)
+            if svc:
+                await phase(svc_name, svc.stop, 5.0)
+        for name, fn, timeout in (("agents", init.cleanup_agents, 15.0),
+                                  ("managers", init.cleanup_managers, 10.0),
+                                  ("tools", init.cleanup_tools, 15.0),
+                                  ("modules", init.cleanup_modules, 10.0),
+                                  ("core", init.cleanup_core, 5.0)):
+            await phase(name, lambda fn=fn: fn(self.container), timeout)
 
-            treasury_sweeper = self.container.get_service('treasury_sweeper')
-            if treasury_sweeper:
-                try:
-                    await asyncio.wait_for(treasury_sweeper.stop(), timeout=5.0)
-                    self.logger.info("  ✓ Treasury sweeper stopped")
-                except Exception as e:
-                    self.logger.warning(f"  ⚠ Error stopping treasury sweeper: {e}")
-
-            # Cleanup agents with timeout
-            self.logger.info("Cleaning up agents...")
-            from polyrob.app.initialization import cleanup_agents
-            await cleanup_with_timeout(cleanup_agents, "agents", 15.0)
-
-            # Check if we're running out of time
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > cleanup_timeout * 0.8:  # 80% of timeout used
-                self.logger.warning("Cleanup taking too long, forcing remaining cleanup")
-                self.is_running = False
-                return
-
-            # Cleanup managers with timeout
-            self.logger.info("Cleaning up managers...")
-            from polyrob.app.initialization import cleanup_managers
-            await cleanup_with_timeout(cleanup_managers, "managers", 10.0)
-
-            # Cleanup tools with timeout
-            self.logger.info("Cleaning up tools...")
-            from polyrob.app.initialization import cleanup_tools
-            await cleanup_with_timeout(cleanup_tools, "tools", 15.0)
-
-            # Check timeout again
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > cleanup_timeout * 0.9:  # 90% of timeout used
-                self.logger.warning("Cleanup timeout approaching, skipping remaining cleanup")
-                self.is_running = False
-                return
-
-            # Cleanup modules with timeout
-            self.logger.info("Cleaning up modules...")
-            from polyrob.app.initialization import cleanup_modules
-            await cleanup_with_timeout(cleanup_modules, "modules", 10.0)
-
-            # Cleanup core with timeout
-            self.logger.info("Cleaning up core components...")
-            from polyrob.app.initialization import cleanup_core
-            await cleanup_with_timeout(cleanup_core, "core", 5.0)
-
-            self.is_running = False
+        bad = [f"{k} ({v})" for k, v in report.items() if v != "ok"]
+        if self.state == "stopping":
+            self._move("stopped_degraded" if bad else "stopped")
+        if bad:
+            self.logger.warning("Application cleanup incomplete: " + ", ".join(bad))
+        else:
             self.logger.info("Application cleanup completed")
 
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}", exc_info=True)
-            self.is_running = False
-
     async def start(self) -> None:
-        """Start the application."""
-        async with self._lock:
-            if self.is_running:
-                self.logger.warning("Application is already running")
-                return
-
-            try:
-                await self.initialize()
-                self.logger.info("Application started successfully")
-            except Exception as e:
-                self.logger.error(f"Failed to start application: {e}")
-                raise
+        """Start the application. initialize() holds the component lock; this
+        must not (an asyncio lock is not re-entrant)."""
+        if self.is_running:
+            self.logger.warning("Application is already running")
+            return
+        try:
+            await self.initialize()
+            self.logger.info("Application started successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to start application: {e}")
+            raise
 
     async def stop(self) -> None:
-        """Stop the application."""
-        async with self._lock:
-            if not self.is_running:
-                self.logger.warning("Application is not running")
-                return
-
-            try:
-                await self.cleanup()
-                self.logger.info("Application stopped successfully")
-            except Exception as e:
-                self.logger.error(f"Error stopping application: {e}")
-                raise
+        """Stop the application (cleanup() serialises with initialize())."""
+        if not self.is_running:
+            self.logger.warning("Application is not running")
+            return
+        try:
+            await self.cleanup()
+            self.logger.info("Application stopped successfully")
+        except Exception as e:
+            self.logger.error(f"Error stopping application: {e}")
+            raise
 
     def get_status(self) -> Dict[str, Any]:
         """Get application status information."""
         return {
             "running": self.is_running,
+            "state": self.state,
             "components": {
                 "services": len(self.container.services),
                 "managers": len(self.container.managers),

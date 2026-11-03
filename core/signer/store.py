@@ -47,6 +47,24 @@ CREATE TABLE IF NOT EXISTS decisions (
 """
 _DECISIONS_KEPT = 5000
 
+#: 098 CO-22: the nonce journal's ONE transition table. ``unknown`` = the send
+#: raised with an unknown outcome; only the ROOT ``nonce.reconcile`` op (on the
+#: box) moves it, from what the chain shows. ``released`` keeps the history of
+#: a nonce the node never took, and a later reservation re-uses that row.
+from core.state.machine import StateMachine  # noqa: E402
+
+NONCE = StateMachine(
+    name="signer_nonce",
+    states=frozenset({"reserved", "unknown", "sent", "released"}),
+    transitions={
+        "reserved": frozenset({"sent", "released", "unknown"}),
+        "unknown": frozenset({"sent", "released"}),
+        "released": frozenset({"reserved"}),
+    },
+    terminal=frozenset({"sent"}),
+    initial=frozenset({"reserved"}),
+)
+
 
 class SignerStore:
     def __init__(self, state_dir: str, *, clock=time.time):
@@ -73,9 +91,12 @@ class SignerStore:
     # -- nonces ------------------------------------------------------------
 
     def highest_nonce(self, chain: str, address: str) -> Optional[int]:
+        """The highest nonce held for (chain, address); a ``released`` row is
+        free again and does not count."""
         with self._db() as db:
             row = db.execute(
-                "SELECT MAX(nonce) AS n FROM nonces WHERE chain=? AND address=?",
+                "SELECT MAX(nonce) AS n FROM nonces WHERE chain=? AND address=? "
+                "AND state != 'released'",
                 (str(chain), str(address).lower())).fetchone()
         return None if row is None or row["n"] is None else int(row["n"])
 
@@ -84,26 +105,74 @@ class SignerStore:
         address = str(address).lower()
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT MAX(nonce) AS n FROM nonces WHERE chain=? AND address=?",
-                             (str(chain), address)).fetchone()
+            row = db.execute("SELECT MAX(nonce) AS n FROM nonces WHERE chain=? AND address=? "
+                             "AND state != 'released'", (str(chain), address)).fetchone()
             if row is not None and row["n"] is not None and int(nonce) <= int(row["n"]):
                 db.execute("ROLLBACK")
                 return False
-            db.execute("INSERT INTO nonces VALUES (?,?,?,?,?,?)",
-                       (str(chain), address, int(nonce), None, "reserved", self._now()))
+            NONCE.check("released", "reserved")
+            reused = db.execute(
+                "UPDATE nonces SET state='reserved', tx_hash=NULL, ts=? WHERE chain=? "
+                "AND address=? AND nonce=? AND state='released'",
+                (self._now(), str(chain), address, int(nonce))).rowcount
+            if not reused:
+                db.execute("INSERT INTO nonces VALUES (?,?,?,?,?,?)",
+                           (str(chain), address, int(nonce), None, "reserved", self._now()))
             db.execute("COMMIT")
         return True
 
-    def bind_nonce(self, chain: str, address: str, nonce: int, tx_hash: str) -> None:
+    def _move_nonce(self, chain: str, address: str, nonce: int, to: str,
+                    froms: tuple, tx_hash: Optional[str] = None) -> bool:
+        froms = NONCE.require_sources(to, froms, ctx={"chain": chain, "nonce": nonce})
+        if not froms:
+            return False
         with self._db() as db:
-            db.execute("UPDATE nonces SET tx_hash=?, state='sent' WHERE chain=? AND address=? AND nonce=?",
-                       (str(tx_hash), str(chain), str(address).lower(), int(nonce)))
+            n = db.execute(
+                "UPDATE nonces SET state=?, tx_hash=COALESCE(?, tx_hash), ts=? WHERE chain=? "
+                f"AND address=? AND nonce=? AND state IN ({','.join('?' * len(froms))})",
+                (to, tx_hash, self._now(), str(chain), str(address).lower(), int(nonce),
+                 *froms)).rowcount
+        return n == 1
 
-    def release_nonce(self, chain: str, address: str, nonce: int) -> None:
+    def bind_nonce(self, chain: str, address: str, nonce: int, tx_hash: str) -> bool:
+        return self._move_nonce(chain, address, nonce, "sent", ("reserved", "unknown"),
+                                str(tx_hash))
+
+    def release_nonce(self, chain: str, address: str, nonce: int) -> bool:
         """The node REFUSED the bytes (definitively not sent): the nonce is free."""
+        return self._move_nonce(chain, address, nonce, "released", ("reserved",))
+
+    def mark_nonce_unknown(self, chain: str, address: str, nonce: int,
+                           tx_hash: Optional[str] = None) -> bool:
+        """The send raised with an unknown outcome: only a reconcile may free it."""
+        return self._move_nonce(chain, address, nonce, "unknown", ("reserved",), tx_hash)
+
+    def unresolved_nonces(self, chain: str, address: str, *,
+                          reserved_older_than: float = 3600.0) -> List[Dict[str, Any]]:
+        """Rows a reconcile must decide: every ``unknown`` row, and a ``reserved``
+        row with no tx older than *reserved_older_than* (a pre-098 unknown)."""
+        cutoff = self._now() - float(reserved_older_than)
         with self._db() as db:
-            db.execute("DELETE FROM nonces WHERE chain=? AND address=? AND nonce=? AND state='reserved'",
-                       (str(chain), str(address).lower(), int(nonce)))
+            rows = db.execute(
+                "SELECT * FROM nonces WHERE chain=? AND address=? AND (state='unknown' OR "
+                "(state='reserved' AND tx_hash IS NULL AND ts < ?)) ORDER BY nonce",
+                (str(chain), str(address).lower(), cutoff)).fetchall()
+        return [dict(r) for r in rows]
+
+    def unresolved_addresses(self, chain: str, *, reserved_older_than: float = 3600.0) -> List[str]:
+        """098 review (O-12): every address with a row a reconcile must decide
+        on *chain* — deposit addresses (the sweep) as well as the operational one."""
+        cutoff = self._now() - float(reserved_older_than)
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT DISTINCT address FROM nonces WHERE chain=? AND (state='unknown' OR "
+                "(state='reserved' AND tx_hash IS NULL AND ts < ?)) ORDER BY address",
+                (str(chain), cutoff)).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def resolve_nonce(self, chain: str, address: str, nonce: int, to: str) -> bool:
+        """``unknown``/stale ``reserved`` → ``sent`` or ``released`` (reconcile)."""
+        return self._move_nonce(chain, address, nonce, to, ("reserved", "unknown"))
 
     # -- approvals ---------------------------------------------------------
 
@@ -121,9 +190,6 @@ class SignerStore:
         from core.signer.review import MAX_REVIEW_CHARS, MAX_PENDING_APPROVALS
         if len(summary) > MAX_REVIEW_CHARS or len(json.dumps(summary)) > MAX_REVIEW_CHARS * 2 + 2:
             raise ValueError('Signer approval detail exceeds review limit')
-        existing = self.find_approval(digest)
-        if existing is not None:
-            return existing
         now = self._now()
         row = {"id": "sig-" + uuid.uuid4().hex[:10], "digest": digest, "op": op,
                "chain": chain, "amount_usd": float(amount_usd), "summary": summary,
@@ -131,6 +197,13 @@ class SignerStore:
                "decided_at": None, "decided_uid": None}
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
+            # 098 CO-22: the dedup read is inside the write transaction.
+            existing = db.execute(
+                "SELECT * FROM approvals WHERE digest=? AND state IN ('pending','granted') "
+                "AND expires > ? ORDER BY created DESC LIMIT 1", (digest, now)).fetchone()
+            if existing is not None:
+                db.execute("ROLLBACK")
+                return dict(existing)
             count = db.execute("SELECT count(*) FROM approvals WHERE state IN ('pending','granted') "
                                "AND expires > ?", (now,)).fetchone()[0]
             if count >= MAX_PENDING_APPROVALS:

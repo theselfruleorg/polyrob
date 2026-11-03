@@ -214,3 +214,63 @@ async def test_refresh_callback_raises_when_no_refresh_token(monkeypatch, fake_m
     cb = oauth_bridge.make_auth_refresh_callback("u1", "svc")
     with pytest.raises(Exception):
         await cb()
+
+
+# --- 098 TS-13: the 401'd request's token is the refresh guard ------------------
+
+@pytest.mark.asyncio
+async def test_two_401s_on_one_token_refresh_once(monkeypatch, fake_manager):
+    """Two transports sent the same token and both got a 401. The second 401
+    arrives after the first refresh finished: it must get the new token back,
+    not burn the refresh token a second time."""
+    from core.exceptions import MCPProtocolError
+    from tools.mcp.protocol import MCPTransport, _MCPUnauthorized
+
+    prov = _RefreshingProvider()
+    fake_manager.register(prov)
+    fake_manager.store_token(
+        "u1", "mcp:svc",
+        OAuthToken(access_token="old", refresh_token="r0", expires_at=time.time() + 3600),
+    )
+
+    def _transport():
+        t = MCPTransport(on_auth_refresh=oauth_bridge.make_auth_refresh_callback("u1", "svc"))
+        t.headers = {"Authorization": "Bearer old"}
+        return t
+
+    async def _send_for(t, sent):
+        async def do_send():
+            sent.append(t.headers["Authorization"])
+            if t.headers["Authorization"] == "Bearer old":
+                raise _MCPUnauthorized(MCPProtocolError("status: 401"))
+        return do_send
+
+    a, b = _transport(), _transport()
+    sent_a, sent_b = [], []
+    await a._send_with_auth_retry(await _send_for(a, sent_a))
+    await b._send_with_auth_retry(await _send_for(b, sent_b))
+
+    assert prov.refresh_calls == 1
+    assert sent_a == ["Bearer old", "Bearer refreshed-1"]
+    assert sent_b == ["Bearer old", "Bearer refreshed-1"]
+
+
+@pytest.mark.asyncio
+async def test_zero_arg_refresh_callback_still_supported():
+    from core.exceptions import MCPProtocolError
+    from tools.mcp.protocol import MCPTransport, _MCPUnauthorized
+
+    async def cb():
+        return "Bearer fresh"
+
+    t = MCPTransport(on_auth_refresh=cb)
+    t.headers = {"Authorization": "Bearer old"}
+    calls = []
+
+    async def do_send():
+        calls.append(t.headers["Authorization"])
+        if len(calls) == 1:
+            raise _MCPUnauthorized(MCPProtocolError("status: 401"))
+
+    await t._send_with_auth_retry(do_send)
+    assert calls == ["Bearer old", "Bearer fresh"]

@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 #: Telegram's hard limit on ``callback_data``.
 _CALLBACK_DATA_MAX = 64
-#: Buttons per keyboard row.
-_PER_ROW = 2
+#: Buttons per keyboard row: one item's approve · reject · read it (096 D8).
+_PER_ROW = 3
 
 
 def keyboard_rows(actions: list) -> list:

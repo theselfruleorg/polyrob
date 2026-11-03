@@ -94,7 +94,9 @@ def test_skills_lists_the_catalog(monkeypatch):
     monkeypatch.setattr(sm, "get_skill_manager", lambda: SimpleNamespace(
         get_catalog_skills=lambda **kw: skills))
     out = skills_reply("u1", [])
-    assert out.splitlines()[1:3] == ["• digest — The daily digest", "• x-post — Post on X"]
+    # 096 C7: each line carries its read tap (/skill_<id>, `-` folded to `_`).
+    assert out.splitlines()[1:3] == ["• digest — The daily digest · /skill_digest",
+                                     "• x-post — Post on X · /skill_x_post"]
     assert "x-post" in skills_reply("u1", ["post"]) and "digest" not in skills_reply("u1", ["post"])
 
 

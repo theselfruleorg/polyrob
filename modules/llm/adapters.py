@@ -40,6 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 from modules.llm.llm_client import LLMClient, translate_llm_error
 from modules.llm.model_registry import get_model_config
 from modules.llm.retry_log import log_attempt_classified
+from modules.llm.init_gate import note_call_error
 
 
 def think_scrubber_enabled() -> bool:
@@ -673,17 +674,16 @@ class LLMClientAdapter(BaseChatModel):
                               LLMConnectionError, LLMContextLengthError,
                               LLMResponseError, LLMPermanentError, LLMError)):
                 self._logger.warning(f"LLM error (propagating for fallback): {type(e).__name__}: {str(e)[:200]}")
+                note_call_error(self._client, e)  # 098 MO-13: health from real calls
                 raise
 
             # Route through the single unified classifier (translate_llm_error).
             # Preserves all previous categories including billing→LLMPermanentError.
             provider_name = _client_provider_label(self._client)
             translated = translate_llm_error(e, f"from {provider_name}")
-            # A12 fix round 5 (2026-09-14, 043 §4.6): per-attempt classify +
-            # WARNING (not ERROR — this always `raise`s onward; the outer
-            # retry loop owns the turn's one final ERROR line). Rendering
-            # extracted to modules/llm/retry_log.py (file-size ratchet).
+            # A12 (043 §4.6): per-attempt WARNING; the outer retry loop owns the ERROR.
             log_attempt_classified(self._logger, e, translated)
+            note_call_error(self._client, translated)
             raise translated
     
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:

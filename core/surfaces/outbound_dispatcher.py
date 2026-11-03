@@ -5,7 +5,7 @@ import asyncio
 import logging
 import random
 import uuid
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from core.config_policy import dead_target_registry_enabled
 from core.surfaces.dead_targets import classify_dead_error
@@ -32,11 +32,35 @@ _NOT_HOSTED_SEC = 15.0
 #: says owner chat keeps working while paused.
 _PROACTIVE_SESSION_PREFIX = "direct:"
 
+#: 098 CO-15: how often a send in progress renews its lease. Well under
+#: ``INFLIGHT_LEASE_SEC``, so a long send (a big document, a slow API) is never
+#: reclaimed mid-flight and sent a second time by another process.
+LEASE_RENEW_SEC = 60.0
+
 # TYPE_CHECKING import avoids a circular-import risk; the breaker is pure.
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.surfaces.circuit import SurfaceCircuitBreaker
     from core.surfaces.dead_targets import DeadTargetStore
+
+
+def unsent_text(full: Any, remaining: Any) -> str:
+    """OB7 / 096 W8: the part of *full* a failed send did NOT deliver.
+
+    ``remaining`` is the progress a surface reports on its error
+    (``remaining_text``): ``""`` = every word landed (only an extra failed),
+    a string = the text from the first chunk that did not go, ``None`` =
+    progress unknown. Returns ``""`` (nothing owed), *remaining*, or the whole
+    *full* text when progress is unknown. ONE rule for the outbound queue retry
+    and the Telegram command reply's ``/missed`` copy, so neither re-sends a
+    chunk the reader already has.
+    """
+    whole = "" if full is None else str(full)
+    if not isinstance(remaining, str):
+        return whole
+    if not remaining.strip():
+        return ""
+    return remaining
 
 
 class OutboundDispatcher:
@@ -47,8 +71,10 @@ class OutboundDispatcher:
                  circuit: Optional["SurfaceCircuitBreaker"] = None,
                  dead_targets: Optional["DeadTargetStore"] = None,
                  event_log: Optional[object] = None,
-                 hosted_surfaces: Optional[Callable[[], Iterable[str]]] = None) -> None:
+                 hosted_surfaces: Optional[Callable[[], Iterable[str]]] = None,
+                 lease_renew_sec: float = LEASE_RENEW_SEC) -> None:
         self._q = queue
+        self._renew_every = float(lease_renew_sec)
         self._lookup = surface_lookup
         # OB5: the surfaces THIS process can send on. None = claim every
         # surface (legacy / tests); bootstrap passes the router's subscriptions.
@@ -132,6 +158,40 @@ class OutboundDispatcher:
         except (TypeError, ValueError):
             return True
 
+    async def _hold_lease(self, row) -> None:
+        """098 CO-15: renew this claimer's lease every ``_renew_every`` seconds
+        while the send runs. A renew is a guarded write on THIS claimer's token;
+        a lost renew means another claimer owns the row — say so once and stop.
+        The send finishes, and the token-guarded close then loses cleanly."""
+        renew = getattr(self._q, "renew", None)
+        if not callable(renew):
+            return
+        while True:
+            await asyncio.sleep(self._renew_every)
+            try:
+                held = renew(row["id"], row.get("claim_token"))
+            except Exception:
+                logger.warning("outbound: lease renew on row %s failed (store)",
+                               row["id"], exc_info=True)
+                continue
+            if not held:
+                logger.warning("outbound.lease_lost row=%s during a long send — another "
+                               "claimer owns it; this send finishes, its close loses",
+                               row["id"])
+                return
+
+    async def _send_holding_lease(self, surface, row, message):
+        keeper = asyncio.ensure_future(self._hold_lease(row))
+        try:
+            return await surface.send(message)
+        finally:
+            keeper.cancel()
+            # 098 review (O-10): wait for the keeper without swallowing a cancel
+            # of THIS task — `asyncio.wait` never raises the keeper's result.
+            await asyncio.wait({keeper})
+            if not keeper.cancelled() and keeper.exception() is not None:
+                logger.debug("lease keeper ended with %r", keeper.exception())
+
     def _resume_partial(self, row, remaining) -> bool:
         """OB7: a surface that reports its progress on a failed send. ``""`` =
         the text landed (only a best-effort extra failed): delivered, True.
@@ -139,15 +199,16 @@ class OutboundDispatcher:
         ``None`` (progress unknown) keeps the whole row for the retry."""
         if not isinstance(remaining, str):
             return False
-        if not remaining.strip():
+        rest = unsent_text(row.get("payload"), remaining)
+        if rest == "":
             return True
-        if remaining != row.get("payload"):
+        if rest != row.get("payload"):
             setter = getattr(self._q, "set_payload", None)
             if callable(setter):
                 try:
-                    setter(row["id"], remaining)
+                    setter(row["id"], rest)
                     logger.info("outbound: row %s partly sent; the retry resumes "
-                                "with %d chars", row["id"], len(remaining))
+                                "with %d chars", row["id"], len(rest))
                 except Exception:
                     logger.warning("outbound: row %s progress not saved (whole "
                                    "row retried)", row["id"], exc_info=True)
@@ -243,7 +304,7 @@ class OutboundDispatcher:
                             logger.warning("outbound drain: row %s dropped %d attachment(s) "
                                            "changed since enqueue: %s", row["id"],
                                            len(swapped), swapped)
-                    res = await surface.send(OutboundMessage(
+                    res = await self._send_holding_lease(surface, row, OutboundMessage(
                         session_key=row["session_key"], text=row["payload"],
                         media=media,
                     ))
@@ -310,13 +371,17 @@ class OutboundDispatcher:
                 pass
 
     def start(self) -> None:
-        if self._task is None:
+        """Idempotent while running; after stop() it runs again (098 CO-08)."""
+        if self._task is None or self._task.done():
+            if self._stop.is_set():
+                self._stop = asyncio.Event()
             self._task = asyncio.ensure_future(self.run())
 
     async def stop(self) -> None:
         self._stop.set()
-        if self._task is not None:
+        task, self._task = self._task, None
+        if task is not None:
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                await asyncio.wait_for(task, timeout=5.0)
             except Exception:
-                self._task.cancel()
+                task.cancel()

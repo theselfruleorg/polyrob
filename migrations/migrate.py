@@ -117,6 +117,16 @@ async def apply_pending_migrations(db, db_manager, version_mgr, migrations_dir: 
         start_time = time.time()
 
         await module.upgrade(db, db_manager)
+        # 098 review (O-06): an upgrade whose helpers swallowed a failed ALTER or
+        # index must not be recorded as applied — verify() decides.
+        # Opt-in (VERIFY_GATES): older verify() bodies were written as checks
+        # for a full schema and fail on a legacy or partly created DB.
+        verify = getattr(module, "verify", None) if getattr(module, "VERIFY_GATES", False) else None
+        if verify is not None and await verify(db, db_manager) is False:
+            # A self-recording upgrade() already wrote its row: take it back, or
+            # every later run would skip the migration as applied.
+            await db.execute("DELETE FROM schema_versions WHERE version = ?", (module.VERSION,))
+            raise RuntimeError(f"migration {migration_file.name} did not verify; not recorded")
 
         execution_time = int((time.time() - start_time) * 1000)
 

@@ -49,10 +49,30 @@ _ASSET_PROBE = (
 )
 
 
+class StepFailed(subprocess.CalledProcessError):
+    """A failed update step whose message carries the tail of the command's output.
+
+    The CLI prints ``str(error)``; without the tail a user saw only "returned
+    non-zero exit status 1" and never the cause (for example a migrate refusal).
+    """
+
+    TAIL_LINES = 8
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        text = (self.stderr or "").strip() or (self.output or "").strip()
+        if not text:
+            return base
+        tail = "\n".join(text.splitlines()[-self.TAIL_LINES:])
+        return f"{base}\n{tail}"
+
+
 def _checked_run(cmd: List[str], cwd: Optional[Path]) -> None:
-    """Run ``cmd``; raise ``CalledProcessError`` (with captured output) on non-zero."""
-    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True,
-                   capture_output=True, text=True)
+    """Run ``cmd``; raise :class:`StepFailed` (with the output tail) on non-zero."""
+    proc = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise StepFailed(proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr)
 
 
 def _checked_capture(cmd: List[str], cwd: Optional[Path]) -> str:
@@ -274,5 +294,11 @@ def build_runners(
             # must not make the ROLLBACK itself report as failed.
             _pip_install()
 
+    def prepare() -> dict:
+        """098 CL-09: the commit to return to, read before anything mutates."""
+        return {"old_sha": _capture(["git", "rev-parse", "HEAD"], repo),
+                "old_branch": _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)}
+
     return UpdateRunners(install=install, migrate=migrate,
-                         verify=verify, rollback_code=rollback_code, state=state)
+                         verify=verify, rollback_code=rollback_code, state=state,
+                         prepare=prepare)

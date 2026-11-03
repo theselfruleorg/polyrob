@@ -200,10 +200,16 @@ def make_auth_refresh_callback(
     that as "refresh failed, surface the original 401".
     """
 
-    async def _refresh() -> Optional[str]:
+    async def _refresh(observed_auth: Optional[str] = None) -> Optional[str]:
+        # 098 TS-13: the 401'd request's token is force_refresh's identity
+        # guard — a peer that already refreshed it hands back the new token.
         manager = _get_manager()
         provider_name = _provider_name(server_name)
-        fresh = await manager.force_refresh(user_id, provider_name)
+        observed = str(observed_auth or "").strip()
+        if " " in observed:
+            observed = observed.split(None, 1)[1].strip()
+        fresh = await manager.force_refresh(
+            user_id, provider_name, observed_access_token=observed or None)
         return f"{fresh.token_type} {fresh.access_token}"
 
     return _refresh

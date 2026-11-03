@@ -1032,6 +1032,8 @@ async def perform_bridge(tool, params, execution_context=None):
 
     # B-1: the delivering tx must not predate this bridge's record.
     _created_at = bridge_guard.created_at_of(bid)
+    # 098 CO-23: hold the row for the whole wait, so the watcher leaves it alone.
+    bridge_guard.hold_driver(bid, bridge_guard.DEFAULT_ARRIVAL_DEADLINE_SEC + 60)
     # Phase 2, off the event loop: it polls with blocking sleeps and a stalled
     # loop would freeze every other session's turn.
     outcome = await _asyncio.to_thread(
@@ -1044,8 +1046,17 @@ async def perform_bridge(tool, params, execution_context=None):
             bridge_id=bid, dest_chain_id=dest_id, created_at=_created_at,
             min_out_raw=int(quote.min_out_raw)))
 
-    bridge_guard.settle(bid, state=outcome.state, detail=outcome.detail,
-                        tx_ref=signature, balance_after=outcome.balance_after)
+    if not bridge_guard.settle(bid, state=outcome.state, detail=outcome.detail,
+                               tx_ref=signature, balance_after=outcome.balance_after,
+                               from_states=(bridge_guard.STATE_PENDING,
+                                            bridge_guard.STATE_IN_FLIGHT)):
+        # 098 CO-23: the watcher settled this row first (and told the owner) —
+        # report the state on record, never overwrite it, no second notice.
+        now_row = bridge_guard.state_of(bid) or {}
+        return tool._ar(content=header + (
+            f"  phase 2 : {str(now_row.get('state') or 'unknown').upper()} on record — "
+            f"{now_row.get('detail') or 'settled by the bridge watcher'}\n"
+            f"  RESULT: see the state above. bridge id {bid}"))
 
     _settled_state = {bridge_guard.STATE_ARRIVED: tx_notify.STATE_ARRIVED,
                       bridge_guard.STATE_FAILED: tx_notify.STATE_FAILED}.get(

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 # Module-level Agent import (no cycle: service does not import orchestrator, and
 # service is loaded before this module during orchestrator import).
 from agents.task.agent.service import Agent
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy.goal_flags import interactive_max_steps
 from core.exceptions import LLMError, LLMPermanentError, LLMProviderExhaustedError
 
 
@@ -295,6 +295,9 @@ class SessionExecutionMixin:
             Results from the session execution
         """
         self.logger.info(f"Executing session with {len(agent_sequence)} agents: {agent_sequence}")
+        reopen = getattr(self, "reopen_shell_sandbox", None)  # 098 TS-09: a run = a resume
+        if callable(reopen):
+            reopen()
 
         # C-N1: fire on_session_start once (fail-open; no-op unless hooks registered).
         if not getattr(self, "_session_start_fired", False):
@@ -313,7 +316,7 @@ class SessionExecutionMixin:
                     continue
 
                 agent = self.agents[agent_id]
-                max_steps = max_steps_per_agent.get(agent_id, INTERACTIVE_MAX_STEPS)
+                max_steps = max_steps_per_agent.get(agent_id, interactive_max_steps())
 
                 self.logger.info(f"Running agent {agent_id} with max {max_steps} steps")
 

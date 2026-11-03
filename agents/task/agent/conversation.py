@@ -31,24 +31,20 @@ def extract_answer(history: Any) -> str:
 
 
 # A REPL turn is an owner turn: the one interactive budget (REPL ⊇ Telegram).
-from core.config_policy.goal_flags import INTERACTIVE_MAX_STEPS as DEFAULT_TURN_BUDGET  # noqa: E402
+from core.config_policy.goal_flags import interactive_max_steps  # noqa: E402
 
 
 def _reset_turn_state(agent: Any, *, owner_line: bool = False) -> None:
-    """Clear transient failure state so a NEW user turn gets a fresh attempt.
+    """Clear the cancel flag so a NEW user turn gets a fresh attempt.
 
-    Agent.run() resets n_steps but not consecutive_failures / _cancelled. Without
-    this, once a turn hits max consecutive failures (e.g. an LLM quota error), the
-    agent stays wedged and every later respond() returns 'failed | -1 steps' — the
-    REPL is dead until restart. A fresh user message should start clean.
+    098 AG-01: the run-scoped halt (stopped, consecutive failures, failed
+    providers, the LLM breaker) is cleared by ``run()`` itself
+    (``AgentState.begin_run``), so a halted turn never wedges the REPL.
 
     093 E2: ``owner_line`` — the owner typed this line (a REPL line), so the retry
     wall starts empty, as it does for a drained owner batch
     (``user_ingress._drain_user_messages``). A REPL line never rides that queue.
     """
-    state = getattr(agent, "state", None)
-    if state is not None and hasattr(state, "consecutive_failures"):
-        state.consecutive_failures = 0
     if getattr(agent, "_cancelled", False):
         agent._cancelled = False
     if owner_line:
@@ -70,7 +66,7 @@ class Conversation:
     agent: Any
     turns: List[Turn] = field(default_factory=list)
 
-    async def respond(self, text: str, max_steps: int = DEFAULT_TURN_BUDGET, *,
+    async def respond(self, text: str, max_steps: Optional[int] = None, *,
                       typed_text: Optional[str] = None) -> str:
         """Run exactly one conversational turn and return the agent's reply.
 
@@ -85,6 +81,7 @@ class Conversation:
         owner's words for every later line.
         """
         _reset_turn_state(self.agent, owner_line=True)  # recover; a fresh retry wall
+        _mark_owner_turn(self.agent)                 # 098 AG-06: a REPL line is the owner
         _set_owner_turn_text(self.agent, text if typed_text is None else typed_text)
         _record_repl_line(self.agent, text)          # 061: the terminal is an owner seat
         self.agent.set_turn_input(text)              # append-as-turn (Task 7)
@@ -93,6 +90,11 @@ class Conversation:
         answer = extract_answer(history)
         self.turns.append(Turn(user=text, assistant=answer))
         return answer
+
+
+def _mark_owner_turn(agent: Any) -> None:
+    from agents.task.agent.core.user_ingress import mark_owner_turn
+    mark_owner_turn(getattr(agent, "orchestrator", None))
 
 
 def _set_owner_turn_text(agent: Any, typed: Any) -> None:

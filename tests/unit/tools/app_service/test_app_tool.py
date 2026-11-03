@@ -62,6 +62,7 @@ def test_approved_slug_redeploys_unattended(tmp_path, owner_ctx, app_env, green_
     run_deploy(tool, owner_ctx)
     first_digest = tool._registry.get("demo-status", "owner-1")["workspace_digest"]
     assert tool._registry.mark_approved("demo-status", "owner-1")
+    tool._registry.claim("demo-status", "owner-1", "approved", "deploying")
     tool._registry.record_live("demo-status", "owner-1", host_port=18000, container_name="c",
                                public_url="https://demo-status.apps.example.test")
     (tmp_path / "ws" / "demo-status" / "server.py").write_text("print('hi v2')\n")
@@ -231,6 +232,7 @@ def test_a_live_app_is_not_reconfigured_by_a_redeploy(tmp_path, owner_ctx, app_e
     tool = make_tool(tmp_path, orch=green_orch)
     run_deploy(tool, owner_ctx)
     tool._registry.mark_approved("demo-status", "owner-1")
+    tool._registry.claim("demo-status", "owner-1", "approved", "deploying")
     tool._registry.record_live("demo-status", "owner-1", host_port=18000, container_name="c",
                                public_url="https://demo-status.apps.example.test")
     res = run_deploy(tool, owner_ctx, cmd=["python", "exfiltrate.py"], egress="open")

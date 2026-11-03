@@ -84,5 +84,11 @@ def test_venue_usd_amount_is_always_shown_on_each_seat(field, reply_lines):
 
 
 def test_truncated_value_names_how_much_is_hidden():
-    card = render_grant_card("shell_run", {"command": "x" * 500}, "tap-4")
+    card = render_grant_card("t", {"note": "x" * 500}, "tap-4")
     assert "(+441 chars)" in card
+
+
+def test_shell_command_is_shown_whole():
+    # 096 B2: a command the owner approves is outbound content, not a 60-char extra.
+    card = render_grant_card("shell_run", {"command": "x" * 500}, "tap-4")
+    assert "x" * 500 in card

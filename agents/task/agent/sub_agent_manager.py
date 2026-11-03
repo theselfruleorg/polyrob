@@ -1036,7 +1036,8 @@ class SubAgentManager:
         state = getattr(agent, 'state', None) if agent is not None else None
         if state is None:
             return None
-        state.stopped = True
+        from agents.task.runtime.stop_reason import StopReason
+        state.request_stop(StopReason.CONTROL)
         self.logger.info(f"⏹️ owner stopped sub-agent {cid}")
         return cid
 

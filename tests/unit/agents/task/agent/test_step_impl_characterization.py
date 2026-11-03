@@ -54,6 +54,8 @@ def _build_agent(*, done=True, validate=True):
     st.n_steps = 0
     st.stopped = False
     st.consecutive_failures = 0
+    from agents.task.agent.core.run_state import RunControl
+    st.run_control = RunControl()  # 098 AG-02: per-run counters live here
     st.is_stuck_in_loop.return_value = False
     st.is_showing_loop_symptoms.return_value = False
     a.state = st

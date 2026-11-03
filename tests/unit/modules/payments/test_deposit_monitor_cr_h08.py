@@ -39,7 +39,7 @@ class _SqliteDB:
         self.connection = _Conn(self)
 
     async def execute(self, sql, params=()):
-        self.raw.execute(sql, params or ())
+        return self.raw.execute(sql, params or ())   # a cursor (098 MO-01: rowcount)
 
     async def fetch_one(self, sql, params=()):
         row = self.raw.execute(sql, params or ()).fetchone()

@@ -53,6 +53,8 @@ from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT, build_child_env
 from tools.code_exec.limits import exec_timeout_cap, max_output_bytes, max_timeout_sec
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
+from tools.code_exec.backends.sandbox_lifecycle import dead_container, restarted_result
+from core.state.lifecycle import ResourceLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -343,9 +345,14 @@ class DockerBackend(ExecutionBackend):
         # `run()` calls. See setup()/teardown()/_run_persistent() below.
         self._session_id = session_id
         self._docker: DockerRunner = docker_runner or _default_docker_runner
-        self._container: Optional[str] = None  # persistent container name, once created
         self._workdir: Optional[str] = None  # persistent container's host bind-mount dir
-        self._setup_lock = asyncio.Lock()  # guards persistent-mode create-once-under-races
+        # 098 TS-08: the persistent container is a ResourceLifecycle: one lock for
+        # setup AND teardown, a failed create cleans up, a dead container DEGRADES
+        # and the next call re-creates it. ``generation`` bumps per container.
+        self.generation = 0
+        self._lc: Optional[ResourceLifecycle] = None if session_id is None else ResourceLifecycle(
+            f"docker:{session_id}", create=self._create_container,
+            teardown=self._remove_container, backoff_base=0.0)
         # WS-1 (compute posture): sandbox-dev entitlement for THIS backend instance.
         # Only affects the PERSISTENT container's mounts (a writable /install bind is
         # fixed at `docker run -d` time); the per-request python/-I-vs-/-s + env choice
@@ -375,66 +382,78 @@ class DockerBackend(ExecutionBackend):
                 )
             return
         # PERSISTENT (P1-B, opt-in): start ONE long-lived container for this session.
-        if self._container is not None:
-            return  # idempotent — already set up
-        async with self._setup_lock:
-            if self._container is not None:  # lost a setup() race to another waiter
-                return
-            workdir = self._resolve_persistent_workdir()
-            os.makedirs(workdir, exist_ok=True)  # as ephemeral does; lstat-checked below
-            if self._workspace_needs_chmod:
-                self._ensure_workspace_writable(workdir)
-            network = self._resolve_setup_network()
-            egress_flags: List[str] = []
-            if network == _PROXY_POLICY:
-                network, egress_flags = await self._egress_setup()
-            container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
-            install_host = self._ensure_install_dir(workdir) if self._dev_mode else None
-            # H02: verify every bind source right before the argv (raises).
-            self._check_bind_source(workdir, "workspace")
-            if install_host is not None:
-                self._check_bind_source(install_host, "install dir")
-            reuse_labels: List[str] = []
-            if docker_reuse_across_restart_enabled() and not _tool_rpc_on() and not egress_flags:
-                # 073 W6: re-attach to this session's running container from a
-                # previous process when it was built with the SAME config (image,
-                # mounts, network, caps, user) — never a container of another session.
-                config = self._config_hash(self._hardening_flags(
-                    network=network, workdir_host=workdir, install_host=install_host
-                ) + self._publish_flags() + [self.image, "sleep", "infinity"])
-                found = await self._find_reusable(config)
-                if found:
-                    self._workdir = workdir
-                    self._container = found
-                    logger.info("docker backend: re-attached session %s to container %s",
-                                self._session_id, found[:12])
-                    return
-                reuse_labels = ["--label", _REUSE_LABEL,
-                                "--label", f"{_CONFIG_LABEL_KEY}={config}"]
-            argv = [
-                "run", "-d",
-                "--label", _SANDBOX_LABEL,
-                "--label", f"polyrob.session={self._session_id}",
-            ] + reuse_labels + [
-                "--name", container_name,
-            ] + self._hardening_flags(
+        await self._lc.start()  # idempotent; serialised with teardown()
+
+    @property
+    def _container(self) -> Optional[str]:
+        """The persistent container name while READY (read-only view)."""
+        return self._lc.handle if self._lc is not None else None
+
+    async def _create_container(self) -> str:
+        """The lifecycle create hook. Any failure after a name or the egress pair
+        exists removes them before it raises (never a leaked container)."""
+        workdir = self._resolve_persistent_workdir()
+        os.makedirs(workdir, exist_ok=True)  # as ephemeral does; lstat-checked below
+        if self._workspace_needs_chmod:
+            self._ensure_workspace_writable(workdir)
+        network = self._resolve_setup_network()
+        egress_flags: List[str] = []
+        if network == _PROXY_POLICY:
+            network, egress_flags = await self._egress_setup()
+        container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
+        try:
+            return await self._create_named(container_name, workdir, network, egress_flags)
+        except BaseException:
+            await self._remove_container(container_name)
+            raise
+
+    async def _create_named(self, container_name, workdir, network, egress_flags) -> str:
+        install_host = self._ensure_install_dir(workdir) if self._dev_mode else None
+        # H02: verify every bind source right before the argv (raises).
+        self._check_bind_source(workdir, "workspace")
+        if install_host is not None:
+            self._check_bind_source(install_host, "install dir")
+        reuse_labels: List[str] = []
+        if docker_reuse_across_restart_enabled() and not _tool_rpc_on() and not egress_flags:
+            # 073 W6: re-attach to this session's running container from a
+            # previous process when it was built with the SAME config (image,
+            # mounts, network, caps, user) — never a container of another session.
+            config = self._config_hash(self._hardening_flags(
                 network=network, workdir_host=workdir, install_host=install_host
-            ) + (egress_flags or self._publish_flags()) + self._tool_rpc_setup_flags() + [
-                self.image, "sleep", "infinity",
-            ]
-            try:
-                code, out, err = await self._docker(argv, timeout=self.max_timeout)
-            except _DockerExecTimeout as e:
-                raise ExecutionBackendError(
-                    f"docker run -d (persistent sandbox) timed out: {e}"
-                ) from e
-            if code != 0:
-                await self._egress_teardown()
-                raise ExecutionBackendError(
-                    f"docker run -d (persistent sandbox) failed (exit {code}): {err or out}"
-                )
-            self._workdir = workdir
-            self._container = container_name
+            ) + self._publish_flags() + [self.image, "sleep", "infinity"])
+            found = await self._find_reusable(config)
+            if found:
+                self._workdir = workdir
+                self.generation += 1
+                logger.info("docker backend: re-attached session %s to container %s",
+                            self._session_id, found[:12])
+                return found
+            reuse_labels = ["--label", _REUSE_LABEL,
+                            "--label", f"{_CONFIG_LABEL_KEY}={config}"]
+        argv = [
+            "run", "-d",
+            "--label", _SANDBOX_LABEL,
+            "--label", f"polyrob.session={self._session_id}",
+        ] + reuse_labels + [
+            "--name", container_name,
+        ] + self._hardening_flags(
+            network=network, workdir_host=workdir, install_host=install_host
+        ) + (egress_flags or self._publish_flags()) + self._tool_rpc_setup_flags() + [
+            self.image, "sleep", "infinity",
+        ]
+        try:
+            code, out, err = await self._docker(argv, timeout=self.max_timeout)
+        except _DockerExecTimeout as e:
+            raise ExecutionBackendError(
+                f"docker run -d (persistent sandbox) timed out: {e}"
+            ) from e
+        if code != 0:
+            raise ExecutionBackendError(
+                f"docker run -d (persistent sandbox) failed (exit {code}): {err or out}"
+            )
+        self._workdir = workdir
+        self.generation += 1
+        return container_name
 
     def _config_hash(self, body: List[str]) -> str:
         """PURE: a short hash of everything a re-attached container must share
@@ -468,10 +487,10 @@ class DockerBackend(ExecutionBackend):
     async def teardown(self) -> None:
         if self._session_id is None:
             return  # EPHEMERAL (P0, unchanged): no-op — nothing persists to clean up.
-        if self._container is None:
-            return  # idempotent — never set up, or already torn down
-        cname = self._container
-        self._container = None  # mark torn down even if the rm call below errors
+        await self._lc.stop()  # waits for a setup in flight, then removes its container
+
+    async def _remove_container(self, cname: str) -> None:
+        """The lifecycle teardown hook (also the failed-create cleanup)."""
         if self._tool_rpc_host_dir:  # 073 W9: the persistent tool-RPC socket dir
             shutil.rmtree(self._tool_rpc_host_dir, ignore_errors=True)
             self._tool_rpc_host_dir = None
@@ -1208,6 +1227,9 @@ class DockerBackend(ExecutionBackend):
             timed_out = code in _TIMEOUT_EXIT_CODES
         except _DockerExecTimeout as e:
             code, out, err, timed_out = 1, "", str(e), True
+        if dead_container(code, err):  # 098 TS-08: never re-run user code
+            await self._lc.fail(ExecutionBackendError(err))
+            return restarted_result(self.name)
 
         out_text, t1 = self._cap_text(out)
         err_text, t2 = self._cap_text(err)
@@ -1230,13 +1252,18 @@ class DockerBackend(ExecutionBackend):
             raise ExecutionBackendError(
                 "exec_detached requires a persistent (session-scoped) docker backend"
             )
-        if self._container is None:
-            await self.setup()
-        argv = ["exec", "-d", "-w", "/workspace", self._container, "bash", "-c", script]
-        try:
-            code, _out, err = await self._docker(argv, timeout=self.max_timeout)
-        except _DockerExecTimeout as e:
-            raise ExecutionBackendError(f"docker exec -d (background) timed out: {e}") from e
+        for attempt in (1, 2):  # a launch on a dead container never ran: retry once
+            if self._container is None:
+                await self.setup()
+            argv = ["exec", "-d", "-w", "/workspace", self._container, "bash", "-c", script]
+            try:
+                code, _out, err = await self._docker(argv, timeout=self.max_timeout)
+            except _DockerExecTimeout as e:
+                raise ExecutionBackendError(f"docker exec -d (background) timed out: {e}") from e
+            if attempt == 1 and dead_container(code, err):
+                await self._lc.fail(ExecutionBackendError(err))
+                continue
+            break
         if code != 0:
             raise ExecutionBackendError(
                 f"docker exec -d (background) failed (exit {code}): {err}"

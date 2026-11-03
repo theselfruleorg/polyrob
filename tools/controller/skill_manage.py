@@ -24,7 +24,9 @@ SKILL_MANAGE_DESCRIPTION = (
 	"edit: replace the whole body. delete: archive. patch/edit/delete need "
 	"expected_sha256 = the sha256 load_skill returned for the body you read. "
 	"rollback: restore an archived revision (to_sha, default the one the last change "
-	"replaced). A background delete names absorbed_into. promote is owner-only. New and "
+	"replaced). A background delete names absorbed_into. create/patch/edit need "
+	"reason = one sentence for the owner: why this change (what went wrong or right). "
+	"promote is owner-only. New and "
 	"edited skills wait for review before they activate; a bundled skill's fix waits "
 	"for the owner. " + owner_route("programme")
 )
@@ -42,9 +44,11 @@ class SkillManageAction(BaseModel):
 	to_sha: Optional[str] = None           # rollback: the revision (8+ char prefix)
 	absorbed_into: Optional[str] = None    # delete: the skill that now holds this one
 	when: Optional[str] = None             # create / patch alone: the index line (<= 60 chars)
+	reason: Optional[str] = None           # create/patch/edit: why, one sentence (096 W1)
 
 
 _NEEDS_READ = ("patch", "edit", "delete")
+_NEEDS_REASON = ("create", "patch", "edit")
 
 
 def _keep_frontmatter(current: str, content: str) -> str:
@@ -138,6 +142,13 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 			error=(f"{params.action} needs expected_sha256: call load_skill('{params.skill_id}') "
 			       f"and pass the sha256 it returns for the body you read."),
 			include_in_memory=True)
+	if (not is_forged and params.action in _NEEDS_REASON
+	        and not (params.reason or "").strip()):
+		# 096 D3: the owner decides from the reason, so an owner-turn draft needs one.
+		return ActionResult(
+			error=(f"{params.action} needs `reason`: one sentence for the owner on why "
+			       f"this change (what went wrong or right). Nothing was written."),
+			include_in_memory=True)
 	new_terms = params.new_string or ""  # patch: the changed span
 	try:
 		from agents.task.agent.skill_manager import get_skill_manager
@@ -210,6 +221,18 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 	if not res.ok:
 		return ActionResult(error=_refusal(res), include_in_memory=True)
 	where = "pending review" if res.pending else "active"
+	if res.pending and (params.reason or "").strip():
+		# 096 W1: recorded BEFORE the owner is notified, so the notice says why.
+		try:
+			from core import pending_reasons
+			from core.instance import resolve_instance_id as _rii0
+			from core.runtime_paths import data_dir_or_home as _ddh0
+			_cfg0 = getattr(getattr(controller, 'container', None), 'config', None)
+			pending_reasons.record(user_id, "skill", params.skill_id, params.reason,
+			                       by=created_by, home_dir=_ddh0(getattr(_cfg0, 'data_dir', None)),
+			                       instance_id=_rii0())
+		except Exception as _e:
+			controller.logger.debug(f"skill reason not recorded: {_e}")
 	# The body just changed: let the next `load_skill` re-emit it.
 	forget_activated_skill(controller, params.skill_id)
 	_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by)

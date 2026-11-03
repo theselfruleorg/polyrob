@@ -40,7 +40,21 @@ async def inbound_receipts(database, user_id: str, days: int) -> Dict[str, Any]:
            WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND {chain_filter} AND status = 'refund_due'""",
         (user_id, user_id, *chain_args),
     )
+    # 098 MO-21: a payment recorded with no on-chain tx is UNPROVEN — its own
+    # line, never summed into income. `auth_used` counts the rows where the
+    # chain shows the payer's EIP-3009 authorization was consumed.
+    unproven = await database.fetch_one(
+        f"""SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n,
+                  COALESCE(SUM(CASE WHEN json_extract(metadata, '$.authorization_used') = 1
+                               THEN 1 ELSE 0 END), 0) AS auth_used
+           FROM x402_payment_requests
+           WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND {chain_filter} AND status = 'settled_no_tx'""",
+        (user_id, user_id, *chain_args),
+    )
     return {
+        "unproven_usd": round(float(unproven.get("usd") or 0), 6) if unproven else 0.0,
+        "unproven_count": int(unproven.get("n") or 0) if unproven else 0,
+        "unproven_auth_used_count": int(unproven.get("auth_used") or 0) if unproven else 0,
         "income_usd": round(float(settled.get("usd") or 0), 6) if settled else 0.0,
         "settled_payments": int(settled.get("n") or 0) if settled else 0,
         "pending_invoices_usd": round(float(pending.get("usd") or 0), 6) if pending else 0.0,

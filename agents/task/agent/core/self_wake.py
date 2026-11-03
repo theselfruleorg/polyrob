@@ -83,11 +83,11 @@ class ReentryBudget:
         self._store = store
 
     def _hydrate_locked(self, session_id: str) -> Optional[_SessionBudget]:
-        """Load a persisted budget row on first touch after a restart (caller
-        holds the lock). Stale rows are dropped; errors read as no-row."""
-        b = self._by_session.get(session_id)
-        if b is not None or self._store is None:
-            return b
+        """The session's budget (caller holds the lock). With a store the DB row
+        is read EVERY time (AG-11: it is the source; another process's wake or
+        reset shows at once); stale rows are dropped; errors read as no-row."""
+        if self._store is None:
+            return self._by_session.get(session_id)
         try:
             row = self._store.get_budget(session_id)
         except Exception:
@@ -100,10 +100,8 @@ class ReentryBudget:
             except Exception:
                 pass
             return None
-        b = _SessionBudget(count=int(row.get("count") or 0),
-                           last_wake_at=float(row.get("last_wake_at") or 0.0))
-        self._by_session[session_id] = b
-        return b
+        return _SessionBudget(count=int(row.get("count") or 0),
+                              last_wake_at=float(row.get("last_wake_at") or 0.0))
 
     def _persist_locked(self, session_id: str, b: _SessionBudget) -> None:
         if self._store is None:
@@ -128,8 +126,10 @@ class ReentryBudget:
                 return False
             return True
 
-    def record(self, session_id: str) -> None:
+    def record(self, session_id: str, user_id: str = "") -> None:
         """Account a forged wake that was just dispatched."""
+        if self._store is not None and self._store_consume(session_id, user_id, force=True):
+            return
         with self._lock:
             b = self._hydrate_locked(session_id) or self._by_session.setdefault(
                 session_id, _SessionBudget())
@@ -137,7 +137,18 @@ class ReentryBudget:
             b.last_wake_at = self._clock()
             self._persist_locked(session_id, b)
 
-    def try_consume(self, session_id: str) -> bool:
+    def _store_consume(self, session_id: str, user_id: str = "", *,
+                       force: bool = False) -> Optional[bool]:
+        """AG-11: the cross-process CAS; None when the store failed (fall back
+        to this process's memory)."""
+        try:
+            return bool(self._store.consume_budget(
+                session_id, user_id, max_reentries=self._max, backoff_s=self._backoff,
+                now=self._clock(), force=force))
+        except Exception:
+            return None
+
+    def try_consume(self, session_id: str, user_id: str = "") -> bool:
         """Atomic allow()+record(): True (and consumes a slot) iff within budget.
 
         Use this instead of a separate allow()/record() pair — those span two lock
@@ -146,6 +157,10 @@ class ReentryBudget:
         """
         if self._max <= 0:
             return False
+        if self._store is not None:
+            res = self._store_consume(session_id, user_id)
+            if res is not None:
+                return res
         with self._lock:
             b = self._hydrate_locked(session_id)
             if b is None:

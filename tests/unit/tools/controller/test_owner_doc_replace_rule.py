@@ -55,7 +55,7 @@ def _draft(tmp_path):
 async def test_replace_rule_supersedes_the_rule_its_first_words_name(monkeypatch, tmp_path):
     action = _action(monkeypatch, tmp_path, f"{TZ}\n\n{BOUNTY_OLD}\n\n{LINK}\n")
     res = await action.function(
-        action.param_model(action="replace_rule", rule_start="BOUNTY — JUDGE",
+        action.param_model(reason="test reason", action="replace_rule", rule_start="BOUNTY — JUDGE",
                            new_string=BOUNTY_NEW, source="owner said"),
         execution_context=CTX)
     assert not res.error, res.error
@@ -70,7 +70,7 @@ async def test_replace_rule_supersedes_the_rule_its_first_words_name(monkeypatch
 async def test_replace_rule_with_no_text_retires_the_rule(monkeypatch, tmp_path):
     action = _action(monkeypatch, tmp_path, f"{BOUNTY_OLD}\n\n{LINK}\n")
     res = await action.function(
-        action.param_model(action="replace_rule", rule_start="bounty — judge + pay"),
+        action.param_model(reason="test reason", action="replace_rule", rule_start="bounty — judge + pay"),
         execution_context=CTX)
     assert not res.error, res.error
     active, sup = split_superseded(_draft(tmp_path))
@@ -81,11 +81,11 @@ async def test_replace_rule_with_no_text_retires_the_rule(monkeypatch, tmp_path)
 async def test_replace_rule_refuses_an_unknown_or_ambiguous_start(monkeypatch, tmp_path):
     action = _action(monkeypatch, tmp_path, f"{BOUNTY_OLD}\n\nBOUNTY SPLIT: 5 to 7 winners.\n")
     res = await action.function(
-        action.param_model(action="replace_rule", rule_start="RELEASES", new_string="x"),
+        action.param_model(reason="test reason", action="replace_rule", rule_start="RELEASES", new_string="x"),
         execution_context=CTX)
     assert res.error and "Nothing was written" in res.error and "no active rule" in res.error
     res = await action.function(
-        action.param_model(action="replace_rule", rule_start="BOUNTY", new_string="x"),
+        action.param_model(reason="test reason", action="replace_rule", rule_start="BOUNTY", new_string="x"),
         execution_context=CTX)
     assert res.error and "Nothing was written" in res.error and "2 active rules" in res.error
 
@@ -93,7 +93,7 @@ async def test_replace_rule_refuses_an_unknown_or_ambiguous_start(monkeypatch, t
 @pytest.mark.asyncio
 async def test_a_write_reports_the_headroom(monkeypatch, tmp_path):
     action = _action(monkeypatch, tmp_path)
-    res = await action.function(action.param_model(action="update", content=LINK),
+    res = await action.function(action.param_model(reason="test reason", action="update", content=LINK),
                                 execution_context=CTX)
     assert f"/{OWNER_DOC_MAX_CHARS:,} chars" in res.extracted_content
     assert "left" in res.extracted_content
@@ -104,7 +104,7 @@ async def test_near_the_cap_the_result_says_replace_not_append(monkeypatch, tmp_
     filler = "\n\n".join(f"RULE {i}: " + "w" * 180 for i in range(int(OWNER_DOC_MAX_CHARS * 0.93) // 195))
     action = _action(monkeypatch, tmp_path, filler + "\n")
     res = await action.function(
-        action.param_model(action="patch", old_string="RULE 0: ", new_string="RULE 0 (kept): "),
+        action.param_model(reason="test reason", action="patch", old_string="RULE 0: ", new_string="RULE 0 (kept): "),
         execution_context=CTX)
     assert not res.error, res.error
     assert "replace_rule" in res.extracted_content
@@ -115,7 +115,7 @@ async def test_near_the_cap_the_result_says_replace_not_append(monkeypatch, tmp_
 async def test_an_over_cap_write_says_nothing_was_written_and_how_to_make_room(monkeypatch, tmp_path):
     action = _action(monkeypatch, tmp_path)
     res = await action.function(
-        action.param_model(action="update", content="x " * OWNER_DOC_MAX_CHARS),
+        action.param_model(reason="test reason", action="update", content="x " * OWNER_DOC_MAX_CHARS),
         execution_context=CTX)
     assert res.error.startswith("Nothing was written.")
     assert "replace_rule" in res.error
@@ -145,7 +145,7 @@ def test_find_rule_keeps_a_blank_line_prose_rule_whole_without_its_heading():
 async def test_replace_rule_in_a_list_replaces_only_that_bullet(monkeypatch, tmp_path):
     action = _action(monkeypatch, tmp_path, f"{PAYMENTS}\n\n{LINK}\n")
     res = await action.function(
-        action.param_model(action="replace_rule", rule_start="Pay 5 USDC",
+        action.param_model(reason="test reason", action="replace_rule", rule_start="Pay 5 USDC",
                            new_string="Pay 10 USDC per bounty winner."),
         execution_context=CTX)
     assert not res.error, res.error

@@ -344,7 +344,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		except Exception as e:  # nothing left to fall back to; make it loud
 			self.logger.critical(f"{lane}: money deny fallback could not register: {e}")
 
-	def register_pre_tool_call_hook(self, hook: Callable, fail_mode: str = "open") -> None:
+	def register_pre_tool_call_hook(self, hook: Callable, fail_mode: str = "open",
+			key: Optional[str] = None) -> None:
 		"""Register a pre-tool-call hook.
 
 		hook signature: ``(action_name: str, params: dict, context) -> Optional[str]``.
@@ -353,15 +354,18 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		executes — the seam for billing checks, approval, and allow/deny lists.
 
 		fail_mode: ``"open"`` (default, legacy) swallows a raising hook and allows
-		the action; ``"closed"`` (guardrail) treats a raising hook as a DENY.
+		the action; ``"closed"`` (guardrail) treats a raising hook as a DENY. Any
+		other value raises ``ValueError`` here (098 TS-16). ``key``: a hook with
+		the same key replaces the earlier one in place.
 		"""
-		self._hooks.register_pre(hook, fail_mode)
+		self._hooks.register_pre(hook, fail_mode, key=key)
 
 	async def _run_pre_tool_call_hooks(self, action_name, params, context):
 		"""Run pre-tool-call hooks; return the first denial reason, or None to allow."""
 		return await self._hooks.run_pre(action_name, params, context)
 
-	def register_post_tool_call_hook(self, hook: Callable, fail_mode: str = "open") -> None:
+	def register_post_tool_call_hook(self, hook: Callable, fail_mode: str = "open",
+			key: Optional[str] = None) -> None:
 		"""Register a post-tool-call hook (observe-only, roadmap P2 / Reference §23).
 
 		hook signature: ``(action_name: str, params: dict, result, context) -> None``.
@@ -371,13 +375,14 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		fail_mode: ``"open"`` (default) swallows a raising hook; ``"closed"``
 		(e.g. billing) propagates the exception so the failure cannot pass silently.
 		"""
-		self._hooks.register_post(hook, fail_mode)
+		self._hooks.register_post(hook, fail_mode, key=key)
 
 	async def _run_post_tool_call_hooks(self, action_name, params, result, context):
 		"""Run post-tool-call hooks. fail_mode=open swallows; closed re-raises."""
 		return await self._hooks.run_post(action_name, params, result, context)
 
-	def register_transform_tool_result_hook(self, hook: Callable, fail_mode: str = "open") -> None:
+	def register_transform_tool_result_hook(self, hook: Callable, fail_mode: str = "open",
+			key: Optional[str] = None) -> None:
 		"""Register a transform-tool-result hook (roadmap P2 / Reference §23).
 
 		hook signature: ``(action_name, params, result, context) -> Optional[result]``.
@@ -387,7 +392,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		fail_mode: ``"open"`` (default) skips a raising hook (preserves last good
 		result); ``"closed"`` replaces the result with an error ActionResult.
 		"""
-		self._hooks.register_transform(hook, fail_mode)
+		self._hooks.register_transform(hook, fail_mode, key=key)
 
 	async def _run_transform_tool_result_hooks(self, action_name, params, result, context):
 		"""Run transform hooks in order, chaining replacements."""

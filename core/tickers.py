@@ -1,4 +1,7 @@
-"""Shared interval-ticker loop + lifespan supervisor (consolidates cron/goal/curator).
+"""Shared interval-ticker loop (consolidates cron/goal/curator) + the loop heartbeat.
+
+098 CO-07: the old ``TickerSupervisor`` had no caller (the autonomy runtime starts
+its loops through ``AutonomyHandles``) and was deleted.
 
 The canonical loop is lifted verbatim from ``cron/runner.py::CronTicker.run_forever``
 so all four ticker variants share identical scheduling semantics.
@@ -101,86 +104,3 @@ def emit_loop_heartbeats(entries, *, source: str = "supervisor") -> None:
             logger.debug("autonomy_tick: event-log prune skipped", exc_info=True)
     except Exception:
         pass
-
-
-class TickerSupervisor:
-    """Manage a collection of named ticker tasks for API lifespan use.
-
-    Accepts any object with a ``run_forever(stop_event)`` coroutine method —
-    :class:`IntervalTicker` instances or existing ticker classes (CronTicker,
-    GoalTicker, CuratorTicker) that delegate their own ``run_forever`` here.
-
-    Usage::
-
-        sup = TickerSupervisor()
-        sup.register("cron", cron_ticker, enabled=cron_enabled())
-        await sup.start_all()   # on startup
-        ...
-        await sup.stop_all()    # on shutdown (in finally)
-    """
-
-    def __init__(self) -> None:
-        self._entries: list = []            # [(name, ticker, enabled)]
-        self._tasks: dict = {}              # name -> (task, stop_event)
-        self._hb_task: Optional[asyncio.Task] = None
-        self._hb_stop: Optional[asyncio.Event] = None
-
-    def register(self, name: str, ticker: Any, enabled: bool) -> None:
-        """Register a ticker.  Only enabled tickers are started in :meth:`start_all`."""
-        self._entries.append((name, ticker, enabled))
-
-    def _emit_heartbeats(self) -> None:
-        """Record one autonomy_tick per running ticker (liveness signal).
-
-        The audit (2026-07-04) found NO automated 'is the loop alive' signal — ops
-        relied on a manual human tick-log. This makes idle-but-alive observable, and
-        flags a ticker whose task has died. Fail-open; lazy import keeps core clean.
-        """
-        emit_loop_heartbeats([(name, task) for name, (task, _stop) in self._tasks.items()],
-                             source="supervisor")
-
-    async def _heartbeat_loop(self) -> None:
-        interval = _heartbeat_interval_sec()
-        while not (self._hb_stop is not None and self._hb_stop.is_set()):
-            try:
-                await asyncio.wait_for(self._hb_stop.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                pass
-            if self._hb_stop is not None and self._hb_stop.is_set():
-                break
-            self._emit_heartbeats()
-
-    async def start_all(self) -> None:
-        """Start all enabled tickers as background asyncio tasks."""
-        for name, ticker, enabled in self._entries:
-            if not enabled:
-                continue
-            stop = asyncio.Event()
-            task = asyncio.create_task(ticker.run_forever(stop_event=stop))
-            self._tasks[name] = (task, stop)
-            logger.info("✅ %s ticker started", name)
-        # Liveness heartbeat (only if something is actually running).
-        if self._tasks:
-            self._hb_stop = asyncio.Event()
-            self._hb_task = asyncio.create_task(self._heartbeat_loop())
-
-    async def stop_all(self) -> None:
-        """Signal stop and cancel all running tickers, awaiting their completion."""
-        if self._hb_stop is not None:
-            self._hb_stop.set()
-        if self._hb_task is not None:
-            self._hb_task.cancel()
-            try:
-                await self._hb_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._hb_task = None
-        for name, (task, stop) in self._tasks.items():
-            stop.set()
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-            logger.info("%s ticker stopped", name)
-        self._tasks.clear()

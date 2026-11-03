@@ -19,7 +19,6 @@ def prov(tmp_path, monkeypatch):
     R.reset_memory_registry()
     p = SqliteMemoryProvider(str(tmp_path / "memory.db"))
     R.set_external_memory_provider(p)
-    R._store_full.update(recorded_at=0.0, open=None)
     yield p
     R.reset_memory_registry()
 
@@ -27,11 +26,22 @@ def prov(tmp_path, monkeypatch):
 @pytest.fixture
 def verdicts(monkeypatch):
     calls = {"record": [], "clear": []}
+    store = {}
+    import time
+    from types import SimpleNamespace
     import core.credential_verdicts as cv
-    monkeypatch.setattr(cv, "record_rejection",
-                        lambda kind, key="", **kw: calls["record"].append((kind, key, kw)))
-    monkeypatch.setattr(cv, "clear_rejection", lambda kind, key="": calls["clear"].append((kind, key)))
-    monkeypatch.setattr(cv, "verdict", lambda kind, key="": None)
+
+    def record(kind, key="", **kw):
+        calls["record"].append((kind, key, kw))
+        store[(kind, key)] = SimpleNamespace(last_seen=time.time())
+
+    def clear(kind, key=""):
+        calls["clear"].append((kind, key))
+        store.pop((kind, key), None)
+    monkeypatch.setattr(cv, "record_rejection", record)
+    monkeypatch.setattr(cv, "clear_rejection", clear)
+    monkeypatch.setattr(cv, "verdict", lambda kind, key="": store.get((kind, key)))
+    calls["store"] = store
     return calls
 
 
@@ -62,7 +72,7 @@ async def test_storage_cap_records_one_verdict_a_day(prov, verdicts, monkeypatch
     monkeypatch.setattr(sl, "MAX_MEMORY_ROWS", 100)
     assert await R.memory_sync_turn("q", "A new finding after the prune.",
                                     session_id="s", user_id="u") == R.SYNC_INSERTED
-    assert verdicts["clear"] == [(R.STORE_FULL_KIND, R.STORE_FULL_KEY)]
+    assert verdicts["clear"] == [(R.STORE_FULL_KIND, R.store_full_key("u"))]
 
 
 @pytest.mark.asyncio

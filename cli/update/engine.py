@@ -34,6 +34,9 @@ class UpdateRunners:
     #: What ``install`` recorded (``old_sha``/``old_branch``) — 077's boot step
     #: keeps it to roll back new code that never starts.
     state: dict = field(default_factory=dict)
+    #: 098 CL-09: read the commit to return to BEFORE ``install`` mutates, so
+    #: the phase journal holds it on disk while the install runs.
+    prepare: Optional[Callable[[], dict]] = None
 
 
 @dataclass
@@ -53,10 +56,23 @@ def apply_update(
     from_version: str,
     to_version: str = "",
     timestamp: Optional[str] = None,
+    journal=None,
 ) -> ApplyResult:
     """Apply an update atomically; auto-rollback on any failure. Never raises for a step
     failure (returns an ``ApplyResult``); only a failure to take the master snapshot raises
-    (we must never mutate unguarded)."""
+    (we must never mutate unguarded).
+
+    098 CL-09: with a ``journal`` (:class:`core.state.journal.PhaseJournal`) each
+    phase is written BEFORE its step, with the snapshot name and the commit to
+    return to — a kill (SIGKILL, a reboot) leaves an open journal that the next
+    ``polyrob update`` or start rolls back (``cli.update.journal``)."""
+    if journal is not None:
+        import time as _t
+        from core.state.proc import process_identity
+        journal.begin("update", owner=process_identity().encode(),
+                      rollback_info={"from_version": from_version, "to_version": to_version,
+                                     "started_at": _t.time()}, force=True)
+        journal.phase("snapshot")
     snap = create_snapshot(
         snapshots_root=ctx.snapshots_root, data_home=ctx.data_home,
         db_paths=ctx.db_paths or None, config_paths=ctx.config_paths,
@@ -67,9 +83,14 @@ def apply_update(
     # The master snapshot guards every step, including migration. A former
     # per-step "guarded migrate" restored the same snapshot a second time and
     # a failed inner restore skipped code recovery altogether; one restore now.
+    if journal is not None:
+        prepared = dict(runners.prepare() or {}) if runners.prepare else {}
+        journal.phase("prepared", snapshot=snap.name, **prepared)
     for step, run in (("install", runners.install), ("migrate", runners.migrate),
                       ("verify", runners.verify)):
         try:
+            if journal is not None:
+                journal.phase(step)
             run()
         except BaseException as exc:  # restore even on KeyboardInterrupt
             errors = []
@@ -81,6 +102,23 @@ def apply_update(
                     undo()
                 except BaseException as rollback_exc:
                     errors.append(f"{name}: {rollback_exc}")
+            if journal is not None:
+                _journal_end(journal, errors, f"{step}: {exc}")
             return ApplyResult(False, step, exc, snap, not errors, tuple(errors))
 
+    if journal is not None:
+        journal.done(phase="applied")
     return ApplyResult(True, None, None, snap, False)
+
+
+def _journal_end(journal, errors, error: str) -> None:
+    """Close the journal after an in-process rollback: ``rolled_back`` (done)
+    or ``rollback_failed`` (failed — it blocks the next apply)."""
+    try:
+        if errors:
+            journal.phase("rollback_failed", errors=list(errors))
+            journal.failed(f"{error}; rollback: {'; '.join(errors)}")
+        else:
+            journal.done(phase="rolled_back")
+    except Exception:
+        pass

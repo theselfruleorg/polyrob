@@ -38,6 +38,7 @@ def env(monkeypatch, tmp_path):
     ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=False, role="orchestrator")
 
     async def call(**kw):
+        kw.setdefault("reason", "test reason")  # 096 D3
         return await action.function(action.param_model(**kw), execution_context=ctx)
     return sm, tmp_path / "user_u1", call
 

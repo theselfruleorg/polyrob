@@ -250,7 +250,7 @@
     },
     {
       "name": "knowledge_kb_search",
-      "sha": "4abfd5354a82"
+      "sha": "f2e37a92ff69"
     },
     {
       "name": "load_skill",
@@ -270,11 +270,11 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "2c72779ffd6d"
+      "sha": "8682150a5406"
     },
     {
       "name": "preferences",
-      "sha": "266de197b9b5"
+      "sha": "e30f13a6a673"
     },
     {
       "name": "present_choice",
@@ -298,7 +298,7 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "7d5aee19c522"
+      "sha": "7ca08bf9fa47"
     },
     {
       "name": "send_message",
@@ -306,7 +306,7 @@
     },
     {
       "name": "skill_manage",
-      "sha": "816a947f06b5"
+      "sha": "08762d93b4a1"
     },
     {
       "name": "task_todo_add",

@@ -14,6 +14,7 @@ import logging
 import os
 from typing import Any, Optional
 
+from core.surfaces.more_store import clip
 from core.surfaces.tappable import parse_ask_option as _parse_ask_option
 
 logger = logging.getLogger("surfaces.telegram.harness")
@@ -101,7 +102,8 @@ async def _decide_pending_item(task_agent: Any, item: dict, *, approve: bool,
         return False, f"could not decide correspondent {item.get('id')}"
     return decide_pending(kind, item.get("id"), approve=approve, user_id=user_id,
                           home_dir=data_dir, instance_id=instance_id,
-                          board=board, task_agent=task_agent)
+                          board=board, task_agent=task_agent,
+                          rev=item.get("seat_rev"))
 
 
 async def pending_verb(c) -> str:
@@ -117,12 +119,27 @@ async def pending_verb(c) -> str:
     if not pending.items:
         return "\n".join(x for x in (pending.degraded_line() or "No pending approvals.",
                                        rest) if x)
-    lines = [f"{len(pending.items)} pending approval(s):"]
+    # 096 W3/A8: a self-evolution item reads as the notice does (what · why ·
+    # changes · taps), and a linked pair is ONE entry, not two halves.
+    by_key = {f"{it['kind']}:{it['id']}": it for it in pending.items}
+    shown: set = set()
+    rows = []
     for it in pending.items:
+        key = f"{it['kind']}:{it['id']}"
+        if key in shown:
+            continue
+        shown.update({key, it.get("linked") or ""})
+        rows.append(it)
+    lines = [f"{len(rows)} pending approval(s):"]
+    for it in rows:
+        if it.get("kind") in self_evolution.PENDING_KIND_LABELS:
+            lines.extend(self_evolution.notice_item_lines(
+                it, partner=by_key.get(it.get("linked") or "")))
+            continue
         lines.append(f"• {it['kind']}:{it['id']} — {summary_line(it)}")
-        lines.append(f"   {self_evolution.pending_tap_token('approve', it)}   "
-                     f"{self_evolution.pending_tap_token('reject', it)}   "
-                     f"see it all: {self_evolution.pending_tap_token('pending', it)}")
+        lines.append(f"   {self_evolution.pending_tap_token('approve', it)} · "
+                     f"{self_evolution.pending_tap_token('reject', it)} · "
+                     f"read it: {self_evolution.pending_tap_token('pending', it)}")
     lines.append("Everything at once: /approve_all")
     if pending.degraded_line():
         lines.append(pending.degraded_line())
@@ -145,12 +162,51 @@ def _review_one(c, pending, target: str) -> str:
         return f"No pending item '{target}' — see /pending."
     if match.get("kind") not in self_evolution.PENDING_KIND_LABELS:
         from core.pending_review import summary_line
-        return (f"{match['kind']}:{match['id']} — {summary_line(match)}\n"
-                f"{self_evolution.pending_tap_token('approve', match)}   "
+        taps = (f"{self_evolution.pending_tap_token('approve', match)}   "
                 f"{self_evolution.pending_tap_token('reject', match)}")
+        # 096 B3: a queued tool approval opens its STORED full card (the whole
+        # tweet / DM / email body, every money field), not the one-line summary.
+        card = str(match.get("card") or "")
+        if card:
+            return f"{card}\n{taps}"
+        if match.get("kind") == "correspondent":
+            return _contact_review(c, match)
+        if match.get("kind") == "signer_approval":
+            # 096 C2: the signer's own review (op, chain, priced risk, the
+            # whole summary), not the 220-char list line.
+            from core.signer.approvals import review as signer_review
+            ok, text = signer_review(str(match["id"]))
+            body = text if ok else f"{match['kind']}:{match['id']} — {match.get('preview') or ''}\n({text})"
+            return f"{body}\n{taps}"
+        return f"{match['kind']}:{match['id']} — {summary_line(match)}\n{taps}"
     ok, text = self_evolution.review(match["kind"], str(match["id"]), user_id=c.user_id,
                                      home_dir=c.data_dir, instance_id=c.instance_id)
     return text if ok else f"Could not open it: {text}"
+
+
+def _contact_review(c, match: dict) -> str:
+    """096 C1: a pending contact opens as its decision notice — who, why (the
+    stored provenance + session), the first message the agent sent (from the
+    conversation store), and the taps. Fail-open to "not recorded"."""
+    from core.surfaces.seed import build_contact_notice
+    surface, _, address = str(match.get("id") or "").partition(":")
+    first = None
+    try:
+        from surfaces.telegram.contacts_ops import _store
+        store = _store(getattr(c, "container", None), str(c.data_dir))
+        row = (store.first_outbound(str(c.user_id), surface, address)
+               if store is not None else None)
+        if row is not None:
+            subj = str(row.get("subject") or "")
+            body = str(row.get("body") or "")
+            first = f"Subject: {subj}\n\n{body}" if subj else body
+    except Exception as exc:  # say so in the notice; never drop the section silently
+        logger.warning("contact review: first message unreadable", exc_info=True)
+        first = f"unavailable ({type(exc).__name__})"
+    return build_contact_notice(match, surface=surface, address=address,
+                                session_id=str(match.get("session_id") or ""),
+                                provenance=str(match.get("provenance") or ""),
+                                first_message=first, more_tenant=str(c.user_id))
 
 
 def _elsewhere(c, view_name: str) -> str:
@@ -269,20 +325,76 @@ async def asks_verb(c) -> str:
     from core.goal_vocab import has_own_surface
     rows = [a for a in c.board.asks(user_id=c.user_id, status=ASK_OPEN)
             if not has_own_surface(a.payload or {})]
+    if c.args:
+        return _ask_one(c, rows, str(c.args[0]))
     rest = _elsewhere(c, "asks")
     if not rows:
         return "\n".join(x for x in ("No open asks — nothing is blocked on you.", rest) if x)
+    from core.surfaces.tappable import read_token
     lines = [f"{len(rows)} open ask(s):"]
     for a in rows:
         blocks = (a.payload or {}).get("blocks_goal_ids", [])
+        read = read_token("/ask", a.id)
         lines.append(f"• {a.id} — {a.title}"
                      + (f" (blocks {len(blocks)} goal(s))" if blocks else ""))
         if a.body:
-            lines.append(f"   {a.body[:160]}")
+            body = str(a.body)
+            # 096 C3: the Why was cut at 160 with no marker. Now 600, and the
+            # whole ask one tap away.
+            if len(body) > _ASKS_BODY_CHARS:
+                body = (body[:_ASKS_BODY_CHARS].rstrip()
+                        + f"… (+{len(body) - _ASKS_BODY_CHARS} chars"
+                        + (f": {read})" if read else ")"))
+            lines.append(f"   {body}")
+        taps = _ask_option_taps(a)
+        if taps:
+            lines.append(f"   Tap an answer: {taps}")
+        if read:
+            lines.append(f"   read it all: {read}")
     lines.append("Fulfilled one? /fulfill <id> unblocks its goals — add "
                  "your answer after the id and the run is told what you said.")
     if rest:
         lines.append(rest)
+    return "\n".join(lines)
+
+
+#: `/asks` shows this much of each ask's Why; `/ask_<id>` shows all of it.
+_ASKS_BODY_CHARS = 600
+
+
+def _ask_option_taps(ask: Any) -> str:
+    """``A) /fulfill_<id>_a · B) …`` for an ask that stored options (O14)."""
+    from core.surfaces.tappable import ASK_OPTION_LETTERS, ask_option_token
+    opts = (ask.payload or {}).get("options") or {}
+    return " · ".join(f"{letter}) {ask_option_token(ask.id, letter)}"
+                      for letter in ASK_OPTION_LETTERS if letter in opts)
+
+
+def _ask_one(c, rows: list, ref: str) -> str:
+    """`/asks <id>` or the tapped `/ask_<id>`: ONE open ask in full — the
+    question, the whole Why, each option with its tap. A read, never a decision."""
+    ref = ref.strip().lower()
+    matches = [a for a in rows if str(a.id).lower() == ref] or [
+        a for a in rows if str(a.id).lower().startswith(ref)]
+    if not matches:
+        return f"No open ask '{ref}' — see /asks."
+    if len(matches) > 1:
+        return f"'{ref}' matches {len(matches)} open asks — use more characters (see /asks)."
+    a = matches[0]
+    payload = a.payload or {}
+    blocks = payload.get("blocks_goal_ids", [])
+    lines = [f"❓ Ask {a.id}" + (f" (blocks {len(blocks)} goal(s))" if blocks else ""),
+             str(a.title or "")]
+    if a.body:
+        lines += ["", "Why: " + str(a.body)]
+    opts = payload.get("options") or {}
+    if opts:
+        from core.surfaces.tappable import ASK_OPTION_LETTERS, ask_option_token
+        lines.append("")
+        for letter in ASK_OPTION_LETTERS:
+            if letter in opts:
+                lines.append(f"{letter}) {opts[letter]} — {ask_option_token(a.id, letter)}")
+    lines += ["", f"Answer here in chat, or /fulfill {a.id} <your answer>."]
     return "\n".join(lines)
 
 
@@ -314,7 +426,7 @@ async def fulfill_verb(c) -> str:
         return f"No open ask '{args[0]}' — see /asks."
     from agents.task.goals.rail_answers import decision_note
     return (f"✅ Ask fulfilled — {decision_note(board, args[0], unblocked) or 'saved.'}"
-            + (f"\nYour answer was passed to the run: {answer[:200]}"
+            + (f"\nYour answer was passed to the run: {clip(answer, 200)}"
                if answer else ""))
 
 

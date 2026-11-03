@@ -82,7 +82,7 @@ class _Unauth(Exception):
 
 
 def _patch_unauth(monkeypatch):
-    import tweepy
+    from polyrob_x._vendor import tweepy
     monkeypatch.setattr(tweepy, "Unauthorized", _Unauth)
 
 

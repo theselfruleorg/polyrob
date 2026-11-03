@@ -446,20 +446,30 @@ async def _tell_owner_refund_due(container: Any, payment_id: str) -> None:
                        "(the status seat still shows it)", exc_info=True)
 
 
-async def mark_payment_refund_due(payment_id: str) -> bool:
-    """Flag an already-recorded x402 payment as refund_due (N4 reconciliation)."""
+async def mark_payment_refund_due(payment_id: str, *, db=None, container: Any = None) -> bool:
+    """Flag an already-recorded x402 payment as refund_due (N4 reconciliation).
+
+    098 MO-03: a guarded write from ``completed``/``settled_no_tx`` only. The
+    event and the owner notice follow ONLY a real transition, so a missing row,
+    an expired row or a second call never tells the owner a refund is owed."""
     try:
-        from core.container import DependencyContainer
-        container = DependencyContainer.get_instance()
-        db = container.get_service('database_manager')
+        from core.state.sql import acas_transition
+        from modules.x402.invoice_status import X402_INVOICE, sql_now
+        if container is None:
+            from core.container import DependencyContainer
+            container = DependencyContainer.get_instance()
+        db = db or container.get_service('database_manager')
         if not db:
             logger.warning("Database not available to flag refund_due")
             return False
-        await db.execute(
-            "UPDATE x402_payment_requests SET status='refund_due', "
-            "updated_at=datetime('now') WHERE id = ?",
-            (payment_id,),
-        )
+        if not await acas_transition(
+                db, "x402_payment_requests", key="id = ?", key_params=(payment_id,),
+                machine=X402_INVOICE, to="refund_due",
+                from_states=("completed", "settled_no_tx"),
+                set_cols={"updated_at": sql_now()}):
+            logger.warning("x402.refund_due NOT recorded for %s (no completed row)",
+                           payment_id)
+            return False
         logger.warning(f"x402.refund_due payment_id={payment_id} (downstream failed after settlement)")
         _emit_refund_due(payment_id)
         await _tell_owner_refund_due(container, payment_id)
@@ -467,6 +477,32 @@ async def mark_payment_refund_due(payment_id: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to flag x402 refund_due for {payment_id}: {e}")
         return False
+
+
+async def mark_payment_refunded(payment_id: str, *, tx_hash: Optional[str] = None,
+                                note: Optional[str] = None, db=None) -> bool:
+    """The owner refunded the payer: ``refund_due → refunded`` (098 MO-03).
+    Terminal; the `/status` refund-owed line stops counting the row."""
+    from core.state.sql import acas_transition
+    from modules.x402._db import resolve_db
+    from modules.x402.invoice_status import X402_INVOICE, sql_now
+    db = await resolve_db(db)
+    if not db:
+        return False
+    now = sql_now()
+    done = await acas_transition(
+        db, "x402_payment_requests", key="id = ?", key_params=(payment_id,),
+        machine=X402_INVOICE, to="refunded", from_states=("refund_due",),
+        set_cols={"refunded_at": now, "refund_tx_hash": (tx_hash or None),
+                  "refund_note": (str(note)[:500] if note else None), "updated_at": now})
+    if done:
+        try:
+            from modules.x402.invoicing import _emit
+            _emit("payment_refunded", user_id="", attrs={"payment_id": payment_id,
+                                                        "refund_tx_hash": tx_hash or ""})
+        except Exception:
+            pass
+    return done
 
 
 def _emit_refund_due(payment_id: str) -> None:

@@ -89,9 +89,19 @@ class CreditBalanceManager:
         validate_credit_amount(amount)
         # An unpaid completed call must not leave the same small balance
         # reusable for unlimited new requests. An unreadable debt store raises.
-        unpaid = await self.db.fetch_one(
-            "SELECT id FROM billing_failures WHERE user_id = ? "
-            "AND status = 'pending' LIMIT 1", (user_id,))
+        # 098 MO-07/08: a row being resolved still blocks; an unresolved hold
+        # (the platform's open question, not the user's debt) does not.
+        from modules.credits.billing_failures import BLOCKING_SQL
+        try:
+            unpaid = await self.db.fetch_one(
+                "SELECT id FROM billing_failures WHERE user_id = ? "
+                f"AND ({BLOCKING_SQL}) LIMIT 1", (user_id,))
+        except Exception as e:
+            if "resolution" not in str(e):  # a store before migration v1.13.0
+                raise
+            unpaid = await self.db.fetch_one(
+                "SELECT id FROM billing_failures WHERE user_id = ? "
+                "AND status IN ('pending', 'resolving') LIMIT 1", (user_id,))
         if unpaid is not None:
             return False
         balance = await self.get_balance(user_id)

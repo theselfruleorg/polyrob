@@ -52,17 +52,18 @@ async def test_incremental_stream_edits_one_message_in_place(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_is_buffered_single_send(monkeypatch):
+async def test_flag_off_drops_partials_single_send(monkeypatch):
     set_owner_pref(monkeypatch, "stream.telegram", False)
     bot = _FakeBot()
     s = TelegramSurface(bot)
     await s.stream(_om("Hello", partial=True))
     await s.stream(_om(" world", partial=True))
-    await s.stream(_om("!", partial=False))
+    await s.stream(_om("Hello world!", partial=False))
     assert bot.edits == []                       # no live edits
     # HTML parse mode only escapes & < > (see core/surfaces/rendering.py), so ordinary
     # punctuation reaches the user clean — no backslash noise.
-    assert bot.sent == [("555", "Hello world!")]  # one buffered send on finalize
+    # 098 TS-19: partials are dropped; the finalize's own text is the one send.
+    assert bot.sent == [("555", "Hello world!")]
 
 
 @pytest.mark.asyncio

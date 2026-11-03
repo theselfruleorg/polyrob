@@ -102,14 +102,16 @@ async def test_send_failopen_on_bot_error():
 
 
 @pytest.mark.asyncio
-async def test_buffered_stream_flushes_one_send_on_finalize():
+async def test_non_live_stream_drops_partials_and_sends_the_finalize_text():
+    """098 TS-19: without live streaming a partial holds no state; the reply
+    is the finalize's own text (the router sends it through send())."""
     bot = _FakeBot()
     s = TelegramSurface(bot)
     sk = "agent:main:telegram:dm:5:u"
     await s.stream(OutboundMessage(session_key=sk, text="Hel", partial=True, stream_id="x"))
     await s.stream(OutboundMessage(session_key=sk, text="lo", partial=True, stream_id="x"))
-    assert bot.sent == []  # buffered, nothing sent yet
-    await s.stream(OutboundMessage(session_key=sk, text="", partial=False, stream_id="x"))
+    assert bot.sent == []
+    await s.stream(OutboundMessage(session_key=sk, text="Hello", partial=False, stream_id="x"))
     assert len(bot.sent) == 1
     assert bot.sent[0]["text"] == "Hello"
 
@@ -288,5 +290,6 @@ async def test_send_retries_as_plain_text_when_telegram_rejects_the_markup():
     assert res.success is True
     assert len(bot.sent) == 1
     assert bot.sent[0]["kwargs"].get("parse_mode") is None
-    # Falls back to the ORIGINAL source, never to raw HTML tags the user would see.
-    assert bot.sent[0]["text"] == "**hi**"
+    # Falls back to the source as PLAIN text (096 W6: markers stripped), never
+    # to raw HTML tags the user would see.
+    assert bot.sent[0]["text"] == "hi"

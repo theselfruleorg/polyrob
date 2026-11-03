@@ -21,6 +21,12 @@ from core.packs.loader import load_packs as _load_packs, register_policies as _r
 _register_policies()
 _load_packs()
 
+# 098: a state-machine edge the transition table forbids fails the test
+# (production refuses + logs it). core/state/machine.py::strict_mode.
+from core.state.machine import set_strict as _set_state_strict
+
+_set_state_strict(True)
+
 
 # ---------------------------------------------------------------------------
 # Operator-env sandbox (§3.5, 2026-07-16): tests must never read the dev box
@@ -220,6 +226,7 @@ def _reset_process_singletons():
         _ar = _loaded("polyrob.app.autonomy_runtime")
         if _ar is not None:
             _ar._self_binding_sweep_scheduled = False
+            _ar.reset_cold_start_latches()  # 098 CL-03: once per process, not per suite
         _reset_singletons(after=True)
 
 
@@ -319,7 +326,7 @@ def _isolate_path_manager():
         reset_path_manager = None  # type: ignore
     try:
         import core.interactive_gate as _ig
-        _ig._busy_depth = 0
+        _ig.reset_for_tests()  # 098 CO-01: the gate is a holder set
     except Exception:
         pass
     try:
@@ -482,6 +489,10 @@ def _isolated_data_home(tmp_path, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("APP_SERVICES_DB_PATH", str(tmp_path / "app_services.db"))
     # artifacts.db: the ledger and its cached singleton.
     monkeypatch.setenv("ARTIFACTS_DB_PATH", str(tmp_path / "artifacts.db"))
+    # 097: the always-on retention tick DELETES session trees and memory rows of
+    #   the resolved data home; a test that starts the autonomy runtime must
+    #   never run it against the developer's real home.
+    monkeypatch.setenv("RETENTION_TICKER_ENABLED", "off")
     # the ship rail: its DB AND its SERVED FILE TREE — on a box with a live vhost,
     #   files under the real publish root would be publicly served.
     monkeypatch.setenv("PUBLICATIONS_DB_PATH", str(tmp_path / "publications.db"))

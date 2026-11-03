@@ -72,18 +72,17 @@ def test_created_running_completed_emits_three_times(tmp_path):
 
 
 def test_invalid_status_string_path_also_guarded(tmp_path):
-    """The raw-string fallback branch (status.lower() not a valid
-    SessionStatus member) must inherit the guard too — repeating an invalid
-    status string emits only once."""
+    """098 AG-14: a status that is not a state of SESSION_MACHINE is refused
+    (it used to be written as-is) — nothing is saved or emitted."""
     sm = _sm(tmp_path)
     sid = sm.create_session("sess-invalid", user_id="u1")
     sm._emit_status_event = MagicMock()
 
-    sm.update_session_status(sid, "totally-not-a-real-status")
-    sm.update_session_status(sid, "totally-not-a-real-status")
+    assert sm.update_session_status(sid, "totally-not-a-real-status") is False
+    assert sm.update_session_status(sid, "totally-not-a-real-status") is False
 
-    assert sm._emit_status_event.call_count == 1
-    assert sm._sessions[sid]["status"] == "totally-not-a-real-status"
+    assert sm._emit_status_event.call_count == 0
+    assert sm._sessions[sid]["status"] == "created"
 
 
 def test_cancel_called_three_times_emits_once(tmp_path):

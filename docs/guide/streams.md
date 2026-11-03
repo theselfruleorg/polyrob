@@ -38,7 +38,7 @@ you when you do, because nothing will start it.
 
 ```text
 /goal new Draft the Q3 summary from reports/*.md and name the three biggest changes
-/goals                    the board: NOW · STUCK · NEXT · OVER
+/goals                    the board: NOW · STUCK · PAUSED · NEXT · OVER
 /goal show <id>           result, cost, status and its reason, the decision it waits on
 /goal retry <id>          clear the failures and put it back in the queue
 /goal stop <id>           stop this run; add --forever to switch the title off
@@ -75,8 +75,9 @@ learning loops. Naming the file turns a claim into a check.
 **`/goal stop <id>` stops this run once.** Add `--forever` to switch the title
 OFF: no job adds it again, and the agent cannot create it again. `/goal allow
 <id|title>` turns it back on; `/goals` lists what is off in an `OFF` section.
-Each board line also says who asked for the goal — `you launched it`, `you
-asked for it`, or `I made this one up`.
+Each board line also says who asked for the goal: `you launched it`, `you
+asked for it`, `granted: <name>` (filed under a lane you granted), `I made this
+one up`, or `origin not recorded` (an old goal with no record of who asked).
 
 ### Pace
 
@@ -124,7 +125,7 @@ Under effective `AUTONOMY_MODE=autonomous` with the DeFi grant armed
 can include `defi_trade`. That is deliberate. What bounds it is not the
 toolset: it is the per-transaction limit, the rolling daily limit, the pause
 and the owner approval above `DEFI_AUTONOMOUS_MAX_USD`. See
-[payments.md](payments.md) and [security-model.md](security-model.md).
+[onchain.md](onchain.md) and [security-model.md](security-model.md).
 
 A goal's `payload.tools` is used **as written** when it runs. Anything an owner
 seat writes there — `polyrob goals create --tools`, `tools=` on `/job new` — is a

@@ -40,7 +40,7 @@ from core.exceptions import (
 
 # Import billing exception for fail-fast handling
 from core.exceptions import InsufficientCreditsError
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy.goal_flags import interactive_max_steps
 
 # Import centralized utilities to avoid repeated inline imports
 from agents.task.utils_json import normalize_action_schema
@@ -139,6 +139,43 @@ logger = get_task_logger('agent')
 from agents.task.agent.core.session_control import controlled_run, control_checkpoint
 
 
+
+#: Run ends that are a deliberate stop, never reported as "session failed".
+_STOP_NOT_FAILURE = frozenset({"cancelled", "control", "wall_clock"})
+
+
+def _end_session_lane(agent: Any, start_time: float) -> None:
+	"""098 CL-02: a run that ends without its session_completion (cancelled by
+	a scheduler cap or ``/autonomy off``, or an exception) still sends one, so
+	the REPL autonomy lane and any SessionDone waiter see the run end. Main
+	agent only: a sub-agent shares the parent's session id, and its end must
+	not end the parent's lane. Fail-open — never masks the run's own outcome."""
+	if getattr(agent, "_session_end_sent", True) or getattr(agent, "_is_sub_agent", False):
+		return
+	agent._session_end_sent = True
+	try:
+		state = getattr(agent, "state", None)
+		steps = max(0, int(getattr(state, "n_steps", 1) or 1) - 1)
+		reason = getattr(state, "stop_reason", None) or "run ended before completion"
+		reason = getattr(reason, "value", reason)
+		# 098 review: a stop (owner/operator cancel, a control stop, a wall-clock
+		# cap) is not a failure — with an error_message the REPL printed a
+		# "session failed: cancelled" panel. The lane still ends.
+		stopped = str(reason) in _STOP_NOT_FAILURE
+		agent.telemetry_manager.capture_session_end(
+			success=False,
+			steps=steps,
+			duration=time.time() - start_time,
+			error_message=None if stopped else str(reason),
+			metrics={"steps_completed": steps, "ended_in_finally": True,
+			         "stop_reason": str(reason)},
+		)
+	except Exception as e:
+		try:
+			agent.logger.debug(f"Failed to send the run-end session_completion: {e}")
+		except Exception:
+			pass
+
 class RunLoopMixin:
 	"""The agent run loop (run), split whole out of Agent so service.py drops toward
 	its constructor core (P9). Agent composes RunLoopMixin; callers use agent.run()
@@ -155,7 +192,7 @@ class RunLoopMixin:
 			return False
 
 	@controlled_run
-	async def run(self, max_steps: int = INTERACTIVE_MAX_STEPS, _continue_session: bool = False) -> AgentHistoryList:
+	async def run(self, max_steps: Optional[int] = None, _continue_session: bool = False) -> AgentHistoryList:
 			"""Run agent for the task.
 
 			Runs the agent to complete the task set during initialization.
@@ -170,8 +207,18 @@ class RunLoopMixin:
 			# below — a chat turn runs for its newest owner message, not for the
 			# session's FIRST task (which stays in self.task for days).
 			
+			if max_steps is None:  # 098 CO-09: the interactive budget, read at use
+				max_steps = interactive_max_steps()
+			# 098 AG-01: a run starts clean — the last run's halt (stopped, failures,
+			# failed providers, breaker), stop reason and per-run counters go here,
+			# so no entry point (server reuse, REPL, fallback retry) must remember them.
+			self.state.begin_run()
+
 			# Track start time for metrics
 			start_time = time.time()
+			# 098 CL-02: the run's session_completion (SessionDone) is sent once —
+			# from the body on a normal end, else from the finally below.
+			self._session_end_sent = False
 			
 			# The turn's start in the action ledger: done() compares what the turn
 			# CLAIMS was changed with the writes after this point (runtime/change_claims.py).
@@ -184,7 +231,6 @@ class RunLoopMixin:
 			# (the `agent_status` action) can report steps used (of the cap).
 			# `AgentState.max_steps` existed but was never assigned before this.
 			self.state.max_steps = max_steps
-			self.state.stop_reason = None  # 083 WS-1: set by the exit that ends this run
 			self.state.exhausted_summary = None  # 083 WS-2: the last report at the step limit
 			self._budget_notice_sent = False  # 083 WS-5: the one 80 % step notice
 			self._dollar_notice_sent = False  # 095 W1d: the one 80 % dollar notice
@@ -415,7 +461,10 @@ class RunLoopMixin:
 							}
 						last_progress_time = current_time
 
-					# FIX 10: Check for stalled execution and take action
+					# FIX 10: Check for stalled execution and take action. 098 AG-03:
+					# the clock restarts at an owner resume (a pause is not a stall).
+					last_activity_time = max(last_activity_time,
+					                         self.state.run_control.resumed_at or 0.0)
 					if current_time - last_activity_time > STALL_TIMEOUT:
 						self.logger.error(f"Agent appears stalled - no activity for {STALL_TIMEOUT} seconds", exc_info=True)
 						# Emit stall warning telemetry
@@ -454,7 +503,7 @@ class RunLoopMixin:
 						# item so the status reader still sees the honest error last.
 						from agents.task.agent.core.exhaustion_summary import run_budget_stop_report
 						budget_halt = await run_budget_stop_report(self, max_steps, budget_halt)
-						self.state.stopped = True
+						self.state.request_stop(StopReason.RUN_BUDGET)
 						self._last_result = self.append_terminal_error_item(budget_halt)
 						break
 
@@ -560,8 +609,7 @@ class RunLoopMixin:
 							            attrs={"error": _infra[:400]})
 						except Exception:
 							pass
-						self.state.stopped = True
-						set_stop(self, StopReason.MONEY_INFRA)
+						self.state.request_stop(StopReason.MONEY_INFRA)
 						break
 
 					# The identical-call escalation ended the run (LoopDetectionMixin):
@@ -814,6 +862,7 @@ class RunLoopMixin:
 						error_message=error_message,
 						metrics=metrics
 					)
+					self._session_end_sent = True
 				except Exception as e:
 					self.logger.debug(f"Failed to capture session completion telemetry: {e}")
 					
@@ -865,6 +914,8 @@ class RunLoopMixin:
 
 				return self.history
 			finally:
+				self.state.run_control.end_run()  # 098 AG-01: running -> idle (stopped stays)
+				_end_session_lane(self, start_time)  # 098 CL-02
 				# Clean up stall monitor task
 				if hasattr(self, '_stall_check_task') and self._stall_check_task:
 					self._stall_check_task.cancel()

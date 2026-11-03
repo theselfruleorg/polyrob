@@ -50,21 +50,30 @@ def credit_reserver(balance, user_id: str, session_id=None):
         raise ValueError("Credit reservation requires an authenticated payer")
     loop = asyncio.get_running_loop()
 
-    async def reserve_here(model, provider):
+    async def record(ids):
+        from modules.credits.billing_failures import record_holds_unresolved
+        return await record_holds_unresolved(balance.db, user_id, session_id, ids)
+
+    async def reserve_here(model, provider, owned=True):
+        from core.billing_context import note_open_hold, record_orphaned_holds
         from core.exceptions import InsufficientCreditsError
+        # 098 MO-08: a previous call in this flow that raised left its hold
+        # open with no hand-off; the admin sees it now, not after the reaper.
+        await record_orphaned_holds()
         amount = reservation_credits(model, provider)
         request_id = PREFIX + uuid.uuid4().hex
         if not await balance.has_sufficient_balance(user_id, amount) or not await balance.deduct_credits(
                 user_id, amount, request_id, session_id, transaction_type="reservation"):
             available = (await balance.get_balance(user_id))["balance"]
             raise InsufficientCreditsError(user_id, amount, available)
+        note_open_hold(request_id, record, owned=owned)
         return request_id
 
     async def reserve(model, provider):
         if asyncio.get_running_loop() is loop:
             return await reserve_here(model, provider)
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
-            reserve_here(model, provider), loop))
+            reserve_here(model, provider, owned=False), loop))
     return reserve
 
 
@@ -81,6 +90,8 @@ async def settle_reservation(balance, user_id: str, request_id: str, amount: int
         validate_credit_amount(amount)
     if not request_id.startswith(PREFIX):
         raise ValueError("Invalid credit reservation reference")
+    from core.billing_context import hold_handed_off
+    hold_handed_off(request_id)
     db = balance.db
     await db.connection.begin_transaction()
     try:

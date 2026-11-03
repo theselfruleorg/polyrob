@@ -45,7 +45,9 @@ Three authentication methods are supported:
 
 ### 1. API key (recommended)
 
-Create an API key and pass it in the `X-API-KEY` header:
+Create an API key and pass it in the `X-API-KEY` header (an
+`Authorization: Bearer <api-key>` header also works). A new key starts with
+`polyrob_`; a key issued before that prefix still validates.
 
 ```bash
 curl -X POST http://localhost:9000/api/auth/api-keys \
@@ -125,7 +127,7 @@ Pass the JWT as `Authorization: Bearer <jwt>`.
 
 ### 3. x402 crypto pay-per-request
 
-No account needed — pay per request with USDC on Base or Ethereum. The server returns a `402 Payment Required` response with payment details; include the signed payment in the `X-PAYMENT` header on retry. x402 receiving is off by default (`X402_ENABLED`, see [../CONFIGURATION.md](../CONFIGURATION.md)). The paywalled routes are exactly `POST /a2a/rpc`, `POST /a2a/message/stream`, `POST /a2a/tasks` and `POST /v1/chat/completions` — free reads and continuations are never charged. See [payments.md](payments.md) for the money model.
+No account needed — pay per request in USDC on the chain `X402_DEFAULT_CHAIN` names (default `base`; in practice the asset the facilitator knows, USDC on Base). The server returns a `402 Payment Required` response with payment details; include the signed payment in the `X-PAYMENT` header on retry. x402 receiving is off by default (`X402_ENABLED`, see [../CONFIGURATION.md](../CONFIGURATION.md)). The paywalled routes are exactly `POST /a2a/rpc`, `POST /a2a/message/stream`, `POST /a2a/tasks` and `POST /v1/chat/completions` — free reads and continuations are never charged. See [payments.md](payments.md) for the money model.
 
 ---
 
@@ -148,7 +150,7 @@ when their flag is on, in which case the whole path space is absent rather than
 | `/api/mcp/*` | Outbound MCP server management | always |
 | `/api/skills/*` | List, create, read, edit, delete and fork a skill | always |
 | `/api/packs/markets/polymarket/*`, `/api/packs/markets/hyperliquid/*` | Venue configuration, read data, and gated execution | when the `markets` pack is installed and enabled (the venues' own flags gate live trading) |
-| `/a2a/*`, `/.well-known/agent.json` | The A2A protocol surface | always |
+| `/a2a/*`, `/.well-known/agent.json` | The A2A protocol surface | always (if an A2A import fails, the app starts without these routes and logs `A2A endpoints not available`) |
 | `/eip8004/*` | ERC-8004 identity, reputation and validation | always (discovery-only until `EIP8004_ENABLED`) |
 | `/webhooks/{surface_id}` | Inbound webhook verify and delivery | always (404 with an empty surface registry) |
 | `/api/kb/*` | Knowledge-base ingest and search | `KB_API_ENABLED` |
@@ -182,7 +184,7 @@ POST /api/task/sessions
 ```
 
 `model`, `provider`, `tools`, and `max_steps` are optional and default from your config
-(`max_steps` bounds this one request, default 50; goals, scheduled jobs and helpers stop at
+(`max_steps` bounds this one request, default `INTERACTIVE_MAX_STEPS` (100); goals, scheduled jobs and helpers stop at
 `AUTONOMOUS_MAX_STEPS` instead) (run
 `polyrob model list` to see available models). The response echoes what was actually used:
 
@@ -461,8 +463,9 @@ GET  /api/payments/pricing
 
 The `/api/x402/requests/*` pair is public by design — a payer must be able to
 read a challenge and settle without an account — and is rate-limited by a client
-key that cannot be spoofed with `X-Forwarded-For`. The full money model is in
-[payments.md](payments.md).
+key that cannot be spoofed with `X-Forwarded-For`. The four `/api/payments` account
+reads need a JWT from wallet sign-in; `/api/payments/pricing` is public. The money model
+is in [payments.md](payments.md); the pay side is in [wallet.md](wallet.md).
 
 ---
 
@@ -484,7 +487,7 @@ names why.
 These routes configure credentials and read market data. **Mounting them does
 not arm live trading** — an order is validated and returned as a dry run unless
 the master and per-venue trade flags are on and the order is within its cap. See
-[payments.md](payments.md).
+[onchain.md](onchain.md#venue-trading--the-markets-pack).
 
 ---
 
@@ -511,7 +514,8 @@ GET  /eip8004/validation/{status/{hash},summary/{agent_id},pending,validators}
 ```
 
 ERC-8004 is a trust and discovery layer, not a payment rail — it composes with
-x402 rather than replacing it. See [payments.md](payments.md).
+x402 rather than replacing it. See
+[payments.md](payments.md#6-on-chain-identity-and-payment-backed-reputation--erc-8004-moduleseip8004).
 
 ---
 

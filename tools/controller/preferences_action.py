@@ -105,6 +105,9 @@ class PreferencesActionMixin:
 			key: Optional[str] = Field(None, description=_KEY_DOC)
 			value: Optional[str] = Field(
 				None, description="set only: new value (coerced per the key's type)")
+			reason: Optional[str] = Field(
+				None, description="set only: one sentence for the owner — why this change "
+				                  "(shown when a guarded key waits for review)")
 
 		class ReadPreferences(BaseModel):
 			operation: _Literal["list", "get", "explain"]
@@ -231,6 +234,14 @@ class PreferencesActionMixin:
 					                                 data_dir, instance_id=instance_id)
 					if not ok:
 						return ActionResult(error=result, include_in_memory=True)
+					if (getattr(params, "reason", None) or "").strip():
+						try:  # 096 W1
+							from core import pending_reasons
+							pending_reasons.record(user_id, "pref_change", result, params.reason,
+							                       by="agent", home_dir=data_dir,
+							                       instance_id=instance_id)
+						except Exception:
+							pass
 					_self_mod_ev("propose", result, pending=True)
 					return ActionResult(
 						extracted_content=(

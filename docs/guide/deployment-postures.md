@@ -65,7 +65,7 @@ autonomy runtime is up **and the relevant loop is enabled** (`polyrob serve` /
 `polyrob gateway`, or the REPL under `POLYROB_LOCAL` + `AUTONOMY_ENABLED` — autonomy
 is OFF by default), not from the Console process alone.
 
-### Safe-by-default guarantees
+### What every posture enforces
 
 - **Every posture authenticates callers**, including local HTTP and Socket.IO clients.
   On a workstation, `polyrob dashboard` makes its own `JWT_SECRET_KEY` on first run
@@ -263,8 +263,7 @@ pick one:
 - **Console beside a headless agent.** The agent runs a chat surface
   (`polyrob telegram`, `polyrob email`) and the console only watches it. Run the
   console as its own service with `WEBVIEW_READ_ONLY=true`; the owner still logs
-  in to look, and nothing the console can do changes agent state. This is the
-  shape the project's own production instance runs.
+  in to look, and nothing the console can do changes agent state.
 - **Console beside the API.** `polyrob serve` (the FastAPI app) plus the console,
   both behind one reverse proxy. Use this when you also want the REST, A2A and
   OpenAI-compatible surfaces — see [api.md](api.md).
@@ -298,23 +297,12 @@ needs console access is you and you already have a VPN/tailnet set up.
 
 ## Reference: environment variables
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `POLYROB_POSTURE` | unset (derived) | `local` \| `own_ops` \| `multitenant`. Explicit value always wins. |
-| `WEBGATE_MULTITENANT` | — | Retired in 1.4. `true` without `POLYROB_POSTURE` refuses to start; set `POLYROB_POSTURE=multitenant`. |
-| `WEBGATE_HOST` / `WEBVIEW_HOST` | unset | Explicit bind host override; also feeds posture derivation when `POLYROB_POSTURE` is unset. |
-| `WEBGATE_PORT` / `WEBVIEW_PORT` | `5050` | Bind port. |
-| `WEBVIEW_ALLOW_LOCAL_POSTURE` | off | Override the `local`-posture-on-a-server boot refusal. Only if you front the console with your own auth. |
-| `WEBVIEW_READ_ONLY` | `false` | Monitoring-only console: every mutating endpoint returns 403 and the chat input is not rendered. |
-| `POLYROB_CONSOLE_NAME` | `POLYROB Console` | The console's own display name. Naming the instance does not rename the console. |
-| `POLYROB_OWNER_USERNAME` | unset | Owner login username (`own_ops`/`multitenant`). |
-| `POLYROB_OWNER_PASSWORD_HASH` | unset | Argon2 hash of the owner password — never plaintext. |
-| `POLYROB_OWNER_USER_ID` | unset | The owner tenant. Required for a writable non-`local` console. |
-| `JWT_SECRET_KEY` | unset | Signs both the owner-login cookie and wallet/SIWE JWTs. Required for owner login to work. |
-| `WEBVIEW_DOMAIN` | *(a localhost fallback — always set this explicitly for your deployment)* | SIWE domain + default Socket.IO CORS origin. |
-| `ENVIRONMENT` | `production` (as the console reads it) | When `production` (and not `local`), the owner-login cookie is marked `secure` (HTTPS-only). |
-
-The complete reference is [../CONFIGURATION.md](../CONFIGURATION.md); on a running
+The console reads `POLYROB_POSTURE` (an explicit value always wins), `WEBGATE_HOST` /
+`WEBVIEW_HOST`, `WEBGATE_PORT` / `WEBVIEW_PORT`, `WEBVIEW_ALLOW_LOCAL_POSTURE`,
+`WEBVIEW_READ_ONLY`, `POLYROB_CONSOLE_NAME`, the owner login (`POLYROB_OWNER_USERNAME`,
+`POLYROB_OWNER_PASSWORD_HASH`, `POLYROB_OWNER_USER_ID`, `JWT_SECRET_KEY`),
+`WEBVIEW_DOMAIN` and `ENVIRONMENT`. Their defaults and meanings are in
+[../CONFIGURATION.md](../CONFIGURATION.md). On a running
 box, `polyrob doctor --flags --search WEBVIEW` prints the resolved values and where
 each one came from.
 
@@ -337,8 +325,8 @@ read it, the reason says `not readable by <user>`, not `no certificate`: certbot
 `chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive`; the private keys stay 0600,
 and only nginx (as root) reads them.
 
-The serving side is a one-time owner setup on the box. `polyrob apps install` renders it
-for the layout the box runs: the server layout under `/opt/polyrob`, or a user-mode
+The serving side is a one-time owner setup on a Linux box with systemd. `polyrob apps
+install` renders it for the layout the box runs: the server layout under `/opt/polyrob`, or a user-mode
 install under `~/.polyrob` (`polyrob service install`):
 
 ```
@@ -351,7 +339,11 @@ It checks docker, nginx, the certificate and the app image, then:
 
 - writes `polyrob-apps.service`. The supervisor runs as root. On a user-mode install it
   cannot read the agent's `.env` (`InaccessiblePaths=`), so the wallet seed never reaches
-  it; it reads its settings from `/etc/polyrob/apps.env`, which holds only app-service lines;
+  it; it reads its settings from `/etc/polyrob/apps.env`, which holds only app-service lines.
+  ⚠️ In the user layout the root supervisor runs the agent user's own interpreter and
+  code. Code the agent can write (its venv, an editable tree) then runs as root at the
+  next supervisor restart; `polyrob apps install` prints this warning. Where that
+  matters, use the server layout, with a root-owned `/opt/polyrob`;
 - creates the per-app include directory and the nginx include for it;
 - creates the static publish root (`/var/www/polyrob-publish`, owned by the service user,
   readable by nginx) and the `static.<domain>` host that serves it (`--no-publish` skips it);

@@ -60,14 +60,16 @@ def test_running_cron_job_defers_too(tmp_path):
     Its `next_run_at` is still its (past) due time until it finishes."""
     now = datetime(2026, 9, 18, 15, 35)
     store = _store(tmp_path, now - timedelta(minutes=5))
-    store.set_status("exit0001", "running")
+    assert store.claim_for_run("exit0001")   # 098 MO-09: running only by a claim
     assert d.imminent_cron_job(str(tmp_path), now, headroom_sec=600) is not None
 
 
 def test_done_or_failed_cron_job_does_not_defer(tmp_path):
     now = datetime(2026, 9, 18, 15, 35)
     store = _store(tmp_path, now - timedelta(minutes=5))
-    store.set_status("exit0001", "failed")
+    job = store.claim_for_run("exit0001")
+    store.update_after_run("exit0001", last_run_at=now, next_run_at=None, status="failed",
+                           expected=job)
     assert d.imminent_cron_job(str(tmp_path), now, headroom_sec=600) is None
 
 

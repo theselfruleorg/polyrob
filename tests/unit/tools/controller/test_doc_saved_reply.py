@@ -61,7 +61,7 @@ async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_
     c._register_self_context_manage_action()
     action = c.registry.registry.actions["self_context_manage"]
     res = await action.function(
-        action.param_model(action="update", content="STOP posting to the den."),
+        action.param_model(reason="test reason", action="update", content="STOP posting to the den."),
         execution_context=_ctx())
     body = res.extracted_content or ""
     assert "NOT YET IN EFFECT" in body
@@ -78,7 +78,7 @@ async def test_owner_doc_reply_states_inertness_and_command(monkeypatch, tmp_pat
     c._register_owner_doc_manage_action()
     action = c.registry.registry.actions["owner_doc_manage"]
     res = await action.function(
-        action.param_model(action="update", content="Owner prefers concise answers."),
+        action.param_model(reason="test reason", action="update", content="Owner prefers concise answers."),
         execution_context=_ctx())
     body = res.extracted_content or ""
     assert "NOT YET IN EFFECT" in body

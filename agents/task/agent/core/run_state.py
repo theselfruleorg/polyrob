@@ -17,8 +17,12 @@ owner object directly.
 """
 from __future__ import annotations
 
+import contextlib
+import time
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Iterator, List, Optional
+
+from core.state.machine import StateMachine
 
 
 @dataclass
@@ -53,6 +57,150 @@ class LLMCallState:
     def end(self) -> None:
         self.in_progress = False
         self.start_time = None
+
+    @contextlib.contextmanager
+    def active(self, now: float) -> Iterator["LLMCallState"]:
+        """098 AG-19: ``begin`` on entry, ``end`` in ``finally`` — an exception or a
+        cancel never leaves the stall watchdog blind (it skips while in flight)."""
+        self.begin(now)
+        try:
+            yield self
+        finally:
+            self.end()
+
+
+def llm_call_state(agent: Any) -> LLMCallState:
+    """The agent's :class:`LLMCallState` (created on first use, as ``owned`` does)."""
+    state = agent.__dict__.get("llm_call")
+    if state is None:
+        state = agent.__dict__["llm_call"] = LLMCallState()
+    return state
+
+
+#: 098 AG-01: the run lifecycle of one Agent. A run ends; the agent does not, so
+#: no state is terminal: ``begin_run`` leaves ``stopped`` for the next run.
+RUN_MACHINE = StateMachine(
+    "agent_run",
+    states=frozenset({"idle", "running", "paused", "stopped"}),
+    transitions={
+        "idle": frozenset({"running", "stopped"}),
+        "running": frozenset({"paused", "stopped", "idle"}),
+        "paused": frozenset({"running", "stopped", "idle"}),
+        "stopped": frozenset({"running"}),
+    },
+    initial=frozenset({"idle"}),
+)
+
+
+@dataclass
+class RunControl:
+    """098 AG-01/02/03: the ONE owner of run-scoped control state.
+
+    ``begin_run`` starts every run clean (a halt of the last run never wedges
+    the next one); ``request_stop(reason)`` is the one writer of ``stopped`` and
+    names why; ``pause``/``resume`` keep owner-pause time off the stall clock.
+    Never persisted: a restored session starts ``idle``.
+    """
+
+    state: str = "idle"
+    stop_reason: Optional[str] = None
+    paused_since: Optional[float] = None
+    paused_total: float = 0.0
+    resumed_at: Optional[float] = None
+    # AG-02: per-run counters (tool-free responses; whether this run acted)
+    empty_action_counter: int = 0
+    acted_this_run: bool = False
+
+    def _move(self, to: str) -> bool:
+        if self.state == to:
+            return True
+        if not RUN_MACHINE.check(self.state, to, ctx={"owner": "RunControl"}):
+            return False
+        self.state = to
+        return True
+
+    @property
+    def stopped(self) -> bool:
+        return self.state == "stopped"
+
+    def begin_run(self) -> None:
+        """Any state -> ``running``; clears the stop reason, the pause clock and
+        the per-run counters."""
+        if self.state == "paused":
+            self.resume()
+        self._move("running")
+        self.stop_reason = None
+        self.paused_since = None
+        self.paused_total = 0.0
+        self.resumed_at = None
+        self.empty_action_counter = 0
+        self.acted_this_run = False
+
+    def request_stop(self, reason: Any = None) -> bool:
+        """The one writer of ``stopped``. The first named reason wins (the exit
+        that really ended the run). True when this call stopped the run."""
+        value = getattr(reason, "value", reason)
+        if value and not self.stop_reason:
+            self.stop_reason = str(value)
+        if self.state == "stopped":
+            return False
+        return self._move("stopped")
+
+    def pause(self, now: Optional[float] = None) -> None:
+        if self.state == "paused":
+            return
+        if self._move("paused"):
+            self.paused_since = time.time() if now is None else now
+
+    def resume(self, now: Optional[float] = None) -> float:
+        """``paused`` -> ``running``; returns the paused seconds (0 when not paused)."""
+        if self.state != "paused":
+            return 0.0
+        now = time.time() if now is None else now
+        spent = max(0.0, now - (self.paused_since or now))
+        self.paused_total += spent
+        self.paused_since = None
+        self.resumed_at = now
+        self._move("running")
+        return spent
+
+    def end_run(self) -> None:
+        """``running``/``paused`` -> ``idle``. A stopped run stays ``stopped`` so
+        readers after the run see why it ended; the next ``begin_run`` clears it."""
+        if self.state in ("running", "paused"):
+            self.paused_since = None
+            self._move("idle")
+
+
+class run_field:
+    """098 AG-02: ``agent.<name>`` forwards to ``agent.state.run_control.<field>``
+    — a per-run counter lives in RunControl and ``begin_run`` clears it. Before
+    the agent has a state (an ``Agent.__new__`` probe) the value sits on the
+    instance."""
+
+    def __init__(self, field: str):
+        self.field = field
+
+    def _rc(self, obj):
+        return getattr(obj.__dict__.get("state"), "run_control", None)
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        rc = self._rc(obj)
+        if rc is None:
+            try:
+                return obj.__dict__["_run_field_" + self.field]
+            except KeyError:
+                raise AttributeError(self.field) from None
+        return getattr(rc, self.field)
+
+    def __set__(self, obj, value) -> None:
+        rc = self._rc(obj)
+        if rc is None:
+            obj.__dict__["_run_field_" + self.field] = value
+        else:
+            setattr(rc, self.field, value)
 
 
 class owned:

@@ -61,7 +61,7 @@ def test_a_stale_unsent_row_no_longer_blocks_the_balance(rig, monkeypatch):
     stuck = bridge_guard.record_pending(
         user_id="owner", quote=be._quote(request_id="0xcrashed"), amount_usd=1.0,
         balance_before=0, db_path=_db(rig))
-    execute_retry(_db(rig), "UPDATE bridges SET created_at=? WHERE id=?",
+    execute_retry(_db(rig), "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
                   (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, stuck))
     monkeypatch.setattr(be._Provider, "status", lambda self, rid: (
         ("pending", "waiting") if rid == "0xcrashed" else self._status))
@@ -84,7 +84,7 @@ def test_the_verb_tells_the_owner_about_a_row_it_closes_as_never_sent(rig, monke
     stuck = bridge_guard.record_pending(
         user_id="owner", quote=be._quote(request_id="0xcrashed"), amount_usd=1.0,
         balance_before=0, db_path=_db(rig))
-    execute_retry(_db(rig), "UPDATE bridges SET created_at=? WHERE id=?",
+    execute_retry(_db(rig), "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
                   (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, stuck))
     monkeypatch.setattr(be._Provider, "status", lambda self, rid: (
         ("pending", "waiting") if rid == "0xcrashed" else self._status))

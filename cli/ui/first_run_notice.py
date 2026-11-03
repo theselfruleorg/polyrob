@@ -21,6 +21,7 @@ problem) must degrade to silence, never block the CLI.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -91,11 +92,22 @@ def maybe_print_first_run_notice(renderer: Any) -> bool:
     try:
         autonomy_on, data_dir, config_path = _resolve_context()
         mp = marker_path(data_dir)
+        # 098 CL-08: claim the marker with an exclusive create BEFORE printing,
+        # so two starts on a new data home print the notice once. An unwritable
+        # dir stays fail-open: print (the notice re-shows next run).
         try:
-            if mp.exists():
-                return False
+            mp.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(mp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            with os.fdopen(fd, "w") as fh:
+                fh.write("polyrob first-run notice shown\n")
+        except FileExistsError:
+            return False
         except Exception:
-            return False  # can't check the marker → stay quiet rather than spam
+            try:
+                if mp.exists():
+                    return False
+            except Exception:
+                return False  # can't check the marker → stay quiet rather than spam
         lines = build_first_run_notice(
             autonomy_on=autonomy_on, data_dir=data_dir, config_path=config_path
         )
@@ -105,13 +117,6 @@ def maybe_print_first_run_notice(renderer: Any) -> bool:
             console.print(text)
         else:
             renderer.print_block(text)
-        # Best-effort marker write — a failure just means the notice re-shows next
-        # run, which is preferable to crashing the CLI on an unwritable data dir.
-        try:
-            mp.parent.mkdir(parents=True, exist_ok=True)
-            mp.write_text("polyrob first-run notice shown\n")
-        except Exception:
-            pass
         return True
     except Exception:
         return False

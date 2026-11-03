@@ -1458,13 +1458,9 @@ def list_pending_pref_changes(user_id: Optional[str], home_dir: Path | str,
             logger.warning("pref-change proposal unreadable (%s): %s", p, e)
             continue
         key = payload.get("key", p.stem)
-        if payload.get("op") == "remove_entry":
-            # Operation-based removal (P2 T4 review fix): show the OPERATION,
-            # not a raw list snapshot — the applied value is recomputed against
-            # the current list at promote time.
-            preview = f"remove {payload.get('entry')!r} from {key}"
-        else:
-            preview = f"{key} = {payload.get('value')!r}"
+        from core.pref_preview import pref_change_preview
+        preview = pref_change_preview(payload, key, lambda: display_effective(
+            key, user_id, home_dir, instance_id)[0])
         items.append({"id": key, "preview": preview, "chars": len(preview), "path": str(p)})
     return items
 

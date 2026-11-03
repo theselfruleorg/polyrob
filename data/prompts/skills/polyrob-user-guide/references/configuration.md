@@ -40,11 +40,11 @@ The credit sentinel (`CREDIT_SENTINEL_ENABLED`) stops autonomous runs after a re
 ## Areas
 
 - LLM / providers (44) — `references/config/llm-providers.md`
-- Memory (21) — `references/config/memory.md`
+- Memory (23) — `references/config/memory.md`
 - Skills (4) — `references/config/skills.md`
 - Autonomy & continuous-learning loops (59) — `references/config/autonomy-continuous-learning-loops.md`
 - Delegation / sub-agents (7) — `references/config/delegation-sub-agents.md`
-- Tools / code-exec / cron / approvals (127) — `references/config/tools-code-exec-cron-approvals.md`
+- Tools / code-exec / cron / approvals (128) — `references/config/tools-code-exec-cron-approvals.md`
 - API / server / sessions (36) — `references/config/api-server-sessions.md`
 - Identity / polyrob / local profile (85) — `references/config/identity-polyrob-local-profile.md`
 - Preferences (owner UX) (2) — `references/config/preferences-owner-ux.md`

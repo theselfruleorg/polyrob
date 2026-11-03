@@ -617,11 +617,18 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         else:
             logger.info("  ✓ Auth tables verified (created in database init)")
 
-        # SIWE Authenticator (FREE - replaces Privy!)
-        from modules.auth.siwe_auth import SIWEAuthenticator
-        siwe_auth = SIWEAuthenticator(db=db_manager)
-        container.register_service('siwe_authenticator', siwe_auth)
-        logger.info("  ✓ SIWE authenticator initialized (FREE!)")
+        # SIWE wallet sign-in needs the crypto extra (eth_account, web3).
+        # Without it, API keys still work and wallet sign-in answers "off".
+        try:
+            from modules.auth.siwe_auth import SIWEAuthenticator
+        except ImportError as exc:
+            logger.warning(
+                "  ⚠ Wallet sign-in (SIWE) off: %s — install polyrob[crypto] "
+                "to enable it; API keys still work", exc)
+        else:
+            siwe_auth = SIWEAuthenticator(db=db_manager)
+            container.register_service('siwe_authenticator', siwe_auth)
+            logger.info("  ✓ SIWE authenticator initialized")
 
         # Identity Mapper (updated for SIWE)
         from modules.auth.identity_mapper import IdentityMapper

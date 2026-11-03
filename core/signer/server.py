@@ -30,6 +30,7 @@ What the signer enforces, whatever the agent says:
 the ``[account_binding]`` table): an agent acts through an NFT's account only as the NFT's
 owner, which ``tx_guard``'s ``via_account`` pre-flight checks — here as in the agent.
 """
+import json
 import logging
 import os
 import socket
@@ -151,7 +152,7 @@ class SignerService:
         try:
             # Pause changes share the signing lock: once pause.set answers,
             # every later signing request observes the acknowledged pause.
-            if op in _MONEY_OPS or op == "pause.set":
+            if op in _MONEY_OPS or op in ("pause.set", "nonce.reconcile"):
                 with self._money_lock:
                     if op in _MONEY_OPS and self.store.paused():
                         raise _Refuse(protocol.PAUSED,
@@ -219,6 +220,60 @@ class SignerService:
         self.store.log_decision(op="pause.set", digest=None, allowed=True, peer_uid=peer_uid,
                                 reason="paused" if body["paused"] else "resumed")
         return {"paused": body["paused"]}
+
+    #: A nonce the chain has not taken is released only after this long (the
+    #: bytes may still be propagating to the node we ask).
+    RECONCILE_GRACE_SEC = 300
+
+    def _op_nonce_reconcile(self, body, peer_uid):
+        """098 CO-22 (ROOT): decide every ``unknown`` nonce on *chain* (and a
+        pre-098 ``reserved`` one with no tx, older than 1 h) from the chain:
+        the chain's pending nonce is past it, or its tx has a receipt → ``sent``;
+        the chain's pending nonce IS it and its age passed the grace → ``released``
+        (the next send may use it). Anything else is left and named."""
+        protocol.check_keys(body, required=("chain",))
+        chain = str(body["chain"])
+        self._chain_row(chain)
+        holder = self.wallet.operational_signer().address
+        onchain = self._pending_nonce(chain, holder)
+        if onchain is None:
+            raise _Refuse(protocol.INTERNAL, f"could not read the {chain} nonce of {holder}")
+        out = []
+        # 098 review (O-12): deposit addresses (the sweep) are decided too; a
+        # row of one carries its address.
+        others = [a for a in self.store.unresolved_addresses(chain) if a != holder.lower()]
+        for addr in [holder] + others:
+            next_n = onchain if addr == holder else self._safe_pending_nonce(chain, addr)
+            tag = {} if addr == holder else {"address": addr}
+            for row in self.store.unresolved_nonces(chain, addr):
+                n, age = int(row["nonce"]), self._now() - float(row["ts"])
+                if next_n is None:
+                    out.append({"nonce": n, "state": row["state"], "left": True,
+                                "why": "could not read the chain nonce", **tag})
+                    continue
+                if next_n > n or self._receipt_found(chain, row.get("tx_hash")):
+                    to = "sent"
+                elif next_n == n and age >= self.RECONCILE_GRACE_SEC:
+                    to = "released"
+                else:
+                    out.append({"nonce": n, "state": row["state"], "left": True,
+                                "why": f"chain next nonce {next_n}, age {int(age)}s", **tag})
+                    continue
+                moved = self.store.resolve_nonce(chain, addr, n, to)
+                out.append({"nonce": n, "state": to if moved else row["state"],
+                            "left": not moved, **tag})
+        self.store.log_decision(op="nonce.reconcile", digest=None, allowed=True,
+                                peer_uid=peer_uid, reason=json.dumps(out)[:2000])
+        return {"chain": chain, "chain_next_nonce": onchain, "nonces": out}
+
+    def _receipt_found(self, chain: str, tx_hash) -> bool:
+        if not tx_hash:
+            return False
+        try:
+            from core.wallet.broadcast import evm
+            return bool(evm._rpc_call(chain, "eth_getTransactionReceipt", [str(tx_hash)]))
+        except Exception:
+            return False
 
     # -- EVM ---------------------------------------------------------------
 
@@ -365,6 +420,13 @@ class SignerService:
                           f"it would park in the mempool")
         return None
 
+    def _safe_pending_nonce(self, chain: str, holder: str) -> Optional[int]:
+        try:
+            return self._pending_nonce(chain, holder)
+        except Exception:
+            logger.warning("signer: could not read the %s nonce of %s", chain, holder)
+            return None
+
     def _pending_nonce(self, chain: str, holder: str) -> Optional[int]:
         if self._pending_nonce_fn is not None:
             return self._pending_nonce_fn(chain, holder)
@@ -407,9 +469,12 @@ class SignerService:
                                     code=protocol.BROADCAST_FAILED, reason=str(exc), peer_uid=peer_uid)
             raise _Refuse(protocol.BROADCAST_FAILED, f"not sent: {exc}")
         except Exception as exc:
-            # Unknown outcome: the nonce stays claimed and the signer's journal
-            # interlock stands until reconciled on the box. It may have left, so
-            # an owner grant is spent: a retry needs a new approval.
+            # Unknown outcome: the nonce stays claimed (098 CO-22: `unknown`) and
+            # the signer's journal interlock stands until `nonce.reconcile` on
+            # the box. It may have left, so an owner grant is spent: a retry
+            # needs a new approval.
+            self.store.mark_nonce_unknown(chain, signer.address, nonce,
+                                          getattr(exc, "tx_hash", None))
             if grant is not None:
                 self.store.consume_grant(grant["id"])
             logger.exception("signer: send outcome unknown")
@@ -739,6 +804,14 @@ class SignerService:
         except BroadcastError as exc:
             self.store.release_nonce(chain, signer.address, nonce)
             raise _Refuse(protocol.BROADCAST_FAILED, f"not sent: {exc}")
+        except Exception as exc:
+            # 098 review (O-12): the same unknown-outcome rule as evm.send — the
+            # nonce is `unknown` (nonce.reconcile decides it), never left reserved.
+            self.store.mark_nonce_unknown(chain, signer.address, nonce,
+                                          getattr(exc, "tx_hash", None))
+            logger.exception("signer: deposit sweep outcome unknown")
+            raise _Refuse(protocol.INTERNAL, f"sweep outcome UNKNOWN ({type(exc).__name__}); "
+                                             f"deposit nonce {nonce} stays claimed")
         self.store.bind_nonce(chain, signer.address, nonce, tx_hash)
         # A sweep is not a treasury SPEND (the funds move INTO the treasury);
         # it never charges the caps, but it releases its journal row here.

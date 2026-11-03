@@ -69,3 +69,20 @@ def test_status_snapshot_names_unreadable_pending_contacts(tmp_path, monkeypatch
     text = " ".join(sec.lines) + " ".join(h.text for h in sec.health)
     assert "unreadable" in text
     assert "no pending approvals" not in " ".join(sec.lines)
+
+
+def test_pending_items_skip_thread_anchors(tmp_path):
+    """098 CO-12: a pending contact with thread anchors is ONE inbox item."""
+    from core.surfaces.correspondents import CorrespondentRegistry
+    from core.surfaces.owner_admin import pending_correspondent_items
+
+    reg = CorrespondentRegistry(str(tmp_path / "correspondents.db"))
+    assert reg.seed(surface="email", address="a@x.io", session_id="s1",
+                    user_id="u1", provenance="agent") == "pending"
+    for mid in ("<m1@x>", "<m2@x>"):
+        reg.seed_thread_anchor(surface="email", address="a@x.io", thread_id=mid,
+                               session_id="s1", user_id="u1")
+    assert sum(1 for r in reg.list(user_id="u1")
+               if r.get("provenance") == "thread") == 2
+    items = pending_correspondent_items(reg, "u1")
+    assert [i["id"] for i in items] == ["email:a@x.io"]

@@ -22,32 +22,79 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 CL-03: a failed start is a state the owner can see and retry, not a
+#: ``None`` that reads like "stopped by the owner".
+LIVE_AUTONOMY_MACHINE = StateMachine(
+    name="cli.live_autonomy",
+    states=frozenset({"stopped", "starting", "running", "stopping", "failed"}),
+    transitions={
+        "stopped": frozenset({"starting"}),
+        "starting": frozenset({"running", "failed"}),
+        "running": frozenset({"stopping"}),
+        "stopping": frozenset({"stopped"}),
+        "failed": frozenset({"starting", "stopping"}),
+    },
+    initial=frozenset({"stopped", "running"}),
+)
+
 
 class LiveAutonomy:
     """Owns the REPL's ``AutonomyHandles`` (or ``None`` when not running)."""
 
-    def __init__(self, starter: Callable[[], Any], handles: Any = None) -> None:
+    def __init__(self, starter: Callable[[], Any], handles: Any = None,
+                 on_stopped: Optional[Callable[[], Any]] = None) -> None:
         self._starter = starter
+        self._on_stopped = on_stopped
         self.handles = handles
+        self.state = "running" if handles is not None else "stopped"
+        self.last_error: Optional[str] = None
+
+    def _move(self, to: str) -> None:
+        LIVE_AUTONOMY_MACHINE.check(self.state, to, ctx={"what": "live autonomy"})
+        self.state = to
 
     @property
     def running(self) -> bool:
         return self.handles is not None
 
     def start(self) -> Any:
-        self.handles = self._starter()
+        self._move("starting")
+        try:
+            self.handles = self._starter()
+        except Exception as e:
+            self.handles = None
+            self.last_error = f"{type(e).__name__}: {e}"
+            self._move("failed")
+            raise
+        self.last_error = None
+        self._move("running")
         return self.handles
 
     async def stop(self) -> bool:
         """Stop the runtime; True when something was running."""
         h, self.handles = self.handles, None
+        if self.state in ("running", "failed"):
+            self._move("stopping")
+            self._move("stopped")
         if h is None:
             return False
         try:
             await h.stop()
         except Exception:
             logger.warning("autonomy stop failed (non-fatal)", exc_info=True)
+        if self._on_stopped is not None:
+            try:
+                self._on_stopped()  # 098 CL-02: the REPL's autonomy lane goes dark
+            except Exception:
+                logger.debug("autonomy on_stopped callback failed", exc_info=True)
         return True
+
+    def status_line(self) -> str:
+        if self.state == "failed":
+            return f"loops: failed to start ({self.last_error}) — /autonomy on retries"
+        return f"loops: {self.state}"
 
     async def restart(self) -> Any:
         await self.stop()
@@ -85,7 +132,8 @@ async def autonomy_switch(on: bool, *, is_global: bool = True) -> str:
     try:
         if on:
             h = live.handles
-            if h is not None and getattr(h, "autonomy_enabled", False):
+            if h is not None and live.state == "running" \
+                    and getattr(h, "autonomy_enabled", False):
                 lines.append("loops: already running")
             else:
                 await live.restart()
@@ -96,9 +144,12 @@ async def autonomy_switch(on: bool, *, is_global: bool = True) -> str:
                          else "loops: none were running")
             lines.append("for a pause that every process honours, use /pause")
     except Exception as e:
-        lines.append(f"loops: could not {'start' if on else 'stop'} live "
-                     f"({type(e).__name__}: {e}) — the value applies at the next start")
+        if live.state == "failed":
+            lines.append(live.status_line())
+        else:
+            lines.append(f"loops: could not {'start' if on else 'stop'} live "
+                         f"({type(e).__name__}: {e}) — the value applies at the next start")
     return "\n".join(lines)
 
 
-__all__ = ["LiveAutonomy", "autonomy_switch", "bind", "current"]
+__all__ = ["LIVE_AUTONOMY_MACHINE", "LiveAutonomy", "autonomy_switch", "bind", "current"]

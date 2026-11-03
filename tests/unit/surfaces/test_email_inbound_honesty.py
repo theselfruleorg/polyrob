@@ -116,6 +116,8 @@ def _harness(tmp_path, fetcher, *, router):
     h.surface = None
     h._stop = False
     h._attempts = {}
+    from surfaces.email.inbound_state import InboundState
+    h.inbound_state = InboundState(os.path.join(str(tmp_path), "dedup.db"))
     h._route = router
     return h
 

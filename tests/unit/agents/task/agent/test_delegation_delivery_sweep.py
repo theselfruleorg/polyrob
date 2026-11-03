@@ -27,6 +27,8 @@ funnel through).
 """
 import asyncio
 
+from core.state.proc import boot_id
+
 import pytest
 
 from agents.task.agent import autonomy_state
@@ -322,7 +324,7 @@ def test_running_row_still_recovered_as_interrupted_alongside_completed_pass(sto
     pass touching a different row."""
     store.record_dispatched(session_id="s1", user_id="u1", delegation_id="deleg_0001",
                             goal="still going", profile="p", parent_agent_id=None,
-                            dispatched_at=1.0)
+                            dispatched_at=1.0, owner="999999|gone|" + boot_id())
     store.record_dispatched(session_id="s1", user_id="u1", delegation_id="deleg_0002",
                             goal="already done", profile="p", parent_agent_id=None,
                             dispatched_at=1.0)

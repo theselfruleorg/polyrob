@@ -81,7 +81,7 @@ def test_every_cli_command_module_imports_with_all_extras_blocked():
         if p.stem != "__init__"
     )
     blocked = ("playwright", "fastapi", "uvicorn", "aiogram", "web3",
-               "sentence_transformers", "tweepy", "faster_whisper")
+               "sentence_transformers", "requests_oauthlib", "faster_whisper")
     code = _BLOCKER.format(blocked=set(blocked), module="importlib") + "".join(
         f"\nimportlib.import_module({m!r})" for m in modules
     ) + "\nprint('ALL_CLI_OK')"
@@ -101,7 +101,7 @@ def test_the_tool_tier_and_packs_import_with_crypto_and_httpx_extras_blocked():
     httpx is now a base dependency; the tool tier must import without the
     [crypto] stack."""
     blocked = ("playwright", "fastapi", "uvicorn", "aiogram", "web3", "eth_utils",
-               "eth_account", "solders", "solana", "tweepy", "faster_whisper")
+               "eth_account", "solders", "solana", "requests_oauthlib", "faster_whisper")
     proc = _import_with_blocked("tools", blocked)
     assert proc.returncode == 0 and "IMPORT_OK" in proc.stdout, proc.stderr[-2000:]
     proc = _import_with_blocked("polyrob_discovery.perplexity", blocked)

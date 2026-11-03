@@ -53,8 +53,13 @@ snapshots `<data_home>/skills` first, and `polyrob update --rollback` restores i
 (data only; the code is not reverted — see
 [upgrading.md](upgrading.md#the-safety-net)).
 
-`polyrob skills list` shows every builtin. They cover coding, research, documents,
-email, the money rail and its safety checks, and skill authoring. Two of them run
+`polyrob skills list` shows every builtin. They cover coding, the browser, research,
+documents and presentations, files and data, email, task planning, the money rail and
+its safety checks, trading playbooks (mandate, sizing, execution, exits, DCA, the
+position journal), DeFi bridges and liquidity, token launch, self-deploy, secret
+handling, and skill authoring and review. Skills for X, discovery (AnySite, people and
+companies) and the Polymarket and Hyperliquid venues ship in first-party packs: see
+[packs.md](packs.md#skills-in-the-first-party-packs) for the list. Two builtins run
 a whole procedure rather than add knowledge:
 
 - **`incident-response`** — a live incident: impact first, stabilise before root
@@ -231,7 +236,7 @@ new version goes active (official or trusted tap) or waits in quarantine for
 ## Managing skills
 
 There are **two command groups**, and `polyrob --help` prints them as one row,
-`skills (alias: skill)`:
+`skills (related: skill)`:
 
 - **`polyrob skills`** — the read/authoring surface: `list`, `validate`, `export`.
 - **`polyrob skill`** — the install pipeline: `install`, `approve`, `list`, `info`,
@@ -240,7 +245,7 @@ There are **two command groups**, and `polyrob --help` prints them as one row,
 Both names always work. Run either with `--help`, or see [cli.md](cli.md) for the
 full command reference.
 
-Inside the interactive REPL (`polyrob chat` / `polyrob run`) the same operations are
+Inside the interactive REPL (`polyrob chat`, or bare `polyrob`) the same operations are
 available as slash commands:
 
 ```

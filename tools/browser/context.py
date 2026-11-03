@@ -193,6 +193,7 @@ class BrowserContext:
 
 		# Initialize these as None - they'll be set up when needed
 		self.session: BrowserSession | None = None
+		self._session_lock = asyncio.Lock()  # 098 TS-06: one initialisation per context
 
 	async def close(self):
 		"""Close the browser instance and properly clean up all resources"""
@@ -528,7 +529,9 @@ class BrowserContext:
 			self.logger.warning("Browser session lost (browser restarted); re-initializing")
 			self.session = None
 		if self.session is None:
-			return await self._initialize_session()
+			async with self._session_lock:
+				if self.session is None:  # a concurrent caller may have won
+					return await self._initialize_session()
 		return self.session
 
 	def _session_dead(self) -> bool:
@@ -1746,20 +1749,6 @@ class BrowserContext:
 		pixels_above = scroll_y
 		pixels_below = total_height - (scroll_y + viewport_height)
 		return pixels_above, pixels_below
-
-	async def reset_context(self):
-		"""Reset the browser session
-		Call this when you don't want to kill the context but just kill the state
-		"""
-		# close all tabs and clear cached state
-		session = await self.get_session()
-
-		pages = session.context.pages
-		for page in pages:
-			await page.close()
-
-		session.cached_state = self._get_initial_state()
-		session.current_page = await session.context.new_page()
 
 	def _get_initial_state(self, page: Optional[Page] = None) -> BrowserState:
 		"""Get the initial state of the browser

@@ -47,11 +47,22 @@ def env(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _card_sent(home, uid="alice"):
+    """098 CO-19: the owner was sent the card — a decision binds to its hash."""
+    from core import self_evolution as _se
+    from core.instance import resolve_instance_id
+    iid = resolve_instance_id()
+    _se.save_notified_state(uid, _se.pending_notify_state(
+        _se.list_pending(uid, home_dir=home, instance_id=iid)), home_dir=home,
+        instance_id=iid)
+
+
 def _seed_pending_self(home, uid="alice"):
     from core.self_context_writer import PROVENANCE_AGENT, SelfContextWriter
     SelfContextWriter(home).propose(  # default instance id, matching load_self_doc
         "Learned: escalate blockers to the owner proactively.",
         user_id=uid, created_by=PROVENANCE_AGENT, pending=True)
+    _card_sent(home, uid)  # 098 CO-19: the notice carried this draft
 
 
 def test_new_verbs_are_routable_commands():
@@ -64,7 +75,7 @@ async def test_pending_lists_for_owner(env):
     _seed_pending_self(env)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/pending", "/pending"))
     assert "escalate blockers" in out
-    assert "self_context" in out
+    assert "Identity note" in out  # 096 W3: the notice shape, not kind:id
 
 
 @pytest.mark.asyncio

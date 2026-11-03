@@ -1499,6 +1499,8 @@ def build_default_registry() -> CommandRegistry:
     # than grow (the same call h_help.py and h_token.py already made).
     from cli.ui.commands.h_inbox import register as _register_inbox
     _register_inbox(reg, Command)
+    from cli.ui.commands.h_reads import register as _register_reads  # 096 W5
+    _register_reads(reg, Command)
     reg.register(Command(
         "pending", _h_pending,
         "Review the agent's pending self-evolution proposals (show/approve/reject)",

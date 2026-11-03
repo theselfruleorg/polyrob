@@ -290,6 +290,10 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
         "pending_count": inbound["pending_invoices"],
         "refund_due_usd": inbound.get("refund_due_usd", 0.0),
         "refund_due_count": inbound.get("refund_due_count", 0),
+        # 098 MO-21: recorded as paid with no on-chain proof — never in income/net.
+        "unproven_usd": inbound.pop("unproven_usd", 0.0),
+        "unproven_count": inbound.pop("unproven_count", 0),
+        "unproven_auth_used_count": inbound.pop("unproven_auth_used_count", 0),
         "balance_usd": None,
         "net_usd": round(income_usd - wallet["wallet_spend_usd"], 6),
         # H14b: availability must reflect BOTH legs this block depends on, not
@@ -376,6 +380,11 @@ def format_ledger(ledger: Dict[str, Any]) -> str:
     if t.get("refund_due_count"):
         lines.append(f"    ⚠ refund owed: ${t['refund_due_usd']:.4f} across "
                      f"{t['refund_due_count']} settled payment(s) we did not deliver on")
+    if t.get("unproven_count"):
+        used = t.get("unproven_auth_used_count") or 0
+        lines.append(f"    unproven: ${t['unproven_usd']:.4f} across {t['unproven_count']} "
+                     "payment(s) with no on-chain tx (not income)"
+                     + (f"; {used} with the payer's authorization used on chain" if used else ""))
     if t["balance_usd"] is not None:
         lines.append(f"    balance:  ${t['balance_usd']:.4f}")
     lines += ["  Runtime cost (owner-funded compute)",

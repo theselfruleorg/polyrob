@@ -58,8 +58,10 @@ from core.config_policy.autonomy_posture import (  # noqa: F401
     autonomy_enabled,
     autonomy_posture,
 )
+# 098 CO-09: the frozen VALUES (_COMPUTE_POSTURE_FROZEN, _FROZEN_*) are not
+# re-exported: an import-time copy here was never updated by a refreeze. Read
+# them through the accessors; patch them on their owning module.
 from core.config_policy.compute_posture import (  # noqa: F401
-    _COMPUTE_POSTURE_FROZEN,
     _refreeze_compute_posture,
     _refreeze_compute_posture_for_tests,
     _resolve_compute_posture,
@@ -67,9 +69,6 @@ from core.config_policy.compute_posture import (  # noqa: F401
     compute_posture_allows,
 )
 from core.config_policy.payment_policy import (  # noqa: F401
-    _FROZEN_APPROVAL_GRANT_TTL_HOURS,
-    _FROZEN_PAYMENT_APPROVAL_MODE,
-    _FROZEN_PAYMENT_APPROVAL_TIMEOUT_SEC,
     _refreeze_payment_approval_flags,
     _refreeze_payment_approval_flags_for_tests,
     _snapshot_approval_grant_ttl_hours,

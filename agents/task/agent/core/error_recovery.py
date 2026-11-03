@@ -26,6 +26,7 @@ except ImportError:  # google-api-core not installed
 # AgentError exposes format_error(), which _handle_step_error uses at its first line.
 # core.exceptions.AgentError has no such method (importing it there crashes on any error).
 from agents.task.agent.views import ActionResult, AgentError
+from agents.task.runtime.stop_reason import StopReason
 from agents.task.telemetry.views import ProviderFailureEvent, ProviderFallbackSuccessEvent
 from agents.task.utils import time_execution_async
 from core.credit_sentinel import looks_like_credit_death
@@ -190,6 +191,10 @@ class ErrorRecoveryMixin:
 		error_str_lower = str(error).lower()
 		error_type = type(error).__name__
 
+		# 098 MO-08: a billed call that raised keeps its credit hold; the admin sees it now.
+		from core.billing_context import record_orphaned_holds
+		await record_orphaned_holds()
+
 		# === CONTEXT-LENGTH OVERFLOW - COMPACT, DON'T FALLBACK (CO-F6) ===
 		# A context-overflow needs a SMALLER prompt, not a different provider — retrying
 		# on a fallback provider with the same oversized history just overflows again.
@@ -282,7 +287,7 @@ class ErrorRecoveryMixin:
 				self.logger.error("❌ Billing failover found no alternative provider; halting")
 			self.logger.error(f"❌ PERMANENT ERROR - Session halted: {error}")
 			self.state.consecutive_failures = self.max_failures
-			self.state.stopped = True
+			self.state.request_stop(StopReason.ERROR)
 			return [ActionResult(
 				error=f"PERMANENT ERROR: {str(error)[:400]}. Session halted. Please check API configuration.",
 				include_in_memory=True
@@ -308,7 +313,7 @@ class ErrorRecoveryMixin:
 		if isinstance(error, LLMProviderExhaustedError):
 			self.logger.error(f"❌ ALL LLM PROVIDERS EXHAUSTED: {error}")
 			self.state.consecutive_failures = self.max_failures
-			self.state.stopped = True
+			self.state.request_stop(StopReason.ERROR)
 			providers = getattr(error, 'providers_tried', [])
 			return [ActionResult(
 				error=f"All LLM providers failed. Tried: {providers}. Session halted.",
@@ -359,7 +364,7 @@ class ErrorRecoveryMixin:
 					return []  # Empty result = continue execution
 				else:
 					self.logger.error(f"❌ Circuit breaker: No fallback available, halting")
-					self.state.stopped = True
+					self.state.request_stop(StopReason.ERROR)
 					self.state.consecutive_failures = self.max_failures
 					# Raise typed exception for proper handling upstream
 					raise LLMProviderExhaustedError(
@@ -420,7 +425,7 @@ class ErrorRecoveryMixin:
 			if 'quota' in error_str_lower or 'billing' in error_str_lower:
 				self.logger.error(f"❌ CRITICAL: Rate limit due to quota/billing issue")
 				self.state.consecutive_failures = self.max_failures
-				self.state.stopped = True
+				self.state.request_stop(StopReason.ERROR)
 				return [ActionResult(
 					error=f"CRITICAL: {str(error)[:400]}. Session halted due to quota/billing issue.",
 					include_in_memory=True

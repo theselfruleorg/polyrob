@@ -234,7 +234,7 @@ def test_a_reused_request_id_raises_instead_of_replacing_the_row(db):
 
 def _age(db, bid, seconds):
     from core.sqlite_util import execute_retry
-    execute_retry(db, "UPDATE bridges SET created_at=? WHERE id=?",
+    execute_retry(db, "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
                   (time.time() - seconds, bid))
 
 

@@ -19,8 +19,28 @@ import uuid
 from typing import Iterable, List, Optional
 
 from core.sqlite_util import wal_connect, execute_retry
+from core.state.machine import StateMachine
+from core.state.sql import cas_transition
 
 logger = logging.getLogger(__name__)
+
+#: 098 CO-15: the row machine. Every exit from ``inflight`` is ONE guarded
+#: write on ``state='inflight' AND claim_token=<the claimer's token>``, so a
+#: worker whose lease was reclaimed cannot move a row another worker owns (or
+#: already delivered) back to ``pending``.
+OUTBOUND = StateMachine(
+    "surfaces.outbound",
+    states={"pending", "inflight", "delivered", "dead"},
+    # pending -> delivered: a send that SUCCEEDED after its lease was reclaimed,
+    # while no other worker has claimed the row yet (claim_token IS NULL) —
+    # closing it then is what prevents the second copy.
+    transitions={"pending": {"inflight", "dead", "delivered"},
+                 "inflight": {"delivered", "pending", "dead"}},
+    terminal={"delivered", "dead"},
+    initial={"pending"},
+)
+
+_UNSET = object()
 
 #: How long a claimed row may stay ``inflight`` without a renewed lease before
 #: another process may return it to ``pending`` (OB6). The claimer renews before
@@ -65,6 +85,10 @@ CREATE TABLE IF NOT EXISTS outbound_queue (
 class OutboundDeliveryQueue:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        #: row id -> the lease token THIS instance claimed it with (CO-15). An
+        #: exit call without an explicit ``token`` uses it, so the dispatcher's
+        #: ``mark_delivered(row_id)`` is already a CAS on its own lease.
+        self._claims: dict = {}
         conn = wal_connect(db_path)
         try:
             conn.execute(_SCHEMA)
@@ -157,6 +181,8 @@ class OutboundDeliveryQueue:
             )
             if n == 1:
                 d = dict(r); d["state"] = "inflight"; d["claim_token"] = token
+                if token is not None:
+                    self._claims[r["id"]] = token
                 claimed.append(d)
         return claimed
 
@@ -173,31 +199,64 @@ class OutboundDeliveryQueue:
         )
         return n == 1
 
-    def mark_delivered(self, row_id: int) -> None:
-        execute_retry(self.db_path,
-                      "UPDATE outbound_queue SET state='delivered', updated_at=? WHERE id=?",
-                      (_time.time(), row_id))
+    def _exit(self, row_id: int, to: str, token, set_cols: dict) -> bool:
+        """``inflight -> to`` as ONE guarded write on this claimer's lease.
+        False (``outbound.lease_lost``) when the row was reclaimed, finished or
+        re-claimed by another worker: the caller's view is stale."""
+        tok = self._claims.get(row_id) if token is _UNSET else token
+        set_cols = dict(set_cols, updated_at=_time.time())
+        extra, params = ("claim_token=?", (tok,)) if tok is not None else ("", ())
+        ok = cas_transition(self.db_path, "outbound_queue", key="id=?", key_params=(row_id,),
+                            machine=OUTBOUND, to=to, from_states=("inflight",),
+                            set_cols=set_cols, where_extra=extra, where_params=params,
+                            status_col="state")
+        if ok:
+            self._claims.pop(row_id, None)
+        else:
+            # The token stays remembered: a second exit call for this row must
+            # stay a CAS on it, never fall back to a tokenless write.
+            logger.warning("outbound.lease_lost row=%s -> %s (reclaimed or finished elsewhere)",
+                           row_id, to)
+        return ok
+
+    def mark_delivered(self, row_id: int, *, token=_UNSET) -> bool:
+        if self._exit(row_id, "delivered", token, {}):
+            return True
+        # The message WAS sent. If the row was reclaimed but nobody re-claimed
+        # it yet, close it now instead of letting the next tick send it again.
+        # A row another worker holds (or finished) is left alone.
+        ok = cas_transition(self.db_path, "outbound_queue", key="id=?",
+                            key_params=(row_id,), machine=OUTBOUND, to="delivered",
+                            from_states=("pending",), set_cols={"updated_at": _time.time()},
+                            where_extra="claim_token IS NULL", status_col="state")
+        if ok:
+            self._claims.pop(row_id, None)
+        return ok
 
     def reschedule(self, row_id: int, *, next_attempt_at: float, attempts: int,
-                   error: Optional[str] = None) -> None:
-        execute_retry(
-            self.db_path,
-            """UPDATE outbound_queue SET state='pending', attempts=?, next_attempt_at=?,
-                 last_error=?, updated_at=? WHERE id=?""",
-            (attempts, next_attempt_at, error, _time.time(), row_id),
-        )
+                   error: Optional[str] = None, token=_UNSET) -> bool:
+        return self._exit(row_id, "pending", token,
+                          {"attempts": attempts, "next_attempt_at": next_attempt_at,
+                           "last_error": error, "claim_token": None})
 
-    def set_payload(self, row_id: int, payload: str) -> None:
+    def set_payload(self, row_id: int, payload: str, *, token=_UNSET) -> bool:
         """Replace a row's text with what is still undelivered (OB7: a partial
-        send resumes from the next chunk instead of re-sending the first)."""
-        execute_retry(self.db_path,
-                      "UPDATE outbound_queue SET payload=?, updated_at=? WHERE id=?",
-                      (payload, _time.time(), row_id))
+        send resumes from the next chunk instead of re-sending the first).
+        CO-15: only while THIS claimer still holds the inflight lease."""
+        tok = self._claims.get(row_id) if token is _UNSET else token
+        sql = ("UPDATE outbound_queue SET payload=?, updated_at=? "
+               "WHERE id=? AND state='inflight'")
+        params: tuple = (payload, _time.time(), row_id)
+        if tok is not None:
+            sql += " AND claim_token=?"
+            params += (tok,)
+        ok = execute_retry(self.db_path, sql, params) == 1
+        if not ok:
+            logger.warning("outbound.lease_lost row=%s set_payload refused", row_id)
+        return ok
 
-    def dead_letter(self, row_id: int, error: str) -> None:
-        execute_retry(self.db_path,
-                      "UPDATE outbound_queue SET state='dead', last_error=?, updated_at=? WHERE id=?",
-                      (error, _time.time(), row_id))
+    def dead_letter(self, row_id: int, error: str, *, token=_UNSET) -> bool:
+        return self._exit(row_id, "dead", token, {"last_error": error})
 
     def counts(self) -> dict:
         rows = execute_retry(self.db_path,

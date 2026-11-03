@@ -6,7 +6,7 @@ Provides RESTful endpoints for session management and user messaging.
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
 from pydantic import BaseModel, Field
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy.goal_flags import interactive_max_steps
 import logging
 import os
 import time
@@ -72,8 +72,8 @@ def clean_session_id_at_entry(session_id: str) -> str:
 #: told a caller a live session was over.
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
-#: Statuses a session can be RESUMED from by sending it a new message.
-RESUMABLE_SESSION_STATUSES = frozenset({"completed", "suspended", "failed"})
+#: Statuses a session can be RESUMED from by a new message (098 Q1: also cancelled).
+RESUMABLE_SESSION_STATUSES = frozenset({"completed", "suspended", "failed", "cancelled"})
 
 
 def _guard_session_route(agent, session_id: str) -> None:
@@ -421,7 +421,7 @@ async def send_user_message(
         # session from disk and delivers the message so the resume actually processes it.
 
         # If session is in a resumable state, restart execution to process the message
-        if status in ["completed", "resumed", "suspended", "failed", "error"]:
+        if status in RESUMABLE_SESSION_STATUSES | {"resumed", "error"}:
             import asyncio
             user_id_from_session = session_info.get('user_id')
 
@@ -774,7 +774,7 @@ async def get_session_status(
         # accepts a message while it is live, or while it is in a state the
         # agent can be RESUMED from; a cancelled session accepts nothing.
         can_cancel = (user_status == "active")
-        can_message = internal_status not in {"cancelled"}
+        can_message = True  # 098 Q1: a cancelled session resumes on a message too
         
         # Build response with user-facing status
         response_data = {
@@ -1306,7 +1306,7 @@ async def create_session(
                 session_config.llm.use_vision = False  # Conservative default for unknown models
                 logger.warning(f"Model '{session_config.llm.model}' not in registry - defaulting to no vision")
 
-        session_config.limits.max_steps = request_body.get("max_steps", INTERACTIVE_MAX_STEPS)
+        session_config.limits.max_steps = request_body.get("max_steps", interactive_max_steps())
         from agents.task.tool_defaults import owner_seat_tool_ids  # 081 WS-3.1: the console = an owner seat
         from api.tenant_tools import tenant_toolset  # 085 A6: a non-owner tenant carries no money tool
         session_config.tools = tenant_toolset(request_body.get("tools", owner_seat_tool_ids(user_id) or ["browser", "filesystem"]), user_id)
@@ -1488,7 +1488,7 @@ async def get_resource_metrics(agent = Depends(get_task_agent)):
             browser_metrics = {
                 "contexts_in_use": len(browser_manager.contexts_in_use),
                 "max_contexts": browser_manager.browser_config.max_contexts,
-                "contexts_in_pool": len(browser_manager.context_pool),
+                "contexts_in_pool": 0,  # 098 TS-06: contexts are never pooled
                 "wait_queue_depth": len(browser_manager._wait_queue),
                 "utilization_pct": (len(browser_manager.contexts_in_use) / browser_manager.browser_config.max_contexts * 100) if browser_manager.browser_config.max_contexts > 0 else 0
             }

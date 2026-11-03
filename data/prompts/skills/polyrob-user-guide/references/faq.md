@@ -6,7 +6,8 @@
 Short answers to the questions owners ask most. Each answer names the verb to
 send or the page that holds the detail. It does not repeat a default value,
 because a default can change. For the live value, send `/status` in chat, or
-run `polyrob doctor --flags` in a terminal. `/help` lists every chat verb.
+run `polyrob doctor --flags` in a terminal. `/help` lists every chat verb;
+[chat-commands.md](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/chat-commands.md) lists them all.
 
 The second part, [Troubleshooting](#troubleshooting), uses the exact text your
 agent shows when it refuses something or stops. Paste the text you see and find
@@ -21,7 +22,7 @@ Run `polyrob setup` in a terminal. The wizard makes you the owner and connects
 an AI provider and the chat apps you want. See [getting-started.md](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/getting-started.md).
 
 **Where do I put my API key?**
-Run `polyrob auth add` in a terminal, or send `/auth` in the terminal chat.
+Run `polyrob auth add <provider>` in a terminal, or send `/auth` in the terminal chat.
 `polyrob config path` shows which env file your agent reads. See
 [configuration.md](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/configuration.md#keys).
 
@@ -298,13 +299,13 @@ recent ones.
 
 `approval:refused` — who can act: you; what changes it: {lever}; a retry can help: no.
 
-#### approval denied for '{action}': this turn may not ask the owner (not the owner's own turn); only the owner, from his own chat, can run it
+#### approval denied for '{action}': this turn may not ask the owner (not the owner's own turn); only the owner, from their own chat, can run it
 
-`approval_not_created:forged` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+`approval_not_created:forged` — who can act: you; what changes it: the owner runs it from their chat; a retry can help: no.
 
-#### approval denied for '{action}': this turn carries a correspondent's message, so it may not ask the owner; only the owner, from his own chat, can run it
+#### approval denied for '{action}': this turn carries a correspondent's message, so it may not ask the owner; only the owner, from their own chat, can run it
 
-`approval_not_created:tainted` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+`approval_not_created:tainted` — who can act: you; what changes it: the owner runs it from their chat; a retry can help: no.
 
 #### approval denied for '{action}': the approvals store could not be read, so the owner was not asked; retry later
 
@@ -316,7 +317,7 @@ recent ones.
 
 #### approval denied for '{action}': a money verb needs the bound owner identity and this caller is not the owner
 
-`approval_not_created:money_owner` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+`approval_not_created:money_owner` — who can act: you; what changes it: the owner runs it from their chat; a retry can help: no.
 
 #### approval denied for '{action}': another approval prompt is already open; it needs an answer first, then retry
 
@@ -330,17 +331,17 @@ recent ones.
 
 `approval_not_created:closed` — who can act: the agent; what changes it: retry to ask again; a retry can help: yes.
 
-#### '{action}' is not available in a group chat: this session speaks into a public room and can only read and reply. Only the owner, from his private chat with me, can do it
+#### '{action}' is not available in a group chat: this session speaks into a public room and can only read and reply. Only the owner, from their private chat with me, can do it
 
-`seat:room` — who can act: you; what changes it: the owner runs it from his private chat; a retry can help: no.
+`seat:room` — who can act: you; what changes it: the owner runs it from their private chat; a retry can help: no.
 
 #### '{action}' is blocked: the latest input is untrusted correspondent DATA, so no high-impact action runs on this turn; it needs the owner's own message
 
-`seat:correspondent` — who can act: you; what changes it: the owner's own message (or he runs it from his chat); a retry can help: no.
+`seat:correspondent` — who can act: you; what changes it: the owner's own message (or they run it from their chat); a retry can help: no.
 
 #### refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an autonomous run this instance does not admit) cannot move funds
 
-`money:forged_text` — who can act: you; what changes it: the owner runs it from his chat; a retry can help: no.
+`money:forged_text` — who can act: you; what changes it: the owner runs it from their chat; a retry can help: no.
 
 #### refused: a forged/autonomous turn — this autonomous run cannot move funds because unattended money is not armed on this instance
 
@@ -348,7 +349,7 @@ recent ones.
 
 #### refused by the money gate: {why}
 
-`money:gate` — who can act: you; what changes it: the owner's caps or his one-shot approval; a retry can help: no.
+`money:gate` — who can act: you; what changes it: the owner's caps or their one-shot approval; a retry can help: no.
 
 #### '{action}' is on the tool denylist
 

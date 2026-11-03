@@ -20,6 +20,12 @@
           ],
           "type": "string"
         },
+        "reason": {
+          "default": null,
+          "description": "set only: one sentence for the owner — why this change (shown when a guarded key waits for review)",
+          "nullable": true,
+          "type": "string"
+        },
         "value": {
           "default": null,
           "description": "set only: new value (coerced per the key's type)",

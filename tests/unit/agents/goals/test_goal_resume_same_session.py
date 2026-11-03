@@ -292,3 +292,17 @@ async def test_a_resume_with_the_same_cap_writes_nothing():
         request={"task": "carry on", "max_steps": 150, "resume_session_id": "sess-15"},
         autonomous=True, goal_id="g1", creator="goal")
     assert updates == []
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_goal_session_is_not_resumed_the_goal_starts_fresh():
+    """098 review O-01: a cancel holds until a person writes; a goal still on
+    the board runs again in a fresh session, never in the cancelled one."""
+    agent = _ResumingAgent()
+    agent.session_manager = SimpleNamespace(
+        get_session_info=lambda sid: {"user_id": "alice", "status": "cancelled"})
+    out = await run_task_to_outcome(
+        agent, user_id="alice",
+        request={"task": "carry on", "resume_session_id": "sess-15"},
+        autonomous=True, goal_id="g1", creator="goal")
+    assert out.session_id == "cold-session" and agent.ran == ["cold-session"]

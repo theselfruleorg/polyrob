@@ -55,7 +55,6 @@ def relocate_legacy_sidecars() -> List[str]:
     global _DONE
     if _DONE:
         return []
-    _DONE = True
 
     from core.runtime_paths import resolve_data_home, resolve_session_data_root
 
@@ -64,7 +63,10 @@ def relocate_legacy_sidecars() -> List[str]:
         home = resolve_data_home()
         session_root = Path(resolve_session_data_root())
     except Exception:
-        return moved
+        return moved  # 098 CO-32: unresolvable now — the next call tries again
+    # Set once the paths resolve (S9): per-file failures below are fail-open
+    # by design and still count as done.
+    _DONE = True
     if home.resolve() == session_root.resolve():
         return moved  # nothing to do on a layout where the axes coincide
 

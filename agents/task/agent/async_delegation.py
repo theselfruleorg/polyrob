@@ -66,6 +66,8 @@ class DelegationRecord:
     dispatched_at: float = 0.0
     completed_at: Optional[float] = None
     task: Optional[asyncio.Task] = field(default=None, repr=False)
+    #: AG-09: the coroutine body was entered (its finally owns the durable write).
+    started: bool = False
 
 
 # A deliver callback: (DelegationRecord, result_text) -> awaitable. Injected so the
@@ -110,12 +112,46 @@ class AsyncDelegationRegistry:
         n = 0
         for rec in self._records.values():
             t = rec.task
-            if rec.status == "running" and t is not None and not t.done():
+            if t is None or t.done():
+                continue
+            if rec.status == "running":
                 t.cancel()
                 rec.status = "cancelled"
                 n += 1
                 logger.warning("async delegation %s cancelled: %s", rec.delegation_id, reason)
+                # AG-09: the durable row moves now — not only from the
+                # coroutine's finally, which never runs for a task cancelled
+                # before its first step.
+                self._durable_cancel(rec.delegation_id)
+            else:
+                # Finished, still parking its result: the owner stopped it, so
+                # the boot sweep must not redeliver it either.
+                t.cancel()
+                self._stamp_not_redelivered(rec.delegation_id)
         return n
+
+    def _durable_cancel(self, delegation_id: str) -> None:
+        """``running -> cancelled`` in the store (CAS). A miss means the row is
+        already terminal: stamp it so a later boot does not redeliver it."""
+        if self._store is None:
+            return
+        try:
+            if not self._store.record_terminal(
+                    self._session_id, delegation_id, status="cancelled",
+                    completed_at=self._clock(), only_if_running=True):
+                self._stamp_not_redelivered(delegation_id)
+        except Exception:
+            logger.warning("delegation %s: durable cancel failed", delegation_id,
+                           exc_info=True)
+
+    def _stamp_not_redelivered(self, delegation_id: str) -> None:
+        if self._store is None:
+            return
+        try:
+            self._store.mark_delivered(self._session_id, delegation_id, self._clock())
+        except Exception:
+            logger.debug("delegation %s: delivered stamp failed", delegation_id,
+                         exc_info=True)
 
     def _next_id(self) -> str:
         self._counter += 1
@@ -178,6 +214,11 @@ class AsyncDelegationRegistry:
                     parent_agent_id=parent_agent_id, caller_is_sub=caller_is_sub,
                 )
             )
+            # AG-09: a task cancelled before its first step never enters the
+            # coroutine body — its durable row is finalized here instead.
+            rec.task.add_done_callback(
+                lambda t, _rec=rec: self._durable_cancel(_rec.delegation_id)
+                if t.cancelled() and not _rec.started else None)
             self._prune_completed()
         self._emit_delegation_event('dispatched', delegation_id, goal=goal)
         return {"status": "dispatched", "delegation_id": delegation_id}
@@ -226,6 +267,7 @@ class AsyncDelegationRegistry:
         caller_is_sub: bool,
     ) -> None:
         """Run the child to completion and deliver exactly one completion block."""
+        rec.started = True
         status = "completed"
         result_text = ""
         stop_note = ""

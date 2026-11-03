@@ -77,6 +77,13 @@ async def tick(container: Any = None, *, db_path: Optional[str] = None,
     from core.wallet import bridge_guard
 
     result = TickResult()
+    # 098 TS-23: a money tx booked before its receipt was known gets its final
+    # receipt state here (reads only; a revert leaves the daily cap).
+    try:
+        from core.wallet.receipt_resolver import resolve_pending_receipts
+        await resolve_pending_receipts()
+    except Exception:
+        logger.warning("bridge watcher: receipt resolver failed", exc_info=True)
     if provider is None:
         # The seam, NOT the provider: `core` may not import `tools`. See
         # core/wallet/bridge_status.py for why the degraded case is safe.
@@ -118,6 +125,8 @@ async def tick(container: Any = None, *, db_path: Optional[str] = None,
     notifier = notify or _default_notify
 
     for row in rows:
+        if bridge_guard.driver_is_live(row, now=now()):
+            continue  # 098 CO-23: the verb still drives this row (its own wait)
         result.checked += 1
         try:
             await _reconcile(row, container=container, provider=provider,
@@ -192,9 +201,10 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
                       f"+{delta} raw on {chain_name}")
     if arrived_by is not None:
         detail = f"arrived on a later pass: {arrived_by[0]} (floor {min_out})"
-        bridge_guard.settle(bid, state=bridge_guard.STATE_ARRIVED, detail=detail,
-                            balance_after=None if after is None else int(after),
-                            db_path=db_path)
+        if not bridge_guard.settle(bid, state=bridge_guard.STATE_ARRIVED, detail=detail,
+                                   balance_after=None if after is None else int(after),
+                                   db_path=db_path):
+            return  # 098 CO-23: another driver settled it first; it told the owner
         result.arrived += 1
         await notify(container, user_id, tx_notify.TxNotice(
             verb="bridge", route=route, chain=origin_name,
@@ -209,11 +219,12 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
     if state == "failure" and (delta is None or delta < min_out):
         # The one case that can be called failed: the provider says refunded or
         # expired AND no inflow was measured at the destination.
-        bridge_guard.settle(
-            bid, state=bridge_guard.STATE_FAILED,
-            detail=(f"relay reports failure/refund ({status_detail}); measured "
-                    f"delta {'unknown' if delta is None else delta}"),
-            db_path=db_path)
+        if not bridge_guard.settle(
+                bid, state=bridge_guard.STATE_FAILED,
+                detail=(f"relay reports failure/refund ({status_detail}); measured "
+                        f"delta {'unknown' if delta is None else delta}"),
+                db_path=db_path):
+            return  # 098 CO-23: lost to another driver's settle
         result.failed += 1
         await notify(container, user_id, tx_notify.TxNotice(
             verb="bridge", route=route, chain=origin_name,

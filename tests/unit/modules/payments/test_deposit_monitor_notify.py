@@ -77,6 +77,30 @@ def _fake_web3_module(eth_balance_wei: int):
     return types.SimpleNamespace(Web3=_FakeWeb3)
 
 
+def _marks_sql(marks, sql, params):
+    """098 MO-01: the mark is written by an INSERT … DO NOTHING (first mark)
+    or a CAS UPDATE on the value read; returns the row count."""
+    if "INSERT INTO deposit_balance_marks" in sql:
+        key = tuple(params[:3])
+        if key in marks:
+            return 0
+        marks[key] = params[3]
+        return 1
+    if "UPDATE deposit_balance_marks" in sql:
+        balance, _block, user_id, chain, token, old = params[:6]
+        key = (user_id, chain, token)
+        if marks.get(key) != old:
+            return 0
+        marks[key] = balance
+        return 1
+    return None
+
+
+class _Rc:
+    def __init__(self, n):
+        self.rowcount = n
+
+
 class _FakeConnection:
     """Minimal stand-in for `DatabaseConnection`'s transaction control API
     (`begin_transaction`/`commit`/`rollback`) so `_process_deposit`'s
@@ -132,14 +156,13 @@ class _FakeDB:
                 "amount": amount,
                 "token_symbol": token_symbol,
             })
-        if "INSERT INTO deposit_balance_marks" in sql and params:
-            user_id, chain, token_symbol, balance = params
-            self._marks[(user_id, chain, token_symbol)] = balance
+        n = _marks_sql(self._marks, sql, params or ())
+        return _Rc(n) if n is not None else None
 
     async def fetch_one(self, sql, params=None):
         if "FROM deposit_balance_marks" in sql and params:
             bal = self._marks.get(tuple(params))
-            return {"balance": bal} if bal is not None else None
+            return {"balance": bal, "as_of_block": 0} if bal is not None else None
         if "FROM crypto_payments" in sql and params:
             user_id, chain, token_symbol = params
             for row in reversed(self._crypto_payments):
@@ -225,7 +248,7 @@ class _TxFakeDB:
             return dict(row) if row else None
         if "FROM deposit_balance_marks" in sql:
             bal = self.marks.get(tuple(params))
-            return {"balance": bal} if bal is not None else None
+            return {"balance": bal, "as_of_block": 0} if bal is not None else None
         if "FROM crypto_payments" in sql:
             user_id, chain, token_symbol = params
             for row in reversed(self.crypto_payments):
@@ -273,10 +296,9 @@ class _TxFakeDB:
         if "INSERT INTO user_notifications" in sql:
             self.user_notifications.append(params)
             return
-        if "INSERT INTO deposit_balance_marks" in sql:
-            user_id, chain, token_symbol, balance = params
-            self.marks[(user_id, chain, token_symbol)] = balance
-            return
+        n = _marks_sql(self.marks, sql, params)
+        if n is not None:
+            return _Rc(n)
 
 
 class _Config:

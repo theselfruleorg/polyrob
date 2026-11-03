@@ -33,7 +33,7 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
 
     import os
 
-    from core.status_snapshot import _pid_alive, _rows
+    from core.status_snapshot import _rows
     out: dict = {"goals": None, "cron": None, "sessions": None,
                  "unreadable": [], "count": None, "partial": True,
                  "user_id": user_id}
@@ -61,14 +61,13 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
         # 080 WS-4: a fresh install has no registry yet — nothing has ever run,
         # so the honest answer is EMPTY, not "unreadable". A file that exists
         # and fails to read stays unreadable.
-        rows = (_rows(reg, "SELECT session_id, worker_pid, created_at, last_seen_at "
-                           "FROM active_sessions")
+        rows = (_rows(reg, "SELECT * FROM active_sessions")
                 if os.path.exists(reg) else [])
         live = []
         for r in rows:
             sid = str(r.get("session_id") or "")
             pid = r.get("worker_pid")
-            if not sid or not _pid_alive(int(pid or 0)):
+            if not sid or not _registry_owner_alive(r):
                 continue
             sdir = os.path.join(sessions_root, user_id, sid)
             if not os.path.isdir(sdir):
@@ -119,14 +118,28 @@ def session_is_live(session_id: str, data_dir: str) -> "bool | None":
     """
     import os
 
-    from core.status_snapshot import _pid_alive, _rows
+    from core.status_snapshot import _rows
     sid = str(session_id or "").strip()
     if not sid:
         return None
     try:
         rows = _rows(session_registry_db_path(data_dir),
-                     "SELECT worker_pid FROM active_sessions WHERE session_id=?",
+                     "SELECT * FROM active_sessions WHERE session_id=?",
                      (sid,))
     except Exception:
         return None
-    return any(_pid_alive(int(r.get("worker_pid") or 0)) for r in rows)
+    return any(_registry_owner_alive(r) for r in rows)
+
+
+def _registry_owner_alive(row: dict) -> bool:
+    """A registry row's owner still runs. ⚠️ The SAME judgement as
+    ``SqliteSessionRegistry._owner_alive`` (098 AG-16): a row with an
+    ``owner_ident`` is alive only when pid AND start time AND boot match — a
+    reused pid of a crashed owner kept a session "live" here for ever. A legacy
+    row without one falls back to pid liveness."""
+    from core.state.proc import ProcIdentity, is_alive
+    from core.status_snapshot import _pid_alive
+    ident = ProcIdentity.decode(row.get("owner_ident")) if row.get("owner_ident") else None
+    if ident is not None:
+        return is_alive(ident)
+    return _pid_alive(int(row.get("worker_pid") or 0))

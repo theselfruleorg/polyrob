@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "What YOU learned about your work: `self_context_manage`. YOUR OWN durable notes: lessons learned, conventions you follow, what worked and what did not. action='read' returns the current text; action='update' replaces it (≤20000 chars — consolidate, don't sprawl); action='patch' edits by exact-string replace; Every update/patch is a draft the owner reviews (/pending). This is NOT your core identity/boundaries (those are operator-owned). Pass source= (where it came from: 'measured', 'owner said', 'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line is written with its provenance; that stamp counts toward the char cap.",
+    "description": "What YOU learned about your work: `self_context_manage`. YOUR OWN durable notes: lessons learned, conventions you follow, what worked and what did not. action='read' returns the current text; action='update' replaces it (≤20000 chars — consolidate, don't sprawl); action='patch' edits by exact-string replace; Every update/patch is a draft the owner reviews (/pending) and needs reason= (one sentence for the owner: why this change). This is NOT your core identity/boundaries (those are operator-owned). Pass source= (where it came from: 'measured', 'owner said', 'room_read') and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line is written with its provenance; that stamp counts toward the char cap.",
     "name": "self_context_manage",
     "parameters": {
       "additionalProperties": false,
@@ -30,6 +30,11 @@
           "type": "string"
         },
         "old_string": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        },
+        "reason": {
           "default": null,
           "nullable": true,
           "type": "string"

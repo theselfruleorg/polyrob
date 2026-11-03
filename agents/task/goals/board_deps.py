@@ -8,7 +8,6 @@ tables (``goals``, ``goal_events``, ``goal_edges``) are created by ``GoalBoard._
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import List
 
@@ -244,14 +243,14 @@ class BoardDepsMixin:
                 continue
             if (dep.payload or {}).get("block_kind") != "dep_failed":
                 continue
-            payload = dict(dep.payload or {})
-            payload.pop("block_kind", None)
+            from agents.task.goals.payload_keys import payload_expr
+            expr, eparams = payload_expr(remove=("block_kind",))
             rc2 = execute_retry(
                 self.db_path,
-                """UPDATE goals SET status='ready', payload=?
+                f"""UPDATE goals SET status='ready', payload={expr}
                     WHERE id=? AND kind='goal' AND status='blocked'
                       AND COALESCE(json_extract(payload, '$.block_kind'), '') = 'dep_failed'""",
-                (json.dumps(payload), dep_id),
+                (*eparams, dep_id),
             )
             if rc2 == 1:
                 self._event(dep_id, "deps_satisfied", {"completed": completed_goal_id})
@@ -271,13 +270,13 @@ class BoardDepsMixin:
             dep = self.get(dep_id)
             if dep is None or dep.status != STATUS_WAITING:
                 continue
-            payload = dict(dep.payload or {})
-            payload["block_kind"] = "dep_failed"
+            from agents.task.goals.payload_keys import payload_expr
+            expr, eparams = payload_expr({"block_kind": "dep_failed"})
             rc = execute_retry(
                 self.db_path,
-                """UPDATE goals SET status='blocked', payload=?, completed_at=?
+                f"""UPDATE goals SET status='blocked', payload={expr}, completed_at=?
                     WHERE id=? AND kind='goal' AND status='waiting'""",
-                (json.dumps(payload), now, dep_id),
+                (*eparams, now, dep_id),
             )
             if rc == 1:
                 self._event(dep_id, "dep_failed", {"prerequisite": prerequisite_id})

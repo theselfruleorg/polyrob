@@ -135,6 +135,7 @@ def test_ledger_endpoint_all_zero_on_error(monkeypatch):
     assert body["treasury"] == {
         "income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 0.0,
         "pending_count": 0, "refund_due_usd": 0.0, "refund_due_count": 0,
+        "unproven_usd": 0.0, "unproven_count": 0, "unproven_auth_used_count": 0,
         "balance_usd": None, "net_usd": 0.0,
         "available": False,
     }

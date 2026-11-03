@@ -188,6 +188,8 @@ def test_rows_are_read_across_tenants_but_notified_per_tenant(db):
                                 amount_usd=1.0, balance_before=BEFORE, db_path=db)
     bridge_guard.record_pending(user_id="bob", quote=_quote("0xb"),
                                 amount_usd=1.0, balance_before=BEFORE, db_path=db)
+    from core.sqlite_util import execute_retry  # no verb drives these rows
+    execute_retry(db, "UPDATE bridges SET driver_until=NULL", ())
     seen, notify = _collect_notices()
     _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),
                  read_balance=lambda a, c: BEFORE + FLOOR, notify=notify))
@@ -293,7 +295,7 @@ def test_a_solana_destination_is_measured_by_the_watcher(monkeypatch):
            "request_id": "0xreq", "tx_ref": "0xabc"}
     monkeypatch.setattr(bridge_guard, "open_bridges_all", lambda **k: [row])
     monkeypatch.setattr(bridge_guard, "settle",
-                        lambda bid, **k: settled.update(k, bid=bid))
+                        lambda bid, **k: settled.update(k, bid=bid) or True)
     monkeypatch.setattr("core.wallet.solana_onchain.native_balance_raw",
                         lambda addr, **k: 200)
     monkeypatch.setattr(bridge_guard, "native_balance_raw",
@@ -333,7 +335,7 @@ def test_a_row_closed_as_never_sent_tells_the_owner_once(db):
         amount_in_raw=10 ** 9, min_out_raw=FLOOR)
     bid = bridge_guard.record_pending(user_id="owner", quote=quote, amount_usd=12.5,
                                       balance_before=BEFORE, db_path=db)
-    execute_retry(db, "UPDATE bridges SET created_at=? WHERE id=?",
+    execute_retry(db, "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
                   (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, bid))
     seen, notify = _collect_notices()
     _run(bw.tick(db_path=db, provider=_Provider(), read_balance=lambda a, c: BEFORE,
@@ -354,7 +356,7 @@ def test_a_stale_row_relay_reports_filled_sends_no_notice(db):
     from core.sqlite_util import execute_retry
     bid = bridge_guard.record_pending(user_id="owner", quote=_quote("0xfilled"),
                                       amount_usd=1.0, balance_before=BEFORE, db_path=db)
-    execute_retry(db, "UPDATE bridges SET created_at=? WHERE id=?",
+    execute_retry(db, "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
                   (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, bid))
     seen, notify = _collect_notices()
     _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),

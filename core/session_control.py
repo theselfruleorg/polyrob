@@ -9,6 +9,26 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from core.state.machine import StateMachine
+
+#: 098 CO-05: the ``request`` column is a machine, not a "last command wins"
+#: slot. ``cancel`` is final for the run: a later pause or resume is refused.
+SESSION_CONTROL = StateMachine(
+    "session_control",
+    states=frozenset({"run", "pause", "resume", "cancel"}),
+    transitions={
+        "run": frozenset({"pause", "cancel", "resume"}),
+        "pause": frozenset({"resume", "cancel", "pause"}),
+        "resume": frozenset({"pause", "cancel"}),
+    },
+    terminal=frozenset({"cancel"}),
+    initial=frozenset({"run"}),
+)
+
+#: ``request()`` / ``request_and_wait()`` answer for a pause or resume that
+#: lost to an unacknowledged (or acknowledged) cancel: the run is stopping.
+CANCELLED_ALREADY = "cancelled_already"
+
 
 class SessionControl:
     def __init__(self, directory):
@@ -69,23 +89,36 @@ class SessionControl:
             row = conn.execute("SELECT * FROM control WHERE id=1").fetchone()
             if not self.alive(row):
                 return None
-            conn.execute("UPDATE control SET request=?, acknowledged='pending' WHERE id=1", (command,))
+            current = row["request"]
+            if current == "cancel":
+                return CANCELLED_ALREADY if command != "cancel" else row["generation"]
+            if current == command and command != "pause":
+                return row["generation"]  # already the state asked for: nothing to write
+            froms = tuple(sorted(SESSION_CONTROL.sources_of(command)))
+            cur = conn.execute(
+                "UPDATE control SET request=?, acknowledged='pending' WHERE id=1 AND generation=? "
+                f"AND request IN ({','.join('?' * len(froms))})",
+                (command, row["generation"], *froms))
+            if cur.rowcount != 1:  # S3: a lost transition — say what the state is now
+                return None
             return row["generation"]
 
     async def request_and_wait(self, command, timeout=2.0):
         """Request *command* and wait up to *timeout* s for the step-boundary ack.
 
         Returns the acknowledged state (``paused``/``running``/``cancelled``),
-        ``"pending"`` when the run has not reached a step boundary yet, or
-        ``None`` when no live run holds this mailbox. The ONE wait loop the CLI
+        ``"pending"`` when the run has not reached a step boundary yet,
+        :data:`CANCELLED_ALREADY` when a cancel already holds the run (098
+        CO-05: a pause/resume never erases it), or ``None`` when no live run
+        holds this mailbox. The ONE wait loop the CLI
         ``polyrob session`` verbs and the owner ``/run`` verb share.
         """
         import asyncio
         import time
 
         generation = self.request(command)
-        if generation is None:
-            return None
+        if generation is None or generation == CANCELLED_ALREADY:
+            return generation
         expected = {"pause": "paused", "cancel": "cancelled", "resume": "running"}[command]
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

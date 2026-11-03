@@ -115,11 +115,15 @@ class DockerShellExecutor:
 
     async def poll(self, job_id: str) -> str:
         """Return 'running' | 'done' | 'unknown' for a background job."""
+        from tools.shell.jobs import pid_reused_sh
         job_id = _safe_job_id(job_id)
+        # 098 TS-10: a live pid under a different start time is a reused pid.
         code = (
             f"pid=$(cat {_JOBS_DIR}/{job_id}.pid 2>/dev/null); "
             f"if [ -z \"$pid\" ]; then echo UNKNOWN; "
-            f"elif kill -0 \"$pid\" 2>/dev/null; then echo RUNNING; "
+            f"elif kill -0 \"$pid\" 2>/dev/null; then "
+            f"if {pid_reused_sh(f'{_JOBS_DIR}/{job_id}.start')}; then echo DONE; "
+            f"else echo RUNNING; fi; "
             f"else echo DONE; fi"
         )
         result = await self._backend.run(ExecutionRequest(
@@ -153,10 +157,14 @@ class DockerShellExecutor:
         and the stdin keeper) and the job shell's children (``.jpid``), and fall
         back to the single pid — a multi-process server shouldn't orphan children.
         """
+        from tools.shell.jobs import pid_reused_sh
         job_id = _safe_job_id(job_id)
+        # 098 TS-10: never signal a reused pid (it belongs to another process).
         code = (
             f"pid=$(cat {_JOBS_DIR}/{job_id}.pid 2>/dev/null); "
-            f"if [ -n \"$pid\" ]; then "
+            f"if [ -n \"$pid\" ] && {pid_reused_sh(f'{_JOBS_DIR}/{job_id}.start')}; then "
+            f"echo REUSED; "
+            f"elif [ -n \"$pid\" ]; then "
             f"j=$(cat {_JOBS_DIR}/{job_id}.jpid 2>/dev/null); "
             f"kill -TERM -\"$pid\" 2>/dev/null; pkill -TERM -P \"$pid\" 2>/dev/null; "
             f"[ -n \"$j\" ] && pkill -TERM -P \"$j\" 2>/dev/null; "

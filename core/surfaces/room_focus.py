@@ -11,7 +11,7 @@ public room be ``/groups allow here``. Prices, caps, member verbs and enabling
 the sale are administration, and the room is the one place a shoulder-surfer is
 guaranteed. The alternative — the existing explicit ``<surface> <chat_id>``
 grammar — works from a DM already but means retyping ``telegram
--1002002374383`` on every line.
+<chat_id>`` on every line.
 
 Keyed per OWNER-PRINCIPAL. A shared focus would let one admin's ``/groups use``
 silently redirect another's ``here``, which is the shape of an accident with

@@ -92,7 +92,7 @@ ALLOWED = {
         "deposit-address sweeps to TREASURY_ADDRESS; TREASURY_SWEEPER_ENABLED (default off)"),
     ("modules/payments/treasury_sweeper.py", "TreasurySweeper._submit_sweep", "send_raw_transaction"): (
         "same sweep; chain id and derived address re-asserted, journaled first"),
-    ("modules/payments/treasury_sweeper.py", "TreasurySweeper._sweep_deposit", "from_key"): (
+    ("modules/payments/treasury_sweeper.py", "TreasurySweeper._sweep_claimed", "from_key"): (
         "same sweep; derived key must equal the recorded deposit address"),
     ("modules/payments/wallet_generator.py", "DepositWalletGenerator.generate_deposit_address", "from_key"): (
         "derives a deposit ADDRESS; signs nothing"),

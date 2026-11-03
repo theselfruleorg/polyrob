@@ -61,3 +61,22 @@ def test_guard_remote_tolerates_agent_without_route_session():
     class _Old:
         pass
     assert guard_remote(_Old(), "s1") is None  # no route_session -> no-op
+
+
+def test_dead_owner_not_409(tmp_path):
+    """098 AG-16: a row whose owner process is dead routes MISSING (recreate
+    locally), never a 409 to a dead pid."""
+    from agents.task.sqlite_session_registry import SqliteSessionRegistry
+    from tests.unit.agents.task.test_sqlite_session_registry import _dead_pid
+
+    db = str(tmp_path / "r.db")
+    SqliteSessionRegistry(db, worker_pid=_dead_pid()).register("s1", object())
+    live = SqliteSessionRegistry(db)
+
+    class _Agent:
+        def route_session(self, sid):
+            return live.route(sid)
+
+    route = guard_remote(_Agent(), "s1")
+    assert route.is_missing
+    assert live.exists("s1") is False

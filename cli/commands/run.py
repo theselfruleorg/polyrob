@@ -16,7 +16,7 @@ from typing import Optional
 
 import click
 from cli.commands._errors import remedy_line, session_exit_code
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy.goal_flags import interactive_max_steps
 from core.runtime_paths import data_dir_or_home
 
 # The resolver moved to cli/toolset.py (shared with the REPL); re-imported under
@@ -36,7 +36,7 @@ from cli.toolset import resolve_tool_list as _resolve_tool_list  # noqa: F401
 @click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, deepseek, or any provider declared in ~/.polyrob/providers.yaml)")
 @click.option("--tools", "-t", default=None, help="Comma-separated tool list (e.g. browser,mcp,filesystem). Takes precedence over --toolset.")
 @click.option("--toolset", default=None, help="Named toolset (minimal/default/research/coding/development/browser/full/safe). Ignored when --tools is given.")
-@click.option("--max-steps", default=INTERACTIVE_MAX_STEPS, type=click.IntRange(min=1), help=f"Maximum steps (default: {INTERACTIVE_MAX_STEPS})")
+@click.option("--max-steps", default=interactive_max_steps, type=click.IntRange(min=1), help="Maximum steps (default: INTERACTIVE_MAX_STEPS, 100)")
 @click.option("--plain", is_flag=True, help="Force plain, line-oriented output (no ANSI / panels)")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
 def run(

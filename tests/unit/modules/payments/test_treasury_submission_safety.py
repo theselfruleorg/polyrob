@@ -9,6 +9,45 @@ from core.wallet import submission_journal as journal
 from modules.payments.treasury_sweeper import TreasurySweeper
 
 ADDRESS = '0x' + '1' * 40
+
+
+class _RigDB:
+    """A real sqlite crypto_payments (098 MO-01: the sweep claim is a guarded
+    write) with two failure hooks for the record step."""
+
+    def __init__(self):
+        import sqlite3
+        self.conn = sqlite3.connect(':memory:', isolation_level=None)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute(
+            "CREATE TABLE crypto_payments (id INTEGER PRIMARY KEY, user_id TEXT, chain TEXT, "
+            "deposit_address TEXT, token_symbol TEXT, amount TEXT, amount_usd REAL, status TEXT, "
+            "swept_at TEXT, sweep_tx_hash TEXT, sweep_state TEXT NOT NULL DEFAULT 'unswept', "
+            "sweep_started_at INTEGER, sweep_escalated_at INTEGER)")
+        self.conn.execute("INSERT INTO crypto_payments (id, user_id, chain, token_symbol, "
+                          "amount_usd, status) VALUES (1, 'test', 'ethereum', 'ETH', 100, "
+                          "'confirmed')")
+        self.fail_record = None
+        self.steal_claim = False
+
+    async def execute(self, sql, params=()):
+        if 'sweep_tx_hash = ?' in sql:
+            if self.fail_record:
+                raise self.fail_record
+            if self.steal_claim:
+                self.conn.execute("UPDATE crypto_payments SET sweep_started_at = 1")
+        return self.conn.execute(sql, params)
+
+    async def fetch_all(self, sql, params=()):
+        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    async def fetch_one(self, sql, params=()):
+        row = self.conn.execute(sql, params).fetchone()
+        return dict(row) if row else None
+
+    def row(self, rid=1):
+        return dict(self.conn.execute("SELECT * FROM crypto_payments WHERE id=?",
+                                      (rid,)).fetchone())
 RAW = b'synthetic signed sweep'
 HASH = '0x' + keccak(RAW).hex()
 
@@ -28,8 +67,7 @@ def rig(monkeypatch, tmp_path):
             'status': 1, 'transactionHash': bytes.fromhex(HASH[2:])}),
         account=SimpleNamespace(from_key=Mock(return_value=account)))
     w3 = SimpleNamespace(eth=eth, to_hex=Web3.to_hex)
-    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)),
-                         fetch_all=AsyncMock(return_value=[{'id': 1}]))
+    db = _RigDB()
     wallet = SimpleNamespace(get_private_key_for_user_id=Mock(return_value='test-only'))
     sweeper = TreasurySweeper(db, wallet, SimpleNamespace(
         treasury_address='0x'+'2'*40, ethereum_rpc_url='https://example.invalid'))
@@ -50,7 +88,8 @@ async def test_hash_is_durable_before_send_and_fee_matches_signed_value(rig):
     assert tx['chainId'] == 1
     assert tx['value'] + tx['gas'] * tx['gasPrice'] == 10**9
     w3.eth.get_transaction_count.assert_called_once_with(ADDRESS, 'pending')
-    sweeper.db.execute.assert_awaited_once()
+    row = sweeper.db.row()
+    assert (row['sweep_state'], row['sweep_tx_hash']) == ('swept', HASH)
     assert not journal.unresolved()
 
 
@@ -61,8 +100,11 @@ async def test_sweep_books_only_the_captured_deposit_group(rig):
     conn = sqlite3.connect(':memory:', isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute('CREATE TABLE crypto_payments (id INTEGER, user_id TEXT, chain TEXT, '
-                 'token_symbol TEXT, status TEXT, swept_at TEXT, sweep_tx_hash TEXT)')
-    insert = "INSERT INTO crypto_payments VALUES (?, ?, 'ethereum', ?, 'confirmed', NULL, NULL)"
+                 'token_symbol TEXT, status TEXT, swept_at TEXT, sweep_tx_hash TEXT, '
+                 "sweep_state TEXT NOT NULL DEFAULT 'unswept', sweep_started_at INTEGER, "
+                 'sweep_escalated_at INTEGER)')
+    insert = ("INSERT INTO crypto_payments (id, user_id, chain, token_symbol, status) "
+              "VALUES (?, ?, 'ethereum', ?, 'confirmed')")
     conn.executemany(insert, [(1, 'test', 'ETH'), (2, 'test', 'ETH'),
                               (3, 'other', 'ETH'), (4, 'test', 'USDC')])
 
@@ -71,7 +113,8 @@ async def test_sweep_books_only_the_captured_deposit_group(rig):
 
     async def execute(sql, params):
         # A new confirmed deposit appeared while the sweep was on chain.
-        conn.execute(insert, (5, 'test', 'ETH'))
+        if 'sweep_tx_hash = ?' in sql:
+            conn.execute(insert, (5, 'test', 'ETH'))
         return conn.execute(sql, params)
 
     sweeper.db = SimpleNamespace(fetch_all=fetch, execute=execute)
@@ -100,11 +143,20 @@ async def test_uncertain_or_unbooked_sweep_blocks_retry(rig, failure):
     elif failure == 'receipt_mismatch':
         w3.eth.wait_for_transaction_receipt.return_value['transactionHash'] = b'wrong'
     elif failure == 'database':
-        sweeper.db.execute.side_effect = OSError('disk full')
+        sweeper.db.fail_record = OSError('disk full')
     elif failure == 'missing_row':
-        sweeper.db.execute.return_value.rowcount = 0
+        sweeper.db.steal_claim = True
     await sweeper._sweep_deposit(deposit)
     assert journal.unresolved()[0]['tx_hash'] == HASH
+    # 098 MO-01: a broadcast with an unknown outcome stays `sweeping` (the
+    # reaper tells the owner); a mined revert of this tx is `sweep_failed`.
+    row = sweeper.db.row()
+    assert row['sweep_state'] == ('sweep_failed' if failure == 'reverted' else 'sweeping')
+    # 098 review (O-02): an unknown outcome keeps the signed tx hash for the
+    # owner's check (`owner deposit-resolve`); state unchanged, never booked.
+    if failure in ('send_timeout', 'hash_mismatch', 'receipt_timeout', 'receipt_mismatch'):
+        assert row['sweep_tx_hash'] == HASH
+    assert row['swept_at'] is None
     await sweeper._sweep_deposit(deposit)
     assert w3.eth.send_raw_transaction.call_count == 1
     assert account.sign_transaction.call_count == 1
@@ -132,7 +184,7 @@ async def test_storage_failure_cannot_broadcast(rig, monkeypatch):
     await sweeper._sweep_deposit(deposit)
     account.sign_transaction.assert_not_called()
     w3.eth.send_raw_transaction.assert_not_called()
-    sweeper.db.execute.assert_not_awaited()
+    assert sweeper.db.row()['sweep_state'] == 'unswept'   # nothing sent: released
 
 
 @pytest.mark.asyncio
@@ -147,13 +199,14 @@ async def test_signing_failure_keeps_prepared_sweep_reserved(rig):
     await sweeper._sweep_deposit(deposit)
     assert journal.unresolved()[0]['state'] == 'reserved'
     w3.eth.send_raw_transaction.assert_not_called()
-    sweeper.db.execute.assert_not_awaited()
+    assert sweeper.db.row()['sweep_tx_hash'] is None
 
 
 @pytest.mark.asyncio
 async def test_token_path_uses_same_interlock(rig):
     sweeper, w3, account, deposit = rig
     deposit['token_symbol'] = 'USDC'
+    sweeper.db.conn.execute("UPDATE crypto_payments SET token_symbol = 'USDC'")
     transfer = Mock()
     transfer.build_transaction.side_effect = lambda tx: dict(tx, to='token-contract')
     contract = SimpleNamespace(functions=SimpleNamespace(
@@ -189,6 +242,7 @@ async def test_cancellation_cannot_release_inflight_submission(rig):
         with pytest.raises(asyncio.CancelledError):
             await task
         assert journal.unresolved()[0]['tx_hash'] == HASH
-        sweeper.db.execute.assert_not_awaited()
+        row = sweeper.db.row()
+        assert (row['sweep_state'], row['sweep_tx_hash']) == ('sweeping', None)
     finally:
         release_receipt.set()

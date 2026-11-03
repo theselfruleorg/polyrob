@@ -30,6 +30,8 @@ class _State:
             self.llm_providers_failed.add(provider)
         return False
     def reset_llm_errors(self, **k): pass
+    def request_stop(self, reason=None):  # 098 AG-01: the one writer of stopped
+        self.stopped = True
 
 
 class _Host(ErrorRecoveryMixin):

@@ -11,33 +11,41 @@ from surfaces.email.fetchers import AgentMailFetcher, ImapFetcher
 
 class _FakeImapConn:
     def __init__(self, raw_messages):
-        self.raw = raw_messages  # {num: rfc822 bytes}
+        self.raw = raw_messages  # {uid: rfc822 bytes}
         self.stored = []
 
     def select(self, folder):
         assert folder == "INBOX"
         return "OK", [b""]
 
-    def search(self, charset, criteria):
-        assert criteria == "UNSEEN"
-        return "OK", [b" ".join(k for k in self.raw)]
+    def response(self, code):
+        return code, [b"9"]
 
-    def fetch(self, num, spec):
-        return "OK", [(b"", self.raw[num])]
+    def uid(self, cmd, *args):
+        if cmd == "SEARCH":
+            assert args[-1] == "UNSEEN"
+            return "OK", [b" ".join(k for k in self.raw)]
+        if cmd == "FETCH":
+            return "OK", [(b"", self.raw[args[0]])]
+        if cmd == "STORE":
+            self.stored.append(args)
+            return "OK", []
+        raise AssertionError(cmd)
 
-    def store(self, num, op, flag):
-        self.stored.append((num, op, flag))
+    def logout(self):
+        pass
 
 
 class _FakeImapTool:
     def __init__(self, conn):
-        self.imap_connection = conn
+        self.imap_connection = None
+        self._conn = conn
 
     async def ensure_initialized(self):
         return None
 
-    async def _connect_imap(self):
-        return None
+    def _mbox_open(self):
+        return self._conn
 
 
 RAW = (b"Message-ID: <m1@a.b>\r\nFrom: Al <al@a.b>\r\nSubject: Hi\r\n"
@@ -54,8 +62,9 @@ async def test_imap_fetcher_normalizes_and_marks_seen():
     assert norm["message_id"] == "<m1@a.b>"
     assert norm["subject"] == "Hi"
     assert "body line" in norm["body"]
+    assert handle.key() == "uid:9:1"
     fetcher.mark_handled(handle)
-    assert conn.stored == [(b"1", "+FLAGS", "\\Seen")]
+    assert conn.stored == [(b"1", "+FLAGS", "(\\Seen)")]
 
 
 # --- AgentMailFetcher -----------------------------------------------------
@@ -152,7 +161,8 @@ class _SmtpDeadTool:
     """A tool whose SMTP login is refused but whose IMAP half is fine."""
 
     def __init__(self, conn):
-        self.imap_connection = conn
+        self.imap_connection = None
+        self._conn = conn
         self.calls = []
 
     async def ensure_initialized(self):
@@ -162,8 +172,8 @@ class _SmtpDeadTool:
     async def ensure_imap(self):
         self.calls.append("imap")
 
-    async def _connect_imap(self):
-        return None
+    def _mbox_open(self):
+        return self._conn
 
 
 @pytest.mark.asyncio

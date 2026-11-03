@@ -181,6 +181,7 @@ class ResolveBillingFailureRequest(BaseModel):
     """Request to resolve a billing failure."""
     resolution: Literal["charged", "written_off", "refunded"]
     notes: str = ""
+    amount: Optional[int] = None  # 098 MO-08: required to charge an unresolved hold
 
 
 # Dependency: Check admin access
@@ -1123,7 +1124,8 @@ async def get_activity_feed(
 @router.get("/billing-failures", dependencies=[Depends(require_admin)])
 async def get_billing_failures(
     request: Request,
-    status: str = Query("pending", description="Filter by status: pending, resolved, written_off"),
+    status: str = Query("pending", description="Filter by status: pending, hold_unresolved, "
+                        "resolving, charged, written_off, refunded"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0)
 ) -> BillingFailuresResponse:
@@ -1135,6 +1137,9 @@ async def get_billing_failures(
     # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
     from api.dependencies import require_service
     db = require_service('database_manager', missing="Database unavailable")
+    from modules.credits.billing_failures import reap_open_holds, reap_resolving
+    await reap_resolving(db)  # 098 S6: an interrupted resolve finishes from the ledger
+    await reap_open_holds(db)  # 098 MO-08: a never-settled reservation is listed
 
     # Get failures with user info
     failures = await db.fetch_all("""
@@ -1203,57 +1208,21 @@ async def resolve_billing_failure(
     """
     # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
     from api.dependencies import require_service
+    from modules.credits import billing_failures as bf
     db = require_service('database_manager', missing="Database unavailable")
-
-    # Verify failure exists and is pending
-    failure = await db.fetch_one("""
-        SELECT id, user_id, credits_owed, status, request_id
-        FROM billing_failures WHERE id = ?
-    """, (failure_id,))
-
-    if not failure:
-        raise HTTPException(status_code=404, detail="Billing failure not found")
-
-    if failure['status'] != 'pending':
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failure already resolved with status: {failure['status']}"
-        )
-
     admin_id = getattr(request.state, 'user_id', 'unknown')
     resolution = resolution_request.resolution
     notes = resolution_request.notes
-
-    reserved = str(failure['request_id'] or '').startswith('llm-reserve:')
-    if reserved:
-        from modules.credits.reservations import settle_reservation
-        balance_mgr = require_service('balance_manager', missing="Balance service unavailable")
-        success = await settle_reservation(
-            balance_mgr, failure['user_id'], failure['request_id'],
-            failure['credits_owed'] if resolution == 'charged' else 0)
-        if not success:
-            raise HTTPException(status_code=409, detail="Reservation could not be reconciled; no new charge was made")
-    elif resolution == "charged":
-        balance_mgr = require_service('balance_manager', missing="Balance service unavailable")
-        success = await balance_mgr.deduct_credits(
-            user_id=failure['user_id'],
-            amount=failure['credits_owed'],
-            reason=f"Billing reconciliation (resolved by admin {admin_id})"
-        )
-        if not success:
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to deduct credits - user may still have insufficient balance"
-            )
-
-    # Update failure record
-    await db.execute("""
-        UPDATE billing_failures
-        SET status = 'resolved',
-            resolved_at = CURRENT_TIMESTAMP,
-            resolution_notes = ?
-        WHERE id = ?
-    """, (f"{resolution}: {notes} (by {admin_id})", failure_id))
+    # 098 MO-07: pending|hold_unresolved -> resolving is ONE guarded write, so a
+    # double click reaches the money step once; a lost claim is a 409.
+    try:
+        done = await bf.resolve(
+            db, lambda: require_service('balance_manager', missing="Balance service unavailable"),
+            failure_id, resolution, notes=notes, admin_id=admin_id,
+            amount=resolution_request.amount)
+    except bf.ResolveError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    failure = {"user_id": done["user_id"], "credits_owed": done["credits_owed"]}
 
     # Audit log
     audit = await get_audit_logger()
@@ -1266,7 +1235,7 @@ async def resolve_billing_failure(
             actor_ip=client_ip,
             target_id=failure['user_id'],
             target_type="billing_failure",
-            old_value="pending",
+            old_value=done["old_status"],
             new_value=resolution,
             metadata={
                 "failure_id": failure_id,

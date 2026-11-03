@@ -95,21 +95,34 @@ def collect_self_evolution(user_id: str, *, data_dir: str,
     failure of the aggregator ITSELF still raises and is named.
     """
     from core import self_evolution
+    from core.pending_seats import SEAT_CONSOLE, fold_linked, item_lines
     out: List[Item] = []
-    for row in self_evolution.list_pending(user_id, home_dir=data_dir,
-                                           instance_id=instance_id) or []:
+    rows = self_evolution.list_pending(user_id, home_dir=data_dir,
+                                       instance_id=instance_id) or []
+    # 096 W7 (R4): the card reads as the Telegram notice does — what, Why,
+    # Changes — and a linked pair is ONE card (deciding either half decides
+    # both). The title used to be the raw preview's first line: frontmatter.
+    for row, partner in fold_linked(rows):
         kind = str(row.get("kind") or "")
-        preview = row.get("preview") or ""
+        try:
+            lines = [ln.strip() for ln in item_lines(row, partner, seat=SEAT_CONSOLE)]
+        except Exception:
+            logger.debug("inbox: pending lines failed", exc_info=True)
+            lines = [str(row.get("preview") or "")]
+        title = lines[0].lstrip("•").strip() if lines else ""
         out.append(Item(
             kind=kind,
             id=str(row.get("id") or ""),
-            title=_first_line(preview) or self_evolution.pending_kind_label(kind),
-            body=_body(preview),
+            title=_first_line(title) or self_evolution.pending_kind_label(kind),
+            body=_body("\n".join(lines[1:])),
             blocking=True,
             actions=("approve", "reject", "show"),
             source="self_evolution",
             extra={"label": self_evolution.pending_kind_label(kind),
-                   "path": row.get("path") or ""},
+                   "path": row.get("path") or "",
+                   # 098 CO-19: the draft revision this card shows; the
+                   # console's decision POST carries it back.
+                   "rev": self_evolution.decision_rev(row) or ""},
         ))
     return out
 
@@ -137,7 +150,9 @@ def collect_tool_approvals(user_id: str, *, data_dir: str) -> List[Item]:
             kind=str(row.get("kind") or "tool_approval"),
             id=str(row.get("id") or ""),
             title=_first_line(preview),
-            body=_body(preview),
+            # 096 W7: a text seat (REPL/Telegram /inbox) reads the SAME full
+            # card the web card shows — never cut: it is what gets approved.
+            body=card or _body(preview),
             blocking=True,
             actions=("approve", "reject"),
             source="tool_approvals",

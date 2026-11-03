@@ -105,7 +105,11 @@ def _list(svc, user_id: str) -> str:
     shown = jobs[:_LIST_LIMIT]
     lines = [f"{len(jobs)} scheduled job(s):"] + [_row(j) for j in shown]
     if len(jobs) > len(shown):
-        lines.append(f"(+{len(jobs) - len(shown)} more — see the console or ask me)")
+        # 096 W5: the rest one tap away (/more_<token>), never "see the console".
+        from core.surfaces.more_store import cut_line
+        lines.append(cut_line(user_id, len(jobs) - len(shown),
+                              "\n".join(_row(j) for j in jobs[len(shown):]),
+                              what="more jobs", prefix=""))
     return _with_note("\n".join(lines) + _stopped(svc, user_id))
 
 

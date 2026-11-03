@@ -28,12 +28,15 @@ class _FakeSurface(Surface):
 
 
 @pytest.mark.asyncio
-async def test_default_stream_buffers_until_finalize():
+async def test_default_stream_drops_partials_and_sends_a_finalize_text():
+    """098 TS-19: no buffered partial path — the reply arrives through send()."""
     s = _FakeSurface()
     await s.stream(OutboundMessage(session_key="k", text="Hel", partial=True, stream_id="s1"))
     await s.stream(OutboundMessage(session_key="k", text="lo", partial=True, stream_id="s1"))
-    assert s.sent == []  # nothing committed yet
+    assert s.sent == [] and not hasattr(s, "_stream_buffers")
     await s.stream(OutboundMessage(session_key="k", text="", partial=False, stream_id="s1"))
+    assert s.sent == []  # an empty finalize sends nothing
+    await s.stream(OutboundMessage(session_key="k", text="Hello", partial=False, stream_id="s1"))
     assert len(s.sent) == 1
     assert s.sent[0].text == "Hello"
     assert s.sent[0].partial is False

@@ -14,6 +14,7 @@ from core.container import DependencyContainer
 from core.exceptions import LLMError, ServiceError
 
 from modules.llm.llm_client import LLMClient
+from modules.llm.init_gate import ProviderInitGate, recent_call_error
 from modules.llm.manager_inventory import InventoryMixin
 
 # NOTE: provider client classes (AnthropicClient/OpenAIClient/GeminiClient/…) are
@@ -101,7 +102,8 @@ class LLMManager(InventoryMixin, BaseComponent):
         self.llm_config = config.get_llm_config()
         self._client_initializing_lock = asyncio.Lock()
         self._fallback_enabled = True  # Always enable fallback
-        self._initialization_attempts = {}  # Track initialization attempts
+        # 098 MO-13: per-provider init state with backoff (never a permanent latch).
+        self._init_gate = ProviderInitGate()
         
         # Fallback hierarchy — derived from the ProviderSpec registry (024 seam 10).
         self.FALLBACK_HIERARCHY = self._build_fallback_hierarchy()
@@ -482,6 +484,8 @@ class LLMManager(InventoryMixin, BaseComponent):
         try:
             if not getattr(client, '_initialized', False):
                 return False
+            if recent_call_error(client):  # 098 MO-13: a real call just failed
+                return False
             
             # Basic test - try to validate config
             if hasattr(client, '_validate_llm_config'):
@@ -494,25 +498,21 @@ class LLMManager(InventoryMixin, BaseComponent):
             return False
 
     async def _try_initialize_client(self, provider: str) -> Optional[LLMClient]:
-        """Try to initialize a client for the given provider.
-        
-        Args:
-            provider: Provider name (anthropic, openai, etc.)
-            
-        Returns:
-            Initialized client or None if failed
-        """
-        # Prevent multiple initialization attempts
-        if provider in self._initialization_attempts:
-            self.logger.debug(f"Client initialization already attempted for {provider}")
-            return None
-        
-        self._initialization_attempts[provider] = True
-        
+        """Initialize a provider's client on demand (None if not possible now).
+        098 MO-13: one attempt at a time per provider, a failure retries after
+        a backoff; a key set after start-up is read on the next attempt."""
+        return await self._init_gate.acquire(
+            provider, lambda: self.clients.get(f"{provider}_client"),
+            lambda: self._initialize_client_once(provider))
+
+    async def _initialize_client_once(self, provider: str) -> Optional[LLMClient]:
         try:
             config_data = self.llm_config.get(provider, {})
             if not config_data.get('api_key'):
-                return None
+                config_data = (self.config.get_llm_config() or {}).get(provider, {})
+                if not config_data.get('api_key'):
+                    return None
+                self.llm_config[provider] = config_data
             
             model_type = config_data.get('model') or get_default_model(provider)
             if not model_type:
@@ -590,6 +590,8 @@ class LLMManager(InventoryMixin, BaseComponent):
             
             self.clients.clear()
             self.primary_client_name = None
+            self.fallback_client_name = None
+            self._init_gate.reset()
             self.logger.info("LLM Manager cleaned up successfully")
             
         except Exception as e:

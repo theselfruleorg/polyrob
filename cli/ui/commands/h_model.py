@@ -45,9 +45,20 @@ async def swap_live(ctx, provider: str, model: str, reasoning: Any = None,
     return True
 
 
+def _save_default(ctx, provider, model, reasoning=None, *, tenant=None,
+                  validated: bool = True) -> str:
+    """098 CL-05: the default is written AFTER the live swap succeeded, through
+    the one owner of the three stores; each store's result is said."""
+    from cli.config_store import env_default_override_note
+    from cli.model_default import persist_default
+    res = persist_default(provider, model, reasoning, tenant=tenant)
+    note = env_default_override_note(provider) or ""
+    tail = "" if validated else " (not validated by a live swap)"
+    return f" {res.line()}{tail}.{(' ' + note) if note else ''}"
+
+
 async def handle(ctx, *, pick_fn) -> None:
-    from cli.config_store import (env_default_override_note, resolve_model_alias,
-                                  set_default_model, _provider_for_model)
+    from cli.config_store import resolve_model_alias, _provider_for_model
     from core import model_pins
     from agents.task.model_switch_service import describe, plan_switch
     args = list(ctx.args or [])
@@ -58,11 +69,11 @@ async def handle(ctx, *, pick_fn) -> None:
             ctx.emit("Cancelled.")
             return
         provider, model = picked
-        set_default_model(provider, model)
-        note = env_default_override_note(provider) or ""
-        if await swap_live(ctx, provider, model, saved_note=f"Saved as the default for new sessions. {note}"):
-            ctx.emit(f"Model swapped live: {model} ({provider}). Also saved as the default "
-                     f"for new sessions.{(' ' + note) if note else ''}")
+        if ctx.agent is None:
+            ctx.emit(f"No live session.{_save_default(ctx, provider, model, validated=False)}")
+            return
+        if await swap_live(ctx, provider, model, saved_note="The default did not change."):
+            ctx.emit(f"Model swapped live: {model} ({provider}).{_save_default(ctx, provider, model)}")
         return
     cmd = ms.parse_model_args(args)
     if cmd.action == "error":
@@ -85,14 +96,18 @@ async def handle(ctx, *, pick_fn) -> None:
             ctx.emit("No live session.")
             return
         set_session_reasoning(getattr(agent, "session_id", None), cmd.reasoning)
+        saved = ""
         if cmd.default:
-            model_pins.set_default_reasoning(user_id, cmd.reasoning)
-        ctx.emit(f"Reasoning {cmd.reasoning} for this session (sent on OpenRouter).")
+            ok, err = model_pins.set_default_reasoning(user_id, cmd.reasoning)
+            saved = (" Saved as the default." if ok
+                     else f" The default was NOT saved: {err or 'the write failed'}.")
+        ctx.emit(f"Reasoning {cmd.reasoning} for this session (sent on OpenRouter).{saved}")
         return
     if cmd.action == "reset":
         from cli.config_store import get_default_model
         if cmd.default or any(w.lower() == "default" for w in cmd.words):
-            model_pins.clear_default(user_id)
+            from cli.model_default import clear_default
+            ctx.emit(clear_default(tenant=user_id).line("cleared"))
         provider, model = get_default_model()
         if not (provider and model):
             from core.runtime_config import resolve_default_provider
@@ -115,15 +130,14 @@ async def handle(ctx, *, pick_fn) -> None:
     if plan.quote:
         ctx.emit(plan.quote)
         return
-    saved = ""
-    if plan.default:
-        set_default_model(plan.provider, plan.model)
-        ok, why = model_pins.set_default(user_id, plan.provider, plan.model, plan.reasoning)
-        saved = (" Also your default for new sessions and chats." if ok
-                 else f" Default not saved: {why}.")
-        note = env_default_override_note(plan.provider)
-        saved += f" {note}" if note else ""
-    if await swap_live(ctx, plan.provider, plan.model, plan.reasoning):
+    if plan.default and agent is None:
+        ctx.emit("No live session." + _save_default(
+            ctx, plan.provider, plan.model, plan.reasoning, tenant=user_id, validated=False))
+        return
+    if await swap_live(ctx, plan.provider, plan.model, plan.reasoning,
+                       saved_note="The default did not change." if plan.default else ""):
+        saved = (_save_default(ctx, plan.provider, plan.model, plan.reasoning, tenant=user_id)
+                 if plan.default else "")
         ctx.emit(f"Model swapped live: {describe(plan)}.{saved}")
 
 

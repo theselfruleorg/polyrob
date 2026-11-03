@@ -12,8 +12,10 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - MEMORY_TOOL_MAX_ENTRIES — default: 50 — Per-tenant entry cap for the `memory` tool (active+pending notes; archived notes free space).
 - MEMORY_TOOL_MAX_CHARS — default: 2000 — Per-tenant char cap for the `memory` tool.
 - MEMORY_ROW_MAX_CHARS — default: 4000 — Max chars per auto-injected cross-session `memories` row (truncated at write, shared by the FTS and vector halves so RRF dedup stays consistent). `<=0` disables.
-- MEMORY_RETENTION_DAYS — default: 365 — Age-based retention for cross-session `memories` rows: rows with a provenance stamp older than this are pruned on the curator tick (legacy stampless rows exempt); rows from cron/goal runs use 45 days, capped by this value. `<=0` disables.
-- SESSION_RETENTION_DAYS — default: 90 — Session-TREE retention (days), swept on the curator tick.
+- MEMORY_RETENTION_DAYS — default: 365 — Age-based retention for cross-session `memories` rows: rows with a provenance stamp older than this are pruned on the always-on retention tick (legacy stampless rows exempt); rows from cron/goal runs use 45 days, capped by this value. `<=0…
+- SESSION_RETENTION_DAYS — default: 90 — Session-TREE retention (days), swept on the always-on retention tick.
+- KB_WRITTEN_RETENTION_DAYS — default: 90 — A document the agent wrote (KB collection `written`) that no search has returned for this many days leaves the knowledge base.
+- RETENTION_TICKER_ENABLED — default: **ON** — The always-on retention tick (every 6 h: memories, episodes, session trees, note consolidation, written-document age-out).
 - KNOWLEDGE_NOTE_STALE_DAYS — default: 90 — Days an agent-authored note can stay unread before the knowledge curator archives it.
 - MEMORY_PREFETCH_CADENCE — default: 0 (**3 under POLYROB_LOCAL and for autonomous sessions**) — `0` = prefetch on first step only; `N>0` = also every N steps (inert without external provider).
 - HMEM_SEMANTIC — default: auto — H-MEM cross-phase recall mode: `auto` (embeddings if an embedder exists, else lexical) / `embeddings` / `lexical` / `off`.
@@ -24,5 +26,5 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - MESSAGE_STORE_BACKEND — default: '' (off) — `sqlite` = additive write-only durable mirror of JSON message history (JSON stays SSOT).
 - TRAJECTORY_CAPTURE — default: OFF — Opt-in run-end trajectory capture: each finished goal/cron/`polyrob run` session is assembled into a canonical training record (outcome-labeled, fail-closed scrubbed, correspondent-tainted sessions skipped) under `<data_root>/datagen/captu…
 - KB_MAX_BYTES — default: 26214400 (25 MiB) — Max total bytes one KB ingestion will read.
-- KB_PREFETCH_COLLECTION — default: default — Which KB collection the step-start auto-prefetch (`KB_AUTO_PREFETCH`) searches.
+- KB_PREFETCH_COLLECTION — default: unset (every collection) — Pin the step-start auto-prefetch (`KB_AUTO_PREFETCH`) to one KB collection.
 - KB_API_ENABLED — default: OFF — Mount the KB HTTP endpoints (`api/kb/`) on the server.

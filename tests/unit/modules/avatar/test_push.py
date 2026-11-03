@@ -46,6 +46,31 @@ def test_push_twitter_calls_update_profile_image(tmp_path):
     assert api.called_with == str(p)
 
 
+def test_build_twitter_api_signs_a_multipart_v11_post(tmp_path, monkeypatch):
+    pytest.importorskip("requests_oauthlib")
+    from requests_oauthlib import OAuth1Session
+    p = tmp_path / "pfp.png"
+    p.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+    seen = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def fake_send(self, request, **kw):
+        seen["url"], seen["auth"], seen["body"] = request.url, request.headers["Authorization"], request.body
+        return _Resp()
+
+    monkeypatch.setattr(OAuth1Session, "send", fake_send)
+    env = {"TWITTER_API_KEY": "ck", "TWITTER_API_SECRET_KEY": "cs",
+           "TWITTER_ACCESS_TOKEN": "at", "TWITTER_ACCESS_TOKEN_SECRET": "as"}
+    push.push_twitter(p, env=env)
+    assert seen["url"] == "https://api.twitter.com/1.1/account/update_profile_image.json"
+    auth = seen["auth"].decode() if isinstance(seen["auth"], bytes) else seen["auth"]
+    assert auth.startswith("OAuth ") and 'oauth_consumer_key="ck"' in auth and 'oauth_token="at"' in auth
+    assert b'name="image"; filename="pfp.png"' in seen["body"]
+
+
 def test_push_discord_raises_without_token():
     with pytest.raises(push.DiscordCredsMissing):
         push.push_discord("/nonexistent.png", env={})

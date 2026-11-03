@@ -27,12 +27,37 @@ import time
 from typing import List, Optional
 
 from core.sqlite_util import execute_retry, wal_connect
+from core.state.machine import StateMachine
+from core.state.sql import cas_transition
 
 logger = logging.getLogger(__name__)
 
 STATE_PENDING = "pending"
 STATE_ACTIVE = "active"
 STATE_EXPIRED = "expired"
+
+#: 098 CO-12. A base (address-level) binding moves only by these edges; the
+#: owner's approve/reject and the revocation are CAS writes on the from-state.
+#: A thread ANCHOR (``provenance='thread'``) holds no trust of its own: every
+#: read derives it from the base row (:data:`_TRUSTED`).
+CORRESPONDENT = StateMachine(
+    "correspondent",
+    states=frozenset({STATE_PENDING, STATE_ACTIVE, STATE_EXPIRED}),
+    transitions={STATE_PENDING: frozenset({STATE_ACTIVE, STATE_EXPIRED}),
+                 STATE_ACTIVE: frozenset({STATE_EXPIRED})},
+    terminal=frozenset({STATE_EXPIRED}),
+    initial=frozenset({STATE_PENDING, STATE_ACTIVE}),
+)
+
+#: A row that may route: an ACTIVE base row, or a live anchor whose base row
+#: for the same (surface, address, tenant) is ACTIVE now.
+_TRUSTED = (
+    "((c.provenance != 'thread' AND c.state = 'active') OR "
+    " (c.provenance = 'thread' AND c.state != 'expired' AND EXISTS ("
+    "   SELECT 1 FROM correspondents b WHERE b.surface = c.surface "
+    "   AND b.address = c.address AND b.user_id = c.user_id "
+    "   AND b.provenance != 'thread' AND b.state = 'active')))"
+)
 
 
 def _norm_addr(address: str) -> str:
@@ -44,6 +69,13 @@ def _norm_addr(address: str) -> str:
     once per file on open (:meth:`CorrespondentRegistry._merge_legacy_spellings`)."""
     from core.surfaces.address_key import canonical_addr
     return canonical_addr(address)
+
+
+def _routed(row) -> dict:
+    """A routable row; an anchor reports the trust it derived (``active``)."""
+    d = dict(row)
+    d["state"] = STATE_ACTIVE
+    return d
 
 
 class CorrespondentRegistry:
@@ -69,6 +101,7 @@ class CorrespondentRegistry:
             )
             conn.commit()
             self._merge_legacy_spellings(conn)
+            self._align_anchors(conn)
         finally:
             conn.close()
 
@@ -120,6 +153,64 @@ class CorrespondentRegistry:
                 conn.rollback()
             except Exception:
                 pass
+
+    #: 098 CO-12: the one-shot anchor alignment.
+    _ANCHOR_ALIGN_VERSION = 2
+
+    @staticmethod
+    def _align_anchors(conn) -> None:
+        """One-shot (``PRAGMA user_version`` 2): every thread anchor takes its
+        base row's state, and an anchor with no base row is deleted. Fail-open."""
+        try:
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= \
+                    CorrespondentRegistry._ANCHOR_ALIGN_VERSION:
+                return
+            conn.execute(
+                "DELETE FROM correspondents WHERE provenance = 'thread' AND NOT EXISTS ("
+                " SELECT 1 FROM correspondents b WHERE b.surface = correspondents.surface"
+                " AND b.address = correspondents.address AND b.user_id = correspondents.user_id"
+                " AND b.provenance != 'thread')")
+            conn.execute(
+                "UPDATE correspondents SET state = ("
+                " SELECT b.state FROM correspondents b WHERE b.surface = correspondents.surface"
+                " AND b.address = correspondents.address AND b.user_id = correspondents.user_id"
+                " AND b.provenance != 'thread' ORDER BY b.updated_at DESC LIMIT 1) "
+                "WHERE provenance = 'thread' AND state IN ('pending', 'active', 'expired')")
+            conn.execute(
+                f"PRAGMA user_version = {CorrespondentRegistry._ANCHOR_ALIGN_VERSION}")
+            conn.commit()
+        except Exception:
+            logger.warning("correspondent anchor alignment skipped", exc_info=True)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+    def _transition(self, *, surface: str, addr: str, tid: str, user_id: Optional[str],
+                    to: str, frm: str, ts: float) -> bool:
+        """``frm -> to`` on ONE binding (098 CAS). With no ``user_id`` the caller
+        has already proven a single tenant holds that from-state."""
+        key = "surface=? AND address=? AND thread_id=?"
+        params: tuple = (surface, addr, tid)
+        if user_id is not None:
+            key += " AND user_id=?"
+            params += (user_id,)
+        return cas_transition(self.db_path, "correspondents", key=key, key_params=params,
+                              machine=CORRESPONDENT, to=to, from_states=(frm,),
+                              set_cols={"updated_at": ts}, status_col="state")
+
+    def _follow_anchors(self, *, surface: str, addr: str, user_id: Optional[str],
+                        to: str, ts: float) -> int:
+        """Keep the anchors of an address-level binding in step with it (their
+        state is a display copy; trust is derived at read time)."""
+        froms = CORRESPONDENT.require_sources(to, None)
+        sql = (f"UPDATE correspondents SET state=?, updated_at=? WHERE provenance='thread' "
+               f"AND surface=? AND address=? AND state IN ({','.join('?' * len(froms))})")
+        params = [to, ts, surface, addr, *froms]
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params.append(user_id)
+        return int(execute_retry(self.db_path, sql, tuple(params)) or 0)
 
     # --- write -------------------------------------------------------------
     def seed(
@@ -228,14 +319,12 @@ class CorrespondentRegistry:
                     surface, addr, tid, len(distinct),
                 )
                 return False
-        sql = ("UPDATE correspondents SET state=?, updated_at=? "
-               "WHERE surface=? AND address=? AND thread_id=? AND state=?")
-        params = [STATE_ACTIVE, ts, surface, addr, tid, STATE_PENDING]
-        if user_id is not None:
-            sql += " AND user_id=?"
-            params.append(user_id)
-        n = execute_retry(self.db_path, sql, tuple(params))
-        return bool(n)
+        ok = self._transition(surface=surface, addr=addr, tid=tid, user_id=user_id,
+                              to=STATE_ACTIVE, frm=STATE_PENDING, ts=ts)
+        if ok and not tid:  # 098 CO-12: one approve clears the anchors' inbox copies
+            self._follow_anchors(surface=surface, addr=addr, user_id=user_id,
+                                 to=STATE_ACTIVE, ts=ts)
+        return ok
 
     def reject(
         self,
@@ -279,14 +368,12 @@ class CorrespondentRegistry:
                     surface, addr, tid, len(distinct),
                 )
                 return False
-        sql = ("UPDATE correspondents SET state=?, updated_at=? "
-               "WHERE surface=? AND address=? AND thread_id=? AND state=?")
-        params = [STATE_EXPIRED, ts, surface, addr, tid, STATE_PENDING]
-        if user_id is not None:
-            sql += " AND user_id=?"
-            params.append(user_id)
-        n = execute_retry(self.db_path, sql, tuple(params))
-        return bool(n)
+        ok = self._transition(surface=surface, addr=addr, tid=tid, user_id=user_id,
+                              to=STATE_EXPIRED, frm=STATE_PENDING, ts=ts)
+        if ok and not tid:
+            self._follow_anchors(surface=surface, addr=addr, user_id=user_id,
+                                 to=STATE_EXPIRED, ts=ts)
+        return ok
 
     def deactivate(
         self,
@@ -318,14 +405,12 @@ class CorrespondentRegistry:
                     "correspondents.deactivate refused: %s:%s (thread %r) is active for %d "
                     "tenants; pass user_id to disambiguate", surface, addr, tid, len(distinct))
                 return False
-        sql = ("UPDATE correspondents SET state=?, updated_at=? "
-               "WHERE surface=? AND address=? AND thread_id=? AND state=?")
-        params = [STATE_EXPIRED, ts, surface, addr, tid, STATE_ACTIVE]
-        if user_id is not None:
-            sql += " AND user_id=?"
-            params.append(user_id)
-        n = execute_retry(self.db_path, sql, tuple(params))
-        return bool(n)
+        ok = self._transition(surface=surface, addr=addr, tid=tid, user_id=user_id,
+                              to=STATE_EXPIRED, frm=STATE_ACTIVE, ts=ts)
+        if ok and not tid:  # 098 CO-12: an address-scoped revoke takes the anchors too
+            self._follow_anchors(surface=surface, addr=addr, user_id=user_id,
+                                 to=STATE_EXPIRED, ts=ts)
+        return ok
 
     def seed_thread_anchor(
         self,
@@ -370,18 +455,25 @@ class CorrespondentRegistry:
         )
         if existing is not None:
             return existing["state"]
+        # 098 CO-12: the anchor's state is read from the base row IN the insert
+        # (one statement), so an approve that lands between the read above and
+        # this write cannot leave a stale ``pending`` copy in the owner's inbox.
         inserted = execute_retry(
             self.db_path,
             """INSERT INTO correspondents
                  (surface, address, thread_id, session_id, user_id, state, provenance,
                   created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'thread', ?, ?)
+               SELECT ?, ?, ?, ?, ?, b.state, 'thread', ?, ?
+                 FROM correspondents b
+                WHERE b.surface=? AND b.address=? AND b.user_id=?
+                  AND b.provenance != 'thread' AND b.state != 'expired'
+                ORDER BY b.updated_at DESC LIMIT 1
                ON CONFLICT(surface, address, thread_id, user_id) DO NOTHING""",
-            (surface, addr, thread_id, session_id, user_id, state, ts, ts),
+            (surface, addr, thread_id, session_id, user_id, ts, ts, surface, addr, user_id),
         )
-        if not inserted:  # AC4: a concurrent anchor won the race
-            return self._state_of(surface, addr, thread_id, user_id) or state
-        return state
+        if not inserted:  # AC4: a concurrent anchor won the race (or the base went)
+            return self._state_of(surface, addr, thread_id, user_id)
+        return self._state_of(surface, addr, thread_id, user_id) or state
 
     def rebind_session(
         self,
@@ -418,13 +510,22 @@ class CorrespondentRegistry:
         """
         ts = time.time() if now is None else now
         cutoff = ts - ttl_secs
-        return int(
+        n = int(
             execute_retry(
                 self.db_path,
                 "DELETE FROM correspondents WHERE state!=? AND updated_at < ?",
                 (STATE_EXPIRED, cutoff),
-            )
+            ) or 0
         )
+        # 098 CO-12: an anchor never outlives its base binding — it would keep
+        # the address reachable after the TTL demanded a fresh approval.
+        n += int(execute_retry(
+            self.db_path,
+            "DELETE FROM correspondents WHERE provenance = 'thread' AND NOT EXISTS ("
+            " SELECT 1 FROM correspondents b WHERE b.surface = correspondents.surface"
+            " AND b.address = correspondents.address AND b.user_id = correspondents.user_id"
+            " AND b.provenance != 'thread')", ()) or 0)
+        return n
 
     def prune_thread_anchors(self, max_age_secs: float, *,
                              now: Optional[float] = None) -> int:
@@ -485,23 +586,25 @@ class CorrespondentRegistry:
         if thread_id:
             row = execute_retry(
                 self.db_path,
-                """SELECT * FROM correspondents
-                   WHERE surface=? AND address=? AND thread_id=? AND state=?""",
-                (surface, addr, thread_id, STATE_ACTIVE),
+                "SELECT * FROM correspondents c "
+                f"WHERE c.surface=? AND c.address=? AND c.thread_id=? AND {_TRUSTED}",
+                (surface, addr, thread_id),
                 fetch="one",
             )
             if row is not None:
-                return dict(row)
+                return _routed(row)
+        # 098 CO-12: trust comes from the base row at read time — an anchor of a
+        # pending, expired or purged base never routes.
         rows: List = execute_retry(
             self.db_path,
-            "SELECT * FROM correspondents WHERE surface=? AND address=? AND state=?",
-            (surface, addr, STATE_ACTIVE),
+            f"SELECT * FROM correspondents c WHERE c.surface=? AND c.address=? AND {_TRUSTED}",
+            (surface, addr),
             fetch="all",
         )
         if not rows:
             return None
         if len(rows) == 1:
-            return dict(rows[0])
+            return _routed(rows[0])
         # A4 (2026-07-13 review): >1 active bindings. CROSS-tenant ambiguity stays
         # unroutable — guessing the tenant would leak a reply into the wrong
         # account. SAME-tenant: route to the most recently active binding — the
@@ -514,7 +617,7 @@ class CorrespondentRegistry:
             "correspondent resolve: %s:%s has %d active bindings (one tenant) — "
             "routing to most recent session %s", surface, addr, len(rows),
             best["session_id"])
-        return dict(best)
+        return _routed(best)
 
     def list(self, user_id: Optional[str] = None) -> List[dict]:
         """List correspondent bindings (all, or tenant-scoped) for owner review."""

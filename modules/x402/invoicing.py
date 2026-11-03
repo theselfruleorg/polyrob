@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 #: that module is imported BY this one for the re-exports below.
 from modules.x402.invoice_assets import INVOICE_KIND  # noqa: E402
 from modules.x402.invoice_status import INVOICE_STATUSES, INCOME_STATUSES  # noqa: F401  (re-export)
+from modules.x402.invoice_status import X402_INVOICE, sql_now  # noqa: E402
+from core.state.sql import acas_transition  # noqa: E402
 
 
 def _norm_tx(tx_hash) -> Optional[str]:
@@ -606,6 +608,12 @@ async def create_payment_request(
     }
 
 
+#: The metadata kind of a paid A2A/OpenAI-compat request (``settlement_attempt``).
+MACHINE_PAYMENT_KIND = "machine_payment"
+#: Statuses that only a machine payment reaches (money taken, then owed back).
+_REFUND_STATUSES = frozenset({"refund_due", "refunded"})
+
+
 async def list_payment_requests(
     *, user_id: str, status: Optional[str] = None, limit: int = 20, db=None,
 ) -> List[Dict[str, Any]]:
@@ -621,9 +629,12 @@ async def list_payment_requests(
     # Python after a `ORDER BY created_at DESC LIMIT n` would grab only the newest
     # n rows of ANY status and could return [] while older matching (e.g. still
     # unpaid pending) invoices exist beyond the window.
+    # 098 review: only machine payments reach refund_due — a refund listing
+    # reads them too, or no seat can see the obligation the ledger counts.
+    kinds = [INVOICE_KIND] + ([MACHINE_PAYMENT_KIND] if status in _REFUND_STATUSES else [])
     where = ["(user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)",
-             "json_extract(metadata, '$.kind') = ?"]
-    params: List[Any] = [user_id, user_id, INVOICE_KIND]
+             f"json_extract(metadata, '$.kind') IN ({','.join('?' * len(kinds))})"]
+    params: List[Any] = [user_id, user_id, *kinds]
     if status:
         where.append("status = ?")
         params.append(status)
@@ -771,19 +782,18 @@ async def get_invoice_tenant(request_id: str, *, db=None) -> Optional[str]:
 async def claim_for_settlement(request_id: str, *, db=None) -> bool:
     """Atomic pending→settling CAS — the exclusive right to settle ONE invoice.
 
-    The payable endpoint claims BEFORE calling the facilitator so two concurrent
-    distinct payers can never both settle the same invoice on-chain: the loser's
-    claim fails (rowcount 0) and it never touches the facilitator. Only a failure
-    BEFORE submission may revert via :func:`revert_settlement_claim`."""
+    `/pay` only (098 MO-02): it claims BEFORE calling the facilitator so two
+    concurrent payers never both settle one invoice on-chain. The claim names its
+    lane and time, so the claim reaper can release one that never reached the
+    facilitator; a scan pass never claims (it settles pending in one CAS)."""
     database = await _resolve_db(db)
     if database is None:
         return False
-    cur = await database.execute(
-        "UPDATE x402_payment_requests SET status = 'settling', updated_at = datetime('now') "
-        "WHERE id = ? AND status = 'pending'",
-        (request_id,),
-    )
-    return bool(getattr(cur, "rowcount", 0))
+    return await acas_transition(
+        database, "x402_payment_requests", key="id = ?", key_params=(request_id,),
+        machine=X402_INVOICE, to="settling", from_states=("pending",),
+        set_cols={"claim_lane": "facilitator", "claimed_at": int(time.time()),
+                  "updated_at": sql_now()})
 
 
 async def revert_settlement_claim(request_id: str, *, db=None) -> None:
@@ -794,24 +804,19 @@ async def revert_settlement_claim(request_id: str, *, db=None) -> None:
     database = await _resolve_db(db)
     if database is None:
         return
-    await database.execute(
-        "UPDATE x402_payment_requests SET status = 'pending', updated_at = datetime('now') "
-        "WHERE id = ? AND status = 'settling' "
-        "AND COALESCE(json_extract(metadata, '$.facilitator_submitted'), 0)=0",
-        (request_id,),
-    )
+    await acas_transition(
+        database, "x402_payment_requests", key="id = ?", key_params=(request_id,),
+        machine=X402_INVOICE, to="pending", from_states=("settling",),
+        set_cols={"claim_lane": None, "claimed_at": None, "updated_at": sql_now()},
+        where_extra="COALESCE(json_extract(metadata, '$.facilitator_submitted'), 0)=0")
 
 
 async def revert_stale_settling(*, max_age_seconds: int = 600, db=None,
                                 ) -> List[Dict[str, Any]]:
-    """Never infer non-settlement from age, including for legacy unmarked claims.
-
-    A facilitator can broadcast before losing its response. Reopening an old
-    claim could charge a second payer. The owner must reconcile the chain and
-    use settle_payment_request for a proven payment; time alone proves nothing.
-    Kept as a compatibility seam for the watcher and older callers.
-    """
-    return []
+    """Release `/pay` claims that never reached the facilitator (098 MO-02).
+    A submission, or a legacy claim with no lane, is never released on age."""
+    from modules.x402.invoice_reaper import reap_unsubmitted_claims
+    return await reap_unsubmitted_claims(max_age_seconds=max_age_seconds, db=db)
 
 
 async def transaction_hash_already_settled(transaction_hash: str, *, db=None) -> bool:
@@ -845,6 +850,7 @@ async def transaction_hash_already_settled(transaction_hash: str, *, db=None) ->
 
 async def settle_payment_request(
     request_id: str, *, transaction_hash: Optional[str] = None, db=None,
+    from_states=None,
 ) -> bool:
     """Attested transition to completed (owner CLI / API). Idempotent: only a
     'pending' (owner-attested direct settle) or 'settling' (endpoint post-claim) row
@@ -875,13 +881,20 @@ async def settle_payment_request(
             "(request %s NOT settled — replay guard)", transaction_hash, request_id)
         return False
     try:
-        cur = await database.execute(
-            """UPDATE x402_payment_requests
-               SET status = 'completed', transaction_hash = ?,
-                   completed_at = datetime('now'), updated_at = datetime('now')
-               WHERE id = ? AND status IN ('pending', 'settling')""",
-            (transaction_hash, request_id),
-        )
+        if from_states is None:  # 098: a scan pass passes ("pending",); MO-21: a
+            from_states = ("pending", "settling") + (  # tx proves a settled_no_tx row
+                ("settled_no_tx",) if transaction_hash else ())
+        now = sql_now()
+        settled = await acas_transition(
+            database, "x402_payment_requests", key="id = ?", key_params=(request_id,),
+            machine=X402_INVOICE, to="completed", from_states=from_states,
+            set_cols={"transaction_hash": transaction_hash, "completed_at": now,
+                      "updated_at": now},
+            # 098 review: a HELD machine payment ("no service was started") is a
+            # refund owed (`complete_held`), never income by attestation.
+            where_extra=("NOT (status = 'settling' AND "
+                         "COALESCE(json_extract(metadata, '$.kind'), '') = ?)"),
+            where_params=(MACHINE_PAYMENT_KIND,))
     except sqlite3.IntegrityError:
         # Lost a genuine concurrent race to the UNIQUE index — two settle
         # attempts for the same tx_hash landed together. Never resurrect or
@@ -890,7 +903,6 @@ async def settle_payment_request(
             "x402 settle refused: tx %s hit the transaction_hash uniqueness "
             "guard concurrently (request %s NOT settled)", transaction_hash, request_id)
         return False
-    settled = bool(getattr(cur, "rowcount", 0))
     if settled:
         logger.info("x402 invoice %s settled (tx=%s)", request_id, transaction_hash)
     return settled
@@ -1026,12 +1038,12 @@ async def expired_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
     database = await _resolve_db(db)
     if database is None:
         return []
-    rows = await database.fetch_all(
+    rows = await database.fetch_all(  # 098 MO-04: every PAYABLE kind expires noticed
         """SELECT * FROM x402_payment_requests
            WHERE status = 'expired'
-             AND json_extract(metadata, '$.kind') = ?
+             AND json_extract(metadata, '$.kind') IN (SELECT value FROM json_each(?))
              AND json_extract(metadata, '$.wake_delivered') = 0""",
-        (INVOICE_KIND,),
+        (json.dumps(list(PAYABLE_KINDS)),),
     )
     out = []
     for row in rows or []:
@@ -1043,6 +1055,8 @@ async def expired_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
             "user_id": meta.get("tenant_id") or row.get("user_id") or "",
             "purpose": meta.get("purpose") or "",
             "correspondent_ref": meta.get("correspondent_ref") or None,
+            "kind": meta.get("kind") or INVOICE_KIND,
+            "room_action": meta.get("room_action") or None,
         })
     return out
 
@@ -1067,12 +1081,13 @@ async def claim_wake(request_id: str, *, db=None) -> bool:
     database = await _resolve_db(db)
     if database is None:
         return False
-    cur = await database.execute(
+    cur = await database.execute(  # 098 MO-04: a lease (`wake_lease`), not a latch
         """UPDATE x402_payment_requests
-           SET metadata = json_set(metadata, '$.wake_delivered', json('true')),
+           SET metadata = json_set(metadata, '$.wake_delivered', json('true'),
+                                   '$.wake_state', 'claimed', '$.wake_claimed_at', ?),
                updated_at = datetime('now')
            WHERE id = ? AND json_extract(metadata, '$.wake_delivered') = 0""",
-        (request_id,),
+        (int(time.time()), request_id),
     )
     return bool(getattr(cur, "rowcount", 0))
 

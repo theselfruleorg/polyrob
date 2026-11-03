@@ -74,7 +74,10 @@ async def test_runner_exception_emits_failed(tmp_path, log):
 def test_reclaim_returns_ids_and_emits_cut_by_restart(tmp_path, log):
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(_job(max_duration_seconds=60))
-    store.set_status("exit0001", "running")
+    store.claim_for_run("exit0001")
+    from core.sqlite_util import execute_retry
+    execute_retry(store.db_path, "UPDATE cron_jobs SET lease_until=1 WHERE id=?",
+                  ("exit0001",))                       # 098 MO-09: the lease ran out
     reclaimed = store.reclaim_stale_running()
     assert reclaimed == 1
     assert store.get("exit0001").status == "scheduled"
@@ -101,3 +104,25 @@ def test_loops_section_renders_last_outcome_per_job(tmp_path, log, monkeypatch):
     assert "EXIT RAIL" in joined and "cut_by_cap" in joined, joined
     keys = {h.key for h in sec.health}
     assert "rail_cut" in keys
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_tick_gives_the_row_back_at_once(tmp_path, log):
+    """098 review: a cancel that is not an owner pause (shutdown, /autonomy off)
+    requeues the row; it stayed `running` until its lease ran out."""
+    store = CronJobStore(str(tmp_path / "cron.db"))
+    store.add(_job(max_duration_seconds=60))
+    started = asyncio.Event()
+
+    async def runner(job):
+        started.set()
+        await asyncio.sleep(30)
+        return True
+
+    t = asyncio.create_task(
+        CronScheduler(store, runner, lock_path=str(tmp_path / "t.lock")).tick(now=NOW))
+    await asyncio.wait_for(started.wait(), 5)
+    t.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await t
+    assert store.get("exit0001").status == "scheduled"

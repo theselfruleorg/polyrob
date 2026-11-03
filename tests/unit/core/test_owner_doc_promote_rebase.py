@@ -59,7 +59,7 @@ def test_rule_the_draft_retires_is_retired_and_named(tmp_path):
     assert w.propose(_doc(rules[1:]), user_id=UID, created_by="agent").pending
     assert w.list_pending(UID)["preview"].startswith("retires 1 active rule(s)")
     ok, msg = se.promote(se.KIND_OWNER, UID, user_id=UID, home_dir=tmp_path,
-                         instance_id=w.instance_id)
+                         instance_id=w.instance_id, rev=w.list_pending(UID)["rev"])
     assert ok and "retires 1 active rule(s)" in msg and "R 0" in msg
     assert rules[0] not in _active_keys(w)
     assert any("R 0" in e for e in superseded_entries(w.read_active(UID)))

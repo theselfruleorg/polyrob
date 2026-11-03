@@ -327,11 +327,10 @@ async def build_prefetch_message(query: str, *, session_id: str,
         if AutonomyConfig.kb_auto_prefetch():
             try:
                 from modules.memory.registry import kb_search
-                # Auto-prefetch collection is configurable — a KB ingested into a
-                # non-"default" collection was previously never auto-recalled because
-                # this was hardcoded. Operators point it at their collection via env.
+                # 097: unset = every collection (the KB has full access). An
+                # operator can still pin one collection via env.
                 import os
-                _kb_collection = os.getenv("KB_PREFETCH_COLLECTION", "default").strip() or "default"
+                _kb_collection = os.getenv("KB_PREFETCH_COLLECTION", "").strip() or None
                 kb_result = await kb_search(query, user_id=user_id, collection=_kb_collection,
                                             limit=RECALL_KB_LIMIT)
                 kb_result = _budget((kb_result or "").strip(), _KB_ENTRY,
@@ -409,6 +408,17 @@ def _owner_memory(agent) -> bool:
         return bool(regime_policy(agent).owner_memory)
     except Exception:
         return False
+
+
+def bootstrap_latch(agent, name: str):
+    """098 AG-22: the per-injector once-per-session latch (``digest``,
+    ``bridge``, ``auto_bridge``), created on first use."""
+    from core.state.once import OnceLatch
+    latches = agent.__dict__.setdefault("_bootstrap_latches", {})
+    latch = latches.get(name)
+    if latch is None:
+        latch = latches[name] = OnceLatch()
+    return latch
 
 
 class MemoryPrefetchMixin:
@@ -536,6 +546,19 @@ class MemoryPrefetchMixin:
         except Exception as e:
             self.logger.debug(f"memory prefetch injection skipped: {e}")
 
+    async def _bootstrap_once(self, name: str, body, label: str) -> None:
+        """098 AG-22: run a once-per-session injector until it succeeds or
+        declines by policy (``OnceLatch``). An error leaves the latch open, so
+        the next run's first step tries again instead of losing it for the
+        session. Fail-open."""
+        latch = bootstrap_latch(self, name)
+        if latch.done():
+            return
+        try:
+            await latch.arun(body)
+        except Exception as e:
+            self.logger.debug(f"{label} skipped (retried at the next run's first step): {e}")
+
     async def _maybe_inject_episodic_digest(self) -> None:
         """Inject a recent-activity digest of the agent's OWN recent runs, ONCE, on
         the first step of a chat/owner session (Task 5). Fail-open; inert unless
@@ -551,33 +574,32 @@ class MemoryPrefetchMixin:
         misread as a chat session. By the time step 1 runs, the marker is reliably
         set, so ``is_autonomous(self.session_id)`` here is trustworthy.
         """
-        try:
-            if getattr(self.state, "n_steps", 0) != 1:
-                return
-            if getattr(self, "_session_bootstrap_done", False):
-                return
-            if getattr(self, "_is_sub_agent", False):
-                return
-            from core.surfaces.room_policy import is_public_session
-            if is_public_session(getattr(self, "orchestrator", None)):
-                return  # 044 T4: no tenant recall into a public room
-            from agents.task.session_class import correspondent_facing
-            if correspondent_facing(getattr(self, "orchestrator", None)):
-                return  # H16: output goes to a correspondent — no owner-tenant state
-            from core.autonomy_marker import is_autonomous
-            if is_autonomous(self.session_id):
-                return
-            from agents.task.agent.core.episodic_digest import build_activity_digest
-            msg = await build_activity_digest(
-                user_id=getattr(self, "user_id", None),
-                kind="chat",
-                is_sub_agent=self._is_sub_agent,
-            )
-            if msg is not None:
-                self.message_manager.push_ephemeral_message(msg)
-                self.logger.debug("Injected episodic activity digest")
-        except Exception as e:
-            self.logger.debug(f"episodic digest injection skipped: {e}")
+        if getattr(self.state, "n_steps", 0) != 1:
+            return
+        await self._bootstrap_once('digest', self._maybe_inject_episodic_digest_body, 'episodic digest injection')
+
+    async def _maybe_inject_episodic_digest_body(self) -> None:
+        # 098 AG-22: a return is a decision (the latch closes); a raise leaves it open.
+        if getattr(self, "_is_sub_agent", False):
+            return
+        from core.surfaces.room_policy import is_public_session
+        if is_public_session(getattr(self, "orchestrator", None)):
+            return  # 044 T4: no tenant recall into a public room
+        from agents.task.session_class import correspondent_facing
+        if correspondent_facing(getattr(self, "orchestrator", None)):
+            return  # H16: output goes to a correspondent — no owner-tenant state
+        from core.autonomy_marker import is_autonomous
+        if is_autonomous(self.session_id):
+            return
+        from agents.task.agent.core.episodic_digest import build_activity_digest
+        msg = await build_activity_digest(
+            user_id=getattr(self, "user_id", None),
+            kind="chat",
+            is_sub_agent=self._is_sub_agent,
+        )
+        if msg is not None:
+            self.message_manager.push_ephemeral_message(msg)
+            self.logger.debug("Injected episodic activity digest")
 
     async def _maybe_inject_autonomous_continuity(self) -> None:
         """§7.5: carry recent activity INTO an autonomous goal/cron tick so it stops
@@ -588,36 +610,35 @@ class MemoryPrefetchMixin:
         Once per SESSION, like its siblings: a self-wake re-entry resets n_steps
         back to 1, so without the bootstrap-done guard the continuity block would
         be re-injected on every wake (D6)."""
-        try:
-            if getattr(self.state, "n_steps", 0) != 1:
-                return
-            if getattr(self, "_session_bootstrap_done", False):
-                return
-            if getattr(self, "_is_sub_agent", False):
-                return
-            from core.surfaces.room_policy import is_public_session
-            if is_public_session(getattr(self, "orchestrator", None)):
-                # 044 I3: no owner-tenant state into a public room. A room's
-                # SERVICE run is an autonomous goal run bound to the room's own
-                # session, so it passed the `is_autonomous` test below and was
-                # handed the owner's last 24 h of autonomous work — trades,
-                # goals, spend — to answer strangers with.
-                return
-            from agents.task.session_class import correspondent_facing
-            if correspondent_facing(getattr(self, "orchestrator", None)):
-                return  # H16: output goes to a correspondent — no owner-tenant state
-            from core.autonomy_marker import is_autonomous
-            if not is_autonomous(self.session_id):
-                return  # chat sessions use _maybe_inject_episodic_digest instead
-            from agents.task.agent.core.episodic_digest import build_mission_continuity
-            _cfg = getattr(getattr(self, "container", None), "config", None)
-            msg = await build_mission_continuity(user_id=getattr(self, "user_id", None),
-                                                 data_dir=getattr(_cfg, "data_dir", None))
-            if msg is not None:
-                self.message_manager.push_ephemeral_message(msg)
-                self.logger.debug("Injected autonomous continuity bridge")
-        except Exception as e:
-            self.logger.debug(f"autonomous continuity injection skipped: {e}")
+        if getattr(self.state, "n_steps", 0) != 1:
+            return
+        await self._bootstrap_once('auto_bridge', self._maybe_inject_autonomous_continuity_body, 'autonomous continuity injection')
+
+    async def _maybe_inject_autonomous_continuity_body(self) -> None:
+        # 098 AG-22: a return is a decision (the latch closes); a raise leaves it open.
+        if getattr(self, "_is_sub_agent", False):
+            return
+        from core.surfaces.room_policy import is_public_session
+        if is_public_session(getattr(self, "orchestrator", None)):
+            # 044 I3: no owner-tenant state into a public room. A room's
+            # SERVICE run is an autonomous goal run bound to the room's own
+            # session, so it passed the `is_autonomous` test below and was
+            # handed the owner's last 24 h of autonomous work — trades,
+            # goals, spend — to answer strangers with.
+            return
+        from agents.task.session_class import correspondent_facing
+        if correspondent_facing(getattr(self, "orchestrator", None)):
+            return  # H16: output goes to a correspondent — no owner-tenant state
+        from core.autonomy_marker import is_autonomous
+        if not is_autonomous(self.session_id):
+            return  # chat sessions use _maybe_inject_episodic_digest instead
+        from agents.task.agent.core.episodic_digest import build_mission_continuity
+        _cfg = getattr(getattr(self, "container", None), "config", None)
+        msg = await build_mission_continuity(user_id=getattr(self, "user_id", None),
+                                             data_dir=getattr(_cfg, "data_dir", None))
+        if msg is not None:
+            self.message_manager.push_ephemeral_message(msg)
+            self.logger.debug("Injected autonomous continuity bridge")
 
     async def _maybe_inject_continuity_bridge(self) -> None:
         """Seed a SESSION_BRIDGE 'last time we were discussing X' message, ONCE, on the
@@ -639,45 +660,44 @@ class MemoryPrefetchMixin:
         ``agents/task_agent_lite.py``) rather than reading ``orchestrator._chat_session_key``
         directly, so this also works after an orchestrator recreation.
         """
-        try:
-            if getattr(self.state, "n_steps", 0) != 1:
-                return
-            if getattr(self, "_session_bootstrap_done", False):
-                return
-            if getattr(self, "_is_sub_agent", False):
-                return
-            from core.surfaces.room_policy import is_public_session
-            if is_public_session(getattr(self, "orchestrator", None)):
-                return  # 044 T4: no tenant recall into a public room
-            from agents.task.session_class import correspondent_facing
-            if correspondent_facing(getattr(self, "orchestrator", None)):
-                return  # H16: output goes to a correspondent — no owner-tenant state
-            from core.autonomy_marker import is_autonomous
-            if is_autonomous(self.session_id):
-                return
-            from core.config_policy import AutonomyConfig
-            if not AutonomyConfig.continuity_bridge_enabled():
-                return
+        if getattr(self.state, "n_steps", 0) != 1:
+            return
+        await self._bootstrap_once('bridge', self._maybe_inject_continuity_bridge_body, 'continuity bridge injection')
 
-            thread_key = None
-            container = getattr(self, "container", None)
-            if container is not None:
-                registry = container.get_service("session_chat_registry")
-                if registry is not None and hasattr(registry, "resolve_by_session_id"):
-                    row = registry.resolve_by_session_id(self.session_id)
-                    if row:
-                        thread_key = row.get("session_key")
-            if not thread_key:
-                return
+    async def _maybe_inject_continuity_bridge_body(self) -> None:
+        # 098 AG-22: a return is a decision (the latch closes); a raise leaves it open.
+        if getattr(self, "_is_sub_agent", False):
+            return
+        from core.surfaces.room_policy import is_public_session
+        if is_public_session(getattr(self, "orchestrator", None)):
+            return  # 044 T4: no tenant recall into a public room
+        from agents.task.session_class import correspondent_facing
+        if correspondent_facing(getattr(self, "orchestrator", None)):
+            return  # H16: output goes to a correspondent — no owner-tenant state
+        from core.autonomy_marker import is_autonomous
+        if is_autonomous(self.session_id):
+            return
+        from core.config_policy import AutonomyConfig
+        if not AutonomyConfig.continuity_bridge_enabled():
+            return
 
-            from core.surfaces.continuity import build_bridge_message
-            # E-C4: owner wording + longer bridge + open errand for the owner chat.
-            from agents.task.session_class import OWNER_CHAT, session_regime
-            msg = await build_bridge_message(
-                user_id=getattr(self, "user_id", None), thread_key=thread_key,
-                owner=session_regime(self) == OWNER_CHAT)
-            if msg is not None:
-                self.message_manager.push_ephemeral_message(msg)
-                self.logger.debug("Injected continuity bridge message")
-        except Exception as e:
-            self.logger.debug(f"continuity bridge injection skipped: {e}")
+        thread_key = None
+        container = getattr(self, "container", None)
+        if container is not None:
+            registry = container.get_service("session_chat_registry")
+            if registry is not None and hasattr(registry, "resolve_by_session_id"):
+                row = registry.resolve_by_session_id(self.session_id)
+                if row:
+                    thread_key = row.get("session_key")
+        if not thread_key:
+            return
+
+        from core.surfaces.continuity import build_bridge_message
+        # E-C4: owner wording + longer bridge + open errand for the owner chat.
+        from agents.task.session_class import OWNER_CHAT, session_regime
+        msg = await build_bridge_message(
+            user_id=getattr(self, "user_id", None), thread_key=thread_key,
+            owner=session_regime(self) == OWNER_CHAT)
+        if msg is not None:
+            self.message_manager.push_ephemeral_message(msg)
+            self.logger.debug("Injected continuity bridge message")

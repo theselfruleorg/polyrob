@@ -125,6 +125,14 @@ class LifecycleWatcher:
         self.request: Optional[lc.LifecycleRequest] = None
         #: Set by a SIGTERM/SIGINT stop: a drain in progress stops waiting.
         self.aborted = False
+        #: The token of this watcher's own drain hold (098 CO-03).
+        self._drain_token: Optional[str] = None
+
+    def _end_drain(self) -> None:
+        """End THIS watcher's hold only (a stop's hold stays, 098 CO-03)."""
+        token, self._drain_token = self._drain_token, None
+        if token is not None:
+            lc.end_drain(token)
 
     def abort(self) -> None:
         """The process is stopping for another reason (``systemctl stop``, a
@@ -151,7 +159,7 @@ class LifecycleWatcher:
                     # A drain that dies must not leave the request "draining" for
                     # ever (the live claimer would block every later /restart).
                     logger.error("lifecycle: drain failed for %s", req.describe(), exc_info=True)
-                    lc.end_drain()
+                    self._end_drain()
                     try:
                         lc.close_request(lc.OUTCOME_CANCELLED, "the drain failed (see the log)",
                                          data_home=self.data_home)
@@ -177,7 +185,7 @@ class LifecycleWatcher:
                          "Run me as a background service (`polyrob service install`).")
             self.request = None
             return
-        lc.begin_drain()
+        self._drain_token = lc.begin_drain("restart")
         idle, busy = _is_idle(self.data_home)
         what = "update" if req.kind == lc.KIND_UPDATE else "restart"
         if req.force:
@@ -194,7 +202,7 @@ class LifecycleWatcher:
                 self._leave_for_next_start(req)
                 return
             if self._clock() >= deadline:
-                lc.end_drain()
+                self._end_drain()
                 lc.close_request(lc.OUTCOME_DRAIN_TIMEOUT, busy, data_home=self.data_home)
                 await notify(self.container, req,
                              f"I did not {what}: still busy after "
@@ -220,17 +228,29 @@ class LifecycleWatcher:
         if self.aborted:
             self._leave_for_next_start(req)
             return
-        lc.set_request_state(lc.STATE_EXITING, data_home=self.data_home,
-                             exited_at=time.time())
+        if lc.set_request_state(lc.STATE_EXITING, data_home=self.data_home,
+                                request_id=req.id, expect=(lc.STATE_DRAINING,),
+                                exited_at=time.time()) is None:
+            # 098 CO-02: the request was closed or replaced while we drained.
+            self._end_drain()
+            logger.warning("lifecycle: %s changed during the drain — not exiting",
+                           req.describe())
+            self.request = None
+            return
         logger.warning("lifecycle: exiting with %s for %s", lc.RESTART_EXIT_CODE, req.describe())
         self.exit_code = lc.RESTART_EXIT_CODE
         self.request_exit()
 
     def _leave_for_next_start(self, req: lc.LifecycleRequest) -> None:
-        lc.set_request_state(lc.STATE_EXITING, data_home=self.data_home,
+        # 098 CO-02: an interrupted UPDATE is parked, never applied by a later
+        # start on its own; an interrupted restart is answered by the next start.
+        to = lc.STATE_PARKED if req.kind == lc.KIND_UPDATE else lc.STATE_EXITING
+        lc.set_request_state(to, data_home=self.data_home, request_id=req.id,
+                             expect=(lc.STATE_DRAINING,),
                              exited_at=time.time(), note="stopped during the drain")
-        logger.warning("lifecycle: stopping during the drain for %s — the next start "
-                       "answers it", req.describe())
+        logger.warning("lifecycle: stopping during the drain for %s — %s", req.describe(),
+                       "parked (a start within the hour answers it)" if to == lc.STATE_PARKED
+                       else "the next start answers it")
 
 
 async def stop_drain(*, data_home: Path, stop_intake: Callable[[], None],
@@ -238,8 +258,9 @@ async def stop_drain(*, data_home: Path, stop_intake: Callable[[], None],
                      clock: Callable[[], float] = time.monotonic,
                      sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep) -> bool:
     """SIGTERM: stop intake, wait (bounded) for the live work. True when the
-    work finished inside the bound, False when the stop cuts it."""
-    lc.begin_drain()
+    work finished inside the bound, False when the stop cuts it. The stop's
+    hold is never ended: the process exits (098 CO-03)."""
+    lc.begin_drain("stop")
     try:
         stop_intake()
     except Exception:
@@ -307,12 +328,26 @@ def _seed_note() -> str:
         return ""
 
 
+def _error_tail(error: Any, limit: int = 300) -> str:
+    """The update error for the chat notice: its END when it is long — a failed
+    step's text is the command first and the cause (the last output lines)
+    after it, so a head cut drops exactly the cause."""
+    text = str(error or "unknown error").strip() or "unknown error"
+    return text if len(text) <= limit else "…" + text[-(limit - 1):]
+
+
 def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str, str]:
     """(outcome, owner text) for the request a healthy boot answers."""
     took = max(0, int(now - float(req.created_at or now)))
     label = lc.version_label(boot.get("version"), boot.get("sha"))
     res = dict(req.update_result or {})
     if req.kind == lc.KIND_UPDATE:
+        if res.get("expired"):
+            asked = time.strftime("%H:%M on %d %b", time.localtime(float(req.created_at or now)))
+            return (lc.OUTCOME_EXPIRED,
+                    f"⚠️ The update asked at {asked} was not applied: the service stopped "
+                    f"before it ran, and that was too long ago to apply it now. Ask again "
+                    f"with /update. Back online on {label}.")
         if res.get("ok"):
             return (lc.OUTCOME_UPDATED,
                     f"✅ Updated and back online on {label} "
@@ -328,7 +363,7 @@ def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str
         if res:
             return (lc.OUTCOME_UPDATE_FAILED,
                     f"⚠️ The update failed at the '{res.get('failed_step') or 'apply'}' step: "
-                    f"{str(res.get('error') or 'unknown error')[:300]}. "
+                    f"{_error_tail(res.get('error'))}. "
                     + ("It was rolled back. " if res.get("rolled_back") else
                        "The rollback was incomplete — run `polyrob update --list-snapshots`. ")
                     + f"Back online on {label}.")

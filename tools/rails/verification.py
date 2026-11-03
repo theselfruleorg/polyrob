@@ -112,7 +112,7 @@ VERIFICATION: Dict[str, RailVerification] = {
     "onchain": _row(
         "onchain", "On-chain transaction", "tx hash",
         "a confirmed receipt AND the state read back afterwards",
-        "the existing `tx_guard` rule: assert the simulated deltas, broadcast, "
+        "the wallet's transaction guard: assert the simulated deltas, broadcast, "
         "then read the resulting state (balance, owner, tokenId) back",
         "a transaction hash is not a result: a receipt can succeed while the "
         "call did nothing. Only the read-back proves the effect",
@@ -184,8 +184,10 @@ def render_guide() -> str:
         "a result will wrongly report a no-op as done.",
         "",
         "This page is generated from the one table in the code",
-        "(`tools/rails/verification.py`), which is also what every tool result's",
-        "`proof:` line is rendered from. There is no second copy to disagree with.",
+        "(`tools/rails/verification.py`). The `proof:` line on a `message` send,",
+        "an email send, a `room_read` result and an `x_post`/`x_reply` result is",
+        "rendered from the same table, so the two cannot disagree. An on-chain",
+        "result carries no `proof:` line: check it against the row below.",
         "",
         "**What this table states is what CAN be proved, never that anything WAS.**",
         "A rail whose proof is the receipt still needs the receipt.",

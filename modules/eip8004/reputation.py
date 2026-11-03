@@ -55,7 +55,9 @@ def _encode_eip712(typed_data: Dict[str, Any]):
 #: verification — mirrors the status set `settled_unnotified_invoices` /
 #: `unified_ledger.py` already treat as settled (`completed` = tx-attested,
 #: `settled_no_tx` = owner-attested with no on-chain transaction recorded).
-_SETTLED_STATUSES = ("completed", "settled_no_tx")
+#: 098 MO-21: `settled_no_tx` is unproven — it backs no reputation until a tx
+#: completes it.
+_SETTLED_STATUSES = ("completed",)
 
 
 class ReputationManager:

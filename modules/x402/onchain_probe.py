@@ -68,6 +68,36 @@ def get_head_block(rpc: RpcCall) -> Optional[int]:
         return None
 
 
+def block_at_or_before(rpc: RpcCall, ts: float, head: int, *, max_reads: int = 40
+                       ) -> Optional[int]:
+    """The highest block whose timestamp is <= *ts* (binary search over
+    ``eth_getBlockByNumber``), or None on any read failure. 098 MO-06: the scan
+    seed for an asset seen for the first time is the block the OLDEST pending
+    invoice could first be paid in, not "where the scanner first looked"."""
+    def stamp(n: int) -> Optional[int]:
+        blk = rpc("eth_getBlockByNumber", [hex(int(n)), False])
+        return int(blk["timestamp"], 16) if isinstance(blk, dict) and blk.get("timestamp") else None
+    try:
+        lo, hi = 0, int(head)
+        if (stamp(hi) or 0) <= ts:
+            return hi
+        reads = 1
+        while lo < hi and reads < max_reads:
+            mid = (lo + hi + 1) // 2
+            t = stamp(mid)
+            reads += 1
+            if t is None:
+                return None
+            if t <= ts:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo if lo == hi else None
+    except Exception:
+        logger.debug("onchain_probe: block-by-time search failed", exc_info=True)
+        return None
+
+
 def scan_treasury_transfers(
     rpc: RpcCall,
     token_addr: str,

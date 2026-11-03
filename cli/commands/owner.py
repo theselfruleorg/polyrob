@@ -94,7 +94,7 @@ _OWNER_HELP_SECTIONS = [
       "fulfill", "missed"]),
     # 046: `paid` is MONEY — it prices what a room sells and names what the
     # treasury OWES a payer whose effect never landed.
-    ("Money", ["invoices", "settle", "sub", "paid"]),
+    ("Money", ["invoices", "settle", "reopen", "refunded", "sub", "paid", "deposits", "deposit-resolve", "invoice-resolve"]),
     ("Control", ["halt", "resume", "pause-entries", "resume-entries", "show"]),
     # 025: quarantined goal/cron findings (memory scopes).
     ("Memory", ["memory"]),
@@ -449,7 +449,6 @@ def pending(user, as_json):
     These are things the agent learned/asked and quarantined for your review — they
     change nothing until you `owner promote` (or reject) them.
     """
-    from core import self_evolution
     from tools.controller.approval_queue import all_pending
     tenant = _owner_tenant(user)
     # 2026-09-15: the ONE union, so this seat and the chat seat list AND decide
@@ -474,28 +473,17 @@ def pending(user, as_json):
                    else empty("pending proposals",
                               "nothing is quarantined for your review"))
         return
-    click.echo(click.style(f"{len(items)} pending proposal(s) for tenant {tenant}:", bold=True))
-    for it in items:
-        # The shared self-evolution label map (owner-UX P2-4 final review, item 4)
-        # covers the five self-evolution kinds; "correspondent"/"tool_approval"
-        # ride separate, non-self-evolution pipelines aggregated into this same
-        # list, so they keep their own labels rather than falling back to "skill".
-        label = {"correspondent": "contact",
-                 "tool_approval": "approval",
-                 "signer_approval": "signer"}.get(
-            it["kind"], self_evolution.pending_kind_label(it["kind"]))
-        click.echo(f"  {click.style(label.ljust(8), fg='yellow')} "
-                   f"{click.style(it['kind'] + ':' + str(it['id']), bold=True)}"
-                   f"  ({it['chars']} chars)")
-        click.echo(f"           {it['preview']}")
+    # 096 W7 (R4): the SAME rows (what · Why · Changes, a linked pair as one
+    # decision) as the Telegram notice; only the decide verbs are this seat's.
+    from core.pending_seats import SEAT_CLI, fold_linked, list_lines
+    click.echo(click.style(f"{len(fold_linked(items))} pending proposal(s) for tenant {tenant}:",
+                           bold=True))
+    for line in list_lines(items, seat=SEAT_CLI):
+        click.echo(f"  {line}")
     if pending_set.unavailable:
         click.echo(click.style(pending_set.degraded_line(), fg="yellow"))
-    click.echo(click.style("\napprove: ", dim=True)
-               + "polyrob owner promote <kind> <id>   "
-               + click.style("reject: ", dim=True)
-               + "polyrob owner reject <kind> <id>   "
-               + click.style("all: ", dim=True)
-               + "polyrob owner promote all")
+    click.echo(click.style("\nall at once: ", dim=True) + "polyrob owner promote all"
+               + click.style("   ·   ", dim=True) + "polyrob owner reject all")
 
 
 @owner.command("show-pending")
@@ -503,21 +491,35 @@ def pending(user, as_json):
 @click.argument("item_id")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def show_pending(kind, item_id, user):
-    """Show the FULL body of one pending proposal before deciding (T3-09).
+    """Show ONE pending item in full before deciding (T3-09, 096 W7).
 
-    KIND is 'self_context' or 'skill'. `owner pending` shows only a ~160-char
-    preview — review the whole quarantined body here, then promote/reject.
+    KIND is any kind `owner pending` lists (skill, self_context, owner_doc,
+    contract, pref_change, curated_note, tool_approval, correspondent,
+    signer_approval, …). A draft is shown as the owner decides it on every
+    seat: why it exists, what changes, the diff against the live text (both
+    halves of a linked pair); a tool approval shows its full grant card.
     """
-    from core import self_evolution
+    from core.pending_seats import SEAT_CLI, find_item, review_one
+    from tools.controller.approval_queue import all_pending
     tenant = _owner_tenant(user)
-    ok, body = self_evolution.show(kind, item_id, user_id=tenant,
-                                   home_dir=_data_dir(write=False),
-                                   instance_id=_instance_id())
+    home = _data_dir(write=False)
+    pending_set = all_pending(user_id=tenant, home_dir=home, instance_id=_instance_id(),
+                              board=_goal_board(),
+                              correspondent_registry=_registry(home))
+    item = find_item(pending_set.items, kind, item_id)
+    if item is None:
+        msg = f"no pending {kind} '{item_id}' for tenant {tenant}"
+        if pending_set.unavailable:
+            msg += f" ({pending_set.degraded_line()})"
+        click.echo(click.style(msg, fg="yellow"))
+        raise SystemExit(1)
+    ok, text = review_one(item, user_id=tenant, home_dir=home,
+                          instance_id=_instance_id(), seat=SEAT_CLI)
     if not ok:
-        click.echo(click.style(body, fg="yellow"))
+        click.echo(click.style(text, fg="yellow"))
         raise SystemExit(1)
     click.echo(click.style(f"--- pending {kind}:{item_id} ---", bold=True))
-    click.echo(body)
+    click.echo(text)
 
 
 def _decide_all_and_echo(approve: bool, tenant: str) -> None:
@@ -963,7 +965,8 @@ def _warn_if_subscriptions_off() -> None:
                    "settling, completed, settled_no_tx, expired, refund_due "
                    "(money taken that was not delivered on).")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def invoices(user, all_tenants, limit, status, as_json):
+@click.option("--stuck", is_flag=True, help="Only rows held in settling that no reaper releases.")
+def invoices(user, all_tenants, limit, status, as_json, stuck):
     """List agent-created x402 payment requests (invoices).
 
     Scoped to this instance's owner tenant; ask for `--all-tenants` to see
@@ -973,6 +976,9 @@ def invoices(user, all_tenants, limit, status, as_json):
     # E22: the no-`--user` default was ALL tenants — on a multi-tenant deploy
     # that is somebody else's receivables, printed under the owner's own verb.
     tenant = None if all_tenants else _money_tenant(user)
+    if stuck:  # 098 W1 (Q2): the owner's list of held `settling` rows
+        from cli.commands.owner_money import print_stuck
+        return print_stuck(tenant, as_json)
     want = max(1, min(500, int(limit)))
 
     async def run(db):
@@ -1633,5 +1639,8 @@ def paid_cancel(offer_id):
 
 # 025: `polyrob owner memory scopes list|show|promote|purge` (its own module).
 from cli.commands.owner_memory import memory as _memory_group  # noqa: E402
+from cli.commands.owner_money import deposit_resolve, deposits as _deposits, invoice_resolve, refunded as _refunded, reopen as _reopen, sub_reactivate  # noqa: E402,E501
+for _cmd in (_reopen, _refunded, _deposits, deposit_resolve, invoice_resolve): owner.add_command(_cmd)
+sub.add_command(sub_reactivate)
 
 owner.add_command(_memory_group)

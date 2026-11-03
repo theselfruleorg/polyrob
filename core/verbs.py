@@ -120,7 +120,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/start", "talk", "A welcome and a short tour of what I can do"),
     # needs you
     Verb("/inbox", "needs you",
-         "Everything waiting on a decision from you, blocking first"),
+         "Everything waiting on a decision from you, blocking first; /inbox all lists every item"),
     Verb("/pending", "needs you",
          "Every approval waiting on you: spends, contacts, tokens, and proposals"),
     Verb("/approve", "needs you", "Approve something that is waiting on you", room_refused=True),
@@ -129,13 +129,16 @@ _CORE_TABLE: tuple[Verb, ...] = (
     # works, so it is where "what will stop and ask me" belongs.
     Verb("/gates", "needs you", "Which actions need your approval",
          seats=("repl",)),
-    Verb("/asks", "needs you", "What I need from you to unblock work"),
+    Verb("/asks", "needs you", "What I need from you to unblock work; /asks <id> opens one in full"),
     Verb("/missed", "needs you",
          "Messages I could not deliver live: capped, paused, or undelivered"),
     Verb("/fulfill", "needs you",
          "Mark an ask fulfilled so its work can continue", room_refused=True),
     Verb("/cards", "needs you",
-         "Open action cards: confirm a quote, answer a choice, or cancel", room_refused=True),
+         "Open action cards: confirm a quote, answer a choice, or cancel; /cards <id> reopens one in full", room_refused=True),
+    # 096 W5: every cut is one tap away. A read of text this seat already
+    # rendered for you (``core.surfaces.more_store``), never a decision.
+    Verb("/more", "look", "The rest of a list or text I cut short", room_refused=True),
     # work
     Verb("/goal", "work", "Add, show, retry, grant, pause, or stop one goal", room_refused=True),
     Verb("/goals", "work", "The goal board summary"),
@@ -156,7 +159,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True),
     Verb("/mode", "control",
          "The effective autonomy posture and how to change it"),
-    Verb("/dev", "control", "Message the dev and ops loop directly", room_refused=True),
+    Verb("/dev", "control", "Pass a message to an operator-run maintenance script, if this host has one", room_refused=True),
     # 077: confirmed by a card; the restart drains first and reports back here.
     Verb("/restart", "control", "Restart me once my current work is done", room_refused=True),
     # 093 D6: `/update now` lets the operator's waiting deploy skip the owner-quiet window.
@@ -168,6 +171,9 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/thread", "remember",
          "Our conversation across every session and rail, newest last", room_refused=True),
     Verb("/journey", "remember", "What I have done over a recent window"),
+    # 096 W5: read only — the rules you gave me and my operating contract.
+    Verb("/rules", "remember", "Your rules for me and my operating contract, numbered",
+         room_refused=True),
     Verb("/kb", "remember", "Search and list my knowledge base"),
     Verb("/memory", "remember", "Recall across sessions and inspect memory scopes",
          seats=("repl",)),
@@ -212,7 +218,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/model", "set up",
          "The model this chat runs on — switch it live, set your default, pick reasoning",
          room_refused=True),
-    Verb("/skills", "work", "The skills I can load, and what each one does",
+    Verb("/skills", "work", "The skills I can load, and what each one does; /skills <id> shows one skill's text",
          room_refused=True),
     # 080 WS-2: the REPL-only verbs, so this ONE table is complete. The terminal
     # holds the live session, its trace and the local machine; no other seat can

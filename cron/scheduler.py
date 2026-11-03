@@ -398,6 +398,13 @@ class CronScheduler:
                 self._terminal_ev(job, "held", "owner_pause",
                                   duration_s=round(time.time() - started, 3))
                 return False
+            # 098 review: a tick cancelled for any other reason (shutdown,
+            # `/autonomy off`) gives the row back at once — it stayed
+            # `running` until its lease ran out (max_duration + slack).
+            try:
+                self.store.set_status(job.id, "scheduled")
+            except Exception:
+                logger.debug("cron requeue after cancel failed for %s", job.id, exc_info=True)
             raise
         except Exception as e:  # runner blew up — never crash the tick
             logger.error("cron job %s raised: %s", job.id, e, exc_info=True)

@@ -220,7 +220,15 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
             key="payment_refund_due", severity=SEVERITY_WARN,
             text=(f"{_refund_n} settled payment(s) worth ${_refund_usd:.2f} are "
                   f"owed back — the work failed after the money arrived"),
-            remedy="`/invoices refund_due` to see them, then refund each payer"))
+            remedy=("`/invoices refund_due` to see them, refund each payer, then "
+                    "`polyrob owner refunded <id>` closes it")))
+    # 098 MO-21: recorded as paid with no on-chain tx — not income, not netted.
+    if int(t.get("unproven_count") or 0):
+        _used = int(t.get("unproven_auth_used_count") or 0)
+        sec.lines.append(
+            f"unproven: ${float(t.get('unproven_usd') or 0):.2f} across "
+            f"{int(t['unproven_count'])} payment(s) with no on-chain tx (NOT income)"
+            + (f"; {_used} with the payer's authorization used on chain" if _used else ""))
     # Positions are read separately and must never take the money section down.
     try:
         sec.lines.append(_positions_line(user_id, data_dir))

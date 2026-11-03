@@ -5,10 +5,10 @@ with a fake Bot and no network). send() resolves the target chat id by parsing t
 session_key (the chat segment — same convention every surface uses), splits messages
 over Telegram's 4096-char limit, and calls bot.send_message.
 
-Streaming: default is the Surface ABC's buffered path (partials buffer, one send() on
-finalize). With owner preference `stream.telegram` enabled, stream() opens one message
+Streaming: by default partials are dropped and the turn's reply is one send() (098
+TS-19 removed the buffered partial path). With owner preference `stream.telegram` enabled, stream() opens one message
 and live-edits it in place via editMessageText as deltas arrive, flood-throttled
-(core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC) and RetryAfter-aware (the minimal rate limiter).
+(core.surfaces.config.TELEGRAM_STREAM_EDIT_INTERVAL_SEC) and RetryAfter-aware (a per-target flood wait).
 
 Formatting: the agent writes markdown; core.surfaces.rendering converts it to the HTML
 subset Telegram renders (parse_mode="HTML"). Every send goes through send_text(), which
@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from core.surfaces.surface import Surface
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
-from core.surfaces.rendering import render_for_flavor, split_for_flavor
+from core.surfaces.rendering import markdown_to_plain, render_for_flavor, split_for_flavor
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,27 @@ class TelegramSurface(Surface):
         super().__init__()
         self._bot = bot
         self.bot_username: Optional[str] = None
+        #: 098 TS-18: target -> monotonic time until which Telegram's flood
+        #: wait (RetryAfter) holds. Non-final stream edits are skipped until
+        #: then, so a live bubble does not extend the penalty; a shorter later
+        #: retry_after never shortens an active wait.
+        self._flood_until: dict = {}
+
+    def _note_flood(self, target: Any, retry_after: float) -> None:
+        until = _time.monotonic() + max(0.0, float(retry_after))
+        key = str(target)
+        if until > self._flood_until.get(key, 0.0):
+            self._flood_until[key] = until
+
+    def _flooded(self, target: Any) -> bool:
+        key = str(target)
+        until = self._flood_until.get(key)
+        if until is None:
+            return False
+        if _time.monotonic() >= until:
+            self._flood_until.pop(key, None)
+            return False
+        return True
 
     @property
     def surface_id(self) -> str:
@@ -98,8 +119,8 @@ class TelegramSurface(Surface):
         """Run one bot call, honoring RetryAfter with a bounded wait+retry (030 L1).
 
         Non-flood exceptions propagate unchanged (the caller's markup-downgrade
-        logic handles those). Flood penalties are recorded on the rate limiter
-        for observability; recording failures never block the retry.
+        logic handles those). The flood wait is recorded per target (TS-18) so
+        live stream edits hold off until it ends.
         """
         import asyncio
         attempt = 0
@@ -111,12 +132,7 @@ class TelegramSurface(Surface):
                 if delay is None or attempt >= _FLOOD_RETRIES:
                     raise
                 attempt += 1
-                try:
-                    from surfaces.telegram.rate_limit import get_telegram_rate_limiter
-                    await get_telegram_rate_limiter().record_penalty(
-                        int(chat_id), delay, op)
-                except Exception:
-                    pass
+                self._note_flood(chat_id, delay)
                 wait = min(delay, _FLOOD_WAIT_CAP_SEC)
                 logger.warning(
                     "TelegramSurface: flood control on %s (%s) — waiting %.1fs "
@@ -185,7 +201,7 @@ class TelegramSurface(Surface):
                     if not parse_mode or _retry_after_seconds(e) is not None:
                         raise
                     logger.warning("TelegramSurface: %s rejected, resending as plain text: %s", parse_mode, e)
-                    sent = await self._send_chunk(chat_id, source, None, extra)
+                    sent = await self._send_chunk(chat_id, markdown_to_plain(source), None, extra)
             except Exception as e:
                 # OB7: chunks 0..i-1 already landed. Say which text did NOT go,
                 # so a retry resumes here instead of re-sending chunk 1. Only
@@ -193,6 +209,10 @@ class TelegramSurface(Surface):
                 if i > 0 and exact_sources:
                     try:
                         e.remaining_text = "\n".join(sources[i:])
+                        # 096 W8: which message of how many did not arrive, so
+                        # the reader is told "2 of 3", not "something failed".
+                        e.sent_chunks = i
+                        e.total_chunks = len(rendered)
                     except Exception:
                         pass
                 raise
@@ -464,22 +484,20 @@ class TelegramSurface(Surface):
             return
         if not final and _time.monotonic() - st.last_edit < self._edit_min_interval_sec():
             return
+        if not final and self._flooded(st.target):
+            return   # TS-18: an edit during a flood wait only extends it
         if text == st.rendered:
             return
         await self._do_edit(st, text)
 
     def _on_stream_error(self, target: str, op: str, e: Exception) -> None:
-        # Record a Telegram RetryAfter penalty so the minimal rate limiter backs off;
+        # A Telegram RetryAfter holds non-final edits for this target (TS-18);
         # everything else is just logged (a streamed edit failing is non-fatal).
         retry_after = getattr(e, "retry_after", None)
         if retry_after is not None:
             try:
-                from core.async_bridge import spawn_retained
-                from surfaces.telegram.rate_limit import get_telegram_rate_limiter
-                spawn_retained(
-                    get_telegram_rate_limiter().record_penalty(int(target), float(retry_after), op)
-                )
-            except Exception:
+                self._note_flood(target, float(retry_after))
+            except (TypeError, ValueError):
                 pass
         logger.debug("TelegramSurface stream %s failed for %s: %s", op, target, e)
 

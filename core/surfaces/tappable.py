@@ -31,16 +31,69 @@ TAPPABLE_VERBS: Tuple[str, ...] = ("/approve", "/reject", "/pending")
 #: Accepted argument shapes, all separator-free.
 #: ``tap_<hex>``  a queued tool/spend approval (``tap-<ask id>``)
 #: ``p_<hex>``    any pending item, by its short alias (``pending_tap_alias``)
+#: ``p_<hex>_<hex>`` the same, plus the draft revision the owner was shown
+#:                (098 CO-19, ``core.self_evolution.pending_tap_token``)
 #: ``all``        the whole queue
-_SUFFIX_RE = re.compile(r"^(?:all|tap_[0-9a-zA-Z-]+|p_[0-9a-f]+)$", re.IGNORECASE)
+_SUFFIX_RE = re.compile(r"^(?:all|tap_[0-9a-zA-Z-]+|p_[0-9a-f]+(?:_[0-9a-f]+)?)$",
+                        re.IGNORECASE)
+
+
+#: 096 W5: READ tokens — one id folded into a token that OPENS one thing in
+#: full. Each is a read, never a decision. ``token prefix -> (the verb it runs,
+#: the id shape)``; the verb is a real chat verb that takes the id as its one
+#: argument. The id is passed through AS TYPED (no ``_`` → ``-`` mapping):
+#: ``/more``, ``/ask`` and ``/card`` ids are hex, and a skill id keeps its
+#: underscores — the skills seat matches it against the live ids itself, so
+#: no ``-``/``_`` guess is ever made here.
+READ_TOKENS = {
+    "/more": ("/more", re.compile(r"^[0-9a-f]{6,16}$")),
+    "/ask": ("/asks", re.compile(r"^[0-9a-f]{6,24}$")),
+    # A card READ is ``/card_<10 hex>``; ``/card_<id>_<act>`` (a press) never
+    # matches this shape and stays ``core.surfaces.cards.parse_card_token``'s.
+    "/card": ("/cards", re.compile(r"^[0-9a-f]{10}$")),
+    "/skill": ("/skills", re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")),
+}
+
+
+def read_token(prefix: str, ident: str) -> str:
+    """``/ask_<id>`` / ``/card_<id>`` / ``/more_<token>`` / ``/skill_<id>``.
+
+    A skill id's ``-`` becomes ``_`` (a chat client links only ``[A-Za-z0-9_]``);
+    the skills seat maps it back by matching the live ids. An id that cannot
+    fold into the token's shape returns ``""`` — the caller then shows no tap
+    rather than a dead one."""
+    shape = READ_TOKENS.get(prefix)
+    if shape is None:
+        return ""
+    folded = str(ident or "").strip().lower()
+    if prefix == "/skill":
+        folded = folded.replace("-", "_")
+    return f"{prefix}_{folded}" if shape[1].match(folded) else ""
+
+
+def _parse_read(token: str) -> Tuple[Optional[str], Optional[str]]:
+    low = token.lower()
+    for prefix, (verb, shape) in READ_TOKENS.items():
+        head = prefix + "_"
+        if low.startswith(head) and len(low) > len(head):
+            suffix = low[len(head):]
+            if shape.match(suffix):
+                return verb, suffix
+    return None, None
 
 
 def parse_tappable(text: str) -> Tuple[Optional[str], Optional[str]]:
     """``("/approve", "tap-abc")`` for ``/approve_tap_abc``, else ``(None, None)``.
 
+    A READ token (:data:`READ_TOKENS`) parses to its verb and id:
+    ``("/asks", "<id>")`` for ``/ask_<id>``.
+
     Pure, so the parsing rule is testable without a chat round trip.
     """
     token = (text or "").strip().split()[0] if (text or "").strip() else ""
+    verb, arg = _parse_read(token)
+    if verb is not None:
+        return verb, arg
     for verb in TAPPABLE_VERBS:
         prefix = verb + "_"
         if token.lower().startswith(prefix) and len(token) > len(prefix):
@@ -86,3 +139,22 @@ def is_tappable_token(token: str) -> bool:
     # an act; what it does is read from the card row, never from the token.
     from core.surfaces.cards import parse_card_token
     return parse_card_token(token)[0] is not None
+
+
+#: 096 E4: what an email reader is told when a notice carries chat taps. Email
+#: cannot tap and owner-by-email is off, so the tokens are named as what they
+#: are — commands for the chat seats — beside the two seats that need no chat.
+EMAIL_TAP_FOOTER = ("—\nThe /… commands above work when you send them in Telegram or the "
+                    "polyrob REPL. Or decide in the console Inbox, or run "
+                    "`polyrob owner pending` on the host.")
+
+
+def email_taps_footer(text: str) -> str:
+    """``text`` plus :data:`EMAIL_TAP_FOOTER` when it holds any tappable token."""
+    body = str(text or "")
+    if EMAIL_TAP_FOOTER in body:
+        return body
+    for word in body.split():
+        if is_tappable_token(word.strip(".,;:()[]")):
+            return f"{body}\n\n{EMAIL_TAP_FOOTER}"
+    return body

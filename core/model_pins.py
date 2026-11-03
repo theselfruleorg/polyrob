@@ -66,11 +66,18 @@ def _write(user_id: Optional[str], data: Dict, home_dir=None) -> Tuple[bool, str
 
 
 def _update(user_id, home_dir, fn) -> Tuple[bool, str]:
-    data, err = load(user_id, home_dir)
-    if err:
-        return False, err
-    fn(data)
-    return _write(user_id, data, home_dir)
+    """Read-modify-write under a cross-process file lock (098 CL-05): an alias
+    and a default written at the same time both survive."""
+    path = _path(user_id, home_dir)
+    if path is None:
+        return False, "empty or unsafe user id"
+    from core.state.files import file_lock
+    with file_lock(str(path)):
+        data, err = load(user_id, home_dir)
+        if err:
+            return False, err
+        fn(data)
+        return _write(user_id, data, home_dir)
 
 
 def owner_default(user_id: Optional[str], home_dir=None) -> Optional[Dict]:

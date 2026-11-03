@@ -695,7 +695,8 @@ class KbIngestParams(BaseModel):
 class KbSearchParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(..., description="Search query.")
-    collection: str = Field("default", description="KB collection to search.")
+    collection: Optional[str] = Field(
+        None, description="KB collection to search. Omit to search every collection.")
     limit: int = Field(8, ge=1, le=50, description="Maximum number of results.")
 
 

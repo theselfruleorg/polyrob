@@ -46,19 +46,19 @@ metadata:
 - approval:timeout_no_ask: owner-verb · now · the remedy it names · retry
 - approval:crashed: operator-env · restart · the approval provider · retry
 - approval:refused: owner-verb · now · the remedy it names · no retry
-- approval_not_created:forged: owner-verb · now · the owner runs it from his chat · no retry
-- approval_not_created:tainted: owner-verb · now · the owner runs it from his chat · no retry
+- approval_not_created:forged: owner-verb · now · the owner runs it from their chat · no retry
+- approval_not_created:tainted: owner-verb · now · the owner runs it from their chat · no retry
 - approval_not_created:store_down: agent · now · retry later · retry
 - approval_not_created:no_provider: operator-env · restart · APPROVAL_PROVIDER · no retry
-- approval_not_created:money_owner: owner-verb · now · the owner runs it from his chat · no retry
+- approval_not_created:money_owner: owner-verb · now · the owner runs it from their chat · no retry
 - approval_not_created:busy: owner-verb · now · the owner answers the open prompt · retry
 - approval_not_created:duplicate: agent · now · none — final · no retry
 - approval_not_created:closed: agent · now · retry to ask again · retry
-- seat:room: owner-verb · now · the owner runs it from his private chat · no retry
-- seat:correspondent: owner-verb · next-turn · the owner's own message (or he runs it from his chat) · no retry
-- money:forged_text: owner-verb · now · the owner runs it from his chat · no retry
+- seat:room: owner-verb · now · the owner runs it from their private chat · no retry
+- seat:correspondent: owner-verb · next-turn · the owner's own message (or they run it from their chat) · no retry
+- money:forged_text: owner-verb · now · the owner runs it from their chat · no retry
 - money:autonomous_unarmed: operator-env · restart · the money regime and DEFI_AUTONOMOUS_TURN_TRADING · no retry
-- money:gate: owner-verb · now · the owner's caps or his one-shot approval · no retry
+- money:gate: owner-verb · now · the owner's caps or their one-shot approval · no retry
 - denylist: owner-verb · next-turn · the owner's approvals.deny preference (/prefs) or POLYROB_TOOL_DENYLIST · no retry
 - paused: owner-verb · now · /resume · no retry
 - strict_code_change: deploy · deploy · a row in core/effects.py WRITE_ACTIONS or NON_WRITE_ACTIONS · no retry

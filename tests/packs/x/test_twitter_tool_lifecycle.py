@@ -130,3 +130,54 @@ async def test_ensure_initialized_marks_initialized_and_does_not_rebuild(monkeyp
     await tool._ensure_initialized()
 
     assert client_factory.call_count == 1, "repeat calls must not rebuild the client"
+
+
+# --- 098 CL-13 -----------------------------------------------------------------
+
+def _patched(monkeypatch, tool_creds=_FULL_CREDS):
+    from unittest.mock import AsyncMock
+    import polyrob_x.twitter_tool as tt
+    monkeypatch.setattr(tt.tweepy, "Client", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(TwitterTool, "_test_api_connection", AsyncMock())
+    monkeypatch.setattr(TwitterTool, "_init_v1_client", MagicMock())
+    return _make_tool(tool_creds)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sets_healthy(monkeypatch):
+    from tools.base_tool import ToolStatus
+    tool = _patched(monkeypatch)
+    tool._status, tool._error_message = ToolStatus.FAILED, "X down at boot"
+    tool.client = None
+    await tool._ensure_initialized()
+    assert tool._status == ToolStatus.HEALTHY and tool._error_message is None
+
+
+class _Chat:
+    def __init__(self, *a, **k):
+        self.closed = 0
+
+    async def close(self):
+        self.closed += 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_closes_chat_client(monkeypatch):
+    tool = _patched(monkeypatch)
+    chat = _Chat()
+    tool.chat_client = chat
+    await tool._cleanup()
+    assert chat.closed == 1 and tool.chat_client is None
+
+
+@pytest.mark.asyncio
+async def test_reinit_closes_previous_chat_client(monkeypatch):
+    import asyncio
+    import polyrob_x.x_chat_client as xc
+    monkeypatch.setattr(xc, "XChatClient", _Chat)
+    tool = _patched(monkeypatch, {**_FULL_CREDS, "oauth2_access_token": "o2"})
+    old = _Chat()
+    tool.chat_client = old
+    await tool._initialize()
+    await asyncio.sleep(0)  # the close runs as a task
+    assert old.closed == 1 and tool.chat_client is not old

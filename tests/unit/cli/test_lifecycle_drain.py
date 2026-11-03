@@ -506,3 +506,81 @@ def test_an_interrupted_apply_never_restores_an_older_updates_snapshot(tmp_path,
     out = upd.rollback_for_boot({"in_progress": True, "old_sha": "abc",
                                  "started_at": time.time() + 60})
     assert out["ok"] and not restored
+
+
+# ---- 098 CO-02: a parked update is never applied by a later start -------------
+
+def test_abort_parks_request_and_boot_does_not_apply_old_update(home, monkeypatch, sent):
+    from cli.commands._lifecycle_boot import boot_step
+    clock, intake = _Clock(), {}
+    _busy_for(monkeypatch, 10_000)
+    req, _ = lc.request_restart(kind=lc.KIND_UPDATE, requested_by="owner", data_home=home)
+    w, _ = _watcher(home, clock, intake)
+
+    async def _go():
+        task = asyncio.ensure_future(w.run())
+        while lc.read_request(data_home=home).state != lc.STATE_DRAINING:
+            await asyncio.sleep(0)
+        w.abort()
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(_go())
+    assert lc.read_request(data_home=home).state == lc.STATE_PARKED
+    # five days later
+    real = lc.time.time
+    monkeypatch.setattr(lc.time, "time", lambda: real() + 5 * 86400)
+    applied = []
+    boot_step("gateway", data_home=home, apply=lambda ch: applied.append(ch) or {"ok": True},
+              reexec=lambda: None, echo=lambda *_: None)
+    assert applied == []
+    r = lc.read_request(data_home=home)
+    assert r.state == lc.STATE_EXITING and r.update_result == {"expired": True}
+    from cli.commands._lifecycle import announce_boot
+    asyncio.run(announce_boot(object(), home))
+    assert lc.history(limit=1, data_home=home)[0]["outcome"] == lc.OUTCOME_EXPIRED
+    assert any("was not applied" in t for t in sent)
+
+
+def test_parked_request_inside_ttl_reopens_for_drain(home):
+    from cli.commands._lifecycle_boot import boot_step
+    req, _ = lc.request_restart(kind=lc.KIND_UPDATE, requested_by="owner", data_home=home)
+    lc.claim_request(pid=999_999_999, data_home=home)   # the drainer died
+    import time as _t
+    _t.sleep(0.01)
+    applied = []
+    boot_step("gateway", data_home=home, apply=lambda ch: applied.append(ch) or {"ok": True},
+              reexec=lambda: None, echo=lambda *_: None)
+    assert applied == []
+    r = lc.read_request(data_home=home)
+    assert r.state == lc.STATE_OPEN and r.claimed_by == 0   # the live drain answers it
+
+
+def test_legacy_exiting_note_reads_as_parked(home, monkeypatch):
+    req, _ = lc.request_restart(kind=lc.KIND_UPDATE, requested_by="owner", data_home=home)
+    lc.claim_request(data_home=home)
+    lc.set_request_state(lc.STATE_EXITING, data_home=home, note="stopped during the drain")
+    assert lc.resolve_parked_request(data_home=home) == "reopened"
+
+
+def test_service_stop_closes_open_request(home):
+    lc.request_restart(kind=lc.KIND_UPDATE, requested_by="owner", data_home=home)
+    entry = lc.cancel_unstarted_request("the service was stopped", data_home=home)
+    assert entry and entry["outcome"] == lc.OUTCOME_CANCELLED
+    assert lc.read_request(data_home=home) is None
+    # a draining (claimed) request is the live process's to finish
+    lc.request_restart(requested_by="owner", data_home=home)
+    lc.claim_request(data_home=home)
+    assert lc.cancel_unstarted_request("x", data_home=home) is None
+
+
+def test_a_long_update_error_keeps_its_cause_at_the_end():
+    """The step error is the command first and the cause last; the chat notice
+    keeps the end so the cause survives the 300-char limit."""
+    from cli.commands._lifecycle import _error_tail
+    err = ("Command '['/venv/bin/python', '-m', 'migrations.migrate', 'upgrade']' "
+           "returned non-zero exit status 1.\n" + "noise line\n" * 40
+           + "RuntimeError: migration v1_15_0 did not verify")
+    out = _error_tail(err)
+    assert len(out) <= 300 and out.startswith("…")
+    assert out.endswith("RuntimeError: migration v1_15_0 did not verify")
+    assert _error_tail("short") == "short" and _error_tail(None) == "unknown error"

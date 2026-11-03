@@ -242,9 +242,10 @@ def _tenant(request: Request) -> str:
 
 # --- deciders (reused, never reimplemented) --------------------------------- #
 
-def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool):
+def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool,
+                    rev: Optional[str] = None):
     from webview.pages import _decide_pending as shared
-    return shared(kind, item_id, kw, approved=approved)
+    return shared(kind, item_id, kw, approved=approved, rev=rev)
 
 
 def _goal_board():
@@ -285,7 +286,7 @@ ANSWER_MAX_CHARS = 2000
 
 
 def _decide(request: Request, kind: str, item_id: str, *, approved: bool,
-            answer: str = "") -> dict:
+            answer: str = "", rev: str = "") -> dict:
     user_id = _tenant(request)
     if kind in _APP_KINDS:
         from webview.pages import _owner_console_required
@@ -308,7 +309,8 @@ def _decide(request: Request, kind: str, item_id: str, *, approved: bool,
         else:
             kw = {"user_id": user_id, "home_dir": _data_dir(),
                   "instance_id": _instance_id()}
-            ok, msg = _decide_pending(kind, item_id, kw, approved=approved)
+            ok, msg = _decide_pending(kind, item_id, kw, approved=approved,
+                                      rev=rev or None)
     except Exception as exc:
         # Audit WR9: a store that refused (a locked goals.db) is "nothing was
         # decided", said in words — never a bare 500 the page cannot read.
@@ -343,6 +345,18 @@ async def api_inbox(request: Request):
     return JSONResponse(body)
 
 
+async def _body_field(request: Request, name: str) -> str:
+    """One optional string field of the JSON body, ``""`` when absent or the
+    body is not an object (never a 400 — see :func:`_answer_text`)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get(name) or "")
+
+
 async def _answer_text(request: Request) -> str:
     """The optional ``{"answer": "<text>"}`` an ask's decision may carry.
 
@@ -364,14 +378,16 @@ async def _answer_text(request: Request) -> str:
              dependencies=webgate.MUTATION_DEPS)
 async def api_inbox_decide(request: Request, kind: str, item_id: str):
     return JSONResponse(_decide(request, kind, item_id, approved=True,
-                                answer=await _answer_text(request)))
+                                answer=await _answer_text(request),
+                                rev=await _body_field(request, "rev")))
 
 
 @router.post("/api/webgate/inbox/{kind}/{item_id}/reject",
              dependencies=webgate.MUTATION_DEPS)
 async def api_inbox_reject(request: Request, kind: str, item_id: str):
     return JSONResponse(_decide(request, kind, item_id, approved=False,
-                                answer=await _answer_text(request)))
+                                answer=await _answer_text(request),
+                                rev=await _body_field(request, "rev")))
 
 
 @router.post("/api/webgate/inbox/{kind}/{item_id}/fulfill",

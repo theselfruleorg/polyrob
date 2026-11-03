@@ -166,6 +166,20 @@ def scan_key(treasury: str, chain: str, asset_address) -> str:
     return f"{treasury}|{(chain or '').strip().lower()}|{addr}"
 
 
+async def _pending_old_recipients(treasury: str, *, db=None) -> list:
+    """098 MO-06: EVM recipients other than the current treasury that still
+    have a PENDING invoice (a rotated ``X402_PAYMENT_RECIPIENT``)."""
+    from modules.x402 import invoicing
+    database = await invoicing._resolve_db(db)
+    if database is None:
+        return []
+    rows = await database.fetch_all(
+        "SELECT DISTINCT recipient FROM x402_payment_requests WHERE status = 'pending' "
+        "AND lower(recipient) LIKE '0x%' AND lower(recipient) != ?",
+        (str(treasury).lower(),)) or []
+    return [str(r["recipient"]).lower() for r in rows if r["recipient"]]
+
+
 async def pending_scan_groups(treasury: str, *, db=None):
     """``[(chain, asset_address, decimals, asset_id), ...]`` — one row per
     DISTINCT asset that has a PENDING invoice at this treasury.
@@ -402,11 +416,16 @@ class SettlementScanMixin:
             # The configured chain is unscannable AND nothing is owed elsewhere.
             return 0, 0
 
+        # 098 MO-06: a ROTATED treasury still owes its pending invoices a scan —
+        # a payer who pays the old address must still be matched.
+        work = [(treasury, treasury_key, g) for g in groups]
+        for old in await _pending_old_recipients(treasury_key, db=self._db):
+            work += [(old, old, g) for g in await pending_scan_groups(old, db=self._db)]
         settled = unmatched = 0
-        for chain, asset_address, decimals, asset_id in groups:
+        for scan_treasury, scan_key_base, (chain, asset_address, decimals, asset_id) in work:
             try:
                 s, u = await self._scan_one_asset(
-                    treasury, treasury_key, chain, asset_address, decimals,
+                    scan_treasury, scan_key_base, chain, asset_address, decimals,
                     asset_id)
                 settled += s
                 unmatched += u
@@ -419,6 +438,27 @@ class SettlementScanMixin:
                     asset_id, chain, exc_info=True)
         return settled, unmatched
 
+
+    async def _seed_from_oldest_pending(self, call, treasury, chain, asset_address,
+                                        head) -> Optional[int]:
+        """The block before the oldest PENDING invoice of this group was created,
+        or None (nothing pending, or the chain could not be read)."""
+        from modules.x402 import invoicing, onchain_probe
+        database = await invoicing._resolve_db(self._db)
+        if database is None:
+            return None
+        row = await database.fetch_one(
+            "SELECT MIN(CAST(strftime('%s', created_at) AS INTEGER)) AS ts "
+            "FROM x402_payment_requests WHERE status = 'pending' AND recipient = ? "
+            "AND lower(chain) = ? AND (lower(COALESCE(asset_address, '')) = ? "
+            "OR asset_address IS NULL)",
+            (invoicing.normalize_recipient(treasury), str(chain).lower(),
+             str(asset_address or "").lower()))
+        if not row or row.get("ts") is None:
+            return None
+        blk = await asyncio.to_thread(onchain_probe.block_at_or_before, call,
+                                      float(row["ts"]), int(head))
+        return None if blk is None else max(0, blk - 1)
 
     async def _default_scan_group(self, cfg):
         """The ``(chain, asset_address, decimals, asset_id)`` of the configured
@@ -534,14 +574,21 @@ class SettlementScanMixin:
             # seeded every tick, owed or not). For a NEWLY pinned asset it does,
             # so say it out loud rather than let an operator discover it by
             # losing a payment.
-            logger.warning(
-                "x402 on-chain detection: first sight of asset %s on %s — "
-                "seeding the checkpoint at block %s and scanning nothing this "
-                "tick. A transfer of this token that ALREADY landed will not be "
-                "detected; pin an asset before inviting payment in it.",
-                asset_id, chain, max(0, safe_head))
-            await invoicing.advance_scan_checkpoint(key, max(0, safe_head),
-                                                    db=self._db)
+            # 098 MO-06: when an invoice is already pending in this group, seed
+            # at the block it could first be paid in, so a payment that landed
+            # before this first look is still enumerated next tick.
+            seed = await self._seed_from_oldest_pending(call, treasury, chain,
+                                                        asset_address, head)
+            if seed is None:
+                logger.warning(
+                    "x402 on-chain detection: first sight of asset %s on %s — "
+                    "seeding the checkpoint at block %s and scanning nothing this "
+                    "tick. A transfer of this token that ALREADY landed will not be "
+                    "detected; pin an asset before inviting payment in it.",
+                    asset_id, chain, max(0, safe_head))
+            await invoicing.advance_scan_checkpoint(
+                key, max(0, safe_head if seed is None else min(seed, safe_head)),
+                db=self._db)
             return 0, 0
 
         from_block = last + 1
@@ -678,7 +725,6 @@ class SettlementScanMixin:
                 continue
             if expected_raw <= 0:
                 continue
-            claimed = False
             fetched = 0
             complete = False
             unread = False
@@ -721,12 +767,11 @@ class SettlementScanMixin:
                             unread = True
                         unmatched += 1
                         continue
-                    if not await invoicing.claim_for_settlement(request_id, db=self._db):
-                        break
-                    claimed = True
+                    # 098 MO-02: no claim — pending -> completed is one CAS,
+                    # so a cancel or a lost race leaves the row pending.
                     ok = await invoicing.settle_payment_request(
-                        request_id, transaction_hash=signature, db=self._db)
-                    claimed = False
+                        request_id, transaction_hash=signature, db=self._db,
+                        from_states=("pending",))
                     if ok:
                         settled += 1
                         logger.info("solana settle: invoice %s settled by %s",
@@ -750,14 +795,6 @@ class SettlementScanMixin:
                         (int(now_ts), request_id))
             except Exception as exc:
                 logger.warning("solana settle: invoice %s failed (%s)", request_id, exc)
-            finally:
-                if claimed:
-                    # Claimed but never settled — revert so the row is retryable
-                    # rather than stranded in `settling`.
-                    try:
-                        await invoicing.revert_settlement_claim(request_id, db=self._db)
-                    except Exception:
-                        pass
         try:
             unmatched += await self._svm_late_payments(
                 database, treasury=treasury, mint=mint, rpc=_rpc, now_ts=now_ts)
@@ -857,10 +894,6 @@ class SettlementScanMixin:
         settled = 0
         unmatched = 0
         for transfer in transfers:
-            # H7: track a claim made for THIS transfer so a failure BETWEEN the
-            # claim and the settle reverts it (pending->settling->stranded) —
-            # cleared the moment the row reaches a terminal state.
-            claimed_request_id: Optional[str] = None
             try:
                 tx_hash = transfer.get("tx_hash")
                 if tx_hash and await invoicing.transaction_hash_already_settled(
@@ -947,17 +980,14 @@ class SettlementScanMixin:
                     unmatched += 1
                     continue
                 request_id = match["request_id"]
-                if not await invoicing.claim_for_settlement(request_id, db=self._db):
-                    # Lost the race (already settling/settled/expired concurrently)
-                    # — nothing to revert; this transfer just stays unflagged for
-                    # THIS invoice, and is reported as unmatched for the tick.
-                    await self._notify_unmatched(transfer, treasury)
-                    unmatched += 1
-                    continue
-                claimed_request_id = request_id
+                # 098 MO-02: no claim — the scan settles pending -> completed in
+                # ONE CAS. A False result means "not pending any more" (a
+                # concurrent settle, `/pay` or expiry), reported unmatched; a
+                # cancel or crash leaves the row pending and the next tick,
+                # which re-reads the same un-advanced range, settles it.
                 if await invoicing.settle_payment_request(
-                        request_id, transaction_hash=tx_hash, db=self._db):
-                    claimed_request_id = None  # terminal — nothing to revert
+                        request_id, transaction_hash=tx_hash, db=self._db,
+                        from_states=("pending",)):
                     settled += 1
                     # CR-M16/L24: the settled row names WHO paid and WHICH log.
                     await self._stamp_settlement_source(request_id, transfer)
@@ -965,39 +995,11 @@ class SettlementScanMixin:
                     # settled_unnotified_invoices -> claim_wake -> _notify path as
                     # an owner/API settle — no new wake code needed.
                 else:
-                    await invoicing.revert_settlement_claim(request_id, db=self._db)
-                    claimed_request_id = None
                     await self._notify_unmatched(transfer, treasury)
                     unmatched += 1
-            except asyncio.CancelledError:
-                # H7: CancelledError derives from BaseException, so the old bare
-                # `except Exception` let a shutdown/force-cancel skip straight
-                # past any revert — stranding a just-claimed invoice in
-                # 'settling' forever. Honor cancellation immediately (re-raise);
-                # a claim left behind is healed by the stale-settling reaper in
-                # `tick_once` (age > 10min). Do NOT attempt an await-based revert
-                # here — it would just be re-cancelled.
-                logger.warning(
-                    "settlement watcher: cancelled mid-settle for transfer %s "
-                    "(a claim in 'settling', if any, is healed by the stale-"
-                    "settling reaper next tick)", transfer.get("tx_hash"))
-                raise
             except Exception:
-                # A plain exception BETWEEN claim and settle (e.g.
-                # settle_payment_request raised) used to strand the claim in
-                # 'settling' — now revert it so the invoice stays payable. One
-                # bad transfer must never block the rest of the batch nor the
-                # checkpoint advance — log and move on.
-                if claimed_request_id is not None:
-                    try:
-                        await invoicing.revert_settlement_claim(
-                            claimed_request_id, db=self._db)
-                    except Exception:
-                        logger.warning(
-                            "settlement watcher: could not revert stranded claim "
-                            "%s after a settle failure — the stale-settling "
-                            "reaper will heal it next tick", claimed_request_id,
-                            exc_info=True)
+                # One bad transfer must never block the rest of the batch nor
+                # the checkpoint advance — log and move on.
                 logger.warning(
                     "settlement watcher: settling transfer %s failed — "
                     "skipping (ledger rows are the record; checkpoint still "
@@ -1190,6 +1192,10 @@ class SettlementScanMixin:
                 logger.warning("x402 held settlement %s: the authorization WAS "
                                "used on-chain; owner reconciliation required",
                                row.get("id"))
+                # 098 MO-23: used but unproven needs the owner — told ONCE.
+                from modules.x402.invoice_reaper import escalate_once
+                if await escalate_once(row["id"], "auth_used_unproven", db=self._db):
+                    await self._escalate_to_owner(row, "auth_used_unproven")
                 continue
             if await settlement_holds.reopen_rejected_settlement(row["id"], nonce,
                                                           db=self._db):
@@ -1295,12 +1301,20 @@ class SettlementScanMixin:
         return True
 
     async def _sweep_stale_settling(self) -> int:
-        """Age alone never releases a submitted payment; chain proof may."""
-        from modules.x402 import invoicing
-        reverted = await invoicing.revert_stale_settling(
-            max_age_seconds=600, db=self._db)
-        reverted = list(reverted) + await self._resolve_held_submissions()
-        for inv in reverted:
+        """098 S6: a `/pay` claim that never reached the facilitator is released
+        on age (no money moved); a submission only on a chain answer; a row
+        neither can decide goes to the owner ONCE."""
+        from modules.x402 import invoicing, invoice_reaper
+        released = await invoicing.revert_stale_settling(
+            max_age_seconds=invoice_reaper.CLAIM_MAX_AGE_SEC, db=self._db)
+        for inv in released:
+            invoicing._emit("payment_settling_reverted", user_id=inv.get("user_id") or "",
+                            session_id=inv.get("session_id") or "", attrs={
+                                "request_id": inv.get("request_id"),
+                                "amount_usd": inv.get("amount_usd"),
+                                "reason": "claim_unsubmitted"})
+        reopened = await self._resolve_held_submissions()
+        for inv in reopened:
             try:
                 invoicing._emit(
                     "payment_settling_reverted",
@@ -1318,4 +1332,74 @@ class SettlementScanMixin:
                 logger.debug(
                     "settlement watcher: stale-settling owner notice failed for "
                     "%s (fail-open)", inv.get("request_id"), exc_info=True)
-        return len(reverted)
+        try:   # 098 close-out MO-21: the chain's word on a tx-less payment
+            await invoice_reaper.check_no_tx_authorizations(self._held_call, db=self._db)
+        except Exception:
+            logger.warning("settlement watcher: no-tx authorization check failed", exc_info=True)
+        for inv in (await invoice_reaper.escalate_stalled(db=self._db)
+                    + await invoice_reaper.escalate_unproven(db=self._db)):
+            await self._escalate_to_owner(inv, inv["reason"])
+        return len(released) + len(reopened)
+
+    async def _escalate_to_owner(self, inv: dict, reason: str) -> None:
+        """The ONE owner notice for a held invoice no reaper can decide."""
+        from modules.x402 import invoicing
+        rid = inv.get("request_id") or inv.get("id")
+        meta = invoicing._row_metadata(inv) if "metadata" in inv else {}
+        user = inv.get("user_id") or meta.get("tenant_id") or ""
+        kind = {"settling_unknown": "payment_settling_unknown",
+                "no_tx_unproven": "payment_no_tx_unproven"}.get(
+                    reason, "payment_held_needs_owner")
+        try:
+            invoicing._emit(kind, user_id=user, session_id=inv.get("session_id") or "",
+                            attrs={"request_id": rid, "reason": reason,
+                                   "amount_usd": inv.get("amount_usd")})
+            why = {"auth_used_unproven": "the payer's authorization WAS used on-chain, "
+                                         "but no transfer to the treasury is proven",
+                   "submitted_stalled": "the facilitator outcome is still unknown after "
+                                        "24 hours",
+                   "no_tx_unproven": "the facilitator reported it paid but gave no "
+                                     "transaction, so it is not counted as income"
+                                     + ("; the chain shows the payer's authorization "
+                                        "was used (a payment or a cancel)"
+                                        if inv.get("authorization_used") else ""),
+                   }.get(reason, "it was claimed before claims were tracked, so the "
+                                 "watcher cannot tell whether a payment is behind it")
+            # 098 review: name only verbs that act on this row. `owner refunded`
+            # moves refund_due rows only, so it is never the remedy here, and a
+            # machine payment is never settled as income (no service ran).
+            amount = f"${float(inv.get('amount_usd') or 0):.2f}"
+            if _row_kind(inv) == "machine_payment" and reason != "no_tx_unproven":
+                text = (f"Paid request {rid} for {amount} is unproven: {why}. No service "
+                        "was started for it, and it is never counted as income. Check the "
+                        f"chain: `polyrob owner invoice-resolve {rid} --refund-due --confirm` "
+                        "if the payer was charged, `--unpaid` if not.")
+            else:
+                if_not = (f"mark it unpaid with `polyrob owner reopen {rid} --confirm` "
+                          "(never-submitted rows only)" if reason == "settling_unknown" else
+                          f"`polyrob owner invoice-resolve {rid} --unpaid --confirm` (or "
+                          "`--refund-due` if the payer was charged for nothing)")
+                text = (f"Invoice {rid} for {amount} is unproven: {why}. Check the chain, "
+                        f"then `polyrob owner settle {rid} --tx-hash 0x…` if it was paid; "
+                        f"if not, {if_not}.")
+            await self._push_owner_notice(user, text, source="payments")
+        except Exception:
+            logger.debug("settlement watcher: escalation notice failed for %s",
+                         rid, exc_info=True)
+
+
+def _row_kind(row) -> str:
+    """The ``metadata.kind`` of an invoice row (``agent_invoice`` /
+    ``machine_payment``), or ``""``."""
+    import json as _json
+    if row.get("kind"):
+        return str(row["kind"])
+    meta = row.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = _json.loads(meta)
+        except ValueError:
+            meta = None
+    if not isinstance(meta, dict):
+        meta = {}
+    return str(meta.get("kind") or "")

@@ -58,11 +58,9 @@ def _session_window() -> tuple:
 #: line into a listing.
 _MAX_COLLECTIONS = 4
 
-#: WS-K3 health thresholds. Below the floor the ratio is noise (two documents
-#: and one indexed is not a finding); the share is the line prod sat far under
-#: on 2026-09-22 — 76 of 473, 16%.
-MIN_DOCS_FOR_INDEX_HEALTH = 20
-MIN_INDEXED_SHARE = 0.25
+#: A recorded sweep older than this, while trees are past the window, means the
+#: retention tick is not running (it runs every few hours — 097 D4).
+SWEEP_STALE_SEC = 2 * 86400
 
 
 def _why(exc: BaseException) -> str:
@@ -183,46 +181,55 @@ def _kb(sec: Section, mem_db: str, uid: str) -> None:
                      f"collection(s) ({shown}{more})")
 
 
-def _documents(sec: Section, data_dir: str, uid: str) -> None:
-    """What the agent has WRITTEN, from the artifact registry it already keeps.
+def _documents(sec: Section, data_dir: str, uid: str, mem_db: str) -> None:
+    """What the agent has WRITTEN, from the artifact registry it already keeps,
+    and how much of its knowledge is in the KB.
 
-    ⚠️ The indexed RATIO counts text documents only. Comparing 76 indexed
-    sources against every artifact — screenshots, JSON, video — reports a gap
-    that no ingest could ever close, which is the confident-but-wrong shape
-    this whole section exists to avoid.
+    097 W3/W4: this used to divide "KB sources in any collection" by "text
+    artifacts ever registered" and raise a health item under 25%. The two counts
+    shared no join — the denominator held run logs, backups and deleted files the
+    ingest refuses on purpose, the numerator held uploads that were never
+    artifacts — so the warning could not clear, and its remedy could not clear it.
+    Now: the denominator is the documents that still exist AND are knowledge by
+    name; the numerator is those whose path IS a KB source. A status line, never
+    a health item — indexing is automatic and there is nothing for the owner to do.
     """
-    from core.artifacts import TEXT_DOCUMENT_SUFFIXES
+    from core.artifacts import TEXT_DOCUMENT_SUFFIXES, is_knowledge_candidate
 
     suffixes = sorted(TEXT_DOCUMENT_SUFFIXES)
     doc_clause = " OR ".join("lower(path) LIKE ?" for _ in suffixes)
+    art_db = _sidecar(data_dir, "artifacts.db")
     row = _probe(sec, "documents", lambda: _one(
-        _sidecar(data_dir, "artifacts.db"),
-        f"SELECT count(*) AS n, sum(CASE WHEN {doc_clause} THEN 1 ELSE 0 END) "
-        "AS docs FROM artifacts WHERE user_id = ?",
-        tuple(f"%{sfx}" for sfx in suffixes) + (uid,)))
+        art_db, "SELECT count(*) AS n FROM artifacts WHERE user_id = ?", (uid,)))
     if row is None:
         return
     n = int(row.get("n") or 0)
-    docs = int(row.get("docs") or 0)
-    kb = sec.data.get("kb") or {}
-    indexed = int(kb.get("sources") or 0)
-    sec.data["documents"] = {"state": "ok", "rows": n, "text": docs,
-                             "indexed": indexed}
     if not n:
+        sec.data["documents"] = {"state": "ok", "rows": 0}
         sec.lines.append("documents: none registered")
         return
-    sec.lines.append(f"documents: {n:,} registered ({docs:,} text), "
-                     f"{indexed:,} indexed ({_pct(indexed, docs)})")
-    # WS-K3. Only when the KB itself answered: an instance with no knowledge
-    # base is not failing to index, it simply has nowhere to index TO.
-    if kb.get("state") == "ok" and docs >= MIN_DOCS_FOR_INDEX_HEALTH and \
-            indexed < docs * MIN_INDEXED_SHARE:
-        sec.health.append(HealthItem(
-            key="knowledge_unindexed",
-            text=(f"{docs - indexed:,} of {docs:,} written documents are not in "
-                  f"the knowledge base"),
-            remedy="polyrob kb reindex",
-            severity=SEVERITY_WARN))
+    paths = _probe(sec, "documents", lambda: [
+        str(r.get("path") or "") for r in _rows(
+            art_db, f"SELECT path FROM artifacts WHERE user_id = ? AND ({doc_clause})",
+            (uid,) + tuple(f"%{sfx}" for sfx in suffixes))])
+    if paths is None:
+        return
+    knowledge = [p for p in paths if p and is_knowledge_candidate(p) and os.path.exists(p)]
+    data: Dict[str, Any] = {"state": "ok", "rows": n, "text": len(paths),
+                            "knowledge": len(knowledge)}
+    line = f"documents: {n:,} registered ({len(paths):,} text, {len(knowledge):,} knowledge)"
+    kb = sec.data.get("kb") or {}
+    if kb.get("state") == "ok":
+        sources = _probe(sec, "kb", lambda: {
+            str(r.get("source_path") or "") for r in _rows(
+                mem_db, "SELECT DISTINCT source_path FROM kb_sources WHERE user_id = ?",
+                (uid,))})
+        if sources is not None:
+            indexed = sum(1 for p in knowledge if p in sources)
+            data["indexed"] = indexed
+            line += f", {indexed:,} indexed"
+    sec.data["documents"] = data
+    sec.lines.append(line)
 
 
 def _skills(sec: Section, data_dir: str, uid: str) -> None:
@@ -241,7 +248,7 @@ def _skills(sec: Section, data_dir: str, uid: str) -> None:
     sec.lines.append(f"skills: {used} ever loaded, last {_day(last)}")
 
 
-def _sessions(sec: Section, now: float) -> None:
+def _sessions(sec: Section, now: float, data_dir: str = "") -> None:
     """Session trees by count and age — a scandir, never a size walk."""
     window, swept = _session_window()
 
@@ -280,13 +287,38 @@ def _sessions(sec: Section, now: float) -> None:
     sec.lines.append(f"sessions: {got['trees']:,} trees{tail}, "
                      f"oldest {_day(got['oldest'])}"
                      + ("" if swept else " — no retention policy"))
-    # WS-K2. Only when a sweep is supposed to be enforcing the window: an owner
-    # who turned retention off is not failing to retain, they decided not to.
+    # 097 W9: the age count includes every tree the sweep keeps ON PURPOSE (it
+    # holds an artifact, a live goal names it, a worker owns it), so "N trees are
+    # older than the window" is a status line, never a fault. The fault is a
+    # sweep that is NOT RUNNING or REFUSED — read from the outcome it records.
     if swept and got["older"]:
+        _sweep_health(sec, got, now, data_dir)
+
+
+def _sweep_health(sec: Section, got: Dict[str, Any], now: float, data_dir: str) -> None:
+    from core.session_retention import read_sweep_state
+    try:
+        state = read_sweep_state(data_dir_or_home(data_dir))
+    except Exception:
+        state = None
+    got["last_sweep"] = state
+    if state and state.get("unreadable"):
         sec.health.append(HealthItem(
-            key="sessions_unretained",
-            text=(f"{got['older']:,} session trees are older than the "
-                  f"{window}-day window"),
+            key="sessions_sweep_record_unreadable",
+            text=f"the session sweep record is unreadable ({state['unreadable']})",
+            remedy="polyrob sessions prune",
+            severity=SEVERITY_WARN))
+    elif state and state.get("error"):
+        sec.health.append(HealthItem(
+            key="sessions_sweep_refused",
+            text=f"the session sweep refused to run ({state['error'][:120]})",
+            remedy="polyrob sessions prune",
+            severity=SEVERITY_WARN))
+    elif not state or float(state.get("at") or 0) < now - SWEEP_STALE_SEC:
+        when = _day(state.get("at")) if state else "never"
+        sec.health.append(HealthItem(
+            key="sessions_sweep_not_running",
+            text=f"session retention has not run since {when}",
             remedy="polyrob sessions prune",
             severity=SEVERITY_WARN))
 
@@ -318,9 +350,9 @@ def knowledge_section(user_id: str, data_dir: str,
     _curated(sec, mem_db, uid)
     _episodes(sec, mem_db, uid)
     _kb(sec, mem_db, uid)
-    _documents(sec, data_dir, uid)
+    _documents(sec, data_dir, uid, mem_db)
     _skills(sec, data_dir, uid)
-    _sessions(sec, now)
+    _sessions(sec, now, data_dir)
 
     detail: List[str] = list(sec.lines)
     if not detail:

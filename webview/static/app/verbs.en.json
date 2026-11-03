@@ -22,7 +22,7 @@
     {
       "name": "/inbox",
       "group": "needs you",
-      "help": "Everything waiting on a decision from you, blocking first",
+      "help": "Everything waiting on a decision from you, blocking first; /inbox all lists every item",
       "aliases": []
     },
     {
@@ -46,7 +46,7 @@
     {
       "name": "/asks",
       "group": "needs you",
-      "help": "What I need from you to unblock work",
+      "help": "What I need from you to unblock work; /asks <id> opens one in full",
       "aliases": []
     },
     {
@@ -64,7 +64,7 @@
     {
       "name": "/cards",
       "group": "needs you",
-      "help": "Open action cards: confirm a quote, answer a choice, or cancel",
+      "help": "Open action cards: confirm a quote, answer a choice, or cancel; /cards <id> reopens one in full",
       "aliases": []
     },
     {
@@ -100,7 +100,7 @@
     {
       "name": "/skills",
       "group": "work",
-      "help": "The skills I can load, and what each one does",
+      "help": "The skills I can load, and what each one does; /skills <id> shows one skill's text",
       "aliases": []
     },
     {
@@ -256,7 +256,7 @@
     {
       "name": "/dev",
       "group": "control",
-      "help": "Message the dev and ops loop directly",
+      "help": "Pass a message to an operator-run maintenance script, if this host has one",
       "aliases": []
     },
     {
@@ -290,9 +290,21 @@
       "aliases": []
     },
     {
+      "name": "/rules",
+      "group": "remember",
+      "help": "Your rules for me and my operating contract, numbered",
+      "aliases": []
+    },
+    {
       "name": "/kb",
       "group": "remember",
       "help": "Search and list my knowledge base",
+      "aliases": []
+    },
+    {
+      "name": "/more",
+      "group": "look",
+      "help": "The rest of a list or text I cut short",
       "aliases": []
     },
     {

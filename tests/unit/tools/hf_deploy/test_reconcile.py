@@ -1,5 +1,6 @@
-"""Reconcile-on-boot (§3.5): re-health-check `live` rows; drift flips status —
-fail-open on unreachable checks; never touches non-live rows."""
+"""Reconcile-on-boot (§3.5, 098 TS-30): re-health-check `live`/`unhealthy` rows;
+drift flips live -> unhealthy — fail-open on unreachable checks; never touches
+pending rows."""
 import asyncio
 
 
@@ -7,10 +8,12 @@ def _seed(tmp_path):
     from tools.hf_deploy.registry import DeployedAppsRegistry
     reg = DeployedAppsRegistry(str(tmp_path / "deployed_apps.db"))
     reg.upsert_pending("app-good", "u1")
+    reg.begin_deploy("app-good", "u1")
     reg.record_live("app-good", "u1", space_repo="o/app-good",
                     public_url="https://o-app-good.hf.space", health_path="/",
                     workspace_digest="d")
     reg.upsert_pending("app-dead", "u1")
+    reg.begin_deploy("app-dead", "u1")
     reg.record_live("app-dead", "u1", space_repo="o/app-dead",
                     public_url="https://o-app-dead.hf.space", health_path="/health",
                     workspace_digest="d")
@@ -29,7 +32,7 @@ def test_reconcile_flips_drifted_live_rows(tmp_path):
         db_path=reg.db_path, http_get=getter))
     assert flipped == 1
     assert reg.get("app-good", "u1")["status"] == "live"
-    assert reg.get("app-dead", "u1")["status"] == "failed"
+    assert reg.get("app-dead", "u1")["status"] == "unhealthy"
     assert reg.get("app-pending", "u1")["status"] == "pending"
 
 

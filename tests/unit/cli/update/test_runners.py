@@ -289,3 +289,19 @@ def test_lazy_installer_child_env_carries_a_disk_tmpdir(tmp_path, monkeypatch):
     monkeypatch.delenv("TMPDIR", raising=False)
     monkeypatch.setattr(rp, "effective_data_home", lambda: tmp_path / "home")
     assert child_env()["TMPDIR"] == str(tmp_path / "home" / "tmp")
+
+
+def test_failed_step_error_names_the_cause(monkeypatch):
+    """A failed step shows the tail of the command's output, not only the exit code."""
+    import sys
+
+    import pytest
+
+    from cli.update.runners import _checked_run
+    code = "import os, sys; print('noise'); sys.stderr.write(os.environ['CAUSE'] + chr(10)); sys.exit(1)"
+    monkeypatch.setenv("CAUSE", "RuntimeError: data home split")
+    with pytest.raises(Exception) as ei:
+        _checked_run([sys.executable, "-c", code], None)
+    msg = str(ei.value)
+    assert "returned non-zero exit status 1" in msg
+    assert "RuntimeError: data home split" in msg

@@ -11,8 +11,10 @@ delivered post as unconfirmed. An agent that treats a transaction hash as
 a result will wrongly report a no-op as done.
 
 This page is generated from the one table in the code
-(`tools/rails/verification.py`), which is also what every tool result's
-`proof:` line is rendered from. There is no second copy to disagree with.
+(`tools/rails/verification.py`). The `proof:` line on a `message` send,
+an email send, a `room_read` result and an `x_post`/`x_reply` result is
+rendered from the same table, so the two cannot disagree. An on-chain
+result carries no `proof:` line: check it against the row below.
 
 **What this table states is what CAN be proved, never that anything WAS.**
 A rail whose proof is the receipt still needs the receipt.
@@ -50,7 +52,7 @@ A rail whose proof is the receipt still needs the receipt.
 ## On-chain transaction (`onchain`)
 
 - **Proof:** a confirmed receipt AND the state read back afterwards
-- **How to check:** the existing `tx_guard` rule: assert the simulated deltas, broadcast, then read the resulting state (balance, owner, tokenId) back
+- **How to check:** the wallet's transaction guard: assert the simulated deltas, broadcast, then read the resulting state (balance, owner, tokenId) back
 - **Watch out:** a transaction hash is not a result: a receipt can succeed while the call did nothing. Only the read-back proves the effect
 
 ## When you cannot prove it

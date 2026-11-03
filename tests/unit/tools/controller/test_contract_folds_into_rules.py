@@ -63,6 +63,7 @@ def test_an_existing_contract_draft_stays_promotable(tmp_path):
     items = se.list_pending("alice", home_dir=tmp_path,
                             instance_id=DEFAULT_INSTANCE_ID, skill_manager=None)
     assert any(i["kind"] == "contract" for i in items)
+    [rev] = [i["rev"] for i in items if i["kind"] == "contract"]
     ok, _ = se.promote("contract", "alice", user_id="alice", home_dir=tmp_path,
-                       instance_id=DEFAULT_INSTANCE_ID)
+                       instance_id=DEFAULT_INSTANCE_ID, rev=rev)
     assert ok

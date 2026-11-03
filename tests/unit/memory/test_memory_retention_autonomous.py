@@ -83,7 +83,7 @@ def test_autonomous_window_is_capped_by_general_window():
 
 
 def _curator():
-    from agents.task.agent.core.curator import SkillCurator
+    from agents.task.agent.core.retention import RetentionSweeper
 
     class _Usage:
         def list_authored(self, **kw):
@@ -95,7 +95,7 @@ def _curator():
         def set_state(self, key, value):
             pass
 
-    return SkillCurator(object(), _Usage())
+    return RetentionSweeper()
 
 
 @pytest.mark.asyncio
@@ -107,13 +107,13 @@ async def test_curator_prunes_autonomous_rows_and_logs_count(provider, monkeypat
         monkeypatch.setenv("MEMORY_RETENTION_DAYS", "365")
         _episode(provider, "cron-s", "cron")
         _raw_row(provider, "cron finding sixty days", session_id="cron-s", ts=NOW - 60 * DAY)
-        with caplog.at_level(logging.INFO, logger="agents.task.agent.core.curator"):
+        with caplog.at_level(logging.INFO, logger="agents.task.agent.core.retention"):
             await _curator().run_once()
         assert _contents(provider) == []
         assert "pruned 1 old memories (window 365d, autonomous runs 45d)" in caplog.text
 
         caplog.clear()
-        with caplog.at_level(logging.INFO, logger="agents.task.agent.core.curator"):
+        with caplog.at_level(logging.INFO, logger="agents.task.agent.core.retention"):
             await _curator().run_once()
         assert "pruned 0 old memories" in caplog.text  # a zero is logged too
     finally:

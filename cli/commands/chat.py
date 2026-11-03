@@ -560,12 +560,10 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         except Exception:
             return sid == repl_sid
 
-    # Tracks in-flight BACKGROUND session ids (cron/goal/self-wake on a foreign
-    # session) so the muted ``⟲ autonomy`` indicator reflects real activity and the
-    # counter can't leak on a duplicate start. A set (not a bare counter) is
-    # idempotent under repeated SessionStart and a missing SessionDone self-heals on
-    # the next start of the same id.
-    _bg_sessions: set = set()
+    # In-flight BACKGROUND sessions (cron/goal/self-wake on a foreign session)
+    # live in the lifecycle (098 CL-02): keyed by session id (a repeated start
+    # counts once), aged out by a TTL when a run dies without a SessionDone,
+    # and reset when the autonomy runtime stops.
 
     # Session dir for LIVE token/cost counting: per-call usage is written to disk
     # (capture_llm_usage skips the push feed to avoid double-counting), so the bar's
@@ -597,12 +595,10 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         lc = getattr(_ui_state, "lifecycle", None)
         if lc is None:
             return
-        if isinstance(event, SessionStart) and session_id not in _bg_sessions:
-            _bg_sessions.add(session_id)
-            lc.begin_background()
-        elif isinstance(event, SessionDone) and session_id in _bg_sessions:
-            _bg_sessions.discard(session_id)
-            lc.end_background()
+        if isinstance(event, SessionStart):
+            lc.begin_background(session_id)
+        elif isinstance(event, SessionDone):
+            lc.end_background(session_id)
         else:
             return
         _app = getattr(_ui_state, "_app", None)
@@ -674,7 +670,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         "provider": provider,
         "tools": repl_tools,   # filesystem/task + enabled autonomy tools (local mode)
         # No max_steps: each turn runs Conversation.respond() with its own
-        # DEFAULT_TURN_BUDGET (= INTERACTIVE_MAX_STEPS).
+        # interactive budget (interactive_max_steps(), INTERACTIVE_MAX_STEPS).
         "temperature": 0.0,
         "use_vision": False,
     }
@@ -746,6 +742,8 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         orchestrator._on_stream_chunk = make_stream_callback(
             _renderer,
             main_agent_id=lambda: _ui_state.main_agent_id,
+            subagents_active=lambda: _ui_state.subagents_active,
+            turn_active=lambda: _ui_state.lifecycle.is_active(),
         )
 
         # D3: subscribe to the orchestrator's sub-agent lifecycle hooks so a
@@ -767,6 +765,10 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         )
         if agent is None:
             return  # clean error already printed by _start_repl_agent
+        # 098 CL-06: the main agent's id comes from the agent itself, not only
+        # from the feed telemetry (which can fail); the feed stays fill-if-empty.
+        if not _ui_state.main_agent_id:
+            _ui_state.main_agent_id = str(getattr(agent, "agent_id", "") or "")
 
         # If the agent pre-existed (built during create_session, before we set
         # _on_stream_chunk), create_agent's one-time registration didn't see our
@@ -795,7 +797,9 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 # `/autonomy on|off` can start/stop the SAME runtime, no restart.
                 from cli.ui.autonomy_live import LiveAutonomy, bind as _bind_live
                 _autonomy_live = LiveAutonomy(
-                    lambda: start_autonomy(task_agent=task_agent, data_dir=_data_dir))
+                    lambda: start_autonomy(task_agent=task_agent, data_dir=_data_dir),
+                    on_stopped=lambda: getattr(getattr(_ui_state, "lifecycle", None),
+                                               "reset_background", lambda: None)())
                 _autonomy_live.start()
                 _bind_live(_autonomy_live)
         except Exception:
@@ -1048,10 +1052,14 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 pass
         if session_id:
             try:
-                await task_agent.cancel_session(user_id=user_id, session_id=session_id)
-                # The async cancel completed → the session is already at a
-                # terminal status (F3).  Mark it so run_repl's synchronous
-                # fallback doesn't redundantly flip it again.
+                # 098 CL-07: exit cancels a live turn only; an idle exit keeps a
+                # completed/failed status (cli/repl_exit.py).
+                from cli.repl_exit import close_on_exit, needs_cancel
+                if needs_cancel(locals().get("_ui_state"), task_agent.session_manager, session_id):
+                    await task_agent.cancel_session(user_id=user_id, session_id=session_id)
+                else:
+                    close_on_exit(task_agent.session_manager, session_id)
+                # Mark it so run_repl's synchronous fallback doesn't flip it again.
                 lifecycle_ref["cleaned"] = True
             except Exception:
                 pass
@@ -1077,7 +1085,8 @@ def _repl_sync_cleanup(lifecycle_ref: dict) -> None:
     try:
         sm = getattr(task_agent, "session_manager", None)
         if sm is not None:
-            sm.update_session_status(session_id, "cancelled")
+            from cli.repl_exit import close_on_exit
+            close_on_exit(sm, session_id)  # 098 CL-07: never over completed/failed
             lifecycle_ref["cleaned"] = True
     except Exception:
         pass

@@ -65,7 +65,7 @@ from agents.task.path import pm
 
 from core.logging import entrypoint_logger  # D6: this module is the console entry
 from core.version import get_version
-from webview import pack_console, posture_routes, template_globals
+from webview import pack_console, posture_routes, socket_members, template_globals
 from webview.socket_limits import forget, join_allowed, limit_key, refusal  # 070 W0.17
 from webview.error_page import StarletteHTTPException, error_response  # 070 W0.18
 
@@ -422,7 +422,7 @@ app = LocalHostGuard(socketio.ASGIApp(_sio, other_asgi_app=_fastapi))  # the fin
 # For tracking watchers and client sessions
 _watch_tasks: dict[str, asyncio.Task] = {}
 _client_session: dict[str, str] = {}
-_session_clients: dict[str, int] = {}
+_session_clients: dict[str, set] = {}  # session -> member sids (TS-22, webview/socket_members.py)
 
 # Rate limiting configuration (hardcoded for webview - not business logic)
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -2560,6 +2560,7 @@ async def _stop_hub_if_activity_empty() -> None:
 @_sio.event
 async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
     """Handle client disconnect and clean up resources."""
+    socket_members.mark_dead(sid)  # TS-22: a join awaiting enter_room sees it
     _socket_auth_monitor.remove(sid)
     forget(sid)
     _socket_user.pop(sid, None)
@@ -2579,12 +2580,8 @@ async def _leave_session(sid: str) -> None:
     from webview.session_access import session_room
     await _sio.leave_room(sid, session_room(sess_id))
     _client_session.pop(sid, None)
-    
-    # Remove the client from this session
-    _session_clients[sess_id] = _session_clients.get(sess_id, 1) - 1
-    
-    # Only cancel watcher if no more clients for this session
-    if _session_clients.get(sess_id, 0) <= 0:
+    # Only cancel the watcher when the room's member set is empty
+    if socket_members.remove(_session_clients, sess_id, sid):
         # No more clients for this session - cancel the watcher
         task = _watch_tasks.pop(sess_id, None)
         if task and not task.done():
@@ -2596,13 +2593,9 @@ async def _leave_session(sid: str) -> None:
                 pass
             except Exception as exc:
                 logger.warning(f"Error cancelling watcher for {sess_id}: {exc}")
-        
-        # Clean up session tracking
-        _session_clients.pop(sess_id, None)
         _gapped_rooms.discard(sess_id)
-    
-    logger.debug("Client %s disconnected from %s (remaining=%s)", 
-                sid, sess_id, _session_clients.get(sess_id, 0))
+    logger.debug("Client %s disconnected from %s (remaining=%s)",
+                 sid, sess_id, len(_session_clients.get(sess_id, ())))
 
 
 @_sio.event
@@ -2643,8 +2636,11 @@ async def join_session(sid, data):
         if _client_session.get(sid) != clean_id:
             await _leave_session(sid)
             await _sio.enter_room(sid, session_room(clean_id))
+            if socket_members.is_dead(sid):  # TS-22: disconnected during the await
+                await _sio.leave_room(sid, session_room(clean_id))
+                return
             _client_session[sid] = clean_id
-            _session_clients[clean_id] = _session_clients.get(clean_id, 0) + 1
+            socket_members.add(_session_clients, clean_id, sid)
         logger.info("Client %s joined session %s (cleaned: %s)", sid, session_id, clean_id)
 
         # 030 WS-G2 (D-8): a RECONNECTING client that already holds state sends
@@ -2712,6 +2708,9 @@ async def join_activity(sid, data=None):
 
         from webview.activity import get_hub
         await _sio.enter_room(sid, "activity")
+        if socket_members.is_dead(sid):  # TS-22: disconnected during the await
+            await _sio.leave_room(sid, "activity")
+            return
         _activity_clients.add(sid)
         hub = get_hub()
         hub.start(_sio)

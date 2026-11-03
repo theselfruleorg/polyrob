@@ -6,6 +6,7 @@ Sweeps deposited funds from user addresses to the main treasury
 
 import asyncio
 import logging
+import time
 from typing import Dict, List, Optional
 
 from modules.payments.networks import chain_configs, TOKEN_ADDRESSES, ERC20_TRANSFER_ABI
@@ -84,6 +85,11 @@ class TreasurySweeper:
                 await self._sweep_all_deposits()
             except Exception as e:
                 self.logger.error(f"Error in sweep loop: {type(e).__name__}")
+            try:  # 098 MO-01: a sweep in flight for > 1 h goes to the owner once
+                from modules.payments.sweep_state import reap_stuck_sweeps
+                await reap_stuck_sweeps(self.db)
+            except Exception as e:
+                self.logger.error(f"Stuck-sweep check failed: {type(e).__name__}")
 
             # Sleep until next sweep
             await asyncio.sleep(self.sweep_interval)
@@ -91,6 +97,8 @@ class TreasurySweeper:
     async def _sweep_all_deposits(self):
         """Sweep all unswept deposits to treasury."""
         try:
+            from modules.payments.sweep_state import ensure_sweep_schema
+            await ensure_sweep_schema(self.db)
             # Get all deposits that haven't been swept
             deposits = await self.db.fetch_all("""
                 SELECT
@@ -106,6 +114,7 @@ class TreasurySweeper:
                 JOIN user_deposit_addresses uda ON cp.user_id = uda.user_id
                 WHERE cp.swept_at IS NULL
                   AND cp.status = 'confirmed'
+                  AND cp.sweep_state = 'unswept'
                   AND cp.amount_usd >= ?
                 ORDER BY cp.detected_at ASC
                 LIMIT 50
@@ -164,67 +173,148 @@ class TreasurySweeper:
             if len(ids) > 1000:
                 raise RuntimeError('Too many pending deposits; reconcile before sweeping')
             deposit = dict(deposit, sweep_deposit_ids=ids)
-
-            if getattr(self.wallet_gen, 'remote', False):
-                # 066 §5.5: the deposit seed lives in polyrob-signer, which
-                # sweeps to the destination pinned in signer.toml.
-                tx_hash = await asyncio.to_thread(
-                    self.wallet_gen.sweep, user_id=deposit['user_id'], chain=chain_name,
-                    token_symbol=deposit['token_symbol'],
-                    deposit_address=deposit['deposit_address'])
-                await self._record_sweep(deposit, tx_hash, chain_name)
+            # 098 MO-01: claim the whole group (unswept -> sweeping) BEFORE any
+            # broadcast; a row another sweeper holds means nothing is sent.
+            from modules.payments import sweep_state
+            started = int(time.time())
+            if not await sweep_state.claim_group(self.db, ids, started):
+                self.logger.warning(f"Deposit {deposit['id']}: sweep group is held; skipped")
                 return
-
-            w3 = Web3(Web3.HTTPProvider(
-                chain_config['rpc_url'], request_kwargs={'timeout': 15}))
-            if w3.eth.chain_id != chain_config['chain_id']:
-                raise ValueError('Treasury RPC chain does not match configured chain')
-            user_address = deposit['user_address']
-            token_symbol = deposit['token_symbol']
-
-            # Get private key for user's deposit address
-            private_key = self.wallet_gen.get_private_key_for_user_id(deposit['user_id'])
-            account = w3.eth.account.from_key(private_key)
-            if (account.address.lower() != user_address.lower()
-                    or user_address.lower() != deposit['deposit_address'].lower()):
-                raise ValueError('Deposit address does not match derived signing account')
-
-            # Check if ETH or ERC20 token
-            if token_symbol == 'ETH':
-                tx_hash = await self._sweep_eth(
-                    w3, account, user_address, deposit
-                )
-            else:
-                tx_hash = await self._sweep_token(
-                    w3, account, user_address, token_symbol, chain_name, deposit
-                )
-
-            if tx_hash:
-                await self._record_sweep(deposit, tx_hash, chain_name)
-                submission_journal.mark_booked(tx_hash)
+            deposit['_sweep_started_at'] = started
+            try:
+                await self._sweep_claimed(deposit, chain_name, chain_config, submission_journal)
+            except Exception:
+                await self._settle_claim(deposit, None)
+                raise
 
         except Exception as e:
             self.logger.error(f"Error sweeping deposit {deposit['id']}: {type(e).__name__}")
 
-    async def _record_sweep(self, deposit: Dict, tx_hash: str, chain_name: str) -> None:
-        """Book the exact pre-broadcast deposit group in one atomic UPDATE."""
-        ids = deposit['sweep_deposit_ids']
-        placeholders = ','.join('?' for _ in ids)
-        cursor = await self.db.execute("""
-            UPDATE crypto_payments
-            SET swept_at = datetime('now'),
-                sweep_tx_hash = ?
-            WHERE swept_at IS NULL AND id IN (""" + placeholders + ")",
-            (tx_hash, *ids))
+    async def _settle_claim(self, deposit: Dict, tx_hash: Optional[str]) -> None:
+        """098 MO-01: a claimed group that was not recorded as swept. Nothing
+        broadcast -> back to ``unswept``; a reverted receipt -> ``sweep_failed``
+        (told once); an unknown broadcast outcome stays ``sweeping`` (the reaper
+        tells the owner, nothing is resent)."""
+        from modules.payments import sweep_state
+        ids, started = deposit['sweep_deposit_ids'], deposit['_sweep_started_at']
+        if deposit.get('_sweep_reverted'):
+            if await sweep_state.move_group(self.db, ids, 'sweep_failed', ('sweeping',),
+                                            started_at=started):
+                sweep_state.emit_sweep_failed(deposit, tx_hash or deposit.get('_sweep_tx'))
+        elif not deposit.get('_broadcast'):
+            await sweep_state.move_group(self.db, ids, 'unswept', ('sweeping',),
+                                         started_at=started)
+        elif deposit.get('_sweep_tx'):
+            # 098 review (O-02): unknown outcome — keep the tx for the owner.
+            await sweep_state.note_sweep_tx(self.db, ids, started, deposit['_sweep_tx'])
 
-        if cursor.rowcount != len(ids):
+    async def _sweep_claimed(self, deposit: Dict, chain_name: str, chain_config: Dict,
+                             submission_journal) -> None:
+        """Broadcast the sweep of a claimed group and record its outcome."""
+        from web3 import Web3
+        if getattr(self.wallet_gen, 'remote', False):
+            # 066 §5.5: the deposit seed lives in polyrob-signer, which
+            # sweeps to the destination pinned in signer.toml. 098 MO-01:
+            # there is no receipt on this path — swept_unproven, never
+            # booked on the deposit mark.
+            # ⚠️ The outcome is UNKNOWN from the moment the request may have
+            # reached the signer — except for a definite refusal: the signer
+            # sends nothing before it refuses (no fee balance, no pinned token,
+            # nonce reuse, "not sent"), and an unsent request never arrived.
+            # Those release the group (-> unswept, retried next tick); holding
+            # them in `sweeping` blocked every later deposit of the
+            # user/chain/token for ever (098 review).
+            deposit['_broadcast'] = True
+            try:
+                tx_hash = await asyncio.to_thread(
+                    self.wallet_gen.sweep, user_id=deposit['user_id'], chain=chain_name,
+                    token_symbol=deposit['token_symbol'],
+                    deposit_address=deposit['deposit_address'])
+            except Exception as exc:
+                if _definitely_not_sent(exc):
+                    deposit['_broadcast'] = False
+                raise
+            await self._record_sweep(deposit, tx_hash, chain_name, state='swept_unproven')
+            return
+
+        w3 = Web3(Web3.HTTPProvider(
+            chain_config['rpc_url'], request_kwargs={'timeout': 15}))
+        if w3.eth.chain_id != chain_config['chain_id']:
+            raise ValueError('Treasury RPC chain does not match configured chain')
+        user_address = deposit['user_address']
+        token_symbol = deposit['token_symbol']
+
+        # Get private key for user's deposit address
+        private_key = self.wallet_gen.get_private_key_for_user_id(deposit['user_id'])
+        account = w3.eth.account.from_key(private_key)
+        if (account.address.lower() != user_address.lower()
+                or user_address.lower() != deposit['deposit_address'].lower()):
+            raise ValueError('Deposit address does not match derived signing account')
+
+        # Check if ETH or ERC20 token
+        if token_symbol == 'ETH':
+            tx_hash = await self._sweep_eth(
+                w3, account, user_address, deposit
+            )
+        else:
+            tx_hash = await self._sweep_token(
+                w3, account, user_address, token_symbol, chain_name, deposit
+            )
+
+        if tx_hash:
+            await self._record_sweep(deposit, tx_hash, chain_name)
+            submission_journal.mark_booked(tx_hash)
+        else:
+            await self._settle_claim(deposit, None)
+
+    async def _record_sweep(self, deposit: Dict, tx_hash: str, chain_name: str,
+                            state: str = 'swept') -> None:
+        """Book the exact pre-broadcast deposit group in one atomic UPDATE
+        (``sweeping -> swept | swept_unproven``, on the claim this sweep holds)."""
+        from modules.payments import sweep_state
+        ids = deposit['sweep_deposit_ids']
+        n = await sweep_state.move_group(
+            self.db, ids, state, ('sweeping',), started_at=deposit['_sweep_started_at'],
+            extra_set="swept_at = datetime('now'), sweep_tx_hash = ?",
+            extra_params=(tx_hash,))
+        if n != len(ids):
             raise RuntimeError('Sweep bookkeeping did not update the complete deposit group')
+        if state != 'swept':
+            self.logger.warning(f"Swept deposit group {list(ids)} with no receipt "
+                                f"(tx {tx_hash[:10]}...): {state}, not booked on the mark")
+            return
+        await self._book_outflow(deposit, chain_name)
 
         self.logger.info(
             f"✅ Swept deposit {deposit['id']}: "
             f"{deposit['amount_usd']:.2f} USD in {deposit['token_symbol']} on {chain_name} "
             f"(tx: {tx_hash[:10]}...)"
         )
+
+    async def _book_outflow(self, deposit: Dict, chain_name: str) -> None:
+        """098 MO-01: book what the sweep moved, from its receipt, on the
+        deposit monitor's balance mark at the sweep's block — so a deposit that
+        lands after the sweep and before the next poll is still credited. Only
+        the local signer path has the receipt; fail-open (logged)."""
+        receipt = deposit.get('_sweep_receipt')
+        if not receipt or receipt.get('block') is None:
+            return
+        from decimal import Decimal
+        from modules.payments.deposit_monitor import book_sweep_outflow
+        try:
+            gas_wei = int(receipt.get('gas_used') or 0) * int(receipt.get('gas_price') or 0)
+            user, block, token = deposit['user_id'], int(receipt['block']), deposit['token_symbol']
+            if token == 'ETH':
+                await book_sweep_outflow(self.db, user, chain_name, 'ETH',
+                                         int(deposit.get('_sweep_out_raw') or 0) + gas_wei, block)
+            else:
+                out = Decimal(int(deposit.get('_sweep_out_raw') or 0)) / 10**6
+                await book_sweep_outflow(self.db, user, chain_name, token, out, block)
+                if gas_wei:
+                    await book_sweep_outflow(self.db, user, chain_name, 'ETH', gas_wei, block)
+        except Exception as e:
+            self.logger.error("sweep out-flow not booked on the deposit mark (%s)",
+                              type(e).__name__)
 
     async def _sweep_eth(
         self,
@@ -276,6 +366,7 @@ class TreasurySweeper:
             }
 
             # Sign and send
+            deposit['_sweep_out_raw'] = amount_to_send  # 098 MO-01
             return await asyncio.to_thread(self._submit_sweep, w3, account, tx, deposit)
 
         except Exception as e:
@@ -348,6 +439,7 @@ class TreasurySweeper:
                 return None
 
             # Sign and send
+            deposit['_sweep_out_raw'] = balance  # 098 MO-01
             return await asyncio.to_thread(self._submit_sweep, w3, account, tx, deposit)
 
         except Exception as e:
@@ -373,12 +465,34 @@ class TreasurySweeper:
             raw = signed.rawTransaction
         tx_hash = '0x' + keccak(bytes(raw)).hex()
         submission_journal.bind_signed_hash(reference, tx_hash)
+        deposit['_broadcast'], deposit['_sweep_tx'] = True, tx_hash  # 098 MO-01
         returned = w3.to_hex(w3.eth.send_raw_transaction(raw))
         if returned.lower() != tx_hash:
             raise RuntimeError('Sweep response hash mismatch; reconcile prepared submission')
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60, poll_latency=1)
         if (receipt.get('status') != 1
                 or w3.to_hex(receipt.get('transactionHash')).lower() != tx_hash):
+            # 098 MO-01: a mined revert of THIS tx is a definite failure.
+            deposit['_sweep_reverted'] = (
+                receipt.get('status') == 0
+                and w3.to_hex(receipt.get('transactionHash')).lower() == tx_hash)
             raise RuntimeError('Sweep not confirmed successful; reconcile prepared submission')
+        # 098 MO-01: what the receipt proves left the address, and where.
+        deposit['_sweep_receipt'] = {
+            'block': receipt.get('blockNumber'), 'gas_used': receipt.get('gasUsed') or 0,
+            'gas_price': receipt.get('effectiveGasPrice') or tx.get('gasPrice') or 0}
         # Only the caller may release the interlock, after recording the sweep.
         return tx_hash
+
+
+def _definitely_not_sent(exc: BaseException) -> bool:
+    """A remote-signer sweep error that proves no transaction left: a refusal
+    with a definite code, or a request that never reached the signer. An
+    ``internal`` refusal or a request that was sent stays unknown."""
+    from core.signer import protocol
+    from core.signer.client import SignerRefused, SignerUnavailable
+    if isinstance(exc, SignerRefused):
+        return exc.code != protocol.INTERNAL
+    if isinstance(exc, SignerUnavailable):
+        return not exc.sent
+    return False

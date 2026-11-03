@@ -618,10 +618,23 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
         click.echo("Aborted.")
         sys.exit(EXIT_UP_TO_DATE)
 
+    from cli.update.journal import (clear_failed, failed_rollback, shield_signals,
+                                    update_journal)
+    torn = failed_rollback(uctx.snapshots_root)
+    if torn and not force:
+        msg = ("Refusing to apply: the last update's rollback did not complete "
+               f"({torn.get('error') or 'see the log'}). Run `polyrob update --rollback` "
+               "first, or pass --force.")
+        click.echo(_json.dumps({"applied": False, "error": "rollback_failed"})
+                   if as_json else click.style(msg, fg="red"))
+        sys.exit(EXIT_ERROR)
+    if torn:
+        clear_failed(uctx.snapshots_root)
     try:
-        with update_lock(uctx.snapshots_root):
+        with update_lock(uctx.snapshots_root), shield_signals():
             res = apply_update(ctx=uctx, runners=runners,
-                               from_version=status.current, to_version=status.latest or "")
+                               from_version=status.current, to_version=status.latest or "",
+                               journal=update_journal(uctx.snapshots_root))
     except Exception as exc:
         click.echo(_json.dumps({"applied": False, "error": str(exc)})
                    if as_json else click.style(f"Apply failed: {exc}", fg="red"))
@@ -665,6 +678,20 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
             for error in res.rollback_errors:
                 click.echo(f"  {error}")
     sys.exit(EXIT_ERROR)
+
+
+def _recover_interrupted_update(as_json: bool, *, acknowledge: bool = False) -> None:
+    """098 CL-09: an apply killed mid-way (its journal is open, its process is
+    gone) is rolled back before this command does anything else. ``--rollback``
+    acknowledges a failed rollback. Never raises."""
+    try:
+        from cli.update.journal import clear_failed, recover_open_update
+        root = resolve_update_context().snapshots_root
+        recover_open_update(root, echo=(lambda _m: None) if as_json else click.echo)
+        if acknowledge:
+            clear_failed(root)
+    except Exception:
+        pass
 
 
 def _seed_bundled_skills() -> list:
@@ -750,6 +777,7 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
         raise click.UsageError("--snapshot requires --rollback.")
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
+    _recover_interrupted_update(as_json, acknowledge=do_rollback)
     if do_list:
         _do_list_snapshots(as_json)
         sys.exit(EXIT_UP_TO_DATE)

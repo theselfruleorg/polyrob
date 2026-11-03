@@ -12,7 +12,11 @@ ONE launcher text for the container and the host, so a job looks the same to the
   write side open;
 - ``<id>.closed`` — present once ``process close`` sent EOF;
 - ``<id>.jpid`` — the job shell's own pid (a kill reaches its children even
-  where the launcher is not a process-group leader).
+  where the launcher is not a process-group leader);
+- ``<id>.start`` — the launcher's start time (098 TS-10): ``/proc/<pid>/stat``
+  field 22 where ``/proc`` exists (container, Linux ssh host); the host executor
+  writes ``core.state.proc.start_time`` itself. A pid whose start time differs
+  is a REUSED pid — the job is gone.
 
 Why a keeper process (the documented choice, not ``O_RDWR``): opening a FIFO for
 reading blocks until a writer opens it, and a reader sees EOF as soon as the LAST
@@ -67,7 +71,23 @@ def ends_with_password_prompt(log_tail: str) -> bool:
 def job_files(jobs_dir: str, job_id: str) -> Dict[str, str]:
     """The control-file paths for ``job_id`` (``job_id`` must already be validated)."""
     base = f"{jobs_dir.rstrip('/')}/{job_id}"
-    return {k: f"{base}.{k}" for k in ("pid", "log", "cmd", "rc", "in", "keeper", "closed", "jpid")}
+    return {k: f"{base}.{k}"
+            for k in ("pid", "log", "cmd", "rc", "in", "keeper", "closed", "jpid", "start")}
+
+
+#: Shell text: the start time of ``$pid`` (``/proc/<pid>/stat`` field 22 — after
+#: the ``)`` that closes the comm field it is field 20). Empty where there is no
+#: ``/proc`` (macOS ssh host): the start is then unknown and only ``kill -0`` counts.
+_PROC_START_SH = "sed 's/.*) //' /proc/{pid}/stat 2>/dev/null | cut -d' ' -f20"
+
+
+def pid_reused_sh(start_file: str) -> str:
+    """Shell condition, true when ``$pid`` is alive under a DIFFERENT start time
+    than the job recorded in ``start_file`` (already shell-quoted) — a reused
+    pid (098 TS-10). An unknown start (no file, no ``/proc``) is never "reused"."""
+    cur = _PROC_START_SH.format(pid='"$pid"')
+    return (f"{{ __st=$(cat {start_file} 2>/dev/null); __cur=$({cur}); "
+            f"[ -n \"$__st\" ] && [ -n \"$__cur\" ] && [ \"$__st\" != \"$__cur\" ]; }}")
 
 
 def launcher_script(*, shell: str, files: Dict[str, str], exports: str,
@@ -87,7 +107,8 @@ def launcher_script(*, shell: str, files: Dict[str, str], exports: str,
         f"{pre}"
         f"{exports}"
         f"echo $$ > {f['pid']}\n"
-        f"rm -f {f['in']} {f['keeper']} {f['closed']} {f['rc']}\n"
+        f"rm -f {f['in']} {f['keeper']} {f['closed']} {f['rc']} {f['start']}\n"
+        f"[ -r /proc/$$/stat ] && {_PROC_START_SH.format(pid='$$')} > {f['start']}\n"
         f"if mkfifo -m 600 {f['in']} 2>/dev/null; then\n"
         f"  sleep {_KEEPER_SLEEP} > {f['in']} 2>/dev/null &\n"
         f"  echo $! > {f['keeper']}\n"
@@ -113,5 +134,5 @@ def command_file_text(command: str, workdir: str = "") -> str:
 
 __all__ = [
     "STDIN_MAX_BYTES", "STDIN_WRITE_TIMEOUT_SEC", "ends_with_password_prompt",
-    "job_files", "launcher_script", "command_file_text",
+    "job_files", "launcher_script", "command_file_text", "pid_reused_sh",
 ]

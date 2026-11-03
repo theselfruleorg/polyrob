@@ -16,7 +16,7 @@ update it to a new release, and do both from a shell **or from your chat**.
 | Restart at once | `polyrob service restart --now` | `/restart now` |
 | Update to the latest release | `polyrob update --apply` | `/update` |
 | Restart only if it is idle now | `polyrob service restart --no-wait` | — |
-| Stop / start | `polyrob service stop` (`--now` cuts the turn) / `start` | — |
+| Stop / start | `polyrob service stop` (`--now` cuts the turn, Linux only) / `start` | — |
 | Read the log | `polyrob service logs -f` | — |
 
 ## What a restart does
@@ -29,8 +29,9 @@ A restart never cuts you off in the middle of a reply:
    up to 10 minutes (`--wait-idle SECONDS` on the CLI).
 3. **It stops taking new messages and exits.** Messages you send during the restart are
    not lost: Telegram keeps them and they are answered when the service is back.
-4. **The service manager starts it again** (the unit restarts the process on exit code
-   75 — `RestartForceExitStatus=75`).
+4. **The service manager starts it again.** The process exits with code 75. On Linux the
+   systemd unit starts it again on that code (`RestartForceExitStatus=75`); on macOS the
+   launchd agent has `KeepAlive`, so launchd starts it again after any exit.
 5. **It tells you it is back** — in the chat you asked from:
    `✅ Back online on 1.7.0 (abc1234) — restart took 41 s.`
 
@@ -57,9 +58,10 @@ step: **the update is applied by the new process before it starts anything** —
   `✅ Updated and back online on 1.7.0 (was 1.6.0) — took 95 s.` or
   `⚠️ The update failed at the 'migrate' step: … It was rolled back. Back online on 1.6.0.`
 
-Automated updates are for **git and editable installs** (what `install.sh` sets up). A
-pip, pipx or Docker install tells you the manager command instead. `/update pre` includes
-pre-releases.
+Automated updates are for **git and editable installs** (what `install.sh` sets up). On a
+pip, pipx or Docker install, `/update` tells you that a newer version is out and that
+whoever installed the agent updates it; `polyrob update` on the box prints the command for
+that method. `/update pre` includes pre-releases.
 
 With no service running, `polyrob update --apply` updates the code directly (it waits for
 a REPL turn to finish) and then says `polyrob service restart` to pick it up.

@@ -16,14 +16,34 @@ GOAL_DEDUP_THRESHOLD = 0.6
 
 #: 083: the ONE default step budget of an interactive request — ``polyrob run``,
 #: the HTTP task API, A2A, ``SessionRequest``, an owner chat turn on a surface
-#: and the billed ceiling. Env ``INTERACTIVE_MAX_STEPS`` (read at import; a value
-#: below 1 keeps 100). Autonomous runs use ``AutonomyConfig.autonomous_max_steps()``;
+#: and the billed ceiling. Env ``INTERACTIVE_MAX_STEPS`` (read at import and again
+#: after the first ``load_env``; a value below 1 keeps 100). Callers read
+#: :func:`interactive_max_steps` at use time — never copy the value (098 CO-09). Autonomous runs use ``AutonomyConfig.autonomous_max_steps()``;
 #: ``chat_once`` uses ``CHAT_MAX_STEPS``; the REPL turn uses this budget too.
 #: 2026-10-29: 50 → 100 — owner turns that judge, pay and report legitimately ran
 #: past 50; the loop breaker (StopReason.LOOP) now ends a degenerate turn early.
-INTERACTIVE_MAX_STEPS = _int_env("INTERACTIVE_MAX_STEPS", 100)
-if INTERACTIVE_MAX_STEPS < 1:
-    INTERACTIVE_MAX_STEPS = 100
+def _resolve_interactive_max_steps() -> int:
+    n = _int_env("INTERACTIVE_MAX_STEPS", 100)
+    return n if n >= 1 else 100
+
+
+INTERACTIVE_MAX_STEPS = _resolve_interactive_max_steps()
+
+
+def interactive_max_steps() -> int:
+    """The frozen interactive step budget (read at use time, so the refreeze
+    after the first ``load_env`` reaches every caller that uses this)."""
+    return INTERACTIVE_MAX_STEPS
+
+
+def _refreeze_interactive_max_steps() -> int:
+    """098 CO-09: re-read ``INTERACTIVE_MAX_STEPS`` after the first ``load_env``
+    (a ``.polyrob/.env`` value was silently inert: the module froze the bare
+    process env at import). Every caller reads :func:`interactive_max_steps` at
+    use time, so updating this module reaches all of them."""
+    global INTERACTIVE_MAX_STEPS
+    INTERACTIVE_MAX_STEPS = _resolve_interactive_max_steps()
+    return INTERACTIVE_MAX_STEPS
 
 
 class GoalFlagsMixin:

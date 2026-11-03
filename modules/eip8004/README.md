@@ -3,7 +3,7 @@
 This package serves the agent's [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004)
 registration file and its feedback/validation API at `/eip8004/*`.
 For setup, flags and caveats, read the public guide:
-[payments guide §8 — ERC-8004](../../docs/guide/payments.md#8-on-chain-identity-and-payment-backed-reputation--erc-8004-moduleseip8004).
+[payments guide §6 — ERC-8004](../../docs/guide/payments.md#6-on-chain-identity-and-payment-backed-reputation--erc-8004-moduleseip8004).
 
 ## Status
 

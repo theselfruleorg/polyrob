@@ -29,6 +29,7 @@ def test_request_pending_then_approve_then_redeploy_unattended(tmp_path):
     assert r.mark_approved("st", "u1") is True
     assert r.mark_approved("st", "u1") is False  # CAS: only pending -> approved
     assert r.get("st", "u1")["status"] == STATUS_APPROVED
+    r.claim("st", "u1", "approved", "deploying")
     r.record_live("st", "u1", host_port=18000, container_name="polyrob-app-u1-st",
                   public_url="https://st.apps.example.test")
     live = r.get("st", "u1")
@@ -76,10 +77,12 @@ def test_failed_increments_and_redeploy_resets(tmp_path):
     r = AppServiceRegistry(str(tmp_path / "a.db"))
     _req(r)
     r.mark_approved("st", "u1")
-    r.record_failed("st", "u1", error="health check failed")
-    r.record_failed("st", "u1", error="health check failed again")
+    r.claim("st", "u1", "approved", "deploying")
+    assert r.record_failed("st", "u1", error="health check failed again") is True
+    # 098 CO-21: a failed row is not failed again (only deploying/live may fail)
+    assert r.record_failed("st", "u1", error="late") is False
     row = r.get("st", "u1")
-    assert row["status"] == STATUS_FAILED and row["consecutive_failures"] == 2
+    assert row["status"] == STATUS_FAILED and row["consecutive_failures"] == 1
     assert "again" in row["last_failure_error"]
     row = _req(r, workspace_digest="d3" * 12)
     assert row["status"] == STATUS_APPROVED and row["consecutive_failures"] == 0
@@ -90,20 +93,22 @@ def test_health_stop_pause_transitions(tmp_path):
     r = AppServiceRegistry(str(tmp_path / "a.db"))
     _req(r)
     r.mark_approved("st", "u1")
+    r.claim("st", "u1", "approved", "deploying")
     r.record_live("st", "u1", host_port=18001, container_name="c", public_url="u")
     r.record_health("st", "u1", ok=False)
     assert r.get("st", "u1")["consecutive_failures"] == 1
     r.record_health("st", "u1", ok=True)
     assert r.get("st", "u1")["consecutive_failures"] == 0
-    assert r.set_status("st", "u1", STATUS_PAUSED) is True
+    assert r.set_status("st", "u1", STATUS_PAUSED, from_states=(STATUS_LIVE,)) is True
     assert r.get("st", "u1")["status"] == STATUS_PAUSED
-    assert r.set_status("st", "u1", STATUS_STOPPED, error="owner kill") is True
+    assert r.set_status("st", "u1", STATUS_STOPPED, error="owner kill",
+                        from_states=(STATUS_PAUSED,)) is True
     assert r.get("st", "u1")["last_failure_error"] == "owner kill"
     assert r.get("st", "u1")["container_name"] == "c"  # kept until the supervisor cleans up
     r.record_stopped("st", "u1")
     row = r.get("st", "u1")
     assert row["container_name"] is None and row["host_port"] is None and row["public_url"] is None
-    assert r.set_status("nope", "u1", STATUS_STOPPED) is False
+    assert r.set_status("nope", "u1", STATUS_STOPPED, from_states=(STATUS_LIVE,)) is False
 
 
 def test_caps_counters_and_listing(tmp_path):
@@ -118,6 +123,7 @@ def test_caps_counters_and_listing(tmp_path):
     assert r.last_attempt_epoch("st", "u1") is not None
     assert r.last_attempt_epoch("st", "u1") <= time.time()
     assert r.last_attempt_epoch("none", "u1") is None
+    r.claim("st", "u1", "approved", "deploying")
     r.record_live("st", "u1", host_port=18000, container_name="c", public_url="u")
     assert r.used_host_ports() == {18000}
     assert [x["slug"] for x in r.list_for("u1")] == ["st", "two"]

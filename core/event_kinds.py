@@ -136,6 +136,26 @@ PAYMENT_UNMATCHED = "payment_unmatched"
 #: ``refund_due`` status alone is invisible to a filtered listing, so the fact
 #: also rides as an owner-notified event (2026-09-21 revalidation).
 PAYMENT_REFUND_DUE = "payment_refund_due"
+#: 098 W1: the owner closed a refund_due row (``polyrob owner refunded``).
+PAYMENT_REFUNDED = "payment_refunded"
+#: 098 W1 (MO-04): a settlement/expiry wake claim re-opened, or given up after
+#: its last attempt (one owner notice).
+PAYMENT_WAKE_RETRIED = "payment_wake_retried"
+PAYMENT_WAKE_FAILED = "payment_wake_failed"
+#: 098 W1 (MO-02/MO-23/MO-21): a held or unproven invoice escalated to the owner once.
+PAYMENT_SETTLING_REVERTED = "payment_settling_reverted"
+PAYMENT_SETTLING_UNKNOWN = "payment_settling_unknown"
+PAYMENT_HELD_NEEDS_OWNER = "payment_held_needs_owner"
+PAYMENT_NO_TX_UNPROVEN = "payment_no_tx_unproven"
+#: 098 close-out (MO-01): a deposit sweep whose broadcast outcome is unknown
+#: after 1 h (told once, never resent), and a sweep whose receipt reverted.
+PAYMENT_DEPOSIT_SWEEP_STUCK = "payment_deposit_sweep_stuck"
+PAYMENT_DEPOSIT_SWEEP_FAILED = "payment_deposit_sweep_failed"
+#: 098 close-out (TS-23): a money tx booked before its receipt was known got its
+#: final receipt state (confirmed / reverted — out of the daily cap / unknown).
+TX_RECEIPT_RESOLVED = "tx_receipt_resolved"
+#: 098 W1 (MO-18): the pull pass brought a hunt job back in step with its mandate.
+TRADING_HUNT_REPAIRED = "trading_hunt_repaired"
 #: An inbound treasury transfer confirmed as our OWN trade proceeds (an exact
 #: broadcast-hash match against the wallet audit ledger) rather than a payment.
 #: Not an owner notice — but never a silent skip either.
@@ -256,8 +276,24 @@ MODEL_SWITCHED = "model_switched"
 MODEL_SWITCH_FAILED = "model_switch_failed"
 MODEL_REASONING_SET = "model_reasoning_set"
 
+# 098 state machines: owner-visible outcomes of guarded lifecycles
+#: an inbound email failed N times and is quarantined (one owner notice)
+EMAIL_QUARANTINED = "email_quarantined"
+#: a skill write that was cut half-way was rolled back / quarantined by the repair pass
+SKILL_UNCOMMITTED_ROLLED_BACK = "skill_uncommitted_rolled_back"
+SKILL_UNCOMMITTED_QUARANTINED = "skill_uncommitted_quarantined"
+#: the X DM cursor file was unreadable with no backup (a gap is possible)
+X_DM_CURSOR_LOST = "x_dm_cursor_lost"
+#: one X DM event failed its handler 5 times and was skipped
+X_DM_POISON = "x_dm_poison"
+
 # Infra/storage housekeeping
 DB_RELOCATED = "db_relocated"                 # R-2 T3 one-shot sidecar move ran
+#: 098 S3: a write asked for an edge its state machine's table forbids (refused
+#: in production). Emitted by ``core.state.machine`` through its event sink —
+#: that tier-0 module carries the literal; ``tests/test_state_machine_tables.py``
+#: pins the two together.
+STATE_ILLEGAL_TRANSITION = "state_illegal_transition"
 
 KNOWN_KINDS = frozenset(
     v for k, v in globals().items() if k.isupper() and isinstance(v, str)

@@ -1,7 +1,8 @@
-"""M4: Surface.stream() buffers partial=True deltas into _stream_buffers and only frees
-them on a partial=False finalize — but the streaming mirror always emits partial=True and
-never finalizes through the router, so both the buffer map (per chat key) and each key's
-chunk list grew for the daemon's whole lifetime. Both must be bounded.
+"""M4 → 098 TS-19: a surface that does not live-edit keeps NO per-stream state.
+
+M4 bounded the buffered partial path (a buffer map that the router never
+finalized). TS-19 removed that path: a partial on such a surface is dropped, so
+there is nothing to bound and nothing to leak.
 """
 import pytest
 
@@ -13,7 +14,12 @@ class _S(Surface):
     surface_id = "test"
     capabilities = None
 
+    def __init__(self):
+        super().__init__()
+        self.sent = []
+
     async def send(self, msg):
+        self.sent.append(msg)
         return None
 
     async def start(self, container):
@@ -23,7 +29,7 @@ class _S(Surface):
         return None
 
     def _incremental_streaming_enabled(self):
-        return False  # force the buffered path
+        return False
 
 
 def _partial(key, text="x"):
@@ -31,16 +37,11 @@ def _partial(key, text="x"):
 
 
 @pytest.mark.asyncio
-async def test_buffer_map_key_count_is_bounded():
+async def test_partials_on_a_non_live_surface_hold_no_state():
     s = _S()
     for i in range(Surface._MAX_LIVE_STREAMS + 50):
         await s.stream(_partial(f"k{i}"))
-    assert len(s._stream_buffers) <= Surface._MAX_LIVE_STREAMS
-
-
-@pytest.mark.asyncio
-async def test_per_key_chunk_list_is_bounded():
-    s = _S()
-    for _ in range(5000):
+    for _ in range(100):
         await s.stream(_partial("samekey"))
-    assert len(s._stream_buffers["samekey"]) <= Surface._MAX_STREAM_CHUNKS
+    assert not hasattr(s, "_stream_buffers")
+    assert s._live == {} and s.sent == []

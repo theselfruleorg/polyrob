@@ -89,19 +89,73 @@ def pending_tap_alias(kind: str, item_id: str) -> str:
     return f"{PENDING_ALIAS_PREFIX}{digest[:6]}"
 
 
+#: 098 CO-19: hex chars of the reviewed draft revision a decide token carries
+#: (``/approve_p_<alias>_<rev>``). 12 keeps the whole token within the 32 chars
+#: a chat client links; the writer still checks the FULL rev under its lock.
+TAP_REV_LEN = 12
+_ALIAS_REV_RE = re.compile(r"^(p-[0-9a-f]{6})-([0-9a-f]{%d})$" % TAP_REV_LEN)
+_ID_REV_RE = re.compile(r"^(.+)@([0-9a-f]{16})$")
+
+
+def split_alias_rev(alias: str) -> Tuple[str, Optional[str]]:
+    """``("p-a1b2c3", "<rev prefix>")`` for a rev-carrying alias, else
+    ``(alias, None)``. Accepts the tapped (``_``) or parsed (``-``) form."""
+    want = str(alias or "").strip().lower().replace("_", "-")
+    m = _ALIAS_REV_RE.match(want)
+    if m:
+        return m.group(1), m.group(2)
+    return str(alias or "").strip().lower(), None
+
+
+def split_id_rev(target: str) -> Tuple[str, Optional[str]]:
+    """``("<id>", "<rev>")`` for a typed ``<id>@<16 hex>``, else
+    ``(target, None)`` — an email address keeps its ``@``."""
+    m = _ID_REV_RE.match(str(target or ""))
+    return (m.group(1), m.group(2)) if m else (str(target or ""), None)
+
+
+def decision_rev(item: dict) -> Optional[str]:
+    """The identity-draft revision a decision on ``item`` binds to (098 CO-19):
+    its own ``rev`` for a SELF/OWNER/CONTRACT draft, else the rev of the doc
+    draft it is linked to (one decision decides both), else ``None``."""
+    if item.get("kind") in _DOC_KINDS:
+        return item.get("rev") or None
+    return item.get("linked_rev") or None
+
+
+def decision_id(item: dict) -> str:
+    """The id a typed seat (CLI, REPL, console) decides by: ``<id>@<rev>`` when
+    the decision binds to a draft revision, else the bare id."""
+    rev = decision_rev(item)
+    item_id = str(item.get("id", ""))
+    return f"{item_id}@{rev}" if rev else item_id
+
+
 def resolve_pending_alias(alias: str, items: List[dict]) -> Optional[dict]:
     """The item ``alias`` names, or ``None`` when it names none or more than one.
 
     Two matches is a hash collision across the LIVE queue. Refusing is the only
     honest answer: acting on either one would decide a proposal the owner did
     not look at.
+
+    098 CO-19: a decide token carries the reviewed revision
+    (``p-<hex>-<rev>``). The hit is then a COPY with ``seat_rev`` set: the full
+    current rev when the token's rev matches it, else the token's own rev (the
+    draft changed — the writer refuses it). Every seat passes ``seat_rev`` on.
     """
     if not alias:
         return None
-    want = str(alias).strip().lower()
+    want, rev = split_alias_rev(alias)
     hits = [it for it in items
             if pending_tap_alias(it.get("kind", ""), it.get("id", "")) == want]
-    return hits[0] if len(hits) == 1 else None
+    if len(hits) != 1:
+        return None
+    if rev is None:
+        return hits[0]
+    current = decision_rev(hits[0]) or ""
+    hit = dict(hits[0])
+    hit["seat_rev"] = current if current.startswith(rev) else rev
+    return hit
 
 
 def last_decision_for_alias(alias: str, *, user_id: str, events=None,
@@ -115,7 +169,7 @@ def last_decision_for_alias(alias: str, *, user_id: str, events=None,
     ``(kind, id)`` the alias hashes, so the stale token can name what happened.
     Returns ``{"action", "kind", "item_id", "ts"}``; newest decision wins.
     """
-    want = str(alias or "").strip().lower().replace("_", "-")
+    want = split_alias_rev(str(alias or "").strip().lower().replace("_", "-"))[0]
     if not want.startswith(PENDING_ALIAS_PREFIX):
         return None
     if events is None:
@@ -140,7 +194,8 @@ def last_decision_for_alias(alias: str, *, user_id: str, events=None,
     return None
 
 
-_TOKEN_RE = re.compile(r"/(approve|reject)_p_([0-9a-f]{6})\b", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"/(approve|reject)_p_([0-9a-f]{6})(?:_[0-9a-f]{%d})?\b" % TAP_REV_LEN,
+                       re.IGNORECASE)
 
 
 def annotate_decided_tokens(text: str, *, user_id: str, live_items: List[dict],
@@ -282,6 +337,9 @@ def _curated_list_pending(home_dir: "Path | str", user_id: str) -> List[dict]:
             "preview": preview,
             "chars": len(content),
             "path": None,   # DB-backed, not a file quarantine
+            # 096 A10: only a forged/autonomous turn quarantines a note, so a
+            # pending note is always a background run's draft.
+            "by": ["background_review"],
         })
     return out
 
@@ -358,9 +416,11 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
             items.append({
                 "kind": KIND_SELF_CONTEXT,
                 "id": sc["user_id"],
+                "change": _doc_change(_writer(home_dir, instance_id), sc),
                 "preview": sc["preview"],
                 "chars": sc["chars"],
                 "path": sc["path"],
+                "rev": sc.get("rev"),
                 "by": sc.get("by") or [],
             })
     except Exception as e:
@@ -372,10 +432,13 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
             items.append({
                 "kind": KIND_OWNER,
                 "id": od["user_id"],
+                "change": _doc_change(_owner_writer(home_dir, instance_id), od),
                 "preview": od["preview"],
                 "chars": od["chars"],
                 "path": od["path"],
+                "rev": od.get("rev"),
                 "by": od.get("by") or [],
+                "retires": list(od.get("retires") or []),
             })
     except Exception as e:
         logger.debug("self_evolution: owner-doc list failed: %s", e)
@@ -386,9 +449,11 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
             items.append({
                 "kind": KIND_CONTRACT,
                 "id": cd["user_id"],
+                "change": _doc_change(_contract_writer(home_dir, instance_id), cd),
                 "preview": cd["preview"],
                 "chars": cd["chars"],
                 "path": cd["path"],
+                "rev": cd.get("rev"),
             })
     except Exception as e:
         logger.debug("self_evolution: contract list failed: %s", e)
@@ -430,6 +495,24 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
     return items
 
 
+def _doc_change(writer, entry: dict) -> Optional[dict]:
+    """096 W2/A4: an identity / owner-facts / contract draft as a CHANGE
+    against the active doc (a new doc when none is active). Fail-open."""
+    try:
+        from core.pending_review import change_summary
+        body = Path(entry["path"]).read_text(encoding="utf-8")
+        active = writer.read_active(entry["user_id"]) or None
+        return change_summary(body, active)
+    except Exception as e:
+        logger.debug("self_evolution: doc change summary skipped: %s", e)
+        return None
+
+
+def _doc_writer_for(kind: str, home_dir, instance_id: str):
+    return {KIND_SELF_CONTEXT: _writer, KIND_OWNER: _owner_writer,
+            KIND_CONTRACT: _contract_writer}[kind](home_dir, instance_id)
+
+
 def _skill_change(mgr, entry: dict, user_id: str) -> Optional[dict]:
     """New skill or update (+/− lines) and its description. Fail-open."""
     try:
@@ -455,20 +538,52 @@ def review(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
                          skill_manager=skill_manager)
     item = next((it for it in items if it["kind"] == kind and str(it["id"]) == str(item_id)),
                 {"kind": kind, "id": item_id})
-    active = None
-    if kind == KIND_SKILL:
-        mgr = _resolve_skill_manager(skill_manager)
-        try:
-            if mgr is not None and hasattr(mgr, "active_skill_text"):
-                active = mgr.active_skill_text(item_id, user_id=user_id)
-        except Exception as e:
-            logger.debug("self_evolution: live skill unreadable for review: %s", e)
+    active = _live_text(kind, item_id, user_id=user_id, home_dir=home_dir,
+                        instance_id=instance_id, skill_manager=skill_manager)
     from core.pending_review import review_text
+    extra = []
+    partner_key = item.get("linked") or ""
+    if partner_key:
+        # 096 A8: a linked pair is ONE decision — the review shows BOTH halves.
+        p_kind, _, p_id = partner_key.partition(":")
+        p_item = next((it for it in items if it["kind"] == p_kind
+                       and str(it["id"]) == p_id), {"kind": p_kind, "id": p_id})
+        ok2, p_body = show(p_kind, p_id, user_id=user_id, home_dir=home_dir,
+                           instance_id=instance_id, skill_manager=skill_manager)
+        if ok2:
+            p_text = review_text(
+                {**p_item, "notes": ""}, p_body, label=_item_label(p_item),
+                is_skill=(p_kind == KIND_SKILL),
+                active_body=_live_text(p_kind, p_id, user_id=user_id, home_dir=home_dir,
+                                       instance_id=instance_id, skill_manager=skill_manager),
+                decide_line="")
+            extra = ["", "— and, in the same decision —", p_text.rstrip()]
+        else:
+            extra = ["", f"— and, in the same decision, the {_item_label(p_item)} "
+                         f"(unreadable: {p_body})"]
     return True, review_text(
         item, body, label=_item_label(item), is_skill=(kind == KIND_SKILL),
-        active_body=active,
-        decide_line=(f"Decide: {pending_tap_token('approve', item)}   "
+        active_body=active, extra_sections=extra,
+        decide_line=(f"Decide{' both' if partner_key else ''}: "
+                     f"{pending_tap_token('approve', item)}   "
                      f"{pending_tap_token('reject', item)}"))
+
+
+def _live_text(kind: str, item_id, *, user_id: str, home_dir, instance_id: str,
+               skill_manager=None) -> Optional[str]:
+    """The live text a draft would replace, or None (new item / no live text).
+    Fail-open to None: the review then shows the draft whole."""
+    try:
+        if kind == KIND_SKILL:
+            mgr = _resolve_skill_manager(skill_manager)
+            if mgr is not None and hasattr(mgr, "active_skill_text"):
+                return mgr.active_skill_text(item_id, user_id=user_id)
+            return None
+        if kind in (KIND_SELF_CONTEXT, KIND_OWNER, KIND_CONTRACT):
+            return _doc_writer_for(kind, home_dir, instance_id).read_active(user_id) or None
+    except Exception as e:
+        logger.debug("self_evolution: live text unreadable for review: %s", e)
+    return None
 
 
 #: 095 W10 (R9): who drafted a pending item, in the owner's words.
@@ -479,9 +594,18 @@ _BY_LABELS = {"user": "the owner", "agent": "the agent",
 def _annotate(items: List[dict], user_id: str, home_dir, instance_id: str) -> None:
     """Name each draft's author and its linked draft in its preview (095 W10):
     every seat that lists the queue shows both, from this one place."""
-    from core import pending_links
+    from core import pending_links, pending_reasons
     keys = {f"{it['kind']}:{it['id']}" for it in items}
+    revs = {f"{it['kind']}:{it['id']}": it.get("rev") for it in items}
+    why = pending_reasons.all_reasons(user_id, home_dir=home_dir, instance_id=instance_id)
     for it in items:
+        # 096 W1: why the agent wants it, newest last ("" = not recorded).
+        entries = why.get(f"{it['kind']}:{it['id']}") or []
+        it["reasons"] = [str(e.get("reason") or "") for e in entries if e.get("reason")]
+        it["reason"] = it["reasons"][-1] if it["reasons"] else ""
+        if pending_reasons.UNREADABLE in why:
+            it["reason_unreadable"] = True
+        it["reason_at"] = int(entries[-1].get("at") or 0) if entries else 0
         notes = []
         by = [_BY_LABELS.get(b, b) for b in it.get("by") or []]
         if by:
@@ -493,6 +617,9 @@ def _annotate(items: List[dict], user_id: str, home_dir, instance_id: str) -> No
             other = None
         if other and f"{other[0]}:{other[1]}" in keys:
             it["linked"] = f"{other[0]}:{other[1]}"
+            if other[0] in _DOC_KINDS and it["kind"] not in _DOC_KINDS:
+                # 098 CO-19: the doc half's rev rides on the folded decision.
+                it["linked_rev"] = revs.get(it["linked"])
             notes.append(f"one decision with the {_item_label({'kind': other[0], 'id': other[1]})}")
         if notes:
             it["notes"] = "; ".join(notes)
@@ -544,15 +671,80 @@ def _rebase_note(res) -> str:
     return f" — {note}" if note else ""
 
 
+_DOC_KINDS = (KIND_SELF_CONTEXT, KIND_OWNER, KIND_CONTRACT)
+
+
+def _split_rev(kind: str, item_id, rev: Optional[str]):
+    """098 CO-19: an identity-doc decision may name the reviewed revision as
+    ``rev=`` or as ``<id>@<rev>`` (a tenant id never contains ``@``)."""
+    item_id = str(item_id)
+    if kind in _DOC_KINDS and "@" in item_id:
+        item_id, _, embedded = item_id.partition("@")
+        rev = rev or embedded
+    elif _ID_REV_RE.match(item_id):  # a linked pair's other half: ``<skill>@<doc rev>``
+        m = _ID_REV_RE.match(item_id)
+        item_id, rev = m.group(1), rev or m.group(2)
+    return item_id, (str(rev).strip() or None) if rev else None
+
+
+def _reviewed_rev(kind: str, item_id: str, rev: Optional[str], *, user_id: str,
+                  home_dir, instance_id: str) -> Optional[str]:
+    """The revision the owner decided on: the seat's ``rev``, else the revision
+    the owner was last NOTIFIED of (the inbox card's content hash). ``None``
+    when the owner was never sent this draft — the decision is then REFUSED
+    (:data:`DRAFT_NOT_SHOWN`), never applied to whatever the draft holds now."""
+    if rev or kind not in _DOC_KINDS:
+        return rev
+    try:
+        state = load_notified_state(user_id, home_dir=home_dir, instance_id=instance_id)
+        return state.get(f"{kind}:{item_id}") or None
+    except Exception:
+        return None
+
+
+#: 098 CO-19: a decision with no revision on a draft whose card was never sent.
+DRAFT_NOT_SHOWN = ("the draft changed or was never shown — read it (/pending, or "
+                   "`polyrob owner show-pending`) and decide it by the <id>@<rev> "
+                   "that view prints")
+
+
+def _unbound_doc_decision(kind: str, rev: Optional[str]) -> bool:
+    return kind in _DOC_KINDS and not rev
+
+
 def _decide_linked(fn, kind: str, item_id, *, user_id: str, home_dir, instance_id: str,
-                   skill_manager=None) -> Tuple[bool, str]:
+                   skill_manager=None, rev: Optional[str] = None) -> Tuple[bool, str]:
     """095 W10 (R8): a linked pair is ONE decision. The first half decides; the
     second follows only when the first succeeded, and a failed second half is
     named, never hidden."""
     other = _linked_pending(kind, item_id, user_id=user_id, home_dir=home_dir,
                             instance_id=instance_id, skill_manager=skill_manager)
+    _decide = fn
+
+    def fn(k, i, **kw):  # 096 W1: a decided draft's reasons go with it
+        res = _decide(k, i, **kw)
+        if res[0]:
+            from core import pending_reasons
+            pending_reasons.forget(user_id, k, i, home_dir=home_dir, instance_id=instance_id)
+        return res
+
+    other_rev = None
+    if other is not None and other[0] in _DOC_KINDS and kind not in _DOC_KINDS:
+        # 098 CO-19: the seat's rev belongs to the doc half. Check it BEFORE the
+        # first half is decided, so a refused doc never splits the pair.
+        other_rev = _reviewed_rev(other[0], str(other[1]), rev, user_id=user_id,
+                                  home_dir=home_dir, instance_id=instance_id)
+        if not other_rev:
+            return False, DRAFT_NOT_SHOWN
+        current = _doc_writer_for(other[0], home_dir, instance_id).list_pending(user_id)
+        if not current or current.get("rev") != other_rev:
+            clear_notified_item(user_id, other[0], str(other[1]), home_dir=home_dir,
+                                instance_id=instance_id)
+            from core.self_context_writer import DRAFT_CHANGED
+            return False, DRAFT_CHANGED
+        rev = None
     ok, msg = fn(kind, item_id, user_id=user_id, home_dir=home_dir,
-                 instance_id=instance_id, skill_manager=skill_manager)
+                 instance_id=instance_id, skill_manager=skill_manager, rev=rev)
     if other is None:
         return ok, msg
     label = _item_label({"kind": other[0], "id": other[1]})
@@ -561,49 +753,61 @@ def _decide_linked(fn, kind: str, item_id, *, user_id: str, home_dir, instance_i
     from core import pending_links
     pending_links.unlink(user_id, kind, item_id, home_dir=home_dir, instance_id=instance_id)
     ok2, msg2 = fn(other[0], other[1], user_id=user_id, home_dir=home_dir,
-                   instance_id=instance_id, skill_manager=skill_manager)
+                   instance_id=instance_id, skill_manager=skill_manager, rev=other_rev)
     if not ok2:
         return False, f"{msg}; ⚠ the linked {label} FAILED: {msg2}"
     return True, f"{msg}; {msg2}"
 
 
 def promote(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
-            instance_id: str, skill_manager=None) -> Tuple[bool, str]:
-    """Promote a pending proposal (and the draft linked to it) to active."""
+            instance_id: str, skill_manager=None, rev: Optional[str] = None) -> Tuple[bool, str]:
+    """Promote a pending proposal (and the draft linked to it) to active.
+
+    ``rev`` (098 CO-19): the identity-doc revision the owner reviewed; a draft
+    that changed since is refused and re-sent, never promoted."""
+    item_id, rev = _split_rev(kind, item_id, rev)
     return _decide_linked(_promote_one, kind, item_id, user_id=user_id, home_dir=home_dir,
-                          instance_id=instance_id, skill_manager=skill_manager)
+                          instance_id=instance_id, skill_manager=skill_manager, rev=rev)
 
 
 def reject(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
-           instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+           instance_id: str, skill_manager=None, rev: Optional[str] = None) -> Tuple[bool, str]:
     """Reject a pending proposal (and the draft linked to it). ``(ok, message)``."""
+    item_id, rev = _split_rev(kind, item_id, rev)
     return _decide_linked(_reject_one, kind, item_id, user_id=user_id, home_dir=home_dir,
-                          instance_id=instance_id, skill_manager=skill_manager)
+                          instance_id=instance_id, skill_manager=skill_manager, rev=rev)
 
 
 def _promote_one(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
-                 instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+                 instance_id: str, skill_manager=None,
+                 rev: Optional[str] = None) -> Tuple[bool, str]:
     """Promote ONE pending proposal to active. Returns ``(ok, message)``."""
+    rev = _reviewed_rev(kind, item_id, rev, user_id=user_id, home_dir=home_dir,
+                        instance_id=instance_id)
+    if _unbound_doc_decision(kind, rev):
+        return False, DRAFT_NOT_SHOWN
     # 019 #1: an owner action changes the pending set — forget the notified
-    # fingerprint so the next (possibly same-id) proposal notifies again.
+    # fingerprint so the next (possibly same-id) proposal notifies again (a
+    # refused, changed draft is re-sent the same way).
     clear_notified_item(user_id, kind, item_id, home_dir=home_dir,
                         instance_id=instance_id)
     if kind == KIND_SELF_CONTEXT:
-        res = _writer(home_dir, instance_id).promote(user_id=user_id)
+        res = _writer(home_dir, instance_id).promote(user_id=user_id, expected_rev=rev)
         ok = bool(res.ok and not res.pending)
         _self_mod_ev(kind, "promote", item_id, user_id, ok)
         return ok, (
             "self-context promoted (active next session)" + _rebase_note(res) if res.ok
             else "; ".join(res.errors) or "promote failed")
     if kind == KIND_OWNER:
-        res = _owner_writer(home_dir, instance_id).promote(user_id=user_id)
+        res = _owner_writer(home_dir, instance_id).promote(user_id=user_id, expected_rev=rev)
         ok = bool(res.ok and not res.pending)
         _self_mod_ev(kind, "promote", item_id, user_id, ok)
         return ok, (
             "owner-facts doc promoted (active next session)" + _rebase_note(res) if res.ok
             else "; ".join(res.errors) or "promote failed")
     if kind == KIND_CONTRACT:
-        res = _contract_writer(home_dir, instance_id).promote(user_id=user_id)
+        res = _contract_writer(home_dir, instance_id).promote(user_id=user_id,
+                                                              expected_rev=rev)
         ok = bool(res.ok and not res.pending)
         _self_mod_ev(kind, "promote", item_id, user_id, ok)
         return ok, (
@@ -634,23 +838,29 @@ def _promote_one(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
 
 
 def _reject_one(kind: str, item_id: str, *, user_id: str, home_dir: Path | str,
-                instance_id: str, skill_manager=None) -> Tuple[bool, str]:
+                instance_id: str, skill_manager=None,
+                rev: Optional[str] = None) -> Tuple[bool, str]:
     """Reject (archive-then-discard) ONE pending proposal. ``(ok, message)``."""
+    rev = _reviewed_rev(kind, item_id, rev, user_id=user_id, home_dir=home_dir,
+                        instance_id=instance_id)
+    if _unbound_doc_decision(kind, rev):
+        return False, DRAFT_NOT_SHOWN
     # 019 #1: see promote() — owner action resets the notification batch.
     clear_notified_item(user_id, kind, item_id, home_dir=home_dir,
                         instance_id=instance_id)
     if kind == KIND_SELF_CONTEXT:
-        res = _writer(home_dir, instance_id).reject(user_id=user_id)
+        res = _writer(home_dir, instance_id).reject(user_id=user_id, expected_rev=rev)
         _self_mod_ev(kind, "reject", item_id, user_id, bool(res.ok))
         return bool(res.ok), ("self-context draft rejected (archived)" if res.ok
                               else "; ".join(res.errors) or "reject failed")
     if kind == KIND_OWNER:
-        res = _owner_writer(home_dir, instance_id).reject(user_id=user_id)
+        res = _owner_writer(home_dir, instance_id).reject(user_id=user_id, expected_rev=rev)
         _self_mod_ev(kind, "reject", item_id, user_id, bool(res.ok))
         return bool(res.ok), ("owner-facts draft rejected (archived)" if res.ok
                               else "; ".join(res.errors) or "reject failed")
     if kind == KIND_CONTRACT:
-        res = _contract_writer(home_dir, instance_id).reject(user_id=user_id)
+        res = _contract_writer(home_dir, instance_id).reject(user_id=user_id,
+                                                             expected_rev=rev)
         _self_mod_ev(kind, "reject", item_id, user_id, bool(res.ok))
         return bool(res.ok), ("operating contract draft rejected (archived)" if res.ok
                               else "; ".join(res.errors) or "reject failed")
@@ -697,9 +907,16 @@ def decide_all(approve: bool, *, user_id: str, home_dir: Path | str,
         if f"{it['kind']}:{it['id']}" in decided:
             continue  # the second half of a linked pair: decided with the first
         decided.update({f"{it['kind']}:{it['id']}", it.get("linked") or ""})
+        # 098 review: a bulk REJECT binds to the revision it just listed (the
+        # safe direction — a draft that changes after the list is refused, not
+        # discarded). A bulk APPROVE passes no rev: an identity draft the owner
+        # was never sent stays refused (CO-19) and names its <id>@<rev>.
+        rev = None if approve else decision_rev(it)
         try:
             ok, msg = fn(it["kind"], it["id"], user_id=user_id, home_dir=home_dir,
-                         instance_id=instance_id, skill_manager=skill_manager)
+                         instance_id=instance_id, skill_manager=skill_manager, rev=rev)
+            if not ok and msg == DRAFT_NOT_SHOWN:
+                msg = f"{msg}: {decision_id(it)}"
         except Exception as e:  # one bad item must not abandon the rest
             ok, msg = False, f"{it['kind']}:{it['id']} failed: {e}"
         ok_n, fail_n = (ok_n + 1, fail_n) if ok else (ok_n, fail_n + 1)
@@ -746,7 +963,10 @@ def pending_tap_token(verb: str, item: dict) -> str:
     cannot drift apart.
     """
     alias = pending_tap_alias(item.get("kind", ""), item.get("id", ""))
-    return f"/{verb}_{alias.replace('-', '_')}"
+    token = f"/{verb}_{alias.replace('-', '_')}"
+    # 098 CO-19: a DECIDE token binds to the draft revision the owner is shown.
+    rev = decision_rev(item) if verb in ("approve", "reject") else None
+    return f"{token}_{rev[:TAP_REV_LEN]}" if rev else token
 
 
 def _item_label(it: dict) -> str:
@@ -786,15 +1006,51 @@ def build_pending_notification(items: List[dict]) -> Optional[str]:
             continue  # 095 W10: a linked pair is ONE entry with ONE pair of taps
         shown.update({f"{it['kind']}:{it['id']}", it.get("linked") or ""})
         rows.append(it)
-    from core.pending_review import summary_line
-    lines = [f"🧠 I've proposed {len(rows)} change(s) to how I work — tap to approve:"]
-    for it in rows:
-        lines.append(f"• {_item_label(it)} — {summary_line(it)}")
-        lines.append(f"   {pending_tap_token('approve', it)}   "
-                     f"{pending_tap_token('reject', it)}   "
-                     f"see it all: {pending_tap_token('pending', it)}")
-    lines.append("Everything at once: /approve_all · the full list: /pending")
+    by_key = {f"{it['kind']}:{it['id']}": it for it in items}
+    n = len(rows)
+    lines = [f"🧠 {n} proposed change{'s' if n != 1 else ''} to how I work"]
+    for i, it in enumerate(rows, 1):
+        lines.append("")
+        lines.extend(notice_item_lines(it, partner=by_key.get(it.get("linked") or ""),
+                                       number=i))
+    lines.append("")
+    lines.append("All: /approve_all · /pending")
     return "\n".join(lines)
+
+
+def notice_item_lines(it: dict, *, partner: Optional[dict] = None,
+                      number: Optional[int] = None) -> List[str]:
+    """096 W3: ONE pending item as the owner decides it — what (label + kind of
+    change, who drafted it), Why, what Changes, then the taps. A linked pair
+    is one block naming both halves. Shared by the notice and ``/pending``."""
+    from core.pending_review import parts_text, summary_line, why_line
+    head = _item_label(it)
+    head = head[0].upper() + head[1:]
+    change = it.get("change") if isinstance(it.get("change"), dict) else None
+    what = ("new" if change and change.get("new") else "update" if change else "")
+    title = f"{head}" + (f" + the {_item_label(partner)}" if partner else "")
+    title += f" — {what}" if what else ""
+    by = (it.get("notes") or "").split(";")[0].strip()
+    if by.startswith("drafted by"):
+        title += f" ({by})"
+    prefix = f"{number}. " if number is not None else "• "
+    out = [prefix + title, f"   {why_line(it)}"]
+    if change and not change.get("new") and change.get("parts"):
+        out.append(f"   Changes: {parts_text(change['parts'])}.")
+    else:
+        # A new item (or one with no named change): what it says, one line.
+        text = summary_line({**it, "notes": ""})
+        out.append(f"   What: {text}")
+    if partner:
+        p_change = partner.get("change") if isinstance(partner.get("change"), dict) else None
+        if partner.get("retires"):
+            ret = " | ".join(f'"{str(r)[:80]}"' for r in partner["retires"][:3])
+            out.append(f"   Also retires: {ret}")
+        elif p_change and p_change.get("parts"):
+            out.append(f"   Also, the {_item_label(partner)}: {parts_text(p_change['parts'])}.")
+    out.append(f"   {pending_tap_token('approve', it)} · {pending_tap_token('reject', it)}"
+               f" · read it: {pending_tap_token('pending', it)}")
+    return out
 
 
 # --- 035 P0-1: pending-notification state (per item, content-aware) ----------

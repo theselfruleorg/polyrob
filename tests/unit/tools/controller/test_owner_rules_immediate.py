@@ -62,7 +62,7 @@ async def test_model_rule_requires_review_even_on_owner_turn(monkeypatch, tmp_pa
     c = _bare_controller(tmp_path)
     action = _action(c, which)
     result = await action.function(
-        action.param_model(action="update", content="Never publish customer records."),
+        action.param_model(reason="test reason", action="update", content="Never publish customer records."),
         execution_context=_owner_ctx())
     active, pending = _paths(tmp_path, name)
     assert result.error is None
@@ -73,7 +73,9 @@ async def test_model_rule_requires_review_even_on_owner_turn(monkeypatch, tmp_pa
     # The direct owner review primitive still activates the reviewed draft.
     from core import self_evolution
     kind = "owner_doc" if which == "owner_doc_manage" else "self_context"
-    ok, message = self_evolution.promote(kind, "alice", user_id="alice", home_dir=tmp_path, instance_id="polyrob")
+    [item] = self_evolution.list_pending("alice", home_dir=tmp_path, instance_id="polyrob")
+    ok, message = self_evolution.promote(kind, "alice", user_id="alice", home_dir=tmp_path,
+                                         instance_id="polyrob", rev=item["rev"])
     assert ok, message
     assert active.exists()
 
@@ -86,7 +88,7 @@ async def test_new_draft_never_replaces_active_rules(monkeypatch, tmp_path):
     writer.propose("Keep customer data private.", user_id="alice", created_by="agent", pending=False)
     action = _action(_bare_controller(tmp_path), "owner_doc_manage")
     for context in (_owner_ctx(), _forged_ctx()):
-        result = await action.function(action.param_model(action="update", content="Publish all records."),
+        result = await action.function(action.param_model(reason="test reason", action="update", content="Publish all records."),
                                        execution_context=context)
         assert result.error is None
         active, pending = _paths(tmp_path, "owner.md")

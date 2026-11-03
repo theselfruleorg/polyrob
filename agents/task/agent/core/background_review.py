@@ -38,7 +38,8 @@ _REVIEW_PROMPT = (
     "DURABLE, REUSABLE procedure emerged that would help in future sessions.\n\n"
     "If yes: call skill_manage(action='create', skill_id=<short-kebab-id>, "
     "when=<one line of <= 60 chars: when to load it>, "
-    "content=<a concise SKILL.md: a '# Title' heading then when-to-use + steps>). "
+    "content=<a concise SKILL.md: a '# Title' heading then when-to-use + steps>, "
+    "reason=<one sentence for the owner: what in this work the skill addresses>). "
     "Keep it general (no secrets, no session-specific data). Author at most ONE skill.\n"
     "First search the skill index: when a skill already covers it, load_skill it and "
     "patch the smallest span instead of creating one. A rule the owner stated is not "
@@ -190,9 +191,13 @@ class BackgroundReviewMixin:
     def _maybe_spawn_background_review(self, *, turn_was_productive: bool) -> None:
         """Fire-and-forget the reviewer if the cadence says so. Never blocks/raises."""
         try:
+            prev = getattr(self, "_bg_review_task", None)
+            if prev is not None and not prev.done():
+                return  # 098 AG-12: one inline reviewer per agent at a time
             if not self._bg_review_should_fire(turn_was_productive):
                 return
             task = asyncio.create_task(self._run_background_review())
+            self._bg_review_task = task
             # M5: keep a strong reference so CPython can't GC the task mid-run (a task no
             # one references may be collected before it completes), and so it's cancelled
             # at session teardown. Mirrors _stall_check_task; self-removes when done.
@@ -246,6 +251,8 @@ class BackgroundReviewMixin:
                 digest = build_review_digest(_hist)
             except Exception:
                 digest = ""
+            import time as _time
+            _started = _time.time()
             await manager.run_subtask(
                 task=build_review_prompt(digest),
                 parent_agent_id=self.agent_id,
@@ -255,6 +262,11 @@ class BackgroundReviewMixin:
                 skip_complexity_check=True,
                 exclude_actions=set(REVIEWER_EXCLUDED_ACTIONS),
             )
+            _uid = getattr(self, "user_id", None) or getattr(
+                getattr(self, "orchestrator", None), "user_id", None)
+            _record_fallback_reasons(
+                _uid, _drafts_since(_uid, _started - 1),
+                "a review of the session's recent work found a step worth keeping")
         except Exception as e:
             logger.debug("background-review run failed (ignored): %s", e)
 
@@ -281,6 +293,8 @@ _RUN_REVIEW_PROMPT = (
     "(c) Only if neither fits: skill_manage(action='create', skill_id=<short-kebab-id>, "
     "when=<one line of <= 60 chars>, content=<a '# Title' heading, when to use, steps>) "
     "— search the skill index first and never duplicate a skill.\n"
+    "Every skill_manage call passes reason=<one sentence for the owner: what went "
+    "wrong or right in the run that this change addresses>.\n"
     "Keep it general: no secrets, no ids, no amounts, no dates of this run. Every "
     "write is a draft that the owner reviews. Write skills only: do not edit owner or "
     "self documents, do not message anyone, do not do the run's work again.\n"
@@ -350,6 +364,34 @@ def _main_agent(orchestrator):
         if not getattr(agent, "_is_sub_agent", False):
             return agent
     return None
+
+
+def _run_reason(rail_id, regime, outcome, meta) -> str:
+    """096 W1: the owner-readable fallback reason for an after-run draft."""
+    m = meta if isinstance(meta, dict) else {}
+    bits = [f"outcome: {outcome or 'unknown'}"]
+    if m.get("stop_reason"):
+        bits.append(f"stopped: {m['stop_reason']}")
+    return (f"learned from the {regime or 'scheduled'} run {rail_id or '(unnamed)'} "
+            f"({', '.join(bits)})")
+
+
+def _record_fallback_reasons(user_id, drafts: list, reason: str) -> None:
+    """096 W1: a reviewer draft is never left without a reason — when the model
+    gave none, record the run it learned from. Never raises."""
+    if not drafts:
+        return
+    try:
+        from core import pending_reasons
+        from core.instance import resolve_instance_id
+        home = _prefs_home_dir()
+        for d in drafts:
+            item_id = d.split(" ", 1)[-1]
+            pending_reasons.record(str(user_id or ""), "skill", item_id, reason,
+                                   by="background_review", home_dir=home,
+                                   instance_id=resolve_instance_id(), only_if_missing=True)
+    except Exception:
+        logger.debug("reviewer fallback reason not recorded", exc_info=True)
 
 
 def _drafts_since(user_id, since_ts: float) -> list:
@@ -424,6 +466,7 @@ async def review_after_run(task_agent, *, regime: str, session_id, user_id,
             exclude_actions=set(REVIEWER_EXCLUDED_ACTIONS),
         )
         drafts = _drafts_since(user_id, started - 1)
+        _record_fallback_reasons(user_id, drafts, _run_reason(rail_id, regime, outcome, meta))
         if drafts:
             from core.self_events import emit_self_modification
             emit_self_modification(
@@ -469,9 +512,12 @@ def schedule_review_after_run(task_agent, **kw) -> None:
         from core.async_bridge import spawn_retained
         _REVIEWS_IN_FLIGHT.add(key)
         try:
-            spawn_retained(_review_after_run_once(key, task_agent, **kw))
+            task = spawn_retained(_review_after_run_once(key, task_agent, **kw))
         except Exception:
             _REVIEWS_IN_FLIGHT.discard(key)
             raise
+        # 098 AG-12: the release rides on the TASK's end — a task cancelled
+        # before its first step never runs the coroutine's finally.
+        task.add_done_callback(lambda _t, _k=key: _REVIEWS_IN_FLIGHT.discard(_k))
     except Exception as e:
         logger.debug("after-run review not scheduled: %s", e)

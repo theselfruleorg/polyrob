@@ -144,55 +144,6 @@ class TestMultiAgentBrowserManagement:
             await manager.cleanup()
 
     @pytest.mark.asyncio
-    async def test_context_pool_reuse(self):
-        """Test that contexts are properly pooled and reused."""
-        config = BotConfig()
-        manager_config = BrowserManagerConfig(
-            max_contexts=3,
-            enable_pooling=True
-        )
-
-        with patch('tools.browser.browser_manager.Browser') as MockBrowser:
-            mock_browser = MockBrowser.return_value
-            created_contexts = []
-
-            async def track_context_creation(config=None, session_id=None, **kwargs):
-                ctx = MagicMock()
-                ctx.reset_context = AsyncMock()
-                ctx.close = AsyncMock()
-                ctx.id = len(created_contexts)
-                created_contexts.append(ctx)
-                return ctx
-
-            mock_browser.new_context = AsyncMock(side_effect=track_context_creation)
-            mock_browser.close = AsyncMock()
-
-            manager = BrowserManager(config=config)
-            manager.browser_config = manager_config
-            await manager.initialize()
-
-            # Create and release a context
-            ctx1 = await manager.get_context("session1")
-            assert ctx1 is not None
-            original_id = ctx1.id
-
-            await manager.release_context("session1", close=False)  # Pool it
-            assert len(manager.context_pool) == 1
-
-            # Get a new context - should reuse from pool
-            ctx2 = await manager.get_context("session2")
-            assert ctx2 is not None
-            assert ctx2.id == original_id  # Same context reused
-
-            # Verify reset was called
-            ctx1.reset_context.assert_called_once()
-
-            # Only one context should have been created
-            assert len(created_contexts) == 1
-
-            await manager.cleanup()
-
-    @pytest.mark.asyncio
     async def test_cleanup_with_active_contexts(self):
         """Test that cleanup properly handles active contexts and wait queue."""
         config = BotConfig()

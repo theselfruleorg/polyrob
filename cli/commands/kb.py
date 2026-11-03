@@ -276,7 +276,8 @@ async def _kb_remove(collection: str, source) -> None:
 
 @kb.command("search")
 @click.argument("query")
-@click.option("--collection", default="default", show_default=True, help="KB collection to search.")
+@click.option("--collection", default=None,
+              help="KB collection to search (default: every collection).")
 @click.option("--limit", default=8, show_default=True, type=int, help="Max results.")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def kb_search(query: str, collection: str, limit: int, as_json: bool) -> None:

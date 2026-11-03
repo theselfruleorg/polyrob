@@ -96,23 +96,23 @@ The `Dockerfile` builds a production image with:
 `python main.py` (the FastAPI app). So a compose deployment gives you REST, A2A and
 the OpenAI-compatible `/v1` surface, plus the browser and vector-memory extras — it
 does **not** run `polyrob telegram`, the email surface, or any money verb. For those,
-use a host install from the repo root — the extras set a production deployer installs,
-hash-checked against the lock, then the project itself:
+use a host install from the repo root — the extras hash-checked against the lock,
+then the project itself:
 `pip install --require-hashes -r requirements.txt && pip install --no-deps --no-build-isolation -e .`
 — or add the extras to your own image.
+
+API keys need no extra: mint one inside the container with
+`docker compose exec polyrob polyrob keys create -n <label>` and send it as
+`X-API-KEY`. Without the `crypto` extra, wallet sign-in is off (the server logs a
+warning) and API keys work as usual.
 
 **Optional extras on a server.** An extra you did not install arrives on first use
 through the trusted lazy install (`LAZY_DEPS_MODE=trusted`, the default): the exact,
 hashed files of the release lock, into a separate overlay (the venv itself is
-never changed). On a plain server it installs in process into `~/.polyrob/pylibs`. On a
-server that holds a wallet seed, provision the seedless installer unit once (the
-`polyrob-deps` user and its systemd units, as the production deployer does): the agent then only requests a
-feature through `/var/lib/polyrob-deps/requests`, and the separate `polyrob-deps`
-user installs it, wheel-only, into that protected overlay. This directory is a
-sibling of the shared data home (`/srv/polyrob-deps` for a data home of `/srv/polyrob`),
-under a root-owned parent that is not group/world writable. The agent can read
-the overlay and write only its request spool. Without that unit, a custody server refuses lazy installs and names
-the extra to add. `LAZY_DEPS_MODE=off` seals it.
+never changed). On a plain server it installs in process into `~/.polyrob/pylibs`. A
+server that holds a wallet seed never installs code inside the agent process: the
+miss is a refusal that names the extra, and you install that extra into the venv
+yourself. `LAZY_DEPS_MODE=off` seals lazy installs everywhere.
 
 The `docker-compose.yml` file:
 
@@ -131,9 +131,8 @@ Instance data (memory, sessions, skills, cron jobs) survives container restarts 
 | `./.polyrob/` | `/app/.polyrob/` | Memory DB, sessions, skills, cron jobs (the server-side data home: the image sets `POLYROB_DATA_DIR=/app/.polyrob`, so a plain `docker run` with no env file uses it too) |
 
 To back up your instance data, copy the `.polyrob/` directory. Your own MCP servers
-live in the service user's `~/.polyrob/mcp.json` (on the shipped units
-`/var/lib/polyrob-agent/.polyrob/mcp.json`), which is outside the data directory:
-back it up too.
+live in the service user's `~/.polyrob/mcp.json`, which is outside the data
+directory: back it up too.
 
 ---
 
@@ -165,45 +164,84 @@ shape; running more has two preconditions and a real ceiling, both described in
 
 ## Running it as services
 
-Docker is one way; systemd is the other, and it is what a multi-surface deployment
-usually wants, because each surface is its own long-running process. Create one
-unit per process you need:
+Docker is one way; systemd is the other.
 
 > **Single-user machine?** `polyrob service install` writes a systemd **user**
 > unit (or a launchd agent on macOS) that runs `polyrob gateway` — every enabled
-> surface from one unit, no root, no unit file to author. The table below is for
-> a SERVER, where each surface is its own system unit under its own hardened
-> identity. Do not use both on one box. Start, stop, restart, update — from a
+> surface from one unit, no root, no unit file to author. The rest of this
+> section is for a SERVER, where the agent runs as a system unit under its own
+> unprivileged identity. Do not use both on one box. Start, stop, restart, update — from a
 > shell, from your chat, or as root on a box whose service runs as another user:
 > [operate-the-service.md](operate-the-service.md).
 
-Every agent unit in `deployment/` carries the restart contract: `RestartForceExitStatus=75`
-and `SuccessExitStatus=75`. A `/restart` from chat makes the agent finish its live work
-and exit with 75; systemd starts it again and the agent reports back in that chat. A
-`systemctl stop` or `restart` also lets a live turn finish first (up to 60 seconds,
-inside `TimeoutStopSec`).
+The examples on this page use one layout; change the names to suit your box:
+the code and its venv in `/opt/polyrob`, the environment in
+`/etc/polyrob/polyrob.env`, the data home in `/var/lib/polyrob`, and the agent
+user `polyrob-agent` with its own `HOME` of `/var/lib/polyrob-agent` (mode `0700`).
+
+A minimal agent unit:
+
+```ini
+# /etc/systemd/system/polyrob.service
+[Unit]
+Description=POLYROB agent (chat surfaces + autonomy loops)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=polyrob-agent
+WorkingDirectory=/var/lib/polyrob-agent
+Environment="HOME=/var/lib/polyrob-agent"
+Environment="POLYROB_DATA_DIR=/var/lib/polyrob"
+EnvironmentFile=/etc/polyrob/polyrob.env
+ExecStart=/opt/polyrob/venv/bin/python -I -m cli.polyrob gateway
+Restart=on-failure
+RestartSec=10
+# exit 75 = a drained restart the owner asked for: start again, never a failure
+RestartForceExitStatus=75
+SuccessExitStatus=75
+# SIGTERM lets the live turn finish (up to 60 s) before the process stops
+TimeoutStopSec=120
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/polyrob /var/lib/polyrob-agent
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Keep the restart contract: `RestartForceExitStatus=75` and `SuccessExitStatus=75`. A
+`/restart` from chat makes the agent finish its live work and exit with 75; systemd
+starts it again and the agent reports back in that chat. A `systemctl stop` or
+`restart` also lets a live turn finish first (up to 60 seconds, inside
+`TimeoutStopSec`). `-I` keeps a `cli/` or `core/` folder in the working directory
+from running in place of polyrob's own code.
+
+`polyrob gateway` runs every surface you enabled in one process, and that process
+runs the autonomy loops. You can also give a surface its own unit; then remove it
+from the gateway, because two processes polling one surface fight each other.
 
 | Process | Command | What it is |
 |---|---|---|
-| Agent (headless) | `polyrob telegram` | The agent itself, long-polling a chat surface. This is the process that runs the autonomy loops. |
-| Email surface | `polyrob email` | IMAP poll in, SMTP out. Its own process. |
+| Agent (all surfaces) | `polyrob gateway` | Every enabled chat surface, plus the autonomy loops. |
+| One surface | `polyrob telegram`, `polyrob email`, … | A single surface in its own process. |
 | API server | `python main.py` (or `polyrob serve`) | REST, A2A and the OpenAI-compatible `/v1` surface. Only needed if you want programmatic access. |
 | Console | `python -m uvicorn webview.server:app --host 127.0.0.1 --port 5050 --proxy-headers --forwarded-allow-ips=127.0.0.1` | The web console, behind your reverse proxy. **Requires `POLYROB_POSTURE=own_ops` plus `POLYROB_OWNER_USERNAME`, `POLYROB_OWNER_PASSWORD_HASH` and `JWT_SECRET_KEY`** — see the warning below and [deployment-postures.md](deployment-postures.md). |
-| App supervisor | `polyrob apps supervise` | Only if the agent deploys durable apps. It holds the docker and nginx privilege the agent never has. |
+| App supervisor | `polyrob apps supervise` (`polyrob apps install` writes its unit) | Only if the agent deploys durable apps. It holds the docker and nginx privilege the agent never has. |
 | Isolated browser | `polyrob browser install` (writes `polyrob-browser.service`) | Required as soon as the wallet is enabled. A custody process never launches Chromium beside the signer; it connects to this one. See below. |
 
-Give every unit the same `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`)
-and the same `POLYROB_DATA_DIR`, so they agree about the owner, the data home and
-the flags. Run the agent units as a non-root user (the shipped units use
-`User=polyrob-agent`); the production deploy script refuses to deploy onto a unit
-that would run the agent as root. Give the agent a `HOME` of its own, outside the
-shared data home (the shipped units set `HOME=/var/lib/polyrob-agent`, mode
-`0700`): any identity that can write the shared data tree could otherwise plant
-`~/.polyrob` or tool state that the agent then reads as its own. If the signer
-runs, install it into a venv of its own, never the agent's shared one, which a
-third-party pack can install into. The console is the one exception: it takes an extra file of its own
-(`/etc/polyrob/webview.env`, `chmod 600`, outside the code tree) for posture, owner
-credentials and read-only settings, as the shipped console unit does.
+Give every unit the same `EnvironmentFile` and the same `POLYROB_DATA_DIR`, so they
+agree about the owner, the data home and the flags. Run the agent units as a
+non-root user. Give the agent a `HOME` of its own, outside the shared data home: any
+identity that can write the shared data tree could otherwise plant `~/.polyrob` or
+tool state that the agent then reads as its own. If the signer runs, install it
+into a venv of its own, never the agent's shared one, which a third-party pack can
+install into. The console is the one exception to the shared file: give it an extra
+file of its own (`/etc/polyrob/webview.env`, `chmod 600`, outside the code tree) for
+posture, owner credentials and read-only settings.
 
 > ⚠️ **The console REFUSES to start as a `local` console on a server.** The default
 > `local` posture still requires the owner login, but it trusts the loopback bind and
@@ -410,20 +448,12 @@ See [operate-the-service.md](operate-the-service.md).
 
 ## Environment flags for server deployments
 
-For multi-user / production deployments, review these defaults:
-
-| Variable | Recommended server value | Notes |
-|----------|-------------------------|-------|
-| `POLYROB_LOCAL` | *(unset)* | The single-user profile. Leave unset on a server: it is what turns on the interactive tool group (coding, git, knowledge base, project context), and it is also a precondition for the autonomy group |
-| `AUTONOMY_ENABLED` | *(unset / `false`)* | Master switch for the self-directed loops (self-wake, goals, curator, writable skills). Their bundle default needs **both** this and `POLYROB_LOCAL`, so a plain server has them off; turn one on with its `POLYROB_OVERRIDES` entry |
-| `POLYROB_OWNER_USER_ID` | *(set it)* | The owner tenant every surface, the console and `polyrob owner` resolve. Set the same value everywhere |
-| `MEMORY_REQUIRE_USER_ID` | `true` (default) | Prevents cross-tenant memory bleed |
-| `CODE_EXEC_ENABLED` | `false` (default) | The local subprocess backend is not a sandbox. If you need code execution on a server, use `CODE_EXEC_BACKEND=docker` |
-| `CRON_ENABLED` | off (default) | Scheduled runs. On under `AUTONOMY_POSTURE=full`, or with `POLYROB_OVERRIDES=CRON_ENABLED=true`; a `CRON_ENABLED=` line of its own is ignored |
-| `SUB_AGENTS_ENABLED` | `true` (default) | Disable to prevent agent delegation |
-
-See [configuration.md](configuration.md) for how these fit together and
-[../CONFIGURATION.md](../CONFIGURATION.md) for the complete flag reference.
+A server leaves `POLYROB_LOCAL` unset (it turns on the single-user tool group),
+sets `POLYROB_OWNER_USER_ID` to the same value in every unit, and keeps code
+execution off or on the `docker` backend. Every flag, its default and its code
+anchor are in [../CONFIGURATION.md](../CONFIGURATION.md); how they fit together is
+in [configuration.md](configuration.md). After a change, `polyrob doctor --flags
+--changed` on the box lists every value you moved off its default.
 
 ---
 

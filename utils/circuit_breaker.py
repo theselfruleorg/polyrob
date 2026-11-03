@@ -5,15 +5,27 @@ import time
 import logging
 from enum import Enum
 from typing import Optional, Type, Any, Callable, Dict
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from core.state.machine import StateMachine
 
 class CircuitState(Enum):
     """Circuit breaker states."""
     CLOSED = "closed"        # Normal operation, requests pass through
     OPEN = "open"           # Failing, reject requests immediately
     HALF_OPEN = "half_open" # Testing recovery, allow limited requests
+
+
+#: 098 CL-16. reset() is the explicit owner edge any -> CLOSED (not in the table).
+CIRCUIT = StateMachine(
+    "utils.circuit",
+    states={"closed", "open", "half_open"},
+    transitions={"closed": {"open"}, "open": {"half_open"}, "half_open": {"closed", "open"}},
+    initial={"closed"},
+)
 
 @dataclass
 class CircuitStats:
@@ -26,7 +38,7 @@ class CircuitStats:
     last_success_time: Optional[float] = None
     consecutive_failures: int = 0
     consecutive_successes: int = 0
-    state_changes: list = field(default_factory=list)
+    state_changes: deque = field(default_factory=lambda: deque(maxlen=50))
 
 class CircuitBreakerError(Exception):
     """Exception raised when circuit breaker is open."""
@@ -79,6 +91,10 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         self.stats = CircuitStats()
         self._half_open_calls = 0
+        self._half_open_since = 0.0
+        #: bumps on every transition: a slot taken in one HALF_OPEN episode is
+        #: never returned to a later one.
+        self._generation = 0
         self._state_lock = asyncio.Lock()
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}[{self.name}]")
@@ -94,18 +110,32 @@ class CircuitBreaker:
             CircuitBreakerError: When circuit is open
             Exception: Original exception from protected operation
         """
-        await self._before_call()
-
+        slot = await self._before_call()
+        settled = False
         try:
             yield
-            await self._on_success()
+            await self._on_success(slot)
+            settled = True
         except self.expected_exception as e:
-            await self._on_failure(e)
+            await self._on_failure(e, slot)
+            settled = True
             raise
         except Exception as e:
             # Unexpected exceptions don't trigger the circuit breaker
             self.logger.debug(f"Unexpected exception (not triggering breaker): {e}")
             raise
+        finally:
+            # 098 CL-16: every other exit (CancelledError, an unexpected
+            # exception) gives the HALF_OPEN slot back, with no failure count.
+            if not settled:
+                self._release_slot(slot)
+
+    def _release_slot(self, slot: Optional[int]) -> None:
+        """Return a HALF_OPEN slot taken in generation ``slot`` (sync: safe in a
+        ``finally`` under cancellation; no await between read and write)."""
+        if (slot is not None and slot == self._generation
+                and self.state == CircuitState.HALF_OPEN):
+            self._half_open_calls = max(0, self._half_open_calls - 1)
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """Execute a function with circuit breaker protection.
@@ -128,14 +158,26 @@ class CircuitBreaker:
             else:
                 return await asyncio.to_thread(func, *args, **kwargs)
 
-    async def _before_call(self):
-        """Check circuit state before allowing call."""
+    async def _before_call(self) -> Optional[int]:
+        """Check circuit state before allowing call. Returns the generation of
+        the HALF_OPEN slot this call took, or None when it took none."""
         async with self._state_lock:
             self.stats.total_calls += 1
+
+            if (self.state == CircuitState.HALF_OPEN
+                    and self._half_open_calls >= self.half_open_max_calls
+                    and time.time() - self._half_open_since >= self.recovery_timeout):
+                # 098 CL-16: probes held past a recovery window — start a fresh
+                # half-open episode instead of refusing forever.
+                self._half_open_calls = 0
+                self._half_open_since = time.time()
+                self._generation += 1
 
             if self.state == CircuitState.OPEN:
                 if self._should_attempt_reset():
                     self._transition_to_half_open()
+                    self._half_open_calls += 1
+                    return self._generation
                 else:
                     self.stats.rejected_calls += 1
                     time_remaining = self.recovery_timeout - (time.time() - self.stats.last_failure_time)
@@ -152,8 +194,10 @@ class CircuitBreaker:
                         f"max concurrent calls ({self.half_open_max_calls}) reached"
                     )
                 self._half_open_calls += 1
+                return self._generation
+            return None
 
-    async def _on_success(self):
+    async def _on_success(self, slot: Optional[int] = None):
         """Handle successful call."""
         async with self._state_lock:
             self.stats.success_calls += 1
@@ -162,7 +206,7 @@ class CircuitBreaker:
             self.stats.consecutive_successes += 1
 
             if self.state == CircuitState.HALF_OPEN:
-                self._half_open_calls = max(0, self._half_open_calls - 1)
+                self._release_slot(slot)
                 if self.stats.consecutive_successes >= self.success_threshold:
                     self._transition_to_closed()
                 else:
@@ -176,7 +220,7 @@ class CircuitBreaker:
                 if self.stats.consecutive_successes > self.success_threshold * 2:
                     self.stats.consecutive_successes = 0
 
-    async def _on_failure(self, exception: Exception):
+    async def _on_failure(self, exception: Exception, slot: Optional[int] = None):
         """Handle failed call."""
         async with self._state_lock:
             self.stats.failed_calls += 1
@@ -194,7 +238,7 @@ class CircuitBreaker:
                     self._transition_to_open()
 
             elif self.state == CircuitState.HALF_OPEN:
-                self._half_open_calls = max(0, self._half_open_calls - 1)
+                self._release_slot(slot)
                 self._transition_to_open()
 
     def _should_attempt_reset(self) -> bool:
@@ -206,7 +250,9 @@ class CircuitBreaker:
     def _transition_to_closed(self):
         """Transition to CLOSED state."""
         old_state = self.state
+        CIRCUIT.check(old_state.value, CircuitState.CLOSED.value, ctx={"breaker": self.name})
         self.state = CircuitState.CLOSED
+        self._generation += 1
         self.stats.consecutive_failures = 0
         self._half_open_calls = 0
 
@@ -225,7 +271,9 @@ class CircuitBreaker:
     def _transition_to_open(self):
         """Transition to OPEN state."""
         old_state = self.state
+        CIRCUIT.check(old_state.value, CircuitState.OPEN.value, ctx={"breaker": self.name})
         self.state = CircuitState.OPEN
+        self._generation += 1
         self._half_open_calls = 0
 
         self.stats.state_changes.append({
@@ -243,10 +291,13 @@ class CircuitBreaker:
     def _transition_to_half_open(self):
         """Transition to HALF_OPEN state."""
         old_state = self.state
+        CIRCUIT.check(old_state.value, CircuitState.HALF_OPEN.value, ctx={"breaker": self.name})
         self.state = CircuitState.HALF_OPEN
+        self._generation += 1
         self.stats.consecutive_failures = 0
         self.stats.consecutive_successes = 0
         self._half_open_calls = 0
+        self._half_open_since = time.time()
 
         self.stats.state_changes.append({
             "from": old_state.value,
@@ -284,7 +335,7 @@ class CircuitBreaker:
                             if self.stats.last_failure_time else None,
             "last_success": datetime.fromtimestamp(self.stats.last_success_time).isoformat()
                             if self.stats.last_success_time else None,
-            "state_changes": self.stats.state_changes[-10:]  # Last 10 state changes
+            "state_changes": list(self.stats.state_changes)[-10:]  # Last 10 state changes
         }
 
     def reset(self):
@@ -292,6 +343,7 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         self.stats = CircuitStats()
         self._half_open_calls = 0
+        self._generation += 1
         self.logger.info(f"Circuit breaker '{self.name}' manually reset to CLOSED state")
 
 class CircuitBreakerRegistry:

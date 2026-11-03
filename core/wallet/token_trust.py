@@ -156,24 +156,29 @@ def untrust(ctx: Any, chain: str, address: str, *, note: str = "",
     except Exception as exc:
         logger.warning("token untrust write failed", exc_info=True)
         return False, f"Not recorded: the token store could not be written ({exc})."
+    # 098 CO-24: only a position still in play is quarantined; a written-off or
+    # retired row stays closed (the rejection above is still recorded).
     quarantined = _set_status(uid, chain, address, "quarantined",
                               f"owner: not trusted{(' — ' + note) if note else ''}",
-                              positions_db)
+                              positions_db, from_states=("open", "dust"))
+    closed = None if quarantined else _position(uid, chain, address, positions_db)
     _emit(_kinds().TOKEN_UNTRUSTED, uid, chain, row["address"], sym)
     msg = (f"🚫 {sym or 'Token'} {row['address']} on {chain} is marked NOT trusted. "
            f"I will not buy it and will not ask about it again.")
     if quarantined:
         msg += (" The position I hold at that address is quarantined — it keeps "
                 "its cost, and it no longer claims the symbol.")
+    elif closed is not None and closed.status in ("written_off", "retired"):
+        msg += f" The position at that address is already closed ({closed.status})."
     return True, msg
 
 
 def _set_status(uid: str, chain: str, address: str, status: str, reason: str,
-                positions_db: Optional[str]) -> bool:
+                positions_db: Optional[str], from_states=None) -> bool:
     from core import open_positions
     try:
         return open_positions.set_status(uid, chain, address, status, reason=reason,
-                                         db_path=positions_db)
+                                         db_path=positions_db, from_states=from_states)
     except Exception:
         logger.warning("token trust: position status write failed", exc_info=True)
         return False
@@ -242,7 +247,7 @@ def unquarantine(ctx: Any, chain: str, address: str, *, execute: bool = False,
                       f"that symbol is refused until one of them is trusted. Confirm:\n"
                       f"/unquarantine {chain} {pos.address} go")
     ok = _set_status(uid, chain, pos.address, "open", "owner: quarantine undone",
-                     positions_db)
+                     positions_db, from_states=("quarantined",))  # 098 CO-24: CAS
     try:
         from core.wallet import token_pins
         token_pins.unreject(chain, pos.address, db_path=pins_db)

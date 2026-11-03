@@ -160,7 +160,9 @@ class AppSupervisor:
         logger.warning("app_service: refusing registry row: %s", why)
         try:
             self.registry.set_status(row["slug"], row["user_id"], STATUS_FAILED,
-                                     error=f"refused by supervisor: {why}")
+                                     error=f"refused by supervisor: {why}",
+                                     from_states=(STATUS_PENDING, STATUS_APPROVED,
+                                                  STATUS_DEPLOYING, STATUS_LIVE, STATUS_PAUSED))
         except Exception:
             logger.debug("app_service: could not mark refused row", exc_info=True)
 
@@ -189,14 +191,17 @@ class AppSupervisor:
                     self._refuse_row(row, why)
                     continue
                 await self._teardown(row)
-                self.registry.set_status(row["slug"], row["user_id"], STATUS_PAUSED,
-                                         error=f"paused: {reason}")
+                if not self.registry.set_status(row["slug"], row["user_id"], STATUS_PAUSED,
+                                                error=f"paused: {reason}",
+                                                from_states=(STATUS_LIVE, STATUS_DEPLOYING)):
+                    continue  # 098 CO-21: an owner kill meanwhile wins over the pause
                 self._emit(APP_STOPPED, row, {"by": "pause", "reason": str(reason)[:200]})
                 counts["paused"] += 1
             return counts
         for row in self.registry.list_by_status((STATUS_PAUSED,)):
-            self.registry.set_status(row["slug"], row["user_id"], STATUS_APPROVED)
-            counts["resumed"] += 1
+            if self.registry.set_status(row["slug"], row["user_id"], STATUS_APPROVED,
+                                        from_states=(STATUS_PAUSED,)):
+                counts["resumed"] += 1
         for row in self.registry.list_by_status((STATUS_STOPPED,)):
             if row.get("container_name"):
                 why = self._unsafe(row)
@@ -219,7 +224,7 @@ class AppSupervisor:
                 logger.warning("app_service: %s/%s approval refused: %s",
                                row["user_id"], row["slug"], unsigned)
                 self.registry.set_status(row["slug"], row["user_id"], STATUS_PENDING,
-                                         error=unsigned)
+                                         error=unsigned, from_states=(STATUS_APPROVED,))
                 counts["failed"] += 1
                 continue
             if not self.registry.claim(row["slug"], row["user_id"], STATUS_APPROVED, STATUS_DEPLOYING):
@@ -320,8 +325,16 @@ class AppSupervisor:
                 if not ok:
                     raise DeployError(f"nginx refused the stanza: {e}")
                 public_url = f"https://{slug}.{self.base_domain}"
-            self.registry.record_live(slug, uid, host_port=host_port, container_name=name,
-                                      public_url=public_url)
+            if not self.registry.record_live(slug, uid, host_port=host_port, container_name=name,
+                                             public_url=public_url):
+                # 098 CO-21: the row left `deploying` while this deploy ran (an
+                # owner kill or a pause). The owner's state wins: remove what this
+                # deploy just created, never revive the row.
+                await self._teardown(dict(row, container_name=name))
+                self._emit(APP_STOPPED, row, {"by": "owner", "during": "deploy"})
+                logger.warning("app_service: %s/%s left deploying during its deploy; "
+                               "torn down, not made live", uid, slug)
+                return False
             self._link_artifact(uid, src, public_url, row.get("cmd"))
             live_attrs = {"url": public_url, "digest": digest, "files": files,
                           "bytes": total, "skipped": len(skipped)}
@@ -341,7 +354,8 @@ class AppSupervisor:
             return True
         except Exception as e:  # every failure is a typed, visible row state
             tail = await self._logs_tail(name, 20)
-            self.registry.record_failed(slug, uid, error=str(e)[:500])
+            self.registry.record_failed(slug, uid, error=str(e)[:500],
+                                        from_states=(STATUS_DEPLOYING,))
             if not self._unsafe(row):
                 await self._teardown(row)
             self._emit(APP_FAILED, row, {"error": str(e)[:300], "log_tail": tail[-1500:]})
@@ -426,7 +440,8 @@ class AppSupervisor:
         name = self.container_name(row)
         code, out, _err = await self._docker(["inspect", "-f", "{{.State.Running}}", name], timeout=30)
         if code != 0 or (out or "").strip().lower() != "true":
-            self.registry.record_failed(slug, uid, error="container not running")
+            self.registry.record_failed(slug, uid, error="container not running",
+                                        from_states=(STATUS_LIVE,))
             await self._teardown(dict(row, container_name=name))
             self._emit(APP_FAILED, row, {"error": "container not running"})
             return False
@@ -438,7 +453,7 @@ class AppSupervisor:
             # the breaker open on the third tick.
             error = f"egress rules not asserted: {egress_err}"
             self.registry.record_health(slug, uid, False)
-            self.registry.set_status(slug, uid, STATUS_LIVE, error=error)
+            self.registry.record_health_error(slug, uid, error)
             self._emit(APP_FAILED, row, {"error": error})
             await self._open_breaker_if_exhausted(row, name, error)
             return False
@@ -459,7 +474,8 @@ class AppSupervisor:
             return
         self.registry.record_failed(
             row["slug"], row["user_id"],
-            error=f"{reason} on {_MAX_UNHEALTHY_TICKS} consecutive ticks")
+            error=f"{reason} on {_MAX_UNHEALTHY_TICKS} consecutive ticks",
+            from_states=(STATUS_LIVE,))
         await self._teardown(dict(row, container_name=name))
         self._emit(APP_FAILED, row, {"error": f"{reason} for {_MAX_UNHEALTHY_TICKS} ticks"})
 

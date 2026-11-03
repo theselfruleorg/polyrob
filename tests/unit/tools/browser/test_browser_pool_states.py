@@ -1,0 +1,116 @@
+"""098 TS-05: the browser context pool — one creation per session, the cap holds
+under concurrency, a cancelled waiter leaves the queue, cleanup is restartable."""
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from core.config import BotConfig
+from tools.browser.browser_manager import BrowserManager
+
+pytestmark = pytest.mark.asyncio
+
+
+def _cfg(max_contexts=2, per_session=5):
+    c = BotConfig()
+    c.max_browser_contexts = max_contexts
+    c.max_contexts_per_session = per_session
+    c.browser_context_timeout = 5.0
+    c.browser_stale_timeout = 600.0
+    return c
+
+
+def _ctx():
+    ctx = MagicMock()
+    ctx.close = AsyncMock()
+    ctx.reset_context = AsyncMock()
+    return ctx
+
+
+@patch('tools.browser.browser_manager.Browser')
+async def test_concurrent_get_context_same_session_creates_once(mock_browser_class):
+    gate = asyncio.Event()
+    made = []
+
+    async def new_context(config=None, session_id=None):
+        await gate.wait()
+        made.append(_ctx())
+        return made[-1]
+    mock_browser_class.return_value.new_context = new_context
+    m = BrowserManager(config=_cfg())
+    await m.initialize()
+    a = asyncio.create_task(m.get_context("s1_agent"))
+    b = asyncio.create_task(m.get_context("s1_agent"))
+    await asyncio.sleep(0.01)
+    gate.set()
+    ca, cb = await asyncio.gather(a, b)
+    assert len(made) == 1 and ca is cb is made[0]
+    assert m.session_contexts["s1"] == ["s1_agent"]
+
+
+@patch('tools.browser.browser_manager.Browser')
+async def test_pool_respects_max_contexts_under_concurrency(mock_browser_class):
+    gate = asyncio.Event()
+
+    async def new_context(config=None, session_id=None):
+        await gate.wait()
+        return _ctx()
+    mock_browser_class.return_value.new_context = new_context
+    m = BrowserManager(config=_cfg(max_contexts=2))
+    await m.initialize()
+    tasks = [asyncio.create_task(m.get_context(f"s{i}")) for i in range(4)]
+    await asyncio.sleep(0.01)
+    gate.set()
+    got = await asyncio.gather(*tasks)
+    assert sum(1 for c in got if c is not None) == 2
+    assert len(m.contexts_in_use) == 2 and not m._creating
+
+
+@patch('tools.browser.browser_manager.Browser')
+async def test_cancelled_waiter_is_removed_and_context_returned_to_pool(mock_browser_class):
+    made = []
+
+    async def new_context(config=None, session_id=None):
+        made.append(_ctx())
+        return made[-1]
+    mock_browser_class.return_value.new_context = new_context
+    m = BrowserManager(config=_cfg(max_contexts=1))
+    await m.initialize()
+    await m.get_context("s1")
+    waiter = asyncio.create_task(m.get_context("s2", wait=True, timeout=5))
+    await asyncio.sleep(0.01)
+    assert "s2" in m._wait_queue
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert "s2" not in m._wait_queue and "s2" not in m._queue_order
+    await m.release_context("s1", close=True)
+    # nobody waits: no context was created for (and stranded under) s2
+    assert "s2" not in m.contexts_in_use and len(made) == 1
+
+
+@patch('tools.browser.browser_manager.Browser')
+async def test_cleanup_then_initialize_restarts_background_tasks(mock_browser_class):
+    mock_browser_class.return_value.new_context = AsyncMock(return_value=_ctx())
+    mock_browser_class.return_value.close = AsyncMock()
+    m = BrowserManager(config=_cfg())
+    await m.initialize()
+    await m.get_context("s1")
+    assert m._queue_processor_task is not None
+    await m.cleanup()
+    assert m._queue_processor_task is None and m._cleanup_task is None
+    await m.initialize()
+    await m.get_context("s2")
+    assert m._queue_processor_task is not None and not m._queue_processor_task.done()
+    await m.cleanup()
+
+
+@patch('tools.browser.browser_manager.Browser')
+async def test_cleanup_resets_initialized(mock_browser_class):
+    mock_browser_class.return_value.close = AsyncMock()
+    m = BrowserManager(config=_cfg())
+    await m.initialize()
+    await m.cleanup()
+    assert not m.is_initialized
+    assert await m.get_browser() is not None  # re-initializes
+    await m.cleanup()

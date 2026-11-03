@@ -2,6 +2,7 @@
 the test's own event loop, so a closed loop never destroys a pending watcher."""
 import asyncio
 
+import pytest
 import pytest_asyncio
 
 
@@ -23,3 +24,13 @@ async def _stop_job_watchers():
             pass
     if mine:
         await asyncio.gather(*mine, return_exceptions=True)
+
+
+@pytest.fixture(autouse=True)
+def _reset_closed_sessions():
+    """098 TS-09: a test's teardown_session marks its session id closed; the
+    next test reuses ids like "s1", so each test starts with no closed marker."""
+    from tools.shell import backend_pool
+    backend_pool._CLOSED.clear()
+    yield
+    backend_pool._CLOSED.clear()
