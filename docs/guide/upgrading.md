@@ -114,8 +114,10 @@ polyrob config check
   run `python -m playwright install chromium` after the update; a host with the
   isolated browser service runs `sudo polyrob browser update`.
 - **The X pack carries its own copy of tweepy** and needs oauthlib 4.0.1 or later.
-  `pip install -U "polyrob[twitter]"` (or `polyrob update`) installs it; a tweepy
-  that an older install left behind is no longer used.
+  `polyrob update` (or `pip install -U "polyrob[twitter]"`) installs it. The update,
+  the migrate step and `install.sh` uninstall a tweepy an older install left
+  behind (its `oauthlib<4` pin would fail `pip check`); after a plain `pip install`,
+  run `pip uninstall tweepy` yourself.
 - **The knowledge-base collection `artifacts_unreviewed` is now `written`.** Rows
   move on the first start. A written document leaves the index after 90 unread days
   (`KB_WRITTEN_RETENTION_DAYS`; the file stays on disk). Retention runs without

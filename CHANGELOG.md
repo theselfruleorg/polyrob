@@ -59,7 +59,8 @@ short, user-facing notes for each release are on its GitHub Release page.
   `sudo polyrob browser update`).
 - Dependency CVEs: pypdf 6.21.4 (7 crafted-PDF DoS), pyasn1 0.6.5 (4 BER-decode DoS); console rig vitest 4.1.12.
 - oauthlib 3.3.1 → 4.0.1 (2 CVEs): tweepy 4.17.0 pins `oauthlib<4`, so the X pack carries tweepy itself
-  (`polyrob_x/_vendor`); `[twitter]` installs requests-oauthlib, oauthlib>=4.0.1 and urllib3.
+  (`polyrob_x/_vendor`); `[twitter]` installs requests-oauthlib, oauthlib>=4.0.1 and urllib3; every update path
+  uninstalls the old tweepy so `pip check` passes.
 
 ## [1.7.1] — 2026-11-02
 

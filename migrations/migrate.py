@@ -277,6 +277,15 @@ def cli_main(argv=None) -> int:
         if rc:
             logger.error("retired pack distributions: retirement incomplete (see the remedy "
                          "above); the schema migration continues")
+        # Same reason, third-party dists (core.retired_deps): a dropped dependency
+        # whose pins would fail the verify step's `pip check`.
+        try:
+            from core import retired_deps
+            if retired_deps.main([]):
+                logger.error("retired dependencies: one is still installed (see above); "
+                             "the schema migration continues")
+        except Exception as exc:  # noqa: BLE001 — named, never silent
+            logger.error("retired dependencies: the check failed: %s", exc)
     success = asyncio.run(run_migrations(command))
     return 0 if success else 1
 

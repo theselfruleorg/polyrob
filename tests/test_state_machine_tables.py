@@ -51,8 +51,9 @@ MACHINE_MODULES = [
     "modules.memory.sqlite_curated_store",
     "modules.payments.sweep_state",
     "core.money.receipt_state",
-    "scripts.release_train:_rc_machine",  # built on first use
 ]
+# The private release-train machine (scripts/release_train.py, never shipped)
+# is checked in ops/tests/scripts/test_release_train_machine_table.py.
 
 
 def _load(entry):
