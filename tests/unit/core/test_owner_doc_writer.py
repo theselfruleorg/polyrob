@@ -118,7 +118,7 @@ def test_owner_doc_pending_labeled_in_notification(tmp_path):
     kinds = {it["kind"] for it in items}
     assert se.KIND_OWNER in kinds
     note = se.build_pending_notification(items)
-    assert "owner-facts note" in note  # NOT mislabeled as skill '<uid>'
+    assert "owner-facts note" in note.lower()  # NOT mislabeled as skill '<uid>'
 
 
 def test_promote_of_a_sourced_rewrite_keeps_the_draft_stamps(tmp_path, monkeypatch):

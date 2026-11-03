@@ -174,21 +174,33 @@ def pending_correspondent_items(registry: Any, tenant: str) -> List[Dict[str, An
     names the store unreadable instead (AGENTS: an unreadable store is not an
     empty one).
     """
+    from core.self_evolution import pending_tap_token
+
     items: List[Dict[str, Any]] = []
     for r in registry.list(user_id=tenant):
         if r.get("state") != "pending":
             continue
-        items.append({
+        # 098 CO-12: a thread anchor mirrors its base row's state — it is not a
+        # second contact. One contact shows as ONE inbox item (the base row).
+        if r.get("provenance") == "thread":
+            continue
+        item: Dict[str, Any] = {
             "kind": "correspondent",
             "id": f"{r['surface']}:{r['address']}",
             "chars": 0,
-            # 030 C7: seat-aware remedy — chat CAN decide this (the old hint
-            # pointed a phone owner at the CLI, teaching them chat couldn't).
-            "preview": (f"{r['surface']}:{r['address']} -> session "
-                        f"{r['session_id']}  (approve: /approve "
-                        f"{r['surface']}:{r['address']} — or polyrob owner "
-                        f"approve {r['surface']} {r['address']})"),
-        })
+            "session_id": r.get("session_id"),
+            "provenance": r.get("provenance"),
+            "created_at": r.get("created_at"),
+        }
+        # 096 C1: the remedy is the ONE tap grammar. ``/approve surface:addr``
+        # was untappable (a chat client links only the bare verb) and an
+        # address holds ``.``/``@``, so it cannot be folded into a token — the
+        # alias resolves back through the live union (``all_pending``).
+        item["preview"] = (
+            f"{r['surface']}:{r['address']} -> session {r['session_id']}  "
+            f"(approve: {pending_tap_token('approve', item)} · "
+            f"reject: {pending_tap_token('reject', item)})")
+        items.append(item)
     return items
 
 

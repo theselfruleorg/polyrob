@@ -104,6 +104,10 @@ class TaskAgentControlMixin:
                 logger.info(f"Called cancel() on orchestrator for session {session_id}")
             except Exception as e:
                 logger.error(f"Error calling orchestrator.cancel(): {e}")
+            # 098 review (O-01): the cancel also stops this session's background
+            # delegations — a late result must not restart what the owner stopped.
+            if hasattr(orchestrator, "cancel_background_delegations"):
+                orchestrator.cancel_background_delegations("owner cancelled the session")
 
         # F3: persist the terminal status unconditionally (idempotent;
         # CREATED→CANCELLED is a valid transition per session.py). orchestrator
@@ -121,6 +125,16 @@ class TaskAgentControlMixin:
         logger.info(f"Cancelled session {session_id}")
         return True
 
+    def _finish_status(self, session_id: str, final_status: str) -> bool:
+        """098 AG-14: the end-of-run status write — a CAS from ``running``, so a
+        cancel (or a pause) that landed during the run is never overwritten by
+        ``completed``. False when the status moved on."""
+        won = self.session_manager.try_transition_status(session_id, 'running', final_status)
+        if not won:
+            cur = (self.session_manager.get_session_info(session_id) or {}).get('status')
+            logger.info(f"Session {session_id}: run ended as {final_status}, status stays {cur}")
+        return won
+
     async def pause_session(self, user_id: str, session_id: str) -> bool:
         """Pause (suspend) a session — an honest status op, not a hard stop.
 
@@ -134,12 +148,12 @@ class TaskAgentControlMixin:
         info = self.session_manager.get_session_info(session_id)
         if not info or info.get('user_id') != user_id:
             return False
-        return self.session_manager.try_transition_status(
-            session_id, info.get('status'), 'suspended'
-        )
+        # 098 AG-14: only from 'running' — never revives a cancelled/finished session.
+        return self.session_manager.try_transition_status(session_id, 'running', 'suspended')
 
     async def resume_session(self, user_id: str, session_id: str) -> bool:
-        """Mark a suspended/failed/completed session resumable (-> RESUMED).
+        """Mark a suspended/failed/completed/cancelled session resumable (-> RESUMED).
+        098 Q1: no session state is terminal — a cancelled session resumes too.
 
         Flips the persisted status so the normal resume path
         (try_transition_status RESUMED -> RUNNING inside the run loop) will pick it
@@ -152,6 +166,6 @@ class TaskAgentControlMixin:
         if not info or info.get('user_id') != user_id:
             return False
         cur = info.get('status')
-        if cur not in ('suspended', 'failed', 'completed'):
+        if cur not in ('suspended', 'failed', 'completed', 'cancelled'):
             return False
         return self.session_manager.try_transition_status(session_id, cur, 'resumed')

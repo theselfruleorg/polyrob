@@ -165,7 +165,8 @@ def _recap_reply(user_id: str, data_dir: str, args: list) -> str:
     except ValueError:
         return (f"Invalid recap window {window!r} — expected e.g. '30m' / '24h' / '7d' "
                 "(a bare number of seconds also works).")
-    return format_recap_markdown(entries, window, limit=_RECAP_CHAT_LIMIT)
+    return format_recap_markdown(entries, window, limit=_RECAP_CHAT_LIMIT,
+                                 more_tenant=user_id)
 
 
 def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> str:

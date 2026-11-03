@@ -408,14 +408,16 @@ async def test_one_transfer_failure_does_not_block_others_in_the_batch(tmp_path,
         bad = await invoicing.create_payment_request(
             user_id="alice", session_id="s_bad", amount_usd=8.0, purpose="bad", db=db)
 
-        real_claim = invoicing.claim_for_settlement
+        # 098 MO-02: the scan settles in one CAS (no claim), so the hiccup
+        # lands on the settle.
+        real_settle = invoicing.settle_payment_request
 
-        async def flaky_claim(request_id, *, db=None):
+        async def flaky_settle(request_id, **kw):
             if request_id == bad["request_id"]:
                 raise RuntimeError("simulated DB hiccup mid-batch")
-            return await real_claim(request_id, db=db)
+            return await real_settle(request_id, **kw)
 
-        monkeypatch.setattr(invoicing, "claim_for_settlement", flaky_claim)
+        monkeypatch.setattr(invoicing, "settle_payment_request", flaky_settle)
 
         watcher = SettlementWatcher(_WakeAgent(), db=db)
         transfers = [
@@ -431,7 +433,7 @@ async def test_one_transfer_failure_does_not_block_others_in_the_batch(tmp_path,
             (good["request_id"],))
         assert row_good["status"] == "completed"
         assert row_good["transaction_hash"] == "0xgood"
-        # the bad invoice is left pending, not corrupted — the claim never landed
+        # the bad invoice is left pending, not corrupted
         row_bad = await db.fetch_one(
             "SELECT status FROM x402_payment_requests WHERE id = ?", (bad["request_id"],))
         assert row_bad["status"] == "pending"

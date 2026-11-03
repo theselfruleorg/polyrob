@@ -162,6 +162,16 @@ async def apply_migrations_at_boot(
                 version = getattr(module, "VERSION", _version_from_filename(path))
                 start = time.time()
                 await module.upgrade(db, db_manager)
+                # 098 review (O-06): an unverified upgrade is never recorded — it
+                # raises into the handler below and the next boot retries it.
+                # Opt-in (VERIFY_GATES): older verify() bodies were written as checks
+                # for a full schema and fail on a legacy or partly created DB.
+                verify = getattr(module, "verify", None) if getattr(module, "VERIFY_GATES", False) else None
+                if verify is not None and await verify(db, db_manager) is False:
+                    # A self-recording upgrade() already wrote its row: take it
+                    # back, or every later boot would skip the migration as applied.
+                    await db.execute("DELETE FROM schema_versions WHERE version = ?", (version,))
+                    raise RuntimeError(f"migration {version} did not verify; not recorded")
                 # Record via the SSOT exactly once (migrations self-record inconsistently).
                 if version and not await version_mgr.is_version_applied(version):
                     await version_mgr.record_migration(

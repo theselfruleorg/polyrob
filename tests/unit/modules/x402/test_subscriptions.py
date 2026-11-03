@@ -225,7 +225,8 @@ async def test_apply_settlement_reactivates_suspended_sub(tmp_path):
         assert applied == subs.SettlementResult.APPLIED
         row = await subs.get_subscription(sub["id"], db=db)
         assert row["status"] == subs.STATUS_ACTIVE
-        assert row["paid_through"] == (now - 100000) + 30 * 86400
+        # 098 MO-05: a reactivation from suspended buys a period from NOW.
+        assert now + 30 * 86400 <= row["paid_through"] <= int(time.time()) + 30 * 86400
     finally:
         await db.close()
 

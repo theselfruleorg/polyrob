@@ -87,9 +87,12 @@ class BrowserManager(BaseComponent):
         # Browser instance
         self.browser: Optional[Browser] = None
 
-        # Context management
-        self.context_pool: List[BrowserContext] = []
+        # Context management. 098 TS-06: no pool — a released context is
+        # always closed (a "reset" context kept the previous tenant's cookies).
         self.contexts_in_use: Dict[str, BrowserContext] = {}
+        #: 098 TS-05: session -> the in-flight creation (a reserved slot that
+        #: counts against max_contexts; a second caller awaits the same future).
+        self._creating: Dict[str, asyncio.Future] = {}
         self.context_allocation_times: Dict[str, float] = {}
 
         # Per-session tracking
@@ -196,6 +199,8 @@ class BrowserManager(BaseComponent):
         # _notify_wait_queue can never run to hand off a context).
         wait_future: Optional[asyncio.Future] = None
 
+        creating: Optional[asyncio.Future] = None
+        reserved = False
         async with self._pool_lock:
             # Check if session already has a context
             if session_id in self.contexts_in_use:
@@ -207,58 +212,40 @@ class BrowserManager(BaseComponent):
                 self.context_allocation_times[session_id] = time.time()
                 self.logger.debug(f"Returning existing context for session {session_id}")
                 return self.contexts_in_use[session_id]
-
-            # Store session config if provided
-            if config:
-                self.session_configs[session_id] = config
-            elif session_id not in self.session_configs:
-                # Create default config with allowed domains
-                self.session_configs[session_id] = BrowserContextConfig(
-                    allowed_domains=allowed_domains or []
-                )
-
-            # Get base session ID (without agent suffix)
-            base_session = session_id.split('_')[0]
-
-            # Track contexts per session
-            if base_session not in self.session_contexts:
-                self.session_contexts[base_session] = []
-
-            # Check per-session limit
-            session_context_count = len(self.session_contexts[base_session])
-            if session_context_count >= self.browser_config.max_contexts_per_session:
-                if not wait:
-                    self.logger.warning(
-                        f"Per-session context limit reached ({self.browser_config.max_contexts_per_session}) "
-                        f"for session {base_session}. Use wait=True to queue."
+            if session_id in self._creating:  # 098 TS-05: one creation per session
+                creating = self._creating[session_id]
+            else:
+                # Store session config if provided
+                if config:
+                    self.session_configs[session_id] = config
+                elif session_id not in self.session_configs:
+                    # Create default config with allowed domains
+                    self.session_configs[session_id] = BrowserContextConfig(
+                        allowed_domains=allowed_domains or []
                     )
-                    return None
-                else:
-                    # Enqueue now (under the lock), await after releasing it.
+                base_session = session_id.split('_')[0]
+                held = len(self.session_contexts.get(base_session, ())) + sum(
+                    1 for s in self._creating if s.split('_')[0] == base_session)
+                if held >= self.browser_config.max_contexts_per_session:
+                    if not wait:
+                        self.logger.warning(
+                            f"Per-session context limit reached ({self.browser_config.max_contexts_per_session}) "
+                            f"for session {base_session}. Use wait=True to queue."
+                        )
+                        return None
                     wait_future = self._enqueue_waiter(session_id)
-            elif reuse and self.browser_config.enable_pooling and self.context_pool:
-                # Try to get from pool if reuse is enabled
-                context = self.context_pool.pop(0)
-
-                # Reset context for new session
-                await self._reset_context_for_session(context, session_id)
-
-                self.contexts_in_use[session_id] = context
-                self.context_allocation_times[session_id] = time.time()
-                self.session_contexts[base_session].append(session_id)
-                self.logger.debug(f"Reused context from pool for session {session_id}")
-                return context
-            elif len(self.contexts_in_use) >= self.browser_config.max_contexts:
-                # Check if we can create a new context
-                if not wait:
-                    self.logger.warning(
-                        f"Context limit reached ({self.browser_config.max_contexts}) "
-                        f"for session {session_id}. Use wait=True to queue."
-                    )
-                    return None
-                else:
-                    # Enqueue now (under the lock), await after releasing it.
+                elif self._slots_taken() >= self.browser_config.max_contexts:
+                    if not wait:
+                        self.logger.warning(
+                            f"Context limit reached ({self.browser_config.max_contexts}) "
+                            f"for session {session_id}. Use wait=True to queue."
+                        )
+                        return None
                     wait_future = self._enqueue_waiter(session_id)
+                else:  # reserve the slot under the lock; create outside it
+                    creating = asyncio.get_running_loop().create_future()
+                    self._creating[session_id] = creating
+                    reserved = True
 
         # Released the pool lock. If we were queued, wait for a context here.
         if wait_future is not None:
@@ -267,37 +254,38 @@ class BrowserManager(BaseComponent):
                 wait_future,
                 timeout or self.browser_config.wait_queue_timeout,
             )
+        if not reserved:  # another caller is creating this session's context
+            return await asyncio.shield(creating)
+        return await self._finish_create(session_id, creating)
 
-        async with self._pool_lock:
-            # Create new context
-            context = await self._create_context(session_id)
-            if context:
-                self.session_contexts[base_session].append(session_id)
-            return context
+    def _slots_taken(self) -> int:
+        """In-use contexts plus reserved creations (both count against the cap)."""
+        return len(self.contexts_in_use) + len(self._creating)
 
-    async def _reset_context_for_session(self, context: BrowserContext, session_id: str) -> None:
-        """
-        Reset a context for reuse by a new session.
-
-        Args:
-            context: The context to reset
-            session_id: The new session ID
-        """
+    async def _finish_create(self, session_id: str, creating: asyncio.Future):
+        """Create the reserved context OUTSIDE the lock (Playwright can take
+        seconds), then register it; a failure frees the slot for the queue."""
+        context = None
         try:
-            # Reset browser state
-            await context.reset_context()
+            context = await self._create_context(session_id)
+        finally:
+            async with self._pool_lock:
+                self._creating.pop(session_id, None)
+                if context is not None:
+                    self._register(session_id, context)
+                if not creating.done():
+                    creating.set_result(context)
+                if context is None:
+                    await self._notify_wait_queue()
+        return context
 
-            # Update context configuration
-            if session_id in self.session_configs:
-                config = self.session_configs[session_id]
-                context.config = config
-                # Update allowed domains if specified
-                if config.allowed_domains:
-                    context.allowed_domains = config.allowed_domains
-
-            self.logger.debug(f"Reset context for session {session_id}")
-        except Exception as e:
-            self.logger.error(f"Error resetting context for session {session_id}: {e}")
+    def _register(self, session_id: str, context: BrowserContext) -> None:
+        """IN_USE (caller holds the pool lock)."""
+        self.contexts_in_use[session_id] = context
+        self.context_allocation_times[session_id] = time.time()
+        base = self.session_contexts.setdefault(session_id.split('_')[0], [])
+        if session_id not in base:
+            base.append(session_id)
 
     async def _create_context(self, session_id: str) -> Optional[BrowserContext]:
         """
@@ -320,9 +308,6 @@ class BrowserManager(BaseComponent):
                 self.browser.new_context(config=config, session_id=session_id),
                 timeout=self.browser_config.context_timeout
             )
-
-            self.contexts_in_use[session_id] = context
-            self.context_allocation_times[session_id] = time.time()
             self.logger.info(f"Created new browser context for session {session_id}")
             return context
 
@@ -363,16 +348,11 @@ class BrowserManager(BaseComponent):
             if not self.session_contexts[base_session]:
                 del self.session_contexts[base_session]
 
-        if close or not self.browser_config.enable_pooling:
-            try:
-                await context.close()
-                self.logger.debug(f"Closed context for session {session_id}")
-            except Exception as e:
-                self.logger.error(f"Error closing context for {session_id}: {e}")
-        else:
-            # Return to pool for reuse
-            self.context_pool.append(context)
-            self.logger.debug(f"Returned context to pool from session {session_id}")
+        try:  # 098 TS-06: always closed, never pooled (``close`` is kept for callers)
+            await context.close()
+            self.logger.debug(f"Closed context for session {session_id}")
+        except Exception as e:
+            self.logger.error(f"Error closing context for {session_id}: {e}")
 
         # Process wait queue after releasing (no lock needed - caller holds it)
         await self._notify_wait_queue()
@@ -466,39 +446,25 @@ class BrowserManager(BaseComponent):
         Returns:
             BrowserContext or None if timeout
         """
+        delivered = False
         try:
-            # Wait for context with timeout
             context = await asyncio.wait_for(future, timeout=timeout)
-
+            delivered = True
             if context:
-                async with self._pool_lock:
-                    self.contexts_in_use[session_id] = context
-                    self.context_allocation_times[session_id] = time.time()
-                    base_session = session_id.split('_')[0]
-                    if base_session not in self.session_contexts:
-                        self.session_contexts[base_session] = []
-                    self.session_contexts[base_session].append(session_id)
-                    self.logger.info(f"Session {session_id} acquired context from queue")
-                return context
-            return None
-
+                self.logger.info(f"Session {session_id} acquired context from queue")
+            return context or None
         except asyncio.TimeoutError:
-            async with self._pool_lock:
-                # Remove from wait queue if still there
-                if session_id in self._wait_queue:
-                    del self._wait_queue[session_id]
-                if session_id in self._queue_order:
-                    self._queue_order.remove(session_id)
-                self.logger.warning(f"Session {session_id} timed out waiting for context")
+            self.logger.warning(f"Session {session_id} timed out waiting for context")
             return None
-        except Exception as e:
-            async with self._pool_lock:
-                # Clean up on any error
-                if session_id in self._wait_queue:
-                    del self._wait_queue[session_id]
-                if session_id in self._queue_order:
-                    self._queue_order.remove(session_id)
-            raise
+        finally:
+            # 098 TS-05: every exit — timeout, error, CANCEL — leaves the queue;
+            # a context handed over to a waiter that is gone is released.
+            self._wait_queue.pop(session_id, None)
+            if session_id in self._queue_order:
+                self._queue_order.remove(session_id)
+            if (not delivered and future.done() and not future.cancelled()
+                    and future.exception() is None and future.result() is not None):
+                asyncio.ensure_future(self.release_context(session_id, close=True))
 
     async def _notify_wait_queue(self) -> None:
         """
@@ -510,13 +476,7 @@ class BrowserManager(BaseComponent):
 
         # Process waiting sessions in FIFO order
         while self._queue_order:
-            # Check if we can allocate
-            can_allocate = (
-                len(self.context_pool) > 0 or
-                len(self.contexts_in_use) < self.browser_config.max_contexts
-            )
-
-            if not can_allocate:
+            if self._slots_taken() >= self.browser_config.max_contexts:
                 break
 
             # Get the first waiter
@@ -527,26 +487,28 @@ class BrowserManager(BaseComponent):
                 continue
 
             future = self._wait_queue[session_id]
-
-            # Try to allocate a context
-            context = None
-            if self.context_pool:
-                context = self.context_pool.pop(0)
-                await self._reset_context_for_session(context, session_id)
-            elif len(self.contexts_in_use) < self.browser_config.max_contexts:
-                context = await self._create_context(session_id)
-
-            if context:
-                # Remove from queue and fulfill the future
+            if future.done():  # the waiter is gone (cancelled): skip it
                 self._queue_order.pop(0)
                 del self._wait_queue[session_id]
+                continue
 
-                if not future.done():
-                    future.set_result(context)
-                    self.logger.debug(f"Allocated context to waiting session {session_id}")
-            else:
-                # Could not allocate, stop trying
-                break
+            context = await self._create_context(session_id)
+            if not context:
+                break  # could not allocate, stop trying
+            self._queue_order.pop(0)
+            del self._wait_queue[session_id]
+            if future.done():  # cancelled while the context was created
+                await self._close_quietly(context, session_id)
+                continue
+            self._register(session_id, context)
+            future.set_result(context)
+            self.logger.debug(f"Allocated context to waiting session {session_id}")
+
+    async def _close_quietly(self, context: BrowserContext, session_id: str) -> None:
+        try:
+            await context.close()
+        except Exception as e:
+            self.logger.error(f"Error closing context for {session_id}: {e}")
 
     async def _process_wait_queue(self) -> None:
         """
@@ -591,6 +553,8 @@ class BrowserManager(BaseComponent):
                     self.logger.debug("Task cancellation timed out, continuing cleanup")
                 except Exception as e:
                     self.logger.warning(f"Error cancelling task: {e}")
+        # 098 TS-05: a later first use restarts them (the handles gated it).
+        self._cleanup_task = self._queue_processor_task = None
 
         async with self._pool_lock:
             # Close all contexts in use with shorter timeout per context
@@ -612,20 +576,13 @@ class BrowserManager(BaseComponent):
                     self.contexts_in_use.pop(session_id, None)
                     self.context_allocation_times.pop(session_id, None)
 
-            # Close pooled contexts with shorter timeouts and fewer retries
-            for context in list(self.context_pool):  # Create copy to avoid modification during iteration
-                for retry in range(2):  # Reduced from 3 retries
-                    try:
-                        await asyncio.wait_for(context.close(), timeout=3.0)  # Reduced from 5.0
-                        break
-                    except asyncio.TimeoutError:
-                        self.logger.warning(f"Timeout closing pooled context (retry {retry + 1}/2)")
-                        if retry == 1:  # Last retry
-                            self.logger.error("Failed to close pooled context after 2 attempts, forcing removal")
-                    except Exception as e:
-                        self.logger.error(f"Error closing pooled context: {e}")
-                        break
-            self.context_pool.clear()
+            self.session_contexts.clear()
+            for fut in list(self._wait_queue.values()) + list(self._creating.values()):
+                if not fut.done():
+                    fut.cancel()
+            self._wait_queue.clear()
+            self._queue_order.clear()
+            self._creating.clear()
 
             # Close browser with retries
             if self.browser:
@@ -686,8 +643,13 @@ class BrowserManager(BaseComponent):
             self.logger.warning(f"Error during process cleanup: {e}")
 
     async def cleanup(self) -> None:
-        """Public cleanup method for backward compatibility."""
-        await self._cleanup()
+        """Public cleanup: the guarded BaseComponent path, so ``_initialized``
+        resets and ``get_browser()`` re-initializes afterwards (098 TS-05). A
+        never-initialized manager still closes whatever it holds."""
+        if self._initialized:
+            await super().cleanup()
+        else:
+            await self._cleanup()
 
     def get_status(self) -> Dict[str, Any]:
         """
@@ -699,7 +661,8 @@ class BrowserManager(BaseComponent):
         return {
             'browser_active': self.browser is not None,
             'contexts_in_use': len(self.contexts_in_use),
-            'contexts_pooled': len(self.context_pool),
+            'contexts_pooled': 0,
+            'contexts_creating': len(self._creating),
             'max_contexts': self.browser_config.max_contexts,
             'max_contexts_per_session': self.browser_config.max_contexts_per_session,
             'sessions': list(self.contexts_in_use.keys()),
@@ -709,7 +672,7 @@ class BrowserManager(BaseComponent):
             },
             'wait_queue_depth': len(self._wait_queue),
             'wait_queue_sessions': list(self._wait_queue.keys()),
-            'total_contexts_allocated': len(self.contexts_in_use) + len(self.context_pool),
+            'total_contexts_allocated': self._slots_taken(),
         }
 
     async def get_browser(self) -> Optional['Browser']:

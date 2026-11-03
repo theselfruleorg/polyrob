@@ -133,7 +133,7 @@ class MemoryProvider(ABC):
         """
         return False
 
-    async def kb_search(self, query: str, *, user_id, collection: str = "default",
+    async def kb_search(self, query: str, *, user_id, collection: Optional[str] = None,
                         limit: int = 8) -> str:
         return ""
 

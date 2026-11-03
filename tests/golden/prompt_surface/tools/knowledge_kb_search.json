@@ -6,8 +6,9 @@
       "additionalProperties": false,
       "properties": {
         "collection": {
-          "default": "default",
-          "description": "KB collection to search.",
+          "default": null,
+          "description": "KB collection to search. Omit to search every collection.",
+          "nullable": true,
           "type": "string"
         },
         "limit": {

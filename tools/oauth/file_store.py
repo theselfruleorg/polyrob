@@ -119,6 +119,7 @@ class FileTokenStore(MutableMapping):
 
     def __init__(self, path: Optional[Path] = None) -> None:
         self._path = Path(path) if path is not None else _default_path()
+        self._stamp = self._file_stamp()
         self._data: dict = self._load()
 
     @property
@@ -186,6 +187,7 @@ class FileTokenStore(MutableMapping):
                 json.dump(payload, f)
             self._match_target_identity(tmp_name)
             os.replace(tmp_name, str(self._path))
+            self._stamp = self._file_stamp()
         except Exception:
             try:
                 os.remove(tmp_name)
@@ -230,8 +232,26 @@ class FileTokenStore(MutableMapping):
 
     # -- MutableMapping ---------------------------------------------------
 
+    def _file_stamp(self):
+        try:
+            st = os.stat(self._path)
+            return (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            return None
+
+    def _fresh(self) -> dict:
+        """098 review: READS follow the file too. A peer process (the agent and
+        the email unit share this store) refreshed and rotated the token; a
+        snapshot from construction kept the dead refresh token, refreshed with
+        it, got invalid_grant and latched needs_reauth over the good token."""
+        stamp = self._file_stamp()
+        if stamp != self._stamp:
+            self._stamp = stamp
+            self._data = self._load()
+        return self._data
+
     def __getitem__(self, key: Key) -> bytes:
-        return self._data[key]
+        return self._fresh()[key]
 
     def __setitem__(self, key: Key, value: bytes) -> None:
         # Read-modify-write against the CURRENT file: a second instance over the
@@ -256,13 +276,13 @@ class FileTokenStore(MutableMapping):
         self._flush()
 
     def __iter__(self) -> Iterator[Key]:
-        return iter(self._data)
+        return iter(self._fresh())
 
     def __len__(self) -> int:
-        return len(self._data)
+        return len(self._fresh())
 
     def __contains__(self, key: object) -> bool:
-        return key in self._data
+        return key in self._fresh()
 
     def __repr__(self) -> str:  # never echo values (opaque ciphertext)
         return f"FileTokenStore(path={self._path!s}, n={len(self._data)})"

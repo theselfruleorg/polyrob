@@ -53,7 +53,7 @@ async def test_respond_resets_failed_state_for_recovery():
     a = _WedgedAgent()
     convo = Conversation(a)
     out = await convo.respond("retry please")
-    # respond() clears the wedged state so a new turn gets a fresh attempt.
-    assert a.state.consecutive_failures == 0
+    # respond() clears the cancel flag; 098 AG-01: run() itself clears the
+    # run-scoped halt (state.begin_run — see test_run_control.py).
     assert a._cancelled is False
     assert out == "reply to: retry please"

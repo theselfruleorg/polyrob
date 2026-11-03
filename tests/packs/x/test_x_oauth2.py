@@ -174,7 +174,7 @@ def test_exchange_code_persists_pkce_pair(store):
 
 @pytest.mark.asyncio
 async def test_xdm_client_refreshes_and_retries_on_401(monkeypatch):
-    import tweepy
+    from polyrob_x._vendor import tweepy
     from polyrob_x.surface.client import XDMClient
 
     # A stateful stand-in for the store-backed resolver: a forced refresh
@@ -212,7 +212,7 @@ async def test_xdm_client_refreshes_and_retries_on_401(monkeypatch):
         def json(self): return {}
     monkeypatch.setattr(tweepy.Unauthorized, "__init__",
                         lambda self, *a, **k: Exception.__init__(self, "401"))
-    monkeypatch.setattr("tweepy.Client", FakeTweepy)
+    monkeypatch.setattr("polyrob_x._vendor.tweepy.Client", FakeTweepy)
     uid = await c.get_me()
     assert uid == "42"
     assert built == ["tok-old", "tok-new"]  # rebuilt exactly once on the fresh token
@@ -234,7 +234,7 @@ def test_twitter_tool_picks_up_a_token_imported_after_start(monkeypatch):
     t.chat_passphrase = None
     monkeypatch.setattr(TwitterTool, "_resolve_oauth2_token",
                         staticmethod(lambda force_refresh=False, refresh=True: "late-token"))
-    monkeypatch.setattr("tweepy.Client", lambda **kw: MagicMock(bt=kw["bearer_token"]))
+    monkeypatch.setattr("polyrob_x._vendor.tweepy.Client", lambda **kw: MagicMock(bt=kw["bearer_token"]))
     t._ensure_oauth2_fresh()
     assert t.oauth2_access_token == "late-token"
     assert t.dm_client is not None and t.chat_client is not None

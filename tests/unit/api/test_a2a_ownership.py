@@ -14,12 +14,21 @@ from api.a2a.task_handler import A2ATaskHandler
 from api.a2a.models import A2AMessage
 
 
+class _SM:
+    def __init__(self, info):
+        self.info = info
+
+    def update_session_metadata(self, sid, upd):
+        self.info.update(upd)
+
+
 class _FakeAgent:
     def __init__(self, session_info):
         self._session_info = session_info
         self.submit_calls = []
         self.run_calls = []
-        self.session_manager = None  # push-config: _get_session_manager() -> None (skip persist)
+        # TS-21: the session-metadata mirror is the one push-config copy.
+        self.session_manager = _SM(session_info)
 
     async def get_session_by_id(self, task_id):
         return dict(self._session_info)
@@ -113,16 +122,16 @@ def test_set_push_config_rejects_non_owner_before_write():
             handler.set_push_notification_config("victim-session", _pnc(), user_id="attacker")
         )
     # Nothing was persisted for the victim task.
-    assert "victim-session" not in handler._push_configs
+    assert not agent._session_info.get("a2a_push_url")
 
 
 def test_set_push_config_allows_owner():
-    handler, _ = _handler(owner="owner-user")
+    handler, agent = _handler(owner="owner-user")
     ok = asyncio.run(
         handler.set_push_notification_config("owned-session", _pnc(), user_id="owner-user")
     )
     assert ok is True
-    assert "owned-session" in handler._push_configs
+    assert agent._session_info["a2a_push_url"] == "https://attacker.example/hook"
 
 
 def test_get_push_config_rejects_non_owner():
@@ -133,9 +142,9 @@ def test_get_push_config_rejects_non_owner():
 
 
 def test_delete_push_config_rejects_non_owner():
-    handler, _ = _handler(owner="owner-user")
+    handler, agent = _handler(owner="owner-user")
     asyncio.run(handler.set_push_notification_config("owned-session", _pnc(), user_id=None))
     with pytest.raises(ValueError, match="not found"):
         asyncio.run(handler.delete_push_notification_config("owned-session", user_id="attacker"))
     # Still present — attacker could not delete it.
-    assert "owned-session" in handler._push_configs
+    assert agent._session_info["a2a_push_url"] == "https://attacker.example/hook"

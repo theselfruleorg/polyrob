@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from core.runtime_paths import cron_db_path, goals_db_path
 import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -218,11 +219,46 @@ def _x402_read(user_id: str, db: str) -> str:
     return f"x402:{(newest or {})['m'] if newest else None}:{count_sig}"
 
 
+#: Payload keys that are the job's run notes, not its definition.
+_RUN_NOTE_KEYS = ("last_outcome", "paused", "stopped")
+
+
+def job_definition_token(job: Any) -> str:
+    """MO-11: the job's OWN definition (task, schedule, payload minus run
+    notes). Part of the fingerprint, so an owner edit (``/job edit``, a new
+    schedule, a resume) is a change and the next tick runs."""
+    try:
+        payload = {k: v for k, v in dict(getattr(job, "payload", None) or {}).items()
+                   if k not in _RUN_NOTE_KEYS}
+        blob = json.dumps([str(getattr(job, "task", "") or ""),
+                           str(getattr(job, "schedule_spec", "") or ""), payload],
+                          sort_keys=True, default=str)
+        return "job:" + hashlib.sha256(blob.encode()).hexdigest()[:16]
+    except Exception:
+        return f"job:err:{time.time()}"
+
+
+def drop_baselines(db_path: str, *, job_id: Optional[str] = None) -> None:
+    """Forget the baseline of *job_id* (resume/cancel), or of every job no
+    longer in ``cron_jobs`` (after a prune). A missing table is a no-op."""
+    try:
+        if job_id is not None:
+            execute_retry(db_path, "DELETE FROM wake_gate WHERE job_id=?", (job_id,))
+        else:
+            execute_retry(db_path, "DELETE FROM wake_gate WHERE job_id NOT IN "
+                                   "(SELECT id FROM cron_jobs)")
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e).lower():
+            raise
+
+
 def compute_wake_fingerprint(
-    user_id: str, *, data_dir: str, exclude_job_id: Optional[str] = None
+    user_id: str, *, data_dir: str, exclude_job_id: Optional[str] = None,
+    job: Any = None,
 ) -> str:
-    """Stable hash of the tenant's observable autonomy state (cheap, no LLM)."""
-    parts = []
+    """Stable hash of the tenant's observable autonomy state (cheap, no LLM),
+    plus the job's own definition when *job* is given (MO-11)."""
+    parts = [job_definition_token(job)] if job is not None else []
     for source in (
         lambda: _goal_board_cursor(user_id, data_dir),
         lambda: _cron_cursor(user_id, data_dir, exclude_job_id),
@@ -273,7 +309,8 @@ def should_skip_wake(job: Any, *, data_dir: str) -> bool:
         if not baseline or not baseline.get("ok"):
             return False
         fp = compute_wake_fingerprint(
-            job.user_id, data_dir=data_dir, exclude_job_id=getattr(job, "id", None)
+            job.user_id, data_dir=data_dir, exclude_job_id=getattr(job, "id", None),
+            job=job,
         )
         return fp == baseline.get("fingerprint")
     except Exception:
@@ -290,7 +327,8 @@ def record_wake_outcome(job: Any, *, data_dir: str, ok: bool) -> None:
             return
         store = WakeGateStore(cron_db_path(data_dir))
         fp = compute_wake_fingerprint(
-            job.user_id, data_dir=data_dir, exclude_job_id=getattr(job, "id", None)
+            job.user_id, data_dir=data_dir, exclude_job_id=getattr(job, "id", None),
+            job=job,
         )
         store.put(job.id, job.user_id, fp, ok=ok)
     except Exception:

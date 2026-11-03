@@ -153,3 +153,79 @@ def test_a_withdrawal_closes_under_its_own_lock(home):
     req, _ = lc.request_restart(requested_by="cli", data_home=home)
     assert lc.withdraw_if_open(req.id, "x", data_home=home)
     assert lc.read_request(data_home=home) is None
+
+
+# ---- 098 CO-02 ---------------------------------------------------------------
+
+def test_set_request_state_refuses_other_request_id(tmp_path):
+    home = tmp_path / "data"
+    req, _ = lc.request_restart(requested_by="owner", data_home=home)
+    lc.claim_request(data_home=home)
+    assert lc.set_request_state(lc.STATE_EXITING, data_home=home, request_id="other") is None
+    assert lc.set_request_state(lc.STATE_EXITING, data_home=home, request_id=req.id,
+                                expect=(lc.STATE_OPEN,)) is None
+    assert lc.set_request_state(lc.STATE_EXITING, data_home=home, request_id=req.id,
+                                expect=(lc.STATE_DRAINING,)).state == lc.STATE_EXITING
+
+
+def test_set_request_state_refuses_illegal_transition(tmp_path):
+    import pytest
+    from core.state.machine import IllegalTransition
+    home = tmp_path / "data"
+    lc.request_restart(requested_by="owner", data_home=home)
+    lc.claim_request(data_home=home)
+    lc.set_request_state(lc.STATE_EXITING, data_home=home)
+    with pytest.raises(IllegalTransition):
+        lc.set_request_state(lc.STATE_OPEN, data_home=home)
+
+
+# ---- 098 CO-03: the drain is a set of holders -----------------------------------
+
+def test_end_drain_of_restart_does_not_clear_stop_drain():
+    lc.end_drain()
+    restart = lc.begin_drain("restart")
+    lc.begin_drain("stop")
+    lc.end_drain(restart)
+    try:
+        assert lc.draining()
+    finally:
+        lc.end_drain()
+    assert not lc.draining()
+
+
+def test_end_drain_unknown_token_is_noop():
+    lc.end_drain()
+    t = lc.begin_drain("restart")
+    lc.end_drain("nope")
+    assert lc.draining()
+    lc.end_drain(t)
+    assert not lc.draining()
+
+
+# ---- 098 CO-04: the boot record names a process, not a pid ----------------------
+
+def test_running_service_ignores_reused_pid(tmp_path, monkeypatch):
+    import json
+    home = tmp_path / "data"
+    monkeypatch.setattr(lc, "supervisor", lambda: "systemd")
+    lc.record_boot(data_home=home)
+    assert lc.running_service(data_home=home) is not None
+    p = lc.lifecycle_dir(home) / "boot.json"
+    rec = json.loads(p.read_text())
+    pid, _start, boot = rec["ident"].split("|", 2)
+    rec["ident"] = f"{pid}|an-older-start|{boot}"   # the pid now belongs to someone else
+    p.write_text(json.dumps(rec))
+    assert lc.running_service(data_home=home) is None
+
+
+def test_reset_boot_attempts_from_other_process_is_noop(tmp_path):
+    import json
+    home = tmp_path / "data"
+    lc.record_boot(data_home=home)
+    p = lc.lifecycle_dir(home) / "boot.json"
+    rec = json.loads(p.read_text())
+    rec["attempts"] = 2
+    rec["ident"] = rec["ident"].split("|", 1)[0] + "|other|boot"
+    p.write_text(json.dumps(rec))
+    lc.reset_boot_attempts(data_home=home)
+    assert json.loads(p.read_text())["attempts"] == 2

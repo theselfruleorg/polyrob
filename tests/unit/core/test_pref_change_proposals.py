@@ -296,6 +296,7 @@ def test_contract_approve_promotes_to_active(tmp_path):
                    user_id="alice", created_by=PROVENANCE_BACKGROUND)
 
     ok, msg = se.promote(se.KIND_CONTRACT, "alice", user_id="alice",
+                         rev=writer.list_pending("alice")["rev"],
                          home_dir=tmp_path, instance_id="dana")
 
     assert ok
@@ -312,6 +313,7 @@ def test_contract_reject_never_activates(tmp_path):
                    created_by=PROVENANCE_BACKGROUND)
 
     ok, _ = se.reject(se.KIND_CONTRACT, "alice", user_id="alice",
+                      rev=writer.list_pending("alice")["rev"],
                       home_dir=tmp_path, instance_id="dana")
 
     assert ok

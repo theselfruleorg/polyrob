@@ -94,6 +94,8 @@ def extract_stable_request_id(llm: Any, response: Any, provider: str) -> Optiona
     if isinstance(response, dict):
         reserved = reserved or getattr(response.get("raw"), "_polyrob_billing_reservation_id", None)
     if isinstance(reserved, str) and reserved.startswith("llm-reserve:"):
+        from core.billing_context import hold_handed_off
+        hold_handed_off(reserved)   # 098 MO-08: the metering path owns it now
         return reserved
     # MOST-PREFERRED: the per-call attribute (see docstring). Checked before
     # anything shared-client-derived so a concurrent completion sharing the

@@ -1021,7 +1021,18 @@ async def apply(container: Any, offer_id: str, *, perform_fn: Any = None,
                            reason_code="unknown")
     if row.status == "applied":
         return OfferResult(True, "already applied", offer_id=offer_id)
-    if row.status in ("credited", "expired", "refused", "redeemed"):
+    # 098 CO-31: only a PAID offer is actuated, by ONE actuator: `paid ->
+    # applying` is a CAS; a stale claim (a crashed actuator) goes back to paid.
+    from core.surfaces.room_action_store import APPLYING_RECLAIM_SEC
+    if row.status == "applying" and (now - float(row.applied_at or 0)) > APPLYING_RECLAIM_SEC:
+        store.set_status(offer_id, "paid", from_states=("applying",),
+                         where_applied_at=float(row.applied_at or 0))
+        row = store.get(offer_id) or row
+    if row.status != "paid" or not store.set_status(offer_id, "applying", applied_at=now,
+                                                     from_states=("paid",)):
+        row = store.get(offer_id) or row
+        if row.status == "applied":
+            return OfferResult(True, "already applied", offer_id=offer_id)
         return OfferResult(False, f"offer {offer_id} is {row.status}",
                            offer_id=offer_id, reason_code=row.status)
 
@@ -1058,7 +1069,7 @@ async def apply(container: Any, offer_id: str, *, perform_fn: Any = None,
                        getattr(result, "reason", "") or "the chat rejected it",
                        now)
 
-    store.set_status(offer_id, "applied", applied_at=now)
+    store.set_status(offer_id, "applied", applied_at=now, from_states=("applying",))
     _event(container, "room_action_applied", offer_id=offer_id, verb=row.verb,
            chat_id=row.chat_id, asset_id=row.asset_id, price_usd=row.price_usd)
     return OfferResult(True, receipt(row, eff), offer_id=offer_id)
@@ -1085,6 +1096,22 @@ def mark_settled(container: Any, offer_id: str, *,
     return ok
 
 
+def paid_by(container: Any, offer_id: str, invoice_id: str) -> Optional[str]:
+    """098 MO-04: the offer's status when THIS invoice already paid it (a
+    retried settlement wake), else None (a late payment for another state)."""
+    row = _store(container).get(offer_id)
+    if row is None or not invoice_id or str(getattr(row, "invoice_id", "") or "") != str(invoice_id):
+        return None
+    return row.status if row.status in ("paid", "applying", "applied", "credited",
+                                        "redeemed") else None
+
+
+def offer_status(container: Any, offer_id: str) -> Optional[str]:
+    """The offer's current status, or None when the store has no such row."""
+    row = _store(container).get(offer_id)
+    return row.status if row is not None else None
+
+
 def _credit(container: Any, store, row, reason: str, now: float) -> OfferResult:
     """Record a credit, and say plainly what failed.
 
@@ -1094,8 +1121,13 @@ def _credit(container: Any, store, row, reason: str, now: float) -> OfferResult:
     since phase 2 it is genuinely spendable (`_redeem_credit`).
     """
     credit_id = f"cr_{uuid.uuid4().hex[:12]}"
-    store.set_status(row.offer_id, "credited", reason=str(reason)[:300],
-                     credit_id=credit_id, applied_at=now)
+    if not store.set_status(row.offer_id, "credited", reason=str(reason)[:300],
+                            credit_id=credit_id, applied_at=now, from_states=("applying",)):
+        cur = store.get(row.offer_id)  # 098 CO-31: never a credit after an applied effect
+        return OfferResult(cur is not None and cur.status == "applied",
+                           f"offer {row.offer_id} is {cur.status if cur else 'gone'}",
+                           offer_id=row.offer_id,
+                           reason_code=cur.status if cur else "unknown")
     _event(container, "room_action_credited", offer_id=row.offer_id,
            verb=row.verb, chat_id=row.chat_id, reason=str(reason)[:200],
            credit_id=credit_id)

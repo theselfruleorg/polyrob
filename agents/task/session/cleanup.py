@@ -222,7 +222,7 @@ def _derive_closing_chat_summary(orchestrator) -> Optional[str]:
 class SessionCleanupMixin:
     """Session teardown for SessionOrchestrator."""
 
-    async def release_shell_sandbox(self) -> None:
+    async def release_shell_sandbox(self, *, generation: Optional[int] = None) -> None:
         """Release this session's pooled persistent shell sandbox container.
 
         Callable outside full cleanup: autonomous (goal/cron) runs invoke it at
@@ -238,7 +238,28 @@ class SessionCleanupMixin:
         """
         try:
             from tools.shell.backend_pool import teardown_session as _shell_teardown
-            await _shell_teardown(getattr(self, "session_id", None))
+            sid = getattr(self, "session_id", None)
+            await (_shell_teardown(sid) if generation is None
+                   else _shell_teardown(sid, generation=generation))
+        except Exception:
+            pass
+
+    def shell_sandbox_generation(self) -> Optional[int]:
+        """098 review: the run generation of this session's sandbox — a release
+        that names it never tears down (or closes) a LATER run's sandbox."""
+        try:
+            from tools.shell.backend_pool import session_generation
+            return session_generation(getattr(self, "session_id", None))
+        except Exception:
+            return None
+
+    def reopen_shell_sandbox(self) -> None:
+        """098 TS-09: the session resumed — clear the closed marker its last
+        sandbox teardown set, so a shell call gets a fresh container (until
+        then a late call is refused instead of starting one). Fail-open."""
+        try:
+            from tools.shell.backend_pool import reopen_session
+            reopen_session(getattr(self, "session_id", None))
         except Exception:
             pass
 
@@ -903,27 +924,20 @@ class SessionCleanupMixin:
                 except Exception as e:
                     self.logger.error(f"Error creating workspace metadata: {e}")
 
-            # Update session status if provided and not overwriting terminal states
-            # DEFENSIVE: Don't overwrite terminal statuses (error, failed, cancelled) with non-terminal
-            # Terminal states should only be changed by explicit user action or retry logic
-            TERMINAL_STATUSES = {'error', 'failed', 'cancelled'}
-            
+            # Update session status only along an edge of the ONE table (098 AG-14,
+            # agents/task/agent/session.py SESSION_MACHINE): a cancelled/failed
+            # session is never rewritten to 'suspended'/'completed' by a cleanup.
             if self.session_manager and status:
-                current_status = self.session_manager.get_session_info(self.session_id)
-                if current_status:
-                    current_status_value = current_status.get('status', '').lower()
-                    
-                    # Protect terminal statuses from being overwritten with non-terminal status
-                    if current_status_value in TERMINAL_STATUSES and status.lower() not in TERMINAL_STATUSES:
-                        self.logger.debug(
-                            f"Preserved terminal status '{current_status_value}', "
-                            f"not overwriting with: {status}"
-                        )
-                    else:
-                        self.session_manager.update_session_status(self.session_id, status)
-                        self.logger.debug(f"Updated session status to: {status}")
-                else:
+                from agents.task.agent.session import SESSION_MACHINE
+                info = self.session_manager.get_session_info(self.session_id)
+                cur = SESSION_MACHINE.normalize(str((info or {}).get('status') or '').lower())
+                new = SESSION_MACHINE.normalize(status.lower())
+                if (not info or cur == new or cur not in SESSION_MACHINE.states
+                        or SESSION_MACHINE.allowed(cur, new)):
                     self.session_manager.update_session_status(self.session_id, status)
+                    self.logger.debug(f"Updated session status to: {status}")
+                else:
+                    self.logger.debug(f"Preserved status '{cur}', not overwriting with: {status}")
 
             cleanup_type = "full" if full_cleanup else "partial"
             self.logger.info(f"Session {self.session_id} {cleanup_type} cleanup complete, status: {status}")

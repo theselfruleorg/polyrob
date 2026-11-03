@@ -185,7 +185,6 @@ def probe(provider: str, *, api_key: Optional[str], http: Any = None) -> SeatVer
 # learn whether a latched seat was topped up (z.ai would cost a completion).
 _FREE_RECOVERY_KEYS = {"openrouter": "OPENROUTER_API_KEY"}
 RECOVERY_INTERVAL_SEC = 300
-_LAST_RECOVERY_CHECK: dict = {}
 
 
 def release_funded_latches(*, http: Any = None, now: Optional[float] = None,
@@ -197,21 +196,22 @@ def release_funded_latches(*, http: Any = None, now: Optional[float] = None,
     free balance check is used, only an ``ok`` verdict releases (``unknown`` /
     ``unreachable`` / ``no_credit`` never do), the global ``*`` trip is left to
     its owner, and each provider is checked at most once per *interval*.
+    098 CO-11: the cadence is stamped in the latch doc under its lock
+    (``claim_recovery_check``), so all units on one data home share it.
     Never raises; returns the providers it released.
     """
     released: list = []
     try:
-        from core.credit_sentinel import credit_sentinel_status, release
+        from core.credit_sentinel import (claim_recovery_check,
+                                          credit_sentinel_status, release)
         latched = credit_sentinel_status() or {}
         t = time.time() if now is None else now
         for name in latched:
             env_key = _FREE_RECOVERY_KEYS.get(name)
             if env_key is None:
                 continue
-            last = _LAST_RECOVERY_CHECK.get(name)
-            if last is not None and t - last < interval:
+            if not claim_recovery_check(name, now=t, interval=interval):
                 continue
-            _LAST_RECOVERY_CHECK[name] = t
             verdict = probe(name, api_key=os.getenv(env_key), http=http)
             if verdict.usable and release(name):
                 released.append(name)

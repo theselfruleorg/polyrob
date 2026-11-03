@@ -257,7 +257,8 @@ def test_an_ask_does_not_hold_a_running_goal(monkeypatch, tmp_path, seeded):
 def test_finished_goals_are_newest_by_when_they_ended(monkeypatch, tmp_path, seeded):
     from agents.task.goals.board import GoalBoard
     b = GoalBoard(str(tmp_path / "goals.db"))
-    b.update_status(seeded["trade"], "done")       # created early, finished last
+    from tests.unit.webview.goal_board_seed import force_status
+    force_status(b, seeded["trade"], "done")       # created early, finished last
     from core.sqlite_util import execute_retry
     execute_retry(b.db_path, "UPDATE goals SET completed_at=? WHERE id=?",
                   (4_000_000_000.0, seeded["trade"]))

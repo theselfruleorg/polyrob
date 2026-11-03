@@ -1,9 +1,9 @@
-"""Unit tests for core.tickers (IntervalTicker + TickerSupervisor)."""
+"""Unit tests for core.tickers (IntervalTicker)."""
 import asyncio
 
 import pytest
 
-from core.tickers import IntervalTicker, TickerSupervisor
+from core.tickers import IntervalTicker
 
 
 def test_interval_ticker_runs_until_stopped():
@@ -43,36 +43,10 @@ def test_tick_error_does_not_kill_loop():
     assert n["c"] >= 2  # kept ticking despite exceptions
 
 
-def test_ticker_supervisor_starts_enabled_skips_disabled():
-    """Supervisor starts only enabled tickers and stops them cleanly."""
-    started = []
-
-    async def run():
-        sup = TickerSupervisor()
-
-        calls_a = []
-
-        async def tick_a():
-            calls_a.append(1)
-
-        calls_b = []
-
-        async def tick_b():
-            calls_b.append(1)
-
-        sup.register("enabled", IntervalTicker(tick_a, interval_seconds=0.01), enabled=True)
-        sup.register("disabled", IntervalTicker(tick_b, interval_seconds=0.01), enabled=False)
-
-        await sup.start_all()
-        await asyncio.sleep(0.05)
-        await sup.stop_all()
-
-        started.append((len(calls_a), len(calls_b)))
-
-    asyncio.run(run())
-    count_a, count_b = started[0]
-    assert count_a >= 2, "enabled ticker should have run"
-    assert count_b == 0, "disabled ticker should not have run"
+def test_ticker_supervisor_is_gone():
+    """098 CO-07: no caller — removed, not patched."""
+    import core.tickers as t
+    assert not hasattr(t, "TickerSupervisor")
 
 
 def test_idle_backoff_grows_interval_when_inactive():

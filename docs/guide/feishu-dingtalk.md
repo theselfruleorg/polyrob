@@ -7,6 +7,11 @@ same access model as every other surface: the owner, correspondents, group
 members, and everyone else denied. See [groups.md](groups.md) and
 [owner-controls.md](owner-controls.md).
 
+To keep a configured surface off, set `FEISHU_SURFACE_ENABLED=false` or
+`DINGTALK_SURFACE_ENABLED=false`. The explicit flag wins over the credentials,
+and it applies when the gateway starts again. See
+[CONFIGURATION.md](../CONFIGURATION.md) for the per-surface flag.
+
 Your owner identity on Feishu and DingTalk comes from a pairing row.
 
 ⚠️ Pairing is one switch for every chat app: while it is on, a sender who is
@@ -41,14 +46,14 @@ polyrob surfaces add feishu        # asks for FEISHU_APP_ID and FEISHU_APP_SECRE
 polyrob surfaces probe feishu      # proves them with a tenant_access_token read
 ```
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | unset | The app credentials. Both set = the surface starts. |
-| `FEISHU_DOMAIN` | `lark` | `lark` (open.larksuite.com, international) or `feishu` (open.feishu.cn, mainland). |
-| `FEISHU_TRANSPORT` | `ws` | `ws` = the long connection (no public URL; needs `pip install "polyrob[feishu]"`). `webhook` = the event request URL (no extra). |
-| `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` | unset | Webhook mode only: the Event Subscription secrets. The Encrypt Key is required; a token alone needs the opt-in below. |
-| `FEISHU_WEBHOOK_ALLOW_UNSIGNED` | off | Webhook mode only: accept events with a Verification Token and no Encrypt Key. Such events carry no signature. |
-| `OWNER_FEISHU_ID` | unset | Where owner notices go: an `ou_` open_id, an `oc_` chat id, or an email. |
+| Setting | Meaning |
+|---|---|
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | The app credentials. Both set = the surface starts. |
+| `FEISHU_DOMAIN` | `lark` (open.larksuite.com, international) or `feishu` (open.feishu.cn, mainland). Default: `lark`. |
+| `FEISHU_TRANSPORT` | `ws` = the long connection (no public URL; needs `pip install "polyrob[feishu]"`). `webhook` = the event request URL (no extra). Default: `ws`. |
+| `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` | Webhook mode only: the Event Subscription secrets. The Encrypt Key is required; a token alone needs the opt-in below. |
+| `FEISHU_WEBHOOK_ALLOW_UNSIGNED` | Webhook mode only: accept events with a Verification Token and no Encrypt Key. Such events carry no signature. |
+| `OWNER_FEISHU_ID` | Where owner notices go: an `ou_` open_id, an `oc_` chat id, or an email. |
 
 ### Long connection or webhook
 
@@ -101,10 +106,10 @@ polyrob surfaces add dingtalk      # asks for DINGTALK_CLIENT_ID and DINGTALK_CL
 polyrob surfaces probe dingtalk    # proves them with an accessToken read
 ```
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `DINGTALK_CLIENT_ID` / `DINGTALK_CLIENT_SECRET` | unset | The app credentials. Both set = the surface starts. |
-| `OWNER_DINGTALK_ID` | unset | Where owner notices go: the owner's staff id, or a `cid…` group conversation id. |
+| Setting | Meaning |
+|---|---|
+| `DINGTALK_CLIENT_ID` / `DINGTALK_CLIENT_SECRET` | The app credentials. Both set = the surface starts. |
+| `OWNER_DINGTALK_ID` | Where owner notices go: the owner's staff id, or a `cid…` group conversation id. |
 
 ### What works
 

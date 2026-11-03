@@ -8,6 +8,7 @@ grant). This module renders the card; per-seat formatting stays trivial because
 the decide verbs (``/approve tap-<id>``) are shared by every chat seat.
 """
 import hashlib
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 #: Every money-relevant field of every money verb (CR-M01). Each present key
@@ -27,7 +28,22 @@ _ASSET_KEYS = ("chain", "from_chain", "to_chain", "token_in", "token_out",
                "dry_run", "expected_pay_to", "allow_plaintext")
 _TARGET_KEYS = ("to", "to_email", "target", "recipient", "payer_contact",
                 "address", "market", "url", "repo", "package")
-_PURPOSE_KEYS = ("purpose", "reason", "description", "task", "subject", "text")
+_PURPOSE_KEYS = ("purpose", "reason", "description", "task")
+#: 096 W4 (B1/B2): the words the action SENDS or RUNS — a tweet, a DM, an email
+#: body, a shell command. Each present key is shown WHOLE in its own fenced block
+#: (up to ``OUTBOUND_INLINE_MAX_CHARS``; above that a head + the hidden count +
+#: the tap that opens the rest). It used to share the 160-char "For:" slot or
+#: fall into the 60-char extras: the owner approved speech it could not read.
+_OUTBOUND_KEYS = ("text", "body", "html", "message", "content", "command")
+#: Rendered on its own line, never in the body's slot (an email's subject used
+#: to take the "For:" slot and push the body into a 60-char extra).
+_SUBJECT_KEY = "subject"
+#: 096 D1 (proposed default): inline up to 3000 chars on a pushed card.
+OUTBOUND_INLINE_MAX_CHARS = 3000
+_OUTBOUND_HEAD_CHARS = 1500
+_TARGET_MAX_CHARS = 300
+_PURPOSE_MAX_CHARS = 600
+_SUBJECT_MAX_CHARS = 300
 #: Contract-call detail (the dapp wallet's owner ask). Rendered IN FULL on
 #: their own lines: an approval for calldata the owner cannot see is a blind
 #: signature, and a 60-character extra would hide every argument.
@@ -44,6 +60,54 @@ _MAX_VALUE_LEN = 60
 
 def _present(v: Any) -> bool:
     return v is not None and v != ""
+
+
+def _cut(text: str, cap: int) -> str:
+    """*text* whole, or its first *cap* chars + how many are hidden (R3)."""
+    if len(text) <= cap:
+        return text
+    return text[:cap].rstrip() + f"… (+{len(text) - cap} chars)"
+
+
+def _html_as_text(raw: str) -> str:
+    import html as _html
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", "", raw)
+    text = re.sub(r"(?i)<br\s*/?>|</p\s*>|</div\s*>|</li\s*>", "\n", text)
+    # A link shows its target next to its text: the owner approves where the
+    # link goes, not only what it says (an <a> whose text is one address and
+    # whose href is another is the phishing shape).
+    text = re.sub(
+        r"""(?is)<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>(.*?)</a\s*>""",
+        lambda m: f"{m.group(4)} [link: {m.group(1) or m.group(2) or m.group(3) or ''}]",
+        text)
+    text = re.sub(
+        r"""(?is)<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>""",
+        lambda m: f"[image: {m.group(1) or m.group(2) or m.group(3) or ''}]", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = _html.unescape(text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _outbound_lines(key: str, raw: Any, *, full: bool, more_tap: str) -> List[str]:
+    """The fenced, whole outbound value for *key* (096 W4)."""
+    text = str(raw)
+    label = key
+    if key == "html":
+        text = _html_as_text(text)
+        label = "html, shown as text"
+    head = f"• {label} ({len(text)} chars):"
+    shown = text
+    tail = None
+    if not full and len(text) > OUTBOUND_INLINE_MAX_CHARS:
+        shown = text[:_OUTBOUND_HEAD_CHARS].rstrip()
+        hidden = len(text) - len(shown)
+        tail = (f"(+{hidden} chars not shown here — the whole text: {more_tap})"
+                if more_tap else f"(+{hidden} chars not shown here)")
+    # A value that itself holds ``` would close the fence early.
+    lines = [head, "```", shown.replace("```", "ʼʼʼ"), "```"]
+    if tail:
+        lines.append(tail)
+    return lines
 
 
 def _first(params: Dict[str, Any], keys) -> Tuple[Optional[str], Optional[str]]:
@@ -117,8 +181,13 @@ def render_grant_card(action_name: str, params: Optional[Dict[str, Any]],
                       timeout_sec: Optional[float] = None,
                       grant_ttl_hours: Optional[float] = None,
                       reply_lines: bool = True,
-                      context_lines: Optional[List[str]] = None) -> str:
+                      context_lines: Optional[List[str]] = None,
+                      full_content: bool = False) -> str:
     """A sectioned, human-first approval card. Never raises.
+
+    ``full_content=True`` shows every outbound text whole at any length (the
+    tapped full view, ``/pending <id>``, and the web Inbox); the pushed card
+    shows up to ``OUTBOUND_INLINE_MAX_CHARS`` and names the tap to the rest.
 
     ``reply_lines=False`` drops the trailing ``/approve``/``/reject`` lines for
     a seat that draws its own buttons (the web Inbox); every field above them
@@ -137,13 +206,20 @@ def render_grant_card(action_name: str, params: Optional[Dict[str, Any]],
     target_key, target = _first(p, _TARGET_KEYS)
     if target:
         shown.add(target_key)
-        lines.append(f"• To: {target[:120]}"
-                     + ("…" if len(target) > 120 else ""))
+        lines.append(f"• To: {_cut(target, _TARGET_MAX_CHARS)}")
+    if _present(p.get(_SUBJECT_KEY)):
+        shown.add(_SUBJECT_KEY)
+        lines.append(f"• Subject: {_cut(str(p[_SUBJECT_KEY]), _SUBJECT_MAX_CHARS)}")
     purpose_key, purpose = _first(p, _PURPOSE_KEYS)
     if purpose:
         shown.add(purpose_key)
-        lines.append(f"• For: {purpose[:160]}"
-                     + ("…" if len(purpose) > 160 else ""))
+        lines.append(f"• For: {_cut(purpose, _PURPOSE_MAX_CHARS)}")
+    more_tap = f"/pending_{str(display_id).replace('-', '_')}" if display_id else ""
+    for k in _OUTBOUND_KEYS:
+        if k in shown or not _present(p.get(k)) or isinstance(p.get(k), (dict, list)):
+            continue
+        shown.add(k)
+        lines.extend(_outbound_lines(k, p[k], full=full_content, more_tap=more_tap))
     # Every OTHER money field and every asset/grant field, in full (CR-M01).
     for k in _MONEY_KEYS + _ASSET_KEYS:
         if k in shown or not _present(p.get(k)):

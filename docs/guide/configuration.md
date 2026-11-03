@@ -5,7 +5,7 @@ you will actually touch. It leads with the six axes that decide what the agent i
 individual flags are an appendix. The complete reference —
 every environment flag, its default, and the code that reads it — is
 [`docs/CONFIGURATION.md`](../CONFIGURATION.md). When this page and that file
-disagree, that file wins; it is generated from the code and contract-tested.
+disagree, that file wins; a contract test checks it against the code.
 
 Read this page top to bottom once. After that, `polyrob doctor` and
 `polyrob config explain KEY` answer most questions faster than any document.
@@ -70,8 +70,8 @@ capabilities (axis 3), money, host access.
 
 **5. `AGENT_COMPUTE_POSTURE` — how much of the host it may use.** `0` is a
 confined, ephemeral sandbox. `1` adds a persistent dev container with a `shell`
-and pip installs. `2` adds the approval-gated `self_env` verbs that patch and
-restart the agent itself. `3` is the host and requires axis 1. Frozen when the
+and pip installs. `2` adds the approval-gated `self_env` verbs, which read the
+agent's own source and restart its service. `3` is the host and requires axis 1. Frozen when the
 process starts: a running agent cannot widen its own host access. Never moves:
 money; every `self_env` verb still asks.
 
@@ -251,8 +251,9 @@ or `--character-from <name>`; see §9.
 ### Keys
 
 Set at least one key. With no provider pinned, POLYROB picks the **first
-provider with a usable key** in this order: `openrouter`, `anthropic`,
-`openai`, `gemini`, `nvidia`, then the rows of your `providers.yaml` in file
+provider with a usable key** in this order: the six built-ins `openrouter`,
+`anthropic`, `openai`, `gemini`, `nvidia` and `deepseek`; then the flat-rate
+and subscription rows below; then the rows of your `providers.yaml` in file
 order. It fails over to the next usable provider on a billing, quota or
 rate-limit error.
 
@@ -276,8 +277,7 @@ another model with its own `payload.model`. The old `CHAT_PROVIDER`/`CHAT_MODEL`
 names are retired; set alone, POLYROB refuses to start and names the
 `DEFAULT_` name to use.
 
-`DEEPSEEK_API_KEY` selects DeepSeek's own API (last in the preference order
-above): `deepseek-flash` by default, `deepseek-v4-pro`, and the legacy ids
+`DEEPSEEK_API_KEY` selects DeepSeek's own API (sixth in the order above): `deepseek-flash` by default, `deepseek-v4-pro`, and the legacy ids
 `deepseek-chat` (thinking off) and `deepseek-reasoner` (thinking on). The
 names `deepseek-v4.1-flash` and `deepseek-pro` also work: the agent sends DeepSeek
 the API name (`deepseek-flash`, `deepseek-v4-pro`). Thinking
@@ -435,15 +435,9 @@ Inspect the active provider from the REPL with `/memory`.
 ## 6. The autonomy dial
 
 Out of the box the agent is **interactive**: it acts on your messages and on
-nothing else. Autonomy is a set of loops you opt into, governed by four of
-the six axes in §1. Set them in this order and stop when you have what you want.
-
-| Axis | Default | What it moves |
-|---|---|---|
-| `POLYROB_LOCAL` | off | The single-user profile. Turns on the interactive tools (coding, git, knowledge base, memory, project context) as a group. Set automatically by the CLI. |
-| `AUTONOMY_ENABLED` | off | The master switch for the self-directed loops: self-wake, the goal board, the curator, background review, episodic continuity, writable skills. |
-| `AUTONOMY_POSTURE` | `silent` | How visible the autonomous work is. `owner-visible` adds completion judging, blocker escalation and continuity; `full` adds time-based initiative (cron) and the no-change wake gate. Recommended for a single-user box: `owner-visible`. |
-| `AUTONOMY_MODE` | `supervised` | `autonomous` = act-and-report on a single-owner box: capability flags (Twitter, MCP, groups, email surface, invoicing) default on, approvals become allow-audit-notify, outbound policy opens. Effective only with `POLYROB_LOCAL` and a bound owner; otherwise it clamps back to `supervised`. |
+nothing else. Autonomy is a set of loops you opt into with axes 2–4 of §1
+(`AUTONOMY_ENABLED`, `AUTONOMY_MODE`, `AUTONOMY_POSTURE`). For a single-user box,
+`owner-visible` is the usual posture.
 
 ```bash
 polyrob autonomy status            # the posture card: every axis, pauses, loop state
@@ -456,19 +450,12 @@ In the REPL, `/autonomy on` and `/autonomy off` write the same flag, apply it to
 the session at once, and start or stop that session's loops — no restart.
 
 **`AUTONOMY_MODE=autonomous` needs a bound owner.** Without `POLYROB_LOCAL` and an
-owner binding (`POLYROB_OWNER_USER_ID`, or pair one with `polyrob init` /
-`polyrob owner invite`), the mode clamps back to `supervised`, and so do the two
-axes it would have raised. The write says so at once
-(`note: autonomous will CLAMP to supervised — …`), and `polyrob autonomy status`
-shows the clamp on the mode row.
-
-**If you set axis 3 or 4, skip axis 2 — they turn it on.** Choosing
-`AUTONOMY_MODE=autonomous` or an `owner-visible`/`full` posture flips
-`AUTONOMY_ENABLED` on for you, so a deliberate choice is never left inert. To
-change one loop flag, use its `POLYROB_OVERRIDES` entry (§1).
-
-**What never moves with the dial:** spending money, host access and secrets.
-Each keeps its own gate (§10, §7) under every mode — see §1.
+owner binding, the mode clamps back to `supervised`, and so do the two axes it
+would have raised. An owner binding is one of: `POLYROB_OWNER_USER_ID` (which
+`polyrob setup --owner ID` writes), `SURFACE_SUPER_ADMIN_USER_IDS`, your
+Telegram id (`POLYROB_OWNER_TELEGRAM_ID`, §8) or `POLYROB_OWNER_EMAIL`. The write
+says so at once (`note: autonomous will CLAMP to supervised — …`), and
+`polyrob autonomy status` shows the clamp on the mode row.
 
 ### Stopping it
 
@@ -483,15 +470,6 @@ polyrob autonomy resume
 In chat the verbs are `/pause`, `/halt` and `/resume`; a plain sentence such as
 "stop" is a message to the agent, never a switch. `polyrob owner …` and the console expose the
 same record. Details: [owner-controls.md](owner-controls.md).
-
-### Compute posture
-
-`AGENT_COMPUTE_POSTURE` is a separate axis for how much of the host the agent
-may use. `0` (default) is a confined, ephemeral sandbox. `1` gives it a
-persistent dev container with a `shell` and pip installs. `2` adds the
-approval-gated `self_env` verbs that patch and restart the agent itself. `3`
-means the host and requires `POLYROB_LOCAL`. Leave it at `0` unless you are
-building software with the agent. See [security-model.md](security-model.md).
 
 ---
 
@@ -626,15 +604,15 @@ it yourself.
 
 Every chat surface runs the same agent. Start one with `polyrob telegram`,
 `polyrob email`, `polyrob discord`, `polyrob slack`, `polyrob signal`,
-`polyrob whatsapp`, `polyrob x`, or all enabled ones with `polyrob gateway`.
+`polyrob whatsapp`, or all enabled ones with `polyrob gateway`.
 
 ### The owner
 
 Bind yourself before exposing any surface:
 
 ```bash
-polyrob config set POLYROB_OWNER_TELEGRAM_ID 123456789   # your numeric Telegram id
-polyrob config set ALLOWED_TELEGRAM_USER_IDS 123456789   # the DM lock
+polyrob config set POLYROB_OWNER_TELEGRAM_ID <telegram_id>   # your numeric Telegram id
+polyrob config set ALLOWED_TELEGRAM_USER_IDS <telegram_id>   # the DM lock
 polyrob owner show                                        # the bound owner and per-surface posture
 ```
 
@@ -671,17 +649,12 @@ Who the agent may message on its own is an allowlist (`polyrob owner allow
 telegram <id>`), widened by `OUTBOUND_POLICY` and capped by
 `OUTBOUND_DAILY_SEND_CAP`.
 
-Everything the agent sends **you** rides one delivery rail, bounded so a
-runaway loop cannot fill your chat:
-
-| Bound | Default | Flag |
-|---|---|---|
-| messages per day | 30 | `USER_DELIVERY_DAILY_CAP`, pref `delivery.daily_cap` |
-| messages per hour | 10 | `USER_DELIVERY_RATE_PER_HOUR`, pref `delivery.rate_per_hour` |
-| identical text suppressed for | 24h | `USER_DELIVERY_DEDUP_HOURS` |
-| framework status pings per day | 10 | the owner pref `delivery.lifecycle_daily_cap` (`/config set`) |
-| slots reserved from low-priority traffic | 8 | `USER_DELIVERY_RESERVED_SLOTS` |
-| gap before the agent repeats the same text to you | 2h | `OWNER_MESSAGE_COOLDOWN_SEC` |
+Everything the agent sends **you** rides one delivery rail, bounded per day and
+per hour, with identical text suppressed and slots reserved for urgent traffic.
+The bounds and their defaults are the `USER_DELIVERY_*` rows of
+[`docs/CONFIGURATION.md`](../CONFIGURATION.md); `delivery.daily_cap`,
+`delivery.rate_per_hour` and `delivery.lifecycle_daily_cap` are the matching
+preferences (§11).
 
 Three rules make those bounds safe to live with:
 
@@ -790,21 +763,14 @@ or resume a session another process owns. See
 
 ### When the context window fills
 
-You do not have to manage this, but it helps to know what happens. At 70 % of
-the model's input window POLYROB logs a note. At 85 % it first ages old tool
-results — anything outside the newest six and longer than
-`TOOL_RESULT_AGE_CHARS` (2 000 characters) is demoted to its first line plus a
-pointer to the file the full text was written to — and re-measures; if that was
-enough, no model call happens at all. If it was not, it compacts the
-conversation through the model. At 95 % a non-LLM prune runs as the safety net.
-
-Compaction is deliberately reluctant: rebuilding the conversation is the one
-moment the prompt cache goes cold, so `COMPACTION_COOLDOWN_STEPS` (8) is the
-minimum gap between two model-driven compactions — unless the last one actually
-freed 5 % or more, in which case it may run again straight away.
-
-`/context` tells you where the tokens are, and `/compact` runs the whole ladder
-by hand.
+You do not have to manage this. As the window fills, POLYROB first shortens old
+tool results to a pointer, then compacts the conversation through the model, and
+prunes without a model call as the last step. How the ladder works, and why it
+waits between compactions:
+[architecture.md](architecture.md#prompt-caching-and-the-context-window). The parts
+you can tune are `COMPACTION_COOLDOWN_STEPS` and `TOOL_RESULT_AGE_CHARS` in
+[`docs/CONFIGURATION.md`](../CONFIGURATION.md). `/context` tells you where the
+tokens are, and `/compact` runs the whole ladder by hand.
 
 ---
 
@@ -813,7 +779,8 @@ by hand.
 Two reliability defaults you can leave alone, before the table:
 `DEAD_TARGET_REGISTRY` skips sends to a chat that has blocked or deleted the
 bot and revives it when it writes again. `COMPACTION_PROMPT_GUARD` frames the
-context-compaction step so old adversarial text cannot hijack it. Both are on.
+context-compaction step so that old text is summarized as data, never followed
+as instructions. Both are on.
 
 | Symptom | Check |
 |---|---|
@@ -853,7 +820,7 @@ delegation · crypto trading · skills · avatar · preferences · self-update �
 web fetch.
 
 The complete reference — every flag, its default, and the code that reads it —
-is [`docs/CONFIGURATION.md`](../CONFIGURATION.md); it is generated from the
-code and contract-tested, and it wins over this page. The CLI reference:
+is [`docs/CONFIGURATION.md`](../CONFIGURATION.md); a contract test checks it
+against the code, and it wins over this page. The CLI reference:
 [cli.md](cli.md). What actually stops the agent from doing something harmful:
 [security-model.md](security-model.md).

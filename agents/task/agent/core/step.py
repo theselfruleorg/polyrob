@@ -667,10 +667,10 @@ class StepMixin:
 		# (cancellation, resumed-from-done/stopped, too-many-failures) leaves
 		# the flag False — a later real turn still gets to inject once. A
 		# _continue_session=True turn resets n_steps too, so its own first step
-		# also lands here; the injectors' own `_session_bootstrap_done` guard
-		# (see memory_prefetch.py) makes this idempotent — they've already
-		# fired-or-declined by the time this line runs, so re-setting an
-		# already-True flag is a no-op.
+		# also lands here. 098 AG-22: the three bootstrap injectors no longer
+		# read this flag — each has its own OnceLatch (memory_prefetch.py) that
+		# closes only on an injection or a policy decline; the owner thread
+		# (owner_thread_inject.py) reads it.
 		if self.state.n_steps == 1:
 			self._session_bootstrap_done = True
 
@@ -968,9 +968,8 @@ class StepMixin:
 				# raises, fail-open.
 				await self._trip_sentinel_if_credit_death(e)
 				self.state.consecutive_failures = self.max_failures  # Force max failures
-				self.state.stopped = True  # Mark session as stopped
-				from agents.task.runtime.stop_reason import StopReason, set_stop
-				set_stop(self, StopReason.ERROR)  # 083 WS-1
+				from agents.task.runtime.stop_reason import StopReason
+				self.state.request_stop(StopReason.ERROR)  # 098 AG-01: the one stop writer
 
 				# Create error result for user visibility
 				self._last_result = [ActionResult(

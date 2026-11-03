@@ -14,6 +14,11 @@ def _seed_pending_self(home, uid):
         user_id=uid, created_by=PROVENANCE_AGENT, pending=True)
 
 
+def _id_rev(home, uid):
+    """098 CO-19: the CLI decides ``<id>@<rev>`` — the revision `owner pending` showed."""
+    return f"{uid}@{SelfContextWriter(home).list_pending(uid)['rev']}"
+
+
 def _env(tmp_path, monkeypatch):
     # Point the owner CLI's data home + owner tenant at an isolated tmp dir.
     # Pin the instance id to the DEFAULT explicitly so an operator env file
@@ -43,7 +48,7 @@ def test_promote_self_context(tmp_path, monkeypatch):
     from core.instance import load_self_doc
     _env(tmp_path, monkeypatch)
     _seed_pending_self(tmp_path, "alice")
-    res = CliRunner().invoke(owner, ["promote", "self_context", "alice"])
+    res = CliRunner().invoke(owner, ["promote", "self_context", _id_rev(tmp_path, "alice")])
     assert res.exit_code == 0
     assert "surface blockers" in load_self_doc(tmp_path, user_id="alice")
 
@@ -51,7 +56,7 @@ def test_promote_self_context(tmp_path, monkeypatch):
 def test_reject_self_context(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     _seed_pending_self(tmp_path, "alice")
-    res = CliRunner().invoke(owner, ["reject", "self_context", "alice"])
+    res = CliRunner().invoke(owner, ["reject", "self_context", _id_rev(tmp_path, "alice")])
     assert res.exit_code == 0
     # now nothing pending
     res2 = CliRunner().invoke(owner, ["pending"])
@@ -135,10 +140,11 @@ def test_pending_labels_contract_and_pref_change_correctly(tmp_path, monkeypatch
 
     res = CliRunner().invoke(owner, ["pending"])
     assert res.exit_code == 0
-    assert "contract" in res.output
-    assert "pref change" in res.output
-    assert "skill    contract:" not in res.output
-    assert "skill    pref_change:" not in res.output
+    # 096 W7: the notice's own labels, and this seat's decide verbs per item.
+    assert "Operating contract" in res.output
+    assert "Preference change 'approvals.require'" in res.output
+    assert "polyrob owner promote contract alice" in res.output
+    assert "Skill 'alice'" not in res.output
 
 
 def test_promote_tool_approval_accepts_bare_id_without_prefix(tmp_path, monkeypatch):

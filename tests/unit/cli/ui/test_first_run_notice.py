@@ -52,3 +52,21 @@ def test_notice_fail_open_on_resolver_error(monkeypatch):
     monkeypatch.setattr(frn, "_resolve_context", _boom)
     # must not raise; returns False
     assert frn.maybe_print_first_run_notice(_FakeRenderer()) is False
+
+
+def test_two_starts_print_once(monkeypatch, tmp_path):
+    """098 CL-08: the marker is claimed by an exclusive create BEFORE the print."""
+    monkeypatch.setattr(frn, "_resolve_context", lambda: (False, str(tmp_path), None))
+
+    class _R:
+        console = None
+
+        def __init__(self):
+            self.blocks = []
+
+        def print_block(self, text):
+            self.blocks.append(text)
+    a, b = _R(), _R()
+    assert frn.maybe_print_first_run_notice(a) is True
+    assert frn.maybe_print_first_run_notice(b) is False
+    assert len(a.blocks) == 1 and b.blocks == []

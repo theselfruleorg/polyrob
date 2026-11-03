@@ -37,6 +37,13 @@ def _curator_enabled() -> bool:
     return AutonomyConfig.curator_enabled()
 
 
+def _retention_enabled() -> bool:
+    """097 D4: retention is housekeeping, not autonomy — ON on every install,
+    whatever the curator or the autonomy bucket says."""
+    from core.env import bool_env
+    return bool_env("RETENTION_TICKER_ENABLED", True)
+
+
 def _surface_gc_enabled() -> bool:
     from core.surfaces.config import SurfaceConfig
     return SurfaceConfig.surface_gc_enabled()
@@ -166,6 +173,8 @@ def _build_wake_drain_ticker(task_agent, data_dir):
                 # trusts `deliver_self_wake`'s own resident-or-recreatable check
                 # (it drops + audits a session it cannot legitimately own), and a
                 # wrongly-recreated session's forged wake still cannot spend.
+                if not queue.renew(row.id, owner):
+                    continue    # 098 CO-16: reclaimed by another drainer meanwhile
                 try:
                     # A late-approved ACTION (an X post the owner approved after
                     # the run stopped waiting) runs here once — not a wake turn.
@@ -182,11 +191,11 @@ def _build_wake_drain_ticker(task_agent, data_dir):
                                  row.session_id, exc_info=True)
                     ok = False
                 if ok is None:      # 084: busy with a live owner turn — wait, no attempt
-                    queue.release(row.id)
+                    queue.release(row.id, owner)
                 elif ok:
-                    queue.mark_delivered(row.id)
+                    queue.mark_delivered(row.id, owner)
                 else:
-                    queue.fail(row.id)
+                    queue.fail(row.id, owner=owner)
         except Exception as e:
             logger.debug("wake drain tick failed: %s", e)
 
@@ -355,6 +364,31 @@ def _requeue_on_boot(board) -> int:
     return board.requeue_running_on_boot()
 
 
+def _build_retention_ticker(data_dir):
+    """097 D4: the always-on retention sweep, on its own cross-process TickLock.
+    Built here (not in ``agents``) because the lock lives in ``cron`` — the
+    layering ladder lets the app tier reach both."""
+    from agents.task.agent.core.retention import RETENTION_INTERVAL_SEC, RetentionSweeper
+    from core.tickers import IntervalTicker
+    import os
+
+    from cron.scheduler import TickLock
+
+    sweeper = RetentionSweeper(data_dir=data_dir)
+    lock_path = os.path.join(data_dir, "retention.tick.lock")
+
+    async def _tick() -> None:
+        lock = TickLock(lock_path)
+        if not lock.acquire():
+            return  # another worker holds this cycle
+        try:
+            await sweeper.run_once()
+        finally:
+            lock.release()
+
+    return IntervalTicker(_tick, interval_seconds=RETENTION_INTERVAL_SEC)
+
+
 def _build_curator_ticker(data_dir):
     from agents.task.agent.core.curator import build_curator_ticker
     return build_curator_ticker(data_dir=data_dir)
@@ -494,6 +528,25 @@ def _schedule_cold_start_orphan_reap() -> None:
 
 _boot_migrations_scheduled = False
 
+#: 098 CL-03: the cold-start sweeps run ONCE per process and data home — a REPL
+#: ``/autonomy off`` + ``on`` restarts the loops, never the recovery sweeps (a
+#: re-run told live sessions their delegations died and reaped the REPL's own
+#: sandbox). Each latch sets only after the sweep was scheduled (S9).
+_COLD_START_LATCHES: dict = {}
+
+
+def _cold_start_once(name: str, data_dir, fn) -> None:
+    import os
+    from core.state.once import OnceLatch
+    key = (name, os.path.realpath(str(data_dir or "")))
+    _COLD_START_LATCHES.setdefault(key, OnceLatch()).run(fn)
+
+
+def reset_cold_start_latches() -> None:
+    """Test seam: forget which cold-start sweeps ran."""
+    for latch in _COLD_START_LATCHES.values():
+        latch.reset()
+
 
 def _schedule_boot_migrations(task_agent) -> None:
     """D2 (2026-07-14 review): boot migrations ran ONLY in the API lifespan
@@ -508,11 +561,10 @@ def _schedule_boot_migrations(task_agent) -> None:
     global _boot_migrations_scheduled
     if _boot_migrations_scheduled:
         return
-    _boot_migrations_scheduled = True
     try:
         container = getattr(task_agent, "container", None)
         if container is None:
-            return
+            return  # 098 CL-04: nothing scheduled — a later call with a container runs
 
         async def _migrate() -> None:
             try:
@@ -534,6 +586,7 @@ def _schedule_boot_migrations(task_agent) -> None:
         except Exception:
             coro.close()  # avoid a "coroutine was never awaited" leak on failure
             raise
+        _boot_migrations_scheduled = True  # 098 CL-04: set once it is scheduled
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_BACKGROUND_TASKS.discard)
     except Exception as e:
@@ -559,7 +612,6 @@ def _schedule_owner_profile_seed(task_agent) -> None:
     global _owner_profile_seed_scheduled
     if _owner_profile_seed_scheduled:
         return
-    _owner_profile_seed_scheduled = True
     try:
         db = None
         container = getattr(task_agent, "container", None)
@@ -579,6 +631,7 @@ def _schedule_owner_profile_seed(task_agent) -> None:
         except Exception:
             coro.close()  # avoid a "coroutine was never awaited" leak on failure
             raise
+        _owner_profile_seed_scheduled = True  # 098 CL-04: set once it is scheduled
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_BACKGROUND_TASKS.discard)
     except Exception as e:
@@ -596,7 +649,6 @@ def _schedule_self_binding_sweep(task_agent) -> None:
     global _self_binding_sweep_scheduled
     if _self_binding_sweep_scheduled:
         return
-    _self_binding_sweep_scheduled = True
 
     async def _sweep() -> None:
         try:
@@ -619,7 +671,13 @@ def _schedule_self_binding_sweep(task_agent) -> None:
         except Exception as e:
             logger.warning("self-binding sweep failed (non-fatal): %s", e)
 
-    task = asyncio.create_task(_sweep())
+    coro = _sweep()
+    try:
+        task = asyncio.create_task(coro)
+    except Exception:
+        coro.close()
+        raise
+    _self_binding_sweep_scheduled = True  # 098 CO-32: set once it is scheduled
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
@@ -1169,9 +1227,16 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     try:
         # COLD START ONLY — see _schedule_cold_start_orphan_reap docstring. Not
         # added to `handles` (it's a one-shot sweep, not a recurring loop).
-        _schedule_cold_start_orphan_reap()
+        _cold_start_once("orphan_reap", data_dir, _schedule_cold_start_orphan_reap)
     except Exception as e:
         logger.warning("Could not schedule cold-start orphan reap: %s", e)
+    try:
+        # 098 CL-15: COLD START ONLY — delete dead owners' ephemeral cloud
+        # sandboxes, stop their persistent ones (tools/code_exec/backends/sandbox_sweep.py).
+        from tools.code_exec.backends.sandbox_sweep import schedule_boot_sweep
+        _cold_start_once("sandbox_sweep", data_dir, schedule_boot_sweep)
+    except Exception as e:
+        logger.warning("Could not schedule sandbox sweep: %s", e)
     try:
         # 031 T15: expire any correspondent binding to the agent's own address.
         _schedule_self_binding_sweep(task_agent)
@@ -1180,12 +1245,13 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     try:
         # One-shot recovery: delegations still 'running' in autonomy_state.db were
         # crash-interrupted — mark them and surface back to their sessions.
-        _schedule_delegation_recovery(task_agent, data_dir)
+        _cold_start_once("delegation_recovery", data_dir,
+                         lambda: _schedule_delegation_recovery(task_agent, data_dir))
     except Exception as e:
         logger.warning("Could not schedule delegation recovery: %s", e)
     try:
         # COLD START ONLY, same shape as the orphan reap above — not a recurring loop.
-        _schedule_hf_deploy_reconcile()
+        _cold_start_once("hf_deploy_reconcile", data_dir, _schedule_hf_deploy_reconcile)
     except Exception as e:
         logger.warning("Could not schedule hf_deploy reconcile: %s", e)
     if _cron_enabled():
@@ -1218,6 +1284,11 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
                 _sched.set_yield_hook(_disp.yield_for_rail)
     except Exception as e:
         logger.debug("yield hook not wired: %s", e)
+    if _retention_enabled():
+        try:
+            handles._add("retention", _build_retention_ticker(data_dir))
+        except Exception as e:
+            logger.warning("Could not start retention ticker: %s", e)
     if _curator_enabled():
         try:
             handles._add("curator", _build_curator_ticker(data_dir))

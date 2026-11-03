@@ -205,7 +205,8 @@ def test_pause_edge_stops_live_apps_and_resume_redeploys(rig):
 
 def test_stop_cleans_up(rig):
     asyncio.run(rig.sup.tick())
-    rig.reg.set_status("demo-status", "owner-1", "stopped", error="owner kill")
+    rig.reg.set_status("demo-status", "owner-1", "stopped", error="owner kill",
+                       from_states=("live",))
     counts = asyncio.run(rig.sup.tick())
     assert counts["stopped"] == 1
     row = rig.reg.get("demo-status", "owner-1")
@@ -256,6 +257,7 @@ def test_source_outside_roots_and_port_exhaustion(rig):
                                container_port=80, health_path="/", egress="none", egress_allow=[],
                                env={}, workspace_digest="a" * 64)
         rig.reg.mark_approved(f"other{i}", "owner-1")
+        rig.reg.claim(f"other{i}", "owner-1", "approved", "deploying")
         rig.reg.record_live(f"other{i}", "owner-1", host_port=18000, container_name="c", public_url="u")
     requeue(rig, workspace_digest="b" * 64)
     asyncio.run(rig.sup.tick())
@@ -360,7 +362,8 @@ def test_a_live_app_is_never_silently_reconfigured(rig):
     assert row["status"] == "live" and row["cmd"] == ["python", "server.py"]
     assert row["egress"] == "none" and rig.reg.slug_holder("demo-status") == "owner-1"
     # the honest route: stop, request the new configuration, owner approves
-    rig.reg.set_status("demo-status", "owner-1", "stopped", error="agent stop")
+    rig.reg.set_status("demo-status", "owner-1", "stopped", error="agent stop",
+                       from_states=("live",))
     asyncio.run(rig.sup.tick())
     new = rig.reg.upsert_request("demo-status", "owner-1", source_dir=str(rig.proj),
                                  cmd=["python", "server.py"], container_port=8765,

@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from core.sqlite_util import execute_retry
+from cron.job_machine import CRON_JOB_MACHINE, LEASE_SLACK_SECONDS, lease_is_live, run_owner
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,11 @@ class CronJob:
     #: on the claimed object — ``{"outcome": "failed", "reason": "stopped at the
     #: step limit (150/150)"}`` — and written to ``payload.last_outcome``.
     run_note: Optional[Dict[str, str]] = field(default=None, compare=False, repr=False)
+    #: NOT a stored field of the job: the lease THIS claim holds (``lease_until``
+    #: from :meth:`CronJobStore.claim_for_run`). The run end is a CAS on it, so
+    #: a run whose lease ran out and was reclaimed can never end the run that
+    #: took the row after it (098 review).
+    claim_lease: Optional[float] = field(default=None, compare=False, repr=False)
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -148,6 +154,15 @@ class CronJobStore:
             )
             """
         )
+        # MO-09: the run lease (owner process + expiry) beside the status.
+        from core.sqlite_util import ensure_columns, wal_connect
+        conn = wal_connect(self.db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            ensure_columns(conn, "cron_jobs", (("run_owner", "TEXT"), ("lease_until", "REAL")))
+            conn.commit()
+        finally:
+            conn.close()
         self._clear_dead_state()
 
     def _clear_dead_state(self) -> None:
@@ -160,7 +175,12 @@ class CronJobStore:
         try:
             execute_retry(self.db_path,
                           "UPDATE cron_jobs SET enabled=0 "
-                          "WHERE status IN ('done','failed') AND enabled=1")
+                          "WHERE status IN ('done','failed','cancelled') AND enabled=1")
+            # MO-09: a live status with enabled=0 was a cancel that a later
+            # unguarded write moved back — it is cancelled.
+            execute_retry(self.db_path,
+                          "UPDATE cron_jobs SET status='cancelled' "
+                          "WHERE status IN ('scheduled','paused') AND enabled=0")
             execute_retry(
                 self.db_path,
                 "UPDATE cron_jobs SET payload=json_remove(payload, '$.authored_by', "
@@ -252,6 +272,11 @@ class CronJobStore:
             # schedule edit or cancellation that landed during the run.
             unchanged = "schedule_spec=? AND one_shot=? AND next_run_at IS ?"
             match = (expected.schedule_spec, int(expected.one_shot), _iso(expected.next_run_at))
+            # 098 review: only the claim that holds the lease ends the run.
+            lease, lease_params = "", ()
+            if expected.claim_lease is not None:
+                lease = " AND run_owner IS ? AND lease_until IS ?"
+                lease_params = (run_owner(), expected.claim_lease)
             # A job that reaches a terminal state ('done' or 'failed') is
             # disabled in the same write: nothing will run it again, and
             # enabled=1 kept its prose in the live rail readers (rules sweep,
@@ -261,16 +286,19 @@ class CronJobStore:
                 f"""UPDATE cron_jobs SET last_run_at=?,
                     next_run_at=CASE WHEN {unchanged} THEN ? ELSE next_run_at END,
                     enabled=CASE WHEN {unchanged} AND ? IN ('done','failed') THEN 0 ELSE 1 END,
-                    status=CASE WHEN {unchanged} THEN ? ELSE 'scheduled' END
-                    WHERE id=? AND enabled=1 AND status='running'""",
+                    status=CASE WHEN {unchanged} THEN ? ELSE 'scheduled' END,
+                    run_owner=NULL, lease_until=NULL
+                    WHERE id=? AND enabled=1 AND status='running'{lease}""",
                 (_iso(last_run_at), *match, _iso(next_run_at), *match, status,
-                 *match, status, job_id),
+                 *match, status, job_id, *lease_params),
             )
             return
+        # MO-09: only the run ends a run — never a cancel or a pause.
         execute_retry(
             self.db_path,
             "UPDATE cron_jobs SET last_run_at=?, next_run_at=?, status=?, "
-            "enabled=CASE WHEN ? IN ('done','failed') THEN 0 ELSE enabled END WHERE id=?",
+            "enabled=CASE WHEN ? IN ('done','failed') THEN 0 ELSE enabled END, "
+            "run_owner=NULL, lease_until=NULL WHERE id=? AND status='running'",
             (_iso(last_run_at), _iso(next_run_at), status, status, job_id),
         )
 
@@ -283,13 +311,18 @@ class CronJobStore:
         from core.cron_rearm import rearm_job
         return rearm_job(self.db_path, job_id, now)
 
-    def set_status(self, job_id: str, status: str) -> None:
-        """Scheduler-internal status write. Never lifts an owner pause (080
-        WS-2): a run the autonomy pause cut short goes back to 'scheduled',
-        but a job the owner paused mid-run stays paused."""
-        execute_retry(self.db_path,
-                      "UPDATE cron_jobs SET status=? WHERE id=? AND status!='paused'",
-                      (status, job_id))
+    def set_status(self, job_id: str, status: str) -> bool:
+        """Scheduler-internal: a run this process holds goes back (``running ->
+        scheduled`` after a pause cut or a shutdown requeue). MO-09: a CAS on
+        ``running`` held by THIS process (or a legacy row with no owner) — a
+        job the owner paused or cancelled mid-run keeps the owner's state."""
+        from core.state.sql import cas_transition
+        return cas_transition(
+            self.db_path, "cron_jobs", key="id=?", key_params=(job_id,),
+            machine=CRON_JOB_MACHINE, to=status, from_states=("running",),
+            set_cols={"run_owner": None, "lease_until": None},
+            where_extra="enabled=1 AND (run_owner IS NULL OR run_owner=?)",
+            where_params=(run_owner(),))
 
     # --- owner job state (080 WS-2) -------------------------------------------
     #
@@ -320,7 +353,22 @@ class CronJobStore:
         if user_id is not None:
             sql += " AND user_id=?"
             params = params + (user_id,)
-        return bool(execute_retry(self.db_path, sql, params))
+        ok = bool(execute_retry(self.db_path, sql, params))
+        if ok:
+            self._drop_side_rows(job_id, streak=False)  # MO-11: a resumed job runs once
+        return ok
+
+    def _drop_side_rows(self, job_id: Optional[str], *, streak: bool = True) -> None:
+        """MO-11/MO-12: the job's wake-gate baseline (and its remedy streak)
+        go with it — ``job_id=None`` drops every row whose job is gone."""
+        try:
+            from cron.wake_gate import drop_baselines
+            drop_baselines(self.db_path, job_id=job_id)
+            if streak:
+                from cron.remedy_streak import drop_streaks
+                drop_streaks(self.db_path, job_id=job_id)
+        except Exception:
+            logger.debug("cron side rows not dropped for %s", job_id, exc_info=True)
 
     def record_outcome(self, job_id: str, outcome: str, at: datetime,
                        reason: Optional[str] = None) -> None:
@@ -357,40 +405,59 @@ class CronJobStore:
             # a concurrent payload edit loses this claim and waits one tick.
             where += " AND json(payload)=json(?)"
             params += (json.dumps(current.payload),)
-        row = execute_retry(self.db_path,
-                            f"UPDATE cron_jobs SET status='running' WHERE {where} RETURNING *",
-                            params, fetch="one")
-        return self._row_to_job(row) if row is not None else None
+        import time as _time
+        # MO-09: the claim names its owner and a lease past the run's own cap.
+        from cron.scheduler import RUN_CAP_CEILING_SECONDS
+        lease_base = _time.time() + LEASE_SLACK_SECONDS
+        row = execute_retry(
+            self.db_path,
+            f"UPDATE cron_jobs SET status='running', run_owner=?, "
+            f"lease_until=? + MAX(max_duration_seconds, ?) WHERE {where} RETURNING *",
+            (run_owner(), lease_base, int(RUN_CAP_CEILING_SECONDS)) + params, fetch="one")
+        if row is None:
+            return None
+        job = self._row_to_job(row)
+        job.claim_lease = row["lease_until"]
+        return job
 
-    def reclaim_stale_running(self) -> int:
+    def reclaim_stale_running(self, *, under_lock: bool = True) -> int:
         """Reset jobs stuck in 'running' (process died mid-run) back to 'scheduled'.
 
-        Returns the number of rows reclaimed. MUST be called only under the held cron
-        TickLock (the scheduler does this at the start of each tick). Ticks are
-        serialized by the lock and always write a terminal/rescheduled status after a
-        run, so any 'running' row observed under the lock is genuinely orphaned by a
-        crash and safe to reclaim. Calling it WITHOUT the lock (e.g. from __init__)
-        could reset a live job and cause a double-run.
+        MO-09: a row is reclaimed only when it is provably orphaned — its lease
+        ran out or its owner process is gone (``cron.job_machine.lease_is_live``)
+        — one CAS per row on the exact owner read. A live lease is never touched,
+        so a worker that stole the tick lock cannot reset (and double-run) a live
+        job. A legacy row with no lease is judged by the lock convention: only
+        when ``under_lock`` (the scheduler calls this under its TickLock).
         """
-        # 056 WS1: name the orphans so each gets a terminal `cron_run cut_by_restart`
-        # event — before this a restart mid-run left the ledger with a bare `started`.
         try:
             rows = execute_retry(
                 self.db_path,
-                "SELECT id, user_id, task FROM cron_jobs WHERE status='running' AND enabled=1",
-                (), fetch="all") or []
+                "SELECT id, user_id, task, run_owner, lease_until FROM cron_jobs "
+                "WHERE status='running' AND enabled=1", (), fetch="all") or []
         except Exception:
             rows = []
-        n = execute_retry(
-            self.db_path,
-            "UPDATE cron_jobs SET status='scheduled' WHERE status='running' AND enabled=1",
-            (),
-        ) or 0
-        if n and rows:
+        n, reclaimed = 0, []
+        for r in rows:
+            live = lease_is_live(r["run_owner"], r["lease_until"])
+            if live or (live is None and not under_lock):
+                continue
+            rc = execute_retry(
+                self.db_path,
+                "UPDATE cron_jobs SET status='scheduled', run_owner=NULL, lease_until=NULL "
+                "WHERE id=? AND status='running' AND enabled=1 "
+                "AND run_owner IS ? AND lease_until IS ?",
+                (r["id"], r["run_owner"], r["lease_until"])) or 0
+            if rc == 1:
+                n += 1
+                reclaimed.append(r)
+        if reclaimed:
+            # 056 WS1: name the orphans so each gets a terminal `cron_run
+            # cut_by_restart` event — not a bare `started` in the ledger.
             try:
                 from types import SimpleNamespace
                 from cron.runner import _cron_ev
-                for r in rows:
+                for r in reclaimed:
                     _cron_ev(SimpleNamespace(id=r["id"], user_id=r["user_id"], task=r["task"]),
                              "cut_by_restart", "orphaned running row reclaimed")
             except Exception:
@@ -438,13 +505,9 @@ class CronJobStore:
         replace, the payload. Unknown classes are refused."""
         if str(priority) not in (CRON_PRIORITY_MONEY, "ops"):
             return False
-        job = self.get(job_id)
-        if job is None or (user_id is not None and job.user_id != user_id):
-            return False
-        payload = dict(job.payload or {})
-        payload["priority"] = str(priority)
-        sql = "UPDATE cron_jobs SET payload=? WHERE id=?"
-        params: tuple = (json.dumps(payload), job_id)
+        # MO-10: only this key (json_set) — a concurrent `last_outcome` survives.
+        sql = "UPDATE cron_jobs SET payload=json_set(payload, '$.priority', ?) WHERE id=?"
+        params: tuple = (str(priority), job_id)
         if user_id is not None:
             sql += " AND user_id=?"
             params = params + (user_id,)
@@ -471,13 +534,9 @@ class CronJobStore:
                      user_id: Optional[str] = None) -> bool:
         """057 WS-C (B7): set ``payload.preempts`` — merge, never replace, the
         payload. Tenant-scoped like ``cancel``."""
-        job = self.get(job_id)
-        if job is None or (user_id is not None and job.user_id != user_id):
-            return False
-        payload = dict(job.payload or {})
-        payload["preempts"] = bool(value)
-        sql = "UPDATE cron_jobs SET payload=? WHERE id=?"
-        params: tuple = (json.dumps(payload), job_id)
+        # MO-10: only this key (json_set) — a concurrent `paused` note survives.
+        sql = "UPDATE cron_jobs SET payload=json_set(payload, '$.preempts', json(?)) WHERE id=?"
+        params: tuple = ("true" if value else "false", job_id)
         if user_id is not None:
             sql += " AND user_id=?"
             params = params + (user_id,)
@@ -510,22 +569,27 @@ class CronJobStore:
                                 f"SELECT COUNT(*) AS n FROM cron_jobs {where}",
                                 params, fetch="one")
             return int((row["n"] if row is not None else 0) or 0)
-        return int(execute_retry(self.db_path,
-                                 f"DELETE FROM cron_jobs {where}", params) or 0)
+        n = int(execute_retry(self.db_path, f"DELETE FROM cron_jobs {where}", params) or 0)
+        if n:
+            self._drop_side_rows(None)
+        return n
 
     def cancel(self, job_id: str, *, user_id: Optional[str] = None,
                note: Optional[Dict[str, Any]] = None) -> bool:
         """Stop the job for good. *note* (who stopped it, via which seat, when)
         lands on ``payload.stopped`` so the row itself answers "who stopped it"."""
-        if note:
-            sql = ("UPDATE cron_jobs SET enabled=0, status='cancelled', "
-                   "payload=json_set(payload, '$.stopped', json(?)) WHERE id=?")
-            params: tuple = (json.dumps(note), job_id)
-        else:
-            sql = "UPDATE cron_jobs SET enabled=0, status='cancelled' WHERE id=?"
-            params = (job_id,)
-        if user_id is not None:
-            sql += " AND user_id=?"
-            params = params + (user_id,)
-        rowcount = execute_retry(self.db_path, sql, params)
-        return bool(rowcount)
+        # MO-09: a CAS from every live state; a cancelled row never moves again
+        # (re-cancelling it is a no-op that still answers True).
+        from core.state.sql import cas_transition
+        extra, extra_params = ("user_id=?", (user_id,)) if user_id is not None else ("", ())
+        ok = cas_transition(
+            self.db_path, "cron_jobs", key="id=?", key_params=(job_id,),
+            machine=CRON_JOB_MACHINE, to="cancelled",
+            set_cols={"enabled": 0, "run_owner": None, "lease_until": None},
+            json_set={"stopped": note} if note else None,
+            where_extra=extra, where_params=extra_params)
+        if not ok:
+            row = self.get(job_id, user_id=user_id)
+            return row is not None and row.status == "cancelled"
+        self._drop_side_rows(job_id)
+        return True

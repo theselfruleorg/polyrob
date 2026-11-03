@@ -88,7 +88,7 @@ async def test_a_last_step_stopped_by_the_user_is_control_not_max_steps():
     async def _stop_on_last(step_info=None):
         await inner(step_info)
         if agent.state.n_steps == 3:
-            agent.state.stopped = True
+            agent.state.request_stop()
     agent.step.side_effect = _stop_on_last
     assert await _run(agent, n) == "control"
 

@@ -57,6 +57,29 @@ KIND_FILE = "file"      # default: something produced, kind not asserted
 #: no ingest could ever close.
 TEXT_DOCUMENT_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".rst"})
 
+#: Name fragments that mean "this file is an append-only RECORD", not knowledge.
+RECORD_NAME_HINTS = ("run-log", "runlog", "run_log", ".log", "-log-",
+                     "changelog", "journal", "transcript")
+
+#: A COPY is never knowledge. Prod carried 34 hand-made `.bak`/copy files under
+#: the project tree — one of them a 1.0 MB backup of a 97 KB ledger. Indexing a
+#: backup means recall answers with a stale version of a document it also holds.
+COPY_MARKERS = (".bak", ".old", ".orig", " copy.", "-copy.", ".archived", ".pending")
+
+
+def is_knowledge_candidate(path: str) -> bool:
+    """By NAME alone: could this produced file be knowledge? The one predicate the
+    KB auto-ingest (which then also reads the declared ``kind:``) and the status
+    section's "how much of what I wrote is indexed" count share (097)."""
+    name = os.path.basename(path).lower()
+    if os.path.splitext(name)[1] not in TEXT_DOCUMENT_SUFFIXES:
+        return False
+    if any(hint in name for hint in RECORD_NAME_HINTS):
+        return False
+    lowered = path.replace("\\", "/").lower()
+    return not any(marker in lowered for marker in COPY_MARKERS)
+
+
 _HASH_CHUNK = 1024 * 1024
 
 _SCHEMA = """

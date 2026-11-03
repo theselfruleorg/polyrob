@@ -108,6 +108,18 @@ CREATE TABLE IF NOT EXISTS accepted_events (
 )
 """
 
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 CO-18: ``accepted → processing → (row deleted) | accepted | failed``.
+ACCEPTED_EVENT = StateMachine(
+    "surfaces.accepted_event",
+    states={"accepted", "processing", "failed"},
+    transitions={"accepted": {"processing"},
+                 "processing": {"accepted", "failed"}},
+    terminal={"failed"},
+    initial={"accepted"},
+)
+
 
 class AcceptedEventJournal:
     """Persist-before-ack for a webhook surface (064 F4).
@@ -124,6 +136,12 @@ class AcceptedEventJournal:
     ``state``: ``accepted`` → ``processing`` → (row deleted) | ``failed``
     after ``max_attempts``. A ``failed`` row stays for an operator to read.
 
+    098 CO-18: a ``processing`` row names its claimant (``claimed_by`` =
+    :func:`core.state.proc.process_identity`). ``recover`` hands back only rows
+    whose claimant is no longer alive, so a second process that hosts the same
+    webhook surface never re-runs an event the first is still processing; and
+    ``complete``/``release`` act only on the caller's own claim.
+
     Unlike :class:`IdempotencyStore` this is NOT fail-open on write: if the
     event cannot be persisted, :meth:`accept` raises and the caller processes
     inline instead of acking an event it could lose.
@@ -135,9 +153,16 @@ class AcceptedEventJournal:
         conn = wal_connect(db_path)
         try:
             conn.execute(_ACCEPTED_SCHEMA)
+            from core.sqlite_util import ensure_columns
+            ensure_columns(conn, "accepted_events", (("claimed_by", "TEXT"),))
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _me() -> str:
+        from core.state.proc import process_identity
+        return process_identity().encode()
 
     def accept(self, key: str, surface_id: str, body: bytes, *,
                now: Optional[float] = None) -> bool:
@@ -152,33 +177,47 @@ class AcceptedEventJournal:
         return inserted == 1
 
     def claim(self, key: str) -> Optional[bytes]:
-        """Atomically move one ``accepted`` row to ``processing``; its body, or
-        None when another drain already holds it."""
-        changed = execute_retry(
-            self.db_path,
-            "UPDATE accepted_events SET state='processing', attempts=attempts+1 "
-            "WHERE event_key=? AND state='accepted'",
-            (str(key),),
-        )
-        if changed != 1:
+        """Atomically move one ``accepted`` row to ``processing`` under this
+        process's identity; its body, or None when another drain holds it."""
+        from core.state.sql import cas_transition
+        if not cas_transition(self.db_path, "accepted_events", key="event_key=?",
+                              key_params=(str(key),), machine=ACCEPTED_EVENT,
+                              to="processing", from_states=("accepted",),
+                              set_cols={"claimed_by": self._me()},
+                              status_col="state"):
             return None
+        execute_retry(self.db_path,
+                      "UPDATE accepted_events SET attempts=attempts+1 WHERE event_key=?",
+                      (str(key),))
         row = execute_retry(self.db_path,
                             "SELECT body FROM accepted_events WHERE event_key=?",
                             (str(key),), fetch="one")
         return bytes(row["body"]) if row else None
 
     def complete(self, key: str) -> None:
-        execute_retry(self.db_path, "DELETE FROM accepted_events WHERE event_key=?",
-                      (str(key),))
+        """Delete the row this process claimed (a legacy row without a claimant
+        too). A row another live process re-claimed is left alone."""
+        execute_retry(self.db_path,
+                      "DELETE FROM accepted_events WHERE event_key=? "
+                      "AND (claimed_by IS NULL OR claimed_by=?)",
+                      (str(key), self._me()))
 
     def release(self, key: str) -> None:
-        """A drain failed: back to ``accepted``, or ``failed`` past the cap."""
-        execute_retry(
-            self.db_path,
-            "UPDATE accepted_events SET state = CASE WHEN attempts >= ? "
-            "THEN 'failed' ELSE 'accepted' END WHERE event_key=?",
-            (self.max_attempts, str(key)),
-        )
+        """A drain failed: back to ``accepted``, or ``failed`` past the cap.
+        Only the claimant's own ``processing`` row moves."""
+        from core.state.sql import cas_transition
+        row = execute_retry(self.db_path,
+                            "SELECT attempts FROM accepted_events WHERE event_key=?",
+                            (str(key),), fetch="one")
+        if row is None:
+            return
+        to = "failed" if int(row["attempts"] or 0) >= self.max_attempts else "accepted"
+        cas_transition(self.db_path, "accepted_events", key="event_key=?",
+                       key_params=(str(key),), machine=ACCEPTED_EVENT, to=to,
+                       from_states=("processing",),
+                       set_cols={"claimed_by": None},
+                       where_extra="claimed_by IS NULL OR claimed_by=?",
+                       where_params=(self._me(),), status_col="state")
 
     def pending(self, surface_id: str) -> list:
         rows = execute_retry(
@@ -188,11 +227,25 @@ class AcceptedEventJournal:
         return [r["event_key"] for r in rows or []]
 
     def recover(self, surface_id: str) -> list:
-        """On start, BEFORE the surface takes a request: a ``processing`` row is
-        one a dead process held — hand it back. Returns the keys to drain. One
-        process owns a data dir."""
-        execute_retry(
+        """On start, BEFORE the surface takes a request: a ``processing`` row
+        whose claimant is no longer alive is handed back (CO-18: a live
+        claimant keeps its row). Returns the keys to drain."""
+        from core.state.proc import ProcIdentity, is_alive
+        from core.state.sql import cas_transition
+        rows = execute_retry(
             self.db_path,
-            "UPDATE accepted_events SET state='accepted' "
-            "WHERE surface_id=? AND state='processing'", (surface_id,))
+            "SELECT event_key, claimed_by FROM accepted_events "
+            "WHERE surface_id=? AND state='processing'", (surface_id,), fetch="all") or []
+        me = self._me()
+        for r in rows:
+            owner = r["claimed_by"]
+            if owner and owner != me and is_alive(ProcIdentity.decode(owner)):
+                continue
+            extra, params = (("claimed_by=?", (owner,)) if owner
+                             else ("claimed_by IS NULL", ()))
+            cas_transition(self.db_path, "accepted_events", key="event_key=?",
+                           key_params=(r["event_key"],), machine=ACCEPTED_EVENT,
+                           to="accepted", from_states=("processing",),
+                           set_cols={"claimed_by": None}, where_extra=extra,
+                           where_params=params, status_col="state")
         return self.pending(surface_id)

@@ -1807,6 +1807,8 @@ def wallet_asset_verify(ctx, asset_id):
 
 from cli.commands.wallet_lp import lp_cmd
 wallet_cmd.add_command(lp_cmd)
+from cli.commands.wallet_signer import signer_reconcile  # 098 CO-22 (root, on the box)
+wallet_cmd.add_command(signer_reconcile)
 
 
 @wallet_cmd.command("overview")

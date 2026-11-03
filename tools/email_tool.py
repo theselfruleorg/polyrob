@@ -897,7 +897,8 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                     from core.surfaces.seed import maybe_seed_correspondent
                     seed_state = maybe_seed_correspondent(
                         self.container, surface="email", address=addr,
-                        session_id=session_id, user_id=user_id, provenance="owner")
+                        session_id=session_id, user_id=user_id, provenance="owner",
+                        first_message=f"Subject: {subject}\n\n{body or ''}")
                 except Exception as e:  # fail-soft: a seed fault must not block the send
                     self.logger.debug(f"{action} correspondent seed skipped: {e}")
                     seed_state = None

@@ -416,9 +416,9 @@ class MessageRouter:
                     "— sending directly", idem)
         try:
             if msg.partial:
-                await surface.stream(msg)  # base buffers if surface can't stream
+                await surface.stream(msg)  # a surface that can't live-edit drops it
                 # A live-edit surface has already opened a user-visible bubble;
-                # a buffered surface has not.  The stream producer uses this
+                # any other surface has not.  The stream producer uses this
                 # distinction to avoid letting done() publish a second recap.
                 # ``getattr`` keeps legacy/test surface doubles (which only
                 # implemented ``stream``) compatible; real Surface subclasses

@@ -125,9 +125,9 @@ REMEDIES: Dict[str, str] = {
     "tool-off": ("operator checks why the tool did not start (`polyrob doctor`): a "
                  "required service is missing or its setup failed, so every call fails"),
     "seat-room": ("not on this seat: a public room only reads and replies; the owner "
-                  "does it from his private chat"),
+                  "does it from their private chat"),
     "seat-correspondent": ("not on this seat: a correspondent's session takes no "
-                           "high-impact action; the owner does it from his own chat"),
+                           "high-impact action; the owner does it from their own chat"),
     # 057 WS-A credential verdict texts (``tools.tool_disclosure.CREDENTIAL_GATED_TOOLS``
     # rows and a pack's ``register_credential_gate`` name these keys).
     "smtp-rejected": ("operator fixes the SMTP credentials (GMAIL_* / EMAIL_*) or "
@@ -346,13 +346,13 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
         "approval_denied", "owner-verb", "now", "{lever}", False,
         _AP + ": the approval provider refused without asking the owner; {remedy}"),
     "approval_not_created:forged": _k(
-        "approval_denied", "owner-verb", "now", "the owner runs it from his chat", False,
+        "approval_denied", "owner-verb", "now", "the owner runs it from their chat", False,
         _AP + ": this turn may not ask the owner (not the owner's own turn); only the "
-        "owner, from his own chat, can run it"),
+        "owner, from their own chat, can run it"),
     "approval_not_created:tainted": _k(
-        "approval_denied", "owner-verb", "now", "the owner runs it from his chat", False,
+        "approval_denied", "owner-verb", "now", "the owner runs it from their chat", False,
         _AP + ": this turn carries a correspondent's message, so it may not ask the "
-        "owner; only the owner, from his own chat, can run it"),
+        "owner; only the owner, from their own chat, can run it"),
     "approval_not_created:store_down": _k(
         "approval_denied", "agent", "now", "retry later", True,
         _AP + ": the approvals store could not be read, so " + _AP_NO_ASK + "; retry later"),
@@ -361,7 +361,7 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
         _AP + ": this deploy's approval provider asks no one and denies every gated "
         "call; the operator sets APPROVAL_PROVIDER"),
     "approval_not_created:money_owner": _k(
-        "approval_denied", "owner-verb", "now", "the owner runs it from his chat", False,
+        "approval_denied", "owner-verb", "now", "the owner runs it from their chat", False,
         _AP + ": a money verb needs the bound owner identity and this caller is not "
         "the owner"),
     "approval_not_created:busy": _k(
@@ -377,19 +377,19 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
         _AP + ": the ask was closed without an approval; retry to ask again"),
     # -- the session gates ------------------------------------------------------
     "seat:room": _k(
-        "room_toolset", "owner-verb", "now", "the owner runs it from his private chat",
+        "room_toolset", "owner-verb", "now", "the owner runs it from their private chat",
         False,
         "'{action}' is not available in a group chat: this session speaks into a "
-        "public room and can only read and reply. Only the owner, from his private "
+        "public room and can only read and reply. Only the owner, from their private "
         "chat with me, can do it"),
     "seat:correspondent": _k(
         "correspondent_taint", "owner-verb", "next-turn",
-        "the owner's own message (or he runs it from his chat)", False,
+        "the owner's own message (or they run it from their chat)", False,
         "'{action}' is blocked: the latest input is untrusted correspondent DATA, so no "
         "high-impact action runs on this turn; it needs the owner's own message"),
     # -- the money kernel (core/money/authorize.py) -----------------------------
     "money:forged_text": _k(
-        "forged_turn", "owner-verb", "now", "the owner runs it from his chat", False,
+        "forged_turn", "owner-verb", "now", "the owner runs it from their chat", False,
         "refused: a forged/autonomous turn (self-wake, delegation-result, leaf, or an "
         "autonomous run this instance does not admit) cannot move funds"),
     "money:autonomous_unarmed": _k(
@@ -398,7 +398,7 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
         "refused: a forged/autonomous turn — this autonomous run cannot move funds "
         "because unattended money is not armed on this instance"),
     "money:gate": _k(
-        "money_gate", "owner-verb", "now", "the owner's caps or his one-shot approval",
+        "money_gate", "owner-verb", "now", "the owner's caps or their one-shot approval",
         False, "refused by the money gate: {why}"),
     # -- the controller hooks ---------------------------------------------------
     "denylist": _k(

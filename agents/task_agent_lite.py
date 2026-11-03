@@ -38,7 +38,7 @@ from agents.task.task_agent_support import (  # noqa: F401  (re-exported: existi
     _resolve_chat_runtime,
     _resolve_session_runtime,
     build_session_metadata, bind_memory_scope, memory_scope_fields,
-    room_session_source, INTERACTIVE_MAX_STEPS,
+    room_session_source, interactive_max_steps,
     _spawn_detached,
     task_unavailable_message,
 )
@@ -408,7 +408,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 model=request.get('model'),
                 provider=request.get('provider'),
                 tools=request.get('tools') or default_session_tools(),
-                max_steps=request.get('max_steps', INTERACTIVE_MAX_STEPS),
+                max_steps=request.get('max_steps', interactive_max_steps()),
                 temperature=request.get('temperature', 0.0),
                 use_vision=request.get('use_vision', True),
                 session_config=request.get('session_config'),
@@ -677,13 +677,13 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                     )
                 except Exception as e:
                     logger.debug(f"Failed to emit session resume telemetry: {e}")
-        elif current_status in ('created', 'initializing'):
+        elif current_status in ('created', 'initializing', 'cancelled'):
             # 'created' = fresh session; 'initializing' = the orchestrator just (re)created it
             # (orchestrator.__init__ sets status='initializing'). A warm STEER resume — e.g. the
             # owner sending a voice/text message to continue a suspended session — lands in
             # 'initializing', and WITHOUT this case it dead-ends at the else below ("Cannot run
             # session in status: initializing") so the agent never replies. Both are pre-run states →
-            # transition to running. try_transition_status is a compare-and-swap, so it's safe.
+            # transition to running (CAS). 098 AG-14: 'cancelled' -> running = a new message resumes.
             if not self.session_manager.try_transition_status(session_id, current_status, 'running'):
                 logger.warning(f"Session {session_id} is already being processed")
                 return "Session is already executing"
@@ -750,9 +750,8 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                     logger.warning(f"Agent {agent_id} missing reset_for_continuation, manual reset")
                     agent._last_result = None
                     agent._cancelled = False
-                    if hasattr(agent, 'state'):
-                        agent.state.stopped = False
-                        agent.state.done = False
+                    if hasattr(agent, 'state') and hasattr(agent.state, 'begin_run'):
+                        agent.state.begin_run()
 
                 # Log context for debugging
                 if hasattr(agent, 'message_manager') and hasattr(agent.message_manager, 'history'):
@@ -785,20 +784,21 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             agent_result = results.get(agent.agent_id, {})
             result_status = agent_result.get('status', 'error')
             
+            # 098 AG-14: a CAS from 'running' — a cancel during the run wins (_finish_status).
             if result_status == 'completed':
                 final_status = 'completed'
-                self.session_manager.update_session_status(session_id, final_status)
+                self._finish_status(session_id, final_status)
                 return "Session completed successfully"
             elif result_status == 'stopped':
                 # Agent was explicitly stopped/cancelled by user
                 final_status = 'cancelled'
-                self.session_manager.update_session_status(session_id, final_status)
+                self._finish_status(session_id, final_status)
                 return "Session cancelled by user"
             else:
                 # Error or unknown status
                 final_status = 'failed'
                 error_msg = agent_result.get('error', 'Unknown error')
-                self.session_manager.update_session_status(session_id, final_status)
+                self._finish_status(session_id, final_status)
                 return f"Session failed: {error_msg}"
 
         except asyncio.CancelledError:
@@ -811,7 +811,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             final_status = 'cancelled'
             self._session_last_activity[session_id] = time.time()
             try:
-                self.session_manager.update_session_status(session_id, final_status)
+                self._finish_status(session_id, final_status)
                 self.session_manager.update_session_metadata(session_id, {
                     'error': 'session cancelled (timeout or explicit cancel)',
                     'error_time': datetime.now().isoformat(),
@@ -829,7 +829,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             self._session_last_activity[session_id] = time.time()
 
             # Update status and metadata with user-friendly message
-            self.session_manager.update_session_status(session_id, final_status)
+            self._finish_status(session_id, final_status)
             self.session_manager.update_session_metadata(session_id, {
                 'error': str(e),
                 'error_time': datetime.now().isoformat(),
@@ -853,7 +853,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             self._session_last_activity[session_id] = time.time()
 
             # Update status and metadata
-            self.session_manager.update_session_status(session_id, final_status)
+            self._finish_status(session_id, final_status)
             self.session_manager.update_session_metadata(session_id, {
                 'error': str(e),
                 'error_time': datetime.now().isoformat(),

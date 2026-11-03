@@ -17,7 +17,7 @@ import os
 from typing import Optional, Dict, Any, List, Tuple
 
 from core.env import bool_env as _bool_env
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy.goal_flags import interactive_max_steps
 from core.exceptions import SessionOwnershipError
 from datetime import datetime
 import uuid
@@ -170,6 +170,22 @@ TERMINAL_SESSION_STATUSES = frozenset(
     if A2ATaskState.is_terminal(state)
 )
 
+def a2a_state(session_status: Optional[str], activity: Optional[Dict[str, Any]] = None
+              ) -> A2ATaskState:
+    """098 TS-21: the ONE projection of a session onto an A2A task state, used by
+    ``get_task`` and (through it) the stream. An approval wait is A2A's native
+    INPUT_REQUIRED: the session's status stays ``running`` while a step blocks
+    on the owner, so the live RunActivity phase decides. Before this the stream
+    forced INPUT_REQUIRED by hand and a client that polled ``tasks/get`` after a
+    reconnect saw WORKING for the same wait."""
+    state = INTERNAL_TO_A2A_STATE.get((session_status or "unknown").lower(),
+                                      A2ATaskState.UNKNOWN)
+    if (state == A2ATaskState.WORKING and isinstance(activity, dict)
+            and activity.get("phase") == "awaiting_approval"):
+        return A2ATaskState.INPUT_REQUIRED
+    return state
+
+
 # Map A2A TaskState to POLYROB SessionStatus
 A2A_TO_INTERNAL_STATE: Dict[A2ATaskState, str] = {
     A2ATaskState.SUBMITTED: "created",
@@ -203,9 +219,10 @@ class A2ATaskHandler:
         """
         self.container = container
         self.logger = logging.getLogger("a2a.task_handler")
-
-        # Cache for push notification configs
-        self._push_configs: Dict[str, PushNotificationConfig] = {}
+        # TS-21: no in-memory push-config copy. The handler is built per
+        # request, so a delete on a NEW handler cleared only the session
+        # metadata while the running task's handler kept pushing to the
+        # deleted webhook from its own dict. The metadata mirror is the one copy.
 
     def _get_task_agent(self):
         """Get TaskAgent from container."""
@@ -342,10 +359,7 @@ class A2ATaskHandler:
         Returns:
             Corresponding A2ATaskState
         """
-        return INTERNAL_TO_A2A_STATE.get(
-            status.lower() if status else "unknown",
-            A2ATaskState.UNKNOWN
-        )
+        return a2a_state(status)
 
     def _a2a_state_to_session_status(self, state: A2ATaskState) -> str:
         """Convert A2A task state to POLYROB session status.
@@ -411,7 +425,7 @@ class A2ATaskHandler:
             # 085 A6: a non-owner tenant never carries a money tool.
             tools=tenant_toolset(
                 metadata.get("tools", config.get("tools", ["browser", "filesystem"])), user_id),
-            max_steps=metadata.get("max_steps", config.get("max_steps", INTERACTIVE_MAX_STEPS)),
+            max_steps=metadata.get("max_steps", config.get("max_steps", interactive_max_steps())),
             use_vision=metadata.get("use_vision", config.get("use_vision", True))
         )
 
@@ -449,7 +463,6 @@ class A2ATaskHandler:
         if push_config:
             parsed = PushNotificationConfig(**push_config)
             validate_push_url(parsed.url)
-            self._push_configs[session_id] = parsed
             sm = self._get_session_manager()
             if sm:
                 sm.update_session_metadata(session_id, {
@@ -530,13 +543,14 @@ class A2ATaskHandler:
             raise ValueError(f"Task {task_id} not found")
         self._authorize_owner(session_info, task_id, user_id)
 
-        # Map status to A2A state
+        # Map status to A2A state (TS-21: one projection, activity-aware)
         session_status = session_info.get("status", "unknown")
-        a2a_state = self._session_status_to_a2a_state(session_status)
+        activity = _current_activity(task_id)
+        state = a2a_state(session_status, activity)
 
         # Collect artifacts if completed
         artifacts = []
-        if A2ATaskState.is_terminal(a2a_state):
+        if A2ATaskState.is_terminal(state):
             artifacts = await self._collect_artifacts(task_id, session_info)
 
         # Build history if requested
@@ -553,7 +567,7 @@ class A2ATaskHandler:
             id=task_id,
             contextId=context_id,
             status=A2ATaskStatus(
-                state=a2a_state,
+                state=state,
                 timestamp=session_info.get("updated_at", datetime.now().isoformat())
             ),
             history=history,
@@ -570,7 +584,7 @@ class A2ATaskHandler:
                 # step, call_id}) from the in-process RunActivity snapshot;
                 # None when unknown/remote — same semantics as the plain
                 # session-status API's current_activity field.
-                "current_activity": _current_activity(task_id)
+                "current_activity": activity
             }
         )
 
@@ -620,12 +634,12 @@ class A2ATaskHandler:
         image_attachments = self._extract_images_from_message(message)
 
         # Get orchestrator and queue message
+        metadata = message.metadata or {}
+        if image_attachments:
+            metadata["image_attachments"] = image_attachments
         orchestrator = await resolve_orchestrator(task_id, agent)
+        recreated = False
         if orchestrator:
-            metadata = message.metadata or {}
-            if image_attachments:
-                metadata["image_attachments"] = image_attachments
-
             await orchestrator.submit_user_message(
                 agent_id=None,
                 text=text,
@@ -633,10 +647,26 @@ class A2ATaskHandler:
                 metadata=metadata
             )
             self.logger.info(f"Queued message to task {task_id}")
+        else:
+            # TS-21: not resident here (restart, eviction). The message used to
+            # be skipped while a suspended task still resumed — the run started
+            # with no new input and the client's answer was lost. Deliver it
+            # through the resident-or-recreate rail, or refuse; never resume
+            # without it.
+            outcome = await agent.ensure_session_and_deliver(
+                session_info.get("user_id"), task_id, text,
+                kind="a2a_message", metadata=metadata)
+            if outcome != "delivered":
+                raise ValueError(
+                    f"Task {task_id} is not resident and the message was not accepted "
+                    f"({outcome})")
+            recreated = True
+            self.logger.info(f"Delivered message to non-resident task {task_id}")
 
-        # Resume if suspended
+        # Resume a task that waits for input (the only resumable state: a
+        # terminal one was refused above), or a recreated one nobody runs.
         status = session_info.get("status", "").lower()
-        if status in ["completed", "suspended", "failed", "error"]:
+        if status == "suspended" or recreated:
             self.logger.info(f"Resuming task {task_id} from {status}")
             _spawn_session_task(self._run_session_with_push(
                 agent,
@@ -839,8 +869,6 @@ class A2ATaskHandler:
         # or the next restart resurrects it from the metadata mirror.
         validate_push_url(config.url)
 
-        self._push_configs[task_id] = config
-
         sm = self._get_session_manager()
         if sm:
             sm.update_session_metadata(task_id, {
@@ -861,8 +889,6 @@ class A2ATaskHandler:
         in-memory dict is always empty here; read the session-metadata mirror.
         """
         info = await self._authorize_task(task_id, user_id)
-        if task_id in self._push_configs:
-            return self._push_configs[task_id]
         return self._get_push_config(
             task_id, await self._session_info_for(task_id, info))
 
@@ -879,10 +905,8 @@ class A2ATaskHandler:
         """
         info = await self._session_info_for(
             task_id, await self._authorize_task(task_id, user_id))
-        existed = self._push_configs.pop(task_id, None) is not None
         url, _token = self._stored_push(info)
-        if url:
-            existed = True
+        existed = bool(url)
         sm = self._get_session_manager()
         if sm and info is not None:
             update: Dict[str, Any] = {"a2a_push_url": None, "a2a_push_token": None}
@@ -912,12 +936,8 @@ class A2ATaskHandler:
         task_id: str,
         session_info: Optional[Dict[str, Any]] = None
     ) -> Optional[PushNotificationConfig]:
-        """Resolve the push config: in-memory first, then the session-metadata
-        mirror (restart-survivable — the in-memory dict dies with the process
-        while the metadata written at registration does not). T4-11."""
-        config = self._push_configs.get(task_id)
-        if config:
-            return config
+        """Resolve the push config from the session-metadata mirror (the one
+        copy: restart-survivable and shared by every handler). T4-11, TS-21."""
         try:
             url, stored_token = self._stored_push(session_info)
             if not url:
@@ -988,15 +1008,12 @@ class A2ATaskHandler:
         Returns:
             True if notification sent successfully
         """
-        config = self._push_configs.get(task_id)
-        if not config:
-            # Restart-survivable fallback: rebuild from the metadata mirror.
-            try:
-                agent = self._get_task_agent()
-                session_info = await agent.get_session_by_id(task_id) if agent else None
-                config = self._get_push_config(task_id, session_info)
-            except Exception:
-                config = None
+        try:
+            agent = self._get_task_agent()
+            session_info = await agent.get_session_by_id(task_id) if agent else None
+            config = self._get_push_config(task_id, session_info)
+        except Exception:
+            config = None
         if not config:
             return False
 

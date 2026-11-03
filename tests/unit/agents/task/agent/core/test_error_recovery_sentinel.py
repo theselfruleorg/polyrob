@@ -76,6 +76,8 @@ def _make_agent(role="orchestrator", is_sub_agent=False):
     st = MagicMock()
     st.consecutive_failures = 0
     st.stopped = False
+    # 098 AG-01: request_stop is the one writer of `stopped`.
+    st.request_stop = MagicMock(side_effect=lambda reason=None: setattr(st, "stopped", True))
     # Faithful defaults: a bare MagicMock returns a TRUTHY mock from
     # track_llm_error(), which spuriously trips the circuit breaker and makes
     # _handle_step_error raise LLMProviderExhaustedError instead of taking the

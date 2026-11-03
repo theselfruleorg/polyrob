@@ -129,6 +129,28 @@ async def test_deliver_self_wake_budget_blocks(monkeypatch):
     reset_reentry_budget()
 
 
+@pytest.mark.asyncio
+async def test_deliver_self_wake_passes_user_id_to_budget(monkeypatch):
+    """098 AG-11: the budget row carries the real tenant, not ""."""
+    monkeypatch.setenv("SELF_WAKE_ENABLED", "true")
+    import agents.task.agent.core.self_wake as sw
+    seen = []
+
+    class _B:
+        def try_consume(self, sid, user_id=""):
+            seen.append((sid, user_id))
+            return False
+
+    monkeypatch.setattr(sw, "get_reentry_budget", lambda: _B())
+    monkeypatch.setattr(sw, "effective_self_wake_enabled", lambda *a, **k: True)
+    import core.autonomy_control as ac
+    monkeypatch.setattr(ac, "allows", lambda *a, **k: type("D", (), {"allowed": True})())
+    from agents.task_agent_lite import TaskAgent
+    agent = object.__new__(TaskAgent)
+    assert await agent.deliver_self_wake("sess", "u-42", "wake up") is False
+    assert seen == [("sess", "u-42")]
+
+
 def test_try_consume_is_atomic_check_and_record():
     b = ReentryBudget(max_reentries=2, idle_backoff_s=0)
     assert b.try_consume("s") is True   # 1

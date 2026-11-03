@@ -340,7 +340,7 @@ def test_kb_search_json(kb_stubbed, monkeypatch):
     res = _run(kb, ["search", "hello", "--json"])
     assert res.exit_code == 0, res.output
     payload = json.loads(res.stdout)
-    assert payload == {"query": "hello", "collection": "default",
+    assert payload == {"query": "hello", "collection": None,
                        "result": "chunk one\nchunk two"}
 
 

@@ -20,7 +20,7 @@ def gate(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
     monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("CLI_WORKSPACE_LOCK", raising=False)
-    g._busy_depth = 0
+    g.reset_for_tests()
     return g
 
 
@@ -121,8 +121,7 @@ def test_marker_lives_under_data_dir_even_when_the_workspace_lock_dir_is_set(mon
     monkeypatch.delenv("CLI_WORKSPACE_LOCK", raising=False)
     assert g.turn_marker_path() == str(tmp_path / "data" / "locks" / "turn.active")
     assert g._workspace_lock_path() == str(tmp_path / "project" / ".polyrob" / "workspace.turn.lock")
-    g._busy_depth = 0
-    g._turn_depth = 0
+    g.reset_for_tests()
     with g.owner_turn(kind="owner_chat", session_id="s1"):
         assert os.path.exists(tmp_path / "data" / "locks" / "turn.active")
         assert g.read_turn_marker()["session_id"] == "s1"
@@ -169,7 +168,7 @@ def test_writer_and_updater_agree_in_every_install_shape(monkeypatch, tmp_path):
             monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
         # The gateway process.
         monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / shape / "cwd" / ".polyrob"))
-        g._busy_depth = 0
+        g.reset_for_tests()
         with g.owner_turn(kind="owner_chat", session_id="s1"):
             # The updater process: no lock dir.
             monkeypatch.delenv("POLYROB_WORKSPACE_LOCK_DIR", raising=False)

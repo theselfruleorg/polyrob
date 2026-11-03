@@ -37,6 +37,7 @@ from fastapi.templating import Jinja2Templates
 
 from webview import webgate
 from webview.audit import console_write
+from webview.decision_rev import rev_from_body
 from core.event_kinds import (
     CONSOLE_CONFIG_WRITE, CONSOLE_GOAL_VERB,
     CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE,
@@ -623,6 +624,7 @@ def _empty_ledger(user_id: str, days: int) -> dict:
             "wallet_metering": "error",
             "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 0.0,
                          "pending_count": 0, "refund_due_usd": 0.0, "refund_due_count": 0,
+                         "unproven_usd": 0.0, "unproven_count": 0, "unproven_auth_used_count": 0,
                          "balance_usd": None, "net_usd": 0.0,
                          "available": False},
             "runtime": {"spend_window_usd": 0.0, "spend_total_usd": 0.0,
@@ -1183,10 +1185,18 @@ async def api_pending(request: Request):
 
 @router.get("/api/webgate/pending/{kind}/{item_id}")
 async def api_pending_show(request: Request, kind: str, item_id: str):
-    """Full quarantined body of ONE proposal so promote/reject is an informed
-    decision (same seam as `owner show-pending`)."""
+    """ONE pending item in full — the SAME review every seat opens (096 W7:
+    Why, Changes, the diff, both halves of a linked pair; a tool approval's
+    full card). The Inbox's "Read it" button calls this."""
+    from core.pending_seats import SEAT_CONSOLE, find_item, review_one
+    from tools.controller.approval_queue import all_pending
     kw = _pending_kwargs(request)
-    ok, body = self_evolution.show(kind, item_id, **kw)
+    item = find_item(all_pending(board=_webgate_goal_board(), **kw,
+                                 correspondent_registry=_webgate_correspondent_registry()
+                                 ).items, kind, item_id)
+    if item is None:
+        return JSONResponse({"ok": False, "body": f"no pending {kind} '{item_id}'"})
+    ok, body = review_one(item, seat=SEAT_CONSOLE, **kw)
     return JSONResponse({"ok": ok, "body": body})
 
 
@@ -1218,7 +1228,7 @@ def _decide_correspondent(item_id: str, user_id: str, *, approved: bool) -> tupl
     return False, f"no pending correspondent {surface}:{address}"
 
 
-def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tuple:
+def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool, rev=None) -> tuple:
     """Dispatch a promote/reject decision to the RIGHT underlying function for
     ``kind`` (T10 parity with ``polyrob owner promote/reject`` — see
     ``cli/commands/owner.py``'s ``promote``/``reject`` commands, which this
@@ -1248,14 +1258,14 @@ def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tup
         return decide_item(_webgate_goal_board(), item_id, approve=approved,
                            user_id=kw["user_id"])
     fn = self_evolution.promote if approved else self_evolution.reject
-    return fn(kind, item_id, **kw)
+    return fn(kind, item_id, rev=rev, **kw)
 
 
-def _decide_pending_safely(kind: str, item_id: str, kw: dict, *, approved: bool) -> tuple:
+def _decide_pending_safely(kind: str, item_id: str, kw: dict, *, approved: bool, rev=None) -> tuple:
     """``(ok, message, error)`` — a decider whose store refuses (a locked
     ``goals.db``) is "nothing was decided" in words, never a 500 (audit WR9)."""
     try:
-        ok, msg = _decide_pending(kind, item_id, kw, approved=approved)
+        ok, msg = _decide_pending(kind, item_id, kw, approved=approved, rev=rev)
         return ok, msg, None
     except Exception as exc:
         logger.warning("pending decide %s/%s failed", kind, item_id, exc_info=True)
@@ -1269,7 +1279,8 @@ async def api_pending_promote(request: Request, kind: str, item_id: str):
     tenant-scoped (a tenant can only act on its OWN queue). A miss/failure is
     ``{ok:false, message}``, never a 500 — the aggregator is the authority."""
     kw = _pending_kwargs(request)
-    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=True)
+    rev = await rev_from_body(request)  # 098 CO-19
+    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=True, rev=rev)
     console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
                   attrs={"kind": kind, "item_id": item_id,
                          "approved": True, "ok": bool(ok)})
@@ -1281,7 +1292,8 @@ async def api_pending_reject(request: Request, kind: str, item_id: str):
     """Owner decision: reject (archive) a pending proposal. Same gating as
     promote."""
     kw = _pending_kwargs(request)
-    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=False)
+    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=False,
+                                            rev=await rev_from_body(request))
     console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
                   attrs={"kind": kind, "item_id": item_id,
                          "approved": False, "ok": bool(ok)})

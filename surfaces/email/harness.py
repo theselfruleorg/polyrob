@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 from surfaces.email.dedup import MessageDedup
 from surfaces.email.fetchers import MailFetchError
@@ -53,6 +53,14 @@ class EmailHarness:
         self.email_tool = email_tool
         self.poll_interval = poll_interval
         self.dedup = MessageDedup(os.path.join(data_dir, "email_dedup.db"))
+        # TS-20: the per-message state lives in the same DB as the dedup rows.
+        try:
+            from surfaces.email.inbound_state import InboundState
+            self.inbound_state: Optional[Any] = InboundState(self.dedup.db_path)
+        except Exception:
+            logger.warning("email inbound state DB unavailable — in-memory counter",
+                           exc_info=True)
+            self.inbound_state = None
         # Transport seam (Task 5, 2026-08-18): the fetcher owns "get new mail" +
         # the durable handled-mark; poll_once stays transport-blind.
         from surfaces.email.fetchers import AgentMailFetcher, ImapFetcher
@@ -77,7 +85,7 @@ class EmailHarness:
         self.user_directory = ud
         self.surface = EmailSurface(email_tool)
         self._stop = False
-        #: dedup key -> consecutive routing failures (D4's poison guard).
+        #: fallback counter when the state DB is unavailable (D4's poison guard).
         self._attempts: dict = {}
 
     async def start(self) -> None:
@@ -93,19 +101,18 @@ class EmailHarness:
     async def poll_once(self) -> int:
         """Fetch unread messages and route them. Returns the count routed.
 
-        ⚠️ D4 (2026-09-21 interface audit): a message is marked handled ONLY
-        after it has been dispatched. Before this the mark ran in a ``finally``
-        and the Message-ID dedup key was recorded BEFORE routing, so a crash,
-        a restart, or any raising route left the mail both ``\\Seen`` AND
-        deduped — permanently invisible, with a swallowed debug line as its
-        only trace. The fetch itself no longer sets ``\\Seen`` either
-        (``BODY.PEEK[]``), so an undispatched message stays UNSEEN and the next
-        poll picks it up.
+        ⚠️ D4: a message is marked handled ONLY after it has been dispatched;
+        the fetch does not set ``\\Seen`` (``BODY.PEEK[]``), so an undispatched
+        message stays UNSEEN and the next poll picks it up.
 
-        The re-processing loop that ordering protected against is closed by the
-        poison guard instead: a message that raises repeatedly is marked after
-        ``_MAX_ROUTE_ATTEMPTS`` tries and reported, never silently retried
-        forever.
+        ⚠️ TS-20: each message has ONE durable row (``inbound_state``) and every
+        move is a guarded write: ``fetched -> routed -> handled``, or
+        ``fetched -> failed(n)``, and at ``_MAX_ROUTE_ATTEMPTS`` failures
+        ``quarantined`` — marked ``\\Seen`` to stop the loop AND reported to the
+        owner once. The counter survives a restart (it was process memory), and
+        a message whose FETCH itself raises is counted too (it was skipped with
+        a warning every poll, for ever). A row already ``routed`` is never
+        routed again: the turn ran; only the mark was lost.
         """
         from surfaces._actor import act_on_inbound  # shared decision executor
         routed = 0
@@ -118,8 +125,18 @@ class EmailHarness:
             logger.error("email poll fetch failed: %s", e, exc_info=True)
             return 0
         self._clear_fetch_outage()
+        for failure in list(getattr(self.fetcher, "last_fetch_failures", None) or []):
+            await self._count_fetch_failure(failure)
         for handle, norm in messages:
             key = dedup_key(norm)
+            row = self._state_begin(key, norm)
+            state = row.get("state") if row else "fetched"
+            if state in ("routed", "handled", "quarantined"):
+                # Dispatched (or given up on) earlier; only the mark was lost.
+                if state == "routed":
+                    self._state_move(key, "routed", "handled")
+                await self._mark(handle)
+                continue
             try:
                 result = await process_email(
                     self.container, norm, dedup=self.dedup,
@@ -135,28 +152,114 @@ class EmailHarness:
                     await act_on_inbound(self.task_agent, result,
                                          fetch_media=_media_bytes)
                     routed += 1
+                    self._state_move(key, "fetched", "routed")
             except Exception as e:
-                self._attempts[key] = self._attempts.get(key, 0) + 1
-                if self._attempts[key] < _MAX_ROUTE_ATTEMPTS:
+                new = self._state_fail(key, e)
+                if new != "quarantined":
                     logger.error(
-                        "email message routing failed (attempt %d/%d, will retry "
-                        "next poll): %s", self._attempts[key], _MAX_ROUTE_ATTEMPTS,
-                        e, exc_info=True)
+                        "email message %s routing failed (%s; max %d, will retry "
+                        "next poll): %s", key, new or "state unchanged",
+                        _MAX_ROUTE_ATTEMPTS, e, exc_info=True)
                     continue
                 logger.error(
-                    "email message %s failed %d times — marking it handled so the "
-                    "poll loop can proceed; it will NOT be routed: %s",
-                    key, self._attempts[key], e, exc_info=True)
-            # Dispatched (or given up on): record the dedup key, THEN mark the
-            # transport handle. Both are idempotent.
-            self._attempts.pop(key, None)
+                    "email message %s failed %d times — quarantined (marked \\Seen, "
+                    "owner told); it will NOT be routed: %s",
+                    key, _MAX_ROUTE_ATTEMPTS, e, exc_info=True)
+                await self._notify_quarantine(norm, key, e)
+                self._record_handled(key)
+                await self._mark(handle)
+                continue
+            # Dispatched: record the dedup key, mark the transport handle, then
+            # close the row. Each step is idempotent.
             self._record_handled(key)
-            mark_async = getattr(self.fetcher, "mark_handled_async", None)
-            if callable(mark_async):
-                await mark_async(handle)   # EM1: IMAP stays off the loop
-            else:
-                self.fetcher.mark_handled(handle)
+            await self._mark(handle)
+            self._state_move(key, "routed", "handled")
+            self._state_move(key, "fetched", "handled")  # nothing was routed
         return routed
+
+    async def _mark(self, handle: Any) -> None:
+        mark_async = getattr(self.fetcher, "mark_handled_async", None)
+        if callable(mark_async):
+            await mark_async(handle)   # EM1: IMAP stays off the loop
+        else:
+            self.fetcher.mark_handled(handle)
+
+    # -- TS-20 per-message state (fail-open: a broken state DB never stops mail)
+
+    def _state_begin(self, key: str, norm: dict) -> Optional[dict]:
+        if self.inbound_state is None:
+            return None
+        try:
+            return self.inbound_state.begin(key, sender=str(norm.get("from") or ""),
+                                            subject=str(norm.get("subject") or ""))
+        except Exception:
+            logger.warning("email inbound state begin failed for %s", key, exc_info=True)
+            return None
+
+    def _state_move(self, key: str, frm: str, to: str) -> bool:
+        if self.inbound_state is None:
+            return False
+        try:
+            row = self.inbound_state.get(key)
+            if not row or row["state"] != frm:
+                return False
+            return self.inbound_state.move(key, frm, to)
+        except Exception:
+            logger.warning("email inbound state %s -> %s failed for %s", frm, to, key,
+                           exc_info=True)
+            return False
+
+    def _state_fail(self, key: str, exc: BaseException) -> Optional[str]:
+        """Count one failure; ``"quarantined"`` once the cap is reached. Without
+        a state DB the in-memory counter of D4 stands in."""
+        if self.inbound_state is not None:
+            try:
+                return self.inbound_state.fail(key, f"{type(exc).__name__}: {exc}",
+                                               max_attempts=_MAX_ROUTE_ATTEMPTS)
+            except Exception:
+                logger.warning("email inbound state fail() failed for %s", key, exc_info=True)
+        self._attempts[key] = self._attempts.get(key, 0) + 1
+        return "quarantined" if self._attempts[key] >= _MAX_ROUTE_ATTEMPTS else "failed"
+
+    async def _count_fetch_failure(self, failure: Any) -> None:
+        """A message whose FETCH/parse raised: counted under its UID key, and
+        quarantined (marked + owner told) at the cap."""
+        handle = getattr(failure, "handle", None)
+        key_fn = getattr(handle, "key", None)
+        if not callable(key_fn):
+            return
+        key = key_fn()
+        self._state_begin(key, {"subject": "(unreadable message)"})
+        new = self._state_fail(key, RuntimeError(getattr(failure, "error", "fetch failed")))
+        if new == "quarantined":
+            await self._notify_quarantine({"from": "", "subject": ""}, key,
+                                          getattr(failure, "error", "fetch failed"))
+            await self._mark(handle)
+
+    async def _notify_quarantine(self, norm: dict, key: str, err: Any) -> None:
+        """ONE owner notice per quarantined message (the row moved once)."""
+        sender = str(norm.get("from") or "") or "an unknown sender"
+        subject = str(norm.get("subject") or "") or "(no subject)"
+        text = (f"An email could not be read or routed after {_MAX_ROUTE_ATTEMPTS} tries "
+                f"and was set aside: from {sender}, subject \"{subject[:120]}\". "
+                f"It is marked read in the inbox; open it there to act on it. "
+                f"Last error: {str(err)[:200]}")
+        try:
+            from core.event_log import emit
+            emit("email_quarantined", source="surfaces.email",
+                 attrs={"key": key[:200], "from": sender[:200], "subject": subject[:200],
+                        "error": str(err)[:300]})
+        except Exception:
+            pass
+        try:
+            from core.instance import resolve_owner_user_id
+            owner = resolve_owner_user_id()
+            if owner:
+                import core.surfaces.user_delivery as _ud
+                await _ud.deliver_user_message(self.container, owner, text,
+                                               source="email_quarantined")
+        except Exception:
+            logger.warning("email quarantine owner notice failed (%s)", key, exc_info=True)
 
     def _record_handled(self, key: str) -> None:
         """Record the dedup key for a message that HAS been dispatched."""

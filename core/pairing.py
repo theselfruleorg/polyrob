@@ -70,20 +70,36 @@ class PairingStore:
         """
         if not user_id:
             return None
-        row = execute_retry(
-            self.db_path, "SELECT code, paired, created_at FROM paired_users WHERE user_id=?",
-            (user_id,), fetch="one")
-        if row and row["paired"]:
-            return None
-        if row and row["code"] and (row["created_at"] or 0) > time.time() - PAIRING_CODE_TTL_SEC:
-            return row["code"]
+        # 098 CO-14: ONE live code per user. The upsert replaces a code only when
+        # the user is unpaired and the stored code is missing or expired; two
+        # concurrent requests then both return the code that was stored.
+        now = time.time()
         code = secrets.token_hex(8)  # 16 hex chars (64-bit entropy)
         execute_retry(
             self.db_path,
             "INSERT INTO paired_users (user_id, code, paired, created_at) VALUES (?,?,0,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET code=excluded.code, created_at=excluded.created_at",
-            (user_id, code, time.time()))
-        return code
+            "ON CONFLICT(user_id) DO UPDATE SET code=excluded.code, created_at=excluded.created_at "
+            "WHERE paired_users.paired=0 AND (paired_users.code IS NULL "
+            "OR COALESCE(paired_users.created_at, 0) <= ?)",
+            (user_id, code, now, now - PAIRING_CODE_TTL_SEC))
+        row = execute_retry(
+            self.db_path, "SELECT code, paired FROM paired_users WHERE user_id=?",
+            (user_id,), fetch="one")
+        if not row or row["paired"]:
+            return None
+        return row["code"]
+
+    #: Unpaired rows (expired codes) older than this are deleted by the GC tick.
+    PURGE_AFTER_SEC = 7 * 86400
+
+    def purge_expired(self, older_than: Optional[float] = None) -> int:
+        """Delete UNPAIRED rows whose code was issued more than ``older_than``
+        seconds ago (default 7 days). A paired user is never touched."""
+        cutoff = time.time() - (self.PURGE_AFTER_SEC if older_than is None else older_than)
+        return execute_retry(
+            self.db_path,
+            "DELETE FROM paired_users WHERE paired=0 AND COALESCE(created_at, 0) < ?",
+            (cutoff,)) or 0
 
     def approve(self, code: str) -> Optional[str]:
         """Mark the user holding ``code`` as paired; return their user_id or None."""

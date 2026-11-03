@@ -25,8 +25,7 @@ def _client(model_type="gemini-2.5-flash"):
     c = object.__new__(GeminiClient)
     c.logger = logging.getLogger("gemini-cache-test")
     c.model_type = model_type
-    c._cached_content = None
-    c._cached_tool_sig = None
+    c._cache_leases = None
     return c
 
 
@@ -80,7 +79,10 @@ def test_busts_on_tool_change(monkeypatch, fake_create):
     first = c._maybe_build_cached_content(big, _tools("a"))
     second = c._maybe_build_cached_content(big, _tools("a", "c"))  # tool set changed
     assert second is not first and fake_create["n"] == 2
-    assert first.deleted is True  # old cache cleaned up
+    # 098 MO-14: a different key is a different lease (LRU-bounded), not a bust
+    # of another session's object; cleanup deletes all of them.
+    c._delete_cached_content()
+    assert first.deleted is True and second.deleted is True
 
 
 def test_gemini3_scoped_out(monkeypatch, fake_create):
@@ -105,9 +107,10 @@ def test_failopen_on_create_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cleanup_deletes_cache(monkeypatch):
+    from modules.llm.gemini_cache import leases_of
     c = _client()
     cache = _FakeCache()
-    c._cached_content = cache
+    leases_of(c).put(("m", "s", "t"), cache, 600)
     c._delete_cached_content()
     assert cache.deleted is True
-    assert c._cached_content is None
+    assert len(leases_of(c)) == 0

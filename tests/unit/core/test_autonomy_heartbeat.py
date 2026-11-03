@@ -1,6 +1,6 @@
 """Autonomy liveness heartbeat (telemetry audit 2026-07-04, Phase 3).
 
-The audit found NO automated 'is the loop alive' signal. TickerSupervisor now
+The audit found NO automated 'is the loop alive' signal. ``emit_loop_heartbeats``
 records an autonomy_tick per running ticker so idle-but-alive is observable and a
 dead ticker task is flagged.
 """
@@ -16,15 +16,10 @@ def test_emit_heartbeats_records_liveness(tmp_path, monkeypatch):
     log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
 
-    from core.tickers import TickerSupervisor
-    sup = TickerSupervisor()
-    # Inject fake ticker tasks: 'cron' alive, 'goal' dead.
-    sup._tasks = {
-        "cron": (SimpleNamespace(done=lambda: False), None),
-        "goal": (SimpleNamespace(done=lambda: True), None),
-    }
-
-    sup._emit_heartbeats()
+    from core.tickers import emit_loop_heartbeats
+    # Fake ticker tasks: 'cron' alive, 'goal' dead.
+    emit_loop_heartbeats([("cron", SimpleNamespace(done=lambda: False)),
+                          ("goal", SimpleNamespace(done=lambda: True))])
 
     ticks = log.query(kind="autonomy_tick")
     by_loop = {t["attrs"]["loop"]: t["attrs"] for t in ticks}
@@ -34,9 +29,8 @@ def test_emit_heartbeats_records_liveness(tmp_path, monkeypatch):
 
 
 def test_emit_heartbeats_fail_open_no_tasks():
-    from core.tickers import TickerSupervisor
-    sup = TickerSupervisor()
-    sup._emit_heartbeats()  # no tasks, must not raise
+    from core.tickers import emit_loop_heartbeats
+    emit_loop_heartbeats([])  # no tasks, must not raise
 
 
 # --- 2026-08-28 (status SSOT D13): AutonomyHandles — the class the API

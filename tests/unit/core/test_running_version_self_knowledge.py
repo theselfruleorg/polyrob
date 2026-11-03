@@ -208,6 +208,14 @@ def test_deployed_from_parses_and_treats_none_as_absent(code_root):
     assert rec["sha"] == "abc1234" and "previous" not in rec and rec["subject"] == "x=y"
 
 
+def test_unreadable_deployed_from_is_not_absent(code_root):
+    (code_root / ".deployed_from").mkdir()          # a directory: read_text raises
+    assert v.deployed_from() == {"_unreadable": "IsADirectoryError"}
+    (code_root / "CHANGELOG.md").write_text(_CL)
+    out = v.release_notes("since_previous")
+    assert out.startswith("Cannot tell") and "unreadable (IsADirectoryError)" in out
+
+
 def test_since_previous_without_a_record_says_it_cannot_tell(code_root):
     (code_root / "CHANGELOG.md").write_text(_CL)
     out = v.release_notes("since_previous")

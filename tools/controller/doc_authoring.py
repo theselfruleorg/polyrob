@@ -29,6 +29,44 @@ from tools.controller.turn_origin import _is_forged_or_autonomous_turn
 logger = logging.getLogger(__name__)
 
 
+def _missing_reason(params, is_forged: bool) -> Optional[str]:
+	"""096 D3: an owner-turn draft needs a reason — the owner decides from it."""
+	if is_forged or (getattr(params, "reason", None) or "").strip():
+		return None
+	return ("a write needs `reason`: one sentence for the owner on why this change "
+	        "(what the owner said, or what went wrong).")
+
+
+def _record_doc_reason(writer, params, res, *, user_id: str, created_by: str,
+                       data_dir) -> None:
+	"""096 W1: store why, BEFORE the owner is notified. Fail-open."""
+	reason = (getattr(params, "reason", None) or "").strip()
+	if not (reason and getattr(res, "pending", False)):
+		return
+	try:
+		from core import pending_reasons
+		from core.instance import resolve_instance_id
+		pending_reasons.record(user_id, writer._DOC_KIND, user_id, reason, by=created_by,
+		                       home_dir=data_dir, instance_id=resolve_instance_id())
+	except Exception as e:
+		logger.debug("doc reason not recorded: %s", e)
+
+
+def _doc_changes(writer, user_id: str) -> str:
+	"""096 A9: the Changes line of the queued reply ("" when unreadable)."""
+	try:
+		from pathlib import Path
+		from core.pending_review import change_summary, parts_text
+		pend = writer.list_pending(user_id)
+		if not pend:
+			return ""
+		body = Path(pend["path"]).read_text(encoding="utf-8")
+		change = change_summary(body, writer.read_active(user_id) or None)
+		return "a new document" if change["new"] else parts_text(change["parts"])
+	except Exception:
+		return ""
+
+
 def _write_doc(writer, params, *, user_id: str, created_by: str):
 	"""One write path for both identity docs: update|patch, always a draft.
 
@@ -205,7 +243,8 @@ def _sweep_new_rules(controller, before: str, after: str, user_id: str,
 		return ""
 
 
-def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0) -> str:
+def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0,
+                 changes: str = "") -> str:
 	"""035 P0-4 — "saved" read as DONE. On 09-08/09-09 the agent reported exactly
 	that for two owner directives, which then sat inert in `.pending/` for two
 	days while it kept doing the thing it had been told to stop.
@@ -227,13 +266,19 @@ def _queued_text(label: str, kind: str, user_id: str, queue_depth: int = 0) -> s
 	"""
 	try:
 		from core.self_evolution import pending_tap_token
-		tap = pending_tap_token("approve", {"kind": kind, "id": user_id})
+		_it = {"kind": kind, "id": user_id}
+		tap = pending_tap_token("approve", _it)
+		# 096 A9: the whole decision line — approve, reject AND read it.
+		taps = (f"{tap} · {pending_tap_token('reject', _it)} · "
+		        f"read it: {pending_tap_token('pending', _it)}")
 	except Exception:  # fail-open: name the listing verb, never a dead token
-		tap = "/pending"
+		tap = taps = "/pending"
 	out = (f"{label} draft saved but NOT YET IN EFFECT — it is queued for your "
 	       f"review and changes nothing until you approve it.\n"
-	       f"To activate, tap: {tap}   "
-	       f"(`/pending` lists everything waiting).")
+	       + (f"Changes: {changes}\n" if changes else "")
+	       + f"To activate, tap: {taps}   "
+	       f"(`/pending` lists everything waiting).\n"
+	       f"Relay this tap line to the owner exactly as written.")
 	if queue_depth > 1:
 		out += (f"\n⚠ {queue_depth} proposals are now waiting on you — "
 		        f"/approve_all decides every one of them.")
@@ -295,6 +340,15 @@ def draft_owner_supersede(controller, skill_id: str, new_text: str, *, user_id: 
 				retired.append(rule.strip().split("\n")[0][:100])
 		if not retired:
 			return ""
+		try:  # 096 W1: the retire half says why it exists
+			from core import pending_reasons
+			pending_reasons.record(
+				user_id, "owner_doc", user_id,
+				f"skill '{skill_id}' changes the same terms; this retires the older "
+				f"owner rule so the two do not disagree", by=created_by,
+				home_dir=data_dir, instance_id=instance_id)
+		except Exception:
+			pass
 		text = ("\nAlso drafted: the retire of the owner.md line(s) on the same subject "
 		        "(moved under '## Superseded' on approval): "
 		        + " | ".join(f'"{r}"' for r in retired) + ".")
@@ -357,6 +411,8 @@ class DocAuthoringMixin:
 			# the body, so it counts toward the char cap.
 			source: Optional[str] = None
 			observed_at: Optional[str] = None
+			# 096 W1/D3: why, one sentence for the owner (required on a write).
+			reason: Optional[str] = None
 
 		from core.prompt_text import owner_route
 
@@ -366,7 +422,8 @@ class DocAuthoringMixin:
 			"action='read' "
 			f"returns the current text; action='update' replaces it (≤{SELF_DOC_MAX_CHARS} chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
-			"Every update/patch is a draft the owner reviews (/pending). This is NOT your core "
+			"Every update/patch is a draft the owner reviews (/pending) and needs reason= "
+			"(one sentence for the owner: why this change). This is NOT your core "
 			"identity/boundaries (those are operator-owned). "
 			"Pass source= (where it came from: 'measured', 'owner said', 'room_read') "
 			"and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line "
@@ -426,6 +483,9 @@ class DocAuthoringMixin:
 					include_in_memory=True)
 
 			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
+			_no_reason = _missing_reason(params, is_forged)
+			if _no_reason:
+				return ActionResult(error=NOTHING_WRITTEN + _no_reason, include_in_memory=True)
 			try:
 				res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
 				if err:
@@ -438,6 +498,8 @@ class DocAuthoringMixin:
 			if not res.ok:
 				return ActionResult(error=_rejected("Self-context", res.errors, replace_hint=False),
 				                    include_in_memory=True)
+			_record_doc_reason(writer, params, res, user_id=user_id, created_by=created_by,
+			                   data_dir=data_dir)
 			_room = _headroom_note(writer, res, "self.md", replace_hint=False)
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
 			# §7.1: proactively tell the owner a proposal is waiting (fail-open,
@@ -452,7 +514,8 @@ class DocAuthoringMixin:
 			return ActionResult(
 				extracted_content=_queued_text(
 					"Self-context", "self_context", user_id,
-					_queue_depth(user_id, data_dir, resolve_instance_id())) + _room,
+					_queue_depth(user_id, data_dir, resolve_instance_id()),
+					changes=_doc_changes(writer, user_id)) + _room,
 				include_in_memory=True,
 			)
 
@@ -490,6 +553,8 @@ class DocAuthoringMixin:
 			# the body, so it counts toward the char cap.
 			source: Optional[str] = None
 			observed_at: Optional[str] = None
+			# 096 W1/D3: why, one sentence for the owner (required on a write).
+			reason: Optional[str] = None
 
 		from core.prompt_text import owner_route
 
@@ -502,7 +567,8 @@ class DocAuthoringMixin:
 			"rules by exact-string replace; action='replace_rule' (rule_start=<first "
 			"words of ONE active rule>, new_string=<the new rule>, none = retire it) "
 			"replaces that rule in place; the old text moves under '## Superseded' (off "
-			"the cap). Every write reports the chars left. "
+			"the cap). Every write needs reason= (one sentence for the owner: why this "
+			"change) and reports the chars left. "
 			"Pass source= ('owner said', 'measured') and observed_at=YYYY-MM-DD to stamp "
 			"new lines (counts toward the cap); a line CLAIMING a world fact (broken, "
 			"since …) may be refused without a source. action='sweep' content=<a rule> "
@@ -586,6 +652,9 @@ class DocAuthoringMixin:
 					"new_string": _new, "replace_all": False})
 
 			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
+			_no_reason = _missing_reason(params, is_forged)
+			if _no_reason:
+				return ActionResult(error=NOTHING_WRITTEN + _no_reason, include_in_memory=True)
 			try:
 				res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
 				if err:
@@ -598,6 +667,8 @@ class DocAuthoringMixin:
 			if not res.ok:
 				return ActionResult(error=_rejected("Owner-facts doc", res.errors, replace_hint=True),
 				                    include_in_memory=True)
+			_record_doc_reason(writer, params, res, user_id=user_id, created_by=created_by,
+			                   data_dir=data_dir)
 			_room = _headroom_note(writer, res, "owner.md rules", replace_hint=True)
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
 			_swept = _sweep_new_rules(self, writer.read_active(user_id),
@@ -612,6 +683,7 @@ class DocAuthoringMixin:
 			return ActionResult(
 				extracted_content=_queued_text(
 					"Owner-facts", "owner_doc", user_id,
-					_queue_depth(user_id, data_dir, resolve_instance_id())) + _room + _swept,
+					_queue_depth(user_id, data_dir, resolve_instance_id()),
+					changes=_doc_changes(writer, user_id)) + _room + _swept,
 				include_in_memory=True,
 			)

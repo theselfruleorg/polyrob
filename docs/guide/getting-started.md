@@ -36,7 +36,7 @@ polyrob init --no-prompt --owner aria --instance-id aria --openai-key sk-...
 
 `--owner` alone backfills the instance id and the reverse. The pairing lands in
 `~/.polyrob/.env` as `POLYROB_OWNER_USER_ID` / `POLYROB_INSTANCE_ID`, and
-`polyrob doctor` reports both.
+`polyrob doctor --full` prints both (the default `polyrob doctor` view leaves them out).
 
 ---
 
@@ -97,27 +97,30 @@ pip install -e ".[dev,all]"
 
 ### Extras
 
-| Extra | What it adds | Size |
-|---|---|---|
-| *(none)* | Core agent, keyword memory, CLI, the OpenAI SDK (serves OpenAI, OpenRouter, NVIDIA, DeepSeek and every OpenAI-compatible provider) | ~50 MB |
-| `gemini` | The Google Gemini SDK | +130 MB |
-| `anthropic` | The Anthropic SDK (also the z.ai / Anthropic-transport seats) | +8 MB |
-| `server` | FastAPI REST API + console, upload MIME sniffing | +20 MB |
-| `browser` | Playwright browser automation | +100 MB |
-| `docs` | PDF and DOCX reading (the filesystem tool refuses with the remedy without it) | +5 MB |
-| `media` | Invoice-card QR, run-history GIFs | +40 MB |
-| `anysite` | The AnySite scraping CLI | +5 MB |
-| `memory-vector` | Hybrid vector recall (sqlite-vec + numpy + the embedder) | +500 MB |
-| `crypto` | Web3, x402, the EVM venues | +10 MB |
-| `solana` | Solana signing and trading | +15 MB |
-| `telegram` | Telegram surface | +5 MB |
-| `twitter` | X / Twitter integration | +5 MB |
-| `voice` | Voice transcription (faster-whisper) | +50 MB |
-| `feishu` | Feishu / Lark long connection (`lark-oapi`) | — |
-| `hf` | Hugging Face Hub client, for publishing to a Space | — |
-| `modal` / `daytona` / `vercel-sandbox` | The SDK of that cloud sandbox pack, an optional backend for `run_code` and the shell | — |
-| `dev` | Tests, linting, build tooling | +30 MB |
-| `all` | Everything above except `dev` | ~700 MB |
+| Extra | What it adds |
+|---|---|
+| *(none)* | Core agent, keyword memory, CLI, the OpenAI SDK (serves OpenAI, OpenRouter, NVIDIA, DeepSeek and every OpenAI-compatible provider) |
+| `gemini` | The Google Gemini SDK |
+| `anthropic` | The Anthropic SDK (also the z.ai / Anthropic-transport seats) |
+| `server` | FastAPI REST API + console, upload MIME sniffing |
+| `browser` | Playwright browser automation |
+| `docs` | PDF and DOCX reading (the filesystem tool refuses with the remedy without it) |
+| `media` | Invoice-card QR, run-history GIFs |
+| `anysite` | The AnySite scraping CLI |
+| `memory-vector` | Hybrid vector recall (sqlite-vec + numpy + the embedder) |
+| `crypto` | Web3, x402, the EVM venues |
+| `solana` | Solana signing and trading |
+| `telegram` | Telegram surface |
+| `twitter` | X / Twitter integration |
+| `voice` | Voice transcription (faster-whisper) |
+| `feishu` | Feishu / Lark long connection (`lark-oapi`) |
+| `hf` | Hugging Face Hub client, for publishing to a Space |
+| `modal` / `daytona` / `vercel-sandbox` | The SDK of that cloud sandbox pack, an optional backend for `run_code` and the shell |
+| `dev` | Tests, linting, build tooling |
+| `all` | Everything above except `dev` |
+
+The base install is the smallest; `memory-vector`, `voice`, `gemini` and `crypto`
+are the large extras, and `all` is more than ten times the base size.
 
 You rarely type an extra: the **first use** of an optional capability installs it
 (`LAZY_DEPS_MODE=trusted`, the default). It installs the exact files the release
@@ -228,13 +231,18 @@ action and result. `Alt+Enter` (or `Esc` then `Enter`) inserts a newline,
 `Ctrl-L` repaints the screen, `Ctrl-C` interrupts the current turn, and `/exit`
 or `Ctrl-D` leaves.
 
-The startup banner is two quiet lines:
+The startup banner is two lines, plus a third that names the instance (when you
+named it), the user, the memory backend and the autonomy state:
 
 ```
 $ polyrob
-● polyrob vX.Y.Z · claude-sonnet-4-5 (anthropic)
-  session a1b2c3d4 · tools filesystem, task · /help · /session
+● polyrob vX.Y.Z · <model> (<provider>)
+  session a1b2c3d4 · tools filesystem, task, web_fetch, coding · /help · /session
+  polyrob · instance aria · user aria · memory sqlite-fts · autonomy off
 ```
+
+The first start in a data home also prints a one-time welcome block: whether
+autonomy is on, where the data and the config live, and how to turn autonomy on.
 
 ### The dozen slash commands you will use
 
@@ -255,7 +263,7 @@ $ polyrob
 /exit                    leave the REPL
 ```
 
-The full list: [cli.md](cli.md#slash-commands-repl).
+The full list: [chat-commands.md](chat-commands.md).
 
 ---
 
@@ -359,6 +367,10 @@ The installer offers this at the end when the wizard configured a chat surface.
 To connect one later, `polyrob surfaces add <surface>` asks for its credentials and
 proves them with a read; `polyrob surfaces list` shows what is configured.
 
+A new surface is locked: the agent answers no stranger until you let them in.
+What a first message from you or from an unknown sender gets, and how a pairing
+code is approved: [owner-controls.md](owner-controls.md#first-contact-on-a-chat-surface).
+
 From your chat, `/restart` and `/update` do the same (owner-only, confirmed with a
 button) and answer "back online on <version>" when the service is back. How a
 restart waits for the current work, and running it as root on a server:
@@ -415,7 +427,7 @@ applies the update as it starts, then reports — the same as `/update` in chat
 |---|---|
 | "No API key found" | `polyrob setup`, or `polyrob auth add <provider>` for a sign-in plan |
 | `polyrob: command not found` | Reload your shell (`source ~/.zshrc`) — the installer added `~/.local/bin` to your `PATH` |
-| Not sure what the install did | `polyrob doctor` prints the bootstrap record, the surfaces, the service and the identity docs |
+| Not sure what the install did | `polyrob doctor --full` prints the bootstrap record, the surfaces, the service and the identity docs |
 | The wrong provider answers | `polyrob model list`, then `polyrob model set-default` |
 | "Browser not available" | `pip install "polyrob[browser]"`, then `python -m playwright install chromium` |
 | Recall feels shallow | `pip install "polyrob[memory-vector]"`; the log names the missing extension |

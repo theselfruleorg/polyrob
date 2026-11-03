@@ -340,7 +340,9 @@ def test_cli_guide_names_only_real_repl_verbs():
 def test_cli_guide_does_not_teach_the_retired_approve_semantics():
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
-    text = (root / "docs" / "guide" / "cli.md").read_text(encoding="utf-8")
+    # The slash commands live in the generated chat-commands.md page now.
+    text = "".join((root / "docs" / "guide" / n).read_text(encoding="utf-8")
+                   for n in ("cli.md", "chat-commands.md"))
     assert "it does not decide a pending" not in text
     assert "/gates" in text, "the gate manager's own name must be documented"
 

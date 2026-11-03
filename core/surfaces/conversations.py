@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -72,7 +73,6 @@ class ConversationStore:
                     surface         TEXT NOT NULL,
                     address         TEXT NOT NULL,
                     display_name    TEXT NOT NULL DEFAULT '',
-                    state           TEXT NOT NULL DEFAULT 'open',
                     session_id      TEXT NOT NULL DEFAULT '',
                     last_inbound_ts  REAL,
                     last_outbound_ts REAL,
@@ -102,9 +102,25 @@ class ConversationStore:
                 "ON conversation_messages(conversation_id, ts)"
             )
             conn.commit()
+            self._drop_dead_state_column(conn)
             self._merge_legacy_spellings(conn)
         finally:
             conn.close()
+
+    @staticmethod
+    def _drop_dead_state_column(conn) -> None:
+        """098 CO-13: ``conversations.state`` was declared and never read or
+        written — a column that looks like a lifecycle invites a reader to trust
+        it. Dropped on open (SQLite >= 3.35); an older SQLite keeps the unread
+        column. Fail-open."""
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(conversations)")]
+            if "state" in cols and sqlite3.sqlite_version_info >= (3, 35, 0):
+                conn.execute("ALTER TABLE conversations DROP COLUMN state")
+                conn.commit()
+        except Exception:
+            logger.debug("conversations: drop of the dead state column skipped",
+                         exc_info=True)
 
     #: Bumped when an on-open migration lands, so it runs once per file.
     _SCHEMA_VERSION = 1
@@ -259,6 +275,19 @@ class ConversationStore:
             "ORDER BY ts DESC, id DESC LIMIT ?",
             (conv["id"], max(1, int(limit))), fetch="all") or []
         return [dict(r) for r in reversed(rows)]
+
+    def first_outbound(self, user_id: str, surface: str,
+                       address: str) -> Optional[dict]:
+        """The oldest outbound message still kept for the address, or None."""
+        conv = self.get(user_id, surface, address)
+        if conv is None:
+            return None
+        row = execute_retry(
+            self.db_path,
+            "SELECT * FROM conversation_messages WHERE conversation_id=? "
+            "AND direction='out' ORDER BY ts ASC, id ASC LIMIT 1",
+            (conv["id"],), fetch="one")
+        return dict(row) if row is not None else None
 
     def outbound_count_since(self, user_id: str, surface: str, address: str,
                              since_secs: float, *, now: Optional[float] = None) -> int:

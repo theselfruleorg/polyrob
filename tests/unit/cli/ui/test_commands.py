@@ -524,13 +524,20 @@ async def test_model_rejects_unknown_provider(monkeypatch):
     assert "unknown provider" in buf.getvalue().lower()
 
 
+
+def _patch_persist(monkeypatch, sink):
+    """098 CL-05: /model writes the default through cli.model_default."""
+    from cli.model_default import DefaultWrite
+
+    def _persist(p, m, reasoning=None, *, tenant=None):
+        sink.update(provider=p, model=m)
+        return DefaultWrite([("cli.json", True, "")])
+    monkeypatch.setattr("cli.model_default.persist_default", _persist)
+
 @pytest.mark.asyncio
 async def test_model_no_args_launches_picker_and_persists(monkeypatch):
     called = {}
-    monkeypatch.setattr(
-        "cli.config_store.set_default_model",
-        lambda p, m: called.update(provider=p, model=m),
-    )
+    _patch_persist(monkeypatch, called)
     async def _fake(*a, **k):
         return ("openrouter", "z-ai/glm-5.2")
     monkeypatch.setattr("cli.ui.model_selector.run_standalone_async", _fake)
@@ -587,8 +594,7 @@ async def test_model_picker_uses_embedded_picker_when_app_running(monkeypatch):
                             supports_vision=False, supports_tools=True)])
     monkeypatch.setattr("cli.ui.model_selector._resolved_default", lambda env, choices: None)
     persisted = {}
-    monkeypatch.setattr("cli.config_store.set_default_model",
-                        lambda p, m: persisted.update(provider=p, model=m))
+    _patch_persist(monkeypatch, persisted)
     reg = default_registry()
     ctx, buf = _plain_ctx()
     await reg.dispatch("/model", ctx)
@@ -696,8 +702,7 @@ async def test_model_default_also_persists(monkeypatch, _plan_stub, tmp_path):
     import core.runtime_paths as rp
     monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
     persisted = {}
-    monkeypatch.setattr("cli.config_store.set_default_model",
-                        lambda p, m: persisted.update(provider=p, model=m))
+    _patch_persist(monkeypatch, persisted)
     agent, ctx, buf = _swap_ctx({"ok": True, "provider": "anthropic",
                                  "model": "claude-sonnet-4-5", "previous": {}})
     await default_registry().dispatch("/model anthropic claude-sonnet-4-5 default", ctx)

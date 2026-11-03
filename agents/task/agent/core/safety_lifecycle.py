@@ -37,6 +37,10 @@ class SafetyLifecycleMixin:
         """
         if not self.stall_timeout_seconds:
             return False
+        # 098 AG-03: an owner pause is not a stall.
+        run_control = getattr(self.state, "run_control", None)
+        if run_control is not None and run_control.state == "paused":
+            return False
 
         current_time = time.time()
 
@@ -87,7 +91,8 @@ class SafetyLifecycleMixin:
                 if await self._check_for_stall():
                     self.logger.error("Stall detected - stopping agent", exc_info=True)
                     self.state.consecutive_failures = self.max_failures  # Force stop
-                    self.state.stopped = True
+                    from agents.task.runtime.stop_reason import StopReason
+                    self.state.request_stop(StopReason.STALL)  # 098 AG-01: names the stall
                     break
         except asyncio.CancelledError:
             self.logger.debug("Stall monitor cancelled")
@@ -95,29 +100,15 @@ class SafetyLifecycleMixin:
             self.logger.error(f"Error in stall monitor: {e}", exc_info=True)
 
     async def _handle_control_flags(self) -> bool:
-        """Handle stop and done flags. Returns True if execution should stop.
+        """Raise ``InterruptedError`` when the run was stopped (098 AG-01:
+        ``state.stopped`` is a view of ``RunControl``). Returns False otherwise.
 
-        NOTE: Pause functionality removed (Dec 2025). The blocking wait loop was
-        incompatible with continuous chat design where new messages should be processed.
-
-        For user interruption, use stop which cleanly exits. Users can send a new
-        message to continue with a different task (auto-resume via COMPLETED → RESUMED).
+        An owner pause is the session-control mailbox (``control_checkpoint``),
+        not a flag here. Users send a new message to continue (COMPLETED → RESUMED).
         """
-        # Check state.done to stop execution when agent signals completion
-        if self.state.done:
-            self.logger.info('✅ Agent execution complete (state.done=True)')
-            return True
         if self.state.stopped:
             self.logger.info('⏹️ Agent execution stopped by control flag')
             raise InterruptedError("Agent stopped")
-
-        # Legacy: treat paused as stopped for backwards compatibility
-        # The paused flag is deprecated - use stopped instead
-        if self.state.paused:
-            self.logger.info('⏹️ Agent paused flag set - treating as stop (pause deprecated)')
-            self.state.stopped = True  # Normalize to stopped
-            raise InterruptedError("Agent stopped (paused flag deprecated)")
-
         return False
 
     def pause(self) -> None:
@@ -128,7 +119,8 @@ class SafetyLifecycleMixin:
         new message to continue with modifications (auto-resume via COMPLETED → RESUMED).
         """
         self.logger.warning('⚠️ pause() is DEPRECATED - redirecting to stop()')
-        self.state.stopped = True  # Use stopped instead of paused
+        from agents.task.runtime.stop_reason import StopReason
+        self.state.request_stop(StopReason.CONTROL)
 
     def resume(self) -> None:
         """DEPRECATED: Resume functionality removed. Sessions auto-resume on new message.
@@ -143,7 +135,8 @@ class SafetyLifecycleMixin:
     async def stop(self) -> None:
         """Stop the agent execution."""
         self.logger.info('⏹️ Stopping agent execution')
-        self.state.stopped = True
+        from agents.task.runtime.stop_reason import StopReason
+        self.state.request_stop(StopReason.CONTROL)
 
         # Browser cleanup - release context through orchestrator
         try:
@@ -190,22 +183,9 @@ class SafetyLifecycleMixin:
         # Reset cancellation flag
         self._cancelled = False
 
-        # Reset execution control flags in AgentState
-        self.state.stopped = False
-        self.state.done = False
-        self.state.paused = False
-
-        # Reset failure counters for fresh execution
-        self.state.consecutive_failures = 0
-
-        # The tool-free-response counter is per-run too. It lives on the Agent rather
-        # than AgentState, so `state.consecutive_failures = 0` above never touched it
-        # and an empty response in a previous conversational turn still counted toward
-        # this turn's escalation.
-        self._empty_action_counter = 0
-        # Per-run as well: a prose reply ends an autonomous run as its report only
-        # once THIS run acted (call_quality E-2).
-        self._acted_this_run = False
+        # 098 AG-01/02: one owner of run-scoped state — stopped, the failure count,
+        # the failed-provider list, the LLM breaker and the per-run counters.
+        self.state.begin_run()
 
         # Reset loop detection state
         self.state.reset_loop_detection()

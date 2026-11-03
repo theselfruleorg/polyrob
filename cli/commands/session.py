@@ -681,7 +681,7 @@ def session_prune(days, dry_run: bool, max_removals, yes: bool):
     from cli._admin_home import admin_data_dir
     from core.session_retention import (
         KEEP_ARTIFACT, KEEP_CAP, KEEP_GOAL, KEEP_RECENT, KEEP_REGISTERED,
-        MAX_REMOVALS_PER_SWEEP, apply_sweep, plan_sweep,
+        MAX_REMOVALS_PER_SWEEP, apply_sweep, plan_sweep, record_sweep_state,
     )
 
     data_dir = admin_data_dir(write=not dry_run)
@@ -690,6 +690,8 @@ def session_prune(days, dry_run: bool, max_removals, yes: bool):
                           max_removals=(MAX_REMOVALS_PER_SWEEP
                                         if max_removals is None else int(max_removals)))
     except RuntimeError as exc:
+        if not dry_run:
+            record_sweep_state(data_dir, error=str(exc))
         click.echo(click.style(f"refused: {exc}", fg="red"))
         raise SystemExit(1)
 
@@ -709,6 +711,8 @@ def session_prune(days, dry_run: bool, max_removals, yes: bool):
         f"kept: {kept or 'none'}", fg="cyan"))
 
     if not plan.remove:
+        if not dry_run and plan.scanned:
+            record_sweep_state(data_dir)
         return
     for path in plan.remove[:20]:
         click.echo(f"  {path}")
@@ -721,6 +725,7 @@ def session_prune(days, dry_run: bool, max_removals, yes: bool):
         click.echo("cancelled")
         return
     out = apply_sweep(plan)
+    record_sweep_state(data_dir, removed=out["removed"], failed=out["failed"])
     for err in plan.errors:
         click.echo(click.style(f"  {err}", dim=True))
     click.echo(click.style(

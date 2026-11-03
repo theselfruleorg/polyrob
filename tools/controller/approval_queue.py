@@ -143,7 +143,7 @@ def pending_grant_card(payload: Dict[str, Any], display_id: str) -> str:
         context = payload.get("card_context")
         return render_grant_card(
             str(payload.get("tool_name") or ""), params, display_id,
-            reply_lines=False,
+            reply_lines=False, full_content=True,
             context_lines=[str(x) for x in context] if isinstance(context, list) else None)
     except Exception:
         logger.debug("pending_grant_card: render failed", exc_info=True)
@@ -320,9 +320,13 @@ def resolve_pending_target(target: str, pending: Any) -> Optional[Dict[str, Any]
     hit = resolve_pending_alias(want, items)
     if hit is not None:
         return hit
+    from core.self_evolution import split_id_rev
+    want, typed_rev = split_id_rev(want)  # 098 review: `<id>@<rev>` -> seat_rev
     exact = [it for it in items if str(it.get("id", "")) == want]
     if len(exact) == 1:
-        return exact[0]
+        return dict(exact[0], seat_rev=typed_rev) if typed_rev else exact[0]
+    if typed_rev:
+        return None
     qualified = [it for it in items
                  if f"{it.get('kind', '')}:{it.get('id', '')}" == want]
     return qualified[0] if len(qualified) == 1 else None
@@ -331,7 +335,8 @@ def resolve_pending_target(target: str, pending: Any) -> Optional[Dict[str, Any]
 def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
                    home_dir: Any, instance_id: str, board: Any = None,
                    correspondent_registry: Any = None,
-                   task_agent: Any = None, answer: str = "") -> tuple:
+                   task_agent: Any = None, answer: str = "",
+                   rev: Optional[str] = None) -> tuple:
     """Record the owner's decision on ONE item of the union. ``(ok, message)``.
 
     The union holds three kinds of thing and each has its own decider. Routing
@@ -388,8 +393,10 @@ def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
                       if approve else
                       f"contact {item_id} rejected — the binding is tombstoned")
     fn = self_evolution.promote if approve else self_evolution.reject
+    # 098 CO-19: ``rev`` is the identity-draft revision the seat showed (a
+    # resolved tap's ``seat_rev``); without one the card hash binds, or nothing.
     return fn(kind, item_id, user_id=user_id, home_dir=home_dir,
-              instance_id=instance_id)
+              instance_id=instance_id, rev=rev)
 
 
 def _is_money_action(action_name: str) -> bool:
@@ -455,6 +462,19 @@ def needs_individual_decision(item: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _held_line(it: Dict[str, Any], why: str, *, cli: bool = False) -> str:
+    """096 B6: a held item keeps its decide taps (``cli``: the `<id>@<rev>` line)."""
+    kind, item_id = it.get("kind", ""), it.get("id")
+    try:
+        from core.self_evolution import decision_id, pending_tap_token
+        taps = (f" {pending_tap_token('approve', it)} {pending_tap_token('reject', it)} "
+                f"read it: {pending_tap_token('pending', it)}"
+                + (f" (CLI: polyrob owner promote {kind} {decision_id(it)})" if cli else ""))
+    except Exception:
+        taps = ""
+    return f"{kind}:{item_id} ({why}){taps}"
+
+
 def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
                        instance_id: str, board: Any = None,
                        correspondent_registry: Any = None,
@@ -487,16 +507,22 @@ def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
                else needs_individual_decision(it) if kind == TOKEN_IDENTITY_ASK_KIND
                else None)
         if why:
-            held.append(f"{kind}:{item_id} ({why})")
+            held.append(_held_line(it, why))
             continue
+        # 098 review: a bulk REJECT binds to the listed rev (the safe way); a bulk
+        # APPROVE holds a never-shown identity draft, never approves it blind.
+        from core.self_evolution import DRAFT_NOT_SHOWN, decision_rev
         try:
-            ok, msg = decide_pending(kind, item_id, approve=approve, user_id=user_id,
-                                     home_dir=home_dir, instance_id=instance_id,
-                                     board=board,
-                                     correspondent_registry=correspondent_registry,
-                                     task_agent=task_agent)
+            ok, msg = decide_pending(
+                kind, item_id, approve=approve, user_id=user_id, home_dir=home_dir,
+                instance_id=instance_id, board=board, task_agent=task_agent,
+                correspondent_registry=correspondent_registry,
+                rev=None if approve else decision_rev(it))
         except Exception as e:  # one bad item must not abandon the rest
             ok, msg = False, f"{kind}:{item_id} failed: {e}"
+        if not ok and msg == DRAFT_NOT_SHOWN:
+            held.append(_held_line(it, "identity draft you were never shown", cli=True))
+            continue
         ok_n, fail_n = (ok_n + 1, fail_n) if ok else (ok_n, fail_n + 1)
         # \u26a0\ufe0f The mark is bound OUTSIDE the f-string: a backslash escape inside an
         # f-string expression is a SyntaxError before 3.12, and pyproject floors
@@ -507,7 +533,7 @@ def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
         msgs.append(
             f"\u26a0 NOT {'approved' if approve else 'rejected'} \u2014 these need "
             "your individual decision "
-            "(decide each one by its id): " + "; ".join(held))
+            "(decide each one by its id):\n" + "\n".join(f"• {h}" for h in held))
     if pending.unavailable:
         msgs.append(pending.degraded_line())
     return ok_n, fail_n, msgs
@@ -592,6 +618,15 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
     ok, _ = board.decide_ask(real_id, user_id=user_id, approved=approved,
                              answer=(answer or "").strip())
     if not ok:
+        # TS-14: an ask past its clock cannot be decided — say so, and close it.
+        if (row is not None and getattr(row, "user_id", None) == user_id
+                and getattr(board, "ask_expired", None) and board.ask_expired(row)):
+            try:
+                board.obsolete_ask(real_id, user_id=user_id, reason="expired")
+            except Exception:
+                logger.debug("expired ask %s not closed", real_id, exc_info=True)
+            return False, (f"tool-approval request '{display_id}' expired — ask again "
+                           "(the agent files a fresh request with the current details)")
         return False, f"no open tool-approval request '{display_id}'"
     verb = "approved" if approved else "rejected"
     # W10 (043): resume-on-grant wakes the session that asked. The wake MUST
@@ -728,6 +763,11 @@ def register_late_sender(tool_names, sender) -> None:
         _LATE_SENDERS[name] = sender
 
 
+def _ask_expires_at(action_name: str) -> float:
+    from tools.controller.approval_ask_ttl import expires_at
+    return expires_at(time.time(), money=_is_money_action(action_name))
+
+
 def _poller_gone(board: Any, ask_id: str) -> None:
     """Mark that no run is waiting on this ask any more. Fail-open. If the owner
     already approved (a race with the timeout), queue the late send now."""
@@ -757,10 +797,13 @@ def _ask_poller_gone(board: Any, ask_id: str) -> bool:
 def _enqueue_late_send(board: Any, ask_id: str, user_id: str, session_id: str) -> None:
     """A durable row the agent process's wake drain turns into ONE send
     (``core.approved_actions`` -> :func:`run_approved_outbound`)."""
+    # TS-14: both writers (the deciding seat and `_poller_gone`) may see
+    # "approved, not consumed" — the idempotency key makes it ONE row.
     _wake_queue_for_board(board).enqueue(
         session_id, user_id, f"send the approved {ask_id}", kind="approved_outbound",
         metadata={"kind": "approved_outbound", "ask_id": ask_id,
-                  "goals_db": getattr(board, "db_path", None)})
+                  "goals_db": getattr(board, "db_path", None)},
+        dedup_key=f"approved_outbound:{ask_id}")
 
 
 async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
@@ -1145,7 +1188,12 @@ class OwnerQueueApprover(ApprovalProvider):
                 continue
             if payload.get("grant_consumed"):
                 continue
-            if a.completed_at is None or (now - a.completed_at) > ttl_hours * 3600:
+            # TS-14: from the decision, capped by the request's own clock.
+            from tools.controller.approval_ask_ttl import grant_deadline
+            deadline = grant_deadline(created_at=a.created_at, completed_at=a.completed_at,
+                                      grant_ttl_hours=ttl_hours,
+                                      ask_expires_at=payload.get("expires_at"))
+            if deadline is None or now > deadline:
                 continue
             if board.consume_ask_grant(a.id):
                 return True
@@ -1158,6 +1206,10 @@ class OwnerQueueApprover(ApprovalProvider):
             payload = a.payload or {}
             if payload.get("ask_kind") == TOOL_APPROVAL_ASK_KIND \
                     and payload.get("request_hash") == req_hash:
+                if getattr(board, "ask_expired", None) and board.ask_expired(a):
+                    # TS-14: never reuse an expired ask — close it, ask afresh.
+                    board.obsolete_ask(a.id, user_id=user_id, reason="expired")
+                    continue
                 return a
         return None
 
@@ -1319,6 +1371,8 @@ class OwnerQueueApprover(ApprovalProvider):
                     "request_hash": req_hash,
                     "session_id": session_id,
                     "grant_consumed": False,
+                    # TS-14: the ask's clock (money asks are shorter).
+                    "expires_at": _ask_expires_at(action_name),
                     # 2026-09-18: the cron twin of blocks_goal_ids — an approval
                     # re-arms THIS job to run on the next tick (see
                     # decide_tool_approval). None for every other origin.

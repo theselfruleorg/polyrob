@@ -179,6 +179,14 @@ def autonomous_wait_refusal(controller, session_id: str):
         metadata={"conversational_reply": True, "gated": "autonomous_wait"})
 
 
+def _read_tap(ask_id: str) -> str:
+    """096 W5: the ask's own read tap (``/ask_<id>``), on every seat that
+    re-reads it later."""
+    from core.surfaces.tappable import read_token
+    tok = read_token("/ask", ask_id)
+    return f" Read it again: {tok}" if tok else ""
+
+
 def register_owner_ask_action(controller) -> None:
     class OwnerAskAction(BaseModel):
         question: Optional[str] = Field(
@@ -288,10 +296,13 @@ def register_owner_ask_action(controller) -> None:
                     taps = "\nTap an answer: " + " · ".join(
                         f"{letter}) {ask_option_token(ask.id, letter)}" for letter in options)
                 text = (f"❓ I need your decision (ask {short}): {question}"
-                        + (f"\nWhy: {(params.why or '').strip()[:400]}" if (params.why or '').strip() else "")
+                        # 096 C3: the Why was cut at 400 with no marker; the
+                        # field itself holds 1200, so it is shown whole.
+                        + (f"\nWhy: {(params.why or '').strip()}" if (params.why or '').strip() else "")
                         + taps
                         + "\nAnswer here in chat (e.g. \"A\"), or /fulfill "
-                        + f"{ask.id} <answer>.")
+                        + f"{ask.id} <answer>."
+                        + _read_tap(ask.id))
                 await deliver_user_message(getattr(controller, "container", None), user_id, text,
                                            source="owner_ask", session_id=sid or None,
                                            ask_id=str(ask.id))

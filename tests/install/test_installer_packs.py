@@ -73,7 +73,7 @@ def test_packs_flag_installs_the_pack_extra_hashed_and_no_second_dist(tmp_path):
         "only core installs --no-deps: the pack ships inside it"
     hashed = [c for c in calls if "--require-hashes" in c]
     assert len(hashed) == 2, "core closure, then the pack's extra closure"
-    assert "tweepy==" in reqs and "chatxdk==" in reqs
+    assert "requests-oauthlib==" in reqs and "chatxdk==" in reqs
     assert "anysite-cli==" not in reqs
     assert not any("/packs/" in c for c in calls)
 
@@ -82,13 +82,13 @@ def test_piped_or_no_prompt_default_installs_no_pack_sdk(tmp_path):
     res, src, calls, reqs = _run(tmp_path, "--no-prompt")
     assert res.returncode == 0, res.stderr
     assert not any("/packs/" in c for c in calls)
-    assert "tweepy==" not in reqs
+    assert "requests-oauthlib==" not in reqs
 
 
 def test_all_installs_every_pack_extra(tmp_path):
     res, src, calls, reqs = _run(tmp_path, "--no-prompt", "--packs", "all")
     assert res.returncode == 0, res.stderr
-    for pin in ("tweepy==", "anysite-cli==", "hyperliquid-python-sdk==", "py-clob-client-v2=="):
+    for pin in ("requests-oauthlib==", "anysite-cli==", "hyperliquid-python-sdk==", "py-clob-client-v2=="):
         assert pin in reqs, pin
     assert not any("/packs/" in c for c in calls)
 

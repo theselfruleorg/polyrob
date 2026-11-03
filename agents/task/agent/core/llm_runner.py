@@ -621,10 +621,6 @@ class LLMRunnerMixin:
 				) from generic_llm_error
 		
 		except asyncio.TimeoutError:
-			# Clear LLM call tracking on timeout
-			self._llm_call_in_progress = False
-			self._llm_call_start_time = None
-			
 			self.logger.error(f"LLM call timed out after {timeout:.0f} seconds - implementing recovery strategy", exc_info=True)
 
 			# 057 WS-B: consecutive timeouts are a ROUTING fact. A timeout never

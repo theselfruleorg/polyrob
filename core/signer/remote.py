@@ -25,7 +25,10 @@ secret and (b) got the signer's identity and it matched the wallet of record
 """
 import logging
 import threading
+import time
 from typing import Any, Dict, Optional
+
+from core.state.machine import StateMachine
 
 from core.wallet.agent_wallet import (VENUES, PublicOnlySigner, PublicOnlyWallet,
                                       WalletSigningUnavailable)
@@ -36,10 +39,66 @@ _lock = threading.Lock()
 _verified = False
 _verify_detail = "remote signer not built in this process"
 
+#: 098 CO-10: unverified -> verified | mismatch | unreachable. ``unreachable``
+#: (the signer was down at start) re-tries the identity check at most once per
+#: :data:`REVERIFY_SEC`; ``mismatch`` (a different wallet) stays until restart.
+VERIFY = StateMachine(
+    "signer.remote_verify",
+    states={"unverified", "verified", "mismatch", "unreachable"},
+    transitions={"unverified": {"verified", "mismatch", "unreachable"},
+                 "unreachable": {"verified", "mismatch", "unreachable"}},
+    terminal={"verified", "mismatch"},
+    initial={"unverified"},
+)
+REVERIFY_SEC = 60.0
+_state = "unverified"
+_reverify: Optional[tuple] = None   # (client, record) while unreachable
+_last_try = 0.0
+
 
 def remote_verified() -> bool:
     with _lock:
+        due = (_state == "unreachable" and _reverify is not None
+               and time.monotonic() - _last_try >= REVERIFY_SEC)
+        if not due:
+            return _verified
+    _check_identity(*_reverify)
+    with _lock:
         return _verified
+
+
+def _check_identity(client, record) -> None:
+    """One identity check -> verified | mismatch | unreachable (098 CO-10)."""
+    global _state, _reverify, _last_try
+    with _lock:
+        _last_try = time.monotonic()
+    try:
+        identity = client.call("identity", timeout=10.0)
+    except Exception as exc:
+        _move("unreachable", f"signer unreachable: {exc}")
+        with _lock:
+            _reverify = (client, record)
+        return None
+    mismatch = _record_matches(identity, record)
+    if mismatch:
+        _move("mismatch", f"signer wallet differs from the wallet of record ({mismatch})")
+        logger.critical("WALLET_SIGNER=remote: the signer's wallet is NOT the wallet of "
+                        "record (%s); every send refuses", mismatch)
+    else:
+        _move("verified", "signer identity matches the wallet of record")
+    with _lock:
+        _reverify = None
+    return identity
+
+
+def _move(to: str, detail: str) -> None:
+    global _state
+    with _lock:
+        frm = _state
+    if frm == to or VERIFY.check(frm, to, ctx={"detail": detail[:120]}):
+        with _lock:
+            _state = to
+        _set_verified(to == "verified", detail)
 
 
 def remote_state() -> Dict[str, Any]:
@@ -54,7 +113,10 @@ def _set_verified(value: bool, detail: str) -> None:
 
 
 def _reset_for_tests() -> None:
+    global _state, _reverify, _last_try
     _set_verified(False, "remote signer not built in this process")
+    with _lock:
+        _state, _reverify, _last_try = "unverified", None, 0.0
 
 
 def _refusal(what: str) -> str:
@@ -325,21 +387,11 @@ def build_remote_wallet(cfg, sink, *, on_record=None, client=None) -> RemoteWall
         record = public_identity.read_public_identity()
     except Exception:
         record = None
-    identity = None
-    try:
-        identity = client.call("identity", timeout=10.0)
-    except Exception as exc:
-        _set_verified(False, f"signer unreachable at start: {exc}")
-        logger.error("WALLET_SIGNER=remote: signer identity unavailable (%s); reads use the "
-                     "published identity and every send refuses until restart", exc)
-    if identity is not None:
-        mismatch = _record_matches(identity, record)
-        if mismatch:
-            _set_verified(False, f"signer wallet differs from the wallet of record ({mismatch})")
-            logger.critical("WALLET_SIGNER=remote: the signer's wallet is NOT the wallet of "
-                            "record (%s); every send refuses", mismatch)
-        else:
-            _set_verified(True, "signer identity matches the wallet of record")
+    identity = _check_identity(client, record)
+    if identity is None:
+        logger.error("WALLET_SIGNER=remote: signer identity unavailable; reads use the "
+                     "published identity and every send refuses until the signer answers "
+                     "(re-checked at most once a minute)")
     source = identity if identity is not None else record
     if not source:
         raise WalletSigningUnavailable(

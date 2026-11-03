@@ -8,8 +8,8 @@ objects.
 """
 from agents.task.tool_defaults import default_session_tools
 from core.optional_extras import missing_extra_hint
-from core.config_policy import INTERACTIVE_MAX_STEPS
-from dataclasses import dataclass
+from core.config_policy.goal_flags import interactive_max_steps
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Union, List
 import asyncio
 import logging
@@ -64,7 +64,7 @@ class SessionRequest:
     model: Optional[str] = None
     provider: Optional[str] = None
     tools: List[str] = None
-    max_steps: int = INTERACTIVE_MAX_STEPS
+    max_steps: int = field(default_factory=interactive_max_steps)  # 098 CO-09: read at use
     temperature: float = 0.0
     use_vision: bool = True
     session_config: Optional[Dict[str, Any]] = None

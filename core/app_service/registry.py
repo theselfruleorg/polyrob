@@ -42,6 +42,24 @@ STATUS_STOPPED = "stopped"
 STATUS_PAUSED = "paused"
 ALL_STATUSES = (STATUS_PENDING, STATUS_APPROVED, STATUS_DEPLOYING, STATUS_LIVE,
                 STATUS_FAILED, STATUS_STOPPED, STATUS_PAUSED)
+#: The app lifecycle table (098 S1, CO-21). ``stopped`` is the owner's stop;
+#: only an owner/agent request leaves it (the address stays approved).
+from core.state.machine import StateMachine as _SM  # noqa: E402
+
+APP_MACHINE = _SM(
+    "app_service", states=frozenset(ALL_STATUSES), initial=frozenset({STATUS_PENDING}),
+    transitions={
+        STATUS_PENDING: {STATUS_APPROVED, STATUS_STOPPED, STATUS_FAILED},
+        STATUS_APPROVED: {STATUS_DEPLOYING, STATUS_PENDING, STATUS_STOPPED, STATUS_FAILED},
+        STATUS_DEPLOYING: {STATUS_LIVE, STATUS_FAILED, STATUS_STOPPED, STATUS_PAUSED},
+        STATUS_LIVE: {STATUS_FAILED, STATUS_PAUSED, STATUS_STOPPED},
+        STATUS_PAUSED: {STATUS_APPROVED, STATUS_STOPPED, STATUS_FAILED},
+        STATUS_FAILED: {STATUS_PENDING, STATUS_APPROVED, STATUS_STOPPED},
+        STATUS_STOPPED: {STATUS_PENDING, STATUS_APPROVED},
+    })
+
+#: Every state a stop may leave (098 CO-21): all but ``stopped``.
+NOT_STOPPED = tuple(x for x in ALL_STATUSES if x != STATUS_STOPPED)
 #: Statuses in which a row HOLDS its slug (the cross-tenant uniqueness set).
 HOLDS_ADDRESS = (STATUS_APPROVED, STATUS_DEPLOYING, STATUS_LIVE, STATUS_PAUSED)
 EGRESS_MODES = ("none", "allowlist", "open")
@@ -327,15 +345,20 @@ class AppServiceRegistry:
         if approved:
             extra_sql = ", approved_fingerprint=?, approved_config=?"
             extra_args = (fingerprint(requested), json.dumps(requested, sort_keys=True))
-        execute_retry(
+        # 098 CO-21: CAS on the status read above — a claim to `deploying` (or an
+        # owner kill) between the read and this write must not be overwritten.
+        rc = execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, source_dir=?, cmd=?, container_port=?, "
             "health_path=?, egress=?, egress_allow=?, env_json=?, workspace_digest=?, "
             f"consecutive_failures=0, last_failure_error=NULL{extra_sql}, updated_at=? "
-            "WHERE slug=? AND user_id=?",
+            "WHERE slug=? AND user_id=? AND status=?",
             (status, source_dir, json.dumps(cmd), int(container_port), health_path, egress,
              json.dumps(allow), json.dumps(clean_env), workspace_digest, *extra_args,
-             now, slug, user_id))
+             now, slug, user_id, existing["status"]))
+        if rc != 1:
+            raise ValueError(f"{slug!r} changed state while the request was written; "
+                             f"request again")
         return self.get(slug, user_id)
 
     def mark_approved(self, slug: str, user_id: str) -> bool:
@@ -400,32 +423,58 @@ class AppServiceRegistry:
         return rc == 1
 
     def set_status(self, slug: str, user_id: str, status: str, *,
-                   error: Optional[str] = None) -> bool:
+                   error: Optional[str] = None,
+                   from_states: Sequence[str]) -> bool:
+        """Guarded transition (098 CO-21): writes only while the row is in one of
+        ``from_states``; False when another writer moved it first (the other
+        writer's state wins — e.g. an owner kill is never overwritten)."""
         if status not in ALL_STATUSES:
             raise ValueError(f"unknown status {status!r}")
+        froms = tuple(from_states)
+        if not froms or any(f not in ALL_STATUSES for f in froms):
+            raise ValueError(f"bad from_states {froms!r}")
+        marks = ",".join("?" * len(froms))
         rc = execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, last_failure_error=COALESCE(?, last_failure_error), "
-            "updated_at=? WHERE slug=? AND user_id=?",
-            (status, error, time.time(), slug, user_id))
+            f"updated_at=? WHERE slug=? AND user_id=? AND status IN ({marks})",
+            (status, error, time.time(), slug, user_id, *froms))
         return rc == 1
 
     def record_live(self, slug: str, user_id: str, *, host_port: int, container_name: str,
-                    public_url: str) -> None:
+                    public_url: str) -> bool:
+        """``deploying -> live`` only. False when the row left ``deploying``
+        meanwhile (an owner kill or a pause): the caller tears down."""
         now = time.time()
-        execute_retry(
+        rc = execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, host_port=?, container_name=?, public_url=?, "
             "last_deploy=?, last_health=?, consecutive_failures=0, last_failure_error=NULL, "
-            "updated_at=? WHERE slug=? AND user_id=?",
-            (STATUS_LIVE, int(host_port), container_name, public_url, now, now, now, slug, user_id))
+            "updated_at=? WHERE slug=? AND user_id=? AND status=?",
+            (STATUS_LIVE, int(host_port), container_name, public_url, now, now, now, slug,
+             user_id, STATUS_DEPLOYING))
+        return rc == 1
 
-    def record_failed(self, slug: str, user_id: str, *, error: str) -> None:
-        execute_retry(
+    def record_failed(self, slug: str, user_id: str, *, error: str,
+                      from_states: Sequence[str] = (STATUS_DEPLOYING, STATUS_LIVE)) -> bool:
+        froms = tuple(from_states)
+        marks = ",".join("?" * len(froms))
+        rc = execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, consecutive_failures=consecutive_failures+1, "
-            "last_failure_error=?, updated_at=? WHERE slug=? AND user_id=?",
-            (STATUS_FAILED, (error or "")[:500], time.time(), slug, user_id))
+            f"last_failure_error=?, updated_at=? WHERE slug=? AND user_id=? AND status IN ({marks})",
+            (STATUS_FAILED, (error or "")[:500], time.time(), slug, user_id, *froms))
+        return rc == 1
+
+    def record_health_error(self, slug: str, user_id: str, error: str) -> bool:
+        """A live app's health note — never a status write (098 CO-21: the old
+        ``set_status(LIVE)`` here revived a row the owner had just killed)."""
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE app_services SET last_failure_error=?, updated_at=? "
+            "WHERE slug=? AND user_id=? AND status=?",
+            ((error or "")[:500], time.time(), slug, user_id, STATUS_LIVE))
+        return rc == 1
 
     def record_health(self, slug: str, user_id: str, ok: bool) -> None:
         now = time.time()
@@ -446,8 +495,8 @@ class AppServiceRegistry:
         execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, host_port=NULL, container_name=NULL, "
-            "public_url=NULL, updated_at=? WHERE slug=? AND user_id=?",
-            (STATUS_STOPPED, time.time(), slug, user_id))
+            "public_url=NULL, updated_at=? WHERE slug=? AND user_id=? AND status=?",
+            (STATUS_STOPPED, time.time(), slug, user_id, STATUS_STOPPED))
 
     def record_attempt(self, slug: str, user_id: str) -> None:
         execute_retry(

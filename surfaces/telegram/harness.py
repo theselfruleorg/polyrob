@@ -175,7 +175,10 @@ _USAGE = {
     "/resume": "[word…]",
     "/missed": "[n]",
     "/run": "[pause|resume|stop <n>]",
-    "/inbox": "[n]",
+    "/inbox": "[all|n]",
+    "/more": "<token>",
+    "/asks": "[<id>]",
+    "/skills": "[words | <id>]",
     "/fulfill": "<id> [what you want to tell the run]",
     "/job": "<new|show|edit|pause|resume|run|stop> …",
     "/goal": "new <what> · <show|retry|pause|stop [--forever]|allow> <id>",
@@ -186,7 +189,7 @@ _USAGE = {
     "/wallet": "[balances|tokens]",
     "/writeoff": "<chain> <address> [go] [reason]",
     "/unquarantine": "<chain> <address> [go]",
-    "/invoices": "[status]",
+    "/invoices": "[status] | refunded <id> [tx]",
     "/settle": "<id> [tx]",
     "/trade": "start|status|pause|resume|stop|release",
     "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
@@ -197,7 +200,7 @@ _USAGE = {
     "/pay": "<url> [max_usd] [go] [id=<name>]",
     "/send": "<amount> <native|token-address> to <address> on <chain> [max <usd>] [go]",
     "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
-    "/cards": "[<id> ok|no|re|1-6]",
+    "/cards": "[<id> [ok|no|re|1-6]]",
     "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
             "revoke <contract> <operator> [go]",
     "/dapp": "list|revoke <id>",
@@ -219,7 +222,6 @@ _USAGE = {
     "/config": "[get|explain <key> | set <key> <value>]",
     "/model": "[<name> [default] [reasoning=<level>] | reset | aliases]",
     "/usage": "[days]",
-    "/skills": "[words]",
     "/kb": "[list [collection] | search <query> | <words>]",
     "/files": "[n]",
     "/dev": "[message]",
@@ -409,6 +411,7 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
                          "/avatar", "/cwd",
                          "/missed", "/apps", "/mcp",
+                         "/more", "/rules",  # 096 W5: reads (the rest of a cut; owner rules)
                          "/kb", "/files", "/dev",
                          "/model", "/skills",  # 080 D8
                          "/usage",  # 2026-10-14 D6: the owner spend view
@@ -681,9 +684,9 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         from surfaces.telegram.interactive_tools import reconcile_owner_toolset
         await reconcile_owner_toolset(task_agent, user_id, session_id)
         # The owner turn owns its budget: a wake's narrowing never lowers it.
-        from core.config_policy import INTERACTIVE_MAX_STEPS
+        from core.config_policy.goal_flags import interactive_max_steps
         if callable(getattr(task_agent, "scope_next_run", None)):
-            task_agent.scope_next_run(session_id, max_steps=INTERACTIVE_MAX_STEPS)
+            task_agent.scope_next_run(session_id, max_steps=interactive_max_steps())
 
     # 056 WS3: a headless owner/room turn HOLDS the shared workspace for its whole
     # run (busy depth + turn.active marker + cross-process lock, never refusing
@@ -1336,20 +1339,8 @@ def _room_member_help(task_agent: Any, result: InboundResult):
 _BACKGROUND_COMMANDS: set = set()
 
 
-def _record_undelivered_reply(user_id: str, cmd: str, text: str, exc: BaseException) -> None:
-    """TG12: a command reply that could not be SENT — after a money verb that
-    already executed, the result the owner never saw — becomes an ``owner_notice``
-    row `/missed` reads (marker: ``user_delivery.NOTICE_MARKERS[2]``), never
-    only a log line. Fail-open."""
-    logger.error("telegram: %s reply undelivered (%s) — recorded for /missed",
-                 cmd, exc, exc_info=True)
-    from core import event_log
-    from core.event_kinds import OWNER_NOTICE
-    from core.surfaces.user_delivery import NOTICE_MARKERS
-    # `emit` is the fail-open record (core.event_log) — it never raises.
-    event_log.emit(OWNER_NOTICE, source="telegram", user_id=str(user_id or ""),
-                   attrs={"text": f"{NOTICE_MARKERS[2]}; source=telegram {cmd}] "
-                                  f"{str(text or '')[:1900]}"})
+from surfaces.telegram.reply_spill import (  # noqa: E402,F401 — 096 W5/W8
+    record_undelivered_reply as _record_undelivered_reply)
 
 
 #: TG2 (audit 2026-10-03): every owner money verb whose `go` form waits on a
@@ -2070,7 +2061,7 @@ class TelegramHarness:
             return False
 
     async def stop(self) -> None:
-        self._running = False
+        self._running, self._stop_requested = False, True  # 098 TS-17: sticky
         try:
             await self.bot.delete_webhook()
         except Exception as e:
@@ -2084,9 +2075,10 @@ class TelegramHarness:
 
     async def run_polling(self) -> None:
         """Long-poll getUpdates and dispatch each update. Exits when stop() is
-        called (self._running False) or the task is cancelled."""
+        called (self._running False) or the task is cancelled. A stop that came
+        BEFORE this task's first step is honoured (098 TS-17: it is sticky)."""
         import asyncio
-        self._running = True
+        self._running = not getattr(self, "_stop_requested", False)
         offset = None
         transient_streak = 0
         fail_streak = 0  # ANY consecutive failure: drives the backoff, reset on success
@@ -2765,19 +2757,32 @@ class TelegramHarness:
                                                actions_from_text)
             from surfaces.telegram import card_ops
             _cmd = getattr(result.decision, "command", None)
+            _uid = result.inbound.identity.user_id
+            full_text = reply_text(reply)
+            # 096 W5 (D2): a long reply the owner asked for arrives as a gist +
+            # the whole text attached; buttons still come from the WHOLE text.
+            from surfaces.telegram import reply_spill
+            send_text, spill_entry = reply_spill.plan_owner_reply(
+                getattr(result.inbound, "text", ""), _cmd, full_text,
+                in_room=bool(reply_to_room(reply) and _room_chat_id))
             try:
                 _mid = await _send_telegram_text(  # 064 F2: /pending's own tokens as buttons
-                    self.bot, reply_chat_id, reply_text(reply),
+                    self.bot, reply_chat_id, send_text,
                     actions=(card_ops.reply_actions(reply)
-                             or (actions_from_text(reply_text(reply))
+                             or (actions_from_text(full_text)
                                  if _cmd in DECISION_LIST_COMMANDS else None)))
             except Exception as e:
                 # TG12: the verb already RAN (a money `go` included);
                 # its answer must reach /missed, not only the log.
-                _record_undelivered_reply(result.inbound.identity.user_id,
-                                          str(_cmd or "command"),
-                                          reply_text(reply), e)
+                await reply_spill.hold_unsent_reply(
+                    _send_telegram_text, self.bot, reply_chat_id, _uid, _cmd, e,
+                    sent_text=send_text, full_text=full_text,
+                    spilled=spill_entry is not None)
                 return
+            if spill_entry is not None:
+                await reply_spill.send_spill_or_full(
+                    _send_telegram_text, self.bot, self._send_reply_media,
+                    reply_chat_id, _uid, _cmd, spill_entry, full_text)
             card_ops.record_ref(reply, reply_chat_id, _mid)
             # A tapped decision button is spent: take the keyboard off the
             # message it sat on, so it cannot be tapped again (064 F2

@@ -160,6 +160,9 @@ class AuthTables:
             await self.db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_crypto_payments_time ON crypto_payments(detected_at)
             ''')
+            # 098 MO-01: the deposit-sweep state columns. Shared with migration v1.15.0.
+            from modules.payments.sweep_state import ensure_sweep_schema
+            await ensure_sweep_schema(self.db)
 
             # Usage records
             await self.db.execute('''
@@ -276,6 +279,10 @@ class AuthTables:
                 CREATE INDEX IF NOT EXISTS idx_billing_failures_created
                 ON billing_failures(created_at)
             ''')
+            # 098 W1 (MO-07): resolution columns + the one-charge index. Shared
+            # with migration v1.13.0.
+            from modules.credits.billing_failures import ensure_columns
+            await ensure_columns(self.db, logger)
 
             # Pending sweeps (treasury transfer queue)
             await self.db.execute('''

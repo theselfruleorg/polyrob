@@ -280,7 +280,13 @@ def cancel(container: Any, offer_id: str, *, by: str = "owner",
         status = now.status if now is not None else "gone"
         return (f"❌ offer {offer_id} is {status}, not pending — a paid "
                 f"offer cannot be cancelled, only credited.")
-    return f"✅ Offer {offer_id} withdrawn ({row.verb} on {row.target_name or row.target_user_id})."
+    # ⚠️ The invoice is NOT expired here. It stays matchable until its own
+    # deadline, so a payment sent after the cancel is still traced to this
+    # offer (held and reported, never applied). Its expiry then sends no
+    # notice — `SettlementNotifyMixin._notify_expired` reads `refused`.
+    return (f"✅ Offer {offer_id} withdrawn ({row.verb} on "
+            f"{row.target_name or row.target_user_id}). A payment that still "
+            f"arrives is held and reported, not applied.")
 
 
 def credits_owed(container: Any) -> List:

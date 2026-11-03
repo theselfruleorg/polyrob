@@ -136,7 +136,9 @@ def reject(registry: AppServiceRegistry, slug: str, user_id: str, *, via: str) -
         return False, f"no app {slug!r} for this tenant"
     if r["status"] != STATUS_PENDING:
         return False, f"{slug!r} is {r['status']}, not pending — use kill to stop a running app"
-    registry.set_status(slug, user_id, STATUS_STOPPED, error=f"rejected by owner via {via}")
+    if not registry.set_status(slug, user_id, STATUS_STOPPED, error=f"rejected by owner via {via}",
+                               from_states=(STATUS_PENDING,)):
+        return False, f"{slug!r} changed state underneath — look again (/apps show {slug})"
     from core.event_kinds import APP_STOPPED
     _emit(APP_STOPPED, user_id, {"slug": slug, "by": "owner", "via": via, "rejected": True})
     return True, f"✖ {slug!r} rejected; it never ran."
@@ -148,7 +150,10 @@ def kill(registry: AppServiceRegistry, slug: str, user_id: str, *, via: str) -> 
         return False, f"no app {slug!r} for this tenant"
     if r["status"] == STATUS_STOPPED:
         return True, f"{slug!r} is already stopped."
-    registry.set_status(slug, user_id, STATUS_STOPPED, error=f"killed by owner via {via}")
+    from core.app_service.registry import NOT_STOPPED
+    if not registry.set_status(slug, user_id, STATUS_STOPPED, error=f"killed by owner via {via}",
+                               from_states=NOT_STOPPED):
+        return True, f"{slug!r} is already stopped."
     from core.event_kinds import APP_STOPPED
     _emit(APP_STOPPED, user_id, {"slug": slug, "by": "owner", "via": via})
     return True, (f"⏹ {slug!r} stop queued — the supervisor removes its container and stanza "

@@ -4,8 +4,8 @@ Outbound only carries the agent's reply to a bound email session; it goes out ov
 injected SMTP sender (the existing ``EmailTool`` or any object with an async
 ``send_email(to, subject, body)``), so it's unit-testable with a fake and no network.
 
-Streaming: buffered (``supports_edit=False``) — email has no in-place edit, so the
-Surface ABC accumulates partials and emits ONE message on finalize (never one email per
+Streaming: none (``supports_edit=False``) — email has no in-place edit, so the
+Surface ABC drops partials and the turn's reply is ONE email (never one email per
 delta). ``supports_interactive_ask=False`` — email is asynchronous, no live prompt.
 Fail-open: a sender error returns ``SendResult(success=False)`` and is swallowed.
 """
@@ -69,7 +69,7 @@ class EmailSurface(Surface):
         )
 
     async def send(self, msg: OutboundMessage) -> SendResult:
-        # supports_edit is False, so this is a no-op (buffered path), but keep the call
+        # supports_edit is False, so this is a no-op (no live stream), but keep the call
         # for parity with the contract.
         if await self._finalize_live_on_send(msg):
             return SendResult(success=True)
@@ -81,7 +81,8 @@ class EmailSurface(Surface):
         # A5 (2026-07-13 review): seed the reply binding BEFORE the email leaves.
         # A cap-refused binding BLOCKS the send — previously the mail still went out
         # and the reply was orphaned forever (unroutable, invisibly).
-        seed_state = self._maybe_seed_correspondent(msg.session_key, addr)
+        seed_state = self._maybe_seed_correspondent(msg.session_key, addr,
+                                                    first_message=msg.text)
         if seed_state == "refused":
             logger.warning(
                 "EmailSurface.send to %s blocked: correspondent per-day cap reached — "
@@ -129,7 +130,8 @@ class EmailSurface(Surface):
             logger.error("EmailSurface.send to %s failed: %s", addr, e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
-    def _maybe_seed_correspondent(self, session_key: str, addr: str) -> Optional[str]:
+    def _maybe_seed_correspondent(self, session_key: str, addr: str,
+                                  first_message: Optional[str] = None) -> Optional[str]:
         """Register the recipient as a (guard-railed) correspondent BEFORE sending, so
         their reply can later route back as DATA. Approval-gated and fail-soft — a seed
         FAULT never affects the send; only an explicit cap "refused" blocks it (the
@@ -147,7 +149,7 @@ class EmailSurface(Surface):
             return maybe_seed_correspondent(
                 container, surface="email", address=addr,
                 session_id=row.get("session_id"), user_id=row.get("user_id"),
-                thread_id=None, provenance="owner",
+                thread_id=None, provenance="owner", first_message=first_message,
             )
         except Exception as e:
             logger.warning("EmailSurface correspondent seed skipped for %s: %s — "

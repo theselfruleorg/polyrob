@@ -381,6 +381,7 @@ async def test_run_now_off_an_owner_turn_respects_the_jobs_own_gap(tmp_path, age
     from tools.cronjob_tools import CronRunNowAction
     t = _tool(tmp_path)
     job = _job(t)
+    t._cron_service.store.claim_for_run(job.id)  # 098 MO-09: only a run ends a run
     t._cron_service.store.update_after_run(job.id, last_run_at=datetime.now(),
                                            next_run_at=job.next_run_at, status="scheduled")
     res = await t.cronjob_run_now(CronRunNowAction(job_id=job.id), execution_context=_ctx())

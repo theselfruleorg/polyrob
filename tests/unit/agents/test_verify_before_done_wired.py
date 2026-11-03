@@ -44,9 +44,8 @@ def _build_run_loop_agent(*, max_steps=10, registered=("coding_run_tests", "done
     a._is_sub_agent = False
     a.agent_id = "agent_test-session"
 
-    a.state = types.SimpleNamespace(
-        n_steps=0, consecutive_failures=0, reset_llm_errors=MagicMock(),
-    )
+    from agents.task.agent.agent_state import AgentState
+    a.state = AgentState(n_steps=0)  # 098 AG-01: run() calls state.begin_run()
 
     done_result = [ActionResult(is_done=True, extracted_content="final answer", success=True)]
 

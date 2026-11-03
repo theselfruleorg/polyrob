@@ -16,6 +16,18 @@ from modules.memory.wikilinks import parse_wikilinks
 
 logger = logging.getLogger("modules.memory.sqlite_memory_provider")
 
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 MO-15: a curated note's lifecycle (``curated_memory.status``).
+CURATED_NOTE = StateMachine(
+    "curated_note",
+    states={"active", "pending", "archived"},
+    transitions={"pending": {"active", "archived"},
+                 "active": {"archived"},
+                 "archived": {"active"}},
+    initial={"active", "pending"},
+)
+
 
 class CuratedNotesStoreMixin:
     def _init_curated_schema(self, conn) -> None:
@@ -144,19 +156,20 @@ class CuratedNotesStoreMixin:
         except Exception as e:
             logger.warning("note_create failed: %s", e)
             return None
-    #: The status values a note may hold (schema comment on the column). A
-    #: `pending` note comes from a forged/autonomous turn (see
-    #: ``action_registration.py``) and stays dark until an owner promotes it to
-    #: `active`; `archived` is the reject / soft-delete sink (A27).
-    _NOTE_STATUSES = ("active", "pending", "archived")
+    # A `pending` note comes from a forged/autonomous turn (see
+    # ``action_registration.py``) and stays dark until an owner promotes it to
+    # `active`; `archived` is the reject / soft-delete sink (A27). The states
+    # and edges are :data:`CURATED_NOTE`.
 
     async def note_update(self, user_id, note_id, *, content: str = None,
-                          title: str = None, tags=None, status: str = None) -> bool:
-        """Update a note's content/title/tags/status (tenant-scoped). Content
-        updates recompute links. ``status`` (A27) promotes a pending note to
-        ``active`` or archives it — only ``active``|``pending``|``archived`` are
-        accepted; an unknown value is refused. Returns False when the note isn't
-        this tenant's (or the status is invalid)."""
+                          title: str = None, tags=None) -> bool:
+        """Update a note's content/title/tags (tenant-scoped). Content updates
+        recompute links. Returns False when the note isn't this tenant's, or is
+        archived (an edit there succeeded and stayed invisible).
+
+        098 MO-15: there is no raw status setter — a status moves only through
+        :meth:`note_promote` / :meth:`note_restore` / :meth:`note_archive`, each
+        a guarded transition of the ``curated_note`` machine."""
         if self._anon_blocked(user_id):
             return False
         sets, args = ["updated_ts = ?"], [int(time.time())]
@@ -175,33 +188,47 @@ class CuratedNotesStoreMixin:
             sets.append("title = ?"); args.append(scrub_secret_shapes(title).strip() or None)
         if tags is not None:
             sets.append("tags = ?"); args.append(json.dumps(self._tags_list(tags)))
-        if status is not None:
-            if status not in self._NOTE_STATUSES:
-                return False
-            sets.append("status = ?"); args.append(status)
         try:
             n = execute_retry(
                 self.db_path,
                 f"UPDATE curated_memory SET {', '.join(sets)} "
-                f"WHERE id = ? AND user_id = ?",
+                f"WHERE id = ? AND user_id = ? AND COALESCE(status, 'active') != 'archived'",
                 tuple(args) + (note_id, self._norm_user(user_id)))
             return bool(n)
         except Exception as e:
             logger.warning("note_update failed: %s", e)
             return False
     async def note_archive(self, user_id, note_id) -> bool:
-        """Archive (never delete) a note. Returns False when not this tenant's."""
+        """Archive (never delete) a note: ``active|pending -> archived``. False
+        when not this tenant's or already archived (a second archive is a no-op)."""
+        return self._note_move(user_id, note_id, ("active", "pending"), "archived")
+
+    async def note_promote(self, user_id, note_id) -> bool:
+        """``pending -> active`` (the owner accepted a background draft)."""
+        return self._note_move(user_id, note_id, ("pending",), "active")
+
+    async def note_restore(self, user_id, note_id) -> bool:
+        """``archived -> active``."""
+        return self._note_move(user_id, note_id, ("archived",), "active")
+
+    def _note_move(self, user_id, note_id, froms, to) -> bool:
+        """One guarded write per transition (098 S2). A NULL status reads as
+        ``active`` (legacy rows)."""
         if self._anon_blocked(user_id):
+            return False
+        froms = CURATED_NOTE.require_sources(to, froms, ctx={"note": note_id})
+        if not froms:
             return False
         try:
             n = execute_retry(
                 self.db_path,
-                "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
-                "WHERE id = ? AND user_id = ?",
-                (int(time.time()), note_id, self._norm_user(user_id)))
-            return bool(n)
+                "UPDATE curated_memory SET status = ?, updated_ts = ? "
+                f"WHERE id = ? AND user_id = ? AND COALESCE(status, 'active') IN "
+                f"({','.join('?' * len(froms))})",
+                (to, int(time.time()), note_id, self._norm_user(user_id), *froms))
+            return n == 1
         except Exception as e:
-            logger.warning("note_archive failed: %s", e)
+            logger.warning("note %s -> %s failed: %s", note_id, to, e)
             return False
     async def note_list(self, user_id, *, status: str = "active", tag: str = None,
                         limit: int = 200) -> list:

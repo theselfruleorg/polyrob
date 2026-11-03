@@ -257,6 +257,9 @@ a.entry:hover{ border-left-color:var(--running) }
 .entry-meta{ margin-top:var(--s2); font-size:var(--t-micro); color:var(--ink-3) }
 /* a tool_approval's full grant card (CR-M01): every money field, line by line */
 .entry-card{ white-space:pre-wrap; font-family:var(--mono) }
+/* 096 W7: a pending card body is lines (Why / Changes); a review is the whole draft. */
+.entry-lines{ white-space:pre-line }
+.entry-review{ white-space:pre-wrap; font-family:var(--mono); max-height:60vh; overflow:auto }
 /* Money › Moves › Make a move: the send/swap form (action cards) */
 .move-form{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:var(--s2) var(--s3); align-items:end }
 .move-form label{ display:flex; flex-direction:column; gap:var(--s1); font-size:var(--t-micro); color:var(--ink-3) }

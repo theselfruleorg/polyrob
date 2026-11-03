@@ -137,6 +137,10 @@ class HITLManager:
                 messages.append(self._user_messages.popleft())
             if self._user_messages:
                 self.logger.info(f"Drained {len(messages)}, {len(self._user_messages)} remaining")
+            elif getattr(self, "_restored_snapshot", None):
+                # 098 AG-08: every restored message is drained — drop the snapshot.
+                from agents.task.session_residency import drop_restored_snapshot
+                drop_restored_snapshot(self)
 
         # Emit queue status update after drain
         await self._emit_queue_status()
@@ -346,11 +350,13 @@ class HITLManager:
     def restore_state(self, state: Dict[str, Any]) -> None:
         """Restore HITL manager state from persistence.
 
+        098 AG-08: MERGE — the saved messages go before anything already queued
+        (a message delivered to the recreated agent is never wiped).
+
         Args:
             state: State dictionary from get_state()
         """
-        # Restore message queue
-        self._user_messages.clear()
+        saved = []
         for msg in state.get("queued_messages", []):
             # Convert timestamp string back to datetime if needed
             if isinstance(msg.get("timestamp"), str):
@@ -358,7 +364,8 @@ class HITLManager:
                     msg["timestamp"] = datetime.fromisoformat(msg["timestamp"])
                 except (ValueError, TypeError):
                     msg["timestamp"] = datetime.utcnow()
-            self._user_messages.append(msg)
+            saved.append(msg)
+        self._user_messages.extendleft(reversed(saved))
 
         self._callback_failures = state.get("callback_failures", 0)
 

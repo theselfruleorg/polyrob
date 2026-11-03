@@ -274,7 +274,11 @@ class AppServiceTool(BaseTool):
         row = registry.get(params.slug, user_id)
         if row is None:
             return ActionResult(error=f"app_stop: no app {params.slug!r} for this tenant")
-        registry.set_status(params.slug, user_id, STATUS_STOPPED, error="stopped by the agent")
+        from core.app_service.registry import NOT_STOPPED
+        if not registry.set_status(params.slug, user_id, STATUS_STOPPED,
+                                   error="stopped by the agent", from_states=NOT_STOPPED):
+            return ActionResult(extracted_content=f"{params.slug!r} is already stopped.",
+                                include_in_memory=True)
         from core.event_kinds import APP_STOPPED
         _emit_event(APP_STOPPED, execution_context, {"slug": params.slug, "by": "agent"})
         return ActionResult(extracted_content=f"Stop of {params.slug!r} queued; the supervisor "

@@ -27,10 +27,6 @@ from __future__ import annotations
 
 from cli.ui import candy
 
-# The default collection mirrors ``cli/commands/kb.py`` (kb search / add default).
-_DEFAULT_COLLECTION = "default"
-
-
 async def h_kb(ctx) -> None:
     """Handle ``/kb`` — list or search the knowledge base.
 
@@ -102,7 +98,7 @@ async def _do_search(ctx, *, query: str, user_id: str) -> None:
         from modules.memory.registry import kb_search
 
         result = await kb_search(
-            query, user_id=user_id, collection=_DEFAULT_COLLECTION, limit=8
+            query, user_id=user_id, collection=None, limit=8  # 097: every collection
         )
     except Exception as exc:
         ctx.emit(f"KB search failed: {exc}", title="kb")

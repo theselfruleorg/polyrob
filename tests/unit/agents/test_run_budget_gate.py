@@ -33,10 +33,8 @@ def _build_agent():
     a.validate_output = False
     a._is_sub_agent = False
     a.agent_id = "agent-1"
-    a.state = types.SimpleNamespace(
-        n_steps=0, consecutive_failures=0, stopped=False, done=False, paused=False,
-        reset_llm_errors=MagicMock(),
-    )
+    from agents.task.agent.agent_state import AgentState
+    a.state = AgentState(n_steps=0)  # 098 AG-01: run() calls state.begin_run()
 
     async def _fake_step(step_info=None):
         a.state.n_steps += 1

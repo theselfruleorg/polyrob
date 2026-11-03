@@ -71,7 +71,7 @@ async def test_curator_runs_memory_prune(monkeypatch, provider):
     """The curator tick sweeps memories with the MEMORY_RETENTION_DAYS cutoff,
     and a <=0 window disables the sweep."""
     import modules.memory.registry as reg
-    from agents.task.agent.core.curator import SkillCurator
+    from agents.task.agent.core.retention import RetentionSweeper
 
     reg.reset_memory_registry()
     reg.set_external_memory_provider(provider)
@@ -86,7 +86,7 @@ async def test_curator_runs_memory_prune(monkeypatch, provider):
             def set_state(self, key, value):
                 pass
 
-        curator = SkillCurator(object(), _Usage())
+        curator = RetentionSweeper()
         monkeypatch.setenv("MEMORY_RETENTION_DAYS", "365")
         await curator.run_once()
         rows = execute_retry(provider.db_path,

@@ -7,6 +7,11 @@ so a sticky load balancer (or a human) can route the request to its owner.
 
 With the default in-process registry every route is ``LOCAL`` or ``MISSING``, so
 behaviour is unchanged until ``SESSION_REGISTRY_BACKEND=sqlite`` + ``workers>1``.
+
+098 AG-16: ``REMOTE`` means a LIVE other owner. The sqlite registry checks the
+owner's process identity (pid + start time + boot id) and turns a dead owner's
+row into ``MISSING``, so a restarted worker (a reused pid) never answers 409 for
+ever — the endpoint's own fallback recreates the session locally from disk.
 """
 from __future__ import annotations
 

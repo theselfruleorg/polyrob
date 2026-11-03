@@ -56,34 +56,51 @@ def markdown_to_html(text: str) -> str:
 
     body = _FENCE_RE.sub(_fence, text)
     body = _INLINE_CODE_RE.sub(lambda m: _stash(f"<code>{_esc(m.group(1))}</code>"), body)
-    # 030 L7a: Telegram HTML has no table tag — degrade a markdown table to a
-    # monospace <pre> block instead of a wall of literal pipes on the phone.
+    # 030 L7a: Telegram HTML has no table tag. A narrow table (<= 3 columns)
+    # becomes "label: value" lines a phone can read; a wider one degrades to a
+    # monospace <pre> block instead of a wall of literal pipes (096 W6).
     body = _stash_tables(body, _stash)
 
     body = _esc(body)
 
+    # 096 W6: a `---` rule becomes a thin line, not a literal run of dashes.
+    body = _RULE_RE.sub(_THIN_RULE, body)
     # A heading is already bold, so drop any inner ** to avoid nesting <b> in <b>.
     body = _HEADING_RE.sub(lambda m: f"<b>{m.group(1).replace('**', '')}</b>", body)
     body = _BULLET_RE.sub(r"\1• ", body)
-    # Stash the whole anchor: a URL is not prose, so no emphasis rule may touch it
-    # (".../_foo_" would otherwise become an italic tag inside the href).
-    def link(m):
-        from urllib.parse import urlsplit
-        try:
-            url = urlsplit(_html.unescape(m.group(2)))
-            allowed = ((url.scheme.lower() in {'http', 'https'} and bool(url.netloc))
-                       or (url.scheme.lower() == 'mailto' and '@' in url.path))
-        except ValueError:
-            allowed = False
-        if not allowed:
-            return m.group(1)  # no tg:// user mentions or application deep links
-        return _stash(f'<a href="{_attr(m.group(2))}">{m.group(1)}</a>')
-    body = _LINK_RE.sub(link, body)
-    body = _BOLD_RE.sub(r"<b>\1</b>", body)
-    body = _BOLD_US_RE.sub(r"<b>\1</b>", body)
-    body = _STRIKE_RE.sub(r"<s>\1</s>", body)
-    body = _ITALIC_RE.sub(r"<i>\1</i>", body)
-    body = _ITALIC_US_RE.sub(r"<i>\1</i>", body)
+    # 096 W6: a numbered item keeps its own number ("1)" reads as "1.").
+    body = _NUMBERED_RE.sub(r"\1\2. ", body)
+
+    def _inline(seg: str) -> str:
+        # Stash the whole anchor: a URL is not prose, so no emphasis rule may
+        # touch it (".../_foo_" would otherwise become an italic tag inside the href).
+        def link(m):
+            from urllib.parse import urlsplit
+            try:
+                url = urlsplit(_html.unescape(m.group(2)))
+                allowed = ((url.scheme.lower() in {'http', 'https'} and bool(url.netloc))
+                           or (url.scheme.lower() == 'mailto' and '@' in url.path))
+            except ValueError:
+                allowed = False
+            if not allowed:
+                return m.group(1)  # no tg:// user mentions or application deep links
+            return _stash(f'<a href="{_attr(m.group(2))}">{m.group(1)}</a>')
+        seg = _LINK_RE.sub(link, seg)
+        seg = _BOLD_RE.sub(r"<b>\1</b>", seg)
+        seg = _BOLD_US_RE.sub(r"<b>\1</b>", seg)
+        seg = _STRIKE_RE.sub(r"<s>\1</s>", seg)
+        seg = _ITALIC_RE.sub(r"<i>\1</i>", seg)
+        return _ITALIC_US_RE.sub(r"<i>\1</i>", seg)
+
+    # 096 W6: `>` quote lines become a <blockquote>. Inline formatting runs per
+    # block, so a bold span can never open inside a quote and close outside it.
+    parts: List[str] = []
+    for is_quote, seg in _quote_blocks(body):
+        if is_quote:
+            parts.append(f"<blockquote>{_inline(seg)}</blockquote>")
+        else:
+            parts.append(_inline(seg))
+    body = "\n".join(parts)
 
     def _restore(m: re.Match) -> str:
         i = int(m.group(1))
@@ -93,13 +110,65 @@ def markdown_to_html(text: str) -> str:
     return re.sub(r"\x00(\d+)\x00", _restore, body)
 
 
+#: A markdown thematic break (``---`` / ``***`` / ``___``), on its own line.
+_RULE_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", re.MULTILINE)
+_THIN_RULE = "──────────"
+_NUMBERED_RE = re.compile(r"^([ \t]*)(\d{1,3})[.)][ \t]+", re.MULTILINE)
+# After escaping, a quote marker `>` reads `&gt;`.
+_QUOTE_LINE_RE = re.compile(r"^[ \t]*&gt;[ \t]?(.*)$")
+
+
+def _quote_blocks(body: str):
+    """``[(is_quote, text)]`` — runs of ``>`` lines (marker stripped) and the
+    text between them, in order. Joined back with newlines by the caller."""
+    blocks: List[tuple] = []
+    for line in body.split("\n"):
+        m = _QUOTE_LINE_RE.match(line)
+        is_quote = m is not None
+        text = m.group(1) if m else line
+        if blocks and blocks[-1][0] == is_quote:
+            blocks[-1][1].append(text)
+        else:
+            blocks.append((is_quote, [text]))
+    return [(q, "\n".join(lines)) for q, lines in blocks]
+
+
 _TABLE_SEP_RE = re.compile(
     r"^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$")
 
 
+#: A table this narrow reads as "label: value" lines on a phone (096 W6).
+NARROW_TABLE_MAX_COLS = 3
+
+
+def _table_cells(line: str) -> List[str]:
+    cells = line.strip()
+    if cells.startswith("|"):
+        cells = cells[1:]
+    if cells.endswith("|"):
+        cells = cells[:-1]
+    return [c.strip() for c in cells.split("|")]
+
+
+def _narrow_table_lines(header: List[str], rows: List[List[str]]) -> List[str]:
+    """``label: value`` lines (markdown source — it is escaped and formatted
+    with the prose around it). The header names the columns once, in bold."""
+    def line(cells: List[str], bold: bool) -> str:
+        cells = cells + [""] * (len(header) - len(cells))
+        label = cells[0]
+        rest = " · ".join(c for c in cells[1:len(header)] if c)
+        if bold and label:
+            label = f"**{label}**"
+        return f"{label}: {rest}" if rest else label
+    out = [line(header, True)] if any(header) else []
+    out.extend(line(r, False) for r in rows)
+    return out
+
+
 def _stash_tables(body: str, _stash) -> str:
-    """Lift markdown table blocks (header line + |---| separator + rows) into
-    stashed ``<pre>`` blocks. A lone line with pipes is prose, not a table."""
+    """Lift markdown table blocks (header line + |---| separator + rows). A
+    table of <= ``NARROW_TABLE_MAX_COLS`` columns becomes "label: value" lines;
+    a wider one a stashed ``<pre>`` block. A lone line with pipes is prose."""
     lines = body.split("\n")
     out: List[str] = []
     i = 0
@@ -109,8 +178,13 @@ def _stash_tables(body: str, _stash) -> str:
             j = i + 2
             while j < len(lines) and "|" in lines[j]:
                 j += 1
-            block = "\n".join(lines[i:j])
-            out.append(_stash(f"<pre>{_esc(block)}</pre>"))
+            header = _table_cells(lines[i])
+            if len(header) <= NARROW_TABLE_MAX_COLS:
+                out.extend(_narrow_table_lines(
+                    header, [_table_cells(r) for r in lines[i + 2:j]]))
+            else:
+                block = "\n".join(lines[i:j])
+                out.append(_stash(f"<pre>{_esc(block)}</pre>"))
             i = j
         else:
             out.append(lines[i])
@@ -251,6 +325,8 @@ def split_markdown(text: str, limit: int) -> List[str]:
             for _ in range(4):
                 adj = _adjust_inline_cut(rest, cut, limit)
                 if adj is None or adj == cut:
+                    adj = _italic_cut(rest, cut, limit)
+                if adj is None or adj == cut:
                     break
                 cut = adj
             head = rest[:cut]
@@ -259,8 +335,84 @@ def split_markdown(text: str, limit: int) -> List[str]:
             head = rest[:cut]
         chunks.append(head)
         rest = rest[cut:]
+        # 096 W6: a table cut in two keeps its header in the second half, so
+        # the rows there still render as a table, not as literal pipes.
+        carry = _table_header_carry(head, rest)
+        if carry and len(carry) < limit // 2:
+            rest = carry + rest.lstrip("\n")
     chunks.append(rest)
     return chunks
+
+
+def _table_header_carry(head: str, rest: str) -> str:
+    """``header\n|---|\n`` when ``head`` ends inside a table that ``rest``
+    continues, else ``""``."""
+    nxt = rest.lstrip("\n").split("\n", 1)[0]
+    if "|" not in nxt:
+        return ""
+    lines = head.rstrip("\n").split("\n")
+    i = len(lines) - 1
+    while i >= 1 and "|" in lines[i]:
+        if _TABLE_SEP_RE.match(lines[i]) and "|" in lines[i - 1]:
+            return f"{lines[i - 1]}\n{lines[i]}\n"
+        i -= 1
+    return ""
+
+
+def _italic_cut(rest: str, cut: int, limit: int):
+    """A cut inside a one-line ``*italic*`` / ``_italic_`` span moves before the
+    span (or after it, when the whole span fits). None = no change."""
+    line_start = rest.rfind("\n", 0, cut) + 1
+    line_end = rest.find("\n", cut)
+    line = rest[line_start:line_end if line_end != -1 else len(rest)]
+    at = cut - line_start
+    for rx in (_ITALIC_RE, _ITALIC_US_RE):
+        for m in rx.finditer(line):
+            if m.start() < at < m.end():
+                end = line_start + m.end()
+                if end <= limit:
+                    return end
+                return line_start + m.start() if line_start + m.start() > 0 else None
+    return None
+
+
+_PLAIN_LINK_RE = re.compile(r"\[([^\]\n]*)\]\(([^)\s]+)\)")
+
+
+def markdown_to_plain(text: str) -> str:
+    """The agent's markdown as plain text — the fallback when a surface rejects
+    the rendered HTML (096 W6). Strips the markers instead of sending them raw:
+    fences and inline code keep their text, ``[t](url)`` reads ``t (url)``,
+    ``**b**``/``*i*``/``~~s~~`` lose their markers, headings their ``#``,
+    bullets read ``•``. Never raises; an empty input returns ``""``."""
+    if not text:
+        return ""
+    try:
+        stash: List[str] = []
+
+        def _keep(literal: str) -> str:
+            stash.append(literal)
+            return f"\x00{len(stash) - 1}\x00"
+
+        # Code is literal: lifted out first so no marker rule touches it.
+        body = _FENCE_RE.sub(lambda m: _keep(m.group(2).strip("\n")), text)
+        body = _INLINE_CODE_RE.sub(lambda m: _keep(m.group(1)), body)
+        body = _PLAIN_LINK_RE.sub(
+            lambda m: m.group(1) if m.group(1) == m.group(2)
+            else f"{m.group(1)} ({m.group(2)})", body)
+        body = _RULE_RE.sub(_THIN_RULE, body)
+        body = _HEADING_RE.sub(lambda m: m.group(1).replace("**", ""), body)
+        body = _BULLET_RE.sub(r"\1• ", body)
+        body = _BOLD_RE.sub(r"\1", body)
+        body = _BOLD_US_RE.sub(r"\1", body)
+        body = _STRIKE_RE.sub(r"\1", body)
+        body = _ITALIC_RE.sub(r"\1", body)
+        body = _ITALIC_US_RE.sub(r"\1", body)
+        return re.sub(r"\x00(\d+)\x00",
+                      lambda m: stash[int(m.group(1))] if int(m.group(1)) < len(stash)
+                      else m.group(0), body)
+    except Exception:
+        return text
 
 
 def _utf16_len(s: str) -> int:

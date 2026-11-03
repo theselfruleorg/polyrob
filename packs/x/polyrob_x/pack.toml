@@ -28,7 +28,7 @@ public_paths = ["/oauth/callback"]
 # are configured (the live gate, polyrob_x:twitter_gate).
 [tools.twitter]
 # 067 (one install): without this module the tool is withheld and names the pack's extra.
-requires = ["tweepy"]
+requires = ["requests_oauthlib"]
 capabilities = ["high_impact", "delegate_blocked", "shared_identity", "writes_social", "writes_comms"]
 untrusted_output = true
 cli = "static"

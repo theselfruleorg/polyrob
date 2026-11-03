@@ -48,6 +48,7 @@ def test_tenant_scoping_same_app_name_isolated(tmp_path):
 def test_record_live_sets_status_url_digest_and_last_deploy(tmp_path):
     reg = _reg(tmp_path)
     reg.upsert_pending("app-a", "u1")
+    reg.begin_deploy("app-a", "u1")
     reg.record_live("app-a", "u1", space_repo="org/app-a",
                     public_url="https://org-app-a.hf.space",
                     health_path="/health", workspace_digest="d" * 64)
@@ -62,6 +63,7 @@ def test_record_live_sets_status_url_digest_and_last_deploy(tmp_path):
 def test_record_failed_and_set_status(tmp_path):
     reg = _reg(tmp_path)
     reg.upsert_pending("app-a", "u1")
+    reg.begin_deploy("app-a", "u1")
     reg.record_failed("app-a", "u1")
     assert reg.get("app-a", "u1")["status"] == "failed"
     reg.set_status("app-a", "u1", "undeployed")
@@ -98,9 +100,11 @@ def test_last_attempt_epoch_per_app(tmp_path):
 def test_list_live_all_crosses_tenants_for_boot_reconcile(tmp_path):
     reg = _reg(tmp_path)
     reg.upsert_pending("app-a", "u1")
+    reg.begin_deploy("app-a", "u1")
     reg.record_live("app-a", "u1", space_repo="o/a", public_url="https://x",
                     health_path="/", workspace_digest="d")
     reg.upsert_pending("app-b", "u2")
+    reg.begin_deploy("app-b", "u2")
     reg.record_live("app-b", "u2", space_repo="o/b", public_url="https://y",
                     health_path="/", workspace_digest="d")
     reg.upsert_pending("app-c", "u1")  # pending — not swept

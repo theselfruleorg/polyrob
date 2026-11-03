@@ -127,3 +127,59 @@ def test_sub_cancel_unknown_id(tmp_path, monkeypatch):
     res = CliRunner().invoke(owner, ["sub", "cancel", "sub_doesnotexist", "--user", "alice"])
     assert res.exit_code == 0
     assert "no active subscription" in res.output.lower()
+
+
+# --- 098 close-out MO-05: `polyrob owner sub reactivate` ---------------------
+
+def _set_status(db_path, sub_id, status, paid_through):
+    async def run():
+        db = DatabaseConnection(db_path)
+        await db.connect()
+        try:
+            await db.execute("UPDATE subscriptions SET status=?, paid_through=? WHERE id=?",
+                             (status, paid_through, sub_id))
+        finally:
+            await db.close()
+    asyncio.run(run())
+
+
+def _get(db_path, sub_id):
+    async def run():
+        db = DatabaseConnection(db_path)
+        await db.connect()
+        try:
+            return await subs.get_subscription(sub_id, db=db)
+        finally:
+            await db.close()
+    return asyncio.run(run())
+
+
+def test_sub_reactivate_brings_a_suspended_subscription_back_for_a_period(tmp_path, monkeypatch):
+    import time
+    db_path, sub_id = _make_db_with_sub(tmp_path, user_id="alice")
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    _set_status(db_path, sub_id, "suspended", int(time.time()) - 60 * 86400)
+    before = int(time.time())
+
+    res = CliRunner().invoke(owner, ["sub", "reactivate", sub_id, "--user", "alice"])
+    assert res.exit_code == 0, res.output
+    assert "reactivated" in res.output
+    row = _get(db_path, sub_id)
+    assert row["status"] == "active"
+    assert row["paid_through"] >= before + int(row["period_days"]) * 86400 - 1
+
+
+def test_sub_reactivate_refuses_canceled_active_and_other_tenants(tmp_path, monkeypatch):
+    import time
+    db_path, sub_id = _make_db_with_sub(tmp_path, user_id="alice")
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    res = CliRunner().invoke(owner, ["sub", "reactivate", sub_id, "--user", "alice"])
+    assert res.exit_code == 1 and "already active" in res.output
+    _set_status(db_path, sub_id, "grace", int(time.time()) - 86400)
+    res = CliRunner().invoke(owner, ["sub", "reactivate", sub_id, "--user", "mallory"])
+    assert res.exit_code == 1 and "unknown" in res.output
+    assert _get(db_path, sub_id)["status"] == "grace"
+    _set_status(db_path, sub_id, "canceled", int(time.time()) - 86400)
+    res = CliRunner().invoke(owner, ["sub", "reactivate", sub_id, "--user", "alice"])
+    assert res.exit_code == 1 and "terminal" in res.output
+    assert _get(db_path, sub_id)["status"] == "canceled"

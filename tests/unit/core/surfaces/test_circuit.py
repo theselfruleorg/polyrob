@@ -10,10 +10,20 @@ def test_opens_after_k_consecutive_failures():
     assert cb.is_open("wa") is False
 
 
-def test_manual_pause_resume():
-    cb = SurfaceCircuitBreaker(threshold=99)
-    cb.pause("wa"); assert cb.is_open("wa") is True
-    cb.resume("wa"); assert cb.is_open("wa") is False
+def test_manual_pause_resume(tmp_path):
+    from core.surfaces.circuit import CircuitStore
+    store = CircuitStore(str(tmp_path / "s.db"))
+    cb = SurfaceCircuitBreaker(threshold=99, store=store)
+    store.pause("wa"); assert cb.is_open("wa") is True
+    store.resume("wa"); assert cb.is_open("wa") is False
+
+
+def test_breaker_has_no_local_pause_state():
+    """098 CO-17: the store is the one pause authority."""
+    cb = SurfaceCircuitBreaker(threshold=3)
+    assert not hasattr(cb, "_paused")
+    assert not hasattr(cb, "pause") and not hasattr(cb, "resume")
+    assert "manually_paused" not in cb.state("wa")
 
 
 def test_two_below_threshold_does_not_open():
@@ -52,15 +62,16 @@ def test_state_returns_snapshot():
     assert cb.state("wa")["is_open"] is True
 
 
-def test_resume_also_resets_counter():
-    """resume() should clear both the manual-pause flag AND the counter."""
-    cb = SurfaceCircuitBreaker(threshold=3)
-    cb.record_fail("wa")
-    cb.record_fail("wa")
-    cb.record_fail("wa")   # auto-open
-    cb.pause("wa")          # also manually paused
+def test_store_resume_also_closes_an_auto_open(tmp_path):
+    """`surface resume` (the store) clears the pause AND a persisted auto-open."""
+    from core.surfaces.circuit import CircuitStore
+    store = CircuitStore(str(tmp_path / "s.db"))
+    cb = SurfaceCircuitBreaker(threshold=3, store=store)
+    for _ in range(3):
+        cb.record_fail("wa")   # auto-open
+    store.pause("wa")          # also paused
     assert cb.is_open("wa") is True
-    cb.resume("wa")
+    store.resume("wa")
     assert cb.is_open("wa") is False
     assert cb.state("wa")["consecutive_failures"] == 0
 
@@ -71,16 +82,15 @@ def test_circuit_store_persists_pause(tmp_path):
     db = str(tmp_path / "surface_state.db")
     store = CircuitStore(db)
 
-    # Writer breaker (simulates the CLI process)
-    writer_cb = SurfaceCircuitBreaker(threshold=99, store=store)
-    writer_cb.pause("wa")
+    # The CLI writes the store directly
+    CircuitStore(db).pause("wa")
 
     # Reader breaker (simulates the worker process — separate in-memory state)
     reader_cb = SurfaceCircuitBreaker(threshold=99, store=store)
     assert reader_cb.is_open("wa") is True   # reads from store
 
-    # resume via writer → reader sees it
-    writer_cb.resume("wa")
+    # resume via the CLI's store → reader sees it
+    CircuitStore(db).resume("wa")
     assert reader_cb.is_open("wa") is False
 
 

@@ -90,7 +90,7 @@ def test_deps_maps_a_pack_to_its_extra():
     base = lc.project_deps(lock, ROOT / "pyproject.toml", ["server"])
     with_x = lc.project_deps(lock, ROOT / "pyproject.toml", ["server"], "x")
     via_extra = lc.project_deps(lock, ROOT / "pyproject.toml", ["server", "twitter"])
-    assert "tweepy==" not in base and "tweepy==" in with_x
+    assert "requests-oauthlib==" not in base and "requests-oauthlib==" in with_x
     assert "polyrob[server,twitter] (packs [x])" in with_x.splitlines()[0]
     body = lambda t: t.split("\n", 1)[1]  # noqa: E731
     assert body(with_x) == body(via_extra)

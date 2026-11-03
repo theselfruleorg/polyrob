@@ -74,26 +74,80 @@ class DaytonaBackend(RemoteSandboxBackend):
         def _create():
             client = self._client(sdk)
             sandbox = None
-            prior = self.load_state().get("sandbox_id") if self._persist() else None
-            if prior:
-                try:
-                    sandbox = client.get(prior)
-                    state = str(getattr(sandbox, "state", "") or "").lower()
-                    if "started" not in state:
-                        start = getattr(sandbox, "start", None)
-                        start() if callable(start) else client.start(sandbox)
-                except Exception:
-                    logger.warning("daytona backend: could not resume sandbox %s; creating "
-                                   "a new one", prior, exc_info=True)
-                    sandbox = None
+            prior = self.load_state()
+            if self._persist() and prior.get("sandbox_id"):
+                sandbox = self._resume(client, prior["sandbox_id"])
+            elif prior.get("mode") == "ephemeral" and prior.get("sandbox_id"):
+                self._reap_dead_owner(client, prior)
             if sandbox is None:
                 sandbox = client.create(self._params(sdk))
-            if self._persist():
-                self.save_state({"sandbox_id": getattr(sandbox, "id", "")})
-            sandbox.process.exec(f"mkdir -p {self.workdir}")
+            # 098 CL-15: a record names the sandbox BEFORE anything else can fail.
+            from polyrob.sdk import process_identity
+            self.save_state({"phase": "created", "sandbox_id": getattr(sandbox, "id", ""),
+                             "mode": "persist" if self._persist() else "ephemeral",
+                             "owner": process_identity().encode()})
+            try:
+                sandbox.process.exec(f"mkdir -p {self.workdir}")
+            except BaseException:
+                self._release_sync(client, sandbox)  # never a billed sandbox with no handle
+                raise
             return {"client": client, "sandbox": sandbox}
 
         return await self.in_thread(_create)
+
+    def _resume(self, client, prior: str):
+        """The persisted sandbox, or None when the provider says it is gone. Any
+        other lookup error raises: never a silent second sandbox (098 CL-15)."""
+        try:
+            sandbox = client.get(prior)
+        except Exception as e:
+            if not _not_found(e):
+                raise ExecutionBackendError(
+                    f"daytona backend: could not look up sandbox {prior} ({e}); not creating "
+                    "a second one — retry, or delete it in Daytona") from e
+            logger.warning("daytona backend: sandbox %s is gone; creating a new one", prior)
+            self.clear_state()
+            return None
+        state = str(getattr(sandbox, "state", "") or "").lower()
+        if "started" not in state:
+            start = getattr(sandbox, "start", None)
+            start() if callable(start) else client.start(sandbox)
+        return sandbox
+
+    def _reap_dead_owner(self, client, prior: Dict[str, Any]) -> None:
+        """An ephemeral sandbox recorded by a process that is gone: delete it."""
+        from polyrob.sdk import ProcIdentity, is_alive
+        owner = ProcIdentity.decode(prior.get("owner"))
+        if owner is not None and is_alive(owner):
+            return
+        try:
+            old = client.get(prior["sandbox_id"])
+            delete = getattr(old, "delete", None)
+            delete() if callable(delete) else client.delete(old)
+        except Exception:
+            logger.warning("daytona backend: could not delete orphaned sandbox %s",
+                           prior.get("sandbox_id"), exc_info=True)
+
+    def reap_orphan(self, record: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """The boot sweep's verb (098 CL-15) for a record whose owner is dead:
+        persist -> stop (the record stays, ``phase="stopped"``, so the session
+        resumes it); ephemeral -> delete (the record goes). A provider
+        not-found drops the record; any other error raises."""
+        client = self._client(self._sdk())
+        sid = record["sandbox_id"]
+        try:
+            sandbox = client.get(sid)
+        except Exception as e:
+            if _not_found(e):
+                return "gone", None
+            raise
+        if record.get("mode", "persist") == "persist":
+            stop = getattr(sandbox, "stop", None)
+            stop() if callable(stop) else client.stop(sandbox)
+            return "stopped", dict(record, phase="stopped")
+        delete = getattr(sandbox, "delete", None)
+        delete() if callable(delete) else client.delete(sandbox)
+        return "deleted", None
 
     async def _exec(self, argv: List[str], *, timeout: float, stdin: Optional[str],
                     env: Dict[str, str]) -> Tuple[int, str, str]:
@@ -120,18 +174,26 @@ class DaytonaBackend(RemoteSandboxBackend):
         return (rc if rc is not None else 1), str(out or ""), ""
 
     async def _release(self, handle: Any) -> None:
-        client, sandbox = handle["client"], handle["sandbox"]
+        await self.in_thread(self._release_sync, handle["client"], handle["sandbox"])
 
-        def _stop():
-            if self._persist():
-                stop = getattr(sandbox, "stop", None)
-                stop() if callable(stop) else client.stop(sandbox)
-                return
-            delete = getattr(sandbox, "delete", None)
-            delete() if callable(delete) else client.delete(sandbox)
-            self.clear_state()
+    def _release_sync(self, client, sandbox) -> None:
+        """Persist: stop (the id stays recorded). Else delete, then forget the id —
+        the record is cleared only after the delete succeeded."""
+        if self._persist():
+            stop = getattr(sandbox, "stop", None)
+            stop() if callable(stop) else client.stop(sandbox)
+            state = self.load_state()
+            if state.get("sandbox_id"):  # 098 CL-15: the boot sweep has nothing to do
+                self.save_state(dict(state, phase="stopped"))
+            return
+        delete = getattr(sandbox, "delete", None)
+        delete() if callable(delete) else client.delete(sandbox)
+        self.clear_state()
 
-        await self.in_thread(_stop)
+
+def _not_found(e: BaseException) -> bool:
+    code = getattr(e, "status_code", None) or getattr(e, "status", None)
+    return code == 404 or "not found" in str(e).lower()
 
 
 def shell_executor(*, session_id: str, workspace_dir: str = "", logs_dir: str = ""):

@@ -273,9 +273,8 @@ def _build_run_loop_agent(*, judge_result, max_steps):
     a._is_sub_agent = False
     a.agent_id = "agent_test-session"
 
-    a.state = types.SimpleNamespace(
-        n_steps=0, consecutive_failures=0, reset_llm_errors=MagicMock(),
-    )
+    from agents.task.agent.agent_state import AgentState
+    a.state = AgentState(n_steps=0)  # 098 AG-01: run() calls state.begin_run()
 
     # Every step "completes" with a done() result — the run loop's job here is
     # deciding whether to break on it or keep going per validate_output.

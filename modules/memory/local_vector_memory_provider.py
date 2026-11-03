@@ -220,6 +220,9 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                     "user_id TEXT, collection TEXT, source_path TEXT, chunk_idx TEXT, content TEXT)"
                 )
                 with con:
+                    from modules.memory.sqlite_kb_store import RETIRED_AUTO_COLLECTION, WRITTEN_COLLECTION
+                    cur.execute("UPDATE kb_meta SET collection = ? WHERE collection = ?",
+                                (WRITTEN_COLLECTION, RETIRED_AUTO_COLLECTION))
                     cur.execute(
                         "INSERT INTO kb_vec_config (k, v) VALUES ('dim', ?) "
                         "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
@@ -645,9 +648,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         finally:
             con.close()
 
-    def _kb_vector_contents(self, query: str, norm_user: str, collection: str,
+    def _kb_vector_contents(self, query: str, norm_user: str, collection: Optional[str],
                             limit: int) -> List[tuple]:
-        """Tenant+collection-scoped KNN over kb_vec joined to kb_meta.
+        """Tenant-scoped KNN over kb_vec joined to kb_meta, filtered to one
+        collection unless *collection* is None (097: every collection).
 
         Returns list of (content, source_path, chunk_idx) tuples, best first.
         """
@@ -663,18 +667,19 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             # collection loses recall (down to zero). Over-fetch k, then slice the
             # collection-filtered rows down to `limit` so semantic recall is restored.
             overfetch = min(max(limit * _KB_VEC_OVERFETCH, limit), _KB_VEC_OVERFETCH_CAP)
+            coll = collection if (collection and str(collection).strip()) else None
             rows = con.cursor().execute(
                 "SELECT m.content, m.source_path, m.chunk_idx, v.distance "
                 "FROM kb_vec v "
                 "JOIN kb_meta m ON m.rowid = v.rowid "
-                "WHERE v.user_id = ? AND m.collection = ? "
+                "WHERE v.user_id = ? AND (? IS NULL OR m.collection = ?) "
                 "AND EXISTS (SELECT 1 FROM kb_chunks c "
                 "WHERE c.user_id = m.user_id AND c.collection = m.collection "
                 "AND c.source_path = m.source_path AND c.chunk_idx = m.chunk_idx "
                 "AND c.content = m.content) "
                 "AND v.embedding MATCH ? AND k = ? "
                 "ORDER BY v.distance",
-                (norm_user, collection, sqlite_vec.serialize_float32(emb), overfetch),
+                (norm_user, coll, coll, sqlite_vec.serialize_float32(emb), overfetch),
             ).fetchall()
             cutoff = _max_distance()
             filtered = [
@@ -686,9 +691,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         finally:
             con.close()
 
-    async def kb_search(self, query: str, *, user_id, collection: str = "default",
+    async def kb_search(self, query: str, *, user_id, collection: Optional[str] = None,
                         limit: int = 8) -> str:
-        """Hybrid KB recall: keyword + vector merged via RRF. Fail-open to keyword-only."""
+        """Hybrid KB recall: keyword + vector merged via RRF. Fail-open to keyword-only.
+        ``collection=None`` searches every collection (097)."""
         if self._anon_blocked(user_id):
             return ""
         norm = self._norm_user(user_id)
@@ -700,6 +706,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             # FTS-only (no vec or empty query)
             if not kw_rows:
                 return ""
+            self.kb_mark_hits(user_id=user_id, source_paths=[s for _, s, _ in kw_rows])
             return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in kw_rows)
         try:
             vec_rows = await asyncio.get_event_loop().run_in_executor(
@@ -710,6 +717,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         if not vec_rows:
             if not kw_rows:
                 return ""
+            self.kb_mark_hits(user_id=user_id, source_paths=[s for _, s, _ in kw_rows])
             return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in kw_rows)
         # Build content-keyed ranked lists for RRF (content string is the unique key).
         kw_contents = [content for content, _, _ in kw_rows]
@@ -726,6 +734,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         for content in merged_contents:
             src, idx = provenance.get(content, ("?", "?"))
             lines.append(f"[{src} #{idx}] {content}")
+        self.kb_mark_hits(user_id=user_id,
+                          source_paths=[provenance.get(c, ("", ""))[0] for c in merged_contents])
         return "\n".join(lines)
 
     async def kb_remove(self, *, user_id, collection: str, source: str = None) -> int:

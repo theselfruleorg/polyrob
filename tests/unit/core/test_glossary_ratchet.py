@@ -32,11 +32,11 @@ CEILINGS = {
     "prefs": 0,
     "inbox_render": 15,
     "telegram_owner": 42,
-    "repl_owner": 23,
+    "repl_owner": 22,
     # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
-    "guide_docs": 1707,
+    "guide_docs": 1687,
     "guide_skill": 241,
 }
 

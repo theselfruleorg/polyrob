@@ -72,3 +72,13 @@ def test_intervention_names_registered_tools():
     assert "mcp_execute_tool" in _intervene(["done", "mcp_execute_tool"], "validation failed")
     assert "filesystem_write_file" in _intervene(["done", "filesystem_write_file"],
                                                  "Action repeated 3 times")
+
+
+def test_reset_clears_pattern_window():
+    """098 AG-04: the A-B-A-B window does not span two runs."""
+    from collections import deque
+    from agents.task.agent.core.loop_detection import LoopDetectionMixin
+
+    h = types.SimpleNamespace(_previous_actions=deque(["A", "B"], maxlen=8))
+    LoopDetectionMixin._reset_loop_guard(h)
+    assert list(h._previous_actions) == []

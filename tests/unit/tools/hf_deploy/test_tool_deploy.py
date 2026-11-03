@@ -79,7 +79,8 @@ def test_deploy_health_check_fail_is_blocked_never_live(
     res = run_deploy(tool, owner_ctx)
     assert res.error and "2xx" in res.error
     row = tool._registry.get("app-x", "owner-1")
-    assert row["status"] == "failed"
+    # 098 TS-30: the Space was published — unhealthy, not a failed publish.
+    assert row["status"] == "unhealthy"
     assert row["status"] != "live"
 
 
@@ -100,7 +101,7 @@ def test_deploy_health_check_exception_is_blocked(
     tool = make_tool(tmp_path, broker=BoomBroker(), orch=green_orch)
     res = run_deploy(tool, owner_ctx)
     assert res.error
-    assert tool._registry.get("app-x", "owner-1")["status"] == "failed"
+    assert tool._registry.get("app-x", "owner-1")["status"] == "unhealthy"
 
 
 def test_deploy_refuses_without_green_run_tests(

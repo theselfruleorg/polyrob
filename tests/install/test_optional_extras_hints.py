@@ -25,7 +25,7 @@ from core.optional_extras import (
         ("web3", "crypto"),
         ("sentence_transformers", "memory-vector"),
         ("faster_whisper", "voice"),
-        ("tweepy", "twitter"),
+        ("requests_oauthlib", "twitter"),
     ],
 )
 def test_extra_for_module_maps_known_modules(module, extra):

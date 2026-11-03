@@ -18,9 +18,29 @@ class SettlementNotifyMixin:
         from modules.x402.income_chains import is_income_chain
         if is_income_chain(inv.get("chain"), inv.get("asset_id")):
             return False
-        if await invoicing.claim_wake(inv["request_id"], db=self._db):
-            await self._notify(inv)
+        await self._wake_once(inv, self._notify)
         return True
+
+    async def _wake_once(self, inv: dict, notify) -> bool:
+        """098 MO-04: claim the wake, run ``notify``, THEN mark it delivered. A
+        notice that raises leaves the claim, which the wake reaper re-opens."""
+        from modules.x402 import invoicing, wake_lease
+        if not await invoicing.claim_wake(inv["request_id"], db=self._db):
+            return False
+        await notify(inv)
+        await wake_lease.mark_delivered(inv["request_id"], db=self._db)
+        return True
+
+    async def _reap_wakes(self) -> None:
+        """Re-open stale wake claims; tell the owner ONCE about a wake that
+        failed every attempt."""
+        from modules.x402 import wake_lease
+        for inv in await wake_lease.reap_stale_wake_claims(db=self._db):
+            await self._push_owner_notice(inv["user_id"], (
+                f"Invoice {inv['request_id']} (${float(inv.get('amount_usd') or 0):.2f}) "
+                f"settled or expired, but its notice failed {wake_lease.WAKE_MAX_ATTEMPTS} "
+                "times; nothing was woken or applied. Check it with "
+                "`polyrob owner invoices`."), source="payments")
 
     #: 046 Phase 1 seams for the room-action branch, declared HERE because this
     #: is what uses them. A settled ``room_action`` invoice bought an EFFECT,
@@ -160,15 +180,21 @@ class SettlementNotifyMixin:
         if container is None:
             container = getattr(getattr(self, "task_agent", None),
                                 "container", None)
-        try:
-            from core.surfaces import room_actions
-            if not room_actions.mark_settled(container, offer_id):
-                # ⚠️ `mark_settled` is now `pending -> paid` and ONLY that. A
+        from core.surfaces import room_actions
+        # 098 MO-04: a store failure HERE propagates, so the wake claim stays
+        # and the reaper retries; a retry is idempotent (`paid_by` below).
+        if not room_actions.mark_settled(container, offer_id):
+            prior = room_actions.paid_by(container, offer_id, inv["request_id"])
+            if prior is None:
+                # ⚠️ `mark_settled` is `pending -> paid` and ONLY that. A
                 # payment against an EXPIRED (or withdrawn) offer used to
                 # resurrect the row and apply an effect we had already told the
                 # payer would not happen. Report it instead of acting on it.
                 await self._report_late_room_payment(inv, offer_id)
                 return
+            if prior != "paid":
+                return  # this invoice's effect already ran (a retried wake)
+        try:
             result = await room_actions.apply(
                 container, offer_id,
                 perform_fn=getattr(self, "_room_moderator", None))
@@ -239,6 +265,25 @@ class SettlementNotifyMixin:
                            offer_id, exc_info=True)
             return False
 
+    def _room_offer_refused(self, offer_id: str) -> bool:
+        """True when the offer store says *offer_id* is ``refused`` (cancelled
+        by an admin or the owner, or refused at sale time).
+
+        ⚠️ Fail-open to False: an unreadable store sends the expiry notice, so a
+        real non-payment is never silenced by a read error."""
+        try:
+            container = (getattr(self, "_room_container", None)
+                         or getattr(getattr(self, "task_agent", None),
+                                    "container", None))
+            if container is None:
+                return False
+            from core.surfaces.room_actions import offer_status
+            return offer_status(container, offer_id) == "refused"
+        except Exception:
+            logger.warning("settlement watcher: offer %s status unreadable — "
+                           "the expiry notice goes out", offer_id, exc_info=True)
+            return False
+
     async def _deliver_room_action_result(self, inv: dict, offer_id: str,
                                           result) -> None:
         """Put the receipt (or the honest failure) where the room can read it,
@@ -275,6 +320,15 @@ class SettlementNotifyMixin:
         :func:`invoicing.expire_stale_requests` at expiry time — this method
         is notification-only and must NOT re-emit it."""
         request_id = inv.get("request_id")
+        offer_id = str((inv.get("room_action") or {}).get("offer_id") or "")
+        is_room = (inv.get("kind") or "") == "room_action" and bool(offer_id)
+        if is_room and self._room_offer_refused(offer_id):
+            # A cancelled or refused offer was closed on purpose, and whoever
+            # closed it already knows. "Expired unpaid" would be false, and the
+            # room post would tell the members about an offer that was withdrawn.
+            logger.info("settlement watcher: invoice %s expired for offer %s, "
+                        "which is refused — no expiry notice", request_id, offer_id)
+            return
         amount = float(inv.get("amount_usd") or 0)
         purpose = inv.get("purpose") or "(unspecified)"
         text = (
@@ -282,6 +336,9 @@ class SettlementNotifyMixin:
             f"purpose: {purpose}). The payer did not pay within the window."
         )
         await self._deliver_session_notice(inv, text, "payment_expired")
+        if is_room:
+            await self._post_to_room(offer_id, f"Offer {offer_id} expired unpaid; "
+                                               "nothing was applied.")
         await self._push_owner_notice(
             inv.get("user_id") or "",
             f"Invoice {request_id} for ${amount:.2f} expired unpaid.",

@@ -19,6 +19,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from tools.shell.job_state import JOB, KILLED, LOST, RUNNING, UNKNOWN, UNKNOWN_LIMIT
+
 @dataclass
 class Job:
     """One background shell job's metadata (output/pid live in the container)."""
@@ -27,7 +29,7 @@ class Job:
     session_id: str
     command: str
     created_at: float
-    status: str = "running"  # running | done | killed | unknown
+    status: str = "running"  # running | done | killed | lost (098 TS-10: shell.job)
     finished_at: Optional[float] = None
     #: 073 W1: which executor launched it ("docker" | "host"). The `process` tool
     #: manages a job only through that same executor.
@@ -36,6 +38,8 @@ class Job:
     pty: bool = False
     #: 073 W4: "exit" | "pattern" | None — what the watcher reports back.
     notify: Optional[str] = None
+    #: consecutive "unknown" probes (098 TS-10); reset by any real observation.
+    unobserved: int = 0
 
 
 class ProcessRegistry:
@@ -91,13 +95,44 @@ class ProcessRegistry:
             )
 
     def mark(self, session_id: str, job_id: str, status: str, *, now: float) -> None:
+        """Move a job along the ``shell.job`` table; a repeat is a no-op and a
+        forbidden edge (e.g. done -> running) is refused + logged."""
         with self._lock:
             job = self._by_session.get(session_id, {}).get(job_id)
-            if job is None:
+            if job is None or status == job.status:
+                return
+            if not JOB.check(job.status, status, ctx={"job": job_id}):
                 return
             job.status = status
-            if status != "running" and job.finished_at is None:
+            if job.finished_at is None:
                 job.finished_at = now
+
+    def observe(self, session_id: str, job_id: str, probe: str, *, now: float) -> str:
+        """Fold one executor probe into the job. Returns ``running`` | ``done`` |
+        ``lost`` | ``unknown`` (unknown = not observed this time; still running)."""
+        lost = False
+        with self._lock:
+            job = self._by_session.get(session_id, {}).get(job_id)
+            if job is None or probe != UNKNOWN:
+                if job is not None:
+                    job.unobserved = 0
+                return probe
+            job.unobserved += 1
+            lost = job.unobserved >= UNKNOWN_LIMIT
+        if lost:
+            self.mark(session_id, job_id, LOST, now=now)
+            return LOST
+        return UNKNOWN
+
+    def close_session(self, session_id: str, *, now: float) -> List[Job]:
+        """The session's sandbox is gone: every running job is ``killed``.
+        Returns those jobs (the caller writes their receipts)."""
+        with self._lock:
+            running = [j for j in self._by_session.get(session_id, {}).values()
+                       if j.status == RUNNING]
+        for j in running:
+            self.mark(session_id, j.id, KILLED, now=now)
+        return running
 
     def _reap_locked(self, session_id: str, now: float) -> None:
         jobs = self._by_session.get(session_id, {})

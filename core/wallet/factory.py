@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 from core.wallet.agent_wallet import AgentWallet
@@ -12,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 _cached: Optional[AgentWallet] = None
 _resolved = False
+#: 098 CO-10: a DISABLED wallet is re-checked after this long (internal tuning,
+#: not an operator flag) — a `wallet init` in a running process takes effect.
+WALLET_DISABLED_RECHECK_SEC = 60.0
+_disabled_at: Optional[float] = None
 _standalone_policy: Optional[PolicyGate] = None
 
 
@@ -103,8 +108,9 @@ def _signer_mode() -> str:
 
 
 def get_agent_wallet() -> Optional[AgentWallet]:
-    global _cached, _resolved
-    if _resolved:
+    global _cached, _resolved, _disabled_at
+    if _resolved and not (_cached is None and _disabled_at is not None
+                          and time.monotonic() - _disabled_at >= WALLET_DISABLED_RECHECK_SEC):
         return _cached
     cfg = load_wallet_config()
     mode = _signer_mode() if cfg.enabled else "local"
@@ -114,7 +120,7 @@ def get_agent_wallet() -> Optional[AgentWallet]:
         from core.signer.remote import build_remote_wallet
         _cached = build_remote_wallet(cfg, _durable_audit_sink(),
                                       on_record=_emit_spend_to_event_log)
-        _resolved = True
+        _resolved, _disabled_at = True, None
         return _cached
     if cfg.enabled:
         sink = _durable_audit_sink()
@@ -143,6 +149,7 @@ def get_agent_wallet() -> Optional[AgentWallet]:
                              exc_info=True)
     else:
         _cached = None
+    _disabled_at = None if cfg.enabled else time.monotonic()
     _resolved = True
     return _cached
 
@@ -179,7 +186,8 @@ def get_policy_gate() -> PolicyGate:
 
 
 def reset_agent_wallet_cache() -> None:
-    global _cached, _resolved, _standalone_policy
+    global _cached, _resolved, _standalone_policy, _disabled_at
     _cached = None
     _resolved = False
+    _disabled_at = None
     _standalone_policy = None

@@ -874,49 +874,45 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 									parsed = None  # Initialize to prevent NameError
 									llm_start = time.time()
 									
-									# Track LLM call state for stall detection
-									self._llm_call_in_progress = True
-									self._llm_call_start_time = llm_start
+									# 098 AG-19: in flight for the stall watchdog; cleared in finally, so a
+									# raise or a cancel never leaves the watchdog blind.
+									from agents.task.agent.core.run_state import llm_call_state
+									with llm_call_state(self).active(llm_start):
+										# 019 P0: llm_started span event — surfaces render
+										# "thinking" instead of dead air during LLM latency
+										# (the llm_usage completion record never reaches the
+										# feed). Fail-open.
+										try:
+											from agents.task.telemetry.views import LLMStartedEvent
+											self.telemetry_manager.capture_event(LLMStartedEvent(
+												agent_id=self.agent_id,
+												step=self.state.n_steps,
+												provider=provider,
+												model_name=self.model_name,
+												attempt=retry_count,
+												context_tokens_est=request_info.get("estimated_input_tokens"),
+											))
+										except Exception:
+											pass
 
-									# 019 P0: llm_started span event — surfaces render
-									# "thinking" instead of dead air during LLM latency
-									# (the llm_usage completion record never reaches the
-									# feed). Fail-open.
-									try:
-										from agents.task.telemetry.views import LLMStartedEvent
-										self.telemetry_manager.capture_event(LLMStartedEvent(
-											agent_id=self.agent_id,
-											step=self.state.n_steps,
-											provider=provider,
-											model_name=self.model_name,
-											attempt=retry_count,
-											context_tokens_est=request_info.get("estimated_input_tokens"),
-										))
-									except Exception:
-										pass
-
-									# CONSISTENT ADAPTER PATTERN:
-									# Our adapters (OpenAIAdapter, DeepSeekAdapter, etc.) accept tools via kwargs
-									# They extract tools from kwargs and call client.generate_agent_response()
-									# This provides consistent interface across all providers
-									# Stream if supported and callbacks registered
-									chunk_count = 0  # Track streaming chunks for telemetry
-									cq.stamp_step_context(self)  # D-7: context slots onto the usage record
-									if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
-										response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
-									else:
-										# Regular batch call
-										self.logger.info(f"[DEBUG_TOOLS] Calling llm.ainvoke with tools={len(tools) if tools else 0}")
-										response = await asyncio.wait_for(
-											self.llm.ainvoke(current_messages, tools=tools),
-											timeout=timeout_seconds
-										)
-										self.logger.info(f"[DEBUG_TOOLS] llm.ainvoke returned, response type: {type(response).__name__}")
-									llm_duration = time.time() - llm_start
-									
-									# Clear LLM call tracking
-									self._llm_call_in_progress = False
-									self._llm_call_start_time = None
+										# CONSISTENT ADAPTER PATTERN:
+										# Our adapters (OpenAIAdapter, DeepSeekAdapter, etc.) accept tools via kwargs
+										# They extract tools from kwargs and call client.generate_agent_response()
+										# This provides consistent interface across all providers
+										# Stream if supported and callbacks registered
+										chunk_count = 0  # Track streaming chunks for telemetry
+										cq.stamp_step_context(self)  # D-7: context slots onto the usage record
+										if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
+											response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
+										else:
+											# Regular batch call
+											self.logger.info(f"[DEBUG_TOOLS] Calling llm.ainvoke with tools={len(tools) if tools else 0}")
+											response = await asyncio.wait_for(
+												self.llm.ainvoke(current_messages, tools=tools),
+												timeout=timeout_seconds
+											)
+											self.logger.info(f"[DEBUG_TOOLS] llm.ainvoke returned, response type: {type(response).__name__}")
+										llm_duration = time.time() - llm_start
 
 									# Extract token usage from response using centralized utility
 									token_usage = extract_token_usage(response, provider)

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.sqlite_util import execute_retry, init_schema, wal_connect
+from core.state.machine import StateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,17 @@ _STAGING_DIR = ".pending"
 
 STATUS_PENDING = "pending"
 STATUS_LIVE = "live"
+
+#: 098 CO-20. Approval binds to the CONTENT the owner saw (``content_digest``),
+#: not to the slug. ``live -> pending`` is only the rollback of a promotion
+#: that could not move the tree; unpublish deletes the row.
+PUBLICATION = StateMachine(
+    "publication",
+    states=frozenset({STATUS_PENDING, STATUS_LIVE}),
+    transitions={STATUS_PENDING: frozenset({STATUS_PENDING, STATUS_LIVE}),
+                 STATUS_LIVE: frozenset({STATUS_LIVE, STATUS_PENDING})},
+    initial=frozenset({STATUS_PENDING}),
+)
 
 MAX_SLUG_LEN = 48
 # A publication is a page or a static site, not a file store (review B8).
@@ -89,6 +101,7 @@ class Publication:
     created_at: float
     approved_at: Optional[float]
     updated_at: float
+    content_digest: str = ""
 
     @classmethod
     def from_row(cls, row: Any) -> "Publication":
@@ -98,7 +111,8 @@ class Publication:
                    bytes=int(d["bytes"] or 0),
                    created_at=float(d["created_at"] or 0.0),
                    approved_at=d["approved_at"],
-                   updated_at=float(d["updated_at"] or 0.0))
+                   updated_at=float(d["updated_at"] or 0.0),
+                   content_digest=str(d.get("content_digest") or ""))
 
 
 def default_publish_db(data_dir: Optional[str] = None) -> str:
@@ -136,7 +150,14 @@ class PublishStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        init_schema(self.db_path, _SCHEMA)
+        init_schema(self.db_path, _SCHEMA,
+                    columns={"publications": (("content_digest", "TEXT"),)})
+
+    def _slug_lock(self, slug: str):
+        """One cross-process lock per slug (098 CO-20): ``stage``, ``approve``
+        and ``unpublish`` read the row and swap the tree as one step."""
+        from core.state.files import file_lock
+        return file_lock(os.path.join(self.root, ".locks", slug))
 
     # --- paths -----------------------------------------------------------
 
@@ -202,6 +223,11 @@ class PublishStore:
         """
         if not valid_slug(slug):
             raise ValueError(f"invalid slug {slug!r}")
+        with self._slug_lock(slug):
+            return self._stage(user_id, slug, sources, confine_to=confine_to)
+
+    def _stage(self, user_id: str, slug: str, sources: List[str], *,
+               confine_to: Optional[str]) -> Publication:
         existing = self.get(slug)
         if existing is not None and existing.user_id != user_id:
             raise PermissionError(f"slug {slug!r} belongs to another tenant")
@@ -231,6 +257,8 @@ class PublishStore:
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 total += _copy_vetted(src, dest, ident, MAX_PUBLISH_BYTES - total)
             os.chmod(build, 0o755)
+            from core.ship_tree import tree_digest
+            digest = tree_digest(build)
             _swap_in(build, target)
         except BaseException:
             shutil.rmtree(build, ignore_errors=True)
@@ -243,42 +271,72 @@ class PublishStore:
             execute_retry(
                 self.db_path,
                 "INSERT INTO publications (slug, user_id, status, url, file_count, "
-                "bytes, created_at, approved_at, updated_at) VALUES (?,?,?,?,?,?,?,NULL,?)",
-                (slug, user_id, status, url, len(resolved), total, now, now))
+                "bytes, created_at, approved_at, updated_at, content_digest) "
+                "VALUES (?,?,?,?,?,?,?,NULL,?,?)",
+                (slug, user_id, status, url, len(resolved), total, now, now, digest))
         else:
             execute_retry(
                 self.db_path,
-                "UPDATE publications SET file_count=?, bytes=?, url=?, updated_at=? "
-                "WHERE slug=? AND user_id=?",
-                (len(resolved), total, url, now, slug, user_id))
+                "UPDATE publications SET file_count=?, bytes=?, url=?, updated_at=?, "
+                "content_digest=? WHERE slug=? AND user_id=?",
+                (len(resolved), total, url, now, digest, slug, user_id))
         return self.get(slug)
 
-    def approve(self, user_id: str, slug: str) -> bool:
-        """Owner decision: this slug may be served. Tenant-scoped CAS."""
+    def approve(self, user_id: str, slug: str,
+                expected_digest: Optional[str] = None) -> bool:
+        """Owner decision: THIS content may be served at *slug*.
+
+        098 CO-20: the decision binds to ``expected_digest`` (the content the
+        owner saw; default: the digest recorded at stage). Under the slug lock
+        the staging tree is re-digested and must match; a missing staging tree
+        refuses (``pending`` stays) and the served tree is never removed without
+        a replacement. The status move is a CAS on ``pending`` + the digest.
+        """
         if not valid_slug(slug):
             return False
-        rc = execute_retry(
-            self.db_path,
-            "UPDATE publications SET status=?, approved_at=?, updated_at=? "
-            "WHERE slug=? AND user_id=? AND status=?",
-            (STATUS_LIVE, time.time(), time.time(), slug, user_id, STATUS_PENDING))
-        if rc != 1:
+        with self._slug_lock(slug):
+            return self._approve(user_id, slug, expected_digest)
+
+    def _approve(self, user_id: str, slug: str, expected_digest: Optional[str]) -> bool:
+        from core.ship_tree import tree_digest
+        from core.state.sql import cas_transition
+        pub = self.get(slug)
+        if pub is None or pub.user_id != user_id or pub.status != STATUS_PENDING:
+            return False
+        staged, served = self.staging_dir_for(slug), self.dir_for(slug)
+        if not os.path.isdir(staged):
+            logger.warning("publish: approve %s refused — the staging tree is missing", slug)
+            return False
+        actual = tree_digest(staged)
+        # A legacy row (no digest recorded at stage) is digested now.
+        recorded = pub.content_digest or actual
+        want = expected_digest or recorded
+        if actual != want or recorded != want:
+            logger.warning("publish: approve %s refused — the content changed after review "
+                           "(staged %s, reviewed %s)", slug, actual[:12], str(want)[:12])
+            return False
+        now = time.time()
+        if not cas_transition(
+                self.db_path, "publications", key="slug=? AND user_id=?",
+                key_params=(slug, user_id), machine=PUBLICATION, to=STATUS_LIVE,
+                from_states=(STATUS_PENDING,),
+                set_cols={"approved_at": now, "updated_at": now, "content_digest": want},
+                where_extra="COALESCE(content_digest, '') IN (?, '')",
+                where_params=(want,)):
             return False
         # Promote the staged directory INTO the served tree. The status flip and
         # this move are the same decision; doing the move only after the CAS wins
-        # means a losing racer never publishes files.
-        staged, served = self.staging_dir_for(slug), self.dir_for(slug)
+        # means a losing racer never publishes files. The old served tree goes
+        # only once the new one is in place (``_swap_in``).
         try:
-            if os.path.isdir(served):
-                shutil.rmtree(served)
-            if os.path.isdir(staged):
-                os.replace(staged, served)
+            _swap_in(staged, served)
         except OSError:
             logger.exception("publish: promoting %s failed; rolling status back", slug)
-            execute_retry(
-                self.db_path,
-                "UPDATE publications SET status=?, approved_at=NULL WHERE slug=? AND user_id=?",
-                (STATUS_PENDING, slug, user_id))
+            cas_transition(
+                self.db_path, "publications", key="slug=? AND user_id=?",
+                key_params=(slug, user_id), machine=PUBLICATION, to=STATUS_PENDING,
+                from_states=(STATUS_LIVE,), set_cols={"approved_at": None},
+                where_extra="approved_at=?", where_params=(now,))
             return False
         return True
 
@@ -286,6 +344,10 @@ class PublishStore:
         """Take it down and remove the files. Tenant-scoped."""
         if not valid_slug(slug):
             return False
+        with self._slug_lock(slug):
+            return self._unpublish(user_id, slug)
+
+    def _unpublish(self, user_id: str, slug: str) -> bool:
         pub = self.get(slug)
         if pub is None or pub.user_id != user_id:
             return False

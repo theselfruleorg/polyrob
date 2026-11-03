@@ -193,7 +193,7 @@ class XDMClient:
             if fresh:
                 self._oauth2_access_token = fresh
         if self._client is None:
-            import tweepy
+            from polyrob_x._vendor import tweepy
             if self._oauth2_access_token:
                 self._client = tweepy.Client(
                     bearer_token=self._oauth2_access_token,
@@ -214,7 +214,7 @@ class XDMClient:
         retry hits the new client, not the stale bound method). A 401 the
         refresh cannot fix falls back to the OAuth 1.0a keys when they are set;
         otherwise :class:`XUnauthorized` backs the caller off."""
-        import tweepy
+        from polyrob_x._vendor import tweepy
         self._maybe_unpark_oauth2()
         if self._unauth_until > time.time():
             raise XUnauthorized(reset_at=self._unauth_until, remedy=_relogin_remedy())

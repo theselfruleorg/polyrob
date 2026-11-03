@@ -17,7 +17,13 @@ polyrob update --apply            # snapshot → install → migrate → verify 
 real runner to drive. Every other install method (pip, pipx, Docker, a system package
 manager) gets honest per-method manual instructions instead of a button that would
 pretend. `polyrob update` with no flags prints the install method it detected, the
-current and latest versions, the schema state, and the right next command.
+current and latest versions, the schema state, and the next command.
+
+The printed command for a git checkout starts with `git pull --ff-only`. That fails
+on a detached tag checkout (`You are not currently on a branch.`), which is the state
+a manual tag install leaves. There, replace the pull with
+`git fetch --tags && git checkout --detach refs/tags/v<latest version>` and run the
+rest of the line as printed.
 
 **With the background service running** (`polyrob service install`), `--apply` does
 not swap code under it: the service finishes its current work, restarts, and applies
@@ -99,6 +105,63 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.2
+
+- **Back up `bot.db` first.** It migrates to schema 1.15 on the first start (x402
+  claim and refund columns, billing-failure states, the deposit-mark block, the
+  deposit sweep state). A migration that does not verify is not recorded and runs again.
+- **Install the new browser.** Playwright moves to 1.64.1. With the `browser` extra,
+  run `python -m playwright install chromium` after the update; a host with the
+  isolated browser service runs `sudo polyrob browser update`.
+- **The X pack carries its own copy of tweepy** and needs oauthlib 4.0.1 or later.
+  `polyrob update` (or `pip install -U "polyrob[twitter]"`) installs it. The update,
+  the migrate step and `install.sh` uninstall a tweepy an older install left
+  behind (its `oauthlib<4` pin would fail `pip check`); after a plain `pip install`,
+  run `pip uninstall tweepy` yourself.
+- **The knowledge-base collection `artifacts_unreviewed` is now `written`.** Rows
+  move on the first start. A written document leaves the index after 90 unread days
+  (`KB_WRITTEN_RETENTION_DAYS`; the file stays on disk). Retention runs without
+  `CURATOR_ENABLED`.
+- **A cancelled chat stays cancelled** until a person writes to it: a background
+  result, a self-wake or a reply from a third party no longer wakes it.
+- **An illegal state change is refused** and logged as `state_illegal_transition`.
+- **Restart the remote signer too** (`polyrob-signer`) on a host that runs it.
+
+### Upgrading to 1.7.1
+
+**Every process reads one data home.** Up to 1.7.0, a process that ran without
+`POLYROB_LOCAL` — `python -m migrations.migrate upgrade`, the updater's own migrate
+step, `polyrob serve`, or a non-root service — used `~/.polyrob` as its data home,
+while the CLI and the gateway used `~/.polyrob/data`. From 1.7.1 such a process uses
+`~/.polyrob/data` too (`/var/lib/polyrob` when it runs as root). Nothing moves your
+stores for you.
+
+⚠️ If a database exists only in the old layout, the 1.7.1 migrate step refuses to
+create a second, empty one, so `polyrob update --apply` stops and rolls back, and a
+1.7.1 server refuses to start. Before you update:
+
+1. Run `polyrob doctor`, and look for a `CRITICAL data home split` line.
+2. Look for the old layout: `ls -l ~/.polyrob/database/bot.db ~/.polyrob/data/database/bot.db`.
+3. If only `~/.polyrob/data/database/bot.db` exists, there is nothing to do.
+
+If `~/.polyrob/database/bot.db` exists, find the home that holds your data. It is the
+one whose stores you used: compare `ls -l ~/.polyrob ~/.polyrob/data` for `goals.db`,
+`memory.db` and `owner_thread.db`, their sizes and their modification times. A
+`bot.db` that only a migrate run created has tables and no rows, and no `goals.db`
+lies beside it. Then do one of these, with the service stopped:
+
+- **The data is in `~/.polyrob/data`** (the usual case): move the stray aside, for
+  example `mv ~/.polyrob/database ~/.polyrob/database.old`.
+- **The data is in `~/.polyrob`** (for example a service that ran without
+  `POLYROB_LOCAL` from the start): pin that home. Set `POLYROB_DATA_DIR=~/.polyrob` in
+  `~/.polyrob/.env` and in the service unit; `polyrob service install` again writes the
+  unit with the pin.
+
+Then update. If `--apply` still fails at the `migrate` step, nothing is lost: it has
+already put the code, the databases and the config back to the old version, and the
+old version keeps running. The error prints the last lines of the step's output, and
+for this case they name both databases and the `POLYROB_DATA_DIR` line to set.
+
 ### Upgrading to 1.7
 
 - **There is no default network.** `polyrob wallet deploy-token`, `polyrob wallet lp …`,
@@ -115,7 +178,7 @@ polyrob config check
   file. `ALCHEMY_API_KEY` stays: the NFT and holdings reads use it.
 - **`/trade` is the trading mandate.** The old one-goal `/trade` verb is removed;
   `/trade start` now opens one decision that starts the whole programme
-  ([cli.md](cli.md#slash-commands-repl)).
+  ([chat-commands.md](chat-commands.md)).
 
 ### Upgrading to 1.6
 
@@ -281,6 +344,12 @@ falls through to `local` on both axes. It never was an isolatable tenant.
 [instances.md](instances.md).
 
 ---
+
+### Upgrading from 1.2.0 or older
+
+- **Signal identifies people by UUID.** A phone-only Signal envelope is refused. Re-pair
+  the owner and re-approve contacts by their UUIDs, and review phone-based block or allow
+  records before you turn the surface on. Older phone-based conversations stay separate.
 
 ## 4. Upgrading a profile, and upgrading a deployment
 

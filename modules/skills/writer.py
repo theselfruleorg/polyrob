@@ -588,9 +588,21 @@ class SkillWriterMixin:
         rule = self._load_user_rules_raw(uid).get(skill_id)
         if isinstance(rule, dict):
             description = str(rule.get("description") or "")
-        return self.create_skill(skill_id, archived[hits[0]], user_id=uid,
-                                 description=description, created_by=created_by,
-                                 action="rollback", bundled=bundled)
+        res = self.create_skill(skill_id, archived[hits[0]], user_id=uid,
+                                description=description, created_by=created_by,
+                                action="rollback", bundled=bundled)
+        if res:
+            # 098 AG-13: a restored skill is active again — a curator mark that
+            # still said archived made the curator skip it for ever.
+            try:
+                from modules.skills.skill_usage import get_skill_usage_store
+                store = get_skill_usage_store()
+                key = f"curator:{uid}/{skill_id}"
+                if store.get_state(key) not in (None, "active"):
+                    store.set_state(key, "active")
+            except Exception:
+                pass
+        return res
 
     def _archived_bodies(self, uid: str, skill_id: str, *, seed_root: Optional[Path] = None) -> dict:
         """``{sha256: body}`` of every archived body of ``skill_id`` (any name:

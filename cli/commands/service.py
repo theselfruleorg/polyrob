@@ -246,8 +246,15 @@ def service_install(start: bool):
                 + " ".join(_exec_argv()))
         unit = _write_systemd_unit()
         click.echo(f"Wrote {unit}")
-        _run(["systemctl", "--user", "daemon-reload"])
-        _run(["systemctl", "--user", "enable", UNIT_NAME])
+        # 098 CL-10: every step's result is checked — a failed enable (no user
+        # D-Bus over SSH without linger) used to print "Enabled" anyway.
+        from cli.commands._service_ops import bus_error_hint
+        for step in (["daemon-reload"], ["enable", UNIT_NAME]):
+            r = _run(["systemctl", "--user", *step])
+            if r.returncode != 0:
+                raise click.ClickException(
+                    f"systemctl --user {' '.join(step)} failed: "
+                    f"{(r.stderr or '').strip()[:300]}" + bus_error_hint(r.stderr))
         if start:
             res = _run(["systemctl", "--user", "restart", UNIT_NAME])
             if res.returncode != 0:
@@ -290,7 +297,8 @@ def service_status(as_user=None):
             click.echo("service: not installed (`polyrob service install`)")
         else:
             state = _run(["systemctl", "--user", "is-active", UNIT_NAME]).stdout.strip()
-            click.echo(f"service: {state or 'unknown'} ({unit})")
+            enabled = _run(["systemctl", "--user", "is-enabled", UNIT_NAME]).stdout.strip()
+            click.echo(f"service: {state or 'unknown'}, {enabled or 'enabled: unknown'} ({unit})")
     elif plat == "macos":
         plist = _launchd_plist_path()
         if not plist.is_file():
@@ -548,6 +556,17 @@ def service_stop(now: bool, as_user):
                                    f"{(res.stderr or '').strip()[:300]}"
                                    + bus_error_hint(res.stderr))
     click.echo("service: stopped (`polyrob service start` to start it again)")
+    # 098 CO-02: a restart/update that was asked but not started is withdrawn —
+    # a later, unrelated start must not apply an update nobody asked for then.
+    try:
+        from core import lifecycle as _lc
+        entry = _lc.cancel_unstarted_request("the service was stopped",
+                                             data_home=_data_home())
+        if entry:
+            what = (entry.get("request") or {}).get("kind") or "request"
+            click.echo(f"service: the pending {what} was withdrawn (ask again after the start)")
+    except Exception:
+        pass
 
 
 @service.command("restart")

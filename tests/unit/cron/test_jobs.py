@@ -51,6 +51,7 @@ def test_due_returns_only_past_due_enabled(tmp_path):
 def test_update_after_run(tmp_path):
     s = _store(tmp_path)
     s.add(_job(id="a"))
+    s.claim_for_run("a")  # 098 MO-09: only a run ends a run
     s.update_after_run(
         "a", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
         next_run_at=datetime(2026, 6, 6, 12, 15, 0), status="scheduled",
@@ -72,6 +73,7 @@ def test_cancel_disables_and_excludes_from_due(tmp_path):
 def test_one_shot_completion_clears_next_run(tmp_path):
     s = _store(tmp_path)
     s.add(_job(id="a", one_shot=True, next_run_at=datetime(2026, 6, 6, 11, 0, 0)))
+    s.claim_for_run("a")
     s.update_after_run("a", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
                        next_run_at=None, status="done")
     got = s.get("a")
@@ -109,6 +111,8 @@ def test_reclaim_stale_running_resets_orphans(tmp_path):
     s = _store(tmp_path)
     s.add(_job(id="o1"))
     s.claim_for_run("o1")  # 'running'
+    assert s.reclaim_stale_running() == 0          # 098 MO-09: a live lease is untouched
+    _orphan(s, "o1")                               # its owner process is gone
     assert s.reclaim_stale_running() == 1
     assert s.get("o1").status == "scheduled"
 
@@ -161,6 +165,7 @@ def test_done_write_disables_the_job(tmp_path):
     assert s.get("b").enabled is True
     # the un-CAS path too
     s.add(_job(id="c"))
+    s.claim_for_run("c")
     s.update_after_run("c", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
                        next_run_at=None, status="done")
     assert s.get("c").enabled is False
@@ -178,6 +183,7 @@ def test_failed_write_disables_the_job_like_done(tmp_path):
                        next_run_at=None, status="failed", expected=claimed)
     assert (s.get("f").status, s.get("f").enabled) == ("failed", False)
     s.add(_job(id="g"))
+    s.claim_for_run("g")
     s.update_after_run("g", last_run_at=datetime(2026, 6, 6, 12, 0, 0),
                        next_run_at=None, status="failed")
     assert s.get("g").enabled is False
@@ -201,3 +207,11 @@ def test_store_open_clears_done_enabled_rows_and_dead_payload_keys(tmp_path):
     assert old.enabled is False
     assert old.payload == {"provider": "gemini"}
     assert s2.get("live").enabled is True
+
+
+def _orphan(store, job_id):
+    """The run's owner process is gone (a dead identity on a live lease)."""
+    from core.sqlite_util import execute_retry
+    execute_retry(store.db_path, "UPDATE cron_jobs SET run_owner=? WHERE id=?",
+                  ("999999|gone|" + __import__("core.state.proc", fromlist=["x"]).boot_id(),
+                   job_id))

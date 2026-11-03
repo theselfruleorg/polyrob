@@ -10,10 +10,9 @@ gate.
 
 ⚠️ Design rules:
 
-- **Own IMAP connection.** The inbound surface polls on the tool's
-  ``imap_connection`` with sequence numbers and a selected INBOX; a verb that
-  selected another folder on that socket would make the poller mark the wrong
-  message. The verbs open ``_mbox_conn`` and never touch ``imap_connection``.
+- **Own IMAP connection.** A verb that SELECTs another folder must never move
+  another reader's socket. The verbs open ``_mbox_conn``; the inbound surface
+  opens its own connection through ``_mbox_open`` (098 TS-20).
 - **UIDs, never sequence numbers** — a UID stays valid while other mail arrives.
 - **Reads never consume.** Folders are selected read-only and bodies fetched
   with ``BODY.PEEK[]``: the surface's queue is the UNSEEN set.

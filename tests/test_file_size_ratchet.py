@@ -159,6 +159,10 @@ def _is_production(rel: str) -> bool:
         return False
     if any(p in ("tests", "test") for p in parts[:-1]):
         return False
+    # Vendored third-party code (a `_vendor/` package, kept byte-identical to its
+    # upstream release so a diff against it stays reviewable) is not ours to split.
+    if "_vendor" in parts[:-1]:
+        return False
     if name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py":
         return False
     return rel.startswith(PROD_ROOTS)

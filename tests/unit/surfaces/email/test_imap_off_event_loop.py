@@ -18,28 +18,28 @@ class _Conn:
         self._mark()
         return ("OK", [b"1"])
 
-    def search(self, charset, criteria):
-        self._mark()
-        return ("OK", [b"1"])
+    def response(self, code):
+        return (code, [b"7"])
 
-    def fetch(self, num, spec):
+    def uid(self, cmd, *args):
         self._mark()
-        return ("OK", [(b"1", b"From: a@b.c\r\nSubject: hi\r\n\r\nbody")])
-
-    def store(self, *a):
-        self._mark()
+        if cmd == "SEARCH":
+            return ("OK", [b"1"])
+        if cmd == "FETCH":
+            return ("OK", [(b"1", b"From: a@b.c\r\nSubject: hi\r\n\r\nbody")])
         return ("OK", [])
 
 
 class _Tool:
     def __init__(self, conn):
-        self.imap_connection = conn
+        self.imap_connection = None
+        self._conn = conn
 
     async def ensure_imap(self):
         return None
 
-    async def _connect_imap(self):
-        raise AssertionError("connected already")
+    def _mbox_open(self):
+        return self._conn
 
 
 def test_fetcher_runs_imap_off_the_loop():
@@ -48,7 +48,7 @@ def test_fetcher_runs_imap_off_the_loop():
 
     async def go():
         out = await fetcher.fetch_unread()
-        await fetcher.mark_handled_async(b"1")
+        await fetcher.mark_handled_async(out[0][0])
         return out
 
     out = asyncio.run(go())

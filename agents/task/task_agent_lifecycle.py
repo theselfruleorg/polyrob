@@ -221,43 +221,30 @@ class TaskAgentLifecycleMixin:
             session_id: Session to evict
             reason: Eviction reason (ttl, lru, manual)
         """
+        from agents.task.session_residency import (
+            lock_is_idle, save_hitl_snapshot, set_residency)
+        # a3: never reap a session with a live run loop. 098 AG-15: and HOLD the
+        # execution lock (and the recreate lock) for the whole eviction — a peek
+        # let a run start on an orchestrator that cleanup() then tore down.
+        exec_lock = self._session_execution_locks.setdefault(session_id, asyncio.Lock())
+        recreate_lock = self._recreate_locks.setdefault(session_id, asyncio.Lock())
+        if exec_lock.locked() or recreate_lock.locked():
+            logger.debug(f"Skipping eviction of {session_id} (reason: {reason}) — run in flight")
+            return
+        await exec_lock.acquire()      # free: no suspension between the check and here
+        await recreate_lock.acquire()
+        evicted = False
         try:
-            # a3: never reap a session with a live run loop. A held execution lock means
-            # a turn is in flight — tearing it down mid-run would corrupt state and drop
-            # the user's reply. Leave it; the next cleanup pass collects it once idle.
-            exec_lock = self._session_execution_locks.get(session_id)
-            if exec_lock is not None and exec_lock.locked():
-                logger.debug(
-                    f"Skipping eviction of {session_id} (reason: {reason}) — run in flight"
-                )
-                return
-
             orchestrator = self._registry.get(session_id)
             if orchestrator:
-                # Save HITL state BEFORE cleanup (queued messages not saved by cleanup)
-                # NOTE: Message history is saved by cleanup(full_cleanup=True) - no need to duplicate
+                # 098 AG-08: leave the registry FIRST (residency `evicting`): a message
+                # that arrives now takes the recreate path, which waits on the
+                # recreate lock and then restores the snapshot below — it never
+                # lands in the old agent's queue while cleanup() releases it.
+                set_residency(self, session_id, "evicting")
+                self._registry.remove(session_id)
                 try:
-                    for agent in orchestrator.agents.values():
-                        # Save HITL state (queued messages, callbacks info)
-                        # This is NOT handled by cleanup() so we must do it here
-                        if hasattr(agent, 'hitl_manager') and agent.hitl_manager:
-                            try:
-                                hitl_state = agent.hitl_manager.get_state()
-                                if hitl_state.get('queued_messages'):
-                                    from agents.task.path import pm
-                                    import json
-                                    hitl_path = pm().create_file_path(
-                                        session_id=session_id,
-                                        subdir_name="memory",
-                                        filename="hitl_state.json",
-                                        user_id=orchestrator.user_id
-                                    )
-                                    hitl_path.parent.mkdir(parents=True, exist_ok=True)
-                                    with open(hitl_path, 'w') as f:
-                                        json.dump(hitl_state, f, indent=2, default=str)
-                                    logger.info(f"💾 Saved HITL state for agent {agent.agent_id} ({len(hitl_state.get('queued_messages', []))} queued messages)")
-                            except Exception as e:
-                                logger.error(f"Failed to save HITL state for agent {agent.agent_id}: {e}")
+                    save_hitl_snapshot(orchestrator, session_id)
                 except Exception as e:
                     logger.error(f"Failed to save HITL state during eviction: {e}")
 
@@ -274,7 +261,7 @@ class TaskAgentLifecycleMixin:
                                 "session_id": session_id,
                                 "reason": reason,
                                 "session_age_seconds": session_age,
-                                "total_sessions_before": self._registry.count(),
+                                "total_sessions_before": self._registry.count() + 1,
                                 "max_sessions_limit": self.max_sessions_in_memory
                             }
                         )
@@ -282,22 +269,32 @@ class TaskAgentLifecycleMixin:
                         logger.debug(f"Failed to emit eviction telemetry: {e}")
 
                 # STEP 2: Full cleanup - release all resources
-                await orchestrator.cleanup(
-                    preserve_workspace=True,
-                    status="suspended",
-                    full_cleanup=True  # Release agents, LLMs, tools
-                )
+                try:
+                    await orchestrator.cleanup(
+                        preserve_workspace=True,
+                        status="suspended",
+                        full_cleanup=True  # Release agents, LLMs, tools
+                    )
+                finally:
+                    set_residency(self, session_id, "evicted")
+                    evicted = True
 
-                # Remove from all tracking
-                self._registry.remove(session_id)
                 self._session_last_activity.pop(session_id, None)
-                self._session_execution_locks.pop(session_id, None)  # Remove execution lock
-                self._recreate_locks.pop(session_id, None)  # a3: don't leak recreate locks
                 self._prune_chat_mappings(session_id)  # P7/F2: don't leak chat-key → session maps
 
                 logger.info(f"Evicted session {session_id} from memory (reason: {reason}) with persistence")
         except Exception as e:
             logger.error(f"Error evicting session {session_id}: {e}")
+        finally:
+            recreate_lock.release()
+            exec_lock.release()
+            # Drop the lock objects only when nobody holds or waits on them: a
+            # waiter on a popped lock and a newcomer on a fresh one would overlap.
+            if evicted or self._registry.get(session_id) is None:
+                if lock_is_idle(exec_lock):
+                    self._session_execution_locks.pop(session_id, None)
+                if lock_is_idle(recreate_lock):
+                    self._recreate_locks.pop(session_id, None)
     async def _cleanup(self) -> None:
         """Cleanup orchestrators and resources during TaskAgent shutdown."""
         # Cleanup active orchestrators - full cleanup since we're shutting down

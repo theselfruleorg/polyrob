@@ -35,6 +35,26 @@ from core.sqlite_util import execute_retry
 logger = logging.getLogger(__name__)
 
 _RESULT_TEXT_CAP = 4000
+#: AG-10: a legacy ``running`` row (no owner stamped) counts as interrupted only
+#: once it is older than any delegation can run.
+LEGACY_ORPHAN_SEC = 3600
+
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 S1. ``interrupted`` is the sweep's verdict on a row whose owner is gone;
+#: a late genuine completion still wins over it (the child really finished).
+DELEGATION_MACHINE = StateMachine(
+    name="delegation",
+    states=frozenset({"running", "completed", "incomplete", "error", "timeout",
+                      "cancelled", "interrupted"}),
+    transitions={
+        "running": frozenset({"completed", "incomplete", "error", "timeout", "cancelled",
+                              "interrupted"}),
+        "interrupted": frozenset({"completed", "incomplete", "error", "timeout"}),
+    },
+    terminal=frozenset({"completed", "incomplete", "error", "timeout", "cancelled"}),
+    initial=frozenset({"running"}),
+)
 # Budget rows older than this are dropped on hydrate — a wake recorded days ago
 # should not still be spacing/backing-off a fresh process.
 STALE_BUDGET_SEC = 7 * 86400
@@ -86,6 +106,9 @@ class AutonomyStateStore:
         col_names = {r["name"] for r in (cols or [])}
         if "delivered_at" not in col_names:
             execute_retry(db_path, "ALTER TABLE delegations ADD COLUMN delivered_at REAL")
+        if "owner" not in col_names:
+            # AG-10: the dispatching process (pid|start|boot, core.state.proc)
+            execute_retry(db_path, "ALTER TABLE delegations ADD COLUMN owner TEXT")
         execute_retry(
             db_path,
             """CREATE TABLE IF NOT EXISTS reentry_budget (
@@ -100,20 +123,24 @@ class AutonomyStateStore:
 
     def record_dispatched(self, *, session_id: str, user_id: str, delegation_id: str,
                           goal: str, profile: str, parent_agent_id: Optional[str],
-                          dispatched_at: float) -> None:
+                          dispatched_at: float, owner: Optional[str] = None) -> None:
+        if owner is None:
+            from core.state.proc import process_identity
+            owner = process_identity().encode()
         execute_retry(
             self.db_path,
             """INSERT OR REPLACE INTO delegations
                (session_id, delegation_id, user_id, goal, profile, parent_agent_id,
-                status, dispatched_at)
-               VALUES (?,?,?,?,?,?,'running',?)""",
+                status, dispatched_at, owner)
+               VALUES (?,?,?,?,?,?,'running',?,?)""",
             (session_id, delegation_id, user_id, goal, profile,
-             parent_agent_id, dispatched_at),
+             parent_agent_id, dispatched_at, owner),
         )
 
     def record_terminal(self, session_id: str, delegation_id: str, *, status: str,
                         completed_at: float, result_text: str = "",
-                        only_if_running: bool = False) -> int:
+                        only_if_running: bool = False, where_extra: str = "",
+                        where_params: tuple = ()) -> int:
         """Record a delegation's terminal status. Returns the rows changed.
 
         ``only_if_running`` adds an ``AND status='running'`` CAS guard (P1
@@ -122,14 +149,19 @@ class AutonomyStateStore:
         state (completed/failed) between ``list_running()`` and this UPDATE — that
         would clobber a real result with a false 'interrupted'. The genuine
         completion path leaves this False (its write is authoritative)."""
-        sql = ("UPDATE delegations SET status=?, completed_at=?, result_text=? "
-               "WHERE session_id=? AND delegation_id=?")
-        params = [status, completed_at, (result_text or "")[:_RESULT_TEXT_CAP],
-                  session_id, delegation_id]
-        if only_if_running:
-            sql += " AND status='running'"
-        n = execute_retry(self.db_path, sql, tuple(params))
-        return int(n or 0)
+        # 098 AG-10: a CAS on the machine's sources — the genuine completion
+        # moves ``running`` OR ``interrupted`` (a late completion wins); never a
+        # ``cancelled`` (an owner stop) or another terminal row.
+        from core.state.sql import cas_transition
+        froms = ("running",) if only_if_running else None
+        ok = cas_transition(
+            self.db_path, "delegations", key="session_id=? AND delegation_id=?",
+            key_params=(session_id, delegation_id), machine=DELEGATION_MACHINE,
+            to=status, from_states=froms,
+            set_cols={"completed_at": completed_at,
+                      "result_text": (result_text or "")[:_RESULT_TEXT_CAP]},
+            where_extra=where_extra, where_params=where_params)
+        return 1 if ok else 0
 
     def get(self, session_id: str, delegation_id: str) -> Optional[dict]:
         row = execute_retry(
@@ -242,6 +274,28 @@ class AutonomyStateStore:
                    count=excluded.count, last_wake_at=excluded.last_wake_at""",
             (session_id, user_id, count, last_wake_at),
         )
+
+    def consume_budget(self, session_id: str, user_id: str, *, max_reentries: int,
+                       backoff_s: float, now: float, force: bool = False) -> bool:
+        """AG-11: the DB counter is the source — one SQL CAS per wake, so two
+        processes share the cap. A row older than :data:`STALE_BUDGET_SEC`
+        counts as zero. ``force`` records a wake that was already dispatched."""
+        execute_retry(
+            self.db_path,
+            "INSERT OR IGNORE INTO reentry_budget (session_id, user_id, count, last_wake_at) "
+            "VALUES (?,?,0,0)", (session_id, user_id or ""))
+        stale = "(? - last_wake_at) > ?"
+        guard = "1" if force else f"({stale} OR (count < ? AND (? - last_wake_at) >= ?))"
+        params: list = [now, STALE_BUDGET_SEC, now, user_id or ""]
+        params += [session_id]
+        if not force:
+            params += [now, STALE_BUDGET_SEC, int(max_reentries), now, float(backoff_s)]
+        n = execute_retry(
+            self.db_path,
+            f"UPDATE reentry_budget SET count=CASE WHEN {stale} THEN 1 ELSE count+1 END, "
+            "last_wake_at=?, user_id=COALESCE(NULLIF(?, ''), user_id) "
+            f"WHERE session_id=? AND {guard}", tuple(params))
+        return n == 1
 
     def delete_budget(self, session_id: str) -> None:
         execute_retry(
@@ -367,6 +421,19 @@ def stamp_delivered_from_drain(session_id: str, user_id: str, kind: str,
         pass
 
 
+def owner_gone(row: dict, now: Optional[float] = None) -> bool:
+    """AG-10: a ``running`` row is interrupted only when its owner is provably
+    gone — the stamped process (pid + start time + boot) no longer runs —
+    or, for a legacy row with no owner, once it is older than any run."""
+    from core.state.proc import ProcIdentity, is_alive
+    raw = row.get("owner")
+    if not raw:
+        age = (now or time.time()) - float(row.get("dispatched_at") or 0.0)
+        return age >= LEGACY_ORPHAN_SEC
+    ident = ProcIdentity.decode(raw)
+    return ident is not None and not is_alive(ident)
+
+
 async def recover_interrupted_delegations(task_agent: Any, db_path: str) -> int:
     """Startup sweep over autonomy_state.db. Two passes, both cold-start-only:
 
@@ -402,12 +469,15 @@ async def recover_interrupted_delegations(task_agent: Any, db_path: str) -> int:
     recovered = 0
     for row in rows:
         session_id, delegation_id = row["session_id"], row["delegation_id"]
+        if not owner_gone(row):
+            continue  # AG-10: a live process (this one, or a REPL beside the daemon) owns it
         try:
             changed = store.record_terminal(
                 session_id, delegation_id, status="interrupted",
                 completed_at=time.time(),
                 result_text="Process restarted while this delegation was running.",
                 only_if_running=True,  # CAS: don't clobber a concurrent completion
+                where_extra="owner IS ?", where_params=(row.get("owner"),),
             )
             if not changed:
                 # The delegation reached a genuine terminal state between the

@@ -1,7 +1,7 @@
 """Send a durable control request; never confuse metadata with execution."""
 import click
 
-from core.session_control import SessionControl
+from core.session_control import CANCELLED_ALREADY, SessionControl
 
 
 async def control_live_session(task_agent, user_id, session_id, command):
@@ -19,6 +19,9 @@ async def control_live_session(task_agent, user_id, session_id, command):
             "No live control endpoint for this session. Its stored status was not changed. "
             "An older running process must be stopped in its own terminal."
         )
+    if state == CANCELLED_ALREADY:  # 098 CO-05: a stop is never erased
+        raise click.ClickException(
+            f"Session {session_id} is stopping: a cancel request holds it. Nothing was changed.")
     if state != "pending":
         click.echo(f"Session {session_id}: {state} (acknowledged at a step boundary).")
         return

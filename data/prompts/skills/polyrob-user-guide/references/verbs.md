@@ -23,15 +23,15 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 ## needs you
 
-- `/inbox` — Everything waiting on a decision from you, blocking first
+- `/inbox` — Everything waiting on a decision from you, blocking first; /inbox all lists every item
 - `/pending` — Every approval waiting on you: spends, contacts, tokens, and proposals
 - `/approve` — Approve something that is waiting on you (not inside a group)
 - `/reject` — Decline something that is waiting on you (not inside a group)
 - `/gates` — Which actions need your approval (only in the terminal REPL)
-- `/asks` — What I need from you to unblock work
+- `/asks` — What I need from you to unblock work; /asks <id> opens one in full
 - `/missed` — Messages I could not deliver live: capped, paused, or undelivered
 - `/fulfill` — Mark an ask fulfilled so its work can continue (not inside a group)
-- `/cards` — Open action cards: confirm a quote, answer a choice, or cancel (not inside a group)
+- `/cards` — Open action cards: confirm a quote, answer a choice, or cancel; /cards <id> reopens one in full (not inside a group)
 
 ## work
 
@@ -40,7 +40,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/jobs` — Scheduled jobs: next run, last outcome, and who wrote each
 - `/job` — Add, change, grant, pause, resume, run, or stop one scheduled job (not inside a group)
 - `/apps` — Deployed apps: approve an address, check health, or kill one (not inside a group)
-- `/skills` — The skills I can load, and what each one does (not inside a group)
+- `/skills` — The skills I can load, and what each one does; /skills <id> shows one skill's text (not inside a group)
 - `/learn` — Describe how to do something and I draft a skill for you to check (only in the terminal REPL)
 - `/todos` — The todo list in my working files (only in the terminal REPL)
 - `/subagents` — What I can hand to a helper (only in the terminal REPL)
@@ -75,7 +75,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/halt` — Stop all autonomous work now (not inside a group)
 - `/run` — Pause, resume or stop one background run (not inside a group)
 - `/mode` — The effective autonomy posture and how to change it
-- `/dev` — Message the dev and ops loop directly (not inside a group)
+- `/dev` — Pass a message to an operator-run maintenance script, if this host has one (not inside a group)
 - `/restart` — Restart me once my current work is done (not inside a group)
 - `/update` — Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet) (not inside a group)
 - `/autonomy` — My background loops and what they hold; switch them on or off (only in the terminal REPL)
@@ -85,12 +85,14 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/recap` — The same as /journey
 - `/thread` — Our conversation across every session and rail, newest last (not inside a group)
 - `/journey` — What I have done over a recent window
+- `/rules` — Your rules for me and my operating contract, numbered (not inside a group)
 - `/kb` — Search and list my knowledge base
 - `/memory` — Recall across sessions and inspect memory scopes (only in the terminal REPL)
 - `/self` (also /soul) — My identity documents, read-only (only in the terminal REPL)
 
 ## look
 
+- `/more` — The rest of a list or text I cut short (not inside a group)
 - `/status` — Health first, then session, goals, loops, and wallet
 - `/files` — Recent files I produced
 - `/cwd` — The directory I am working in right now

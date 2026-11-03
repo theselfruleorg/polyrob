@@ -700,6 +700,14 @@ class UserMCPService:
         """
         return await self.db.update_user_settings(user_id, **updates)
 
+    def _listing_status(self, user_id: str, server: Any) -> str:
+        """098 TS-03: the live connection status when this process holds the
+        connection; else the stored LAST PROBE result, labelled as such (the
+        ``auth_status`` column records a probe, not the live connection)."""
+        live = getattr(self, "live_status", None)
+        status = live(f"user_{user_id}::{server.server_name}") if callable(live) else None
+        return status or f"last_probe:{server.auth_status}"
+
     async def get_available_servers_for_session(
         self,
         user_id: str,
@@ -732,7 +740,7 @@ class UserMCPService:
                 'tool_id': f"mcp:user:{server.server_name}",
                 'display_name': server.display_name or server.server_name,
                 'type': server.server_type,
-                'status': server.auth_status,
+                'status': self._listing_status(user_id, server),
                 'tools_count': server.tools_discovered
             })
 

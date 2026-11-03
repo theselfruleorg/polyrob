@@ -338,3 +338,68 @@ async def test_settle_reports_a_refused_transition(monkeypatch):
     monkeypatch.setattr("modules.x402.invoicing.settle_payment_request", _settle)
     out = await owner_ops.settle_reply("alice", ["inv-1"])
     assert "not settled" in out
+
+
+# ---------------------------------------------------------------------------
+# /invoices refunded (098 close-out MO-03)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_invoices_refunded_closes_one_of_the_callers_refund_due_rows(monkeypatch):
+    asked, closed = [], []
+
+    async def _rows(*, user_id, status=None, limit=20, db=None):
+        asked.append((user_id, status))
+        return [{"request_id": "abcd1234-0000", "status": "refund_due"}]
+
+    async def _mark(payment_id, *, tx_hash=None, note=None, db=None):
+        closed.append((payment_id, tx_hash))
+        return True
+
+    monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
+    monkeypatch.setattr("modules.x402.x402_integration.mark_payment_refunded", _mark)
+    out = await owner_ops.invoices_reply("alice", ["refunded", "abcd", "0xfeed"])
+    assert asked == [("alice", "refund_due")]   # tenant-scoped, refund_due only
+    assert closed == [("abcd1234-0000", "0xfeed")]
+    assert "Refund recorded" in out
+
+
+@pytest.mark.asyncio
+async def test_invoices_refunded_refuses_an_id_that_is_not_owed(monkeypatch):
+    async def _rows(**kwargs):
+        return [{"request_id": "abcd1234-0000", "status": "refund_due"}]
+
+    async def _mark(*a, **kw):
+        raise AssertionError("must not write")
+
+    monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
+    monkeypatch.setattr("modules.x402.x402_integration.mark_payment_refunded", _mark)
+    out = await owner_ops.invoices_reply("alice", ["refunded", "zzzz"])
+    assert "refunds you owe" in out
+
+
+@pytest.mark.asyncio
+async def test_invoices_refunded_names_a_lost_guarded_write(monkeypatch):
+    async def _rows(**kwargs):
+        return [{"request_id": "abcd1234-0000", "status": "refund_due"}]
+
+    async def _mark(*a, **kw):
+        return False
+
+    monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
+    monkeypatch.setattr("modules.x402.x402_integration.mark_payment_refunded", _mark)
+    out = await owner_ops.invoices_reply("alice", ["refunded", "abcd"])
+    assert "not changed" in out and "no longer refund_due" in out
+
+
+@pytest.mark.asyncio
+async def test_bare_invoices_refunded_still_lists_the_refunded_status(monkeypatch):
+    asked = []
+
+    async def _rows(*, user_id, status=None, limit=20, db=None):
+        asked.append(status)
+        return []
+
+    monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
+    out = await owner_ops.invoices_reply("alice", ["refunded"])
+    assert asked == ["refunded"] and "No invoices" in out

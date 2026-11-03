@@ -236,6 +236,9 @@ def _is_dust(r: dict, price_fn: Optional[PriceFn], now: float) -> bool:
     if now - _PRICED.get(k, 0.0) < PRICE_EVERY_S:
         return False
     _PRICED[k] = now
+    if len(_PRICED) > 4096:  # 098 MO-18: bounded — a stale entry only re-prices
+        for old in [key for key, t in _PRICED.items() if now - t >= PRICE_EVERY_S]:
+            _PRICED.pop(old, None)
     try:
         price = price_fn(k[0], str(r.get("address") or ""))
     except Exception:
@@ -321,27 +324,30 @@ def _promotion(m, svc, res: PassResult, tripped: bool, *, mandate_path, book_pat
         trades = _closed_trades(m, book_path)
     except Exception:
         return
-    since = _note_ts(m.id, "stage:small", path=mandate_path) or float(m.created_at)
+    # 098 MO-18: the window starts are columns of the mandate row, written with
+    # the stage itself; a pre-098 row falls back to its notes, else updated_at
+    # (never created_at: probe-era closes must not count toward `normal`).
+    since = (m.stage_since or _note_ts(m.id, "stage:small", path=mandate_path)
+             or float(m.updated_at))
     small = [t for t in trades if t.closed_at >= since and t.pnl_usd is not None]
     # A demotion back to probe needs a NEW probe close: closes before it do not count.
-    demoted = _note_ts(m.id, "stage:demoted", path=mandate_path) or 0.0
+    demoted = m.demoted_at or _note_ts(m.id, "stage:demoted", path=mandate_path) or 0.0
     probed = {t.chain for t in trades if t.closed_at >= demoted and t.pnl_usd is not None}
     nxt = tm.next_stage(m, probe_passed_chains=probed,
                         small_realized_usd=sum(t.pnl_usd for t in small),
                         small_closed_trades=len(small), breaker_tripped=tripped)
     if nxt == m.stage:
         return
-    moved = tm.set_stage(m.id, nxt, path=mandate_path)
+    try:
+        moved = tm.set_stage(m.id, nxt, path=mandate_path, from_stage=m.stage)
+    except tm.MandateChanged:
+        return  # another writer moved it; the next pass reads the row again
     try:
         from polyrob.app.trading_jobs import refresh_stage
         refresh_stage(svc, moved)
     except Exception:
         logger.warning("trading lifecycle: the hunt of %s keeps its old stage line", m.id,
                        exc_info=True)
-    if tripped:
-        _set_note(m.id, "stage:demoted", path=mandate_path, ts=time.time())
-    elif nxt == "small":  # the small window (re)starts now
-        _set_note(m.id, "stage:small", path=mandate_path, ts=time.time())
     res.promoted.append(f"{m.id}:{m.stage}->{nxt}")
     why = ("a breaker tripped" if tripped else
            "the probe passed on every mandate chain" if nxt == "small" else
@@ -460,7 +466,35 @@ def _one_mandate(m, mine, svc, res: PassResult, ts: float, *, mandate_path, book
     if m.status in (tm.ACTIVE, tm.HALTED):
         m, tripped = _breakers(m, svc, res, now=ts, mandate_path=mandate_path,
                                book_path=book_path, memory_db=memory_db)
+    _repair_hunt(m, mine, svc)
     _promotion(m, svc, res, tripped, mandate_path=mandate_path, book_path=book_path)
+
+
+def _repair_hunt(m, mine, svc) -> None:
+    """098 MO-18: the mandate is the source of the hunt job's state. A paused,
+    halted mandate pauses a running hunt; an active one resumes a hunt that was
+    paused ON ITS BEHALF (a pause the owner put on the job alone stays)."""
+    from core import trading_mandate as tm
+    from polyrob.app import trading_jobs as tj
+    moved = []
+    for j in mine:
+        if tj.role(j) != tj.HUNT or not j.enabled:
+            continue
+        if m.status in (tm.PAUSED, tm.HALTED) and j.status in ("scheduled", "running"):
+            if svc.pause(j.id, user_id=m.user_id, via="mandate"):
+                moved.append((j.id, "paused"))
+        elif m.status == tm.ACTIVE and j.status == "paused" and tj.paused_for_mandate(j):
+            if svc.resume(j.id, user_id=m.user_id, via="mandate"):
+                moved.append((j.id, "resumed"))
+    for job_id, to in moved:
+        logger.warning("trading lifecycle: hunt %s %s to match mandate %s (%s)",
+                       job_id, to, m.id, m.status)
+        try:
+            from core.event_log import emit
+            emit("trading_hunt_repaired", source="trading_lifecycle", user_id=m.user_id,
+                 attrs={"mandate": m.id, "job_id": job_id, "to": to, "status": m.status})
+        except Exception:
+            pass
 
 
 # -- delivery + wiring ------------------------------------------------------------------

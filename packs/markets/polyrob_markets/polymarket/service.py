@@ -275,9 +275,10 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
             follow_redirects=True
         )
         
-        # Ensure DB tables exist
+        # Ensure DB tables exist; 098 MO-19: a credential write drops our cache
         if self.db:
             await self.db.ensure_tables()
+            getattr(self.db, "add_change_listener", lambda fn: None)(self.invalidate_user_credentials)
         
         self._status = ToolStatus.HEALTHY
         self.logger.info("PolymarketTool initialized (direct API integration)")
@@ -467,7 +468,7 @@ class PolymarketTool(UserCredentialCacheMixin, BaseTool):
             self._credentials_cache[self._user_id] = credentials
 
             # Reinitialize client with new credentials
-            del self._clob_clients[self._user_id]
+            self._clob_clients.pop(self._user_id, None)
             await self._get_clob_client()
 
             self.logger.info(f"Created API credentials: {api_credentials.api_key[:8]}...")

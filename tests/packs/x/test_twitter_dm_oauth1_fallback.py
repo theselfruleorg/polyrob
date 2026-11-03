@@ -14,7 +14,7 @@ pytest.importorskip("polyrob_x")
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
-import tweepy
+from polyrob_x._vendor import tweepy
 
 from tools.base_tool import ToolStatus
 from polyrob_x.twitter_tool import TwitterDMAction, TwitterGetDMsAction, TwitterTool

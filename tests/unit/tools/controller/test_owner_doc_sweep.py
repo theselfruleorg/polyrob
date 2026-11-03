@@ -64,7 +64,7 @@ async def test_model_rule_stays_pending_and_its_draft_is_swept(tmp_path):
 	rule would override — and stays pending until the owner reviews it."""
 	_cron(tmp_path, "Every day publish a public report of the bugs we fix.")
 	a = _controller(tmp_path)
-	res = await a.function(a.param_model(action="update",
+	res = await a.function(a.param_model(reason="test reason", action="update",
 	                                     content="- Never publish public reports about bugs we fix."),
 	                       execution_context=_ctx())
 	assert "NOT YET IN EFFECT" in res.extracted_content

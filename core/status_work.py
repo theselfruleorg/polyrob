@@ -12,6 +12,8 @@ import os
 from typing import Any, Dict, List
 
 from core import goal_vocab as _gv
+from core.surfaces.more_store import clip as _clip
+from core.surfaces.tappable import read_token
 from core.status_types import (  # noqa: F401
     ASK_KIND_TOKEN_IDENTITY, HealthItem, SEVERITY_CRIT, SEVERITY_WARN, Section,
     _ASK_OPEN, _KIND_ASK, _KIND_GOAL, _K_GOAL_RUN,
@@ -36,12 +38,12 @@ def _block_reason(b: Dict[str, Any]) -> tuple:
         return ("it needs something from you", need or "it did not say what",
                 f"give it what it needs, then /goal retry {gid} — or /goal stop {gid}")
     if low.startswith(_LLM_EXHAUSTED):
-        return ("no model provider could run it", err[:160],
+        return ("no model provider could run it", _clip(err, 160),
                 f"fix the provider key or credit, then /goal retry {gid}")
     if low.startswith("reclaimed"):
-        return ("its run crashed", err[:160], f"/goal retry {gid} — or /goal stop {gid}")
+        return ("its run crashed", _clip(err, 160), f"/goal retry {gid} — or /goal stop {gid}")
     fails = f"failed {b['failures']}/{b['max_retries']} times"
-    return (fails, err[:160] or "no error was recorded",
+    return (fails, _clip(err, 160) or "no error was recorded",
             f"/goal retry {gid} after the cause is fixed, or /goal stop {gid}")
 
 
@@ -63,7 +65,7 @@ def _open_goals_and_stops(sec: Section, user_id: str, goals_db: str, now: float)
                              for s in _gs.active(goals_db, user_id=user_id, now=now)]
     except Exception as e:
         sec.data["stops"] = None
-        sec.data["stops_reason"] = f"{type(e).__name__}: {str(e)[:120]}"
+        sec.data["stops_reason"] = f"{type(e).__name__}: {_clip(e, 120)}"
 
 
 def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Section:
@@ -88,7 +90,7 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
     blocked = [{"id": r["id"], "title": r["title"],
                 "failures": int(r.get("consecutive_failures") or 0),
                 "max_retries": int(r.get("max_retries") or 0),
-                "error": (r.get("last_failure_error") or "")[:160]}
+                "error": _clip(r.get("last_failure_error") or "", 160)}
                for r in _rows(goals_db, "SELECT id, title, consecutive_failures, max_retries, "
                                         "last_failure_error FROM goals WHERE kind=? AND status=? "
                                         "AND user_id=? ORDER BY created_at",
@@ -150,13 +152,14 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
         blocks = f", blocks {len(a['blocks'])} goal(s)" if a["blocks"] else ""
         sec.health.append(HealthItem(
             key=f"ask:{a['id']}", severity=SEVERITY_CRIT if a["blocks"] else SEVERITY_WARN,
-            text=f"open ask ({age} old{blocks}): {a['title'][:110]}",
-            remedy=f"/asks · /fulfill {a['id']} once done"))
+            text=f"open ask ({age} old{blocks}): {_clip(a['title'], 110)}",
+            remedy=(f"{read_token('/ask', a['id']) or '/asks'} · "
+                    f"/fulfill {a['id']} once done")))
     for b in blocked:
         kind, why, remedy = _block_reason(b)
         sec.health.append(HealthItem(
             key=f"blocked:{b['id']}", severity=SEVERITY_WARN,
-            text=f"goal BLOCKED — {kind}: {b['title'][:100]}" + (f" — {why}" if why else ""),
+            text=f"goal BLOCKED — {kind}: {_clip(b['title'], 100)}" + (f" — {why}" if why else ""),
             remedy=remedy))
     return sec
 
@@ -171,17 +174,17 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
         kind = _payload(r).get("ask_kind")
         if kind == _TOOL_APPROVAL_ASK_KIND:
             items.append({"kind": _TOOL_APPROVAL_ASK_KIND, "id": f"tap-{r['id']}",
-                          "preview": (_payload(r).get("tool_name") or r["title"] or "")[:80]})
+                          "preview": _clip(_payload(r).get("tool_name") or r["title"] or "", 80)})
         elif kind == ASK_KIND_TOKEN_IDENTITY:
             # W1: which contract is the real token — decided on /pending.
             items.append({"kind": ASK_KIND_TOKEN_IDENTITY, "id": r["id"],
-                          "preview": (r["title"] or "")[:80]})
+                          "preview": _clip(r["title"] or "", 80)})
     from core import self_evolution
     from core.instance import resolve_instance_id
     for it in self_evolution.list_pending(user_id, home_dir=data_dir,
                                           instance_id=resolve_instance_id()) or []:
         items.append({"kind": it.get("kind"), "id": it.get("id"),
-                      "preview": (it.get("preview") or "")[:80]})
+                      "preview": _clip(it.get("preview") or "", 80)})
     corr_db = correspondents_db_path(data_dir)
     if os.path.exists(corr_db):
         from core.surfaces.correspondents import CorrespondentRegistry
@@ -190,7 +193,7 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
             for it in pending_correspondent_items(CorrespondentRegistry(corr_db),
                                                   user_id):
                 items.append({"kind": it.get("kind"), "id": it.get("id"),
-                              "preview": (it.get("preview") or "")[:80]})
+                              "preview": _clip(it.get("preview") or "", 80)})
         except Exception as e:
             # AC1: an unreadable correspondent store is named, never read as
             # "no pending contacts"; the other approvals still show.

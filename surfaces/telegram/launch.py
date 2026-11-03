@@ -16,6 +16,8 @@ async def launch(ctx: LaunchContext):
     await h.start()
 
     def _on_signal():
-        h._running = False
+        # 098 TS-17: sticky — a SIGTERM drain before run_polling's first step
+        # used to be lost (run_polling set _running back to True).
+        h._running, h._stop_requested = False, True
 
     return Launched(run=h.run_polling, stop=h.stop, on_signal=_on_signal)

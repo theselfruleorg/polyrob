@@ -81,6 +81,13 @@ async def configure_polymarket(
     existing_credentials = await db.get_credentials(user_id)
 
     if not data.demo_mode:
+        # 098 MO-19: trading needs a key — supplied now or already stored (an
+        # existing DEMO row has none, and used to pass as an "update").
+        if existing_credentials and not (data.private_key or existing_credentials.private_key):
+            raise HTTPException(
+                status_code=400,
+                detail="Private key required when not in demo mode"
+            )
         # For new setup, require wallet address and private key
         # For updates, allow partial updates (use existing values)
         if not existing_credentials:
@@ -226,15 +233,7 @@ async def update_trading_limits(
         enable_autonomous_trading=data.trading_limits.enable_autonomous_trading,
     )
 
-    await db.save_credentials(
-        user_id=user_id,
-        wallet_address=credentials.wallet_address,
-        proxy_wallet_address=credentials.proxy_wallet_address,
-        signature_type=credentials.signature_type,
-        demo_mode=credentials.demo_mode,
-        enabled=credentials.enabled,
-        trading_limits=trading_limits
-    )
+    await db.set_limits(user_id, trading_limits)  # 098 MO-19: only the limits
 
     return await get_status(request, user_id)
 
@@ -254,15 +253,7 @@ async def disable_polymarket(
 
     credentials = await db.get_credentials(user_id)
     if credentials:
-        await db.save_credentials(
-            user_id=user_id,
-            wallet_address=credentials.wallet_address,
-            proxy_wallet_address=credentials.proxy_wallet_address,
-            signature_type=credentials.signature_type,
-            demo_mode=credentials.demo_mode,
-            enabled=False,
-            trading_limits=credentials.trading_limits
-        )
+        await db.set_enabled(user_id, False)  # 098 MO-19: only the toggle
 
     return await get_status(request, user_id)
 
@@ -286,15 +277,7 @@ async def enable_polymarket(
             detail="Polymarket not configured. Use POST /configure first."
         )
 
-    await db.save_credentials(
-        user_id=user_id,
-        wallet_address=credentials.wallet_address,
-        proxy_wallet_address=credentials.proxy_wallet_address,
-        signature_type=credentials.signature_type,
-        demo_mode=credentials.demo_mode,
-        enabled=True,
-        trading_limits=credentials.trading_limits
-    )
+    await db.set_enabled(user_id, True)  # 098 MO-19: only the toggle
 
     return await get_status(request, user_id)
 

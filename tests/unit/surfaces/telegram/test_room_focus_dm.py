@@ -10,7 +10,7 @@ Two things blocked that:
 * `/paid` hard-refused a DM ("run it inside the group"), so a room's whole
   paid configuration could only be typed in front of its members.
 * `here` was refused in a DM, and the explicit `<surface> <chat_id>` grammar
-  means retyping `telegram -1002002374383` on every line.
+  means retyping `telegram -1001234567890` on every line.
 
 ⚠️ The fix must not widen anyone. A DM carries no `identity.chat_role` — it is
 stamped only for the room a message arrived through — so the role for a
@@ -88,7 +88,7 @@ def _args(text):
     return text.split()[1:]
 
 
-ROOM = "-1002002374383"
+ROOM = "-1001234567890"
 
 
 @pytest.fixture

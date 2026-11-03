@@ -71,6 +71,17 @@ STATUS_CLAIMED = "claimed"
 STATUS_DELIVERED = "delivered"
 STATUS_DROPPED = "dropped"
 
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 S1 / CO-16: every exit from ``claimed`` is a CAS on the claimant.
+WAKE_MACHINE = StateMachine(
+    name="wake",
+    states=frozenset({STATUS_PENDING, STATUS_CLAIMED, STATUS_DELIVERED, STATUS_DROPPED}),
+    transitions={STATUS_PENDING: frozenset({STATUS_CLAIMED, STATUS_DROPPED}),
+                 STATUS_CLAIMED: frozenset({STATUS_DELIVERED, STATUS_PENDING, STATUS_DROPPED})},
+    terminal=frozenset({STATUS_DELIVERED, STATUS_DROPPED}),
+)
+
 #: Default wake row kind (the resume-on-grant nudge). Mirrors the ``metadata.kind``
 #: the in-process path stamps, so both rails read the same on the agent side.
 WAKE_KIND_APPROVAL = "approval_granted"
@@ -94,6 +105,14 @@ CREATE INDEX IF NOT EXISTS idx_sw_status ON session_wakes(status);
 """
 
 
+#: TS-14: one live row per idempotency key (an approved outbound send is
+#: enqueued by whichever of two writers sees "approved" — ONE row results).
+_DEDUP_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sw_dedup ON session_wakes(dedup_key)
+    WHERE dedup_key IS NOT NULL;
+"""
+
+
 @dataclass
 class WakeRow:
     id: int
@@ -113,7 +132,9 @@ class WakeQueue:
         self.db_path = db_path
         self._ready = False
         try:
-            init_schema(db_path, _SCHEMA, mkdir=True)
+            init_schema(db_path, _SCHEMA, mkdir=True,
+                        columns={"session_wakes": (("dedup_key", "TEXT"),)})
+            init_schema(db_path, _DEDUP_INDEX)
             self._ready = True
         except Exception as e:
             logger.error(f"wake_queue init failed ({db_path}): {e}")
@@ -122,9 +143,12 @@ class WakeQueue:
 
     def enqueue(self, session_id: str, user_id: str, text: str, *,
                 kind: str = WAKE_KIND_APPROVAL,
-                metadata: Optional[Dict[str, Any]] = None) -> Optional[int]:
+                metadata: Optional[Dict[str, Any]] = None,
+                dedup_key: Optional[str] = None) -> Optional[int]:
         """Write a durable pending wake for ``session_id``. Returns the row id, or
-        None on failure (fail-open + LOUD — the caller's ask row already flipped)."""
+        None on failure (fail-open + LOUD — the caller's ask row already flipped).
+        ``dedup_key``: a second enqueue with the same key writes nothing and
+        returns the first row's id (098 TS-14)."""
         if not self._ready or not session_id or not text:
             return None
         try:
@@ -133,6 +157,21 @@ class WakeQueue:
             blob = "{}"
         try:
             self._prune_aged()
+            if dedup_key:
+                row = execute_retry(
+                    self.db_path,
+                    "INSERT INTO session_wakes (session_id, user_id, text, kind, metadata, "
+                    "status, attempts, created_at, dedup_key) "
+                    "VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?) "
+                    "ON CONFLICT(dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING "
+                    "RETURNING id",
+                    (str(session_id), str(user_id or ""), str(text), str(kind), blob,
+                     time.time(), str(dedup_key)), fetch="one")
+                if row is None:
+                    row = execute_retry(
+                        self.db_path, "SELECT id FROM session_wakes WHERE dedup_key=?",
+                        (str(dedup_key),), fetch="one")
+                return int(row[0]) if row else None
             rowid = execute_retry(
                 self.db_path,
                 "INSERT INTO session_wakes "
@@ -191,34 +230,61 @@ class WakeQueue:
                 won.append(row)
         return won
 
-    def mark_delivered(self, wake_id: int) -> None:
-        self._exec(
-            "UPDATE session_wakes SET status='delivered', reason='delivered' "
-            "WHERE id=?", (int(wake_id),))
+    @staticmethod
+    def _claim_guard(owner: Optional[str]) -> tuple:
+        if owner is None:
+            return "status='claimed'", ()
+        return "status='claimed' AND claimed_by=?", (str(owner),)
 
-    def fail(self, wake_id: int, *, reason: str = "undeliverable") -> None:
+    def renew(self, wake_id: int, owner: str) -> bool:
+        """CO-16: re-check (and refresh) this drainer's claim right before it
+        delivers — a stalled claim another drainer reclaimed is not ours."""
+        try:
+            return execute_retry(
+                self.db_path, "UPDATE session_wakes SET claimed_at=? "
+                "WHERE id=? AND status='claimed' AND claimed_by=?",
+                (time.time(), int(wake_id), str(owner))) == 1
+        except Exception:
+            return False
+
+    def mark_delivered(self, wake_id: int, owner: Optional[str] = None) -> bool:
+        """``claimed -> delivered`` for the claimant only (CO-16): a stale
+        claimer whose row was reclaimed or aged out changes nothing."""
+        guard, gp = self._claim_guard(owner)
+        WAKE_MACHINE.check(STATUS_CLAIMED, STATUS_DELIVERED)
+        return self._cas(
+            f"UPDATE session_wakes SET status='delivered', reason='delivered' "
+            f"WHERE id=? AND {guard}", (int(wake_id), *gp))
+
+    def fail(self, wake_id: int, *, reason: str = "undeliverable",
+             owner: Optional[str] = None) -> bool:
         """A claimed wake could not be delivered. Requeue for another attempt, or
         drop it once it has exhausted ``WAKE_MAX_ATTEMPTS`` — the grant is durable,
-        so a dropped resume-nudge is safe."""
-        row = self._load(int(wake_id))
-        if row is None:
-            return
-        if row.attempts >= WAKE_MAX_ATTEMPTS:
-            self._exec(
-                "UPDATE session_wakes SET status='dropped', reason=? WHERE id=?",
-                (str(reason), int(wake_id)))
-        else:
-            self._exec(
-                "UPDATE session_wakes SET status='pending', claimed_by=NULL, "
-                "claimed_at=NULL WHERE id=?", (int(wake_id),))
+        so a dropped resume-nudge is safe. One guarded statement: a row that was
+        pruned (dropped) or reclaimed meanwhile is never resurrected."""
+        guard, gp = self._claim_guard(owner)
+        return self._cas(
+            "UPDATE session_wakes SET "
+            "status=CASE WHEN attempts>=? THEN 'dropped' ELSE 'pending' END, "
+            "reason=CASE WHEN attempts>=? THEN ? ELSE reason END, "
+            f"claimed_by=NULL, claimed_at=NULL WHERE id=? AND {guard}",
+            (WAKE_MAX_ATTEMPTS, WAKE_MAX_ATTEMPTS, str(reason), int(wake_id), *gp))
 
-    def release(self, wake_id: int) -> None:
+    def release(self, wake_id: int, owner: Optional[str] = None) -> bool:
         """Put a claimed wake back WITHOUT spending an attempt: the session is
         busy with a live owner turn, not unreachable (084). The row's age cap
         still bounds how long it can wait."""
-        self._exec(
+        guard, gp = self._claim_guard(owner)
+        return self._cas(
             "UPDATE session_wakes SET status='pending', claimed_by=NULL, claimed_at=NULL, "
-            "attempts=MAX(attempts-1, 0) WHERE id=? AND status='claimed'", (int(wake_id),))
+            f"attempts=MAX(attempts-1, 0) WHERE id=? AND {guard}", (int(wake_id), *gp))
+
+    def _cas(self, sql: str, params: tuple) -> bool:
+        try:
+            return execute_retry(self.db_path, sql, params) == 1
+        except Exception as e:
+            logger.error(f"wake_queue write failed: {e}")
+            return False
 
     # -- test / observability -------------------------------------------------
 

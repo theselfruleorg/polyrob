@@ -70,6 +70,7 @@ def test_auto_ask_naming_two_goals_stays_open_for_the_other(board):
     ask = board.create_ask(user_id="alice", what="Unblock goals",
                            blocks_goal_ids=[a.id, b.id],
                            extra_payload={ASK_AUTO_UNBLOCK: True})
+    board.update_status(a.id, STATUS_BLOCKED)
 
     board.update_status(a.id, STATUS_READY, reset_failures=True, user_id="alice")
 

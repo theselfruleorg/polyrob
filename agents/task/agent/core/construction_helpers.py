@@ -204,8 +204,8 @@ class AgentConstructionHelpersMixin:
 		"""Restore saved tool-call-tracker state from a previous session (P7
 		finalization: extracted from __init__). Best-effort — reads self.session_id /
 		self.tool_call_tracker, fail-open on any error."""
-		if not (self.session_id and orchestrator):
-			return
+		if not (self.session_id and orchestrator) or getattr(self, "_is_sub_agent", False):
+			return  # a sub-agent is new each time: nothing of its own to restore
 		try:
 			from agents.task.path import pm
 			tool_calls_file = pm().create_file_path(

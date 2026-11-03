@@ -164,6 +164,7 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
         except Exception:
             logger.warning("settlement watcher: stale-settling sweep failed", exc_info=True)
         try:
+            await self._reap_wakes()  # 098 MO-04: a claimed wake that never landed
             settled = await invoicing.settled_unnotified_invoices(db=self._db)
         except Exception:
             logger.warning("settlement watcher: settled poll failed", exc_info=True)
@@ -252,22 +253,18 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
                         # silently reported as an ordinary "settled, continue
                         # your work" wake — deliver a DISTINCT owner-actionable
                         # anomaly notice + event instead of the normal one.
-                        if await invoicing.claim_wake(inv["request_id"], db=self._db):
-                            await self._notify_subscription_apply_failed(inv, result)
-                            notified += 1
+                        notified += int(await self._wake_once(inv, lambda i: (
+                            self._notify_subscription_apply_failed(i, result))))
                         continue
                     # APPLIED or ALREADY_APPLIED: the extension is guaranteed
                     # to have landed (this call, or a prior one, atomically) —
                     # safe to fall through to the normal settlement wake below.
                 # Claim-then-notify: the atomic claim makes concurrent watcher
                 # processes safe — exactly one delivers the wake + event.
-                if not await invoicing.claim_wake(inv["request_id"], db=self._db):
-                    continue
-                await self._notify(inv)
-                notified += 1
+                notified += int(await self._wake_once(inv, self._notify))
             except Exception:
                 logger.warning("settlement watcher: notify failed for %s "
-                               "(claim consumed — ledger row is the record)",
+                               "(the claim stays; the wake reaper retries it)",
                                inv.get("request_id"), exc_info=True)
 
         expired_pending = []
@@ -283,13 +280,10 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
                 # wake_delivered flag (see invoicing.claim_expiry_wake) — safe
                 # because this query is already status-partitioned to 'expired'
                 # rows only, so it can never race a settlement claim.
-                if not await invoicing.claim_expiry_wake(inv["request_id"], db=self._db):
-                    continue
-                await self._notify_expired(inv)
-                expired_notified += 1
+                expired_notified += int(await self._wake_once(inv, self._notify_expired))
             except Exception:
                 logger.warning("settlement watcher: expiry notify failed for %s "
-                               "(claim consumed — ledger row is the record)",
+                               "(the claim stays; the wake reaper retries it)",
                                inv.get("request_id"), exc_info=True)
 
         sub_stats = {"subscription_renewals_invoiced": 0, "subscription_grace": 0,

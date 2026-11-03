@@ -56,10 +56,8 @@ class GeminiClient(LLMClient):
             
         self.last_response = None  # Store the last response for token usage reporting
 
-        # UP-08: explicit cachedContents (opt-in, GEMINI_PROMPT_CACHE). A billed, TTL'd
-        # server object reused across steps; busted on tool-set change; deleted on cleanup.
-        self._cached_content = None
-        self._cached_tool_sig = None
+        # UP-08 / 098 MO-14: explicit cachedContents leases (modules/llm/gemini_cache.py).
+        self._cache_leases = None
 
         # Get defaults from model_registry (single source of truth)
         from modules.llm.model_registry import get_model_config
@@ -97,86 +95,20 @@ class GeminiClient(LLMClient):
         # Match gemini-3-*, gemini3*, etc.
         return 'gemini-3' in model_lower or 'gemini3' in model_lower
 
-    # ---- UP-08 explicit cachedContents -------------------------------------
-    @staticmethod
-    def _tool_signature(tool_objects) -> str:
-        """Stable signature of the tool schema so we can bust a stale cache."""
-        names = []
-        for t in (tool_objects or []):
-            for f in getattr(t, 'function_declarations', []) or []:
-                names.append(getattr(f, 'name', ''))
-        return ",".join(sorted(names))
-
-    @staticmethod
-    def _cache_signature(system_instruction, tool_objects) -> str:
-        """L1: reuse key for an explicit cachedContents object. The cached object bakes in
-        BOTH the system_instruction AND the tools, so the reuse key MUST include both —
-        keying on tool names alone let a session reuse another session's cached SYSTEM
-        prompt (persona/SOUL/SELF/project-context) whenever the tool set matched."""
-        import hashlib
-        sys_hash = hashlib.sha256((system_instruction or "").encode("utf-8")).hexdigest()[:16]
-        return f"{sys_hash}:{GeminiClient._tool_signature(tool_objects)}"
-
+    # ---- UP-08 explicit cachedContents (098 MO-14: leases) ------------------
     def _delete_cached_content(self) -> None:
-        """Delete the current cached object (fail-open) and clear local state."""
-        cache = self._cached_content
-        self._cached_content = None
-        self._cached_tool_sig = None
-        if cache is not None:
-            try:
-                cache.delete()
-            except Exception as e:
-                self.logger.debug(f"Gemini cache delete failed (ignored): {e}")
+        """Delete every cached object this client holds (fail-open)."""
+        from modules.llm.gemini_cache import leases_of
+        leases_of(self).clear()
 
     def _maybe_build_cached_content(self, system_instruction, tool_objects):
-        """Return a reusable CachedContent for the stable system+tools prefix, or None.
-
-        UP-08, default OFF (GEMINI_PROMPT_CACHE). Scoped to the non-Gemini-3 tools path
-        (Gemini-3 ChatSession + thought-signatures interact badly with cached content).
-        Reused across steps; busted when the tool-set signature changes; fail-open to the
-        normal uncached path on any SDK error. Requires an estimated prefix >= the API
-        floor (~2048 tokens) to be worth a billed cache object.
-        """
         from modules.llm.cache_hints import (
             gemini_explicit_cache_enabled, GEMINI_EXPLICIT_CACHE_MIN_TOKENS)
+        from modules.llm.gemini_cache import build_or_reuse
         if not gemini_explicit_cache_enabled():
             return None
-        if self._is_gemini_3_model():
-            return None
-        # Rough prefix-size estimate (~4 chars/token): system text + tool schema names.
-        est_chars = len(system_instruction or "") + len(self._tool_signature(tool_objects))
-        if est_chars // 4 < GEMINI_EXPLICIT_CACHE_MIN_TOKENS:
-            return None
-        # L1: reuse key includes the system prompt, not just the tool set — a cached
-        # object bakes in both, so busting only on tool change leaked the system prompt.
-        sig = self._cache_signature(system_instruction, tool_objects)
-        # Reuse within session unless the system prompt OR tool set changed.
-        if self._cached_content is not None and self._cached_tool_sig == sig:
-            return self._cached_content
-        if self._cached_content is not None:
-            self._delete_cached_content()  # stale prefix -> bust before recreate
-        try:
-            import google.generativeai as genai
-            import datetime
-            ttl_min = int(os.getenv("GEMINI_CACHE_TTL_MIN", "10"))
-            cache = genai.caching.CachedContent.create(
-                model=self.model_type,
-                system_instruction=system_instruction or None,
-                tools=tool_objects or None,
-                ttl=datetime.timedelta(minutes=ttl_min),
-            )
-            self._cached_content = cache
-            self._cached_tool_sig = sig
-            self.logger.info(
-                f"event=gemini_explicit_cache_created model={self.model_type} "
-                f"tools={sig.count(',') + 1 if sig else 0} ttl_min={ttl_min}"
-            )
-            return cache
-        except Exception as e:
-            self.logger.warning(f"Gemini explicit cache create failed, continuing uncached: {e}")
-            self._cached_content = None
-            self._cached_tool_sig = None
-            return None
+        return build_or_reuse(self, system_instruction, tool_objects,
+                              min_tokens=GEMINI_EXPLICIT_CACHE_MIN_TOKENS)
 
     def _convert_content_to_parts(self, content: Any) -> List[Dict[str, Any]]:
         """Convert message content to Gemini parts format.
@@ -1175,8 +1107,19 @@ class GeminiClient(LLMClient):
                 raise ServiceError(f"Gemini API call timed out after {self.DEFAULT_REQUEST_TIMEOUT} seconds")
             except Exception as e:
                 self.logger.error(f"Gemini API call failed with exception: {type(e).__name__}: {e}")
-                self.logger.error(f"[DEBUG] Request details: messages={len(gemini_messages)}, tools={len(tool_objects)}, system={bool(system_content)}")
-                raise ServiceError(f"Gemini API call failed: {e}")
+                from core.billing_context import is_billed
+                from modules.llm.gemini_cache import leases_of
+                if cached is not None:  # 098 MO-14: the cache may be gone server-side
+                    leases_of(self).drop(cached)
+                if cached is None or use_chat_session or is_billed():
+                    raise ServiceError(f"Gemini API call failed: {e}")  # a billed retry re-enters the adapter
+                model = genai.GenerativeModel(model_name=self.model_type, generation_config=generation_config,
+                                              tools=tool_objects or None, system_instruction=system_content or None)
+                try:
+                    response = await asyncio.wait_for(model.generate_content_async(
+                        gemini_messages, **billed_google_options()), timeout=float(self.DEFAULT_REQUEST_TIMEOUT))
+                except Exception as e2:
+                    raise ServiceError(f"Gemini API call failed: {e2}")
 
             self.logger.info(f"[DEBUG] Gemini API call completed successfully")
             

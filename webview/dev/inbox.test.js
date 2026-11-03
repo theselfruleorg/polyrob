@@ -168,3 +168,17 @@ describe("FE19 — a decision refusal is never a bare status", () => {
     expect(r.message).toBe("refused");
   });
 });
+
+describe("098 CO-19: the draft revision the card showed", () => {
+  it("rides on the decision POST", async () => {
+    const { fetcher, calls } = reply({ ok: true, message: "promoted" });
+    await decide("self_context", "u1", "decide", { fetcher, rev: "0123456789abcdef" });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ rev: "0123456789abcdef" });
+  });
+
+  it("is not sent when the card has none", async () => {
+    const { fetcher, calls } = reply({ ok: true, message: "ok" });
+    await decide("skill", "abc", "decide", { fetcher, rev: "" });
+    expect(calls[0].init.body).toBeUndefined();
+  });
+});

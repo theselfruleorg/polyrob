@@ -122,7 +122,7 @@ Exports are private backups, created with owner-only permissions at a new destin
 Named credential files (`.env`, `auth.json`, wallet stores) and links are excluded.
 Text files up to 5 MiB pass the shared secret scrubber, including known wallet seeds.
 Binary databases and larger files may still contain sensitive data; exports are not
-public sharing bundles. Re-add keys after import (`polyrob init --profile rob2`).
+public sharing bundles. Re-add keys after import (`polyrob init --profile scout2`).
 
 **Install/update** — the shareable distribution format. A distribution is a git
 repo (or local dir) with a `polyrob.profile.yaml` manifest:
@@ -154,7 +154,9 @@ someone else's memories.
 
 ## Daemons
 
-One systemd unit per profile. Let the CLI emit one matched to your layout:
+One systemd unit per profile. The unit runs `polyrob telegram` for that profile (the
+Telegram surface and the autonomy loops), with code execution off
+(`CODE_EXEC_ENABLED=false`). Let the CLI emit one matched to your layout:
 
 ```bash
 polyrob profile create scout --service      # writes /etc/systemd/system/polyrob@.service

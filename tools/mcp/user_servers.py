@@ -79,6 +79,14 @@ def server_visible(name: str, user_id: Optional[str]) -> bool:
     return bool(user_id) and str(name).startswith(user_prefix(user_id))
 
 
+def live_status(tool: Any, name: str) -> Optional[str]:
+    """098 TS-03: the LIVE connection status of server ``name`` on ``tool``'s
+    manager (``connected``/``error``/...), or None when it holds no connection."""
+    conn = _connections(getattr(tool, "server_manager", None)).get(name)
+    status = getattr(conn, "status", None)
+    return getattr(status, "value", status) if status is not None else None
+
+
 def _connected(conn: Any) -> bool:
     from tools.mcp.server_manager import ServerStatus
     return getattr(conn, "status", None) == ServerStatus.CONNECTED

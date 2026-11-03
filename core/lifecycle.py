@@ -62,6 +62,13 @@ BOOT_FAILURE_ATTEMPTS = 3
 STATE_OPEN = "open"
 STATE_DRAINING = "draining"
 STATE_EXITING = "exiting"
+#: 098 CO-02: a stop (or a crash) interrupted an UPDATE before it ran. A parked
+#: update is never applied by a later start on its own: inside
+#: :data:`PARK_TTL_SEC` (the window of a supervised restart) the boot reopens it
+#: and the live drain answers it; older, it expires and the owner is told.
+STATE_PARKED = "parked"
+#: Internal tuning, not an operator flag.
+PARK_TTL_SEC = 3600.0
 
 OUTCOME_BACK_ONLINE = "back_online"
 OUTCOME_UPDATED = "updated"
@@ -70,6 +77,7 @@ OUTCOME_BOOT_FAILED = "boot_failed"
 OUTCOME_DRAIN_TIMEOUT = "drain_timeout"
 OUTCOME_CANCELLED = "cancelled"
 OUTCOME_UPDATE_FAILED = "update_failed"
+OUTCOME_EXPIRED = "expired"
 
 
 class LifecycleUnreadable(RuntimeError):
@@ -322,8 +330,33 @@ def claim_request(pid: Optional[int] = None,
         return req
 
 
-def set_request_state(state: str, data_home: Optional[os.PathLike] = None,
+def _request_machine():
+    from core.state.machine import StateMachine, REGISTRY
+    m = REGISTRY.get("lifecycle.request")
+    if m is None:
+        # Closing a request removes the file (history.jsonl keeps it), so the
+        # machine has no stored terminal state besides ``exiting``.
+        m = StateMachine(
+            "lifecycle.request",
+            states={STATE_OPEN, STATE_DRAINING, STATE_EXITING, STATE_PARKED},
+            transitions={STATE_OPEN: {STATE_DRAINING, STATE_PARKED, STATE_EXITING},
+                         STATE_DRAINING: {STATE_EXITING, STATE_PARKED, STATE_OPEN},
+                         STATE_PARKED: {STATE_OPEN, STATE_EXITING}},
+            terminal={STATE_EXITING},
+            initial={STATE_OPEN})
+    return m
+
+
+def set_request_state(state: str, data_home: Optional[os.PathLike] = None, *,
+                      request_id: Optional[str] = None,
+                      expect: Optional[Iterable[str]] = None,
                       **fields: Any) -> Optional[LifecycleRequest]:
+    """Move the request to ``state`` (and set ``fields``) under the lock.
+
+    098 CO-02: with ``request_id`` the write refuses (None) when the file now
+    holds ANOTHER request; with ``expect`` it refuses when the state moved on.
+    A state change is checked against the request machine; a same-state write
+    only updates fields."""
     with _locked(data_home) as d:
         try:
             data = _read_json(_request_path(d))
@@ -331,15 +364,18 @@ def set_request_state(state: str, data_home: Optional[os.PathLike] = None,
             return None
         if not data:
             return None
+        if request_id is not None and data.get("id") != request_id:
+            return None
+        old = str(data.get("state") or STATE_OPEN)
+        if expect is not None and old not in set(expect):
+            return None
+        if old != state and not _request_machine().check(
+                old, state, ctx={"request": data.get("id")}):
+            return None
         data.update(fields)
         data["state"] = state
         _write_json(_request_path(d), data)
         return LifecycleRequest.from_dict(data)
-
-
-def reopen_request(data_home: Optional[os.PathLike] = None) -> None:
-    """Back to OPEN, unclaimed (a drain that was interrupted, not finished)."""
-    set_request_state(STATE_OPEN, data_home, claimed_by=0)
 
 
 def close_request(outcome: str, detail: str = "",
@@ -385,9 +421,12 @@ def withdraw_if_open(request_id: str, detail: str,
 def settle_stale_request(started_at: float,
                          data_home: Optional[os.PathLike] = None) -> Optional[LifecycleRequest]:
     """At a PRIMARY boot: a request made before this start whose drain never
-    finished (its process stopped or crashed) was answered by this very start —
-    mark it ``exiting`` so the boot applies an asked-for update and the healthy
-    start reports back, instead of draining and restarting a second time."""
+    finished (its process stopped or crashed).
+
+    A RESTART was answered by this very start — mark it ``exiting`` so the
+    healthy start reports back instead of draining and restarting a second time.
+    An UPDATE is ``parked`` (098 CO-02): a start is not consent to apply an
+    update that may be days old — :func:`resolve_parked_request` decides."""
     with _locked(data_home) as d:
         try:
             data = _read_json(_request_path(d))
@@ -396,14 +435,73 @@ def settle_stale_request(started_at: float,
         if not data:
             return None
         req = LifecycleRequest.from_dict(data)
-        if req.state == STATE_EXITING or float(req.created_at or 0) >= started_at:
+        if req.state in (STATE_EXITING, STATE_PARKED) \
+                or float(req.created_at or 0) >= started_at:
             return None
         if req.state == STATE_DRAINING and _pid_alive(req.claimed_by) \
                 and req.claimed_by != os.getpid():
             return None  # another live process is draining for it
-        data["state"] = STATE_EXITING
+        to = STATE_PARKED if req.kind == KIND_UPDATE else STATE_EXITING
+        if not _request_machine().check(req.state, to, ctx={"request": req.id}):
+            return None
+        data["state"] = to
         _write_json(_request_path(d), data)
         return LifecycleRequest.from_dict(data)
+
+
+def _is_legacy_parked(data: dict) -> bool:
+    """Back-compat: before CO-02 a stop during an update's drain wrote
+    ``exiting`` + this note; it means ``parked``."""
+    return (data.get("state") == STATE_EXITING and data.get("kind") == KIND_UPDATE
+            and not data.get("update_result")
+            and data.get("note") == "stopped during the drain")
+
+
+def resolve_parked_request(data_home: Optional[os.PathLike] = None, *,
+                           now: Optional[float] = None,
+                           ttl: float = PARK_TTL_SEC) -> Optional[str]:
+    """At a PRIMARY boot: a parked update inside ``ttl`` goes back to ``open``
+    (unclaimed) so the live drain answers it normally; an older one is never
+    applied — it moves to ``exiting`` with ``update_result={"expired": True}``,
+    so the healthy start closes it as ``expired`` and tells the owner to ask
+    again. Returns ``"reopened"``, ``"expired"`` or None."""
+    now = time.time() if now is None else now
+    with _locked(data_home) as d:
+        try:
+            data = _read_json(_request_path(d))
+        except LifecycleUnreadable:
+            return None
+        if not data:
+            return None
+        if _is_legacy_parked(data):
+            data["state"] = STATE_PARKED
+        if data.get("state") != STATE_PARKED:
+            return None
+        if now - float(data.get("created_at") or 0) <= ttl:
+            data.update(state=STATE_OPEN, claimed_by=0)
+            _write_json(_request_path(d), data)
+            return "reopened"
+        data.update(state=STATE_EXITING, update_result={"expired": True})
+        _write_json(_request_path(d), data)
+        return "expired"
+
+
+def cancel_unstarted_request(detail: str,
+                             data_home: Optional[os.PathLike] = None) -> Optional[dict]:
+    """``polyrob service stop`` (098 CO-02): an ``open`` or ``parked`` request
+    (and a legacy parked one) is closed as cancelled — a stopped service must
+    not apply an update at some later, unrelated start. Returns the history
+    entry, or None when there was nothing to cancel."""
+    with _locked(data_home) as d:
+        try:
+            data = _read_json(_request_path(d))
+        except LifecycleUnreadable:
+            return None
+        if not data:
+            return None
+        if data.get("state") in (STATE_OPEN, STATE_PARKED) or _is_legacy_parked(data):
+            return _close_held(d, data, OUTCOME_CANCELLED, detail)
+        return None
 
 
 def history(limit: int = 5, data_home: Optional[os.PathLike] = None) -> List[dict]:
@@ -511,24 +609,33 @@ def _pid_alive(pid: int) -> bool:
 # The in-process drain flag
 # --------------------------------------------------------------------------
 
-_draining = False
+#: 098 CO-03: who holds the drain (token -> reason). A bare bool let the
+#: restart drain's failure path clear the hold a SIGTERM stop drain had taken,
+#: so the cron tick could start a job inside the shutdown grace window.
+_drain_holders: Dict[str, str] = {}
 
 
-def begin_drain() -> None:
-    """This process is draining for a restart: the cron tick and the goal
-    dispatcher start nothing new (they read :func:`draining`). A running job
-    or goal is left to finish — that is what the drain waits for."""
-    global _draining
-    _draining = True
+def begin_drain(reason: str = "") -> str:
+    """This process is draining (a restart, or a stop): the cron tick and the
+    goal dispatcher start nothing new (they read :func:`draining`). A running
+    job or goal is left to finish — that is what the drain waits for. Returns
+    the token that ends THIS hold."""
+    token = uuid.uuid4().hex[:12]
+    _drain_holders[token] = reason or "drain"
+    return token
 
 
-def end_drain() -> None:
-    global _draining
-    _draining = False
+def end_drain(token: Optional[str] = None) -> None:
+    """End one hold. An unknown token is a no-op; ``None`` ends every hold (a
+    test reset — production callers pass their token)."""
+    if token is None:
+        _drain_holders.clear()
+    else:
+        _drain_holders.pop(token, None)
 
 
 def draining() -> bool:
-    return _draining
+    return bool(_drain_holders)
 
 
 # --------------------------------------------------------------------------
@@ -560,7 +667,8 @@ def record_boot(*, command: str = "", data_home: Optional[os.PathLike] = None,
         except LifecycleUnreadable:
             prev = {}
         attempts = 1 if prev.get("healthy_at") or not prev else int(prev.get("attempts") or 0) + 1
-        rec = {"pid": os.getpid(), "started_at": time.time(), "version": code_version(),
+        rec = {"pid": os.getpid(), "ident": _own_ident(),
+               "started_at": time.time(), "version": code_version(),
                "sha": code_sha() or "", "command": command, "attempts": attempts,
                "healthy_at": None, "stopped_at": None, "supervisor": supervisor() or "",
                "env_files": _env_ladder()}
@@ -576,6 +684,8 @@ def _update_own_boot(data_home, role: str, **fields) -> Optional[dict]:
             return None
         if not rec or rec.get("pid") != os.getpid():
             return None
+        if rec.get("ident") and rec.get("ident") != _own_ident():
+            return None  # 098 CO-04: same pid, another process (reuse)
         rec.update(fields)
         _write_json(_boot_file(d, role), rec)
         return rec
@@ -604,7 +714,33 @@ def running_service(data_home: Optional[os.PathLike] = None) -> Optional[dict]:
     boot = read_boot(data_home=data_home)
     if not boot or not boot.get("supervisor") or boot.get("stopped_at"):
         return None
-    return boot if _pid_alive(int(boot.get("pid") or 0)) else None
+    return boot if _boot_alive(boot) else None
+
+
+def _own_ident() -> str:
+    """pid + process start time + boot id (098 CO-04), or "" when unknown."""
+    try:
+        from core.state.proc import process_identity
+        return process_identity().encode()
+    except Exception:
+        return ""
+
+
+def _boot_alive(boot: dict) -> bool:
+    """The process a boot record names still runs. A record with an identity is
+    checked by pid AND start time AND boot id: after a crash and a reboot an
+    unrelated live process can hold the same pid (098 CO-04). An older record
+    (pid only) keeps the pid check."""
+    ident = boot.get("ident")
+    if ident:
+        try:
+            from core.state.proc import ProcIdentity, is_alive
+            decoded = ProcIdentity.decode(ident)
+            if decoded is not None:
+                return is_alive(decoded)
+        except Exception:
+            pass
+    return _pid_alive(int(boot.get("pid") or 0))
 
 
 def _env_ladder() -> list:
@@ -679,7 +815,7 @@ def pending_keys(data_home: Optional[os.PathLike] = None) -> List[str]:
     except LifecycleUnreadable:
         boot = None
     since = 0.0
-    if boot and not boot.get("stopped_at") and _pid_alive(int(boot.get("pid") or 0)):
+    if boot and not boot.get("stopped_at") and _boot_alive(boot):
         since = float(boot.get("started_at") or 0.0)
     return sorted(k for k, v in data.items()
                   if float((v or {}).get("written_at") or 0.0) > since)
@@ -775,7 +911,7 @@ __all__ = [
     "BOOT_FAILURE_ATTEMPTS", "LifecycleRequest", "LifecycleUnreadable",
     "lifecycle_dir", "code_sha", "code_version", "version_label", "supervisor",
     "read_request", "request_restart", "claim_request", "set_request_state",
-    "reopen_request", "close_request", "history", "read_boot", "record_boot",
+    "resolve_parked_request", "cancel_unstarted_request", "close_request", "history", "read_boot", "record_boot",
     "mark_healthy", "mark_stopped", "reset_boot_attempts", "running_service", "restart_hint",
     "git_head", "withdraw_if_open", "settle_stale_request",
     "record_pending", "pending_keys",

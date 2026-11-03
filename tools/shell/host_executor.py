@@ -155,6 +155,7 @@ class HostShellExecutor:
             if pid_f.exists():
                 break
             await asyncio.sleep(0.01)
+        self._record_start(job_id)
 
     def _start_pty(self, job_id: str, cwd: str) -> None:
         """One job on a pseudo-terminal: ``pty.openpty`` + a session leader with
@@ -224,6 +225,64 @@ class HostShellExecutor:
         log_f.write_bytes(b"")
         threading.Thread(target=_pump, name=f"pty-{job_id}", daemon=True).start()
 
+    def _start_file(self, job_id: str) -> Path:
+        return Path(self._files(job_id)["start"])
+
+    def _record_start(self, job_id: str) -> None:
+        """098 TS-10: store the job's start time next to its pid, so a reused pid
+        reads as gone. The Linux launcher already wrote it from ``/proc``; on a
+        host without ``/proc`` it comes from ``core.state.proc.start_time``."""
+        start_f = self._start_file(job_id)
+        try:
+            if start_f.exists() and start_f.read_text().strip():
+                return
+            pid = self._pid(job_id)
+            if pid is None:
+                return
+            from core.state.proc import start_time
+            st = start_time(pid)
+            if st:
+                start_f.write_text(st, encoding="utf-8")
+        except OSError:
+            pass
+
+    def _recorded_start(self, job_id: str) -> Optional[str]:
+        try:
+            return self._start_file(job_id).read_text().strip() or None
+        except OSError:
+            return None
+
+    def _pid_alive(self, job_id: str, pid: int) -> Optional[bool]:
+        """Is the job's pid still the job? True / False (gone or reused) /
+        None (alive but the start time cannot be read now).
+
+        ``PermissionError`` (a sudo/root job) means running ONLY when the start
+        time matches or was never recorded — a reused pid of a root daemon is
+        not our job (098 TS-10)."""
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+        from core.state.proc import start_time
+        recorded = self._recorded_start(job_id)
+        current = start_time(pid)
+        if current is None:
+            if os.path.isdir("/proc/self"):
+                return False  # /proc/<pid> vanished: the process is gone
+            return True if recorded is None else None
+        return recorded is None or current == recorded
+
+    def _pid_reused(self, job_id: str, pid: int) -> bool:
+        """The pid is alive under a different start time than the job's."""
+        recorded = self._recorded_start(job_id)
+        if recorded is None:
+            return False
+        from core.state.proc import start_time
+        current = start_time(pid)
+        return current is not None and current != recorded
+
     def _pid(self, job_id: str) -> Optional[int]:
         pid_f = self._paths(job_id)[0]
         try:
@@ -242,13 +301,10 @@ class HostShellExecutor:
         pid = self._pid(job_id)
         if pid is None:
             return "unknown"
-        try:
-            os.kill(pid, 0)
-            return "running"
-        except ProcessLookupError:
-            return "done"
-        except PermissionError:
-            return "running"
+        alive = self._pid_alive(job_id, pid)
+        if alive is None:
+            return "unknown"
+        return "running" if alive else "done"
 
     async def exit_code(self, job_id: str) -> Optional[int]:
         rc_f = self._paths(job_id)[3]
@@ -273,6 +329,8 @@ class HostShellExecutor:
         pid = self._pid(job_id)
         if pid is None:
             return False
+        if job_id not in self._procs and self._pid_reused(job_id, pid):
+            return False  # 098 TS-10: the pid now names another process — never signal it
         killed = False
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:

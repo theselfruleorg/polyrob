@@ -27,6 +27,8 @@ reachable here — it stays operator-write-only and frozen.
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -44,6 +46,28 @@ from core.instance import (
 )
 
 logger = logging.getLogger(__name__)
+
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 CO-19: one draft slot per doc. ``propose``/``patch`` (quarantined) enter
+#: or rewrite ``draft``; the owner's ``promote``/``reject`` leave it, and only
+#: for the revision the owner reviewed (``expected_rev``).
+DOC_DRAFT = StateMachine(
+    "identity_draft",
+    states=frozenset({"none", "draft"}),
+    transitions={"none": frozenset({"draft"}), "draft": frozenset({"draft", "none"})},
+    initial=frozenset({"none"}),
+)
+
+#: The refusal an owner seat shows when the draft moved under the decision.
+DRAFT_CHANGED = "the draft changed after you read it — review the new version"
+
+
+def draft_rev(body: str) -> str:
+    """The revision of a draft: ``sha256(draft)[:16]`` (the same hash the
+    pending notifier records, so a notified card names a revision)."""
+    return hashlib.sha256((body or "").encode("utf-8", "replace")).hexdigest()[:16]
+
 
 PROVENANCE_USER = "user"
 PROVENANCE_AGENT = "agent"
@@ -127,6 +151,14 @@ class SelfContextWriter:
         """Who wrote the pending draft (095 W10, R9): one author per line."""
         pf = self._pending_file(uid)
         return pf.with_name(pf.name + ".by")
+
+    @contextlib.contextmanager
+    def _doc_lock(self, uid: str):
+        """One cross-process lock per doc (098 CO-19): every draft writer and the
+        owner's promote/reject run read -> check -> write -> remove under it."""
+        from core.state.files import file_lock
+        with file_lock(str(self._pending_file(uid))):
+            yield
 
     def _note_author(self, uid: str, created_by: str) -> None:
         authors = self.pending_authors(uid)
@@ -328,6 +360,19 @@ class SelfContextWriter:
                 pending: Optional[bool] = None,
                 source: Optional[str] = None,
                 observed_at: Optional[str] = None) -> SelfContextWriteResult:
+        """Author/replace the doc under the per-doc lock (see :meth:`_propose`)."""
+        uid = self._require_user(user_id)
+        if uid is None:
+            return SelfContextWriteResult(False, errors=["empty user_id refused (tenant scope)"])
+        with self._doc_lock(uid):
+            return self._propose(content, user_id=uid, created_by=created_by,
+                                 pending=pending, source=source, observed_at=observed_at)
+
+    def _propose(self, content: str, *, user_id: str,
+                 created_by: str = PROVENANCE_AGENT,
+                 pending: Optional[bool] = None,
+                 source: Optional[str] = None,
+                 observed_at: Optional[str] = None) -> SelfContextWriteResult:
         """Author/replace the doc (validated, scanned, atomically written).
 
         057 WS-D: ``source``/``observed_at`` attach PROVENANCE. When ``source`` is
@@ -374,7 +419,16 @@ class SelfContextWriter:
                 self._archive_existing(uid)
             elif not target.is_file():
                 # A new draft starts: keep the active doc it is drafted against.
+                DOC_DRAFT.check("none", "draft", ctx={"doc": self._DOC_KIND})
                 self._atomic_write(self._base_file(uid), self.read_active(uid))
+            else:
+                # 098 CO-19: a replaced draft is archived, never lost.
+                DOC_DRAFT.check("draft", "draft", ctx={"doc": self._DOC_KIND})
+                try:
+                    if target.read_text(encoding="utf-8") != body:
+                        self._archive_pending(uid, target)
+                except OSError:
+                    pass
             self._atomic_write(target, body)
             if quarantine:
                 self._note_author(uid, created_by)
@@ -394,7 +448,14 @@ class SelfContextWriter:
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused"])
+        with self._doc_lock(uid):
+            return self._patch(uid, old_string=old_string, new_string=new_string,
+                               replace_all=replace_all, created_by=created_by,
+                               pending=pending, source=source, observed_at=observed_at)
 
+    def _patch(self, uid: str, *, old_string: str, new_string: str, replace_all: bool,
+               created_by: str, pending: Optional[bool], source: Optional[str],
+               observed_at: Optional[str]) -> SelfContextWriteResult:
         active = self._active_file(uid)
         pending_f = self._pending_file(uid)
         # Always prefer an existing PENDING draft (so a patch refines the proposal in
@@ -442,10 +503,10 @@ class SelfContextWriter:
         # 057 WS-D: provenance rides through, and the baseline propose diffs
         # against is the SAME `src` we just read — so only the patched line is
         # new/changed, which is exactly the line that gets stamped.
-        return self.propose(updated, user_id=uid, created_by=created_by,
-                            pending=True if background_revision else (
-                                pending if pending is not None else target_is_pending),
-                            source=source, observed_at=observed_at)
+        return self._propose(updated, user_id=uid, created_by=created_by,
+                             pending=True if background_revision else (
+                                 pending if pending is not None else target_is_pending),
+                             source=source, observed_at=observed_at)
 
     def list_pending(self, user_id: str) -> Optional[dict]:
         """Return a summary of the tenant's pending self-doc draft, or None.
@@ -485,6 +546,7 @@ class SelfContextWriter:
             "by": self.pending_authors(uid),
             "chars": len(body),
             "path": str(pending_f),
+            "rev": draft_rev(body),
         }
 
     def read_active(self, user_id: str) -> str:
@@ -500,20 +562,45 @@ class SelfContextWriter:
         except OSError:
             return ""
 
-    def reject(self, *, user_id: str) -> SelfContextWriteResult:
+    def _check_rev(self, uid: str, pending_f: Path, expected_rev: Optional[str]):
+        """``(content, refusal)``: the draft text, or a refusal when it is gone or
+        is not the revision the owner reviewed (098 CO-19)."""
+        if not pending_f.is_file():
+            return None, None
+        try:
+            content = pending_f.read_text(encoding="utf-8")
+        except Exception as e:
+            return None, SelfContextWriteResult(False, errors=[f"read failed: {e}"])
+        if expected_rev and draft_rev(content) != str(expected_rev).strip():
+            logger.info("%s %s: decision refused, draft rev %s != reviewed %s",
+                        self._LOG_LABEL, uid, draft_rev(content), expected_rev)
+            return content, SelfContextWriteResult(False, errors=[DRAFT_CHANGED])
+        return content, None
+
+    def reject(self, *, user_id: str,
+               expected_rev: Optional[str] = None) -> SelfContextWriteResult:
         """Discard a pending self-doc draft (owner rejects the proposal).
 
         Archive-never-delete: the rejected draft is backed up to
         ``.archived/rejected.<n>.md`` before removal so a decision is recoverable.
-        The active doc is never touched.
+        The active doc is never touched. ``expected_rev`` (098 CO-19): the
+        revision the owner reviewed; a different draft is refused.
         """
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused"])
+        with self._doc_lock(uid):
+            return self._reject(uid, expected_rev)
+
+    def _reject(self, uid: str, expected_rev: Optional[str]) -> SelfContextWriteResult:
         pending_f = self._pending_file(uid)
         if not pending_f.is_file():
             return SelfContextWriteResult(
                 False, errors=[f"no pending {self._CAP_NOUN} to reject"])
+        _content, refused = self._check_rev(uid, pending_f, expected_rev)
+        if refused is not None:
+            return refused
+        DOC_DRAFT.check("draft", "none", ctx={"doc": self._DOC_KIND, "by": "reject"})
         try:
             self._archive_pending(uid, pending_f)
             os.remove(str(pending_f))
@@ -524,19 +611,28 @@ class SelfContextWriter:
             logger.error("%s reject failed for %s: %s", self._LOG_LABEL, uid, e, exc_info=True)
             return SelfContextWriteResult(False, errors=[f"reject failed: {e}"])
 
-    def promote(self, *, user_id: str) -> SelfContextWriteResult:
-        """Move the .pending doc into active use (the owner-review gate)."""
+    def promote(self, *, user_id: str,
+                expected_rev: Optional[str] = None) -> SelfContextWriteResult:
+        """Move the .pending doc into active use (the owner-review gate).
+
+        ``expected_rev`` (098 CO-19) is the revision the owner reviewed; under the
+        per-doc lock a different draft is refused, so the owner's approval makes
+        exactly the text they saw active."""
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused"])
+        with self._doc_lock(uid):
+            return self._promote(uid, expected_rev)
+
+    def _promote(self, uid: str, expected_rev: Optional[str]) -> SelfContextWriteResult:
         pending_f = self._pending_file(uid)
         if not pending_f.is_file():
             return SelfContextWriteResult(
                 False, errors=[f"no pending {self._CAP_NOUN} to promote"])
-        try:
-            content = pending_f.read_text(encoding="utf-8")
-        except Exception as e:
-            return SelfContextWriteResult(False, errors=[f"read failed: {e}"])
+        content, refused = self._check_rev(uid, pending_f, expected_rev)
+        if refused is not None:
+            return refused
+        DOC_DRAFT.check("draft", "none", ctx={"doc": self._DOC_KIND, "by": "promote"})
         # Rebase: apply the draft's CHANGE to the active doc as it is NOW, so a
         # live line the draft never saw stays live and a line retired since stays
         # retired; what the promote retires is named on the result.
@@ -549,8 +645,8 @@ class SelfContextWriter:
         # Promotion is owner-initiated → user provenance, not pending. The
         # owner's approval IS the provenance for any line the draft left bare
         # (stamped lines keep their own stamp).
-        res = self.propose(content, user_id=uid, created_by=PROVENANCE_USER, pending=False,
-                           source="owner approved")
+        res = self._propose(content, user_id=uid, created_by=PROVENANCE_USER, pending=False,
+                            source="owner approved")
         if res.ok and not res.pending:
             res.retired, res.kept = retired, kept
             try:
@@ -645,6 +741,9 @@ class SelfContextWriter:
 __all__ = [
     "SelfContextWriter",
     "describe_rebase",
+    "draft_rev",
+    "DOC_DRAFT",
+    "DRAFT_CHANGED",
     "SelfContextWriteResult",
     "PROVENANCE_USER",
     "PROVENANCE_AGENT",

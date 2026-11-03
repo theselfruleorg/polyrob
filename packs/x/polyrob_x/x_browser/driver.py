@@ -49,6 +49,17 @@ HOME_URL = "https://x.com/home"
 MESSAGES_URL = "https://x.com/messages"
 
 
+def _is_x_url(url: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        parts = urlparse(url or "")
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    return parts.scheme == "https" and (
+        host in ("x.com", "twitter.com") or host.endswith((".x.com", ".twitter.com")))
+
+
 class XPageDriver:
     def __init__(self, page: Any) -> None:
         self.page = page
@@ -325,6 +336,38 @@ class XPageDriver:
             return await self.page.context.storage_state()
         except Exception:
             return {}
+
+    async def current_url(self) -> str:
+        return str(getattr(self.page, "url", "") or "")
+
+    async def page_is_blank(self) -> bool:
+        """True on a page that never left ``about:blank`` (a fresh context)."""
+        url = await self.current_url()
+        return not url or url.startswith("about:")
+
+    async def import_storage_state(self, state: dict, *, url: str = "") -> None:
+        """Load a saved ``storage_state`` (098 CL-11: cross-process signup resume)
+        into this page's context — cookies, then each X origin's localStorage —
+        and go back to ``url`` (an x.com URL; else the signup flow)."""
+        ctx = self.page.context
+        cookies = [c for c in (state.get("cookies") or []) if isinstance(c, dict)]
+        if cookies:
+            await ctx.add_cookies(cookies)
+        for origin in state.get("origins") or []:
+            name = str((origin or {}).get("origin") or "")
+            items = [(i.get("name"), i.get("value"))
+                     for i in (origin or {}).get("localStorage") or [] if isinstance(i, dict)]
+            if not items or not _is_x_url(name):
+                continue
+            try:
+                await self.page.goto(name, wait_until="domcontentloaded")
+                await self.page.evaluate(
+                    "(items) => { for (const [k, v] of items) { "
+                    "try { localStorage.setItem(k, v); } catch (e) {} } }", items)
+            except Exception as e:
+                logger.debug("x signup: localStorage for %s not restored: %s", name, e)
+        target = url if _is_x_url(url) else self.SIGNUP_URL
+        await self.page.goto(target, wait_until="domcontentloaded")
 
     async def probe(self) -> str:
         """Classify the current page for the signup obstacle taxonomy."""

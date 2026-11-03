@@ -50,9 +50,9 @@ async def probe(env) -> ProbeResult:
     if gap:
         return gap
     try:
-        import tweepy
+        from polyrob_x._vendor import tweepy
     except Exception:
-        return ProbeResult.unavailable("tweepy not installed (pip install 'polyrob[twitter]')")
+        return ProbeResult.unavailable("the twitter extra is not installed (pip install 'polyrob[twitter]')")
 
     def _me():
         client = tweepy.Client(consumer_key=env["TWITTER_API_KEY"].strip(),

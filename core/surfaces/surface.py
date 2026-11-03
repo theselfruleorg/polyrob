@@ -4,9 +4,8 @@ Required (every surface MUST implement): surface_id, capabilities, send(), start
 stop().
 
 Shared, default-provided (a surface gets these for free):
-  - stream(): buffers deltas and flushes one send() on finalize, OR — when the surface
-    opts into incremental streaming AND advertises supports_edit — runs the generic
-    live-edit engine below (open one message, edit it in place as deltas arrive,
+  - stream(): when the surface opts into incremental streaming AND advertises
+    supports_edit, runs the generic live-edit engine below (open one message, edit it in place as deltas arrive,
     flood-throttle, split overflow on finalize). The engine is surface-AGNOSTIC; a
     surface plugs in four small transport primitives (_open_stream_message,
     _edit_stream_message, _send_stream_overflow, _stream_target) plus two policy hooks
@@ -73,10 +72,16 @@ class _LiveStream:
     """In-progress streamed reply for one stream_id: the single message we keep editing
     in place, plus accumulated text and last-render bookkeeping. Surface-agnostic —
     ``target`` is whatever address the concrete surface's _stream_target() returns."""
-    __slots__ = ("target", "message_id", "text", "rendered", "last_edit")
+    __slots__ = ("target", "message_id", "text", "rendered", "last_edit", "lock")
 
     def __init__(self, target: Any) -> None:
+        import asyncio
         self.target = target
+        #: 098 TS-19: one render at a time per stream. A partial that finds a
+        #: render in flight (the bubble is still OPENING) only appends its text;
+        #: the finalize waits for the opener, so two overlapping partials can
+        #: never open two bubbles and a finalize never sends a second message.
+        self.lock = asyncio.Lock()
         self.message_id: Optional[Any] = None
         self.text = ""
         self.rendered = ""        # last text actually pushed to the surface
@@ -85,7 +90,6 @@ class _LiveStream:
 
 class Surface(ABC):
     def __init__(self) -> None:
-        self._stream_buffers: dict[str, list] = {}
         self._live: dict[str, _LiveStream] = {}
 
     @property
@@ -106,40 +110,27 @@ class Surface(ABC):
     async def stop(self) -> None: ...
 
     async def stream(self, msg: OutboundMessage) -> None:
-        """Route a streamed delta: live-edit when the surface opts in + supports edit,
-        else the buffered default (commit one send() on finalize)."""
+        """Route a streamed delta: live-edit when the surface opts in + supports edit.
+
+        098 TS-19: a surface that does not live-edit keeps NO partial state. The
+        buffered path is gone: the router never finalized it (the turn's reply
+        arrives through ``send()``), so its buffers only grew to a cap and were
+        dropped. A partial is ignored; a bare finalize sends its own text."""
         if self._incremental_streaming_enabled() and self.capabilities.supports_edit:
             return await self._stream_incremental(msg)
-        key = msg.stream_id or msg.session_key
-        if msg.partial:
-            buf = self._stream_buffers.get(key)
-            if buf is None:
-                # M4: bound the number of buffered streams (evict oldest). The streaming
-                # mirror may never emit a partial=False finalize, so without this the
-                # buffer map grows for the daemon's lifetime.
-                if len(self._stream_buffers) >= self._MAX_LIVE_STREAMS:
-                    oldest = next(iter(self._stream_buffers))
-                    self._stream_buffers.pop(oldest, None)
-                buf = self._stream_buffers[key] = []
-            buf.append(msg.text)
-            # And bound each un-finalized stream's chunk list (drop oldest chunks) so a
-            # single never-flushed key can't grow without limit.
-            if len(buf) > self._MAX_STREAM_CHUNKS:
-                del buf[:len(buf) - self._MAX_STREAM_CHUNKS]
+        if msg.partial or not (msg.text or "").strip():
             return
-        buffered = "".join(self._stream_buffers.pop(key, []))
-        final_text = buffered + (msg.text or "")
         await self.send(OutboundMessage(
-            session_key=msg.session_key, text=final_text, kind=msg.kind,
+            session_key=msg.session_key, text=msg.text, kind=msg.kind,
             partial=False, stream_id=msg.stream_id, reply_to=msg.reply_to,
         ))
 
     def stream_is_live(self) -> bool:
         """Whether a partial stream is visibly delivered as it arrives.
 
-        Buffered surfaces retain partials locally until a final message arrives;
-        treating those frames as a user reply would suppress that final message
-        and lose the reply.  Edit-capable incremental surfaces, on the other
+        A surface that does not live-edit drops partials (the reply arrives
+        through ``send()``); treating those frames as a user reply would
+        suppress that final message and lose the reply.  Edit-capable incremental surfaces, on the other
         hand, have already opened the user's message, so their streamed prose
         must claim the turn's reply latch.
         """
@@ -213,7 +204,7 @@ class Surface(ABC):
     # primitives below. Everything here is shared.
 
     def _incremental_streaming_enabled(self) -> bool:
-        """Opt-in switch (default OFF -> buffered)."""
+        """Opt-in switch (default OFF -> partials dropped, the reply is one send())."""
         return False
 
     def _stream_target(self, msg: OutboundMessage) -> Any:
@@ -250,7 +241,6 @@ class Surface(ABC):
     # module docstring: incremental streaming is engine-correct but not yet wired live —
     # keep the opt-in flag OFF until the producer emits per-turn finalizes.
     _MAX_LIVE_STREAMS = 256
-    _MAX_STREAM_CHUNKS = 4096  # cap buffered deltas per un-finalized stream (M4)
 
     async def _stream_incremental(self, msg: OutboundMessage) -> None:
         key = msg.stream_id or msg.session_key
@@ -265,10 +255,16 @@ class Surface(ABC):
                 st = _LiveStream(self._stream_target(msg))
                 self._live[key] = st
             st.text += (msg.text or "")
-            await self._render_live(st, final=False)
+            if st.lock.locked():
+                return   # a render is in flight; the next render shows this text
+            async with st.lock:
+                await self._render_live(st, final=False)
             return
         # Finalize: commit the full text and drop the live-stream state.
         st = self._live.pop(key, None)
+        if st is not None:
+            async with st.lock:   # an opener in flight finishes first
+                pass
         final_text = (st.text if st else "") + (msg.text or "")
         if st is None or st.message_id is None:
             # No live message was opened (all-whitespace partials, or a bare finalize)

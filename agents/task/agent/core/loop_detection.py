@@ -44,11 +44,6 @@ class LoopDetectionMixin:
         if self.state.stopped:
             self.logger.info('⏹️ Agent execution stopped by control flag')
             raise InterruptedError("Agent stopped")
-        # Legacy: treat paused as stopped for backwards compatibility
-        if self.state.paused:
-            self.logger.info('⏹️ Agent paused flag set - treating as stop (pause deprecated)')
-            self.state.stopped = True  # Normalize to stopped
-            raise InterruptedError("Agent stopped (paused flag deprecated)")
         return False
 
     def _trigger_loop_intervention(self, reason: str, clear_history: bool = False,
@@ -234,6 +229,10 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         self._loop_stop_text = None
         self._last_step_key = None
         self._action_repetition_counter = 0
+        # 098 AG-04: the A-B-A-B window is per run too (a cycle never spans turns).
+        previous = getattr(self, '_previous_actions', None)
+        if previous is not None:
+            previous.clear()
 
     def _take_loop_stop(self) -> Optional[str]:
         """The loop-stop reason once (the run loop ends the run on it), else None."""

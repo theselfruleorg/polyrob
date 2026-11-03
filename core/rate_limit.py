@@ -22,10 +22,8 @@ Each keeps its key space bounded via an amortized idle-key sweep — a key whose
 window has expired (or whose bucket is fully refilled) is semantically identical
 to a fresh key, so evict-then-recreate never changes a decision (WS-4 precedent).
 
-The ONE deliberate non-consolidation: ``surfaces/telegram/rate_limit.py::
-TelegramRateLimiter`` is not a request-budget limiter — it only replays penalties
-Telegram already issued via RetryAfter (grammY philosophy: never pre-throttle),
-so there is no budget shape here for it to configure.
+Telegram's RetryAfter flood wait is not a request budget either: the surface
+keeps it as a per-target deadline (``TelegramSurface._flood_until``).
 
 A shrink-only name ratchet (``tests/test_rate_limiter_ratchet.py``) keeps new
 forks from appearing outside this module.

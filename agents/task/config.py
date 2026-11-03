@@ -16,7 +16,7 @@ from pathlib import Path
 import logging
 
 from agents.task.constants import LoopDetectionConfig
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy.goal_flags import interactive_max_steps
 from core.env import bool_env as _bool_env
 from core.version import get_version
 import os
@@ -172,7 +172,7 @@ class LimitsConfigModel(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
 
-    max_steps: int = Field(default=INTERACTIVE_MAX_STEPS, ge=1, le=1000, description="Maximum steps for execution")
+    max_steps: int = Field(default_factory=interactive_max_steps, ge=1, le=1000, description="Maximum steps for execution")
     # DUPLICATE: Also in MessageManagerConfig (for message formatting)
     max_actions_per_step: int = Field(default=10, ge=1, le=50, description="Maximum actions per step")
     # DUPLICATE: Also in MessageManagerConfig (for context limits)
@@ -388,7 +388,7 @@ class TaskSessionConfig(BaseModel):
                 use_vision=True
             ),
             limits=LimitsConfigModel(
-                max_steps=INTERACTIVE_MAX_STEPS,
+                max_steps=interactive_max_steps(),
                 max_actions_per_step=10,
                 max_input_tokens=None,  # Auto-detect from model
                 max_failures=mode_config.get('max_failures', 3)

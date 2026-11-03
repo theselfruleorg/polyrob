@@ -76,7 +76,7 @@ class TestBrowserManagerInitialization:
 
         assert manager.config == bot_config
         assert manager.browser is None
-        assert manager.context_pool == []
+        assert not hasattr(manager, "context_pool")  # 098 TS-06: no pool
         assert manager.contexts_in_use == {}
         assert manager.session_contexts == {}
         assert manager.browser_config.max_contexts == 2
@@ -267,40 +267,23 @@ class TestContextPooling:
     """Test context pooling and reuse."""
 
     @patch('tools.browser.browser_manager.Browser')
-    async def test_context_returned_to_pool(self, mock_browser_class, bot_config, mock_browser_context):
-        """Test that released contexts are returned to pool."""
+    async def test_release_never_pools(self, mock_browser_class, bot_config, mock_browser_context):
+        """098 TS-06: a released context is closed even with close=False; the
+        next session gets a FRESH context (a reset one kept cookies)."""
         mock_browser = mock_browser_class.return_value
         mock_browser.new_context = AsyncMock(return_value=mock_browser_context)
 
         manager = BrowserManager(config=bot_config)
         await manager.initialize()
 
-        context = await manager.get_context("session1")
-        assert len(manager.context_pool) == 0
-
+        await manager.get_context("session1")
         await manager.release_context("session1", close=False)
-        assert len(manager.context_pool) == 1
+        mock_browser_context.close.assert_called_once()
         assert "session1" not in manager.contexts_in_use
 
-    @patch('tools.browser.browser_manager.Browser')
-    async def test_context_reused_from_pool(self, mock_browser_class, bot_config, mock_browser_context):
-        """Test that contexts are reused from pool."""
-        mock_browser = mock_browser_class.return_value
-        mock_browser.new_context = AsyncMock(return_value=mock_browser_context)
-
-        manager = BrowserManager(config=bot_config)
-        await manager.initialize()
-
-        # Create and release a context
-        context1 = await manager.get_context("session1")
-        await manager.release_context("session1", close=False)
-
-        # Get context for different session (should reuse from pool)
-        context2 = await manager.get_context("session2", reuse=True)
-
-        assert context2 == context1
-        assert mock_browser.new_context.call_count == 1
-        mock_browser_context.reset_context.assert_called_once()
+        await manager.get_context("session2", reuse=True)
+        assert mock_browser.new_context.call_count == 2
+        mock_browser_context.reset_context.assert_not_called()
 
     @patch('tools.browser.browser_manager.Browser')
     async def test_context_closed_when_close_true(self, mock_browser_class, bot_config, mock_browser_context):
@@ -314,7 +297,6 @@ class TestContextPooling:
         context = await manager.get_context("session1")
         await manager.release_context("session1", close=True)
 
-        assert len(manager.context_pool) == 0
         mock_browser_context.close.assert_called_once()
 
 
@@ -411,7 +393,6 @@ class TestCleanup:
         await manager.cleanup()
 
         assert len(manager.contexts_in_use) == 0
-        assert len(manager.context_pool) == 0
         mock_browser.close.assert_called_once()
 
     @patch('tools.browser.browser_manager.Browser')
@@ -462,12 +443,13 @@ class TestSessionTracking:
         allowed_domains = ["example.com", "test.com"]
         context = await manager.get_context("session1", allowed_domains=allowed_domains)
 
-        # When reusing from pool, domains should be updated
+        # 098 TS-06: each session's context is created fresh with its own config
         await manager.release_context("session1")
-        context2 = await manager.get_context("session2", allowed_domains=["other.com"])
-
-        # Reset should have been called
-        mock_browser_context.reset_context.assert_called()
+        await manager.get_context("session2", allowed_domains=["other.com"])
+        configs = [c.kwargs["config"] for c in mock_browser.new_context.call_args_list]
+        assert configs[0].allowed_domains == allowed_domains
+        assert configs[1].allowed_domains == ["other.com"]
+        mock_browser_context.reset_context.assert_not_called()
 
     @patch('tools.browser.browser_manager.Browser')
     async def test_forget_session_config_removes_cached_config(self, mock_browser_class, bot_config, mock_browser_context):

@@ -274,16 +274,61 @@ def apply_sweep(plan: SweepPlan) -> Dict[str, int]:
     return {"removed": removed, "failed": failed}
 
 
+#: Where the last sweep leaves its outcome. The status section reads THIS — a
+#: cheap file read — instead of re-deriving "is retention working" from tree ages
+#: on every turn (097 W9: the age count included every tree the sweep keeps on
+#: purpose, so its warning could never clear).
+SWEEP_STATE_FILE = "session_sweep.json"
+
+
+def record_sweep_state(data_dir: str, *, removed: int = 0, failed: int = 0,
+                       error: str = "", now: Optional[float] = None) -> None:
+    """Write the outcome of one sweep (atomic replace). Never raises."""
+    try:
+        path = os.path.join(data_dir, SWEEP_STATE_FILE)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"at": float(now if now is not None else time.time()),
+                       "removed": int(removed), "failed": int(failed),
+                       "error": str(error or "")[:300]}, fh)
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug("session sweep state not recorded: %s", exc)
+
+
+def read_sweep_state(data_dir: str) -> Optional[Dict]:
+    """The last recorded sweep, or None when no sweep ever recorded one. A
+    record that exists but cannot be read returns ``{"unreadable": "<why>"}``
+    (never None: "never ran" would be a false statement)."""
+    try:
+        with open(os.path.join(data_dir, SWEEP_STATE_FILE), encoding="utf-8") as fh:
+            got = json.load(fh)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        return {"unreadable": type(exc).__name__}
+    return got if isinstance(got, dict) else {"unreadable": "not a JSON object"}
+
+
 def sweep(data_dir: str, *, days: Optional[int] = None,
           now: Optional[float] = None) -> Dict[str, int]:
-    """Plan and apply in one call — what the curator tick runs."""
-    plan = plan_sweep(data_dir, days=days, now=now)
+    """Plan and apply in one call — what the retention tick runs. Records its
+    outcome (``record_sweep_state``), a refusal included."""
+    try:
+        plan = plan_sweep(data_dir, days=days, now=now)
+    except RuntimeError as exc:
+        record_sweep_state(data_dir, error=str(exc))
+        raise
     if not plan.remove:
+        record_sweep_state(data_dir, error="; ".join(plan.errors[:1])
+                           if not plan.scanned and plan.errors else "")
         return {"removed": 0, "failed": 0, "scanned": plan.scanned}
     out = apply_sweep(plan)
     out["scanned"] = plan.scanned
+    record_sweep_state(data_dir, removed=out["removed"], failed=out["failed"])
     return out
 
 
 __all__ = ["MAX_REMOVALS_PER_SWEEP", "TERMINAL_GOAL_STATUSES", "SweepPlan",
-           "apply_sweep", "plan_sweep", "retention_days", "sweep"]
+           "SWEEP_STATE_FILE", "apply_sweep", "plan_sweep", "read_sweep_state",
+           "record_sweep_state", "retention_days", "sweep"]

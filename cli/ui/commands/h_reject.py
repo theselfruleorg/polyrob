@@ -96,6 +96,9 @@ def h_reject(ctx) -> None:
         return
 
     pending_set = _union()
+    # 098 CO-19: a typed ``<id>@<rev>`` decides the draft revision it names.
+    from core.self_evolution import split_id_rev
+    target, typed_rev = split_id_rev(target)
     match = next((it for it in pending_set.items if str(it["id"]) == target), None)
     if match is None:  # a tapped `/approve_p_<hex>` names the item by its short alias
         from core.self_evolution import resolve_pending_alias
@@ -106,6 +109,7 @@ def h_reject(ctx) -> None:
         ctx.emit(f"No pending item '{target}' — see /pending.{tail}", title="reject")
         return
     ok, msg = decide_pending(match["kind"], match["id"], approve=False,
+                             rev=typed_rev or match.get("seat_rev"),
                              user_id=uid, home_dir=data_dir,
                              instance_id=instance_id)
     ctx.emit(msg if ok else f"Failed: {msg}", title="reject")

@@ -178,29 +178,31 @@ SYNC_REFUSED_CAP = "refused_cap" # the tenant storage ceiling refused the row
 SYNC_FAILED = "failed"
 
 #: The owner-visible standing verdict for a full store (``core.credential_verdicts``
-#: renders it as a /status health line). Recorded at most once a day per process.
+#: renders it as a /status health line). 098 MO-16: keyed PER TENANT (the cap is
+#: per tenant) and read from the durable verdict on both paths — a per-process
+#: cache let one process's clear hide another's "full", and one tenant's insert
+#: cleared another tenant's verdict. Only the WRITE of a repeat "full" is
+#: rate-limited (once a day, from the verdict's own ``last_seen``).
 STORE_FULL_KIND = "memory_store"
 STORE_FULL_KEY = "cross_session"
 _STORE_FULL_EVERY_SEC = 86400.0
-_store_full = {"recorded_at": 0.0, "open": None}
 
 
-def _note_store_full() -> None:
+def store_full_key(user_id: Optional[str]) -> str:
+    return f"{STORE_FULL_KEY}:{user_id or ''}"
+
+
+def _note_store_full(user_id: Optional[str] = None) -> None:
     import time as _t
-    now = _t.time()
-    # Rate-limit only while the verdict is known OPEN: after a real insert
-    # cleared it, the store filling up again must be told at once — not up
-    # to a day later.
-    if (_store_full["open"] is not False
-            and now - _store_full["recorded_at"] < _STORE_FULL_EVERY_SEC):
-        return
-    _store_full["recorded_at"] = now
-    _store_full["open"] = True
+    key = store_full_key(user_id)
     try:
-        from core.credential_verdicts import record_rejection
+        from core.credential_verdicts import record_rejection, verdict
+        v = verdict(STORE_FULL_KIND, key)
+        if v is not None and _t.time() - float(v.last_seen) < _STORE_FULL_EVERY_SEC:
+            return
         from modules.memory.storage_limits import MAX_BYTES, MAX_MEMORY_ROWS
         record_rejection(
-            STORE_FULL_KIND, STORE_FULL_KEY, code="storage limit reached",
+            STORE_FULL_KIND, key, code="storage limit reached",
             remedy=(f"cross-session memory is full ({MAX_MEMORY_ROWS:,} rows / "
                     f"{MAX_BYTES // (1024 * 1024)} MiB per tenant) — new findings are NOT "
                     "being stored; remove old memory rows to make room"),
@@ -209,16 +211,14 @@ def _note_store_full() -> None:
         logger.debug("memory store-full verdict skipped: %s", e)
 
 
-def _note_store_ok() -> None:
-    """A real insert proves the store has room: close a standing full verdict.
-    Reads the verdict store at most once per process while none is known open."""
-    if _store_full["open"] is False:
-        return
+def _note_store_ok(user_id: Optional[str] = None) -> None:
+    """A real insert proves THIS tenant's store has room: close its standing
+    full verdict (read from the durable store, never a process cache)."""
+    key = store_full_key(user_id)
     try:
         from core.credential_verdicts import clear_rejection, verdict
-        if _store_full["open"] or verdict(STORE_FULL_KIND, STORE_FULL_KEY) is not None:
-            clear_rejection(STORE_FULL_KIND, STORE_FULL_KEY)
-        _store_full["open"] = False
+        if verdict(STORE_FULL_KIND, key) is not None:
+            clear_rejection(STORE_FULL_KIND, key)
     except Exception as e:
         logger.debug("memory store-full verdict clear skipped: %s", e)
 
@@ -240,13 +240,13 @@ async def memory_sync_turn(user_content: str, assistant_content: str, *,
                                        **_scope_kwargs(provider.sync_turn, session_id))
     except StorageLimitError as e:
         logger.warning("memory_sync_turn refused: %s", e)
-        _note_store_full()
+        _note_store_full(user_id)
         return SYNC_REFUSED_CAP
     except Exception as e:
         logger.warning("memory_sync_turn failed: %s", e)
         return SYNC_FAILED
     if got is True:
-        _note_store_ok()
+        _note_store_ok(user_id)
         return SYNC_INSERTED
     return SYNC_DUPLICATE if got is False else SYNC_SKIPPED
 
@@ -304,8 +304,11 @@ async def memory_recall_episodes(*, user_id: Optional[str] = None,
 # Mirror memory_search: no-throw, delegate to .active(), safe defaults on error.
 
 async def kb_search(query: str, *, user_id: Optional[str] = None,
-                    collection: str = "default", limit: int = 8) -> str:
-    """Route a KB search through the active provider. '' on no-provider / error."""
+                    collection: Optional[str] = None, limit: int = 8) -> str:
+    """Route a KB search through the active provider. '' on no-provider / error.
+
+    ``collection=None`` searches every collection the tenant has (097: the KB
+    has full access — the owner never sorts documents into collections)."""
     provider = get_memory_registry().active()
     if provider is None:
         return ""

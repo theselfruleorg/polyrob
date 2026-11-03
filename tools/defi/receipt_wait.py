@@ -42,7 +42,9 @@ def record_interrupted(tx_hash: str, *, gate, record_kw: Dict[str, Any],
                        notice_kw: Optional[Dict[str, Any]] = None) -> None:
     """Record the broadcast, say so on stderr and to the owner. Never raises."""
     try:
-        gate.record(**record_kw)
+        # 098 TS-23: booked before the receipt was known; resolved later
+        # (core/wallet/receipt_resolver.py).
+        gate.record(**{"receipt_state": "pending_receipt", **record_kw})
     except Exception:
         logger.error("money verb: interrupted broadcast %s NOT recorded", tx_hash,
                      exc_info=True)

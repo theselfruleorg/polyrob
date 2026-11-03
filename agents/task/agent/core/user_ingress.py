@@ -118,13 +118,35 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
     # forged wakes self-wake died PERMANENTLY for a session and never recovered from
     # real conversation (only a 7-day staleness purge cleared it). Fail-open.
     if forged_kind is None:
-        try:
-            from agents.task.agent.core.self_wake import get_reentry_budget
-            sid = getattr(orchestrator, "session_id", "") or ""
-            if sid:
-                get_reentry_budget().reset(sid)
-        except Exception:
-            pass
+        _reset_reentry_budget(orchestrator)
+
+
+def _reset_reentry_budget(orchestrator) -> None:
+    try:
+        from agents.task.agent.core.self_wake import get_reentry_budget
+        sid = getattr(orchestrator, "session_id", "") or ""
+        if sid:
+            get_reentry_budget().reset(sid)
+    except Exception:
+        pass
+
+
+def mark_owner_turn(orchestrator) -> None:
+    """098 AG-06: the owner spoke on a path that never rides the HITL queue (a
+    REPL line). The three owner-turn effects of a genuine drained batch: the
+    forged-turn marker clears (``forged -> owner``), the correspondent taint
+    clears, the self-wake re-entry budget resets. ``run()``'s first drain then
+    recomputes the marker: a forged message drained WITH the line still marks
+    the turn forged (a mixed batch fails toward untrusted). Fail-open."""
+    if orchestrator is None:
+        return
+    orchestrator._forged_turn_kind = None
+    try:
+        from core.security.taints import clear_on_owner_turn
+        clear_on_owner_turn(orchestrator)
+    except Exception:
+        pass
+    _reset_reentry_budget(orchestrator)
 
 
 #: 085 W3: explicit ``creator`` labels whose session task IS the line a person

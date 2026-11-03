@@ -10,7 +10,9 @@ from types import SimpleNamespace
 
 from agents.task.constants import CHAT_MAX_STEPS
 from agents.task.task_agent_delivery import TaskAgentDeliveryMixin, is_narrowed_task
-from core.config_policy import INTERACTIVE_MAX_STEPS
+from core.config_policy import interactive_max_steps
+
+INTERACTIVE_MAX_STEPS = interactive_max_steps()
 
 S = "sess-owner"
 OWNER_TASK = "we started fresh conversation please check now"

@@ -27,7 +27,8 @@ def test_update_counts_lines():
 def test_summary_line_uses_description_not_frontmatter():
     item = {"change": skill_change(DRAFT, LIVE), "preview": "---\nname: x"}
     line = summary_line(item)
-    assert line.startswith("update: +3 / −2 lines — Better way")
+    # 096 W2: an update names what CHANGED, not the new description.
+    assert line.startswith('update — description changed: "Old way" → "Better way"'), line
     assert "name:" not in line
 
 
@@ -58,4 +59,8 @@ def test_review_new_item_whole_and_fence_safe():
 def test_review_caps_long_body():
     out = review_text({"kind": "owner", "id": "1"}, "z" * (REVIEW_MAX_CHARS + 50),
                       label="owner-facts note", decide_line="d", is_skill=False)
-    assert "cut at" in out and "polyrob owner pending show owner 1" in out
+    assert "50 more characters not shown" in out
+    assert "polyrob owner show-pending owner 1" in out
+    assert "polyrob owner pending show" not in out
+    # 096 A6: the note sits AFTER the closing fence, never inside it.
+    assert out.index("more characters not shown") > out.rindex("```")

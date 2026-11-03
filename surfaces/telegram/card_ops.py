@@ -26,12 +26,21 @@ from core.surfaces.command_reply import CommandReply, reply_text
 logger = logging.getLogger(__name__)
 
 USAGE = ("Usage: /cards — the open cards\n"
+         "       /cards <id> — one card in full (the tap /card_<id>)\n"
          "       /cards <id> ok|no|re|1-6 — the same as tapping the button")
+
+
+def _read_id(text: str) -> Optional[str]:
+    """The card id of a READ tap ``/card_<id>`` (096 C4), else None."""
+    from core.surfaces.tappable import parse_tappable
+    verb, arg = parse_tappable(text)
+    return arg if verb == "/cards" else None
 
 
 def is_card_command(text: str) -> bool:
     token = (text or "").strip().split()[0].lower() if (text or "").strip() else ""
-    return token == "/cards" or cards.parse_card_token(token)[0] is not None
+    return (token == "/cards" or cards.parse_card_token(token)[0] is not None
+            or _read_id(token) is not None)
 
 
 async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
@@ -42,11 +51,16 @@ async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
     if not h._is_admin_owner(user_id):
         return "🔒 Owner only."
     text = (result.inbound.text or "").strip()
+    read = _read_id(text)
+    if read is not None:
+        return cards.read_reply(user_id, read)     # a read: nothing is pressed
     cid, act = cards.parse_card_token(text)
     if cid is None:
         args = text.split()[1:]
         if not args:
             return cards.list_reply(user_id)
+        if len(args) == 1:
+            return cards.read_reply(user_id, args[0])
         if len(args) != 2 or args[1].lower() not in cards.ACTS:
             return USAGE
         cid, act = args[0].lower(), args[1].lower()
@@ -191,8 +205,8 @@ def _why_line(text: str) -> str:
     (the journal read only ``outcome=failed`` on 2026-10-19)."""
     for ln in (text or "").splitlines():
         if any(m in ln for m in _WHY_MARKS):
-            return ln.strip()[:160]
-    return (text or "").strip().splitlines()[0][:160] if (text or "").strip() else ""
+            return ln.strip()[:160]  # cut: a log line, not owner text
+    return (text or "").strip().splitlines()[0][:160] if (text or "").strip() else ""  # cut: a log line, not owner text
 
 
 def carded(user_id: str, cmd: str, text: str, reply: Any) -> Any:

@@ -18,6 +18,11 @@ def _seed_self_pending(home, uid="alice"):
         user_id=uid, created_by=PROVENANCE_AGENT, pending=True)
 
 
+def _rev(home, uid="alice"):
+    """098 CO-19: the draft revision the owner reviewed."""
+    return SelfContextWriter(home, instance_id=DEFAULT_INSTANCE_ID).list_pending(uid)["rev"]
+
+
 def _skill_mgr(home):
     return SkillManager(skills_dir=home / "skills")
 
@@ -64,7 +69,7 @@ def test_promote_self_context(tmp_path):
     from core.instance import load_self_doc
     _seed_self_pending(tmp_path)
     ok, _ = self_evolution.promote(
-        "self_context", "alice", user_id="alice",
+        "self_context", "alice", user_id="alice", rev=_rev(tmp_path),
         home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert ok
     assert "surface blockers" in load_self_doc(tmp_path, user_id="alice")
@@ -73,7 +78,7 @@ def test_promote_self_context(tmp_path):
 def test_reject_self_context(tmp_path):
     _seed_self_pending(tmp_path)
     ok, _ = self_evolution.reject(
-        "self_context", "alice", user_id="alice",
+        "self_context", "alice", user_id="alice", rev=_rev(tmp_path),
         home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert ok
     remaining = self_evolution.list_pending(

@@ -52,12 +52,27 @@ throwaway workload before you depend on it.
 A withheld tool is never offered to the agent, and every surface names the remedy:
 
 ```text
-x 1.2.0 (first-party): loaded — needs `pip install 'polyrob[twitter]'` (tools withheld: twitter)
+x <version> (first-party): loaded — needs `pip install 'polyrob[twitter]'` (tools withheld: twitter)
 ```
 
 From a source tree, `install.sh --packs x,markets` installs the extras
 hash-checked; `polyrob pack install <id>` names the extra (or installs it through
 the trusted lazy installer when one ships for it).
+
+## Skills in the first-party packs
+
+Some skills ship only in a pack. They load with the `pack:<id>` scope while the
+pack is loaded, and they go away when you disable the pack.
+
+| Pack | Skills |
+|---|---|
+| `discovery` | `lead-research`, `person-analyzer`, `project-analyzer`, `web-scraping` |
+| `markets` | `crypto-trading-safety`, `hyperliquid-account-review`, `hyperliquid-market-data`, `hyperliquid-trading`, `polymarket-market-research`, `polymarket-portfolio-review`, `polymarket-trading` |
+| `x` | `social-discovery`, `x-engagement` |
+
+The execution-backend packs (`modal`, `daytona`, `vercel_sandbox`, `singularity`)
+ship no skills. For the `x` pack's tools, sign-in and limits, see
+[x-twitter.md](x-twitter.md).
 
 ## See what is installed
 
@@ -108,8 +123,7 @@ names, its SDK extra. A third-party index row installs its exact wheel with
 ⚠️ The separate distribution names the first-party packs had in 1.1.0 are retired
 and were never published: a package index may give them to anybody. POLYROB never
 loads a distribution with one of those names, `polyrob pack install` refuses a
-third-party source that uses one, and `polyrob update` (like `install.sh` and the
-production deploy) retires a leftover one: its install metadata goes, never a pack
+third-party source that uses one, and `polyrob update` (like `install.sh`) retires a leftover one: its install metadata goes, never a pack
 file. To do it by hand: `python -m core.packs.retire`. Do not `pip uninstall` it —
 that would delete files polyrob now owns.
 

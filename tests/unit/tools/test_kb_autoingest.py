@@ -60,8 +60,15 @@ def test_a_declared_record_is_refused_even_with_an_innocent_name(tmp_path):
     assert ai.should_ingest(path) is False
 
 
-def test_a_declared_instruction_is_still_indexed(tmp_path):
+def test_a_declared_instruction_is_not_indexed(tmp_path):
+    """097 G7: an instruction document is a rules surface; a KB copy of it is one
+    no supersede reaches."""
     path = _write(tmp_path, "rules.md", "---\nkind: instruction\n---\n\nrule one\n")
+    assert ai.should_ingest(path) is False
+
+
+def test_a_declared_knowledge_document_is_indexed(tmp_path):
+    path = _write(tmp_path, "notes.md", "---\nkind: knowledge\n---\n\nfact one\n")
     assert ai.should_ingest(path) is True
 
 
@@ -87,7 +94,7 @@ async def test_ingest_reuses_the_one_ingest_path(tmp_path, monkeypatch):
     got = await ai.ingest_artifact("alice", _write(tmp_path, "brief.md"),
                                    session_id="s1")
     assert got == {"ingested": 1, "n_chunks": 3}
-    assert calls["collection"] == ai.AUTO_COLLECTION == "artifacts_unreviewed"
+    assert calls["collection"] == ai.AUTO_COLLECTION == "written"
     assert calls["user_id"] == "alice" and calls["recursive"] is False
 
 
@@ -97,7 +104,9 @@ async def test_force_skips_enablement_but_never_the_kind_rule(tmp_path, monkeypa
     seen = []
 
     async def fake_kb_ingest(path, **kw):
-        assert kw['collection'] == 'default'  # explicit owner reindex only
+        # 097: reindex and auto-ingest share ONE collection — a reindex never
+        # makes a second copy of a document the hook already indexed.
+        assert kw['collection'] == ai.AUTO_COLLECTION
         seen.append(path)
         return {"ingested": 1}
 

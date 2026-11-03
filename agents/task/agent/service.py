@@ -85,7 +85,7 @@ from agents.task.agent.core.history_io import HistoryIOMixin
 from agents.task.agent.core.logging_io import LoggingIOMixin
 from agents.task.agent.core.safety_lifecycle import SafetyLifecycleMixin
 from agents.task.agent.core.user_ingress import UserIngressMixin
-from agents.task.agent.core.run_state import LLMCallState, StepResultState, owned
+from agents.task.agent.core.run_state import LLMCallState, StepResultState, owned, run_field
 from agents.task.agent.core.llm_provisioning import LLMProvisioningMixin
 from agents.task.agent.core.model_swap import ModelSwapMixin
 from agents.task.agent.core.model_introspection import ModelIntrospectionMixin
@@ -252,6 +252,14 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
 	_last_result = owned("step_state", "last_result", StepResultState)
 	_llm_call_in_progress = owned("llm_call", "in_progress", LLMCallState)
 	_llm_call_start_time = owned("llm_call", "start_time", LLMCallState)
+	# 098 AG-02: per-run counters live in state.run_control (begin_run clears them).
+	_empty_action_counter = run_field("empty_action_counter")
+	_acted_this_run = run_field("acted_this_run")
+
+	@property
+	def run_control(self):
+		"""098 AG-01: the run lifecycle owner (``state.run_control``)."""
+		return self.state.run_control
 
 	@classmethod
 	def from_params(cls, **kwargs) -> "Agent":

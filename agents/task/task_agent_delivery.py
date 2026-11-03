@@ -180,9 +180,19 @@ class TaskAgentDeliveryMixin:
         lock = self._recreate_locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             orchestrator = self._registry.get(session_id)  # re-check under lock
-            if not orchestrator:
+            if not orchestrator and _owned_by_live_peer(self, session_id):
+                # 098 review (AG-16): another LIVE worker owns this session — a
+                # second orchestrator here would run turns on the same files.
+                logger.warning("session %s is owned by a live worker; not recreated here",
+                               session_id)
+            elif not orchestrator:
                 self._heal_narrowed_request(session_id)
                 orchestrator = await self._recreate_orchestrator(session_id, session_info)
+                if orchestrator is not None and _owned_by_live_peer(self, session_id):
+                    # Lost the registry row to a live peer while building:
+                    # drop the local copy (the row stays theirs).
+                    getattr(self._registry, "_orchestrators", {}).pop(session_id, None)
+                    orchestrator = None
         # If recreation failed the session never becomes resident, so _evict_session's
         # lock-pop (gated on a live orchestrator) will never fire — drop the lock here so
         # a stream of failed recreations can't leak one Lock per distinct session_id.
@@ -579,8 +589,34 @@ class TaskAgentDeliveryMixin:
         """The run-start gate: False only for a COMPLETED session with nothing
         queued. A member's pending room line is consumed here (it threads the run)."""
         room_turn = self.take_pending_room_turn(session_id)
+        if status == 'cancelled':
+            # 098 review (O-01): the owner's cancel is final until a person
+            # writes again. A forged turn (self-wake, delegation result) or a
+            # correspondent's data never resumes it; it stays queued and is read
+            # by the run the owner's next message starts.
+            return bool(room_turn) or self._session_has_genuine_input(session_id)
         return (status != 'completed' or room_turn
                 or self._session_has_pending_input(session_id))
+
+    def _session_has_genuine_input(self, session_id: str) -> bool:
+        """A queued message a PERSON sent (not a forged kind). Fail-closed: on
+        an error the cancelled session stays cancelled."""
+        from core.security.forged_turns import FORGED_TURN_KINDS
+        orchestrator = self._registry.get(session_id)
+        if not orchestrator:
+            return False
+        try:
+            for entry in getattr(orchestrator, '_pending_messages', None) or ():
+                if (entry[1] if len(entry) > 1 else None) not in FORGED_TURN_KINDS:
+                    return True
+            for agent in (getattr(orchestrator, 'agents', None) or {}).values():
+                hitl = getattr(agent, 'hitl_manager', None)
+                for msg in list(getattr(hitl, '_user_messages', None) or ()):
+                    if msg.get("kind") not in FORGED_TURN_KINDS:
+                        return True
+        except Exception as e:
+            logger.debug(f"_session_has_genuine_input({session_id}) failed: {e}")
+        return False
 
     def _session_has_pending_input(self, session_id: str) -> bool:
         """True if the session has genuine queued input waiting to be processed.
@@ -676,7 +712,7 @@ class TaskAgentDeliveryMixin:
         # concurrent producers can't both pass the check and exceed the cap. A slot
         # consumed on a subsequently-failed dispatch errs toward FEWER wakes — the
         # safe direction for a runaway guard.
-        if not budget.try_consume(session_id):
+        if not budget.try_consume(session_id, user_id or ""):  # 098 AG-11: the real tenant on the row
             logger.info(f"🛌 self-wake budget exhausted for session {session_id} — dropping")
             _wake_ev("skipped", "budget_exhausted")
             return False
@@ -732,7 +768,7 @@ class TaskAgentDeliveryMixin:
         card wake, the groups it carried are ``consumed`` once the run ends
         well, or put back to ``settled`` (the next turn shows them) if it did not."""
         from core.interactive_gate import mark_busy, mark_idle
-        mark_busy()
+        token = mark_busy("woken", session_id)  # 098 CO-01: release exactly this hold
         ok = False
         try:
             out = await self.run_session(user_id, session_id)
@@ -740,7 +776,7 @@ class TaskAgentDeliveryMixin:
             ok = str(info.get("status") or "") not in ("failed", "error")
             return out
         finally:
-            mark_idle()
+            mark_idle(token)
             if card_groups:
                 self._close_woken_groups(card_groups, ok)
 
@@ -809,7 +845,8 @@ class TaskAgentDeliveryMixin:
         stored request, else ``INTERACTIVE_MAX_STEPS``. Takes the scope. A resident
         agent still carrying a narrowed task from an earlier scoped run gets the
         session's own task back (the narrowing belonged to that run only)."""
-        from core.config_policy import INTERACTIVE_MAX_STEPS
+        from core.config_policy.goal_flags import interactive_max_steps
+        default = interactive_max_steps()
         scope = self.__dict__.get("_run_scopes", {}).pop(session_id, None) or {}
         if not scope.get("task") and agent is not None \
                 and is_narrowed_task(getattr(agent, "task", "")):
@@ -821,12 +858,12 @@ class TaskAgentDeliveryMixin:
                     mm.task = stored
         value = scope.get("max_steps")
         if value is None:
-            value = (request or {}).get("max_steps", INTERACTIVE_MAX_STEPS)
+            value = (request or {}).get("max_steps", default)
         try:
             n = int(value)
         except (TypeError, ValueError):
-            n = INTERACTIVE_MAX_STEPS
-        return n if n > 0 else INTERACTIVE_MAX_STEPS
+            n = default
+        return n if n > 0 else default
 
     def _heal_narrowed_request(self, session_id: str) -> None:
         """A request that an older build narrowed IN PLACE (``task='[cards-reply]
@@ -1264,23 +1301,13 @@ class TaskAgentDeliveryMixin:
             # RESTORE HITL STATE (queued messages from before eviction)
             if hasattr(agent, 'hitl_manager') and agent.hitl_manager:
                 try:
-                    from agents.task.path import pm
-                    import json
-                    hitl_path = pm().create_file_path(
-                        session_id=session_id,
-                        subdir_name="memory",
-                        filename="hitl_state.json",
-                        user_id=user_id
-                    )
-                    if hitl_path.exists():
-                        with open(hitl_path, 'r') as f:
-                            hitl_state = json.load(f)
-                        agent.hitl_manager.restore_state(hitl_state)
-                        queued_count = len(hitl_state.get('queued_messages', []))
+                    # 098 AG-08: merged ahead of anything already queued; the file is
+                    # kept (as .restored) until the first drain — a crash before it
+                    # loses nothing.
+                    from agents.task.session_residency import restore_hitl_snapshot
+                    queued_count = restore_hitl_snapshot(agent.hitl_manager, session_id, user_id)
+                    if queued_count:
                         logger.info(f"📂 Restored HITL state for session {session_id} ({queued_count} queued messages)")
-                        
-                        # Remove the file after restoration to avoid re-restoring stale state
-                        hitl_path.unlink()
                 except Exception as e:
                     logger.warning(f"Could not restore HITL state: {e}")
 
@@ -1299,6 +1326,8 @@ class TaskAgentDeliveryMixin:
 
             # Store orchestrator
             self.register_orchestrator(session_id, orchestrator)
+            from agents.task.session_residency import set_residency
+            set_residency(self, session_id, "resident")  # 098 AG-15: evicted -> resident
             self._session_last_activity[session_id] = time.time()
 
             logger.info(f"Successfully recreated orchestrator for suspended session {session_id}")
@@ -1307,6 +1336,17 @@ class TaskAgentDeliveryMixin:
         except Exception as e:
             logger.error(f"Failed to recreate orchestrator for {session_id}: {e}", exc_info=True)
             return None
+
+
+def _owned_by_live_peer(task_agent, session_id: str) -> bool:
+    """The shared session registry says another LIVE worker owns ``session_id``
+    (REMOTE). The in-process registry never answers REMOTE. Fail-open: a
+    routing error is "not owned"."""
+    try:
+        from agents.task.session_route import REMOTE
+        return task_agent.route_session(session_id).status == REMOTE
+    except Exception:
+        return False
 
 
 def _relabel_first_chat_message(agent, session_info) -> None:

@@ -54,6 +54,20 @@ STATUS_SUSPENDED = "suspended"
 STATUS_CANCELED = "canceled"
 _STATUSES = (STATUS_ACTIVE, STATUS_GRACE, STATUS_SUSPENDED, STATUS_CANCELED)
 
+#: 098 MO-05: the subscription table. Every move is a CAS on status AND on the
+#: ``paid_through`` it judged; ``canceled`` is final.
+from core.state.machine import StateMachine  # noqa: E402
+
+SUBSCRIPTION = StateMachine(
+    name="subscription", states=frozenset(_STATUSES), initial=frozenset({STATUS_ACTIVE}),
+    transitions={STATUS_ACTIVE: frozenset({STATUS_GRACE, STATUS_SUSPENDED, STATUS_CANCELED,
+                                           STATUS_ACTIVE}),
+                 STATUS_GRACE: frozenset({STATUS_ACTIVE, STATUS_SUSPENDED, STATUS_CANCELED}),
+                 STATUS_SUSPENDED: frozenset({STATUS_ACTIVE, STATUS_CANCELED})},
+    terminal=frozenset({STATUS_CANCELED}))
+#: A suspended subscription nobody paid for this long is canceled (S6).
+SUSPENDED_MAX_DAYS = 90
+
 
 class SettlementResult(str, enum.Enum):
     """Distinguishable :func:`apply_settlement` outcomes (Task 14 fix pass 2,
@@ -278,6 +292,50 @@ async def cancel_subscription(subscription_id: str, *, user_id: str, db=None) ->
     return ok
 
 
+async def reactivate_subscription(subscription_id: str, *, user_id: str,
+                                  db=None) -> tuple:
+    """Owner reactivation (098 close-out MO-05): ``grace|suspended -> active``
+    on the SUBSCRIPTION machine's reactivate edge, without a payment.
+
+    The owner restores the service by hand (as ``owner settle`` attests a
+    payment): the new ``paid_through`` is one period from NOW (or from the
+    old ``paid_through`` when that is later), so the reaper does not lapse it
+    again on the next tick. One guarded write on the status AND the
+    ``paid_through`` this call read — a concurrent settlement or reaper move
+    wins and this call reports it. ``canceled`` is terminal and refused.
+    Returns ``(ok, detail)``; ``detail`` names why a refusal happened."""
+    from core.state.sql import acas_transition
+    if not user_id or not subscription_id:
+        return False, "unknown"
+    database = await _resolve_db(db)
+    if database is None:
+        return False, "store unavailable"
+    sub = await get_subscription(subscription_id, user_id=user_id, db=database)
+    if sub is None:
+        return False, "unknown"
+    status = str(sub.get("status") or "")
+    if status == STATUS_CANCELED:
+        return False, "canceled (terminal — create a new subscription)"
+    if status == STATUS_ACTIVE:
+        return False, "already active"
+    old_pt = sub.get("paid_through")
+    period = max(1, int(sub.get("period_days") or 30)) * 86400
+    new_pt = int(max(float(old_pt or 0), time.time())) + period
+    ok = await acas_transition(
+        database, "subscriptions", key="id = ? AND user_id = ?",
+        key_params=(subscription_id, user_id), machine=SUBSCRIPTION, to=STATUS_ACTIVE,
+        from_states=(status,),
+        set_cols={"paid_through": new_pt,
+                  "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())},
+        where_extra="paid_through IS ?", where_params=(old_pt,))
+    if not ok:
+        return False, "changed meanwhile (settled or moved by the watcher) — list it again"
+    _emit("subscription_renewed", user_id=user_id,
+          attrs={"subscription_id": subscription_id, "paid_through": new_pt,
+                 "by": "owner_reactivate", "from_status": status})
+    return True, str(new_pt)
+
+
 async def subscription_permits_work(subscription_id: str, *, db=None) -> bool:
     """The cron-gate predicate (``cron/runner.py``): True iff this
     subscription's status allows its cron job to run THIS tick.
@@ -421,11 +479,15 @@ async def apply_settlement(subscription_id: str, request_id: str, *, db=None) ->
         # invoice that was already open never reactivates it — the status
         # guard makes the UPDATE a no-op and the settlement is REFUSED (the
         # caller raises the owner notice: money arrived, nothing extended).
+        # 098 MO-05: a SUSPENDED subscription is reactivated from NOW (a stale
+        # renewal paid months late must buy a period that is still ahead);
+        # active/grace keep the documented append-to-paid_through model.
         upd = await database.execute(
-            "UPDATE subscriptions SET paid_through = COALESCE(paid_through, ?) + ?, "
+            "UPDATE subscriptions SET paid_through = CASE WHEN status = ? THEN ? "
+            "ELSE COALESCE(paid_through, ?) END + ?, "
             "status = ?, updated_at = datetime('now') WHERE id = ? AND status != ?",
-            (now_epoch, period_seconds, STATUS_ACTIVE, subscription_id,
-             STATUS_CANCELED),
+            (STATUS_SUSPENDED, now_epoch, now_epoch, period_seconds, STATUS_ACTIVE,
+             subscription_id, STATUS_CANCELED),
         )
         if not getattr(upd, "rowcount", 0):
             await transaction.rollback()
@@ -521,10 +583,10 @@ async def subscriptions_to_grace(*, now: Optional[float] = None, db=None) -> Lis
     out = []
     for row in rows or []:
         sub = dict(row)
-        cur = await database.execute(
+        cur = await database.execute(  # 098 MO-05: re-check paid_through in the CAS
             "UPDATE subscriptions SET status = ?, updated_at = datetime('now') "
-            "WHERE id = ? AND status = ?",
-            (STATUS_GRACE, sub["id"], STATUS_ACTIVE),
+            "WHERE id = ? AND status = ? AND paid_through < ?",
+            (STATUS_GRACE, sub["id"], STATUS_ACTIVE, cutoff),
         )
         if not getattr(cur, "rowcount", 0):
             continue  # lost a race (already transitioned) — not our flip to report
@@ -554,13 +616,62 @@ async def subscriptions_to_suspend(*, now: Optional[float] = None, db=None) -> L
     out = []
     for row in rows or []:
         sub = dict(row)
-        cur = await database.execute(
+        cur = await database.execute(  # 098 MO-05: re-check the deadline in the CAS
             "UPDATE subscriptions SET status = ?, updated_at = datetime('now') "
-            "WHERE id = ? AND status IN (?, ?)",
-            (STATUS_SUSPENDED, sub["id"], STATUS_ACTIVE, STATUS_GRACE),
+            "WHERE id = ? AND status IN (?, ?) AND (paid_through + grace_days * 86400) < ?",
+            (STATUS_SUSPENDED, sub["id"], STATUS_ACTIVE, STATUS_GRACE, cutoff),
         )
         if not getattr(cur, "rowcount", 0):
             continue
         sub["status"] = STATUS_SUSPENDED
         out.append(sub)
+    return out
+
+
+def _cron_job_status(job_id: str) -> Optional[str]:
+    """The cron job's status, ``"missing"`` when the store has no such row, or
+    None when the store cannot be read (then nothing is decided)."""
+    import os as _os
+    try:
+        from core.runtime_paths import cron_db_path
+        path = cron_db_path()
+        if not _os.path.isfile(path):
+            return None
+        from core.sqlite_util import execute_retry  # modules may not import cron/
+        row = execute_retry(path, "SELECT status FROM cron_jobs WHERE id=?",
+                            (str(job_id),), fetch="one")
+    except Exception:
+        logger.debug("subscriptions: cron store unreadable", exc_info=True)
+        return None
+    return "missing" if row is None else str(row["status"] or "")
+
+
+async def reap_subscriptions(*, now: Optional[float] = None, db=None,
+                             job_status=_cron_job_status) -> List[Dict[str, Any]]:
+    """098 MO-05 (S6), run by the watcher's subscription tick. One source of
+    truth: a subscription whose cron job ended (cancelled, done, failed) is
+    canceled — its pending renewal invoice expires with it — and a suspended
+    subscription nobody paid for :data:`SUSPENDED_MAX_DAYS` is canceled.
+    Returns the canceled rows."""
+    database = await _resolve_db(db)
+    if database is None:
+        return []
+    cutoff = (now if now is not None else time.time()) - SUSPENDED_MAX_DAYS * 86400
+    rows = await database.fetch_all(
+        "SELECT * FROM subscriptions WHERE status != ?", (STATUS_CANCELED,)) or []
+    out = []
+    for row in rows:
+        sub = dict(row)
+        js = job_status(str(sub.get("cron_job_id") or ""))
+        stale = (sub.get("status") == STATUS_SUSPENDED and sub.get("paid_through") is not None
+                 and float(sub["paid_through"]) + int(sub.get("grace_days") or 0) * 86400
+                 < cutoff)
+        # A MISSING job is not proof (a different data home reads as missing):
+        # only a job the cron store holds as ended cancels the subscription.
+        ended = js in ("cancelled", "done", "failed")
+        if not ended and not stale:
+            continue
+        if await cancel_subscription(sub["id"], user_id=sub.get("user_id") or "", db=database):
+            sub["reason"] = f"cron_job_{js}" if ended else "suspended_too_long"
+            out.append(sub)
     return out

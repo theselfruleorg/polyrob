@@ -62,9 +62,8 @@ def test_get_push_config_memory_then_metadata_fallback(monkeypatch):
     import api.a2a.task_handler as th
     monkeypatch.setattr(th, "validate_push_url", lambda url: url)
     handler, _ = _handler()
-    # memory hit
-    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
-    assert handler._get_push_config("t1").url == "https://cb.example/hook"
+    # TS-21: no in-memory copy — without the mirror there is no config
+    assert handler._get_push_config("t1") is None
     # metadata fallback (restart-survivable)
     meta = {"a2a_push_url": "https://cb.example/hook2", "a2a_push_token": "tok"}
     cfg = handler._get_push_config("t2", {"metadata": meta})
@@ -75,7 +74,7 @@ def test_get_push_config_memory_then_metadata_fallback(monkeypatch):
 
 def test_cancel_task_pushes_canceled(monkeypatch):
     handler, agent = _handler(status="running")
-    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
+    agent._session_info["a2a_push_url"] = "https://cb.example/hook"
     sent = []
 
     async def fake_send(task_id, state, message=None):
@@ -108,8 +107,10 @@ def test_run_settle_notifies_even_on_crash(monkeypatch):
 
 
 def test_notify_push_state_maps_session_status(monkeypatch):
+    import api.a2a.task_handler as th
+    monkeypatch.setattr(th, "validate_push_url", lambda url: url)
     handler, agent = _handler(status="completed")
-    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
+    agent._session_info["a2a_push_url"] = "https://cb.example/hook"
     sent = []
 
     async def fake_send(task_id, state, message=None):
@@ -164,8 +165,8 @@ def test_push_delivery_is_pinned_to_the_validated_ip(monkeypatch):
         return real_client(**kw)
 
     monkeypatch.setattr(httpx, "AsyncClient", _client)
-    handler, _ = _handler()
-    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
+    handler, agent = _handler()
+    agent._session_info["a2a_push_url"] = "https://cb.example/hook"
     ok = asyncio.run(handler.send_push_notification("t1", A2ATaskState.COMPLETED))
     assert ok is True
     assert sent["url"].startswith("https://93.184.216.34/")
@@ -188,6 +189,6 @@ def test_push_delivery_refuses_a_rebound_private_address(monkeypatch):
         raise AssertionError("no client may be built for a refused address")
 
     monkeypatch.setattr(httpx, "AsyncClient", _client)
-    handler, _ = _handler()
-    handler._push_configs["t1"] = PushNotificationConfig(url="https://cb.example/hook")
+    handler, agent = _handler()
+    agent._session_info["a2a_push_url"] = "https://cb.example/hook"
     assert asyncio.run(handler.send_push_notification("t1", A2ATaskState.COMPLETED)) is False

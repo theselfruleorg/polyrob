@@ -149,7 +149,7 @@ def test_kb_search_shows_results(monkeypatch):
     assert "hit one" in out and "hit two" in out
     # multi-word query is joined
     assert spy["search_args"]["query"] == "how to deploy"
-    assert spy["search_args"]["collection"] == "default"
+    assert spy["search_args"]["collection"] is None  # 097: every collection
 
 
 def test_kb_search_no_results_is_graceful(monkeypatch):

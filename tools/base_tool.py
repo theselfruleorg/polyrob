@@ -33,6 +33,7 @@ class ToolStatus(Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     FAILED = "failed"
+    CLOSED = "closed"  # 098 CO-06b: after cleanup(); initialize() may start it again
 
 class BaseTool(BaseComponent):
     """Base class for tools."""
@@ -228,6 +229,8 @@ class BaseTool(BaseComponent):
             return
 
         async with self._lock:
+            if self._initialized:  # 098 CO-06b: a waiter that lost the race
+                return
             try:
                 self._status = ToolStatus.INITIALIZING
                 self.logger.info(f"Initializing {self.name} service...")
@@ -428,9 +431,12 @@ class BaseTool(BaseComponent):
             return
 
         async with self._lock:
+            if not self._initialized:  # a concurrent cleanup already ran
+                return
             try:
                 await self._cleanup()
                 self._initialized = False
+                self._status = ToolStatus.CLOSED
                 self.logger.info(f"{self.name} cleaned up successfully")
             except Exception as e:
                 self.logger.error(f"Failed to clean up {self.name}: {e}")

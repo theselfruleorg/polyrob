@@ -126,9 +126,9 @@ HELP_BRIDGE = (
 )
 
 HELP_DEV = (
-    "  The owner ↔ on-host dev-loop rail (027): drive the maintenance loop\n"
-    "  from where you are instead of SSH-ing to the box. Everything after\n"
-    "  /dev is passed through verbatim, including newlines.\n"
+    "  Pass a message to an operator-run maintenance script on the host\n"
+    "  (DEV_RAIL_SCRIPT). Everything after /dev is passed through verbatim,\n"
+    "  including newlines.\n"
     "\n"
     "  Gated by the dev rail's own flags; with it off you get an honest note,\n"
     "  never a stack trace.",
@@ -158,7 +158,7 @@ def register(reg, Command) -> None:
     ))
     reg.register(Command(
         "dev", h_dev,
-        "Drive the on-host dev-loop rail (027) without leaving the terminal",
+        "Pass a message to an operator-run maintenance script",
         usage="<free text>", group="control", raw_arguments=True,
         help_long=HELP_DEV[0], elsewhere=HELP_DEV[1],
     ))

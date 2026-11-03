@@ -28,9 +28,30 @@ import secrets
 import time
 from typing import Any, Dict, MutableMapping, Optional, Tuple
 
+from core.state.machine import StateMachine
 from tools.oauth.provider import OAuthError, OAuthProvider, OAuthToken
 
 Key = Tuple[str, str]
+
+#: 098 TS-13. A refresh the provider REFUSED (invalid_grant/invalid_client) is a
+#: stored fact, not an exception to repeat: NEEDS_REAUTH accepts only a new
+#: authorization. A transient (network) failure keeps the token as it was.
+TOKEN = StateMachine(
+    "oauth.token",
+    states={"absent", "valid", "refreshing", "needs_reauth"},
+    transitions={"absent": {"valid"}, "valid": {"refreshing"},
+                 "refreshing": {"valid", "needs_reauth"}, "needs_reauth": {"valid"}},
+    initial={"absent"},
+)
+NEEDS_REAUTH = "needs_reauth"
+_REFUSALS = ("invalid_grant", "invalid_client", "unauthorized_client")
+
+
+def _refused(e: BaseException) -> bool:
+    """True when the provider refused the refresh token itself (re-authorize),
+    False for a transient failure (network, 5xx)."""
+    body = str(e) + " " + str(getattr(getattr(e, "response", None), "text", "") or "")
+    return any(code in body for code in _REFUSALS)
 
 
 class OAuthManager:
@@ -77,7 +98,12 @@ class OAuthManager:
         del self._authorizations[state]  # no await before consumption
         _, _, _, prov, verifier, redirect = row
         token = await prov.exchange_code(code, code_verifier=verifier, redirect_uri=redirect)
-        self.store_token(user_id, provider, token)
+        self.store_token(user_id, provider, token)  # a new grant clears needs_reauth
+        try:
+            from core.credential_verdicts import clear_rejection
+            clear_rejection("oauth", f"{provider}:{user_id}")
+        except Exception:
+            pass
         return token
 
     @staticmethod
@@ -113,6 +139,32 @@ class OAuthManager:
     def has_token(self, user_id: str, provider: str) -> bool:
         return (user_id, provider) in self._store
 
+    def state(self, user_id: str, provider: str) -> str:
+        """``absent`` | ``valid`` | ``needs_reauth`` (098 TS-13)."""
+        token = self.load_token(user_id, provider)
+        if token is None:
+            return "absent"
+        return NEEDS_REAUTH if token.extra.get("oauth_state") == NEEDS_REAUTH else "valid"
+
+    def _refuse_if_needs_reauth(self, user_id: str, provider: str, token: OAuthToken) -> None:
+        if token.extra.get("oauth_state") == NEEDS_REAUTH:
+            raise OAuthError(f"re-authorize {provider}: the provider refused the refresh "
+                             f"token ({token.extra.get('oauth_error') or 'invalid_grant'})")
+
+    def _mark_needs_reauth(self, user_id: str, provider: str, token: OAuthToken,
+                           error: BaseException) -> None:
+        TOKEN.check("refreshing", NEEDS_REAUTH, ctx={"provider": provider})
+        code = next((c for c in _REFUSALS if c in str(error)), "invalid_grant")
+        token.extra.update({"oauth_state": NEEDS_REAUTH, "oauth_error": code,
+                            "oauth_since": time.time()})
+        self.store_token(user_id, provider, token)
+        try:  # the owner sees ONE actionable item, not a stream of failed connects
+            from core.credential_verdicts import record_rejection
+            record_rejection("oauth", f"{provider}:{user_id}", code=NEEDS_REAUTH,
+                             remedy=f"re-authorize {provider}")
+        except Exception:
+            pass
+
     # -- refresh serialization --------------------------------------------------
 
     def _lock_for(self, user_id: str, provider: str) -> asyncio.Lock:
@@ -137,13 +189,28 @@ class OAuthManager:
         """
         async with self._lock_for(user_id, provider):
             current = self.load_token(user_id, provider)
+            if current is not None:
+                self._refuse_if_needs_reauth(user_id, provider, current)
             if current is not None and current.access_token != observed.access_token:
                 return current
             if current is None or not current.refresh_token:
                 raise OAuthError(
                     f"token invalid/expired and no refresh_token for user='{user_id}' provider='{provider}'"
                 )
-            refreshed = await prov.refresh(current)
+            try:
+                refreshed = await prov.refresh(current)
+            except Exception as e:
+                if _refused(e):
+                    # 098 review: a peer PROCESS may have rotated the refresh
+                    # token under us — its fresh token in the store is the
+                    # answer, never a needs_reauth latch over it.
+                    latest = self.load_token(user_id, provider)
+                    if latest is not None and latest.access_token != current.access_token:
+                        self._refuse_if_needs_reauth(user_id, provider, latest)
+                        return latest
+                    self._mark_needs_reauth(user_id, provider, current, e)
+                    raise OAuthError(f"re-authorize {provider}: {e}") from e
+                raise
             self.store_token(user_id, provider, refreshed)
             return refreshed
 
@@ -155,11 +222,13 @@ class OAuthManager:
         token = self.load_token(user_id, provider)
         if token is None:
             raise OAuthError(f"no token stored for user='{user_id}' provider='{provider}'")
+        self._refuse_if_needs_reauth(user_id, provider, token)
         if prov.valid_token(token):
             return token
         return await self._refresh_from(user_id, provider, prov, token)
 
-    async def force_refresh(self, user_id: str, provider: str) -> OAuthToken:
+    async def force_refresh(self, user_id: str, provider: str,
+                            observed_access_token: Optional[str] = None) -> OAuthToken:
         """Unconditionally refresh, even if the stored token still looks
         locally valid — used when the SERVER says the token is bad (e.g. a
         401) despite our clock-based ``valid_token`` bookkeeping. Serialized
@@ -171,4 +240,8 @@ class OAuthManager:
         token = self.load_token(user_id, provider)
         if token is None:
             raise OAuthError(f"no token stored for user='{user_id}' provider='{provider}'")
+        if observed_access_token:
+            # 098 TS-13: the token the CALLER sent (the 401'd one) is the guard,
+            # so a caller whose token a peer already replaced gets the new one.
+            token = OAuthToken(access_token=observed_access_token)
         return await self._refresh_from(user_id, provider, prov, token)

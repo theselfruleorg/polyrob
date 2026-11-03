@@ -30,7 +30,7 @@ from surfaces.email.fetchers import ImapFetcher, MailFetchError
 
 
 class _Conn:
-    """An IMAP connection that is dead until the tool reconnects."""
+    """An IMAP connection that is dead or alive."""
 
     def __init__(self, alive, unseen=b""):
         self.alive = alive
@@ -43,38 +43,47 @@ class _Conn:
             raise OSError("socket error: EOF occurred in violation of protocol")
         return ("OK", [b"1"])
 
-    def search(self, charset, criteria):
-        return ("OK", [self.unseen])
+    def response(self, code):
+        return (code, [b"1"])
 
-    def fetch(self, num, spec):
+    def uid(self, cmd, *args):
+        if cmd == "SEARCH":
+            return ("OK", [self.unseen])
         raise AssertionError("no message in these fixtures")
+
+    def logout(self):
+        pass
+
+
+class _Opener:
+    """The fetcher's OWN connection factory (TS-20): hands out conns in order."""
+
+    def __init__(self, *conns, auth_error=False):
+        self.conns = list(conns)
+        self.connects = 0
+        self.auth_error = auth_error
+
+    def __call__(self):
+        self.connects += 1
+        if self.auth_error:
+            raise AuthenticationError("AUTHENTICATIONFAILED invalid credentials")
+        return self.conns.pop(0)
 
 
 class _Tool:
-    def __init__(self, first, second=None, auth_error=False):
-        self.imap_connection = first
-        self._next = second
-        self.connects = 0
-        self._auth_error = auth_error
-
     async def ensure_imap(self):
         return None
-
-    async def _connect_imap(self):
-        self.connects += 1
-        if self._auth_error:
-            raise AuthenticationError("AUTHENTICATIONFAILED invalid credentials")
-        self.imap_connection = self._next
 
 
 @pytest.mark.asyncio
 async def test_a_dead_socket_is_dropped_and_the_poll_reconnects():
     """The whole defect: one dead handle must not blind the rail forever."""
     dead, fresh = _Conn(alive=False), _Conn(alive=True)
-    tool = _Tool(dead, fresh)
-    assert await ImapFetcher(tool).fetch_unread() == []
-    assert tool.connects == 1              # it reconnected
-    assert tool.imap_connection is fresh   # and kept the new handle
+    opener = _Opener(dead, fresh)
+    f = ImapFetcher(_Tool(), open_conn=opener)
+    assert await f.fetch_unread() == []
+    assert opener.connects == 2            # first open + one reconnect
+    assert f._conn is fresh                # and kept the new handle
     assert fresh.selects == 1              # and actually re-read the mailbox
 
 
@@ -82,19 +91,21 @@ async def test_a_dead_socket_is_dropped_and_the_poll_reconnects():
 async def test_a_healthy_connection_is_reused_without_reconnecting():
     """The common path must not pay for the rare one."""
     conn = _Conn(alive=True)
-    tool = _Tool(conn)
-    assert await ImapFetcher(tool).fetch_unread() == []
-    assert tool.connects == 0
-    assert conn.selects == 1
+    opener = _Opener(conn)
+    f = ImapFetcher(_Tool(), open_conn=opener)
+    assert await f.fetch_unread() == []
+    assert await f.fetch_unread() == []
+    assert opener.connects == 1
+    assert conn.selects == 2
 
 
 @pytest.mark.asyncio
 async def test_it_retries_exactly_once_and_then_reports_honestly():
     """Two dead handles in a row is a real outage, not something to loop on."""
-    tool = _Tool(_Conn(alive=False), _Conn(alive=False))
+    opener = _Opener(_Conn(alive=False), _Conn(alive=False))
     with pytest.raises(MailFetchError) as exc:
-        await ImapFetcher(tool).fetch_unread()
-    assert tool.connects == 1
+        await ImapFetcher(_Tool(), open_conn=opener).fetch_unread()
+    assert opener.connects == 2
     assert "IMAP read failed" in str(exc.value)
 
 
@@ -102,17 +113,8 @@ async def test_it_retries_exactly_once_and_then_reports_honestly():
 async def test_an_auth_failure_does_NOT_retry():
     """A wrong credential is not a stale socket. Retrying hammers the mailbox,
     and the durable verdict is what the owner needs to see."""
-    tool = _Tool(_Conn(alive=False), auth_error=True)
+    opener = _Opener(auth_error=True)
     with pytest.raises(MailFetchError) as exc:
-        await ImapFetcher(tool).fetch_unread()
+        await ImapFetcher(_Tool(), open_conn=opener).fetch_unread()
     assert exc.value.auth is True
-    assert tool.connects == 1   # the reconnect attempt itself raised; no second try
-
-
-@pytest.mark.asyncio
-async def test_a_missing_connection_still_connects_as_before():
-    """The pre-existing cold-start path is untouched."""
-    fresh = _Conn(alive=True)
-    tool = _Tool(None, fresh)
-    assert await ImapFetcher(tool).fetch_unread() == []
-    assert tool.connects == 1
+    assert opener.connects == 1   # the open itself raised; no second try

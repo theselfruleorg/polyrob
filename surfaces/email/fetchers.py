@@ -3,8 +3,8 @@
 Extracted from EmailHarness (Task 5, 2026-08-18 agent-mail plan) so the poll
 loop's dedup/route/act body is transport-blind:
 
-- ``ImapFetcher`` — the legacy IMAP behaviour, byte-identical: UNSEEN search on
-  hardcoded INBOX, ``\\Seen`` as the durable handled-mark.
+- ``ImapFetcher`` — IMAP on its own connection: UID SEARCH UNSEEN on INBOX,
+  ``(UIDVALIDITY, UID)`` handles, ``\\Seen`` as the durable handled-mark.
 - ``AgentMailFetcher`` — the managed HTTP inbox. No provider read-state is
   needed: the ``MessageDedup`` store IS the durable handled-mark (read-only
   ``was_seen`` probe here; the recording ``seen`` check stays at route time in
@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, List, Protocol, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, List, Optional, Protocol, Tuple
 
 from surfaces.email.dedup import MessageDedup
 # The AgentMail wire shape is owned by its CLIENT (tools tier). Imported, never
@@ -62,39 +63,93 @@ class MailFetcher(Protocol):
         ...
 
 
-async def _off_loop(tool: Any, fn):
-    """EM1: one blocking ``imaplib`` step in a worker thread. The tool's
-    ``run_imap`` serialises the steps on its one connection; a tool without
-    it (a fake) still runs off the loop."""
-    run = getattr(tool, "run_imap", None)
-    if callable(run):
-        return await run(fn)
-    return await asyncio.to_thread(fn)
+@dataclass(frozen=True)
+class ImapHandle:
+    """A message's IDENTITY in the inbox: ``(UIDVALIDITY, UID)``.
+
+    ⚠️ TS-20: the handle used to be a SEQUENCE number, resolved later against
+    the tool's SHARED connection. A sequence number is a position: an expunge
+    between fetch and mark (the legacy delete verb) shifted it onto another
+    message, and a verb that SELECTed another folder made the mark land in that
+    folder. The real message then went ``\\Seen`` without a route and the UNSEEN
+    poll never saw it again. A UID is stable while other mail comes and goes;
+    UIDVALIDITY tells us when even the UID is no longer the same message.
+    """
+    uidvalidity: str
+    uid: bytes
+
+    def key(self) -> str:
+        uid = self.uid.decode() if isinstance(self.uid, bytes) else str(self.uid)
+        return f"uid:{self.uidvalidity}:{uid}"
+
+
+@dataclass
+class FetchFailure:
+    """A message whose FETCH or parse raised (counted by the harness)."""
+    handle: ImapHandle
+    error: str
 
 
 class ImapFetcher:
-    """The legacy IMAP path, moved verbatim from EmailHarness.
+    """The IMAP inbound path on its OWN connection, keyed by UID.
 
-    ⚠️ Every ``imaplib`` call goes through :func:`_off_loop` (EM1): a call
-    inside ``async def`` held the gateway's ONE event loop for as long as the
-    server took — Discord heartbeats, Slack acks and webhooks all froze.
+    ⚠️ Every ``imaplib`` call runs in a worker thread, one at a time (EM1): a
+    call inside ``async def`` held the gateway's ONE event loop for as long as
+    the server took. The connection is the fetcher's own (TS-20) — never the
+    tool's ``imap_connection``, which the agent's legacy verbs re-SELECT and
+    EXPUNGE while a turn runs.
     """
 
-    def __init__(self, email_tool: Any) -> None:
+    def __init__(self, email_tool: Any, *, open_conn: Optional[Callable[[], Any]] = None) -> None:
         self.email_tool = email_tool
+        self._open_conn = open_conn
+        self._conn: Any = None
+        self._lock_pair: Optional[tuple] = None
+        #: messages whose fetch/parse raised in the LAST ``fetch_unread``.
+        self.last_fetch_failures: List[FetchFailure] = []
+
+    # -- connection -------------------------------------------------------
+
+    def _opener(self) -> Callable[[], Any]:
+        if self._open_conn is not None:
+            return self._open_conn
+        opener = getattr(self.email_tool, "_mbox_open", None)
+        if not callable(opener):
+            raise MailFetchError("IMAP fetcher: the email tool cannot open a connection")
+        return opener
+
+    async def _run(self, fn):
+        """``fn(conn)`` off the loop on the fetcher's connection, serialised."""
+        loop = asyncio.get_running_loop()
+        if self._lock_pair is None or self._lock_pair[0] is not loop:
+            self._lock_pair = (loop, asyncio.Lock())
+        async with self._lock_pair[1]:
+            if self._conn is None:
+                self._conn = await asyncio.to_thread(self._opener())
+            return await asyncio.to_thread(fn, self._conn)
+
+    async def _drop(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                await asyncio.to_thread(conn.logout)
+            except Exception:
+                pass
 
     async def fetch_unread(self) -> List[Tuple[Any, dict]]:
         import email as _email
 
         from surfaces.email.harness import normalize_email_message
         tool = self.email_tool
+        self.last_fetch_failures = []
         # 057 WS-F: IMAP only. ``ensure_initialized()`` ran the SMTP probe, so a
         # rejected send-side login stopped INBOUND mail and logged an ERROR every
         # 60 s poll (1,439 lines/day on prod). Polling now needs the receive half.
-        ensure = getattr(tool, "ensure_imap", None) or tool.ensure_initialized
+        ensure = getattr(tool, "ensure_imap", None) or getattr(tool, "ensure_initialized", None)
         try:
-            await ensure()
-            conn, nums = await self._select_unread(tool)
+            if ensure is not None:
+                await ensure()
+            validity, uids = await self._select_unread()
         except MailFetchError:
             raise
         except Exception as e:
@@ -104,68 +159,44 @@ class ImapFetcher:
                 f"IMAP read failed: {type(e).__name__}: {e}",
                 auth=self._is_auth_error(e), key=self._verdict_key()) from e
         out: List[Tuple[Any, dict]] = []
-        for num in (nums[0].split() if nums and nums[0] else []):
+        for uid in uids:
+            handle = ImapHandle(validity, uid)
             try:
                 # D4: PEEK. ``(RFC822)`` sets ``\Seen`` as a side effect of the
-                # FETCH itself, so a message was out of the UNSEEN set before
-                # routing had a chance to fail — a crash between the two lost
-                # the mail with no trace. ``BODY.PEEK[]`` returns the same bytes
-                # and touches no flag; ``mark_handled`` remains the ONE place a
-                # message is marked, and it now runs only on success.
-                _, data = await _off_loop(
-                    tool, lambda n=num: conn.fetch(n, "(BODY.PEEK[])"))
+                # FETCH itself; ``mark_handled`` remains the ONE place a message
+                # is marked, and it runs only once the harness is done with it.
+                _, data = await self._run(
+                    lambda c, u=uid: c.uid("FETCH", u, "(BODY.PEEK[])"))
+                raw = next(p[1] for p in data if isinstance(p, tuple) and len(p) > 1)
                 # CHAT-7: MIME + HTML parsing of mail anyone can send runs OFF
                 # the event loop (it can be large; it must never stall the bot).
-                raw = data[0][1]
                 msg = await asyncio.to_thread(
                     lambda b=raw: normalize_email_message(_email.message_from_bytes(b)))
-                out.append((num, msg))
+                out.append((handle, msg))
             except Exception as e:
-                logger.warning("email fetch %s failed: %s", num, e, exc_info=True)
+                logger.warning("email fetch uid %s failed: %s", uid, e, exc_info=True)
+                self.last_fetch_failures.append(
+                    FetchFailure(handle, f"{type(e).__name__}: {e}"))
         return out
 
-    async def _select_unread(self, tool):
-        """``(connection, search result)`` for INBOX, reconnecting ONCE if the
-        cached handle turns out to be dead.
+    async def _select_unread(self) -> Tuple[str, List[bytes]]:
+        """``(UIDVALIDITY, unseen UIDs)`` for INBOX, reconnecting ONCE if the
+        connection turns out to be dead.
 
-        ⚠️ The guard used to be ``if not tool.imap_connection: connect()``. Gmail
-        closes an idle IMAP socket but the ``IMAP4_SSL`` OBJECT survives and
-        stays truthy, so the guard never fired: every poll reused the corpse and
-        raised ``socket error: EOF`` once a minute forever. Observed on prod
-        2026-09-23 — ten consecutive failures, zero recoveries, while three
-        manual logins from the same host with the same credential all succeeded.
-        The rail's own message says "no new mail cannot be distinguished from
-        this", which is exactly why silent permanent blindness is the bad outcome.
-
-        Exactly ONE retry. An auth failure is not a stale socket — the credential
-        is wrong, retrying only hammers the mailbox, and ``_connect_imap`` raising
-        here propagates so the durable verdict still gets recorded.
+        ⚠️ Gmail closes an idle IMAP socket but the ``IMAP4_SSL`` OBJECT
+        survives, so a poll that reused it raised ``socket error: EOF`` once a
+        minute forever (prod 2026-09-23). Exactly ONE retry: an auth failure is
+        not a stale socket, and retrying only hammers the mailbox.
         """
         for attempt in (0, 1):
-            if not getattr(tool, "imap_connection", None):
-                await tool._connect_imap()
-            conn = tool.imap_connection
-            if conn is None:
-                raise MailFetchError("IMAP connection unavailable after connect")
-            def _select_search(c=conn):
-                c.select("INBOX")
-                return c.search(None, "UNSEEN")[1]
-
             try:
-                nums = await _off_loop(tool, _select_search)
-                return conn, nums
+                return await self._run(_select_search)
             except Exception as exc:
                 if attempt or self._is_auth_error(exc):
                     raise
                 logger.info("email inbound: stale IMAP handle (%s) — reconnecting",
                             type(exc).__name__)
-                # Drop the corpse so the next pass reconnects. `logout()` on a
-                # dead socket raises, and that failure is not news here.
-                try:
-                    await _off_loop(tool, conn.logout)
-                except Exception:
-                    pass
-                tool.imap_connection = None
+                await self._drop()
         raise MailFetchError("IMAP connection unavailable after connect")
 
     @staticmethod
@@ -185,20 +216,64 @@ class ImapFetcher:
         return f"{getattr(tool, 'imap_server', '?')}:{getattr(cfg, 'gmail_email', '') or ''}"
 
     def mark_handled(self, handle: Any) -> None:
-        """Synchronous form (protocol). The harness awaits
-        :meth:`mark_handled_async`, which keeps the call off the loop."""
+        """Synchronous form (protocol): marks on the fetcher's own connection
+        when it is open. The harness awaits :meth:`mark_handled_async`."""
         try:
-            conn = getattr(self.email_tool, "imap_connection", None)
-            if conn is not None and handle is not None:
-                conn.store(handle, "+FLAGS", "\\Seen")
+            if self._conn is not None and isinstance(handle, ImapHandle):
+                _mark_seen(self._conn, handle)
         except Exception as e:
             logger.debug("email mark-seen %s failed: %s", handle, e)
 
-    async def mark_handled_async(self, handle: Any) -> None:
-        try:
-            await _off_loop(self.email_tool, lambda: self.mark_handled(handle))
-        except Exception as e:
-            logger.debug("email mark-seen %s failed: %s", handle, e)
+    async def mark_handled_async(self, handle: Any) -> bool:
+        """``\\Seen`` on the message's UID in INBOX. False (and logged) when the
+        mark could not be made or UIDVALIDITY changed — the message then stays
+        UNSEEN and the next poll's row state decides what happens to it."""
+        if not isinstance(handle, ImapHandle):
+            return False
+        for attempt in (0, 1):
+            try:
+                return await self._run(lambda c: _mark_seen(c, handle))
+            except Exception as e:
+                if attempt:
+                    logger.warning("email mark-seen %s failed: %s", handle.key(), e)
+                    return False
+                await self._drop()
+        return False
+
+
+def _select_search(c) -> Tuple[str, List[bytes]]:
+    c.select("INBOX")
+    validity = _uidvalidity(c)
+    typ, data = c.uid("SEARCH", None, "UNSEEN")
+    if typ != "OK":
+        raise RuntimeError(f"UID SEARCH answered {typ}")
+    raw = data[0] if data and data[0] else b""
+    return validity, (raw.split() if raw else [])
+
+
+def _uidvalidity(c) -> str:
+    """The selected mailbox's UIDVALIDITY ("" when the server did not say)."""
+    try:
+        _, vals = c.response("UIDVALIDITY")
+        val = vals[0] if vals else None
+    except Exception:
+        val = None
+    if isinstance(val, bytes):
+        val = val.decode("ascii", "replace")
+    return str(val or "")
+
+
+def _mark_seen(c, handle: ImapHandle) -> bool:
+    """SELECT INBOX again right before the STORE (a mark must never land in
+    another folder), refuse when UIDVALIDITY changed, then flag by UID."""
+    c.select("INBOX")
+    now = _uidvalidity(c)
+    if handle.uidvalidity and now and now != handle.uidvalidity:
+        logger.warning("email mark-seen skipped: INBOX UIDVALIDITY changed %s -> %s (%s)",
+                       handle.uidvalidity, now, handle.key())
+        return False
+    typ, _ = c.uid("STORE", handle.uid, "+FLAGS", "(\\Seen)")
+    return typ == "OK"
 
 
 class AgentMailFetcher:

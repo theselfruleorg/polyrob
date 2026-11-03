@@ -89,7 +89,7 @@ async def test_a_bound_turn_that_hit_the_cap_and_said_nothing_says_why(thread):
 
 @pytest.mark.asyncio
 async def test_the_owner_turn_runs_on_the_interactive_budget(thread):
-    from core.config_policy import INTERACTIVE_MAX_STEPS
+    from core.config_policy import interactive_max_steps; INTERACTIVE_MAX_STEPS = interactive_max_steps()
     ta = _Agent(_orch("done", bound=True))
     await _turn(ta)
     assert ta.scoped == [{"max_steps": INTERACTIVE_MAX_STEPS}]

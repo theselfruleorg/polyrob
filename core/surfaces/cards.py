@@ -102,6 +102,11 @@ MAX_OPTIONS = 6
 MAX_OPTION_CHARS = 80
 MAX_TITLE_CHARS = 200
 MAX_BODY_CHARS = 3000
+#: 096 C4: what a card KEEPS. The message shows :data:`MAX_TITLE_CHARS` /
+#: :data:`MAX_BODY_CHARS` (one phone message with its buttons); a longer title
+#: or body is kept whole up to these bounds and reopened by ``/card_<id>``.
+MAX_STORED_TITLE_CHARS = 1000
+MAX_STORED_BODY_CHARS = 20000
 
 #: The verbs a quote or a proposal card may carry: every owner money verb that
 #: quotes first and acts on a trailing ``go``. A verb outside this set is never
@@ -278,18 +283,46 @@ _STATE_WORDS = {
 }
 
 
-def render_text(card: Card) -> str:
+_CARD_ID_RE = re.compile(r"^[0-9a-f]{%d}$" % _ID_HEX)
+
+
+def read_token(card_id: str) -> str:
+    """``/card_<id>`` — reopen ONE card in full: a read, parsed by
+    ``core.surfaces.tappable.READ_TOKENS`` (built here without importing it —
+    ``tappable`` already reaches this module, so the edge stays one-way)."""
+    cid = str(card_id or "").lower()
+    return f"/card_{cid}" if _CARD_ID_RE.match(cid) else ""
+
+
+def render_text(card: Card, *, full: bool = False) -> str:
     """The card as text: every seat's fallback, and the body of every button
     message. Each action's typed token is in the text, so nothing depends on a
-    button rendering."""
+    button rendering.
+
+    ``full`` (``/card_<id>``, 096 C4): the whole stored title and body. Without
+    it a title over :data:`MAX_TITLE_CHARS` or a body over
+    :data:`MAX_BODY_CHARS` is cut WITH a marker that names the reopen tap."""
     lines: List[str] = []
-    head = card.title
+    title = " ".join((card.title or "").split())
+    body = (card.body or "").rstrip()
+    cut = False
+    if not full and len(title) > MAX_TITLE_CHARS:
+        title, cut = _short(title, MAX_TITLE_CHARS), True
+    hidden = 0
+    if not full and len(body) > MAX_BODY_CHARS:
+        hidden = len(body) - MAX_BODY_CHARS
+        body, cut = body[:MAX_BODY_CHARS].rstrip(), True
+    head = title
     if card.origin == ORIGIN_AGENT:
         head = f"🤖 From the agent — {head}"
     lines.append(head)
-    if card.body:
+    if body:
         lines.append("")
-        lines.append(card.body.rstrip())
+        lines.append(body + (f"… (+{hidden} chars)" if hidden else ""))
+    if cut:
+        tap = read_token(card.card_id)
+        if tap:
+            lines.append(f"(cut short — the whole card: {tap})")
     if card.kind in (KIND_CHOICE, KIND_BUILDER) and card.options:
         lines.append("")
         for i, opt in enumerate(card.options, start=1):
@@ -680,6 +713,14 @@ def _valid_args(args: List[str]) -> bool:
     return all(isinstance(a, str) and _ARG_RE.match(a) for a in args)
 
 
+def _kept_body(body: str) -> str:
+    """The body as stored: whole up to :data:`MAX_STORED_BODY_CHARS`, then cut
+    with a marker (never silently)."""
+    if len(body) <= MAX_STORED_BODY_CHARS:
+        return body
+    return body[:MAX_STORED_BODY_CHARS - 1] + "…"
+
+
 def _new(user_id: str, kind: str, origin: str, title: str, *, body: str = "",
          verb: str = "", args: Optional[List[str]] = None,
          options: Optional[List[str]] = None, session_id: Optional[str] = None,
@@ -695,7 +736,8 @@ def _new(user_id: str, kind: str, origin: str, title: str, *, body: str = "",
         group_id = group_id or parent.group_id
         parent_id = parent.card_id
     card = Card(card_id=new_card_id(), user_id=str(user_id), kind=kind, origin=origin,
-                title=_short(title, MAX_TITLE_CHARS), body=(body or "")[:MAX_BODY_CHARS],
+                title=_short(title, MAX_STORED_TITLE_CHARS),
+                body=_kept_body(body or ""),
                 verb=verb, args=list(args or []), options=list(options or []),
                 session_id=session_id, typed=list(typed or []), group_id=group_id,
                 parent_id=parent_id, created_at=now, expires_at=now + ttl, updated_at=now)
@@ -1084,7 +1126,7 @@ def choice_card(user_id: str, question: str, options: List[str], *,
     q = " ".join(str(question or "").split())
     if not q:
         raise ValueError("a choice needs a question")
-    return _new(user_id, KIND_CHOICE, ORIGIN_AGENT, _short(q, MAX_TITLE_CHARS),
+    return _new(user_id, KIND_CHOICE, ORIGIN_AGENT, q,
                 options=opts, session_id=session_id, ttl=ttl, st=st)
 
 
@@ -1303,10 +1345,26 @@ def list_reply(user_id: str, *, st: Optional[CardStore] = None) -> str:
     out = ["Open cards:"]
     for c in cards:
         who = "agent" if c.origin == ORIGIN_AGENT else "you"
-        out.append(f"• {c.title} ({c.kind}, from {who})")
+        out.append(f"• {_short(c.title, MAX_TITLE_CHARS)} ({c.kind}, from {who})"
+                   + (f" — read it: {read_token(c.card_id)}" if read_token(c.card_id) else ""))
         for a in card_actions(c):
             out.append(f"    {a.label}: {a.command}")
     return "\n".join(out)
+
+
+def read_reply(user_id: str, card_id: str, *, st: Optional[CardStore] = None) -> str:
+    """``/cards <id>`` or the tapped ``/card_<id>``: ONE card in full, in its
+    current state (an open card keeps its typed tokens). A read: nothing is
+    pressed. Another tenant's card is "no such card", the same as a wrong id."""
+    cid = str(card_id or "").strip().lower()
+    try:
+        card = (st or store()).get(cid)
+    except Exception:
+        logger.warning("/cards %s: store unreadable", cid, exc_info=True)
+        return "I could not read the card store, so I cannot open that card."
+    if card is None or str(card.user_id) != str(user_id):
+        return f"No card '{cid}' — see /cards."
+    return render_text(card, full=True)
 
 
 #: ``result`` of a choice the owner answered by TYPING instead of tapping.
@@ -1415,6 +1473,7 @@ __all__ = [
     "KIND_PROPOSAL",
     "KIND_QUOTE", "Press", "add_listener", "card_actions", "card_token", "choice_card", "close_choices_for_text",
     "confirm_line_in", "finish", "list_reply", "parse_card_token", "press",
+    "read_reply", "read_token",
     "proposal_card", "push", "quote_card", "refused_quote", "remove_listener", "render_text",
     "set_store", "store", "tap_line", "wait_for_answer", "with_go_hint",
 ]

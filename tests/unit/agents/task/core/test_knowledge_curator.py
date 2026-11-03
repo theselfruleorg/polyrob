@@ -12,7 +12,7 @@ import time
 import pytest
 
 import modules.memory.registry as reg
-from agents.task.agent.core.curator import SkillCurator
+from agents.task.agent.core.retention import RetentionSweeper
 from core.sqlite_util import execute_retry
 from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 
@@ -56,7 +56,7 @@ async def test_stale_unread_agent_note_is_archived(provider):
     fresh = await provider.note_create(USER, "fresh", title="fresh",
                                        created_by="agent")
     _age(provider, stale, OLD_TS)
-    await SkillCurator(object(), _Usage()).run_once()
+    await RetentionSweeper().run_once()
     active_ids = [n["id"] for n in await provider.note_list(USER)]
     assert fresh in active_ids and stale not in active_ids
     archived = await provider.note_list(USER, status="archived")
@@ -69,7 +69,7 @@ async def test_read_note_survives_staleness(provider):
                                      created_by="agent")
     _age(provider, nid, OLD_TS)
     await provider.note_get(USER, nid)  # bump access_count
-    await SkillCurator(object(), _Usage()).run_once()
+    await RetentionSweeper().run_once()
     assert [n["id"] for n in await provider.note_list(USER)] == [nid]
 
 
@@ -78,7 +78,7 @@ async def test_owner_notes_never_touched(provider):
     nid = await provider.note_create(USER, "owner wrote this", title="mine",
                                      created_by="user")
     _age(provider, nid, OLD_TS)
-    await SkillCurator(object(), _Usage()).run_once()
+    await RetentionSweeper().run_once()
     assert [n["id"] for n in await provider.note_list(USER)] == [nid]
 
 
@@ -86,7 +86,7 @@ async def test_owner_notes_never_touched(provider):
 async def test_exact_duplicates_collapse_keep_oldest(provider):
     a = await provider.note_create(USER, "same body", title="dup-a", created_by="agent")
     b = await provider.note_create(USER, "same body", title="dup-b", created_by="agent")
-    await SkillCurator(object(), _Usage()).run_once()
+    await RetentionSweeper().run_once()
     active = [n["id"] for n in await provider.note_list(USER)]
     assert a in active and b not in active
 
@@ -97,5 +97,5 @@ async def test_gate_off_is_noop(provider, monkeypatch):
     stale = await provider.note_create(USER, "never read", title="stale",
                                        created_by="agent")
     _age(provider, stale, OLD_TS)
-    await SkillCurator(object(), _Usage()).run_once()
+    await RetentionSweeper().run_once()
     assert [n["id"] for n in await provider.note_list(USER)] == [stale]

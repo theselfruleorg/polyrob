@@ -41,7 +41,7 @@ it. `/status` reports how many lines were recorded in the last day.
 | Regime | Where | Session lifetime | Reads the thread | Writes the thread |
 |---|---|---|---|---|
 | **Thread** (default) | Telegram DM, console landing page, REPL | rolls on idle, `/new`, or a daily reset | tail on the first turn, delta after | every reply |
-| **Task session** | `/task …`, console `/c/<id>`, `polyrob run` | one session, explicit lifetime | tail on the first turn, delta after | every reply |
+| **Task session** | `/task …` in a chat app, console `/c/<id>`, `polyrob run` | one session, explicit lifetime | tail on the first turn, delta after | every reply |
 | **Room** | an allowlisted group chat | per room | **never** — the thread is private | never |
 | **Autonomous run** | goals, jobs, approvals and settlements | one run | its own slice | every line that reached you |
 
@@ -59,13 +59,14 @@ from a background run is refused with this remedy.
 
 ## Switches
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `OWNER_THREAD_INJECT` | ON | read it into sessions (tail, delta, referent, slice) |
-| `OWNER_THREAD_TAIL_HOURS` / `OWNER_THREAD_TAIL_ROWS` | 24 / 40 | the tail window |
+`OWNER_THREAD_INJECT` (on by default) reads the thread into sessions: the tail,
+the delta, the referent and the slice. `OWNER_THREAD_TAIL_HOURS` and
+`OWNER_THREAD_TAIL_ROWS` set the tail window. Their defaults are in
+[`docs/CONFIGURATION.md`](../CONFIGURATION.md).
 
 The thread is not the memory provider: `MEMORY_BACKEND` does not affect it.
 A missing or unreadable store costs the context block, never a turn or a send.
 
 See also: [Owner controls](owner-controls.md), [Group chats](groups.md),
-[Configuration](configuration.md).
+[Configuration](configuration.md), and [Proof per rail](rails-verification.md) for what
+counts as proof that a message the agent sent arrived.

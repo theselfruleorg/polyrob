@@ -31,15 +31,30 @@ logger = logging.getLogger(__name__)
 #: ⚠️ No ``failed``. It shipped in the vocabulary and nothing ever wrote it —
 #: every apply failure pays a CREDIT — and a status a seat may write but nothing
 #: produces is the same dead-key class as the credit that had no redeemer.
-STATUSES = ("pending", "paid", "applied", "credited", "expired",
+STATUSES = ("pending", "paid", "applying", "applied", "credited", "expired",
             "refused", "redeemed")
+
+#: 098 CO-31: the offer table. ``applying`` is the one actuator's claim on a
+#: paid offer (``paid -> applying`` is a CAS, so two re-drives apply once); a
+#: claim older than :data:`APPLYING_RECLAIM_SEC` goes back to ``paid``.
+from core.state.machine import StateMachine  # noqa: E402
+
+OFFER = StateMachine(
+    name="room_offer", states=frozenset(STATUSES),
+    initial=frozenset({"pending", "paid"}),
+    transitions={"pending": frozenset({"paid", "refused", "expired"}),
+                 "paid": frozenset({"applying"}),
+                 "applying": frozenset({"applied", "credited", "paid"}),
+                 "credited": frozenset({"redeemed"})},
+    terminal=frozenset({"applied", "redeemed", "refused", "expired"}))
+APPLYING_RECLAIM_SEC = 600
 
 #: Statuses that consume a payer's / a target's daily budget.
 #:
 #: ⚠️ ``refused`` is absent on purpose: a refusal did not happen to anyone, and
 #: must not spend the very cap it was refused by — otherwise three refused
 #: attempts would lock a member out for the day.
-_COUNTED = ("pending", "paid", "applied", "credited", "expired", "redeemed")
+_COUNTED = ("pending", "paid", "applying", "applied", "credited", "expired", "redeemed")
 
 _DDL = """CREATE TABLE IF NOT EXISTS room_action_offers (
     offer_id TEXT PRIMARY KEY,
@@ -175,11 +190,18 @@ class OfferStore:
                    invoice_id: Optional[str] = None,
                    settled_at: Optional[float] = None,
                    applied_at: Optional[float] = None,
-                   credit_id: Optional[str] = None) -> bool:
+                   credit_id: Optional[str] = None,
+                   from_states=None, where_applied_at: Optional[float] = None) -> bool:
         """Move one offer. An unknown status RAISES — a seat that mistypes must
-        hear the vocabulary back, never write a status nothing reads."""
+        hear the vocabulary back, never write a status nothing reads.
+
+        098 CO-31: ONE guarded write from ``from_states`` (default: every
+        :data:`OFFER` source of ``status``); False when the row was elsewhere."""
         if status not in STATUSES:
             raise ValueError(f"unknown status {status!r}; one of {STATUSES}")
+        froms = OFFER.require_sources(status, from_states, ctx={"offer": offer_id})
+        if not froms:
+            return False
         sets = ["status = ?"]
         params: list = [status]
         for col, val in (("reason", reason or None),
@@ -191,9 +213,14 @@ class OfferStore:
                 sets.append(f"{col} = ?")
                 params.append(val)
         params.append(str(offer_id))
+        where = f"offer_id = ? AND status IN ({','.join('?' * len(froms))})"
+        params.extend(froms)
+        if where_applied_at is not None:
+            where += " AND applied_at = ?"
+            params.append(float(where_applied_at))
         rc = execute_retry(
             self.db_path,
-            f"UPDATE room_action_offers SET {', '.join(sets)} WHERE offer_id = ?",
+            f"UPDATE room_action_offers SET {', '.join(sets)} WHERE {where}",
             tuple(params))
         return bool(rc)
 

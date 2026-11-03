@@ -95,7 +95,7 @@ def _pick(rows: List[dict], token: str) -> Optional[dict]:
 async def run_reply(user_id: str, data_dir: str, sessions_root: str,
                     args: List[str], *, exclude: Iterable[str] = ()) -> str:
     """The whole ``/run`` answer as plain text (both seats render it as is)."""
-    from core.session_control import SessionControl
+    from core.session_control import CANCELLED_ALREADY, SessionControl
 
     if args and (len(args) != 2 or args[0].lower() not in _WORDS):
         return USAGE
@@ -129,6 +129,8 @@ async def run_reply(user_id: str, data_dir: str, sessions_root: str,
     if state is None:
         return (f"{label} cannot be controlled from here: no live run holds it. "
                 "Nothing was changed.")
+    if state == CANCELLED_ALREADY:  # 098 CO-05: a stop is never erased
+        return f"{label} is stopping: a stop request holds it. Nothing was changed."
     if state == "pending":
         return f"{label}: {word} requested. The agent does it at the next step."
     out = f"{_DONE[state]}: {label}."

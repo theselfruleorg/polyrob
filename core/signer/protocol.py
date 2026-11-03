@@ -38,11 +38,12 @@ OPS = frozenset({
     "approvals.list",     # pending above-hard-cap requests
     "approvals.decide",   # ROOT ONLY: grant / deny one request
     "pause.set",          # ROOT ONLY: the signer's own spend pause
+    "nonce.reconcile",    # ROOT ONLY (098 CO-22): settle unknown-outcome nonces from the chain
 })
 #: Ops only uid 0 (the owner on the box) may call. D5: approvals come from the
 #: owner CLI on the box; a Telegram approval runs inside the agent process and
 #: can therefore never unlock anything above the hard cap.
-ROOT_ONLY_OPS = frozenset({"approvals.decide", "pause.set"})
+ROOT_ONLY_OPS = frozenset({"approvals.decide", "pause.set", "nonce.reconcile"})
 
 # Refusal codes (stable strings; the agent maps them to plain text).
 UNKNOWN_SHAPE = "unknown_shape"

@@ -73,3 +73,42 @@ def test_refreeze_fires_for_the_api_entry_point_too(monkeypatch):
     monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
     bootstrap.load_env()
     assert policy.payment_approval_mode() == "auto"
+
+
+# --- 098 CO-09 -------------------------------------------------------------------------
+
+def test_interactive_max_steps_from_env_file_applies(monkeypatch):
+    import core.config_policy as cp
+    from core.config_policy import goal_flags
+    monkeypatch.delenv("INTERACTIVE_MAX_STEPS", raising=False)
+    old = goal_flags.INTERACTIVE_MAX_STEPS
+    dotdir = os.environ["POLYROB_HOME"]
+    os.makedirs(dotdir, exist_ok=True)
+    with open(os.path.join(dotdir, ".env"), "w") as f:
+        f.write("INTERACTIVE_MAX_STEPS=200\n")
+    try:
+        bootstrap.load_env()
+        assert goal_flags.interactive_max_steps() == 200
+        assert cp.interactive_max_steps() == 200
+    finally:
+        os.environ.pop("INTERACTIVE_MAX_STEPS", None)
+        goal_flags.INTERACTIVE_MAX_STEPS = old
+
+
+def test_no_module_copies_interactive_max_steps():
+    """098 CO-09: callers use the accessor; no module keeps a copy of the value."""
+    import subprocess
+    out = subprocess.run(
+        ["git", "grep", "-n", "INTERACTIVE_MAX_STEPS", "--", "*.py", ":!tests",
+         ":!core/config_policy/goal_flags.py", ":!core/flags_catalog.py", ":!scripts"],
+        capture_output=True, text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))))
+    code_refs = [ln for ln in out.stdout.splitlines()
+                 if "import" in ln and "INTERACTIVE_MAX_STEPS" in ln.split("#")[0]]
+    assert code_refs == []
+
+
+def test_no_frozen_value_reexports():
+    assert not [n for n in vars(policy) if n.startswith("_FROZEN")
+                or n == "_COMPUTE_POSTURE_FROZEN"]

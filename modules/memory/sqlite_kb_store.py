@@ -7,9 +7,38 @@ module ``logger``; ``SqliteMemoryProvider`` composes it and calls ``_init_kb_sch
 ``_init_schema`` inside the same connection.
 """
 import logging
+from typing import Optional
+
 from core.sqlite_util import execute_retry, wal_connect
 
 logger = logging.getLogger("modules.memory.sqlite_memory_provider")
+
+
+#: The collection the agent's own documents are indexed into (auto-ingest and
+#: ``polyrob kb reindex``). Searched like every other collection; it differs only
+#: in retention — a written document nobody reads ages out (097 D3).
+WRITTEN_COLLECTION = "written"
+#: Its pre-097 name, renamed in place on schema init.
+RETIRED_AUTO_COLLECTION = "artifacts_unreviewed"
+
+
+def _collection_clause(collection: Optional[str]):
+    """SQL tail + params for an optional collection filter (None = every one)."""
+    if collection is None or not str(collection).strip():
+        return "", ()
+    return " AND collection = ?", (str(collection),)
+
+
+def _dedupe_rows(rows: list) -> list:
+    """Drop repeat chunks by content: with every collection searched, the same
+    document ingested into two collections must answer once, not twice."""
+    seen, out = set(), []
+    for row in rows:
+        if row[0] in seen:
+            continue
+        seen.add(row[0])
+        out.append(row)
+    return out
 
 
 class KbStoreMixin:
@@ -42,6 +71,28 @@ class KbStoreMixin:
             "CREATE INDEX IF NOT EXISTS kb_sources_tenant "
             "ON kb_sources (user_id, collection)"
         )
+        # 097 D3: when a search last returned this source. The written-documents
+        # collection ages out on "unread for N days", which needs a read clock.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(kb_sources)").fetchall()}
+        if "last_hit_at" not in cols:
+            conn.execute("ALTER TABLE kb_sources ADD COLUMN last_hit_at REAL")
+        # 097 D1: there is no review step, so the auto collection is no longer
+        # "unreviewed" — it is what the agent WROTE. One-time, idempotent rename.
+        # Only when an old-name row exists (no FTS scan on every start). A source
+        # already under the new name (a rollback re-indexed it under the old one)
+        # keeps the new row: the old duplicate goes first, or the UNIQUE key on
+        # kb_sources would stop the store from starting.
+        if conn.execute("SELECT 1 FROM kb_sources WHERE collection = ? LIMIT 1",
+                        (RETIRED_AUTO_COLLECTION,)).fetchone():
+            dup = ("EXISTS (SELECT 1 FROM kb_sources w WHERE w.collection = ? "
+                   "AND w.user_id = {t}.user_id AND w.source_path = {t}.source_path)")
+            for table in ("kb_chunks", "kb_sources"):
+                conn.execute(f"DELETE FROM {table} WHERE collection = ? AND "
+                             + dup.format(t=table),
+                             (RETIRED_AUTO_COLLECTION, WRITTEN_COLLECTION))
+            for table in ("kb_sources", "kb_chunks"):
+                conn.execute(f"UPDATE {table} SET collection = ? WHERE collection = ?",
+                             (WRITTEN_COLLECTION, RETIRED_AUTO_COLLECTION))
 
     async def kb_replace_source(self, *, user_id, collection: str, source_path: str,
                                 source_hash: str, chunks: list[str],
@@ -159,9 +210,11 @@ class KbStoreMixin:
         finally:
             conn.close()
 
-    def kb_keyword_contents(self, query: str, *, user_id, collection: str,
+    def kb_keyword_contents(self, query: str, *, user_id, collection: Optional[str],
                             limit: int) -> list:
-        """FTS5 recall over kb_chunks scoped to (user_id, collection).
+        """FTS5 recall over kb_chunks scoped to user_id and, unless *collection* is
+        None, one collection. None searches EVERY collection of the tenant (097: the
+        KB has full access by default — the owner does not curate collections).
 
         Returns a list of (content, source_path, chunk_idx) tuples.
         Uses the same token sanitizer as _keyword_contents. Empty query →
@@ -169,6 +222,7 @@ class KbStoreMixin:
         """
         norm = self._norm_user(user_id)
         limit = self._clamp_limit(limit, 8)
+        scope, scope_params = _collection_clause(collection)
         try:
             terms = self._query_terms(query)
             if terms:
@@ -176,9 +230,9 @@ class KbStoreMixin:
                 rows = execute_retry(
                     self.db_path,
                     "SELECT content, source_path, chunk_idx FROM kb_chunks "
-                    "WHERE kb_chunks MATCH ? AND user_id = ? AND collection = ? "
+                    f"WHERE kb_chunks MATCH ? AND user_id = ?{scope} "
                     "ORDER BY rank LIMIT ?",
-                    (match, norm, collection, limit),
+                    (match, norm) + scope_params + (limit,),
                     fetch="all",
                 )
             elif (query or "").strip():
@@ -190,19 +244,62 @@ class KbStoreMixin:
                 rows = execute_retry(
                     self.db_path,
                     "SELECT content, source_path, chunk_idx FROM kb_chunks "
-                    "WHERE user_id = ? AND collection = ? "
+                    f"WHERE user_id = ?{scope} "
                     "ORDER BY rowid DESC LIMIT ?",
-                    (norm, collection, limit),
+                    (norm,) + scope_params + (limit,),
                     fetch="all",
                 )
-            return [(r["content"], r["source_path"], r["chunk_idx"]) for r in (rows or [])]
+            return _dedupe_rows([(r["content"], r["source_path"], r["chunk_idx"])
+                                 for r in (rows or [])])
         except Exception as e:
             logger.warning("kb_keyword_contents failed: %s", e)
             return []
-    async def kb_search(self, query: str, *, user_id, collection: str = "default",
+
+    def kb_mark_hits(self, *, user_id, source_paths) -> None:
+        """Stamp ``last_hit_at`` on every source a search returned (097 D3).
+
+        Bookkeeping on the read path: fail-open, never raises, never blocks a
+        result. The written-documents age-out reads this clock.
+        """
+        paths = sorted({str(p) for p in (source_paths or []) if p})
+        if not paths or self._anon_blocked(user_id):
+            return
+        try:
+            import time as _time
+            marks = ",".join("?" for _ in paths)
+            execute_retry(
+                self.db_path,
+                f"UPDATE kb_sources SET last_hit_at = ? WHERE user_id = ? "
+                f"AND source_path IN ({marks})",
+                (_time.time(), self._norm_user(user_id), *paths))
+        except Exception as e:
+            logger.debug("kb_mark_hits skipped: %s", e)
+
+    def kb_unread_sources(self, *, collection: str, before_ts: float) -> list:
+        """``(user_id, source_path)`` of every source in *collection* (all tenants)
+        neither ingested nor returned by a search since *before_ts* (097 D3)."""
+        from datetime import datetime
+        rows = execute_retry(
+            self.db_path,
+            "SELECT user_id, source_path, created_at, last_hit_at FROM kb_sources "
+            "WHERE collection = ?", (collection,), fetch="all") or []
+        out = []
+        for r in rows:
+            d = dict(r)
+            seen = float(d.get("last_hit_at") or 0)
+            try:
+                made = datetime.fromisoformat(str(d.get("created_at") or "")).timestamp()
+            except ValueError:
+                made = 0.0
+            if max(seen, made) < before_ts:
+                out.append((str(d["user_id"]), str(d["source_path"])))
+        return out
+
+    async def kb_search(self, query: str, *, user_id, collection: Optional[str] = None,
                         limit: int = 8) -> str:
         """FTS-only KB recall. Returns provenance-tagged '[source_path #chunk_idx] content'
-        lines joined by newline, or '' on anon-block / no results.
+        lines joined by newline, or '' on anon-block / no results. ``collection=None``
+        searches every collection.
         """
         if self._anon_blocked(user_id):
             return ""
@@ -210,6 +307,7 @@ class KbStoreMixin:
                                         limit=limit)
         if not rows:
             return ""
+        self.kb_mark_hits(user_id=user_id, source_paths=[src for _, src, _ in rows])
         return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in rows)
     async def kb_list_sources(self, *, user_id, collection: str = None) -> list:
         """Return list of source dicts for this tenant, optionally filtered by collection.

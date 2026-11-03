@@ -131,3 +131,119 @@ def test_migration_of_old_db_is_idempotent(tmp_path):
     cols = {row[1] for row in con.execute("PRAGMA table_info(active_sessions)")}
     con.close()
     assert "owner_boot_id" in cols
+
+
+# --- 098 AG-16: owner-guarded rows, liveness by process identity -------------
+
+def test_register_does_not_steal_live_owner(tmp_path):
+    a = _reg(tmp_path)
+    b = _reg(tmp_path)
+    assert a.register("s1", _Orch("s1")) is True
+    assert b.register("s1", _Orch("s1")) is False          # a is alive: no theft
+    assert b.owner_boot_id("s1") == a._boot_id
+    assert b.route("s1").is_remote
+    assert a.route("s1").is_local
+
+
+def test_remove_only_deletes_own_row(tmp_path):
+    a = _reg(tmp_path)
+    b = _reg(tmp_path)
+    a.register("s1", _Orch("s1"))
+    b.register("s1", _Orch("s1"))                          # refused, held locally
+    assert b.remove("s1") is not None                      # local object dropped
+    assert a.exists("s1") is True                          # a's row stays
+    assert a.route("s1").is_local
+
+
+def test_register_takes_over_dead_owner(tmp_path):
+    db = str(tmp_path / "registry.db")
+    dead = SqliteSessionRegistry(db, worker_pid=_dead_pid())
+    dead.register("s1", _Orch("s1"))
+    live = SqliteSessionRegistry(db)
+    assert live.register("s1", _Orch("s1")) is True
+    assert live.owner_boot_id("s1") == live._boot_id
+    assert live.route("s1").is_local
+
+
+def test_route_dead_owner_returns_missing(tmp_path):
+    db = str(tmp_path / "registry.db")
+    SqliteSessionRegistry(db, worker_pid=_dead_pid()).register("s1", _Orch("s1"))
+    live = SqliteSessionRegistry(db)
+    assert live.route("s1").is_missing
+    assert live.exists("s1") is False
+
+
+def test_reused_pid_reads_dead(tmp_path):
+    """A row stored by a previous life of OUR pid (other start time) is dead."""
+    import sqlite3
+    from core.state.proc import ProcIdentity, boot_id
+    db = str(tmp_path / "registry.db")
+    live = SqliteSessionRegistry(db)
+    old = ProcIdentity(os.getpid(), "a-start-time-long-ago", boot_id()).encode()
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO active_sessions (session_id, worker_pid, owner_boot_id, owner_ident, "
+        "params, last_seen_at, created_at) VALUES ('s1', ?, 'old-boot', ?, '{}', 'x', 'x')",
+        (os.getpid(), old))
+    con.commit(); con.close()
+    assert live.route("s1").is_missing
+
+
+def test_legacy_row_of_our_pid_reads_dead(tmp_path):
+    """A pre-identity row with our pid and another boot id is a previous life."""
+    import sqlite3
+    db = str(tmp_path / "registry.db")
+    live = SqliteSessionRegistry(db)
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO active_sessions (session_id, worker_pid, owner_boot_id, params, "
+        "last_seen_at, created_at) VALUES ('s1', ?, 'old-boot', '{}', 'x', 'x')",
+        (os.getpid(),))
+    con.commit(); con.close()
+    assert live.route("s1").is_missing
+
+
+def test_status_column_not_written(tmp_path):
+    """S10: the dead ``status`` column is gone from a fresh DB; an old DB keeps it
+    (default 'active') and registration still works."""
+    import sqlite3
+    db = str(tmp_path / "fresh.db")
+    SqliteSessionRegistry(db).register("s1", _Orch("s1"))
+    con = sqlite3.connect(db)
+    cols = {row[1] for row in con.execute("PRAGMA table_info(active_sessions)")}
+    con.close()
+    assert "status" not in cols and "owner_ident" in cols
+
+
+def test_recreate_refuses_a_session_a_live_peer_owns(tmp_path):
+    """098 review: a second worker must not rebuild (and run) a session that a
+    live worker owns — the registry refused the row, but the object was still
+    held and run locally, so two orchestrators wrote one session's files."""
+    import asyncio
+    from agents.task.task_agent_delivery import TaskAgentDeliveryMixin
+
+    a, b = _reg(tmp_path), _reg(tmp_path)
+    a.register("s1", _Orch("s1"))
+    built = []
+
+    class _Agent(TaskAgentDeliveryMixin):
+        _registry = b
+
+        def route_session(self, sid):
+            return self._registry.route(sid)
+
+        def _heal_narrowed_request(self, sid):
+            pass
+
+        async def _recreate_orchestrator(self, sid, info):
+            built.append(sid)
+            orch = _Orch(sid)
+            self._registry.register(sid, orch)
+            return orch
+
+    agent = _Agent()
+    assert asyncio.run(agent._resolve_or_recreate("s1", {})) is None
+    assert built == []
+    a.remove("s1")                                    # the peer lets go
+    assert asyncio.run(agent._resolve_or_recreate("s1", {})) is not None
+    assert built == ["s1"]

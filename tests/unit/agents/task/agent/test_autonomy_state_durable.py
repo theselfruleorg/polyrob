@@ -163,10 +163,14 @@ def test_registry_works_without_store():
 
 # --- restart recovery -----------------------------------------------------------
 
+#: A process that no longer runs (an impossible pid on this boot).
+_DEAD_OWNER = "999999|gone|" + __import__("core.state.proc", fromlist=["x"]).boot_id()
+
 def test_recovery_marks_interrupted_and_surfaces(store):
     store.record_dispatched(session_id="s1", user_id="u1", delegation_id="deleg_0001",
                             goal="long job", profile="executor",
-                            parent_agent_id="a1", dispatched_at=1.0)
+                            parent_agent_id="a1", dispatched_at=1.0,
+                            owner=_DEAD_OWNER)  # 098 AG-10: its process is gone
     wakes = []
 
     class _Agent:
@@ -186,7 +190,8 @@ def test_recovery_marks_interrupted_and_surfaces(store):
 
 def test_recovery_fail_open_when_wake_fails(store):
     store.record_dispatched(session_id="s1", user_id="u1", delegation_id="deleg_0001",
-                            goal="g", profile="p", parent_agent_id=None, dispatched_at=1.0)
+                            goal="g", profile="p", parent_agent_id=None, dispatched_at=1.0,
+                            owner=_DEAD_OWNER)
 
     class _Agent:
         async def deliver_self_wake(self, *a, **kw):

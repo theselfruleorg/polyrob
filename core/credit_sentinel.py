@@ -19,7 +19,6 @@ time-bounded and self-releasing. Everything here is fail-open.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -167,42 +166,115 @@ def extract_reset_ts(text: Optional[str]) -> Optional[float]:
 GLOBAL_KEY = "*"
 
 
-def _read_latch(path: str) -> dict:
-    """The latch as ``{provider: {"ts": float, "release_ts": float|None}}``.
+#: 098 CO-11: per-provider latch machine. ``latched -> latched`` is a re-trip
+#: (a fresh provider-stated release time), ``latched -> clear`` a release.
+from core.state.machine import StateMachine  # noqa: E402
+
+LATCH_MACHINE = StateMachine(
+    name="credit_latch", states=frozenset({"clear", "latched"}),
+    transitions={"clear": frozenset({"latched"}),
+                 "latched": frozenset({"latched", "clear"})},
+    initial=frozenset({"clear"}))
+
+_UNREADABLE = object()
+_unreadable_logged = False
+
+
+def _entry(ts: float, release_ts: Optional[float] = None, reason: str = "",
+           last_recovery_check: Optional[float] = None) -> dict:
+    out = {"ts": ts, "release_ts": release_ts, "reason": reason}
+    if last_recovery_check is not None:
+        out["last_recovery_check"] = last_recovery_check
+    return out
+
+
+def _parse(data: Any, path: str) -> dict:
+    """``{provider: {"ts", "release_ts", "reason"}}`` from the file's JSON.
     Tolerates every historical shape.
 
     A latch written before provider scoping is ``{"ts":…, "reason":…}`` with no
     provider. Reading it as GLOBAL (not as "no entries") matters on upgrade —
     the alternative silently un-pauses a genuinely credit-dead provider.
+    Writes are atomic (098 CO-11), so an unparsable file is real corruption,
+    never a torn write: it reads as a GLOBAL trip (logged once) until
+    ``release(None)`` resets it.
     """
-    def _entry(ts: float, release_ts: Optional[float] = None,
-               reason: str = "") -> dict:
-        return {"ts": ts, "release_ts": release_ts, "reason": reason}
-
-    try:
-        with open(path) as f:
-            data = json.load(f) or {}
-    except Exception:
-        # Unreadable latch: treat its mtime as a global trip time.
-        return {GLOBAL_KEY: _entry(os.path.getmtime(path))}
+    global _unreadable_logged
+    if data is _UNREADABLE or not isinstance(data, dict):
+        if not _unreadable_logged:
+            _unreadable_logged = True
+            logger.warning("credit_sentinel.unreadable %s — read as a global trip; "
+                           "release every provider to reset it", path)
+        try:
+            return {GLOBAL_KEY: _entry(os.path.getmtime(path))}
+        except OSError:
+            return {GLOBAL_KEY: _entry(time.time())}
     providers = data.get("providers")
     if isinstance(providers, dict):
         out = {}
         for name, entry in providers.items():
             try:
                 release = (entry or {}).get("release_ts")
+                checked = (entry or {}).get("last_recovery_check")
                 out[str(name)] = _entry(
                     float((entry or {}).get("ts") or 0.0),
                     float(release) if release else None,
-                    str((entry or {}).get("reason") or ""))
+                    str((entry or {}).get("reason") or ""),
+                    float(checked) if checked is not None else None)
             except Exception:
                 continue
         return out
+    if not data:
+        return {}
     # Legacy unkeyed shape.
     try:
         return {GLOBAL_KEY: _entry(float(data.get("ts") or 0.0))}
     except Exception:
         return {GLOBAL_KEY: _entry(os.path.getmtime(path))}
+
+
+def _load(path: str) -> Any:
+    from core.state.files import read_json
+    if not os.path.exists(path):
+        return {}
+    return read_json(path, _UNREADABLE)
+
+
+def _read_latch(path: str) -> dict:
+    """The latch entries as stored now (no lock: one atomic file read)."""
+    return _parse(_load(path), path)
+
+
+def _mutate(fn) -> Any:
+    """``fn(entries) -> (new_entries | None, result)`` under the latch's file
+    lock; ``None`` writes nothing. An empty latch is written as
+    ``{"providers": {}}`` — never ``os.remove``, which no lock can fence."""
+    from core.state.files import atomic_write_json, file_lock
+    path = _sentinel_path()
+    with file_lock(path):
+        entries = _parse(_load(path), path)
+        new, result = fn(entries)
+        if new is not None:
+            atomic_write_json(path, {"providers": _serialize(new)}, indent=None)
+        return result
+
+
+def _serialize(entries: dict, reason: str = "") -> dict:
+    out = {}
+    for name, entry in entries.items():
+        if isinstance(entry, dict):
+            out[name] = {"ts": entry.get("ts"), "release_ts": entry.get("release_ts"),
+                         "reason": str(entry.get("reason") or reason)[:500]}
+            if entry.get("last_recovery_check") is not None:
+                out[name]["last_recovery_check"] = entry.get("last_recovery_check")
+        else:
+            out[name] = {"ts": entry, "reason": str(reason)[:500]}
+    return out
+
+
+def _fresh(entries: dict, now: float) -> dict:
+    window = _release_hours() * 3600
+    return {n: e for n, e in entries.items() if not _entry_expired(e, now, window)}
 
 
 def _entry_expired(entry: dict, now: float, window: float) -> bool:
@@ -233,20 +305,20 @@ def credit_sentinel_active(provider: Optional[str] = None) -> bool:
     try:
         if not os.path.exists(path):
             return False
-        entries = _read_latch(path)
-        window = _release_hours() * 3600
         now = time.time()
-        fresh = {name: e for name, e in entries.items()
-                 if not _entry_expired(e, now, window)}
-        if not fresh:
-            try:
-                os.remove(path)
-                logger.info("credit sentinel auto-released after %sh", _release_hours())
-            except OSError:
-                pass
-            return False
+        entries = _read_latch(path)
+        fresh = _fresh(entries, now)
         if len(fresh) != len(entries):
-            _write_latch(path, fresh)  # drop only the expired providers
+            # CO-11: the prune re-reads under the lock and drops only what is
+            # expired THEN — a trip written meanwhile survives.
+            def _prune(cur):
+                keep = _fresh(cur, now)
+                return (keep if len(keep) != len(cur) else None), keep
+            fresh = _mutate(_prune)
+            if not fresh:
+                logger.info("credit sentinel auto-released after %sh", _release_hours())
+        if not fresh:
+            return False
         if provider is None:
             return True
         # A global (unattributed) trip pauses every provider.
@@ -269,30 +341,16 @@ def credit_sentinel_status() -> dict:
     path = _sentinel_path()
     if not os.path.exists(path):
         return {}
-    entries = _read_latch(path)
-    window = _release_hours() * 3600
-    now = time.time()
-    return {name: dict(e) for name, e in entries.items()
-            if not _entry_expired(e, now, window)}
+    return {name: dict(e) for name, e in _fresh(_read_latch(path), time.time()).items()}
 
 
 def _write_latch(path: str, entries: dict, reason: str = "") -> None:
-    """Persist ``{provider: entry}``; entries may be the ``_read_latch`` dict
-    shape or bare ``float`` timestamps. Never raises."""
+    """Persist ``{provider: entry}`` atomically under the latch lock (a test and
+    migration seam; production writes go through :func:`_mutate`). Never raises."""
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        providers = {}
-        for name, entry in entries.items():
-            if isinstance(entry, dict):
-                providers[name] = {
-                    "ts": entry.get("ts"),
-                    "release_ts": entry.get("release_ts"),
-                    "reason": str(entry.get("reason") or reason)[:500],
-                }
-            else:
-                providers[name] = {"ts": entry, "reason": str(reason)[:500]}
-        with open(path, "w") as f:
-            json.dump({"providers": providers}, f)
+        from core.state.files import atomic_write_json, file_lock
+        with file_lock(path):
+            atomic_write_json(path, {"providers": _serialize(entries, reason)}, indent=None)
     except Exception:
         logger.warning("credit sentinel: latch write failed", exc_info=True)
 
@@ -314,6 +372,7 @@ def release(provider: Optional[str] = None) -> bool:
     ``"openrouter"`` while a GLOBAL trip is in force returns False: that trip
     still pauses openrouter, and a True there would tell the caller the
     provider is free when the next dispatch still refuses.
+    ``release(None)`` also resets a corrupt latch file.
     """
     if not credit_sentinel_enabled():
         return False
@@ -321,24 +380,57 @@ def release(provider: Optional[str] = None) -> bool:
     try:
         if not os.path.exists(path):
             return False
-        entries = _read_latch(path)
-        if provider is None:
-            if not entries:
-                return False
-            remaining = {}
-        else:
+
+        def _drop(entries):
+            if provider is None:
+                return ({}, True) if entries else (None, False)
             if str(provider) not in entries:
-                return False
-            remaining = {k: v for k, v in entries.items() if k != str(provider)}
-        if remaining:
-            _write_latch(path, remaining)
-        else:
-            os.remove(path)
-        logger.info("credit sentinel released for %s", provider or "every provider")
-        return True
+                return None, False
+            return {k: v for k, v in entries.items() if k != str(provider)}, True
+
+        done = _mutate(_drop)
+        if done:
+            logger.info("credit sentinel released for %s", provider or "every provider")
+        return bool(done)
     except Exception:
         logger.warning("credit sentinel: release failed", exc_info=True)
         return False  # fail-open: a release we could not do is not a claim we made
+
+
+def claim_recovery_check(provider: str, *, now: Optional[float] = None,
+                         interval: float = 300.0) -> bool:
+    """098 CO-11: claim the right to run one free recovery probe for *provider*.
+
+    The probe cadence lives in the latch doc (``last_recovery_check`` on the
+    provider's entry), stamped under the latch lock, so every unit on one data
+    home (agent, email, webview) shares ONE cadence instead of each probing on
+    its own per-process clock. True = the caller may probe now (the stamp is
+    already written); False = not latched, or probed within *interval*.
+    Never raises (a claim we could not record is not a claim made).
+    """
+    if not credit_sentinel_enabled():
+        return False
+    key = str(provider or "")
+    t = time.time() if now is None else float(now)
+    try:
+        if not key or not os.path.exists(_sentinel_path()):
+            return False
+
+        def _claim(entries):
+            entry = entries.get(key)
+            if not isinstance(entry, dict):
+                return None, False
+            last = entry.get("last_recovery_check")
+            if last is not None and t - float(last) < interval:
+                return None, False
+            entries = dict(entries)
+            entries[key] = dict(entry, last_recovery_check=t)
+            return entries, True
+
+        return bool(_mutate(_claim))
+    except Exception:
+        logger.warning("credit sentinel: recovery-check claim failed", exc_info=True)
+        return False
 
 
 async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
@@ -360,13 +452,25 @@ async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
     if not credit_sentinel_enabled():
         return False
     key = str(provider) if provider else GLOBAL_KEY
+    # The notice dedups on "this key was already paused" (a global trip counts).
     already = credit_sentinel_active(key)
+    now = time.time()
+
+    def _trip(entries):
+        # CO-11: "already latched" is decided PER KEY, under the lock — a
+        # provider trip is recorded even under a global one, so releasing the
+        # global trip later does not resume a provider that is still dry.
+        if key in _fresh(entries, now):
+            return None, False
+        entries = dict(entries)
+        entries[key] = {"ts": now, "release_ts": release_ts, "reason": str(reason)[:500]}
+        return entries, True
+
+    try:
+        _mutate(_trip)
+    except Exception:
+        logger.warning("credit sentinel: latch write failed", exc_info=True)
     if not already:
-        path = _sentinel_path()
-        entries = _read_latch(path) if os.path.exists(path) else {}
-        entries[key] = {"ts": time.time(), "release_ts": release_ts,
-                        "reason": str(reason)[:500]}
-        _write_latch(path, entries, reason=reason)
         try:
             from core.event_log import get_event_log
             get_event_log().record("credit_sentinel", user_id=str(user_id or ""),

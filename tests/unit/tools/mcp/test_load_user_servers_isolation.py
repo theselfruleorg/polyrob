@@ -55,11 +55,11 @@ def test_unload_user_servers_uses_passed_user_id():
         "user_userA::s1": object(),
         "user_userB::s9": object(),
     }
-    tool.server_manager.disconnect_server = AsyncMock()
+    tool.server_manager.remove_server = AsyncMock()
 
     asyncio.run(tool.unload_user_servers(user_id="userA"))
 
     # Only userA's server disconnected — NOT userB's (even though _current_user_id=userB).
-    disconnected = [c.args[0] for c in tool.server_manager.disconnect_server.call_args_list]
+    disconnected = [c.args[0] for c in tool.server_manager.remove_server.call_args_list]
     assert disconnected == ["user_userA::s1"], disconnected
     assert "userA" not in tool._loaded_users

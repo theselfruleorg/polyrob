@@ -60,7 +60,6 @@ def latch(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "_sentinel_path", lambda: str(path))
     monkeypatch.delenv("CREDIT_SENTINEL_ENABLED", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    sp._LAST_RECOVERY_CHECK.clear()
     return path
 
 
@@ -145,4 +144,19 @@ def test_never_raises(latch, monkeypatch):
             raise RuntimeError("network down")
 
     assert sp.release_funded_latches(http=_Boom()) == []
+    assert cs.credit_sentinel_active("openrouter") is True
+
+
+def test_recovery_cadence_shared_across_processes(latch):
+    """098 CO-11: the cadence lives in the latch doc, not in process memory —
+    a second unit (a fresh module state) on the same data home skips the probe."""
+    import importlib
+    _write(latch, {"openrouter": _fresh()})
+    http = _Http(_credits(195, 195.12))
+    sp.release_funded_latches(http=http, now=1000.0, interval=300)
+    stored = json.loads(latch.read_text())["providers"]["openrouter"]
+    assert stored["last_recovery_check"] == 1000.0
+    importlib.reload(sp)  # another process: no in-memory cadence
+    sp.release_funded_latches(http=http, now=1100.0, interval=300)
+    assert len(http.calls) == 1
     assert cs.credit_sentinel_active("openrouter") is True

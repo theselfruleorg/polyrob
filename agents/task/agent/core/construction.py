@@ -345,9 +345,13 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 
 		# Initialize Tool Call Tracker for robust ID management
 		# Note: Uses orchestrator.session_id directly
+		# 098 AG-18: the tenant's directory (the restore reads the same one); a
+		# sub-agent writes its own file, never the parent's tool_calls.json.
 		self.tool_call_tracker = ToolCallTracker(
 			session_id=self.orchestrator.session_id,
-			logger=None  # Will use its own logger
+			logger=None,  # Will use its own logger
+			user_id=getattr(self.orchestrator, "user_id", None),
+			file_name=(f"tool_calls_{agent_name}.json" if is_sub_agent else "tool_calls.json"),
 		)
 
 		# Stall detection interval (state.last_activity_time set later after state is created)
@@ -1253,8 +1257,6 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			max_failures=max_failures,
 			consecutive_failures=0,
 			total_actions_count=0,
-			paused=False,
-			stopped=False
 		)
 
 		# Update activity time now that state exists (used for stall detection)
@@ -1325,6 +1327,10 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		self.message_manager.usage_tracker = self.usage_tracker
 		self.message_manager.metering_user_id = getattr(self, "user_id", None)
 		self.message_manager.metering_agent_id = getattr(self, "agent_id", None)
+		if getattr(self, "_is_sub_agent", False):  # 098 AG-05: own checkpoint index
+			from agents.task.agent.messages.compactor import child_checkpoint_dir
+			self.message_manager._compaction_checkpoint_dir = child_checkpoint_dir(
+				self.orchestrator.session_id, getattr(self, "agent_id", None))
 		# E-A7: the REAL workspace (a child's MM session_id is its virtual id, whose
 		# directory the filesystem tool never reads).
 		self.message_manager.workspace_root = getattr(self.orchestrator, "workspace_dir", None)

@@ -22,6 +22,8 @@ from core.file_lock import get_safe_file_lock
 from agents.task.path import pm, get_safe_singleton
 from agents.task.constants import DEFAULT_USER_ID
 from core.data_perms import apply_birth_mode
+from core.state.files import atomic_write_json
+from core.state.machine import StateMachine
 
 
 def _publish_feed_file(tmp_name: str, feed_dir: Path, prefix: str, ms: int) -> Path:
@@ -49,13 +51,10 @@ class SessionStatus(Enum):
     """Session status enumeration for continuous chat.
 
     State machine:
-    - CREATED → RUNNING, CANCELLED
-    - RUNNING → COMPLETED, FAILED, CANCELLED, SUSPENDED
-    - COMPLETED → RESUMED, CANCELLED
-    - RESUMED → RUNNING, CANCELLED
-    - SUSPENDED → RESUMED, CANCELLED
-    - FAILED → RESUMED, CANCELLED
-    - CANCELLED → (terminal state)
+    The table is :data:`SESSION_MACHINE`. No state is terminal (098 owner
+    decision Q1, "we need to be able to resume anything"): every state can
+    reach RUNNING again. A cancel stops the current run; the next message
+    resumes the session (CANCELLED → RESUMED/INITIALIZING/RUNNING).
 
     Note: PAUSED was removed in favor of CANCELLED for user interruption.
     The continuous chat design uses COMPLETED → RESUMED flow for follow-up messages.
@@ -67,10 +66,34 @@ class SessionStatus(Enum):
     RESUMED = "resumed"        # Continuous chat resume (transitional)
     SUSPENDED = "suspended"    # Evicted from memory, persisted to disk
     FAILED = "failed"          # Execution failed
-    CANCELLED = "cancelled"    # User cancelled (terminal)
+    CANCELLED = "cancelled"    # User cancelled the run (resumable)
 
 # Keep old name for backwards compatibility
 SessionState = SessionStatus
+
+#: 098 AG-14: the ONE session status table; update_session_status and
+#: try_transition_status both enforce it. No state is terminal (owner decision
+#: Q1, 098 close-out): failed/suspended/completed/cancelled all reach
+#: ``running`` again — a new message after a cancel resumes the session
+#: (``cancelled -> resumed``, ``-> initializing`` on a recreate, ``-> running``).
+#: Late writers still lose: the end-of-run write is a CAS from ``running``
+#: only (TaskAgent._finish_status), so a completion never overwrites a cancel.
+SESSION_MACHINE = StateMachine(
+    "session_status",
+    states=frozenset(s.value for s in SessionStatus),
+    transitions={
+        "created": frozenset({"initializing", "running", "suspended", "failed", "cancelled"}),
+        "initializing": frozenset({"running", "suspended", "failed", "cancelled"}),
+        "running": frozenset({"completed", "failed", "cancelled", "suspended"}),
+        "completed": frozenset({"resumed", "initializing", "suspended", "cancelled"}),
+        "resumed": frozenset({"running", "suspended", "failed", "cancelled"}),
+        "suspended": frozenset({"resumed", "initializing", "cancelled"}),
+        "failed": frozenset({"resumed", "initializing", "cancelled"}),
+        "cancelled": frozenset({"resumed", "initializing", "running"}),
+    },
+    aliases={"error": "failed", "active": "running"},
+    initial=frozenset({"created"}),
+)
 
 
 def get_user_status(internal_status: str) -> str:
@@ -99,7 +122,7 @@ def get_user_status(internal_status: str) -> str:
 		"suspended": "idle",
 	}
 	# A26: the "error" key that used to live here was dead — no SessionStatus
-	# enum member ever produces it (the terminal-failure state is "failed").
+	# enum member ever produces it (the failure state is "failed").
 	normalized = internal_status.lower()
 	if normalized not in status_map:
 		# Not silent: an unrecognized internal status must not quietly render
@@ -239,6 +262,7 @@ class SessionManager:
                             session_info['status'] = 'suspended'
                             session_info['suspended_at'] = datetime.now().isoformat()
                             self.logger.info(f"Marked session {session_id} as suspended (was running)")
+                            self._write_metadata_file(metadata_path, session_info)  # 098 AG-14
 
                         # Track by user
                         user_id = session_info.get('user_id', DEFAULT_USER_ID)
@@ -417,81 +441,53 @@ class SessionManager:
             self._save_metadata(session_id)
             self.update_agents_summary(session_id)  # Update agents.json for webview
     
-    def update_session_status(self, session_id: str, status: Union[str, SessionStatus]) -> None:
-        """Update session status with enum validation.
-
-        Args:
-            session_id: Session identifier
-            status: New status (string or SessionStatus enum)
-        """
+    def update_session_status(self, session_id: str, status: Union[str, SessionStatus]) -> bool:
+        """Move a session to ``status`` when :data:`SESSION_MACHINE` allows the
+        edge from its current status (098 AG-14). An illegal edge is refused
+        (``state_illegal_transition``) and returns False. Same status: a no-op
+        (A10 — no repeated save/emit). True when the status is now ``status``."""
         with self._lock:
             session_id = pm().clean_session_id(session_id)
 
             if session_id not in self._sessions:
                 self.logger.warning(f"Cannot update status for non-existent session {session_id}")
-                return
+                return False
 
-            # Get previous status for event emission
             previous_status = self._sessions[session_id].get('status')
-
-            # A10: change guard — a session end/cancel can call this method
-            # 2-3x for the SAME status (e.g. cancel calling it three times).
-            # Normalize the incoming status the same way both branches below
-            # would, and skip the save + emit entirely when nothing changed,
-            # so the activity feed never shows the same status 2-3x.
-            normalized_new_status = (
-                status.value if isinstance(status, SessionStatus) else str(status).lower()
-            )
-            if normalized_new_status == previous_status:
+            new = SESSION_MACHINE.normalize(
+                status.value if isinstance(status, SessionStatus) else str(status).lower())
+            if new == SESSION_MACHINE.normalize(previous_status):
                 self.logger.debug(
-                    f"Session {session_id} status unchanged at '{normalized_new_status}'; "
-                    "skipping save and emit"
-                )
-                return
+                    f"Session {session_id} status unchanged at '{new}'; skipping save and emit")
+                return True
+            if not self._edge_allowed(session_id, previous_status, new):
+                return False
+            self._apply_status(session_id, new, previous_status)
+            return True
 
-            # Convert string to enum if needed
-            if isinstance(status, str):
-                try:
-                    status = SessionStatus(status.lower())
-                except ValueError:
-                    self.logger.warning(f"Invalid status value '{status}', using as-is")
-                    # Use string as-is for backward compatibility
-                    new_status_str = status.lower()
-                    self._sessions[session_id]['status'] = new_status_str
-                    self._sessions[session_id]['updated_at'] = datetime.now().isoformat()
-                    self._save_metadata(session_id)
-                    self._save_status_summary(session_id)  # Also save status.json for WebView
-                    # Emit status event to feed for WebSocket updates
-                    self._emit_status_event(session_id, new_status_str, previous_status)
-                    return
+    def _edge_allowed(self, session_id: str, current: Optional[str], new: str) -> bool:
+        """``current -> new`` per :data:`SESSION_MACHINE`; an unknown stored
+        status (a hand-edited file) may move to any known state."""
+        if new not in SESSION_MACHINE.states:
+            self.logger.warning(f"Refused unknown status '{new}' for {session_id}")
+            return False
+        cur = SESSION_MACHINE.normalize(current)
+        if cur not in SESSION_MACHINE.states:
+            return True
+        if SESSION_MACHINE.check(cur, new, ctx={"session_id": session_id}):
+            return True
+        self.logger.warning(f"Refused session status transition for {session_id}: {cur} -> {new}")
+        return False
 
-            # Get current status for validation
-            current = self._sessions[session_id].get('status')
-            if isinstance(current, str):
-                try:
-                    current = SessionStatus(current.lower())
-                except ValueError:
-                    # Current status is invalid, allow transition
-                    self.logger.warning(f"Current status '{current}' invalid, allowing transition")
-                    current = None
-
-            # Validate state transition
-            if current and not self._is_valid_transition(current, status):
-                self.logger.warning(
-                    f"Invalid state transition for {session_id}: "
-                    f"{current.value if isinstance(current, SessionStatus) else current} -> {status.value}"
-                )
-                # Allow it anyway but log warning
-
-            # Update with enum value
-            self._sessions[session_id]['status'] = status.value
-            self._sessions[session_id]['updated_at'] = datetime.now().isoformat()
-            self._save_metadata(session_id)
-            self._save_status_summary(session_id)  # Also save status.json for WebView
-            self.logger.debug(f"Updated session {session_id} status to {status.value}")
-            
-            # Emit status event to feed for WebSocket updates
-            self._emit_status_event(session_id, status.value, previous_status)
+    def _apply_status(self, session_id: str, new: str, previous: Optional[str]) -> None:
+        """The one status write: memory, metadata.json (atomic), status.json and
+        the status feed event. Caller holds ``self._lock`` and checked the edge."""
+        self._sessions[session_id]['status'] = new
+        self._sessions[session_id]['updated_at'] = datetime.now().isoformat()
+        self._save_metadata(session_id)
+        self._save_status_summary(session_id)  # status.json for WebView
+        self.logger.debug(f"Updated session {session_id} status to {new}")
+        self._emit_status_event(session_id, new, previous)
 
     def _emit_status_event(self, session_id: str, new_status: str, previous_status: Optional[str] = None) -> None:
         """Emit a status event to the feed for WebSocket real-time updates.
@@ -556,48 +552,11 @@ class SessionManager:
         except Exception as e:
             self.logger.error(f"Error emitting status event: {e}", exc_info=True)
 
-    def _is_valid_transition(self, from_status: SessionStatus, to_status: SessionStatus) -> bool:
-        """Validate if status transition is allowed.
-
-        Args:
-            from_status: Current status
-            to_status: Target status
-
-        Returns:
-            True if transition is valid
-        """
-        # Same-state transitions are always valid (no-op)
-        if from_status == to_status:
-            return True
-
-        # Define valid state transitions (PAUSED removed - use CANCELLED for interruption)
-        VALID_TRANSITIONS = {
-            SessionStatus.CREATED: [SessionStatus.RUNNING, SessionStatus.CANCELLED],
-            SessionStatus.RUNNING: [SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED, SessionStatus.SUSPENDED],
-            SessionStatus.COMPLETED: [SessionStatus.RESUMED, SessionStatus.CANCELLED],
-            SessionStatus.RESUMED: [SessionStatus.RUNNING, SessionStatus.CANCELLED],
-            SessionStatus.SUSPENDED: [SessionStatus.RESUMED, SessionStatus.CANCELLED],
-            SessionStatus.FAILED: [SessionStatus.RESUMED, SessionStatus.CANCELLED],
-            SessionStatus.CANCELLED: []  # Terminal state - no transitions out
-        }
-
-        allowed = VALID_TRANSITIONS.get(from_status, [])
-        return to_status in allowed
-
     def try_transition_status(self, session_id: str, from_status: str, to_status: str) -> bool:
-        """Atomically try to transition status. Returns False if current status doesn't match.
-
-        This provides concurrency protection without locks - the status field itself
-        acts as the synchronization mechanism.
-
-        Args:
-            session_id: Session ID to transition
-            from_status: Expected current status
-            to_status: New status to set
-
-        Returns:
-            True if transition succeeded, False if current status doesn't match expected
-        """
+        """CAS: move ``from_status -> to_status`` only when the session is still in
+        ``from_status`` AND :data:`SESSION_MACHINE` allows the edge (098 AG-14).
+        A lost race or an illegal edge returns False; a win writes like
+        :meth:`update_session_status` (metadata, status.json, status event)."""
         with self._lock:
             session_id = pm().clean_session_id(session_id)
 
@@ -611,13 +570,12 @@ class SessionManager:
             if current != from_status:
                 self.logger.debug(f"Status transition failed for {session_id}: expected {from_status}, got {current}")
                 return False
-
-            # Perform transition
-            self._sessions[session_id]['status'] = to_status
-            self._sessions[session_id]['updated_at'] = datetime.now().isoformat()
-            self._save_metadata(session_id)
-
-            self.logger.info(f"Session {session_id}: {from_status} → {to_status}")
+            new = SESSION_MACHINE.normalize(str(to_status).lower())
+            if (SESSION_MACHINE.normalize(current) != new
+                    and not self._edge_allowed(session_id, current, new)):
+                return False
+            self._apply_status(session_id, new, current)
+            self.logger.info(f"Session {session_id}: {from_status} → {new}")
             return True
 
     def update_session_request(self, session_id: str, request: Dict[str, Any]) -> bool:
@@ -722,13 +680,18 @@ class SessionManager:
             try:
                 lock = get_safe_file_lock(str(metadata_file) + ".lock", timeout=10.0)
                 with lock:
-                    with open(metadata_file, 'w') as f:
-                        json.dump(serializable_info, f, indent=2, default=str)
+                    self._write_metadata_file(metadata_file, serializable_info)
             except Exception:
-                with open(metadata_file, 'w') as f:
-                    json.dump(serializable_info, f, indent=2, default=str)
+                self._write_metadata_file(metadata_file, serializable_info)
         except Exception as e:
             self.logger.warning(f"Failed to save metadata for {session_id}: {e}")
+
+    @staticmethod
+    def _write_metadata_file(path, info: Dict[str, Any]) -> None:
+        """098 AG-14: metadata.json is replaced atomically — a crash or a
+        concurrent reader never sees a torn file."""
+        atomic_write_json(str(path), info)
+        apply_birth_mode(path)
     
     def load_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """

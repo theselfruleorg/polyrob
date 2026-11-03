@@ -112,10 +112,13 @@ def test_repl_sync_cleanup_flips_status_via_session_manager():
     task_agent = MagicMock()
     task_agent.session_manager = sm
 
+    sm.get_session_info.return_value = {"status": "created"}
+
     ref = {"task_agent": task_agent, "user_id": "throwaway", "session_id": "sess-123"}
     _repl_sync_cleanup(ref)
 
-    sm.update_session_status.assert_called_once_with("sess-123", "cancelled")
+    # 098 CL-07: a CAS from the status it read, never an unconditional write.
+    sm.try_transition_status.assert_called_once_with("sess-123", "created", "cancelled")
     assert ref["cleaned"] is True
 
 
@@ -127,7 +130,7 @@ def test_repl_sync_cleanup_noop_when_already_cleaned():
     task_agent.session_manager = sm
     ref = {"task_agent": task_agent, "session_id": "s", "cleaned": True}
     _repl_sync_cleanup(ref)
-    sm.update_session_status.assert_not_called()
+    sm.try_transition_status.assert_not_called()
 
 
 def test_repl_sync_cleanup_noop_without_session():
@@ -148,6 +151,7 @@ def test_run_repl_keyboardinterrupt_triggers_sync_cleanup(monkeypatch):
     from cli.commands import chat as chat_mod
 
     sm = MagicMock()
+    sm.get_session_info.return_value = {"status": "running"}
     task_agent = MagicMock()
     task_agent.session_manager = sm
 
@@ -163,7 +167,7 @@ def test_run_repl_keyboardinterrupt_triggers_sync_cleanup(monkeypatch):
 
     chat_mod.run_repl(plain=True)
 
-    sm.update_session_status.assert_called_once_with("sess-leak", "cancelled")
+    sm.try_transition_status.assert_called_once_with("sess-leak", "running", "cancelled")
 
 
 # ---------------------------------------------------------------------------

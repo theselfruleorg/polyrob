@@ -110,12 +110,19 @@ def age(seconds: Optional[float], now: Optional[float] = None) -> str:
 
 
 def _wrap(text: str, indent: str, width: int = WIDTH) -> list:
-    text = " ".join(str(text or "").split())
-    if not text:
-        return []
-    return textwrap.wrap(text, width=width, initial_indent=indent,
-                         subsequent_indent=indent, break_long_words=False,
-                         break_on_hyphens=False) or []
+    """Wrap EACH line of ``text`` (096 W6): a multi-line body — a pending
+    item's what · Why · Changes — keeps its lines instead of flattening into
+    one paragraph. A bullet line hangs its continuation under its text."""
+    out: list = []
+    for raw in str(text or "").splitlines():
+        line = " ".join(raw.split())
+        if not line:
+            continue
+        hang = indent + " " * (2 if line.startswith(("• ", "- ", "* ")) else 0)
+        out += textwrap.wrap(line, width=width, initial_indent=indent,
+                             subsequent_indent=hang, break_long_words=False,
+                             break_on_hyphens=False) or []
+    return out
 
 
 def _headline(mark: str, title: str, right: str, width: int = WIDTH) -> str:
@@ -215,16 +222,28 @@ def _sources_footer(body: Mapping[str, Any], width: int) -> list:
     return lines
 
 
-def _more_line(hidden: int, width: int) -> str:
+def _more_line(hidden_blocks: list, width: int, *,
+               more_tenant: Optional[str] = None, rerun: str = "") -> str:
     """What a truncated section leaves out, and how to see the rest.
+
+    096 W5: with ``more_tenant`` (a chat seat) the hidden items are kept one
+    tap away — the line ends ``(+N more: /more_<token>)`` and the tap returns
+    them rendered exactly as above. Without one (a terminal or the CLI, where
+    no ``/more`` is read back) the line names ``rerun``, the seat's own way to
+    list everything, or just the count.
 
     ⚠️ ``_wrap(...)[0]`` took only the FIRST line, so at a phone's 60 columns the
     sentence announcing a truncation truncated itself.
     """
+    hidden = len(hidden_blocks)
     what = "one more is" if hidden == 1 else f"{hidden} more are"
-    return "\n".join(_wrap(
-        f"{what} waiting here and not shown. Ask for the whole list.",
-        "  ", width))
+    if more_tenant is not None:
+        from core.surfaces.more_store import cut_line
+        tail = "\n\n".join("\n".join(b) for b in hidden_blocks)
+        return "\n".join(_wrap(f"{what} waiting here and not shown.", "  ", width)
+                         + ["  " + cut_line(more_tenant, hidden, tail, prefix="")])
+    tip = f" The whole list: {rerun}" if rerun else ""
+    return "\n".join(_wrap(f"{what} waiting here and not shown.{tip}", "  ", width))
 
 
 def elsewhere_line(body: Mapping[str, Any], view_name: str) -> str:
@@ -244,10 +263,22 @@ def elsewhere_line(body: Mapping[str, Any], view_name: str) -> str:
 
 def render_inbox(body: Mapping[str, Any], *, remedies: RemedyTable = REPL_REMEDIES,
                  limit: Optional[int] = None, width: int = WIDTH,
-                 now: Optional[float] = None) -> str:
-    """The Inbox at *width* columns, in one of its three states."""
+                 now: Optional[float] = None, more_tenant: Optional[str] = None,
+                 rerun: str = "") -> str:
+    """The Inbox at *width* columns, in one of its three states.
+
+    ``more_tenant``: a chat seat's tenant — a section cut by ``limit`` keeps
+    its hidden items behind a ``/more_<token>`` tap. ``rerun``: what a seat
+    without ``/more`` names instead (e.g. ``polyrob owner inbox --limit 0``)."""
     items = list(body.get("items") or ())
     listed = list(body.get("not_blocking") or ())
+    cut_items: list = []
+    cut_listed: list = []
+    if not rerun:
+        # Each seat's own "list everything" (no limit = the whole list there).
+        rerun = ("/inbox" if remedies is REPL_REMEDIES
+                 else "polyrob owner inbox" if remedies is CLI_REMEDIES
+                 else "/inbox all" if remedies is CHAT_REMEDIES else "")
     count = int(body.get("count") or 0)
     refused = list(body.get("unreadable_sources") or ())
     # ⚠️ A truncated list SAYS it was truncated. A silent cut is the same
@@ -259,6 +290,7 @@ def render_inbox(body: Mapping[str, Any], *, remedies: RemedyTable = REPL_REMEDI
         keep = max(1, int(limit))
         hidden_items = max(0, len(items) - keep)
         hidden_listed = max(0, len(listed) - keep)
+        cut_items, cut_listed = items[keep:], listed[keep:]
         items = items[:keep]
         listed = listed[:keep]
 
@@ -287,14 +319,19 @@ def render_inbox(body: Mapping[str, Any], *, remedies: RemedyTable = REPL_REMEDI
             out += [""] + _item_block(item, remedies, mark=mark, now=now,
                                       width=width)
         if hidden_items:
-            out += ["", _more_line(hidden_items, width)]
+            blocks = [_item_block(i, remedies, mark=(MARK_UNREADABLE if i.get("unreadable")
+                                                    else MARK_BLOCKING),
+                                  now=now, width=width) for i in cut_items]
+            out += ["", _more_line(blocks, width, more_tenant=more_tenant, rerun=rerun)]
     if listed:
         out += ["", "  Not blocking, listed and not counted:"]
         for item in listed:
             out += [""] + _item_block(item, remedies, mark=" ", now=now,
                                       width=width)
         if hidden_listed:
-            out += ["", _more_line(hidden_listed, width)]
+            blocks = [_item_block(i, remedies, mark=" ", now=now, width=width)
+                      for i in cut_listed]
+            out += ["", _more_line(blocks, width, more_tenant=more_tenant, rerun=rerun)]
     footer = _sources_footer(body, width)
     if footer:
         out += [""] + footer

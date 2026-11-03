@@ -271,6 +271,16 @@ def cancel_exit(svc, *, user_id: str, chain: str, account: str, address: str,
     return done
 
 
+#: 098 MO-18: the suffix a pause made FOR the mandate carries, so the lifecycle
+#: pass resumes exactly those (an owner's own pause of the job stays).
+_FOR_MANDATE = "mandate"
+
+
+def paused_for_mandate(j) -> bool:
+    via = str(((j.payload or {}).get("paused") or {}).get("via") or "")
+    return via == _FOR_MANDATE or via.endswith(f"({_FOR_MANDATE})")
+
+
 def set_hunt(svc, m, *, paused: bool, via: str) -> List[str]:
     """Pause (or resume) the mandate's hunt job(s). Returns the ids that moved."""
     moved = []
@@ -278,7 +288,8 @@ def set_hunt(svc, m, *, paused: bool, via: str) -> List[str]:
         if role(j) != HUNT or not j.enabled:
             continue
         if paused and j.status in ("scheduled", "running"):
-            if svc.pause(j.id, user_id=m.user_id, via=via):
+            tag = via if via == _FOR_MANDATE else f"{via} ({_FOR_MANDATE})"
+            if svc.pause(j.id, user_id=m.user_id, via=tag):
                 moved.append(j.id)
         elif not paused and j.status == "paused":
             if svc.resume(j.id, user_id=m.user_id, via=via):

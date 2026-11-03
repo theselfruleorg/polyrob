@@ -41,6 +41,20 @@ class PolymarketDBHandler:
         self.encryption = encryption or get_encryption()
         self.logger = logging.getLogger("database.polymarket")
         self._tables_initialized = False
+        # 098 MO-19: callables(user_id) told after every credential write, so a
+        # service that caches credentials or a signing client drops that user.
+        self._change_listeners: list = []
+
+    def add_change_listener(self, fn) -> None:
+        if fn not in self._change_listeners:
+            self._change_listeners.append(fn)
+
+    def _changed(self, user_id: str) -> None:
+        for fn in list(self._change_listeners):
+            try:
+                fn(user_id)
+            except Exception:
+                self.logger.warning("credential change listener failed", exc_info=True)
 
     async def ensure_tables(self) -> None:
         """
@@ -210,6 +224,26 @@ class PolymarketDBHandler:
             allowances_verified=bool(row.get("allowances_verified", False))
         )
 
+    async def set_enabled(self, user_id: str, enabled: bool) -> bool:
+        """098 MO-19: the enable toggle writes ONLY ``enabled`` (a disable +
+        enable never resets the network, the allowance check or the creds)."""
+        cur = await self.db.execute(
+            "UPDATE polymarket_credentials SET enabled = ?, updated_at = ? WHERE user_id = ?",
+            (1 if enabled else 0, datetime.utcnow().isoformat(), user_id))
+        self._changed(user_id)
+        await self.audit_log(user_id, "enabled" if enabled else "disabled", details={})
+        return bool(getattr(cur, "rowcount", 0))
+
+    async def set_limits(self, user_id: str, trading_limits: TradingLimits) -> bool:
+        """098 MO-19: a limits update writes ONLY ``trading_limits``."""
+        cur = await self.db.execute(
+            "UPDATE polymarket_credentials SET trading_limits = ?, updated_at = ? "
+            "WHERE user_id = ?",
+            (json.dumps(trading_limits.to_dict()), datetime.utcnow().isoformat(), user_id))
+        self._changed(user_id)
+        await self.audit_log(user_id, "trading_limits_updated", details={})
+        return bool(getattr(cur, "rowcount", 0))
+
     async def save_credentials(
         self,
         user_id: str,
@@ -219,10 +253,10 @@ class PolymarketDBHandler:
         signature_type: int = SIGNATURE_TYPE_PROXY,
         demo_mode: bool = True,
         enabled: bool = True,
-        chain_id: int = POLYGON_MAINNET,
+        chain_id: Optional[int] = None,
         trading_limits: Optional[TradingLimits] = None,
         api_credentials: Optional[ApiCredentials] = None,
-        allowances_verified: bool = False
+        allowances_verified: Optional[bool] = None
     ) -> bool:
         """
         Save or update user's Polymarket credentials.
@@ -242,7 +276,18 @@ class PolymarketDBHandler:
 
         Returns:
             True if saved successfully
+
+        098 MO-19: a column the caller does not name keeps its stored value
+        (``chain_id`` / ``allowances_verified`` default to "unchanged", never to
+        mainnet / unverified), and a NEW wallet or key clears the old wallet's
+        L2 API credentials and allowance check in the same statement. Toggles
+        and limits use :meth:`set_enabled` / :meth:`set_limits`.
         """
+        existing = await self.get_credentials(user_id)
+        reset_l2 = bool(existing) and (
+            (wallet_address and str(wallet_address).lower()
+             != str(existing.wallet_address or "").lower())
+            or (private_key and private_key != existing.private_key))
         # Encrypt private key
         private_key_encrypted = None
         if private_key:
@@ -280,13 +325,18 @@ class PolymarketDBHandler:
                 signature_type = excluded.signature_type,
                 demo_mode = excluded.demo_mode,
                 enabled = excluded.enabled,
-                chain_id = excluded.chain_id,
+                chain_id = CASE WHEN ? THEN excluded.chain_id ELSE chain_id END,
                 trading_limits = excluded.trading_limits,
-                api_key = COALESCE(excluded.api_key, api_key),
-                api_secret_encrypted = COALESCE(excluded.api_secret_encrypted, api_secret_encrypted),
-                api_passphrase_encrypted = COALESCE(excluded.api_passphrase_encrypted, api_passphrase_encrypted),
-                api_credentials_created_at = COALESCE(excluded.api_credentials_created_at, api_credentials_created_at),
-                allowances_verified = excluded.allowances_verified,
+                api_key = CASE WHEN ? THEN excluded.api_key
+                               ELSE COALESCE(excluded.api_key, api_key) END,
+                api_secret_encrypted = CASE WHEN ? THEN excluded.api_secret_encrypted
+                    ELSE COALESCE(excluded.api_secret_encrypted, api_secret_encrypted) END,
+                api_passphrase_encrypted = CASE WHEN ? THEN excluded.api_passphrase_encrypted
+                    ELSE COALESCE(excluded.api_passphrase_encrypted, api_passphrase_encrypted) END,
+                api_credentials_created_at = CASE WHEN ? THEN excluded.api_credentials_created_at
+                    ELSE COALESCE(excluded.api_credentials_created_at, api_credentials_created_at) END,
+                allowances_verified = CASE WHEN ? THEN 0 WHEN ? THEN excluded.allowances_verified
+                                           ELSE allowances_verified END,
                 updated_at = excluded.updated_at
         """
 
@@ -298,16 +348,20 @@ class PolymarketDBHandler:
             signature_type,
             1 if demo_mode else 0,
             1 if enabled else 0,
-            chain_id,
+            POLYGON_MAINNET if chain_id is None else int(chain_id),
             limits_json,
             api_key,
             api_secret_encrypted,
             api_passphrase_encrypted,
             api_credentials_created_at,
             1 if allowances_verified else 0,
-            datetime.utcnow().isoformat()
+            datetime.utcnow().isoformat(),
+            chain_id is not None,
+            reset_l2, reset_l2, reset_l2, reset_l2,
+            reset_l2, allowances_verified is not None,
         ))
 
+        self._changed(user_id)
         self.logger.info(f"Saved Polymarket credentials for user {user_id}")
 
         # Audit log
@@ -365,6 +419,7 @@ class PolymarketDBHandler:
             user_id
         ))
 
+        self._changed(user_id)
         self.logger.info(f"Saved API credentials for user {user_id}")
 
         await self.audit_log(user_id, "api_credentials_created", details={
@@ -425,6 +480,7 @@ class PolymarketDBHandler:
 
         # Check if any rows were deleted using cursor.rowcount
         deleted = cursor.rowcount > 0 if hasattr(cursor, 'rowcount') else True
+        self._changed(user_id)
 
         if deleted:
             self.logger.info(f"Deleted Polymarket credentials for user {user_id}")
@@ -460,6 +516,7 @@ class PolymarketDBHandler:
         """
         now = datetime.utcnow().isoformat()
         await self.db.execute(query, (user_id, now, now))
+        self._changed(user_id)
         self.logger.debug(f"Created demo credentials for user {user_id}")
 
     async def audit_log(

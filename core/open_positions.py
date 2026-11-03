@@ -131,6 +131,20 @@ STATUSES = (STATUS_OPEN, STATUS_QUARANTINED, STATUS_WRITTEN_OFF, STATUS_DUST,
 #: What :func:`positions_for` returns by default: the rows still in play.
 ACTIVE_STATUSES = (STATUS_OPEN, STATUS_QUARANTINED)
 
+#: 098 CO-24: the position lifecycle table. ``written_off`` and ``retired`` are
+#: final (a later buy opens a fresh row): an untrust, a quarantine or an undo
+#: never brings a closed position back into the book.
+from core.state.machine import StateMachine as _SM  # noqa: E402
+
+POSITION = _SM(
+    "position", states=frozenset(STATUSES), initial=frozenset({STATUS_OPEN}),
+    terminal=frozenset({STATUS_WRITTEN_OFF, STATUS_RETIRED}),
+    transitions={
+        STATUS_OPEN: {STATUS_QUARANTINED, STATUS_WRITTEN_OFF, STATUS_DUST, STATUS_RETIRED},
+        STATUS_QUARANTINED: {STATUS_OPEN, STATUS_WRITTEN_OFF, STATUS_RETIRED, STATUS_DUST},
+        STATUS_DUST: {STATUS_OPEN, STATUS_QUARANTINED, STATUS_RETIRED, STATUS_WRITTEN_OFF},
+    })
+
 #: 086 W0: the ONE dust threshold. A holding worth less than this (a KNOWN
 #: value) is dust: below the exit floor (gas costs more), never a position to
 #: chase, never a disagreement. ``positions_view`` and ``reconcile`` import it.
@@ -909,14 +923,21 @@ def observe_price(user_id: str, chain: str, address: str, price_usd: float, *,
 
 def set_status(user_id: str, chain: str, address: str, status: str, *,
                reason: str = "", account: str = TREASURY_ACCOUNT,
-               db_path: Optional[str] = None, now: Optional[float] = None) -> bool:
+               db_path: Optional[str] = None, now: Optional[float] = None,
+               from_states=None) -> bool:
     """Set one position's lifecycle status (W0). Returns True when a row changed.
 
-    The cost basis and size are untouched: a quarantined look-alike still
-    carries what it cost, so the loss stays visible. Never creates the store.
+    098 CO-24: ONE guarded write from ``from_states`` (default: every state the
+    :data:`POSITION` table lets reach ``status``), so a closed row is never
+    reopened and a check the caller made cannot be overtaken. The cost basis
+    and size are untouched: a quarantined look-alike still carries what it
+    cost, so the loss stays visible. Never creates the store.
     """
     if status not in STATUSES:
         raise ValueError(f"unknown position status {status!r}; one of {STATUSES}")
+    froms = POSITION.require_sources(status, from_states, ctx={"address": address})
+    if not froms:
+        return False
     uid = str(user_id or "").strip()
     if not uid or not address:
         return False
@@ -929,9 +950,10 @@ def set_status(user_id: str, chain: str, address: str, status: str, *,
     changed = execute_retry(
         path,
         "UPDATE open_positions SET status=?, status_reason=?, status_ts=? "
-        "WHERE user_id=? AND lower(chain)=? AND account=? AND address=? AND status<>?",
+        "WHERE user_id=? AND lower(chain)=? AND account=? AND address=? "
+        f"AND status IN ({','.join('?' * len(froms))})",
         (status, str(reason or "")[:300], ts, uid, str(chain or "").strip().lower(),
-         _account_key(account), _norm(address), status))
+         _account_key(account), _norm(address), *froms))
     if changed:
         # 086 W1: written_off / dust / retired keep their name; any other
         # status keeps the row active (quarantined, re-opened) = changed.

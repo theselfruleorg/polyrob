@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import re
 from typing import Any, Dict, List, Optional
 
 from core.config_policy import compaction_prompt_guard
+from core.state.files import atomic_write_json
 from modules.llm.messages import (
     AIMessage,
     BaseMessage,
@@ -17,6 +21,41 @@ from modules.llm.messages import (
 from agents.task.agent.messages.retrieval import drop_usage_anchor
 
 logger = logging.getLogger(__name__)
+
+_CHECKPOINT_RE = re.compile(r"^compaction_(\d+)\.json$")
+
+
+def next_checkpoint_index(directory: str) -> int:
+	"""098 AG-05: one past the highest ``compaction_N.json`` in *directory*
+	(the parse ``polyrob session history`` uses); 0 for none."""
+	try:
+		ns = [int(m.group(1)) for m in (_CHECKPOINT_RE.match(f) for f in os.listdir(directory)) if m]
+	except OSError:
+		return 0
+	return max(ns) + 1 if ns else 0
+
+
+def claim_checkpoint_path(directory: str, n: int) -> tuple:
+	"""Create ``compaction_<n>.json`` exclusively (``O_EXCL``); on a clash take
+	the next index. Returns ``(path, n)``."""
+	while True:
+		path = os.path.join(directory, f"compaction_{n}.json")
+		try:
+			os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+			return path, n
+		except FileExistsError:
+			n += 1
+
+
+def child_checkpoint_dir(session_id: str, agent_id: str) -> Optional[str]:
+	"""A sub-agent's checkpoints live in ``history/<agent_id>/`` — never in the
+	parent's index (098 AG-05)."""
+	try:
+		from agents.task.path import pm
+		safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(agent_id or "child"))[:120]
+		return os.path.join(str(pm().get_history_dir(session_id)), safe)
+	except Exception:
+		return None
 
 
 def _transient_compaction_errors() -> tuple:
@@ -577,22 +616,29 @@ class CompactorMixin:
 			return None
 
 	def _write_compaction_checkpoint(self, messages: list) -> None:
-		"""Persist the raw pre-compaction trajectory so it stays recoverable (C2)."""
+		"""Persist the raw pre-compaction trajectory so it stays recoverable (C2).
+
+		098 AG-05: the index is seeded from the files on disk (a restart or a
+		recreate never restarts at 0), each name is claimed exclusively (two
+		managers never overwrite one file), and the write is atomic."""
 		checkpoint_dir = self._resolve_checkpoint_dir()
 		if not checkpoint_dir:
 			return
 		try:
-			import os
-			import json
 			os.makedirs(checkpoint_dir, exist_ok=True)
-			n = getattr(self, "_compaction_count", 0)
-			path = os.path.join(checkpoint_dir, f"compaction_{n}.json")
+			n = max(getattr(self, "_compaction_count", 0) or 0,
+			        next_checkpoint_index(checkpoint_dir))
+			path, n = claim_checkpoint_path(checkpoint_dir, n)
 			payload = [
 				{"role": m.__class__.__name__, "content": str(getattr(m, "content", ""))}
 				for m in messages
 			]
-			with open(path, "w", encoding="utf-8") as fh:
-				json.dump(payload, fh, ensure_ascii=False)
+			try:
+				atomic_write_json(path, payload)
+			except BaseException:
+				with contextlib.suppress(OSError):
+					os.unlink(path)  # no empty claimed file left behind
+				raise
 			self._compaction_count = n + 1
 		except Exception as exc:  # never let audit I/O block compaction
 			self.logger.debug(f"compaction checkpoint skipped: {exc}")

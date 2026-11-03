@@ -34,7 +34,48 @@ _POOL: Dict[str, object] = {}
 _HOST: Dict[str, object] = {}
 #: (session id, kind) -> a RemoteShellExecutor (ssh / pack backends), 073 W6.
 _REMOTE: Dict[Tuple[str, str], object] = {}
-_LOCK = asyncio.Lock()
+#: 098 TS-09: one lock per session (setup AND teardown take it); never a
+#: process-global lock held across a `docker run -d` / image pull.
+_SESSION_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
+#: 098 TS-09: session ids whose session closed (its sandbox was torn down). A
+#: late shell/process call for one never starts a new sandbox; a resume clears
+#: the marker (:func:`reopen_session`), so the resumed session gets a fresh one.
+_CLOSED: set = set()
+#: 098 review: session id -> run generation. A resume bumps it; a teardown that
+#: names the generation it belongs to is skipped once a later run reopened the
+#: session (an autonomous run's end-of-run release raced the next queued run).
+_GEN: Dict[str, int] = {}
+
+
+def session_generation(session_id: Optional[str]) -> int:
+    return _GEN.get(session_id or "shell", 0)
+
+
+def is_session_closed(session_id: Optional[str]) -> bool:
+    return bool(session_id) and session_id in _CLOSED
+
+
+def reopen_session(session_id: Optional[str]) -> None:
+    """Clear the closed marker of ``session_id`` (the session resumed)."""
+    if session_id:
+        _CLOSED.discard(session_id)
+        _GEN[session_id] = _GEN.get(session_id, 0) + 1
+
+
+def _refuse_closed(sid: str) -> None:
+    if is_session_closed(sid):
+        raise ShellBackendUnavailable(
+            f"session {sid} is closed: its sandbox was torn down. Resume the session "
+            "to get a fresh sandbox (background jobs of the closed session were killed).")
+
+
+def _session_lock(sid: str) -> asyncio.Lock:
+    lock = _SESSION_LOCKS.get(sid)
+    if lock is None:
+        lock = _SESSION_LOCKS[sid] = asyncio.Lock()
+    return lock
 
 #: The built-in values. Any other backend NAME is a pack backend
 #: (``tools/code_exec/pack_backends.py``); see :func:`shell_backend_choice`.
@@ -87,9 +128,11 @@ async def get_shell_backend(session_id: str):
     backend = _POOL.get(sid)
     if backend is not None:
         return backend
-    async with _LOCK:
+    _refuse_closed(sid)
+    async with _session_lock(sid):
         backend = _POOL.get(sid)
         if backend is None:
+            _refuse_closed(sid)  # a teardown that ran while we waited (098 TS-09)
             from tools.code_exec import resolve_backend
             backend = resolve_backend(session_id=sid, dev_mode=True)
             _require_persistent_sandbox(backend)  # BEFORE setup() — never start a host backend
@@ -114,7 +157,7 @@ def peek_backend(session_id: str):
     return _POOL.get(session_id or "shell")
 
 
-async def teardown_session(session_id: str) -> None:
+async def teardown_session(session_id: str, *, generation: Optional[int] = None) -> None:
     """Tear down + drop the pooled backend for one session (best-effort).
 
     Also revokes that container's published host loopback ports from the SSRF
@@ -129,11 +172,25 @@ async def teardown_session(session_id: str) -> None:
     except Exception:
         pass
     sid = session_id or "shell"
+    if generation is not None and session_generation(sid) != generation:
+        return  # a later run reopened the session: its sandbox is not ours
+    async with _session_lock(sid):  # waits for a setup in flight (098 TS-09)
+        if generation is not None and session_generation(sid) != generation:
+            return
+        await _teardown_locked(sid)
+        if session_id and (generation is None or session_generation(sid) == generation):
+            # 098 TS-09: no late call starts a sandbox until a resume — unless a
+            # resume already happened while this teardown ran.
+            _CLOSED.add(session_id)
+
+
+async def _teardown_locked(sid: str) -> None:
     try:  # 073 W4: the session's job watchers end with it
         from tools.shell.watch import stop_watches
         stop_watches(sid)
     except Exception:
         pass
+    await _close_session_jobs(sid)
     for key in [k for k in _REMOTE if k[0] == sid]:
         remote = _REMOTE.pop(key, None)
         close = getattr(remote, "close", None)
@@ -165,6 +222,21 @@ async def teardown_session(session_id: str) -> None:
             await backend.teardown()
         except Exception:
             pass
+
+
+async def _close_session_jobs(sid: str) -> None:
+    """098 TS-09: the session's sandbox goes, so its running jobs are KILLED (a
+    receipt says "session ended") — never reported "done" by a later poll."""
+    import time
+    try:
+        from tools.shell.process_registry import get_process_registry
+        from tools.shell.receipts import write_receipt
+        from tools.shell.job_state import KILLED_NOTE
+        for job in get_process_registry().close_session(sid, now=time.time()):
+            write_receipt(sid, None, job, status="killed", exit_code=None, log_text="",
+                          overwrite=True, extra={"note": KILLED_NOTE})
+    except Exception:
+        pass
 
 
 def shell_backend_choice() -> str:
@@ -264,7 +336,7 @@ async def _remote_executor(kind: str, execution_context):
     key = (sid, kind)
     ex = _REMOTE.get(key)
     if ex is None:
-        async with _LOCK:
+        async with _session_lock(sid):
             ex = _REMOTE.get(key)
             if ex is None:
                 try:
@@ -300,6 +372,7 @@ async def resolve_shell_executor(execution_context, *, kind: Optional[str] = Non
     same (session, kind) executor.
     """
     sid = getattr(execution_context, "session_id", None) or "shell"
+    _refuse_closed(sid)  # 098 TS-09: host/remote/sandbox alike
     if kind is None:
         choice = shell_backend_choice()
         if _remote_kind(choice):

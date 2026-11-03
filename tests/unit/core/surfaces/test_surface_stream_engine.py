@@ -84,12 +84,12 @@ async def test_base_engine_splits_overflow_on_finalize():
 
 
 @pytest.mark.asyncio
-async def test_disabled_falls_back_to_buffered_send():
+async def test_disabled_drops_partials_and_sends_the_finalize():
     s = _MiniSurface(enabled=False)
     await s.stream(_om("ab", partial=True))
     await s.stream(_om("cd", partial=False))
     assert s.opened == [] and s.edits == []
-    assert s.sent == ["abcd"]   # base buffered path
+    assert s.sent == ["cd"]   # 098 TS-19: no buffered partial path
 
 
 @pytest.mark.asyncio
@@ -104,10 +104,10 @@ async def test_live_map_is_bounded_when_finalize_never_arrives(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_edit_support_falls_back_to_buffered():
+async def test_no_edit_support_does_not_use_the_live_engine():
     """A surface that opts in but can't edit must NOT use the live engine."""
     s = _MiniSurface(enabled=True, supports_edit=False)
     await s.stream(_om("ab", partial=True))
     await s.stream(_om("cd", partial=False))
     assert s.opened == [] and s.edits == []
-    assert s.sent == ["abcd"]
+    assert s.sent == ["cd"]   # 098 TS-19: the partial is dropped

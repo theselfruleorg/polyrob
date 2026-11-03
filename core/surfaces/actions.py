@@ -30,10 +30,17 @@ logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(r"^/[A-Za-z0-9_]{1,64}$")
 
 #: A tappable token inside prose (not part of a path or a longer word).
-_TAPPABLE_IN_TEXT = re.compile(r"(?<![\w/])(/(?:approve|reject)_[A-Za-z0-9_-]+)")
+#: 096 D8: the "read it" tap (``/pending_p_<hex>``) is a button too — the
+#: owner reads the change from the same message he decides it on.
+_TAPPABLE_IN_TEXT = re.compile(r"(?<![\w/])(/(?:approve|reject|pending)_[A-Za-z0-9_-]+)")
 
+#: The buttons ONE item carries (approve · reject · read it).
+ACTIONS_PER_ITEM = 3
+#: Items that get buttons in one message; the rest keep their inline taps
+#: (the text always carries every token, so nothing is hidden).
+MAX_ITEMS_WITH_BUTTONS = 3
 #: How many buttons one message carries at most (a phone screen, not a menu).
-MAX_ACTIONS = 6
+MAX_ACTIONS = ACTIONS_PER_ITEM * MAX_ITEMS_WITH_BUTTONS
 
 #: ``send_user_message`` sources whose text is a CODE-PRODUCED decision card
 #: (the tokens in it were written by the producer, not by the model). Only these
@@ -72,7 +79,7 @@ def _label_for(token: str) -> str:
     if verb is None:
         return token
     if verb == "/pending":   # a read of ONE item, never a decision
-        return f"Show {arg}"
+        return f"Read {arg}"
     word = "Approve" if verb == "/approve" else "Reject"
     return f"{word} all" if arg == "all" else f"{word} {arg}"
 
@@ -88,12 +95,22 @@ def actions_from_text(text: str) -> List["object"]:
     ⚠️ TG9 (audit 2026-10-03): never a whole-queue button (``/approve_all``,
     ``/reject_all``). A button outlives its message and decides the queue as
     it is at TAP time — an old "Approve all" approved items its message never
-    listed. Each item keeps its own button; the typed token stays in the text."""
+    listed. Each item keeps its own button; the typed token stays in the text.
+
+    096 D8: buttons go to the FIRST :data:`MAX_ITEMS_WITH_BUTTONS` items (an
+    item = the tokens that name one target); the items after them keep only
+    their inline taps."""
     from core.surfaces.envelopes import Action
-    out, seen = [], set()
+    from core.surfaces.tappable import parse_tappable
+    out, seen, items = [], set(), []
     for token in _TAPPABLE_IN_TEXT.findall(text or ""):
         if token in seen or not is_action_command(token) or _whole_queue(token):
             continue
+        target = parse_tappable(token)[1]
+        if target not in items:
+            if len(items) >= MAX_ITEMS_WITH_BUTTONS:
+                continue
+            items.append(target)
         seen.add(token)
         style = ("primary" if token.startswith("/approve")
                  else "default" if token.startswith("/pending") else "danger")

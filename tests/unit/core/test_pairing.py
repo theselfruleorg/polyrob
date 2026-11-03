@@ -121,3 +121,70 @@ def test_pairing_store_failure_denies_remote_user(monkeypatch):
     decision = pairing.guard_inbound(None, "stranger", surface_id="telegram")
     assert decision is not None and not decision.allowed
     assert "unavailable" in decision.reason
+
+
+# --- 098 CO-14: one live code per principal; expired rows purged -------------
+
+def test_concurrent_requests_return_same_code(tmp_path, monkeypatch):
+    """Two requests that both saw no live code: the conditional upsert keeps the
+    first stored code, so both callers return it and it stays approvable."""
+    import threading
+    import core.pairing as pairing
+    s = _store(tmp_path)
+    codes = iter(["aaaa", "bbbb"])
+    monkeypatch.setattr(pairing.secrets, "token_hex", lambda n: next(codes))
+    out = []
+    barrier = threading.Barrier(2)
+
+    def go():
+        barrier.wait()
+        out.append(s.request("u1"))
+
+    ts = [threading.Thread(target=go) for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert out[0] == out[1]
+    assert s.approve(out[0]) == "u1"
+
+
+def test_expired_code_is_replaced(tmp_path, monkeypatch):
+    import core.pairing as pairing
+    s = _store(tmp_path)
+    first = s.request("u1")
+    real = pairing.time.time
+    monkeypatch.setattr(pairing.time, "time", lambda: real() + pairing.PAIRING_CODE_TTL_SEC + 1)
+    second = s.request("u1")
+    assert second and second != first
+
+
+def test_paired_user_gets_no_new_code(tmp_path):
+    s = _store(tmp_path)
+    s.approve(s.request("u1"))
+    assert s.request("u1") is None
+    assert s.is_paired("u1") is True
+
+
+def test_purge_removes_only_unpaired_expired(tmp_path):
+    from core.sqlite_util import execute_retry
+    s = _store(tmp_path)
+    s.approve(s.request("paired"))
+    s.request("fresh")
+    s.request("stale")
+    execute_retry(s.db_path, "UPDATE paired_users SET created_at=0 "
+                  "WHERE user_id IN ('stale','paired')")
+    assert s.purge_expired() == 1
+    left = {r["user_id"] for r in execute_retry(
+        s.db_path, "SELECT user_id FROM paired_users", (), fetch="all")}
+    assert left == {"paired", "fresh"}
+
+
+def test_surface_gc_tick_purges_expired_pairing_rows(tmp_path):
+    import types
+    from core.sqlite_util import execute_retry
+    from core.surfaces.gc import prune_surface_stores
+    s = _store(tmp_path)
+    s.request("stale")
+    execute_retry(s.db_path, "UPDATE paired_users SET created_at=0")
+    prune_surface_stores(types.SimpleNamespace(db_path=str(tmp_path / "surfaces.db")))
+    assert execute_retry(s.db_path, "SELECT COUNT(*) AS n FROM paired_users",
+                         (), fetch="one")["n"] == 0

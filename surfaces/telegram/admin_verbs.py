@@ -347,7 +347,19 @@ async def _inbox(c: AdminCall) -> str:
     # composed once and rendered the same way on every seat. /pending stays
     # as the narrower, older view of the first three.
     from surfaces.telegram import owner_ops
-    return owner_ops.inbox_reply(c.user_id, c.data_dir)
+    return owner_ops.inbox_reply(c.user_id, c.data_dir, c.args)
+
+
+async def _more(c: AdminCall) -> str:
+    # 096 W5: the rest of a list or body a reply cut short (/more_<token>).
+    from core.surfaces.more_store import more_reply
+    return more_reply(c.user_id, c.args)
+
+
+async def _rules(c: AdminCall) -> str:
+    # 096 W5: the owner rules and the operating contract, numbered, read only.
+    from surfaces.telegram import owner_ops
+    return owner_ops.rules_reply(c.user_id, c.data_dir, c.instance_id)
 
 
 async def _book(c: AdminCall) -> str:
@@ -429,6 +441,8 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/invoices": _invoices,
     "/settle": _settle,
     "/inbox": _inbox,
+    "/more": _more,
+    "/rules": _rules,
     "/book": _book,
     "/pending": _approval("pending_verb"),
     "/approve": _approval("decide_verb"),

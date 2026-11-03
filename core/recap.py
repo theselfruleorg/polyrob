@@ -314,7 +314,8 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
 
 
 def format_recap_markdown(entries: List[RecapEntry], window: str,
-                          limit: Optional[int] = None) -> str:
+                          limit: Optional[int] = None,
+                          more_tenant: Optional[str] = None) -> str:
     """Plain markdown rendering of a recap (no Rich) — a friendly empty-state
     line when there's nothing to show. Generic one-line-per-entry shape; a
     surface wanting a richer/grouped layout (e.g. ``/journey``) builds its own
@@ -325,18 +326,27 @@ def format_recap_markdown(entries: List[RecapEntry], window: str,
     episode and authored skill, one line each — a multi-message flood on a
     phone (chat-first review 2026-08-22, G14). None keeps the full listing for
     a terminal or a file.
+
+    ``more_tenant`` (a chat seat, 096 W5): the entries past ``limit`` are kept
+    one tap away (``/more_<token>``); without it the count line names a
+    narrower window.
     """
     scope = window.strip() if window and window.strip() else "all time"
     lines = [f"# Recap — {scope}", ""]
     if not entries:
         lines.append("_Nothing to report in this window._")
         return "\n".join(lines)
-    shown = entries if limit is None else entries[:max(1, int(limit))]
-    for e in shown:
+    def _line(e: RecapEntry) -> str:
         amount_suffix = f" (${e.amount:.2f})" if e.amount else ""
-        lines.append(f"- **{e.kind}**: {e.text}{amount_suffix}")
-    hidden = len(entries) - len(shown)
-    if hidden > 0:
-        lines.append(f"- _(+{hidden} more — ask for a narrower window, "
-                     f"or see the console)_")
+        return f"- **{e.kind}**: {e.text}{amount_suffix}"
+
+    keep = len(entries) if limit is None else max(1, int(limit))
+    lines += [_line(e) for e in entries[:keep]]
+    rest = entries[keep:]
+    if rest and more_tenant is not None:
+        from core.surfaces.more_store import cut_line
+        lines.append("- " + cut_line(more_tenant, len(rest),
+                                     "\n".join(_line(e) for e in rest), prefix=""))
+    elif rest:
+        lines.append(f"- _(+{len(rest)} more — ask for a narrower window)_")
     return "\n".join(lines)

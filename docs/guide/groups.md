@@ -29,7 +29,11 @@ Three things make a room work, in order:
 
 - **`GROUP_CHAT_ENABLED`** (default OFF; ON under `AUTONOMY_MODE=autonomous`) is
   the master flag and the only one the room rail depends on. It does not need
-  `CORRESPONDENT_ACCESS_ENABLED`.
+  `CORRESPONDENT_ACCESS_ENABLED`. It is a posture member, so a
+  `GROUP_CHAT_ENABLED=true` line of its own is ignored: turn it on with
+  `polyrob config set GROUP_CHAT_ENABLED true`, which writes
+  `POLYROB_OVERRIDES=GROUP_CHAT_ENABLED=true` to `~/.polyrob/.env`. `polyrob doctor
+  --flags` shows the value in force and where it came from.
 - **`SINGULAR_CHAT_ENABLED`** must be on too: the room rail is *built* on that
   bus — the chat-to-session registry that decides which session a room resolves
   to, the reply caps, the ledger, and the outbound router that applies the
@@ -91,6 +95,17 @@ an admin may only set `blocked`) or `polyrob owner groups role <surface> <chat_i
 <user_id> <role>`. `/groups admins here` reads Telegram's own admin list as
 **suggestions** — nothing is granted until the owner confirms each one explicitly.
 
+⚠️ A Telegram room id is negative (`-<chat_id>`), and on the command line a
+leading dash reads as an option. Write the id with an underscore in place of the
+dash (`_<chat_id>`), or put `--` before it. After `--` every word is an
+argument, so options such as `--every` go before the `--`:
+
+```bash
+polyrob owner groups mode telegram _<chat_id> active
+polyrob owner groups service telegram _<chat_id> --every 30m --max 3
+polyrob owner groups service --every 30m --max 3 telegram -- -<chat_id>
+```
+
 ---
 
 ## Behaviour (`chat.*` keys)
@@ -113,10 +128,11 @@ groups set <surface> <chat_id> <key> <value>` (`unset`/`-` clears it back to def
 | `chat.member_cooldown_sec` | int, 0-600 | `20` | Overrides `GROUP_MEMBER_COOLDOWN_SEC` for this room |
 | `chat.quiet_hours` | `HH-HH` (0-23, local) | tenant `digest.quiet_hours` | Demotes the room to `listen` inside the window: an addressed owner or admin still gets an answer, a member does not, whatever `chat.mode` says |
 | `chat.mute_until` | float (unix epoch) | `0` (not muted) | Written by `/mute`; demotes the room to `listen` until it elapses |
-| `chat.member_verbs` | list | `help` | The slash verbs a plain member may type in this room. Only `help`, `mute`, `unmute`, `ban`, `unban` and `paid` (the price list only) can be granted; any other name stays ordinary room chatter. See [Paid moderation actions](#paid-moderation-actions-046) |
-| `chat.paid_*` | see below | off | What the room sells, at what price and in what token — [Paid moderation actions](#paid-moderation-actions-046) |
+| `chat.member_verbs` | list | `help` | The slash verbs a plain member may type in this room. Only `help`, `mute`, `unmute`, `ban`, `unban` and `paid` (the price list only) can be granted; any other name stays ordinary room chatter. See [Paid moderation actions](#paid-moderation-actions) |
+| `chat.paid_*` | see below | off | What the room sells, at what price and in what token — [Paid moderation actions](#paid-moderation-actions) |
 
-`set` refuses any other key with `unknown chat.* key`, so a typo never writes a
+`set` refuses any other key with `unknown preference key: chat.<key>` and names the
+nearest keys (`did you mean chat.name, chat.tone …?`), so a typo never writes a
 setting that nothing reads. `chat.persona`, `chat.tool_deny`, `chat.reply_mode` and
 `chat.thread_scope` are not settable.
 
@@ -128,9 +144,9 @@ there is no separate per-topic override in v1.
 
 Being **addressed** — an `@mention`, a reply to one of the agent's own messages, a
 `chat.wake_words` hit, or (owner/admin only) a slash command like `/mute` — is required
-at every mode but `active`. **The owner is not exempt**: he is a person in a room full
-of other people, and an agent that answered his every aside would both interrupt the
-room and bill him for it.
+at every mode but `active`. **The owner is not exempt**: the owner is one person in a room full
+of other people, and an agent that answered every aside would both interrupt the
+room and bill the owner for it.
 
 When an addressed line is a **reply** to another message — a member's, the agent's own,
 or a forward — the agent sees that whole message (and the part the speaker quoted) with
@@ -141,7 +157,7 @@ reply to the topic's first message.
 - **`active`** — also answer a line the agent judges worth answering even when nobody
   addressed it.
 - **`listen`** — read everything; answer an addressed owner or room admin only.
-- **`off`** — ledger only, never a reply, not even from the owner (he changes the mode
+- **`off`** — ledger only, never a reply, not even from the owner (the owner changes the mode
   from a seat, not by shouting into the room).
 
 A mute (`/mute here 2h`) or a `chat.quiet_hours` window temporarily demotes the room to
@@ -232,7 +248,7 @@ promote or install one, and it cannot load a tool.
 Owner-only output — approval prompts, the LLM-outage notice, failure breadcrumbs, the
 bootstrap id reply, and admin-verb confirmations — is redirected to the owner's DM
 instead of rendering in the room; the room either gets nothing or, for a verb the owner
-ran there, a note that it was sent to his DM. Approval prompts never render in a room
+ran there, a note that it was sent to the owner's DM. Approval prompts never render in a room
 at all, and a room turn cannot reach an approval-gated verb in the first place. Failure
 breadcrumbs are capped at one per room per 30 minutes, so a room in a crash loop cannot
 flood the owner's DM.
@@ -266,15 +282,14 @@ Whose decision a moderation is:
 | A room turn, or a correspondent-tainted session | Refused |
 
 So a member line in a room can never talk the agent into banning another member: the
-agent may read the room, but the decision is the owner's, now or in a job he wrote.
+agent may read the room, but the decision is the owner's, now or in a job the owner wrote.
 
 ## Owner commands from inside a room
 
-The owner's money, host and control verbs do not RUN from a room, even for the owner
-himself. Redirecting the reply to his DM was never enough — the action still executed,
-so a member who talked the owner into typing one got it, and a room is the one place a
-shoulder-surfer or a screen-share is guaranteed. These are refused with a one-line note
-in his DM:
+The owner's money, host and control verbs do not RUN from a room, even for the owner.
+A reply sent to the owner's DM does not stop the action itself, and a room is the one
+place a shoulder-surfer or a screen-share is guaranteed. These are refused with a
+one-line note in the owner's DM:
 
 `/trade` `/wallet` `/send` `/swap` `/check` `/cards` `/deploy` `/launch` `/lp` `/bridge`
 `/claim` `/pay` `/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause`
@@ -370,7 +385,7 @@ Adjust "14 days" if you changed `GROUP_LEDGER_RETENTION_DAYS`.
 
 ---
 
-## Paid moderation actions (046)
+## Paid moderation actions
 
 A member can pay to mute or ban another member. The room's owner decides which
 of those are on sale, at what price, for how long, and in what token.
@@ -386,7 +401,7 @@ room, once:
 Then, in the DM, point `here` at it and configure:
 
 ```
-/groups use telegram -1002002374383   # `here` now means that room, in this DM
+/groups use telegram -<chat_id>   # `here` now means that room, in this DM
 /paid asset demo                      # an asset_id from `polyrob wallet asset list`
 /paid price mute 0.50                 # USD; sized into the token at mint
 /paid price ban 2.00                  # optional — a room may sell one and not the other
@@ -398,7 +413,7 @@ Then, in the DM, point `here` at it and configure:
 
 ⚠️ **A unit price is BOUND to the asset it was written for.** You type a bare
 number and the room's current asset is appended, so the stored value is
-`1500 pnl`. Change `chat.paid_asset` afterwards and that price REFUSES, naming
+`1500 <asset_id>`. Change `chat.paid_asset` afterwards and that price REFUSES, naming
 both assets — it is never re-denominated, and never quietly replaced by the USD
 figure. Re-price the room, or switch the asset back.
 
@@ -419,8 +434,7 @@ one admin's `/groups use` never redirects another's `here`.
 token at mint, which needs a live quote over a pool the screen will accept. A
 young token fails that — not because anything is wrong with it, but because
 `pool_screen.classify` answers *"should I buy this?"*, and ordinary launch churn
-(volume far above depth) reads as WASH. Measured on a young launchpad token,
-2026-09-15: V/L 14.6 against a threshold of 10, at 36 hours old.
+(volume far above depth) reads as WASH.
 
 So a room may name the amount directly:
 
@@ -512,9 +526,9 @@ refused.
 **What the agent is told.** A room that sells something adds a paragraph to the
 model's `<surface>` block: which verbs are for sale, at what price, and that
 they are commands a MEMBER TYPES. It is a description, never a capability — the
-room session keeps its read-only 044 toolset and the invoice verb stays in
+room session keeps its read-only room toolset and the invoice verb stays in
 `ROOM_DENIED_ACTIONS`, so the agent still cannot mint, price or perform any of
-it. The reason to say it at all is the opposite failure: asked "can you get him
+it. The reason to say it at all is the opposite failure: asked "can you get them
 muted?", a model that has never heard of the rail either denies a shipped
 capability or invents a way to do it itself.
 
@@ -529,7 +543,7 @@ capability or invents a way to do it itself.
 | the bot is not an admin here | ⚠️ checked BEFORE the invoice exists. We never sell what we cannot deliver |
 | the price cannot be sized | a stale quote, a WASH or UNSCREENABLE pool, a pool below the asset's liquidity floor, or a price so high the fee would fall under the asset's token floor |
 | the duration | above the room's `paid_<verb>_max_duration`, or above the catalog's own 30-day cap |
-| paused | the 031 record, `social` scope |
+| paused | the owner's pause record, `social` scope |
 | the rail cannot settle | invoicing is off, or this room's asset is on a chain nothing watches — checked BEFORE the mint |
 
 ⚠️ The last pricing case is the one worth understanding. The price is in USD but

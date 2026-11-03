@@ -145,13 +145,17 @@ class PublishTool(BaseTool):
                     f"becomes a public address"))
 
         try:
-            store.stage(user_id, params.slug, sources, confine_to=workspace)
+            staged = store.stage(user_id, params.slug, sources, confine_to=workspace)
         except (ValueError, PermissionError) as e:
             return ActionResult(error=f"publish refused: {e}")
         except OSError as e:
             return ActionResult(error=f"publish failed: {str(e)[:160]}")
 
-        if needs_approval and not store.approve(user_id, params.slug):
+        # 098 CO-20: the approval binds to the tree THIS call staged — a restage
+        # by another turn in between is refused, never served.
+        if needs_approval and not store.approve(
+                user_id, params.slug,
+                expected_digest=getattr(staged, "content_digest", None) or None):
             # The promotion failed (and rolled back): nothing is served. Saying
             # "Published" here was a lie (codex review 2026-09-25).
             return ActionResult(error=f"publish failed: {params.slug!r} was staged but could "

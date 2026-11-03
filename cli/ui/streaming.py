@@ -217,6 +217,8 @@ def make_stream_callback(
     renderer: Any,
     *,
     main_agent_id: Optional[Callable[[], str]] = None,
+    subagents_active: Optional[Callable[[], int]] = None,
+    turn_active: Optional[Callable[[], bool]] = None,
 ) -> StreamCallback:
     """Build the orchestrator-level ``_on_stream_chunk`` callback.
 
@@ -243,10 +245,18 @@ def make_stream_callback(
 
     async def _callback(session_id: str, agent_id: str, chunk: str, step: int) -> None:
         try:
+            # 098 CL-06: a delta outside a turn (a background delegation child
+            # between turns) never opens a box.
+            if turn_active is not None and not turn_active():
+                return
             if main_agent_id is not None:
                 expected = main_agent_id() or ""
                 if expected and agent_id and agent_id != expected:
                     return  # sub-agent stream — don't interleave into the box
+                # Unknown main id: accept only while no sub-agent runs
+                # ("unknown" used to mean "accept all").
+                if not expected and subagents_active is not None and subagents_active():
+                    return
             renderer.on_stream_delta(chunk)
         except Exception as exc:
             # Streaming is non-critical; never propagate into the agent loop.

@@ -54,6 +54,26 @@ NOTICE_MARKERS = (
     "[suppressed by owner-message cooldown",
 )
 
+#: 096 W8 (D3): an ``owner_notice`` row IS the held copy of a message the owner
+#: never received — ``/missed`` shows it back. It used to be cut at 2000 chars
+#: with no marker, so a long report came back as its first half and read as
+#: whole. The row now keeps the text up to this bound (a long ``/missed`` reply
+#: spills to an attached file), and any cut beyond it says how much is gone.
+NOTICE_TEXT_MAX_CHARS = 32000
+
+
+def notice_text(text: Any) -> str:
+    """*text* as an ``owner_notice`` row stores it: whole up to
+    :data:`NOTICE_TEXT_MAX_CHARS`, else cut on that bound with a marker that
+    names the lost length. Never a silent cut."""
+    s = str(text or "")
+    if len(s) <= NOTICE_TEXT_MAX_CHARS:
+        return s
+    hidden = len(s) - NOTICE_TEXT_MAX_CHARS
+    return (s[:NOTICE_TEXT_MAX_CHARS].rstrip()
+            + f"\n… [cut: {hidden} more chars were not kept]")
+
+
 #: Outcomes that spent a slot of the rate/cap budget. ``fallback`` is included
 #: because a LIVE sink was there and the send failed against it: the rail did
 #: real work and must not become free retry headroom.
@@ -140,6 +160,10 @@ _CRITICAL_SOURCES = frozenset({
     # four owner directives sat inert for two days. An owner DECISION the agent is
     # blocked on belongs with `approval`/`goal_blocked`, not with chatter.
     "pending_approval",
+    # 096 C1: core/surfaces/seed.py — "I contacted someone new; their replies
+    # do not reach me until you approve". A contact decision, like
+    # ``pending_approval``; bounded by the per-day new-correspondent cap.
+    "correspondent_pending",
     # 039 Unit A: core/wallet/tx_notify.py — "this transaction broadcast" and
     # "this is what it did". Money that has ALREADY MOVED may not queue behind
     # "▶ goal started": over 8 days in August the shared cap dropped 195 of 196
@@ -524,7 +548,7 @@ def _record_notice(event_log: Any, user_id: str, text: str, *,
                            "this undelivered message is not recoverable via /missed",
                            exc_info=True)
             return
-    attrs = {"text": str(text)[:2000]}
+    attrs = {"text": notice_text(text)}
     if content_hash:
         attrs["content_hash"] = str(content_hash)
     try:
@@ -579,6 +603,7 @@ _NOTICE_SUBJECT_BY_SOURCE = {
     "approval": "approval needed",
     "payment_approval": "payment approval needed",
     "pending_approval": "changes waiting for your approval",
+    "correspondent_pending": "a new contact waiting for your approval",
     "goal_blocked": "a goal is blocked",
     "credit_sentinel": "autonomy stopped (credits)",
     "halt": "autonomy halted",
@@ -909,8 +934,12 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             # D70: an email notice is not a reply, so it must not arrive with a
             # "Re:" subject. The subject rides as the legacy media entry every
             # other surface ignores.
+            # 096 E4: email cannot tap — name the chat taps for what they are.
+            from core.surfaces.tappable import email_taps_footer
+            text_for_sid = body
             if _sid == "email":
                 kwargs["subject"] = notice_subject(source)
+                text_for_sid = email_taps_footer(body)
             # A router that can tell "sent" from "queued" is asked for the
             # distinction; any other sink keeps the boolean contract.
             _ex = getattr(sink, "send_message_ex", None)
@@ -935,14 +964,15 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
 
             if send_attachments:
                 try:
-                    res = send(_addr, send_body, media=send_attachments, **kwargs)
+                    res = send(_addr, (email_taps_footer(send_body) if _sid == "email"
+                                       else send_body), media=send_attachments, **kwargs)
                 except TypeError:
                     # pre-QW-1 sink shape (no media kwarg): the attachment cannot
                     # ride, so send the FULL body — a gist pointing at a file the
                     # owner will never receive is worse than a long message.
-                    res = _attempt(body)
+                    res = _attempt(text_for_sid)
             else:
-                res = _attempt(body)
+                res = _attempt(text_for_sid)
             if hasattr(res, "__await__"):
                 res = await res
             # 061: a sink that can name the surface message id answers with a

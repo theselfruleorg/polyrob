@@ -51,7 +51,12 @@ def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] =
     if sync is not None and not sync():
         return "the spend ledger is unreadable, so the LP caps cannot be summed"
     now = time.time() if now is None else now
-    rows = [e for e in gate.audit_log if e.get("action") == "lp_add" and "native_raw" in e]
+    # 098 review (TS-23): a reverted LP add moved nothing — out of the LP caps,
+    # as it is out of the rolling USD caps.
+    voided_fn = getattr(gate, "_voided", None)
+    voided = voided_fn() if callable(voided_fn) else set()
+    rows = [e for e in gate.audit_log if e.get("action") == "lp_add" and "native_raw" in e
+            and not (voided and e.get("result_ref") in voided)]
     total = sum(int(e["native_raw"]) for e in rows)
     day = sum(int(e["native_raw"]) for e in rows if float(e.get("ts") or 0) >= now - 86400)
     eth = lambda w: f"{w / 1e18:.6g} ETH"

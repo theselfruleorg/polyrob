@@ -74,8 +74,11 @@ class TurnLifecycle:
         self.active_started_at: float | None = None
         self.last_outcome: TurnOutcome = TurnOutcome.NONE
         self._token: int = 0
-        # Autonomy lane (orthogonal): count of in-flight background turns.
-        self._autonomy_active: int = 0
+        # Autonomy lane (orthogonal): in-flight background sessions -> start time
+        # (098 CL-02: a run that dies without a SessionDone ages out after
+        # BACKGROUND_TTL_SEC; a runtime stop resets the lane).
+        self._bg: dict = {}
+        self._bg_anon: int = 0
 
     # ------------------------------------------------------------------
     # Foreground lane — user turns (called from the turn runner ONLY)
@@ -116,18 +119,36 @@ class TurnLifecycle:
     # Autonomy lane — background turns (orthogonal to the foreground lane)
     # ------------------------------------------------------------------
 
-    def begin_background(self) -> None:
-        """A background (cron/goal/self-wake) turn started. Lights the muted
-        autonomy indicator without touching the work clock or status word."""
-        self._autonomy_active += 1
+    #: Longer than the cron and goal run caps: a background run that died
+    #: without a SessionDone stops lighting the lane after this.
+    BACKGROUND_TTL_SEC = 15 * 60
 
-    def end_background(self) -> None:
-        """A background turn finished. Floored at 0 (underflow-safe)."""
-        self._autonomy_active = max(0, self._autonomy_active - 1)
+    def begin_background(self, session_id: str | None = None) -> None:
+        """A background (cron/goal/self-wake) turn started. Lights the muted
+        autonomy indicator without touching the work clock or status word.
+        Idempotent per session id (a repeated start counts once)."""
+        if session_id is None:
+            self._bg_anon += 1
+            session_id = f"_anon_{self._bg_anon}"
+        self._bg.setdefault(str(session_id), self._clock())
+
+    def end_background(self, session_id: str | None = None) -> None:
+        """A background turn finished (underflow-safe). No id: the oldest entry."""
+        if session_id is not None:
+            self._bg.pop(str(session_id), None)
+        elif self._bg:
+            self._bg.pop(min(self._bg, key=self._bg.get))
+
+    def reset_background(self) -> None:
+        """The autonomy runtime stopped: nothing runs in the background now."""
+        self._bg.clear()
 
     def autonomy_busy(self) -> bool:
         """True when one or more background turns are in flight."""
-        return self._autonomy_active > 0
+        cutoff = self._clock() - self.BACKGROUND_TTL_SEC
+        for sid in [k for k, t in self._bg.items() if t < cutoff]:
+            self._bg.pop(sid, None)
+        return bool(self._bg)
 
     # ------------------------------------------------------------------
     # Derived reads (the renderer / status bar consume these)

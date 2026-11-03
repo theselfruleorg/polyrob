@@ -16,16 +16,28 @@ Scope note: this gives cross-worker *visibility*, not transparent cross-worker
 *method calls* on a remote orchestrator (that needs sticky routing / IPC — a
 follow-up). With it, a worker can return a meaningful "owned by pid N / elsewhere"
 result instead of a false 404.
+
+098 AG-16 — row ownership is a small machine: ``absent -> owned(boot) -> absent``
+and ``owned(dead owner) -> owned(new boot)`` (take-over). Only the owning boot
+(or a taker of a DEAD owner's row) writes a row; ``remove`` deletes only our own
+row. "Owner alive" is :func:`core.state.proc.is_alive` on the stored
+``owner_ident`` (pid + start time + boot id), so a reused pid (a container PID 1
+after a restart) reads dead. The legacy ``status`` column is no longer read or
+written (S10); an old DB keeps it with its default.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from core.sqlite_util import execute_retry
+from core.state.proc import ProcIdentity, boot_id, is_alive, process_identity, start_time
+
+logger = logging.getLogger(__name__)
 
 
 class SqliteSessionRegistry:
@@ -36,6 +48,11 @@ class SqliteSessionRegistry:
         # Two processes that happen to share a pid (PID reuse after a worker dies)
         # still get distinct boot ids, so routing never mistakes one for the other.
         self._boot_id = uuid.uuid4().hex
+        # 098 AG-16: the liveness identity stored with each owned row.
+        if self._pid == os.getpid():
+            self._ident = process_identity()
+        else:  # tests / an explicit pid: pid-only liveness on this boot
+            self._ident = ProcIdentity(self._pid, start_time(self._pid) or "unknown", boot_id())
         parent = os.path.dirname(db_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -52,11 +69,11 @@ class SqliteSessionRegistry:
             CREATE TABLE IF NOT EXISTS active_sessions (
                 session_id TEXT PRIMARY KEY,
                 worker_pid INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
                 params TEXT NOT NULL DEFAULT '{}',
                 last_seen_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                owner_boot_id TEXT
+                owner_boot_id TEXT,
+                owner_ident TEXT
             )
             """,
         )
@@ -67,11 +84,13 @@ class SqliteSessionRegistry:
             self.db_path, "PRAGMA table_info(active_sessions)", fetch="all",
         ) or []
         names = {row["name"] for row in cols}
-        if "owner_boot_id" not in names:
+        for col in ("owner_boot_id", "owner_ident"):
+            if col in names:
+                continue
             try:
                 execute_retry(
                     self.db_path,
-                    "ALTER TABLE active_sessions ADD COLUMN owner_boot_id TEXT",
+                    f"ALTER TABLE active_sessions ADD COLUMN {col} TEXT",
                 )
             except Exception as e:  # concurrent add won the race — that's fine
                 if "duplicate column" not in str(e).lower():
@@ -79,32 +98,102 @@ class SqliteSessionRegistry:
 
     # --- local object dict (compatible with SessionRegistry) -----------------
 
-    def register(self, session_id: str, orchestrator: Any, *, params: Optional[Dict[str, Any]] = None) -> None:
+    # --- ownership (098 AG-16) -------------------------------------------------
+
+    def _owner_alive(self, row: Any) -> bool:
+        """The process that owns ``row`` still runs. Our own boot: alive. A row
+        with an identity: :func:`is_alive` (pid + start time + boot id). A legacy
+        row without one: pid liveness, and our own pid under another boot id is
+        a previous life of this pid (dead)."""
+        if row["owner_boot_id"] == self._boot_id:
+            return True
+        ident = ProcIdentity.decode(row["owner_ident"]) if "owner_ident" in row.keys() else None
+        if ident is not None:
+            return is_alive(ident)
+        pid = row["worker_pid"]
+        if pid == self._pid:
+            return False
+        return self._pid_alive(pid)
+
+    def _row(self, session_id: str) -> Any:
+        return execute_retry(
+            self.db_path,
+            "SELECT worker_pid, owner_boot_id, owner_ident FROM active_sessions WHERE session_id=?",
+            (session_id,), fetch="one",
+        )
+
+    def _drop_dead_row(self, session_id: str, observed_boot: Optional[str]) -> None:
+        """Delete a dead owner's row — a CAS on the owner we observed, so a row a
+        live worker took over in between is never deleted."""
+        execute_retry(
+            self.db_path,
+            "DELETE FROM active_sessions WHERE session_id=? AND owner_boot_id IS ?",
+            (session_id, observed_boot),
+        )
+
+    def register(self, session_id: str, orchestrator: Any, *, params: Optional[Dict[str, Any]] = None) -> bool:
+        """Own ``session_id``: insert the row, keep our own row, or take over the
+        row of a DEAD owner. A row of a LIVE other owner is never stolen (098
+        AG-16): the object is still held locally, the row stays theirs, and the
+        call returns False (``route`` keeps answering REMOTE)."""
         # Write the DB row BEFORE the local dict. route() reads the DB; if the DB
         # write raised after we'd already stored the object locally, route() would
         # return MISSING for a session this worker actually holds — a false 404, the
         # exact failure this class exists to prevent.
         now = datetime.now().isoformat()
-        execute_retry(
-            self.db_path,
-            """
-            INSERT INTO active_sessions
-                (session_id, worker_pid, owner_boot_id, status, params, last_seen_at, created_at)
-            VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                worker_pid=excluded.worker_pid, owner_boot_id=excluded.owner_boot_id,
-                status='active', params=excluded.params, last_seen_at=excluded.last_seen_at
-            """,
-            (session_id, self._pid, self._boot_id, "active", json.dumps(params or {}), now, now),
-        )
+        payload = json.dumps(params or {})
+        ident = self._ident.encode()
+        owned = True
+        for _ in range(3):
+            row = self._row(session_id)
+            if row is None:
+                execute_retry(
+                    self.db_path,
+                    """
+                    INSERT INTO active_sessions
+                        (session_id, worker_pid, owner_boot_id, owner_ident, params,
+                         last_seen_at, created_at)
+                    VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(session_id) DO NOTHING
+                    """,
+                    (session_id, self._pid, self._boot_id, ident, payload, now, now),
+                )
+            elif row["owner_boot_id"] == self._boot_id or not self._owner_alive(row):
+                execute_retry(
+                    self.db_path,
+                    """
+                    UPDATE active_sessions SET worker_pid=?, owner_boot_id=?, owner_ident=?,
+                        params=?, last_seen_at=?
+                    WHERE session_id=? AND owner_boot_id IS ?
+                    """,
+                    (self._pid, self._boot_id, ident, payload, now,
+                     session_id, row["owner_boot_id"]),
+                )
+            else:
+                owned = False
+                logger.warning(
+                    "session %s is owned by a live worker (pid %s); not taking the row",
+                    session_id, row["worker_pid"])
+                break
+            if self.owner_boot_id(session_id) == self._boot_id:
+                break
+        else:
+            owned = self.owner_boot_id(session_id) == self._boot_id
         self._orchestrators[session_id] = orchestrator
+        return owned
 
     def get(self, session_id: str) -> Optional[Any]:
         """Return the LOCAL orchestrator object (None if owned by another worker)."""
         return self._orchestrators.get(session_id)
 
     def remove(self, session_id: str) -> Optional[Any]:
-        execute_retry(self.db_path, "DELETE FROM active_sessions WHERE session_id=?", (session_id,))
+        """Drop the local object; delete the row only when this boot owns it
+        (098 AG-16 — never another worker's row)."""
+        execute_retry(
+            self.db_path,
+            "DELETE FROM active_sessions WHERE session_id=? AND owner_boot_id=?",
+            (session_id, self._boot_id),
+        )
         return self._orchestrators.pop(session_id, None)
 
     def contains(self, session_id: str) -> bool:
@@ -124,7 +213,11 @@ class SqliteSessionRegistry:
 
     def clear(self) -> None:
         for sid in list(self._orchestrators):
-            execute_retry(self.db_path, "DELETE FROM active_sessions WHERE session_id=?", (sid,))
+            execute_retry(
+                self.db_path,
+                "DELETE FROM active_sessions WHERE session_id=? AND owner_boot_id=?",
+                (sid, self._boot_id),
+            )
         self._orchestrators.clear()
 
     # --- cross-process metadata (SQLite) -------------------------------------
@@ -136,14 +229,13 @@ class SqliteSessionRegistry:
         return row is not None
 
     def route(self, session_id: str):
-        """Routing decision (P6): LOCAL (object is in this worker), REMOTE (exists but
-        owned by another worker — caller can forward / 409 with owner_pid), or MISSING."""
+        """Routing decision (P6): LOCAL (object is in this worker), REMOTE (exists and
+        owned by another LIVE worker — caller can forward / 409 with owner_pid), or
+        MISSING. 098 AG-16: a row whose owner is dead (a reused pid included) is
+        deleted with an owner CAS and reads MISSING, so the caller recreates the
+        session locally instead of answering 409 for ever."""
         from agents.task.session_route import SessionRoute, LOCAL, REMOTE, MISSING
-        row = execute_retry(
-            self.db_path,
-            "SELECT worker_pid, owner_boot_id FROM active_sessions WHERE session_id=?",
-            (session_id,), fetch="one",
-        )
+        row = self._row(session_id)
         if row is None:
             return SessionRoute(status=MISSING)
         owner = int(row["worker_pid"])
@@ -153,6 +245,13 @@ class SqliteSessionRegistry:
         local = self._orchestrators.get(session_id)
         if owner_boot == self._boot_id and local is not None:
             return SessionRoute(status=LOCAL, orchestrator=local, owner_pid=owner)
+        if owner_boot != self._boot_id and not self._owner_alive(row):
+            self._drop_dead_row(session_id, owner_boot)
+            return SessionRoute(status=MISSING)
+        if owner_boot == self._boot_id:
+            # Our row but no local object (a lost local entry): nobody else can
+            # serve it — recreate here.
+            return SessionRoute(status=MISSING)
         return SessionRoute(status=REMOTE, owner_pid=owner)
 
     def owner_pid(self, session_id: str) -> Optional[int]:
@@ -219,7 +318,8 @@ class SqliteSessionRegistry:
         local_sids = set(self._orchestrators.keys())
         rows = execute_retry(
             self.db_path,
-            "SELECT session_id, worker_pid FROM active_sessions WHERE last_seen_at < ?",
+            "SELECT session_id, worker_pid, owner_boot_id, owner_ident FROM active_sessions "
+            "WHERE last_seen_at < ?",
             (cutoff,), fetch="all",
         )
         # Reap only rows that are (a) not ours and (b) owned by a DEAD process. A
@@ -227,7 +327,10 @@ class SqliteSessionRegistry:
         # worker — deleting it would false-404 and orphan that worker's orchestrator.
         reaped = [
             r["session_id"] for r in rows
-            if r["session_id"] not in local_sids and not self._pid_alive(r["worker_pid"])
+            if r["session_id"] not in local_sids
+            # our own row with no local object is an orphan; another owner's row
+            # goes only when that owner is dead (process_identity, 098 AG-16)
+            and (r["owner_boot_id"] == self._boot_id or not self._owner_alive(r))
         ]
         for sid in reaped:
             # Re-check under the cutoff: don't delete a row that heartbeated between

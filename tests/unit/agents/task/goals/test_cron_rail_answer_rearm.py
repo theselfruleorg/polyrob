@@ -17,7 +17,9 @@ def _setup(tmp_path, status="scheduled", hours=6):
     store = CronJobStore(str(tmp_path / "cron.db"))
     store.add(CronJob(id="j1", task="t", schedule_spec="0 */6 * * *", user_id="alice",
                       next_run_at=datetime.now() + timedelta(hours=hours)))
-    if status != "scheduled":
+    if status == "running":
+        assert store.claim_for_run("j1")  # 098 MO-09: running only by a claim
+    elif status != "scheduled":
         store.set_status("j1", status)
     board = GoalBoard(goals_db_path(str(tmp_path)))
     ask = board.create_ask(user_id="alice", what="A) raise the cap, or B) lower the size?",

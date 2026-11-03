@@ -1,9 +1,15 @@
 """Per-surface circuit breaker for the outbound dispatcher.
 
-Opens automatically after K consecutive failures (stops hammering a dead platform);
-also supports manual pause/resume so an operator can hold a surface while it's
-in maintenance. An optional CircuitStore persists the paused flag across processes
-so the CLI's `polyrob surface pause` is visible to the worker.
+Opens automatically after K consecutive failures (stops hammering a dead platform).
+An operator holds a surface with `polyrob surface pause`, which writes the
+CircuitStore; the store is the ONE pause authority and ``is_open`` reads it on
+every call (098 CO-17: the breaker's own in-memory pause copy had no production
+writer and was removed).
+
+Half-open is PER PROCESS (documented, 098 CO-17): each process keeps its own
+failure counter, so after the cooldown every process that hosts the surface
+sends its own probe. With one host process per surface (the prod shape) that is
+one probe; N hosts send N probes, which is bounded and harmless.
 
 OB1 (2026-10-03 audit): an auto-open is HALF-OPEN after ``cooldown`` seconds —
 ``is_open`` lets the next send through as a probe; a failed probe re-opens for
@@ -124,11 +130,10 @@ class SurfaceCircuitBreaker:
     In-memory state:
     - ``_counts[surface_id]``: consecutive failure counter (resets on ok).
     - ``_opened_at[surface_id]``: when THIS process auto-opened the breaker.
-    - ``_paused``: set of manually paused surface IDs.
 
-    Optional ``store`` (a ``CircuitStore``): pause/resume also writes the flag to
-    SQLite, and ``is_open`` reads it so a worker process sees CLI changes. The
-    auto-open moment is persisted as well (OB12).
+    Optional ``store`` (a ``CircuitStore``): ``is_open`` reads its pause flag so a
+    worker process sees the CLI's pause/resume. The auto-open moment is
+    persisted as well (OB12).
 
     An auto-open lasts ``cooldown`` seconds; after that the breaker is
     half-open and lets a probe through (OB1).
@@ -141,7 +146,6 @@ class SurfaceCircuitBreaker:
         self._counts: dict = {}   # surface_id -> consecutive fail count
         self._opened_at: dict = {}   # surface_id -> ts this process auto-opened
         self._persisted: set = set()   # surface ids whose auto-open reached the store
-        self._paused: set = set()
         self._store = store
         self._cooldown = float(cooldown)
         self._clock = clock or time.time
@@ -190,25 +194,6 @@ class SurfaceCircuitBreaker:
                     self._persisted.discard(surface_id)
                     logger.warning("circuit_store: auto-open write failed for %s: %s",
                                    surface_id, e)
-
-    # ------------------------------------------------------------------
-    # Manual pause/resume path
-    # ------------------------------------------------------------------
-
-    def pause(self, surface_id: str) -> None:
-        """Manually pause a surface (operator-driven; persisted if store attached)."""
-        self._paused.add(surface_id)
-        if self._store is not None:
-            self._store.pause(surface_id)
-
-    def resume(self, surface_id: str) -> None:
-        """Resume a paused surface and reset its fail counter."""
-        self._paused.discard(surface_id)
-        self._counts[surface_id] = 0
-        self._opened_at.pop(surface_id, None)
-        self._persisted.discard(surface_id)
-        if self._store is not None:
-            self._store.resume(surface_id)
 
     # ------------------------------------------------------------------
     # State query
@@ -260,15 +245,12 @@ class SurfaceCircuitBreaker:
 
     def is_open(self, surface_id: str) -> bool:
         """Return True if the surface should be skipped (open = bad = skip)."""
-        if surface_id in self._paused:
-            return True
         if self._store_paused(surface_id):
             return True
         return self._auto_open(surface_id)
 
     def state(self, surface_id: str) -> dict:
         """Return a snapshot of the surface's circuit state."""
-        manually_paused = surface_id in self._paused
         store_paused = self._store_paused(surface_id)
         auto_open = self._auto_open(surface_id)
         return {
@@ -276,7 +258,6 @@ class SurfaceCircuitBreaker:
             "consecutive_failures": self._counts.get(surface_id, 0),
             "threshold": self._threshold,
             "auto_open": auto_open,
-            "manually_paused": manually_paused,
             "store_paused": store_paused,
-            "is_open": manually_paused or auto_open or store_paused,
+            "is_open": auto_open or store_paused,
         }

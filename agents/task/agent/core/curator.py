@@ -44,6 +44,23 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
+from core.state.machine import StateMachine  # noqa: E402
+
+#: 098 AG-13: the curator's per-skill mark (``skill_usage`` state
+#: ``curator:{uid}/{id}``). A missing mark is "never judged".
+CURATOR_MARK = StateMachine(
+    "curator_mark",
+    states={"active", "stale", "archived", "proposed"},
+    transitions={"active": {"stale", "proposed", "archived"},
+                 "stale": {"active", "archived", "proposed"},
+                 "archived": {"active"},
+                 "proposed": {"active"}},
+    initial={"active", "stale", "proposed"},
+)
+
+#: First backoff step after a failed curator pass (doubles per failure).
+_BACKOFF_BASE_S = 3600.0
+
 _AUTHORED = ["agent", "background_review"]
 #: Provenance of a skill the owner wrote (console, API): never auto-archived.
 _OWNER_AUTHORED = ["user"]
@@ -251,12 +268,22 @@ class SkillCurator:
                 plan["archived"].append(key)
                 if not self.dry_run:
                     try:
-                        self.sm.delete_skill(skill_id, user_id=user_id, created_by="curator",
-                                             aged=True)
+                        moved = self.sm.delete_skill(skill_id, user_id=user_id,
+                                                     created_by="curator", aged=True)
+                    except Exception as e:
+                        moved = False
+                        logger.debug("curator archive failed for %s: %s", key, e)
+                    # 098 AG-13: the mark records an effect that HAPPENED — a
+                    # refused/failed archive leaves the skill active and stale,
+                    # so the next pass tries again instead of skipping it.
+                    if moved:
                         self._set_mark(key, "archived")
                         self._self_mod_ev("archive", skill_id, user_id)
-                    except Exception as e:
-                        logger.debug("curator archive failed for %s: %s", key, e)
+                    else:
+                        logger.warning("curator: archive of %s did not happen — "
+                                       "the mark stays %s", key, mark)
+                        if mark != "stale":
+                            self._set_mark(key, "stale")
             else:
                 plan["stale"].append(key)
                 if not self.dry_run and mark != "stale":
@@ -342,14 +369,31 @@ class SkillCurator:
 
     def _set_mark(self, key: str, value: str) -> None:
         try:
+            old = self.usage.get_state(f"curator:{key}")
+            if old in CURATOR_MARK.states and old != value and value in CURATOR_MARK.states:
+                if not CURATOR_MARK.check(old, value, ctx={"key": key}):
+                    return
             self.usage.set_state(f"curator:{key}", value)
-        except Exception:
-            pass
+        except Exception as e:
+            from core.state.machine import IllegalTransition
+            if isinstance(e, IllegalTransition):
+                raise
 
     def should_run(self) -> bool:
-        """Idle/interval gate: only run once per CURATOR_INTERVAL_HOURS."""
+        """Idle/interval gate: only run once per CURATOR_INTERVAL_HOURS. After a
+        failed pass (098 AG-13) the next attempt backs off ``1 h * 2**n``,
+        capped at the interval — a failing pass no longer re-runs every check."""
         from core.config_policy import AutonomyConfig
         interval_s = AutonomyConfig.curator_interval_hours() * 3600.0
+        try:
+            failures = int(self.usage.get_state("curator:failures") or 0)
+            last_try = self.usage.get_state("curator:last_attempt")
+            if failures and last_try is not None:
+                wait = min(interval_s, _BACKOFF_BASE_S * 2 ** (failures - 1))
+                if (self._now() - float(last_try)) < wait:
+                    return False
+        except (TypeError, ValueError):
+            pass
         last = self.usage.get_state("curator:last_run")
         if last is None:
             return True
@@ -366,6 +410,21 @@ class SkillCurator:
             self.usage.set_state(key, value)
         except Exception:
             pass
+
+    def _repair_skill_writes(self) -> Dict[str, Any]:
+        """098 MO-17: repair skill writes that stopped between their files, per
+        tenant that has authored skills. Fail-open per tenant."""
+        from modules.skills.repair import repair_uncommitted_skills
+        out: Dict[str, Any] = {}
+        users = sorted({str(r["user_id"]) for r in
+                        self.usage.list_authored(created_by=_AUTHORED + _OWNER_AUTHORED) or []})
+        for uid in users:
+            if not hasattr(self.sm, "_user_root"):
+                break
+            res = repair_uncommitted_skills(self.sm, uid)
+            if any(res.values()):
+                out[uid] = res
+        return out
 
     async def run_once(self) -> Dict[str, Any]:
         """One curator pass: Phase 1 automatic transitions + episodic retention prune.
@@ -392,145 +451,31 @@ class SkillCurator:
         keep it off the event loop — see run_once."""
         result: Dict[str, Any] = {}
         try:
+            result["repair"] = self._repair_skill_writes()
+        except Exception:
+            logger.warning("curator skill repair skipped", exc_info=True)
+        try:
             result["transitions"] = self.apply_automatic_transitions()
             self.mark_ran()
+            self._set_mark_raw("curator:failures", "0")
         except Exception as e:
             logger.error("curator run failed: %s", e, exc_info=True)
             result["error"] = str(e)
+            try:
+                n = int(self.usage.get_state("curator:failures") or 0) + 1
+            except (TypeError, ValueError):
+                n = 1
+            self._set_mark_raw("curator:failures", str(n))
+            self._set_mark_raw("curator:last_attempt", str(self._now()))
         try:
             result["contribution"] = self.contribution_report()
         except Exception:
             logger.warning("curator contribution report skipped", exc_info=True)
-        self._prune_episodes()
-        self._prune_memories()
-        self._prune_sessions()
-        self._consolidate_notes()
+        # 097 D4: retention (episodes, memories, sessions, notes, artifacts, the
+        # written-documents KB) no longer rides the curator — it runs on its own
+        # always-on ticker (`agents/task/agent/core/retention.py`), so a box with
+        # the curator off still keeps its retention windows.
         return result
-
-    def _prune_episodes(self) -> None:
-        """Episodic activity-ledger retention sweep (Task 7), riding the curator's
-        own cadence — never the write path. Global sweep (all tenants); fail-open
-        so a memory-backend hiccup never breaks the curator tick."""
-        try:
-            from core.config_policy import AutonomyConfig
-            from modules.memory.registry import get_memory_registry
-            prov = get_memory_registry().active()
-            if prov is not None and hasattr(prov, "prune_episodes"):
-                cutoff = int(self._now()) - AutonomyConfig.episodic_retention_days() * 86400
-                removed = prov.prune_episodes(older_than_ts=cutoff)
-                if removed:
-                    logger.info("curator: pruned %d old episodes", removed)
-        except Exception:
-            logger.warning("episodic prune skipped", exc_info=True)
-
-    def _prune_sessions(self) -> None:
-        """Session-TREE retention (WS-K2, 2026-09-22) — the third window, on the
-        same cadence as the other two and never on the write path.
-
-        `memories` (365 d) and `episodes` (90 d) were swept here; the largest
-        store on disk was swept by nobody (prod: 2,449 trees, 5.0 GB, 694 over
-        30 days old). The sweep is capped per tick so a backlog drains over
-        several runs instead of deleting 694 directories while the agent serves
-        turns, and it keeps any tree that holds a registered artifact, is named
-        by a live goal, or is still owned by a worker.
-
-        Fail-open like its two siblings: an unreadable goals.db or artifacts.db
-        raises inside `plan_sweep` and REFUSES the sweep, which is the safe
-        direction — nothing is deleted on a read we could not make.
-        """
-        try:
-            from core.runtime_paths import resolve_data_home
-            from core.session_retention import retention_days, sweep
-            if retention_days() <= 0:
-                return
-            out = sweep(str(resolve_data_home()))
-            if out.get("removed") or out.get("failed"):
-                logger.info("curator: session sweep %s", out)
-        except Exception:
-            logger.warning("session sweep skipped", exc_info=True)
-
-    def _consolidate_notes(self) -> None:
-        """C4 (2026-07-11): mechanical note consolidation — the notes twin of the
-        skill staleness loop above. Archives never-read agent-authored notes past
-        KNOWLEDGE_NOTE_STALE_DAYS and collapses exact duplicates (provider does
-        the SQL; owner-authored notes are exempt there). Archive-only, per-note
-        self_modification audit events, fail-open. Gated
-        KNOWLEDGE_CURATOR_ENABLED (safe-local group). Deliberately LLM-free —
-        the aux-model clustering/contradiction pass stays deferred until a
-        concrete merge policy exists (the CURATOR_LLM_MERGE lesson)."""
-        try:
-            from core.config_policy import AutonomyConfig
-            if not AutonomyConfig.knowledge_curator_enabled():
-                return
-            from modules.memory.registry import get_memory_registry
-            prov = get_memory_registry().active()
-            if prov is None or not hasattr(prov, "consolidate_notes"):
-                return
-            cutoff = int(self._now()) - AutonomyConfig.knowledge_note_stale_days() * 86400
-            res = prov.consolidate_notes(stale_before_ts=cutoff)
-            for reason, key in (("stale", "archived_stale"),
-                                ("duplicate", "archived_dupes")):
-                for user_id, note_id in res.get(key, []):
-                    self._note_ev("archive", note_id, user_id, reason)
-            counts = {k: len(v) for k, v in res.items() if v}
-            if counts:
-                logger.info("curator: knowledge consolidation %s", counts)
-        except Exception:
-            logger.warning("knowledge consolidation skipped", exc_info=True)
-
-    @staticmethod
-    def _note_ev(action: str, note_id, user_id: str, reason: str) -> None:
-        """Note lifecycle transitions are self-modifications too. Fail-open."""
-        try:
-            from core.self_events import emit_self_modification
-            emit_self_modification(kind="note", action=action, item_id=str(note_id),
-                                   user_id=user_id or "", created_by="curator",
-                                   source="curator", reason=reason)
-        except Exception as e:
-            logger.debug("curator note event emit skipped: %s", e)
-
-    def _prune_memories(self) -> None:
-        """Cross-session `memories` retention sweep (B3, 2026-07-11) — same
-        contract as the episode sweep: curator cadence only, all tenants,
-        fail-open. MEMORY_RETENTION_DAYS <= 0 disables. Only rows with a B2
-        provenance stamp are age-prunable (legacy rows are exempt inside the
-        provider). Rows an autonomous (cron/goal) run wrote age out after the
-        shorter `retention.AUTONOMOUS_RETENTION_DAYS` (B2, 2026-10-11). The
-        count is logged on EVERY pass, zero included — a sweep that never
-        deletes must be visible as one."""
-        try:
-            from core.config_policy import AutonomyConfig
-            from modules.memory.registry import get_memory_registry
-            from modules.memory.retention import autonomous_window_days
-            days = AutonomyConfig.memory_retention_days()
-            if days <= 0:
-                logger.info("curator: memory retention disabled (MEMORY_RETENTION_DAYS=%d)", days)
-                return
-            prov = get_memory_registry().active()
-            if prov is not None and hasattr(prov, "prune_memories"):
-                auto_days = autonomous_window_days(days)
-                now = int(self._now())
-                removed = prov.prune_memories(older_than_ts=now - days * 86400,
-                                              autonomous_older_than_ts=now - auto_days * 86400)
-                logger.info("curator: pruned %d old memories (window %dd, autonomous runs %dd)",
-                            removed, days, auto_days)
-        except Exception:
-            logger.warning("memory prune skipped", exc_info=True)
-        # 025: an unpromoted memory SCOPE is working memory, not an archive —
-        # purged after RETENTION_DAYS. Only while scopes are ON (OFF shows every
-        # row as shared, and a sweep must never delete what a reader can see).
-        try:
-            from modules.memory.registry import get_memory_registry
-            from modules.memory.scope import scopes_enabled
-            from modules.memory.sqlite_scope_store import scope_age_cutoff
-            prov = get_memory_registry().active()
-            if scopes_enabled() and prov is not None and hasattr(prov, "purge_stale_scopes"):
-                purged = prov.purge_stale_scopes(older_than_ts=scope_age_cutoff(self._now()))
-                if purged:
-                    logger.info("curator: purged %d unpromoted scoped memories", purged)
-        except Exception:
-            logger.warning("memory scope retention skipped", exc_info=True)
-
 
 class CuratorTicker:
     """Periodically run the curator (interval-gated). Mirrors CronTicker/GoalTicker."""

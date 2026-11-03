@@ -54,6 +54,7 @@ def env(monkeypatch, tmp_path):
                                 metadata={})
 
     async def call(**kw):
+        kw.setdefault("reason", "test reason")  # 096 D3
         return await action.function(action.param_model(**kw), execution_context=ctx)
     return sm, home, call
 
@@ -98,10 +99,13 @@ async def test_one_card_promotes_skill_terms_and_retires_owner_line(env, monkeyp
     # R9: provenance rides the preview every seat shows
     assert "drafted by the agent" in by_kind["owner_doc"]["preview"]
     note = se.build_pending_notification(items)
-    assert "1 change(s)" in note and note.count("/approve_") == 2  # one entry + approve_all
+    assert "1 proposed change " in note and note.count("/approve_") == 2  # one entry + approve_all
 
+    # 098 CO-19: the folded card carries the owner_doc half's rev.
+    assert by_kind["skill"]["linked_rev"] == by_kind["owner_doc"]["rev"]
     ok, msg = se.promote("skill", "buy-lane", user_id="u1", home_dir=home,
-                         instance_id=iid, skill_manager=sm)
+                         instance_id=iid, skill_manager=sm,
+                         rev=by_kind["skill"]["linked_rev"])
     assert ok, msg
     assert se.list_pending("u1", home_dir=home, instance_id=iid, skill_manager=sm) == []
     active = writer.read_active("u1")
@@ -127,7 +131,8 @@ async def test_rejecting_either_half_rejects_both(env, monkeypatch):
     await call(action="patch", skill_id="buy-lane", old_string="0.1 ETH",
                new_string="0.2 ETH", expected_sha256=_sha(SKILL))
     ok, msg = se.reject("owner_doc", "u1", user_id="u1", home_dir=home,
-                        instance_id=iid, skill_manager=sm)
+                        instance_id=iid, skill_manager=sm,
+                        rev=writer.list_pending("u1")["rev"])
     assert ok, msg
     assert se.list_pending("u1", home_dir=home, instance_id=iid, skill_manager=sm) == []
     assert "buy-lane budget" in writer.read_active("u1")

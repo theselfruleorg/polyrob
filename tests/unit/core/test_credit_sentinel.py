@@ -71,7 +71,9 @@ def test_trip_activates_and_auto_releases(data_dir, monkeypatch):
         entry["ts"] = stale
     open(p, "w").write(json.dumps(state))
     assert credit_sentinel_active() is False
-    assert not os.path.exists(p), "expired latch is removed (auto-release)"
+    # 098 CO-11: auto-release writes an empty latch (a delete cannot be fenced
+    # by the lock, so it could drop a trip written in between).
+    assert json.loads(open(p).read()) == {"providers": {}}
 
 
 def test_trip_sends_one_safety_net_notice(data_dir, monkeypatch):

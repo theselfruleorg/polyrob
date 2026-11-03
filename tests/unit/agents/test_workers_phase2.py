@@ -1,5 +1,6 @@
 """041 phase 2 — named workers: owner seat, proposal lane, catalog, dispatch config,
 the tool intersection and Stop/Steer on a live child."""
+from agents.task.agent.agent_state import AgentState  # 098 AG-01
 import asyncio
 import json
 from types import SimpleNamespace
@@ -182,7 +183,7 @@ def test_stop_and_steer_a_live_child():
         async def queue_user_message(self, text, kind="comment", metadata=None):
             queued.append((text, kind))
 
-    child = SimpleNamespace(state=SimpleNamespace(stopped=False), hitl_manager=_Hitl())
+    child = SimpleNamespace(state=AgentState(), hitl_manager=_Hitl())
     mgr = _manager()
     mgr._sub_agents["sub_abc123"] = child
     mgr._live_meta["sub_abc123"] = {"worker": "researcher", "goal": "g", "started": 0}
@@ -282,7 +283,7 @@ def test_repl_workers_list_and_live_stop(store, tmp_path, monkeypatch):
     _owner_worker(store)
     out = []
     mgr = _manager()
-    child = SimpleNamespace(state=SimpleNamespace(stopped=False), hitl_manager=None)
+    child = SimpleNamespace(state=AgentState(), hitl_manager=None)
     mgr._sub_agents["sub_x1"] = child
     mgr._live_meta["sub_x1"] = {"worker": "researcher", "goal": "dig", "started": 0}
     ctx = SimpleNamespace(args=[], user_id=UID, emit=lambda t, title=None: out.append(t),

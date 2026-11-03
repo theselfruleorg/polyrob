@@ -60,8 +60,10 @@ def _refreeze_frozen_policy_flags_once() -> None:
     try:
         from core.config_policy.policy import (_refreeze_compute_posture,
                                                _refreeze_payment_approval_flags)
+        from core.config_policy.goal_flags import _refreeze_interactive_max_steps
         _refreeze_compute_posture()
         _refreeze_payment_approval_flags()
+        _refreeze_interactive_max_steps()   # 098 CO-09
     except Exception:
         logging.getLogger(__name__).warning(
             "frozen policy-flag refreeze failed — env-file values for "

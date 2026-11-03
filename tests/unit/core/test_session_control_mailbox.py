@@ -81,3 +81,78 @@ async def test_cancel_signals_registered_session_agents(tmp_path):
         assert store.read()["acknowledged"] == "cancelled"
     finally:
         store.finish(generation)
+
+
+# -- 098 CO-05: a cancel is never erased ------------------------------------------
+
+def _live(tmp_path):
+    store = SessionControl(tmp_path)
+    return store, store.start()
+
+
+def test_resume_after_unacked_cancel_is_refused(tmp_path):
+    from core.session_control import CANCELLED_ALREADY
+    store, gen = _live(tmp_path)
+    try:
+        assert store.request("cancel") == gen
+        assert store.request("resume") == CANCELLED_ALREADY
+        assert store.request("pause") == CANCELLED_ALREADY
+        assert store.read()["request"] == "cancel"
+    finally:
+        store.finish(gen)
+
+
+def test_pause_then_cancel_wins(tmp_path):
+    store, gen = _live(tmp_path)
+    try:
+        assert store.request("pause") == gen
+        assert store.request("cancel") == gen
+        assert store.read()["request"] == "cancel"
+    finally:
+        store.finish(gen)
+
+
+def test_finish_after_cancel_reports_cancelled(tmp_path):
+    store, gen = _live(tmp_path)
+    store.request("cancel")
+    store.request("resume")
+    store.finish(gen)
+    assert store.read()["acknowledged"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_request_and_wait_says_cancelled_already(tmp_path):
+    from core.session_control import CANCELLED_ALREADY
+    store, gen = _live(tmp_path)
+    try:
+        store.request("cancel")
+        assert await store.request_and_wait("resume", timeout=0.1) == CANCELLED_ALREADY
+    finally:
+        store.finish(gen)
+
+
+def test_session_control_machine_well_formed():
+    from core.session_control import SESSION_CONTROL
+    assert SESSION_CONTROL.validate() == []
+
+
+def _send(directory, command):
+    SessionControl(directory).request(command)
+
+
+def test_two_processes_cancel_and_resume(tmp_path):
+    """Both orders across processes: the run always ends on cancel."""
+    ctx = multiprocessing.get_context("spawn")
+    for order in (("cancel", "resume"), ("resume", "cancel")):
+        d = tmp_path / "-".join(order)
+        d.mkdir()
+        store, gen = _live(d)
+        store.request("pause")
+        try:
+            for cmd in order:
+                p = ctx.Process(target=_send, args=(str(d), cmd))
+                p.start()
+                p.join(10)
+            assert store.read()["request"] == "cancel"
+        finally:
+            store.finish(gen)

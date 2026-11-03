@@ -409,7 +409,8 @@ async def perform_call(tool, params, execution_context=None):
             notice_kw=dict(verb="call", route=f"{params.chain}:{to_addr}",
                            chain=params.chain, amount_in=data[:10],
                            usd=decision.amount_usd))
-        gate.record(**_rec)
+        gate.record(**_rec, receipt_state=(  # 098 TS-23: a timed-out wait resolves later
+            "pending_receipt" if receipt.status == "pending" else None))
         tool._notify_tx(execution_context, tx_notify.TxNotice(
             verb="call", route=f"{params.chain}:{to_addr}", chain=params.chain,
             amount_in=data[:10],

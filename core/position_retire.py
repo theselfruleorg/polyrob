@@ -94,8 +94,9 @@ def retire_row(user_id: str, chain: str, address: str, *, account: str,
                     and _op._norm(p.address) == _op._norm(address)), None)
     if pos is None:
         return RetireOutcome(False, f"I track no position at {address} on {chain_key}")
-    if pos.status == _op.STATUS_RETIRED:
-        return RetireOutcome(False, f"{pos.symbol or address} on {chain_key} is already retired")
+    if pos.status in _op.POSITION.terminal:
+        return RetireOutcome(False, f"{pos.symbol or address} on {chain_key} is already "
+                                    f"{pos.status.replace('_', ' ')}")
     ts = time.time() if now is None else now
     qty = _finite(measured_qty)
     usd = _finite(measured_usd)
@@ -109,9 +110,10 @@ def retire_row(user_id: str, chain: str, address: str, *, account: str,
     changed = execute_retry(
         path,
         "UPDATE open_positions SET status=?, status_reason=?, status_ts=?, status_proof=? "
-        "WHERE user_id=? AND chain=? AND account=? AND address=? AND status<>?",
+        "WHERE user_id=? AND chain=? AND account=? AND address=? AND status IN (?,?,?)",
         (_op.STATUS_RETIRED, reason[:300], ts, json.dumps(record), uid, pos.chain,
-         _op._account_key(account), pos.address, _op.STATUS_RETIRED))
+         _op._account_key(account), pos.address,
+         *sorted(_op.POSITION.sources_of(_op.STATUS_RETIRED))))
     if not changed:
         return RetireOutcome(False, "the store did not record the retire")
     # 086 W1: after the commit — the lifecycle disarms the row's exit job.

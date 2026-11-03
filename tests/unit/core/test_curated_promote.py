@@ -62,28 +62,38 @@ def _statuses(home, user_id=UID):
     return out
 
 
-# --- the store's status kwarg (A27) -----------------------------------------
+# --- the store's guarded status moves (A27, 098 MO-15) ----------------------
 
-def test_note_update_status_promotes(home):
+def test_note_promote_promotes(home):
     nid = _seed_pending(home)
     prov = _provider(home)
-    assert asyncio.run(prov.note_update(UID, nid, status="active")) is True
+    assert asyncio.run(prov.note_promote(UID, nid)) is True
     assert _statuses(home).get(nid) == "active"
+    assert asyncio.run(prov.note_promote(UID, nid)) is False   # not pending any more
 
 
-def test_note_update_status_rejects_unknown_value(home):
-    nid = _seed_pending(home)
+def test_note_update_has_no_status_param(home):
+    import inspect
     prov = _provider(home)
-    assert asyncio.run(prov.note_update(UID, nid, status="bogus")) is False
-    assert _statuses(home).get(nid) == "pending"
+    assert "status" not in inspect.signature(prov.note_update).parameters
 
 
-def test_note_update_status_tenant_scoped(home):
+def test_note_promote_tenant_scoped(home):
     nid = _seed_pending(home, user_id=UID)
     prov = _provider(home)
     # Another tenant cannot promote it.
-    assert asyncio.run(prov.note_update("mallory", nid, status="active")) is False
+    assert asyncio.run(prov.note_promote("mallory", nid)) is False
     assert _statuses(home).get(nid) == "pending"
+
+
+def test_update_archived_note_refused(home):
+    nid = _seed_pending(home)
+    prov = _provider(home)
+    assert asyncio.run(prov.note_archive(UID, nid)) is True
+    assert asyncio.run(prov.note_update(UID, nid, content="edited")) is False
+    assert asyncio.run(prov.note_archive(UID, nid)) is False   # a second archive is a no-op
+    assert asyncio.run(prov.note_restore(UID, nid)) is True
+    assert _statuses(home).get(nid) == "active"
 
 
 # --- the self_evolution pipeline (A27) --------------------------------------

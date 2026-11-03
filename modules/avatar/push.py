@@ -14,7 +14,7 @@
   (``PFP_PUSH_TELEGRAM``), hash-idempotent at the caller; on failure the caller prints
   the BotFather ``/setuserpic`` steps as the manual path.
 
-tweepy is imported lazily so this module (and its tests) import without the dep.
+requests-oauthlib is imported lazily so this module (and its tests) import without the dep.
 """
 from __future__ import annotations
 
@@ -56,22 +56,40 @@ def sha256_file(path) -> str:
     return h.hexdigest()
 
 
+_UPDATE_PROFILE_IMAGE_URL = "https://api.twitter.com/1.1/account/update_profile_image.json"
+
+
+class _ProfileImageApi:
+    """The one v1.1 call this module makes, signed OAuth1.0a by requests-oauthlib
+    (the `twitter` extra). Same request as tweepy's ``API.update_profile_image``:
+    a multipart POST with the file in the ``image`` field. A non-2xx raises."""
+
+    def __init__(self, session):
+        self._session = session
+
+    def update_profile_image(self, filename=None):
+        with open(filename, "rb") as fh:
+            resp = self._session.post(_UPDATE_PROFILE_IMAGE_URL,
+                                      files={"image": (Path(filename).name, fh)}, timeout=60)
+        resp.raise_for_status()
+
+
 def build_twitter_api(env: Optional[Mapping[str, str]] = None):
-    """Build a tweepy v1.1 API from OAuth1.0a env creds. Raises
-    :class:`TwitterCredsMissing` if any are absent (checked BEFORE importing tweepy)."""
+    """Build the v1.1 profile-image client from OAuth1.0a env creds. Raises
+    :class:`TwitterCredsMissing` if any are absent (checked BEFORE importing the SDK)."""
     env = os.environ if env is None else env
     creds = {k: (env.get(k) or "").strip() for k in _OAUTH1_ENV}
     missing = [k for k, v in creds.items() if not v]
     if missing:
         raise TwitterCredsMissing(f"missing Twitter OAuth1 creds: {', '.join(missing)}")
 
-    import tweepy  # lazy: not a hard dep of this module
+    from requests_oauthlib import OAuth1Session  # lazy: the `twitter` extra
 
-    auth = tweepy.OAuth1UserHandler(
-        creds["TWITTER_API_KEY"], creds["TWITTER_API_SECRET_KEY"],
-        creds["TWITTER_ACCESS_TOKEN"], creds["TWITTER_ACCESS_TOKEN_SECRET"],
-    )
-    return tweepy.API(auth)
+    return _ProfileImageApi(OAuth1Session(
+        creds["TWITTER_API_KEY"], client_secret=creds["TWITTER_API_SECRET_KEY"],
+        resource_owner_key=creds["TWITTER_ACCESS_TOKEN"],
+        resource_owner_secret=creds["TWITTER_ACCESS_TOKEN_SECRET"],
+    ))
 
 
 def push_twitter(png_path, *, api: Any = None, env: Optional[Mapping[str, str]] = None) -> None:

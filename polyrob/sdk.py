@@ -65,6 +65,12 @@ _EXPORTS: Dict[str, str] = {
     # --- workspace and execution ---------------------------------------------
     "resolve_session_workspace": "tools.controller.message_send:_resolve_session_workspace",
     "run_group": "tools.code_exec.backends._proc:run_group",
+    # --- 098 state primitives (atomic files, leases) --------------------------
+    "atomic_write_json": "core.state.files:atomic_write_json",
+    "file_lock": "core.state.files:file_lock",
+    "process_identity": "core.state.proc:process_identity",
+    "ProcIdentity": "core.state.proc:ProcIdentity",
+    "is_alive": "core.state.proc:is_alive",
     # --- the pack contract ---------------------------------------------------
     # W4: a pack derives its verb lists from its own policy rows (pack.toml)
     "action_ids_where": "core.verb_policy:ids_where",

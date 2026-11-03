@@ -16,7 +16,8 @@ shrink-only layering ratchet).
 
 Two rules every handler follows:
 
-- **Phone-sized replies.** Lists cap at :data:`_LIST_LIMIT` with a count line;
+- **Phone-sized replies.** Lists cap at :data:`_LIST_LIMIT`; the rest is one
+  tap away (``/more_<token>``, ``core.surfaces.more_store``);
   every id and path rides in backticks so the renderer emits ``<code>`` and the
   client stops linkifying it.
 - **Honest about what will actually happen.** A stored job with the scheduler
@@ -40,10 +41,14 @@ def _code(text: Any) -> str:
     return f"`{text}`"
 
 
-def _tail(shown: int, total: int, what: str) -> Optional[str]:
-    if total <= shown:
+def _tail(user_id: str, hidden_lines: List[str], what: str) -> Optional[str]:
+    """096 W5: the cut line of a capped list — the rows it did not show are
+    kept one tap away (``/more_<token>``), never "see the console"."""
+    if not hidden_lines:
         return None
-    return f"(+{total - shown} more {what} — see the console or ask me)"
+    from core.surfaces.more_store import cut_line
+    return cut_line(user_id, len(hidden_lines), "\n".join(hidden_lines),
+                    what=f"more {what}", prefix="")
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +144,9 @@ def _allow_reply(user_id: str, board: Any, rest: List[str]) -> str:
     if not hits:
         return f"Nothing switched off matches {_code(ref[:40])} — /goals lists what is off."
     if len(hits) > 1:
-        return ("That matches more than one: " + "; ".join(h.label for h in hits[:5])
-                + " — use more of the title.")
+        shown = "; ".join(h.label for h in hits[:5]) + (  # cut: the count follows
+            f" (+{len(hits) - 5} more)" if len(hits) > 5 else "")
+        return f"That matches more than one: {shown} — use more of the title."
     h = hits[0]
     allow(board.db_path, user_id=user_id, scope=h.scope, value=h.key)
     return f"✅ Back ON: “{h.label}”. It can be created again."
@@ -221,19 +227,26 @@ def _goal_grant(user_id: str, board: Any, rest: List[str]) -> str:
     return f"✅ Granted goal {_code(goal.id[:8])}: {granted}."
 
 
+#: `/goal show` heads: the body and the result inline, the rest one tap away.
+_GOAL_BODY_CHARS = 1200
+_GOAL_RESULT_CHARS = 1500
+
+
 def _goal_show(user_id: str, board: Any, goal: Any) -> str:
     """``/goal show`` — what it is, why it is where it is, what it produced, what
     it cost (when a run recorded it) and the session to open (F-12)."""
     from core.goal_owner_verbs import reason
     out = [f"{_code(goal.id[:8])} [{goal.status}] {goal.title}",
            reason(board, goal, user_id)]
+    from core.surfaces.more_store import cut_text
     if goal.body and goal.body != goal.title:
-        out.append(goal.body[:400])
+        # 096 C5: the body was cut at 400 with no marker. Now the head, and the
+        # whole body one tap away.
+        out.append(cut_text(user_id, str(goal.body), _GOAL_BODY_CHARS))
     out.append(f"priority {goal.priority} · failures "
                f"{goal.consecutive_failures}/{goal.max_retries}")
     if goal.result:
-        res = str(goal.result)
-        out.append("result: " + (res[:1500] + "…" if len(res) > 1500 else res))
+        out.append("result: " + cut_text(user_id, str(goal.result), _GOAL_RESULT_CHARS))
     cost = (goal.payload or {}).get("cost_usd")
     if cost is not None:
         try:
@@ -588,7 +601,12 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
     simply disappeared from this seat the moment it was written.
     """
     from modules.x402.invoicing import INVOICE_STATUSES, list_payment_requests
-    _usage = f"Usage: /invoices [{'|'.join(INVOICE_STATUSES)}]"
+    # `refunded` is also a status: bare it LISTS refunded rows; with an id it
+    # records a refund (098 MO-03).
+    if len(args) > 1 and args[0].lower() == "refunded":
+        return await _invoice_refunded_reply(user_id, args[1:])
+    _usage = (f"Usage: /invoices [{'|'.join(INVOICE_STATUSES)}] · "
+              "/invoices refunded <id> [tx-hash]")
     status = None
     if args:
         candidate = args[0].lower()
@@ -604,16 +622,17 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
     scope = f"tenant {_code(user_id)}" + (f" · {status}" if status else "")
     if not rows:
         return f"No invoices ({scope})."
-    shown = rows[:_LIST_LIMIT]
     lines = [f"{len(rows)} invoice(s) — {scope}:"]
-    for r in shown:
+    rendered = []
+    for r in rows:
         line = (f"• {_code(str(r['request_id'])[:8])} [{r['status']}] "
                 f"${float(r.get('amount_usd') or 0):.2f} — "
                 f"{r.get('purpose') or '(no purpose)'}")
         if r.get("payer_contact"):
             line += f" · billed to {r['payer_contact']}"
-        lines.append(line)
-    more = _tail(len(shown), len(rows), "invoice(s)")
+        rendered.append(line)
+    lines += rendered[:_LIST_LIMIT]
+    more = _tail(user_id, rendered[_LIST_LIMIT:], "invoice(s)")
     if more:
         lines.append(more)
     lines.append("Mark one paid: /settle <id> [tx-hash]")
@@ -624,11 +643,45 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
         _owed_usd = sum(float(r.get("amount_usd") or 0) for r in _owed)
         lines.append(f"⚠️ {len(_owed)} of these are REFUNDS I owe "
                      f"(${_owed_usd:.2f}) — paid for work that then failed. "
-                     f"`/invoices refund_due` lists only those.")
+                     f"`/invoices refund_due` lists only those; after you pay one "
+                     f"back: /invoices refunded <id> [tx-hash]")
     note = _invoicing_off_note()
     if note:
         lines.append(note.strip())
     return "\n".join(lines)
+
+
+async def _invoice_refunded_reply(user_id: str, args: List[str]) -> str:
+    """`/invoices refunded <id> [tx-hash]` — record that a refund the agent owed
+    was paid back (``refund_due → refunded``, 098 MO-03).
+
+    The SAME operation as ``polyrob owner refunded`` (``mark_payment_refunded``,
+    a guarded write from ``refund_due`` only). The id resolves among the
+    caller's OWN ``refund_due`` rows, so a chat id can never close another
+    tenant's obligation."""
+    from modules.x402.invoicing import list_payment_requests
+    from modules.x402.x402_integration import mark_payment_refunded
+    try:
+        rows = await list_payment_requests(user_id=user_id, status="refund_due", limit=200)
+    except Exception as e:
+        logger.warning("telegram /invoices refunded lookup failed: %s", e, exc_info=True)
+        return f"Could not read invoices: {e}"
+    request_id, err = resolve_prefix(args[0], [str(r["request_id"]) for r in rows])
+    if err:
+        return f"{err} among the refunds you owe — see /invoices refund_due."
+    tx_hash = args[1] if len(args) > 1 else None
+    try:
+        done = await mark_payment_refunded(request_id, tx_hash=tx_hash,
+                                           note="owner: /invoices refunded")
+    except Exception as e:
+        logger.warning("telegram /invoices refunded failed: %s", e, exc_info=True)
+        return f"Refund not recorded: {e}"
+    if not done:
+        return (f"{_code(request_id[:8])} was not changed — it is no longer "
+                "refund_due (already refunded, or the store refused the write).")
+    return (f"✅ Refund recorded for {_code(request_id[:8])}"
+            + (f" (tx {_code(tx_hash)})" if tx_hash else "")
+            + ". /status stops counting it as owed.")
 
 
 async def settle_reply(user_id: str, args: List[str]) -> str:
@@ -889,8 +942,25 @@ _CHAT_WIDTH = 60
 _CHAT_ITEMS = 5
 
 
-def inbox_reply(user_id: str, data_dir: str) -> str:
+def _inbox_limit(args: Optional[List[str]]) -> Tuple[Optional[int], Optional[str]]:
+    """``(limit, error)`` for ``/inbox [all|n]``: no word = the phone default,
+    ``all`` = every item, ``n`` = n per section."""
+    if not args:
+        return _CHAT_ITEMS, None
+    word = str(args[0]).strip().lower()
+    if word == "all":
+        return None, None
+    if word.isdigit() and int(word) > 0:
+        return int(word), None
+    return None, "Usage: /inbox [all|n] — `all` lists everything, `n` that many per section."
+
+
+def inbox_reply(user_id: str, data_dir: str, args: Optional[List[str]] = None) -> str:
     """Everything waiting on an owner decision, blocking first.
+
+    ``/inbox`` shows :data:`_CHAT_ITEMS` per section and keeps the rest one tap
+    away (``/more_<token>``); ``/inbox all`` lists everything, ``/inbox 12``
+    twelve per section (096 C6: ``[n]`` was advertised and ignored).
 
     The SAME composition the console and the REPL render
     (``core.surfaces.inbox`` over ``surfaces.inbox_sources``), through the SAME
@@ -901,14 +971,71 @@ def inbox_reply(user_id: str, data_dir: str) -> str:
     """
     from core.surfaces.inbox_render import CHAT_REMEDIES, render_inbox
     from surfaces.inbox_sources import build_inbox
+    limit, err = _inbox_limit(args)
+    if err:
+        return err
     try:
         body = build_inbox(user_id, data_dir=data_dir)
     except Exception as exc:
         logger.warning("inbox: composition failed", exc_info=True)
         return (f"I could not read the inbox at all ({exc}). That is UNKNOWN, "
                 f"not 'nothing needs you'.")
-    return render_inbox(body, remedies=CHAT_REMEDIES, limit=_CHAT_ITEMS,
-                        width=_CHAT_WIDTH)
+    return render_inbox(body, remedies=CHAT_REMEDIES, limit=limit,
+                        width=_CHAT_WIDTH, more_tenant=user_id)
+
+
+# --------------------------------------------------------------------------- #
+# 096 W5 — /rules: the owner rules and the operating contract, read only
+# --------------------------------------------------------------------------- #
+
+def _numbered(text: str, start: int = 1) -> Tuple[List[str], int]:
+    """Rule lines numbered in order; a heading stays as a plain label."""
+    out, n = [], start
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            out.append(line.lstrip("#").strip() + ":")
+            continue
+        body = line[2:].strip() if line.startswith(("- ", "* ")) else line
+        out.append(f"{n}. {body}")
+        n += 1
+    return out, n
+
+
+def rules_reply(user_id: str, data_dir: str, instance_id: str) -> str:
+    """`/rules` — what I hold myself to: the rules you gave me (owner.md, the
+    ACTIVE part, the same text my sessions load) and my operating contract
+    (contract.md). Numbered, read only; changing one goes through the agent
+    and your approval (/pending)."""
+    from core.instance import load_contract_doc, load_owner_doc
+    out = []
+    try:
+        owner = load_owner_doc(data_dir, user_id, instance_id)
+    except Exception as exc:   # noqa: BLE001 — the loader never raises; say so if it does
+        owner = f"[unreadable: {type(exc).__name__}]"
+    try:
+        contract = load_contract_doc(data_dir, user_id, instance_id)
+    except Exception as exc:   # noqa: BLE001
+        contract = f"[unreadable: {type(exc).__name__}]"
+    out.append("Your rules for me (owner.md):")
+    if owner.strip():
+        lines, _n = _numbered(owner)
+        out += lines or ["(none written)"]
+    else:
+        out.append("(none written)")
+    out.append("")
+    out.append("My operating contract (contract.md):")
+    if contract.strip():
+        lines, _n = _numbered(contract)
+        out += lines or ["(none written)"]
+    else:
+        out.append("(none written)")
+    out.append("")
+    out.append("Read only. To change a rule, tell me — the change waits for your "
+               "approval in /pending.")
+    return "\n".join(out)
 
 
 async def book_reply(user_id: str, data_dir: str) -> str:

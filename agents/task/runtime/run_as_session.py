@@ -121,6 +121,11 @@ async def _resume_existing_session(task_agent: Any, session_id: str, *,
         logger.warning("resume refused: session %s belongs to %s, not %s",
                        session_id, owner, user_id)
         return None
+    if info.get("status") == "cancelled":
+        # 098 review (O-01): a cancelled session holds until a person writes; a
+        # goal still on the board runs again in a FRESH session instead.
+        logger.info("resume: session %s was cancelled — the goal starts fresh", session_id)
+        return None
     if max_steps:
         _refresh_step_cap(task_agent, session_id, info, int(max_steps))
     resolve = getattr(task_agent, "_resolve_or_recreate", None)
@@ -183,17 +188,31 @@ async def _run_session_to_outcome(task_agent: Any, session_id: str, *,
     """
     from agents.task.runtime.run_outcome import build_run_outcome
 
+    def _orch():
+        get_orch = getattr(task_agent, "get_orchestrator", None)
+        return get_orch(session_id) if callable(get_orch) else None
+
+    def _generation():
+        gen = getattr(_orch(), "shell_sandbox_generation", None)
+        return gen() if callable(gen) else None
+
+    # ⚠️ 098 review: read THIS run's sandbox generation the moment run_session
+    # returns (no await in between): a queued run may take the session during
+    # the awaits below, and the release must not close that run's sandbox.
+    generation = None
     try:
         status = await task_agent.run_session(user_id, session_id)
+        generation = _generation()
         return await build_run_outcome(task_agent, session_id, status)
     finally:
         if autonomous:
             try:
-                get_orch = getattr(task_agent, "get_orchestrator", None)
-                orch = get_orch(session_id) if callable(get_orch) else None
-                release = getattr(orch, "release_shell_sandbox", None)
+                if generation is None:
+                    generation = _generation()
+                release = getattr(_orch(), "release_shell_sandbox", None)
                 if callable(release):
-                    await release()
+                    await (release(generation=generation) if generation is not None
+                           else release())
             except Exception:
                 logger.debug("shell sandbox release failed (non-fatal)", exc_info=True)
 

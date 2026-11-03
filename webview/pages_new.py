@@ -517,9 +517,14 @@ def _card(item: dict, *, owner_console: bool = True, now: float = None) -> dict:
     actions = []
     for i, action in enumerate(item.get("actions") or ()):
         key = _ACTION_WORDS.get((kind, action), f"inbox.action.{action}")
+        # 096 W7 (E3): "show" on a pending proposal maps to no decision verb, so
+        # the card drew no button and the body could not be read. It READS the
+        # shared review (GET /api/webgate/pending/{kind}/{id}).
+        reads = action == "show" and item.get("source") == "self_evolution"
         actions.append({
-            "label": t(key),
+            "label": t("inbox.action.read_it") if reads else t(key),
             "verb": _ACTION_VERB.get(action),
+            "read": reads,
             "primary": i == 0 and action in ("approve", "fulfill"),
         })
     row = dict(item, **ages)

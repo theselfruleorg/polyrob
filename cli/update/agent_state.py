@@ -103,17 +103,13 @@ def _read_marker_file(mp: Path):
     import json
     try:
         m = json.loads(mp.read_text(encoding="utf-8"))
-        pid = int(m.get("pid") or 0)
         # A marker with no positive pid is not a turn (the shell reader's
-        # `[ "$pid" -gt 0 ]`); os.kill(0, 0) would signal OUR OWN process
-        # group and succeed, reading as a phantom live turn.
-        if pid <= 0:
+        # `[ "$pid" -gt 0 ]`). 098 CO-01: live only while pid + start time +
+        # boot id match (a reused pid after a crash is not a turn); a marker
+        # without a start time falls back to the pid check.
+        from core.interactive_gate import marker_is_live
+        if not marker_is_live(m):
             return None, None
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return None, None
-    except PermissionError:
-        return m, None  # alive, owned by another user
     except (OSError, ValueError, TypeError, AttributeError):
         return None, "a live turn marker that cannot be parsed (treated as a live turn)"
     return m, None

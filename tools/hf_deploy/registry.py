@@ -11,8 +11,33 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.sqlite_util import execute_retry, init_schema, wal_connect
+from core.state.machine import StateMachine
+from core.state.sql import cas_transition
 
-_VALID_STATUSES = frozenset({"pending", "approved", "live", "failed", "undeployed"})
+#: 098 TS-30. ``deploying`` is written before the Space is published; a health
+#: failure AFTER a publish is ``unhealthy`` (the Space exists), ``failed`` means
+#: the publish itself failed. Every status write is a CAS on the state read.
+HF_DEPLOY = StateMachine(
+    "hf.deploy",
+    states=frozenset({"pending", "deploying", "live", "unhealthy", "failed", "undeployed"}),
+    transitions={
+        "pending": frozenset({"deploying", "undeployed"}),
+        # deploying -> deploying: a stale attempt (a crash mid-deploy) is retaken.
+        "deploying": frozenset({"deploying", "live", "unhealthy", "failed", "undeployed"}),
+        "live": frozenset({"unhealthy", "deploying", "undeployed"}),
+        "unhealthy": frozenset({"live", "deploying", "undeployed"}),
+        "failed": frozenset({"deploying", "undeployed"}),
+        "undeployed": frozenset({"deploying"}),
+    },
+    aliases={"approved": "pending"},
+    initial=frozenset({"pending", "deploying"}),
+)
+
+_VALID_STATUSES = frozenset(HF_DEPLOY.states)
+
+#: A ``deploying`` row older than this is a crashed attempt: a new deploy may
+#: retake it and the reconcile probes it.
+STALE_DEPLOYING_SEC = 30 * 60
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS deployed_apps (
@@ -68,7 +93,8 @@ class DeployedAppsRegistry:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        init_schema(self.db_path, _SCHEMA)
+        init_schema(self.db_path, _SCHEMA,
+                    columns={"deployed_apps": (("deploy_started_at", "REAL"),)})
 
     # --- reads -----------------------------------------------------------
 
@@ -85,6 +111,18 @@ class DeployedAppsRegistry:
             self.db_path,
             "SELECT * FROM deployed_apps WHERE user_id=? ORDER BY created_at",
             (user_id,), fetch="all",
+        ) or []
+        return [dict(r) for r in rows]
+
+    def list_reconcilable_all(self, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Every row the boot reconcile re-checks, across ALL tenants: ``live``,
+        ``unhealthy`` and a ``deploying`` row older than ``STALE_DEPLOYING_SEC``."""
+        cutoff = (now if now is not None else time.time()) - STALE_DEPLOYING_SEC
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM deployed_apps WHERE status IN ('live','unhealthy') "
+            "OR (status='deploying' AND COALESCE(deploy_started_at,0) < ?)",
+            (cutoff,), fetch="all",
         ) or []
         return [dict(r) for r in rows]
 
@@ -143,47 +181,66 @@ class DeployedAppsRegistry:
             (time.time(), app_name, user_id),
         )
 
-    def record_live(self, app_name: str, user_id: str, *, space_repo: str,
-                    public_url: str, health_path: str, workspace_digest: str) -> None:
-        now = time.time()
-        rc = execute_retry(
-            self.db_path,
-            "UPDATE deployed_apps SET status='live', space_repo=?, public_url=?, "
-            "health_path=?, workspace_digest=?, last_deploy=? WHERE app_name=? AND user_id=?",
-            (space_repo, public_url, health_path, workspace_digest, now, app_name, user_id),
-        )
-        if not rc:
-            execute_retry(
-                self.db_path,
-                "INSERT INTO deployed_apps (app_name,user_id,status,space_repo,public_url,"
-                "health_path,workspace_digest,created_at,last_deploy) VALUES (?,?,?,?,?,?,?,?,?)",
-                (app_name, user_id, "live", space_repo, public_url, health_path,
-                 workspace_digest, now, now),
-            )
+    def _cas(self, app_name: str, user_id: str, to: str, *, from_states=None,
+             set_cols=None, where_extra: str = "", where_params: tuple = ()) -> bool:
+        return cas_transition(
+            self.db_path, "deployed_apps", key="app_name=? AND user_id=?",
+            key_params=(app_name, user_id), machine=HF_DEPLOY, to=to,
+            from_states=from_states, set_cols=set_cols or {},
+            where_extra=where_extra, where_params=where_params)
 
-    def record_failed(self, app_name: str, user_id: str, *, error: Optional[str] = None) -> None:
-        rc = execute_retry(
-            self.db_path,
-            "UPDATE deployed_apps SET status='failed', last_failure_error=? "
-            "WHERE app_name=? AND user_id=?",
-            (error, app_name, user_id),
-        )
-        if not rc:
-            execute_retry(
-                self.db_path,
-                "INSERT INTO deployed_apps (app_name,user_id,status,last_failure_error,created_at) "
-                "VALUES (?,?,?,?,?)",
-                (app_name, user_id, "failed", error, time.time()),
-            )
-
-    def set_status(self, app_name: str, user_id: str, status: str) -> None:
-        if status not in _VALID_STATUSES:
-            raise ValueError(f"invalid status {status!r} (use {sorted(_VALID_STATUSES)})")
+    def begin_deploy(self, app_name: str, user_id: str, *,
+                     space_repo: Optional[str] = None,
+                     now: Optional[float] = None) -> bool:
+        """Enter ``deploying`` BEFORE the Space is published. False when another
+        deploy of this app is in progress (a ``deploying`` row younger than
+        ``STALE_DEPLOYING_SEC``)."""
+        now = now if now is not None else time.time()
         execute_retry(
             self.db_path,
-            "UPDATE deployed_apps SET status=? WHERE app_name=? AND user_id=?",
-            (status, app_name, user_id),
+            "INSERT OR IGNORE INTO deployed_apps (app_name,user_id,status,space_repo,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (app_name, user_id, "pending", space_repo, now),
         )
+        cols = {"deploy_started_at": now}
+        if space_repo:
+            cols["space_repo"] = space_repo
+        return self._cas(app_name, user_id, "deploying", set_cols=cols,
+                         where_extra="status != 'deploying' OR COALESCE(deploy_started_at,0) < ?",
+                         where_params=(now - STALE_DEPLOYING_SEC,))
+
+    def record_live(self, app_name: str, user_id: str, *, space_repo: str,
+                    public_url: str, health_path: str, workspace_digest: str,
+                    from_states=("deploying",), where_extra: str = "",
+                    where_params: tuple = ()) -> bool:
+        """``deploying -> live`` (or the reconcile's ``unhealthy -> live``)."""
+        return self._cas(app_name, user_id, "live", from_states=from_states, set_cols={
+            "space_repo": space_repo, "public_url": public_url, "health_path": health_path,
+            "workspace_digest": workspace_digest, "last_deploy": time.time()},
+            where_extra=where_extra, where_params=where_params)
+
+    def record_unhealthy(self, app_name: str, user_id: str, *, error: Optional[str] = None,
+                         from_states=("deploying",), where_extra: str = "",
+                         where_params: tuple = (), set_cols=None) -> bool:
+        """The Space was published but does not answer 2xx."""
+        cols = {"last_failure_error": error}
+        cols.update(set_cols or {})
+        return self._cas(app_name, user_id, "unhealthy", from_states=from_states,
+                         set_cols=cols, where_extra=where_extra, where_params=where_params)
+
+    def record_failed(self, app_name: str, user_id: str, *, error: Optional[str] = None,
+                      from_states=("deploying",), where_extra: str = "",
+                      where_params: tuple = ()) -> bool:
+        """The publish itself failed (no Space was put up by this attempt)."""
+        return self._cas(app_name, user_id, "failed", from_states=from_states,
+                         set_cols={"last_failure_error": error},
+                         where_extra=where_extra, where_params=where_params)
+
+    def set_status(self, app_name: str, user_id: str, status: str) -> bool:
+        """Owner/tool edge to *status* from every state the table allows."""
+        if HF_DEPLOY.normalize(status) not in _VALID_STATUSES:
+            raise ValueError(f"invalid status {status!r} (use {sorted(_VALID_STATUSES)})")
+        return self._cas(app_name, user_id, status)
 
     def record_attempt(self, app_name: str, user_id: str) -> None:
         execute_retry(

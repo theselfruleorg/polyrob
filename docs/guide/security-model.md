@@ -1,13 +1,12 @@
 # Security & trust model
 
-This page is the one honest, consolidated answer to "what actually stops the agent
-from doing something bad?" Short version: almost every gate described elsewhere in
-this repo — correspondent taint, the tool-capability table, approval hooks, money
-caps — is a **heuristic running inside the same trusted process as the agent
-itself**. They are well-designed and load-bearing, but none of them is a hard
-security boundary. The only hard boundary is the **operating system / container**,
-and this page names exactly where that boundary exists today, where it doesn't, and
-what to do about it depending on how you're running polyrob.
+This page answers "what stops the agent from doing something bad?" in one place.
+Short version: almost every gate described elsewhere — correspondent taint, the
+tool-capability table, approval hooks, money caps — is a **policy check running inside
+the same process as the agent itself**. None of them is a hard security boundary. The
+only hard boundary is the **operating system / container**, and this page names where
+that boundary exists, where it does not, and what to do about it for each way you run
+polyrob.
 
 > This page complements, and deliberately does not duplicate:
 > **[SECURITY.md](../../SECURITY.md)** (vulnerability reporting, the unaudited-crypto
@@ -37,8 +36,9 @@ tier per inbound message, fail-closed once the access model is on
 (`CORRESPONDENT_ACCESS_ENABLED`): **OWNER**, **CORRESPONDENT**, **GROUP_MEMBER**,
 or **DENIED** (`core/surfaces/access.py::AccessTier`). A correspondent's reply can
 *never* reach COMMAND/STEER/TASK_AGENT — it is delivered as a
-`MessageOrigin.CORRESPONDENT` control message, framed with an
-`<untrusted_tool_result>` wrapper, exactly like a fetched web page. A group member
+`MessageOrigin.CORRESPONDENT` control message inside a `<correspondent-message>`
+envelope, with the text itself in an inner `<untrusted_tool_result>` wrapper, exactly
+like a fetched web page. A group member
 can only ever reach the room rail.
 
 The tier is only as good as the proof of who sent the message, so each surface
@@ -80,8 +80,11 @@ calling a gated tool — e.g. influencing what the agent later tells the *owner*
 (social-engineering the human, not the gate), or a bug in the gate's own
 resolution logic. The gate's own docstring documents its sharpest edge: the
 pre-hook receives the bare *action name*, not the *tool_id* — a denylist keyed on
-the wrong one is silently dead. It's implemented correctly today, but that's a
-property of the code, not of the mechanism.
+the wrong one is silently dead. The gate keys on action names; that is a property of
+the code, not of the mechanism.
+
+It also does not read the text. The taint is a fact about where the turn's context
+came from, not a judgement of whether the content was hostile.
 
 ### Standing work and the money regime
 
@@ -94,20 +97,18 @@ and only a genuine owner turn may put a write verb on a job
 (`tools/goal_tools.py::owner_seat_turn`).
 
 Money from unattended work follows the money regime
-(`core/config_policy/money_regime.py`). Under `supervised` no goal or cron run moves
-funds unattended: the guard's autonomous lane and the x402 autonomous lane refuse.
-Under `armed` a run trades within the caps and the per-verb simulation.
-
-Tool output reaches the model inside an `<untrusted_tool_result>` frame: it is data,
-never an instruction.
+(`core/config_policy/money_regime.py`), one of three. Under `supervised`
+(`AUTONOMY_MODE` is not effectively `autonomous`) no goal or cron run moves funds
+unattended: the guard's autonomous lane and the x402 autonomous lane refuse. Under
+`autonomous` the agent runs its own work, but money is not armed. `armed` needs
+`DEFI_AGENT_AUTONOMY`, `DEFI_TRADE_ENABLED`, `DEFI_AUTONOMOUS_TURN_TRADING`,
+`DEFI_TIERED_SPEND_LANE` and a daily cap; then a run trades within the caps and the
+per-verb simulation. The posture card names the regime and any missing key.
 
 **A late approval sends exactly what was approved.** When the owner approves a
 queued outbound write (an X post, reply or DM, a mail) after its run has ended, the
 agent process sends those approved parameters once. It never re-runs the job or
 goal that asked, so an approval of one post can never repeat the rest of that run.
-
-What it does not do: read the text. The taint is a fact about where the turn's
-context came from, not a judgement of whether the content was hostile.
 
 ### Tool-capability table (`core/tool_capabilities.py`)
 
@@ -145,83 +146,40 @@ remembered to put in `APPROVAL_REQUIRED_TOOLS` (or the posture-derived defaults)
 
 ### Money gates (`modules/x402`, `core/wallet/`)
 
-More is enforced here than caps. The full set, composed (every one fail-closed
-on a probe error):
+Every money verb passes a stack of checks in the agent process, each fail-closed on a
+probe error:
 
-- **The owner pause** (`polyrob autonomy pause` / `/pause` / `/halt` from the
-  owner; the legacy `AUTONOMY_HALT` file/env is a facet of it) refuses
-  every money movement the agent starts on its own — it is structurally inside
-  `PolicyGate.check` (`core/wallet/policy.py`), so every money verb inherits it,
-  and it is probed again at the top of `tx_guard.authorize` and the x402 pay
-  path. A genuine owner turn (an owner chat turn, or an owner verb such as
-  `/send … go`, `/swap … go`, `/bridge … go`, `/pay … go`, or Confirm on an action
-  card) passes it
-  (`core/money/authority.py::owner_direct_turn`, `tx_guard` step 0); a call with
-  no execution context is never the owner. The venue trade gate
-  (`polyrob_markets/trade_gate.py`, the markets pack) still refuses every order
-  while paused, whoever asks; only the owner's own by-hand cancel of a
-  protective order passes it.
-- **Turn-origin refusal**: a forged self-wake, delegation-result, leaf, or
-  autonomous turn cannot reach a money verb — enforced independently at
-  `core/wallet/tx_guard.py` step 2 (on-chain), `tools/x402/spend_gate.py`
-  (x402 pay), `polyrob_markets/trade_gate.py::trade_turn_refusal` (venue orders, the markets pack),
-  and the owner-queue approver. Two deliberate, flag-gated narrowings exist:
-  `DEFI_AUTONOMOUS_TURN_TRADING` admits goal/cron-dispatched runs, and
-  `DEFI_MONITOR_EXITS` admits EXIT-shaped operations only (close a held
-  position into the quote asset, measured inflow asserted) from a forged
-  main-agent turn. Both default OFF; both still ride every cap.
-- **Caps as a ladder**: `AGENT_WALLET_MAX_PER_TX_USD` (catastrophic ceiling),
-  `WALLET_DAILY_CAP_USD` (rolling 24h), per-venue caps, the
-  `DEFI_AUTONOMOUS_MAX_USD` autonomous ceiling (a spend the agent starts above
-  it → the durable `owner_queue` lane, never auto-execute; once the owner
-  approves that call it is sent, lane `owner_approved`; an owner verb passes the
-  ceiling, lane `owner_direct` — the per-tx cap, the daily cap, the simulation
-  and the declared `max_spend_usd` still bind everyone), and a daily-cap-REQUIRED bar for
-  any unattended origin. An idempotency replay guard sits in the same gate.
-- **`PAYMENT_APPROVAL_MODE`** (`approve` default routes every outward payment
-  through `owner_queue`; `auto` auto-approves within caps and notifies after),
-  plus `X402_INVOICE_MAX_USD` / `X402_INVOICE_DAILY_MAX` on the receive side.
-- **The correspondent-taint gate** denies the money verbs by action name
-  (`defi_trade_*`, `x402_pay_x402_fetch`, `x402_invoice_x402_request`, the
-  venue order verbs) while a session is tainted — not only by tool_id.
-- **The RPC pin**: `tx_guard` refuses to move funds on the shared public RPC
-  (`DEFI_EVM_RPC_<CHAIN>`, `DEFI_SOLANA_RPC`) — the simulation, the deltas and
-  the caps are all read from it, so it cannot be the trust anchor by default.
-- **`secret_guard`** (`core/security/secret_guard.py`) hard-denies every
-  agent-writable file surface access to credential-shaped files — `.env*`,
-  `*.env`, key material, and the wallet's own `meta.json`/`audit.jsonl` (whose
-  rewrite would reset the rolling caps or flip an address).
+- **The owner pause** (`polyrob autonomy pause`, `/pause`, `/halt`) sits inside
+  `PolicyGate.check` (`core/wallet/policy.py`) and is probed again by `tx_guard` and the
+  x402 pay path. A genuine owner turn passes it
+  (`core/money/authority.py::owner_direct_turn`); a call with no execution context is
+  never the owner. The venue trade gate (markets pack) refuses every order while paused.
+- **Turn origin.** A forged self-wake, delegation-result, leaf or autonomous turn cannot
+  reach a money verb — enforced independently in `core/wallet/tx_guard.py`,
+  `tools/x402/spend_gate.py`, the markets pack's `trade_turn_refusal` and the
+  owner-queue approver. `DEFI_AUTONOMOUS_TURN_TRADING` and `DEFI_MONITOR_EXITS` are the
+  two flag-gated narrowings; both still ride every cap.
+- **Caps as a ladder** — per-transaction, rolling daily, per-venue, and the
+  `DEFI_AUTONOMOUS_MAX_USD` autonomous ceiling, with a replay guard in the same gate.
+- **Approval** — `PAYMENT_APPROVAL_MODE` and the receive-side invoice caps.
+- **Correspondent taint** denies the money verbs by action name (`defi_trade_*`,
+  `x402_pay_x402_fetch`, `x402_invoice_x402_request`, the venue order verbs).
+- **The RPC pin** — `tx_guard` refuses to move funds on the shared public RPC.
+- **`secret_guard`** (`core/security/secret_guard.py`) denies every agent-writable file
+  surface access to credential-shaped files, including the wallet's `meta.json` and
+  `audit.jsonl`.
+- **A payout shape always waits for the owner**
+  (`core/config_policy/spend_lane.py::payout_shaped`), in every lane.
+- **No default network** — every money verb and wallet command needs an explicit chain.
+- **Tamper evidence** — the spend ledger is chain-hashed and sealed with a key from the
+  master seed, and every on-chain submission is journaled
+  (`wallet/submissions.sqlite`) before it is signed; an unresolved broadcast blocks new
+  submissions.
 
-- **The declared bound is the value, the fee is the caps'.** A send's declared
-  `max_spend_usd` asserts what the transaction moves or grants; the network fee is
-  charged to the per-tx and daily caps only, so a send declared at exactly its value
-  passes. A shape whose fee IS its value (deploy, claim, mint) keeps the fee in the
-  declared check.
-- **Address poisoning.** A transfer to an address that only looks like a payee of
-  the last 30 days (same first and last characters, a different body) is refused;
-  unreadable payment history refuses the send. This assists, and does not replace,
-  checking the full address.
-- **Transfers to yourself.** A genuine owner turn that transfers to one
-  of `OWNER_WALLET_ADDRESSES` or to the agent's own wallet waits on no second tap.
-  The caps, `tx_guard` and the pause still hold.
-- **A payout shape always waits for the owner.** A `defi_trade.call` that moves
-  value without declaring a fair inflow, and a `deploy_contract` that endows the
-  constructor, can pay an address nobody pinned
-  (`core/config_policy/spend_lane.py::payout_shaped`). `tx_guard` queues such a call
-  for the owner's tap in every lane, `PAYMENT_APPROVAL_MODE=auto` and the
-  autonomous ceiling included.
-- **No default network.** Every money verb (`defi_trade`, `defi_data`,
-  `dapp_browser`, `agent_nft`) and every wallet, identity and LP CLI command needs an
-  explicit `chain`; a call without one is refused, never sent to a guessed network.
-
-Persistent policy history refuses damaged storage and invalid amounts. A shared
-POSIX lock serializes check/spend/record across cooperating local processes. In
-a process that holds the seed, the spend ledger (`wallet/audit.jsonl`) is
-chain-hashed and sealed with a MAC keyed from the master seed, so an edited or
-removed row fails the load and spending is refused until the ledger is repaired.
-Every on-chain submission is written to a journal (`wallet/submissions.sqlite`)
-before it is signed; an unresolved broadcast blocks new submissions until its cap
-charge is booked, and a timeout never frees it.
+The detail of each check is in [wallet.md](wallet.md) (caps, audit, address poisoning,
+transfers to yourself, x402) and [onchain.md](onchain.md) (the transaction guard and its
+ordered gates); the arming order is in
+[payments.md](payments.md#9-arming-it-one-step-at-a-time).
 
 What it does not do: protect the wallet's *key material* from a host-level
 compromise — if the process itself is compromised (see §3's "process identity" gap),
@@ -230,45 +188,29 @@ wallet signer below is the lever that moves the key out of that process.
 
 ### The wallet signer (`core/signer/`)
 
-`WALLET_SIGNER` (default `local`) decides where signatures come from:
-
-- `local` — the agent's own process holds the seed and signs. Every gate above runs in
-  that process.
-- `shadow` — the agent still signs, and also asks `polyrob-signer` for a verdict on the
-  same intent. The verdict is logged and counted in the `custody` status section;
-  it never blocks a send.
-- `remote` — the agent holds no key; a seed that reaches it is dropped. The signer runs
-  as its own OS user behind a Unix socket that checks the connecting UID, re-runs
-  `tx_guard` on its own pinned RPC against the hard limits in `signer.toml`, keeps
-  its own spend record, and only then signs. Above its hard limit the owner
-  approves on the box, as root.
-
-Under `shadow` and `remote` the signer's limits are the envelope: the agent lowers its own
-matching limits to them, so a raise from chat stops at the signer's limit. This is
-the one place in this section where a gate does not share the agent's process.
-Set-up and cut-over: [payments.md](payments.md).
+`WALLET_SIGNER` (default `local`) decides where signatures come from. Under `local`
+the agent's own process holds the seed and signs, and every gate above runs in that
+process. Under `shadow` the agent still signs and also logs the signer's verdict. Under
+`remote` the agent holds no key: `polyrob-signer` runs as its own OS user behind a Unix
+socket that checks the connecting UID, re-runs `tx_guard` on its own pinned RPC against
+the hard limits in `signer.toml`, keeps its own spend record, and only then signs; above
+its hard limit the owner approves on the box, as root. This is the one money gate that
+does not share the agent's process. Set-up and cut-over:
+[wallet.md](wallet.md#where-the-signatures-come-from--the-signer).
 
 ### The on-chain transaction guard (`core/wallet/tx_guard.py`)
 
-Distinct enough from the caps to name on its own: **no value-moving EVM
-transaction is broadcast without simulating it, measuring the observed asset
-and allowance deltas, and asserting them against the declared intent** — a
-revert, an RPC error, an unreadable balance, an undeclared allowance grant, an
-unpriceable outflow, or a measured-zero outflow on a declared send all REFUSE.
-Effects are measured, never inferred from the caller's calldata. The
-`solana_swap` verb cannot route through `tx_guard` (there is no EVM
-transaction), so it mirrors the same step order against `simulateTransaction`
-deltas, with the SPL authority taxonomy (delegate/owner/close/freeze grants
-refuse) standing in for the allowance check.
+No value-moving EVM transaction is broadcast without simulating it, measuring the
+observed asset and allowance deltas, and asserting them against the declared intent;
+`solana_swap` mirrors the same step order against `simulateTransaction`. The gates are
+listed in [onchain.md](onchain.md#defi_trade--value-movement-behind-a-transaction-guard).
 
-There are two money-gate architectures, split by mechanism, and the split is
-deliberate: `tx_guard`-style **simulate-and-assert** governs everything that
-signs a raw transaction; the PolicyGate/venue `trade_gate` (markets pack) **declared-amount**
-model governs venue orders and x402 payments, where there is no local
-transaction to simulate. The risk is a NEW money verb picking the weaker gate
-out of convenience — the bidirectional money-verb ratchet
-(`tests/unit/core/test_money_verb_registration.py`) is the enforcement point:
-any new money verb must name its gate.
+There are two money-gate architectures, split by mechanism: **simulate-and-assert**
+(`tx_guard`) governs everything that signs a raw transaction; the **declared-amount**
+model (the PolicyGate and the markets pack's venue `trade_gate`) governs venue orders
+and x402 payments, where there is no local transaction to simulate. The money-verb
+ratchet (`tests/unit/core/test_money_verb_registration.py`) requires every new money
+verb to name its gate, so a new verb cannot pick the weaker gate by accident.
 
 ### Host-capability gates (`tools/shell/tool.py`, `tools/self_env/tool.py`)
 
@@ -385,19 +327,17 @@ seen. Mail is third-party text: every result is framed as untrusted.
 ### The pattern across all of them
 
 Every one of these is **software logic evaluated by the same interpreter that
-runs the agent loop**. They're real, they're tested, and defeating them requires
-either a genuine implementation bug or a novel bypass path — not "jailbreak the
-sandbox," because there usually isn't one at this layer. That's exactly why they
-need a second, independent line of defense underneath them: the OS/container
-boundary.
+runs the agent loop**. Each checks a fixed condition before a tool runs; none of them
+separates memory, files or privileges. A bug in one of them, or a path none of them
+covers, is not stopped at this layer. That is why they need a second, independent line
+of defense underneath them: the OS/container boundary.
 
 ---
 
-## 3. The honest holes — what runs unsandboxed on the host today
+## 3. The gaps — what runs unsandboxed on the host today
 
-These are not bugs to be quietly worked around; they are documented, deliberate
-trade-offs (or, in one case, an unwired-but-designed lever). Naming them precisely
-is the point of this page.
+These are documented, deliberate trade-offs, not bugs. Each one names what runs
+outside a sandbox and what to do about it.
 
 ### a) Host work runs beside the wallet; the key is isolated in memory, not on disk
 
@@ -427,7 +367,7 @@ refusal names the fixes: move the seed to the signer (`WALLET_SIGNER=remote`, se
 the wallet signer in §2) and remove it from that file, or run code in a sandbox backend
 (`CODE_EXEC_BACKEND=docker`). The other host children above stay allowed: they do
 not run code the model wrote. A seed only in the service manager's env file (the
-production shape: `wallet.env`, root-owned 0600) and an install with no wallet see
+server shape: `wallet.env`, root-owned 0600) and an install with no wallet see
 no change. The env copies in an old `polyrob update` snapshot
 (`<data home>/snapshots/*/config/`) are checked too: a seed moved to the signer can
 still sit there. That refusal names its own fix — delete the old snapshot once you
@@ -475,6 +415,15 @@ kernel; a second host over `BROWSER_WSS_URL` does. Every session gets a fresh
 context over CDP, so no login persists in the service's profile; CDP itself is
 unauthenticated on loopback, which is why nothing may persist there.
 
+**Launch restrictions.** Chromium sandboxing is explicitly enabled for local launches. Disabling it is
+limited to explicit local development without custody. A process holding an agent
+or payment master seed, or enabling the agent wallet, cannot launch local Chromium
+or attach through the existing-local-Chrome helper. It must use a separately
+isolated remote browser. Remote endpoint isolation and connection-time egress
+restrictions are operational requirements, not properties verified by the URL.
+The Playwright driver is still trusted host code; independent signer isolation
+remains necessary.
+
 ### d) `AGENT_COMPUTE_POSTURE=3` runs the shell on the host
 
 At posture 3 the `shell` and `process` tools run commands directly on the machine,
@@ -497,8 +446,8 @@ the host. The child environment is the same allowlist scrub as `run_code` (no
 `*_API_KEY`, `*_TOKEN` or seed reaches it), `sudo` is refused on the host, the
 output passes the credential-shape redaction before it enters the transcript, and
 each command leaves one `host_exec` event (a hash of the command, the exit code,
-the time — never the text or the output). The production deploy refuses to
-deploy a server whose env file sets posture 3 or `SHELL_BACKEND=host`.
+the time — never the text or the output). A server deploy should refuse an env file
+that sets posture 3 or `SHELL_BACKEND=host`.
 
 What it does not do: confine the command. Once a safe-class or approved command
 runs on the host, it can do anything your user can do.
@@ -560,7 +509,7 @@ Given §3, here is what a real hard boundary looks like, concretely:
   multi-tenant trust. POLYROB's multi-tenant model is **single-process,
   multi-session**: tenancy is enforced by `user_id`-scoped software checks
   throughout (memory recall, goal board, correspondent registry, MCP rate
-  limiting) — real, tested, and load-bearing, but it is *also* a heuristic
+  limiting), but it is *also* a policy check
   running in one shared process, exactly like §2. If your threat model includes
   one tenant attacking another (not just a tenant attacking themselves), the OS
   boundary that actually matters is *between tenants' processes*, which today
@@ -576,7 +525,7 @@ without custody, host subprocesses run as you and require trusted inputs. With
 custody enabled, code execution requires a sandbox and host Git/LSP/snapshot
 helpers refuse. Local mode does not provide an OS isolation boundary.
 
-**Single-owner VPS** (the reference VPS shape — headless agent, one owner,
+**Single-owner VPS** (headless agent, one owner,
 `POLYROB_LOCAL=1` on a private box you control) — the code-level trust decisions
 are the same as local CLI, but the box itself is network-facing. Prioritize:
 harden the systemd units to a non-root user (§4); if `CODE_EXEC_ENABLED` is ever
@@ -620,16 +569,13 @@ the `security` status section and the daily brief's `SEC` line both read:
   owns the session through `session_chat_map`. Spend is per chat: a group room
   is one shared session, and no store records one member's share of it.
 
-The daily security scan (run by the maintenance loop on the box) is the deep check: `pip-audit` over
-`requirements.lock`, `gitleaks` over the full history with `.gitleaks.toml`, and
-read-only host checks on the box (modes under `/etc/polyrob/`, non-root units,
-`WEBVIEW_READ_ONLY` and `POLYROB_POSTURE` actually set, TLS certificate expiry).
-It writes a dated report for the operator and a verdict in
-`<data>/ops/security_scan.json`, which the `SEC` line shows as `scan clean`,
-`scan findings N`, `scan incomplete (<checks> not run)`, `scan stale (...)` or
-`scan not run`. A check that could not run — a missing tool, no network, an
-unreadable file, off the box — is named as not run and is never a pass. Exit
-codes: `0` clean, `1` findings, `2` incomplete, `3` the scan itself failed.
+A deep security scan is operator-supplied: the package does not ship one. The repository
+ships `requirements.lock` (for `pip-audit`) and `.gitleaks.toml` (for `gitleaks`), and a
+useful scan also checks the host (modes under `/etc/polyrob/`, non-root units,
+`WEBVIEW_READ_ONLY` and `POLYROB_POSTURE` set, TLS certificate expiry). A scan that
+writes its verdict to `<data>/ops/security_scan.json` shows on the `SEC` line as
+`scan clean`, `scan findings N`, `scan incomplete (<checks> not run)`, `scan stale (...)`
+or `scan not run`. A check that could not run is named as not run and is never a pass.
 
 ---
 
@@ -639,15 +585,4 @@ codes: `0` clean, `1` findings, `2` incomplete, `3` the scan itself failed.
 - [`tools/code_exec/SANDBOX_SECURITY.md`](../../tools/code_exec/SANDBOX_SECURITY.md) — the Docker code-exec backend, hardening flag by flag
 - [deployment-postures.md](deployment-postures.md) — the web console's `local`/`own_ops`/`multitenant` posture ladder
 - [configuration.md](configuration.md) · [`../CONFIGURATION.md`](../CONFIGURATION.md) — every flag named on this page, with its default and code anchor
-- [payments.md](payments.md) — the money-specific safety model (§1 there) in full
-
-### Browser launch restrictions
-
-Chromium sandboxing is explicitly enabled for local launches. Disabling it is
-limited to explicit local development without custody. A process holding an agent
-or payment master seed, or enabling the agent wallet, cannot launch local Chromium
-or attach through the existing-local-Chrome helper. It must use a separately
-isolated remote browser. Remote endpoint isolation and connection-time egress
-restrictions are operational requirements, not properties verified by the URL.
-The Playwright driver is still trusted host code; independent signer isolation
-remains necessary.
+- [payments.md](payments.md#1-the-safety-model-read-first) — the money safety model in full; [wallet.md](wallet.md) and [onchain.md](onchain.md) for the wallet and on-chain gates

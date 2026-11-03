@@ -187,7 +187,7 @@ def test_the_truncation_sentence_does_not_truncate_itself():
     out = render_inbox(body, limit=1, width=60, remedies=CHAT_REMEDIES, now=NOW)
     # The sentence is COMPLETE, however it wraps — which is the whole point.
     flat = " ".join(out.split())
-    assert "6 more are waiting here and not shown. Ask for the whole list." in flat
+    assert "6 more are waiting here and not shown. The whole list: /inbox all" in flat
     assert max(_widths(out)) <= 60
 
 

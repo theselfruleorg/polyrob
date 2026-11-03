@@ -32,27 +32,28 @@ HL_WORST_FEE_RATE = 0.001
 def _with_fee(order_value_usd: float) -> float:
     return float(order_value_usd) * (1.0 + HL_WORST_FEE_RATE)
 
-# Official SDK — imported LAZILY: hyperliquid.exchange drags eth_account (~100 ms)
-# into every process boot via tools/__init__. _has_sdk() performs the one real
-# import on first call and populates the module globals the call sites read.
+# Official SDK — imported LAZILY (hyperliquid.exchange drags eth_account into boot).
+# 098 CL-14: _SDK_LOADED is set only AFTER a successful import; a failure re-tries after 60 s.
 Info = None
 Exchange = None
 HAS_SDK = False
 _SDK_LOADED = False
+_SDK_FAILED_AT = 0.0
 
 
 def _has_sdk() -> bool:
-    """True iff the official hyperliquid SDK is importable (loads on first call)."""
-    global Info, Exchange, HAS_SDK, _SDK_LOADED
-    if not _SDK_LOADED:
-        _SDK_LOADED = True
-        try:
-            from hyperliquid.info import Info as _Info
-            from hyperliquid.exchange import Exchange as _Exchange
-            Info, Exchange = _Info, _Exchange
-            HAS_SDK = True
-        except ImportError:
-            HAS_SDK = False
+    """True iff the official hyperliquid SDK is importable (loads on first success)."""
+    global Info, Exchange, HAS_SDK, _SDK_LOADED, _SDK_FAILED_AT
+    if _SDK_LOADED or (_SDK_FAILED_AT and time.monotonic() - _SDK_FAILED_AT < 60.0):
+        return HAS_SDK
+    try:
+        from hyperliquid.info import Info as Info
+        from hyperliquid.exchange import Exchange as Exchange
+        HAS_SDK = _SDK_LOADED = True
+    except Exception as e:  # a missing extra, or a broken dependency: named, not hidden
+        HAS_SDK, _SDK_FAILED_AT = False, time.monotonic()
+        if not isinstance(e, ImportError):
+            get_component_logger("HyperliquidTool").warning(f"hyperliquid SDK import failed: {type(e).__name__}: {e}")
     return HAS_SDK
 
 

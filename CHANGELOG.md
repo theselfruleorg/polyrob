@@ -10,6 +10,59 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.2] — 2026-11-03
+
+### Added
+
+- State machines (098): every session state resumes (a cancelled one on a person's message); owner verbs
+  `owner sub reactivate`, `owner deposits`, `/invoices refunded`; decisions carry the draft rev; bot.db 1.15.
+
+### Changed
+
+- State machines (098): 41 lifecycles have one transition table (`core/state/`); each status change is one
+  guarded write that reports the state it lost to; owner asks expire (`APPROVAL_ASK_TTL_HOURS`); bot.db 1.12–1.14.
+- Knowledge base: a search reads every collection unless one is named; documents the agent writes (`write_file`
+  too) go to `written` (was `artifacts_unreviewed`) and leave after 90 unread days (`KB_WRITTEN_RETENTION_DAYS`).
+- Retention (memories, episodes, session trees, notes, written documents) runs on its own always-on tick every 6 h
+  (`RETENTION_TICKER_ENABLED`), no longer only when `CURATOR_ENABLED` is on.
+- Owner review: an approval card shows the tweet, DM, email or command whole (rest via `/pending_tap_<id>`); a
+  proposal notice says why (`reason`), what changed (field, section, words) and gives approve · reject · read taps.
+- Owner review in chat: a long reply is a gist + a `.txt`; a capped list ends in `/more_<token>`; new reads
+  `/ask_<id>`, `/card_<id>`, `/skill_<id>`, `/rules`, `/inbox all`; CLI, REPL and console share one pending view.
+- Docs: README rewritten (531 → 264 lines); payments split into payments, `wallet.md` and `onchain.md`; slash
+  commands in a generated `chat-commands.md`; every guide page checked against the code; a 1.7.1 upgrade note.
+
+### Fixed
+
+- Paid room actions: the invoice of a cancelled or refused offer expires with no notice (it said "expired unpaid"
+  in the room and to the owner); a timed-out offer still gets its notice.
+- State machines (098): an owner stop/kill is final against a racing writer; MCP servers, sandboxes and LLM
+  clients recover instead of staying dead; a one-shot grant works once; email inbound uses UIDs.
+- State machines (098 review): refunds owed are listed; bulk approve/reject of a never-shown draft; a cancel holds
+  until a person writes; owner exits for a stuck sweep (`owner deposit-resolve`) and a held invoice (`owner invoice-resolve`).
+- A reply that stopped part-way holds only the missing part for `/missed` and says which message did not arrive;
+  `/missed` keeps line breaks; a split table keeps its header; silent cuts on owner text now carry a marker.
+- `/status` drops two warnings its remedy could not clear (written documents not in the KB, old session trees);
+  it warns only when the session sweep has not run for two days or refused.
+- Auto-ingest refuses `kind: instruction` documents (a rules surface, not knowledge).
+- Release review: an approval card shows each HTML link's target; an unreadable reasons store or sweep record is
+  said, never shown as none or overwritten; `/run stop` also stops background delegations.
+- Release review: a migration that fails `verify()` stays pending; the KB rename survives a rollback duplicate;
+  `owner deposit-resolve` names an open wallet submission; the `/update` notice keeps the cause.
+- `polyrob keys` and API keys work without the `crypto` extra (wallet sign-in turns off); a failed
+  `polyrob update` step prints the end of its output, so the cause shows.
+
+### Security
+
+- Playwright 1.63.0 → 1.64.1 (floor `>=1.64.1`): the bundled Chromium moves to 156.0.8078.4, past the exploited
+  CVE-2026-87491. After the upgrade run `python -m playwright install chromium` (isolated browser service:
+  `sudo polyrob browser update`).
+- Dependency CVEs: pypdf 6.21.2 → 6.21.4 (7), pyasn1 0.6.4 → 0.6.5 (4); console test rig vitest 2.1.9 → 4.1.12
+  (7, one critical: attacker code execution).
+- oauthlib 3.3.1 → 4.0.1 (2 CVEs): tweepy 4.17.0 pins `oauthlib<4`, so the X pack carries tweepy itself
+  (`polyrob_x/_vendor`); `[twitter]` installs requests-oauthlib, oauthlib>=4.0.1 and urllib3; every update path
+  uninstalls the old tweepy so `pip check` passes.
+
 ## [1.7.1] — 2026-11-02
 
 ### Added

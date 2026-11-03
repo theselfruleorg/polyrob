@@ -177,13 +177,20 @@ class SpendLedger:
             return False
         return getattr(self._audit, "healthy", True) is True
 
+    def _voided(self) -> set:
+        """098 TS-23: tx refs a reverted receipt took out of the rolling caps."""
+        from core.money.receipt_state import voided_refs
+        return voided_refs(self._audit)
+
     def _rolling_24h_spend(self, venue: Optional[str] = None) -> float:
         window_start = self._now() - _DAY_SECONDS
+        voided = self._voided()
         return sum(
             _nonnegative_finite(e.get("amount_usd", 0.0))
             for e in self._audit
             if float(e.get("ts") or 0.0) >= window_start
             and (venue is None or str(e.get("venue", "")).lower() == venue)
+            and not (voided and e.get("result_ref") in voided)
         )
 
     def _frees_at_note(self, amount_usd: float) -> str:
@@ -197,10 +204,12 @@ class SpendLedger:
             if amount_usd > cap:
                 return ""
             now = self._now()
+            voided = self._voided()
             live = sorted(
                 (float(e.get("ts") or 0.0), _nonnegative_finite(e.get("amount_usd", 0.0)))
                 for e in self._audit
-                if float(e.get("ts") or 0.0) >= now - _DAY_SECONDS)
+                if float(e.get("ts") or 0.0) >= now - _DAY_SECONDS
+                and e.get("result_ref") not in voided)
             spent = sum(usd for _, usd in live)
             for ts, usd in live:
                 spent -= usd
@@ -322,8 +331,13 @@ class SpendLedger:
                positions: Optional[list] = None,
                submission_ref: Optional[str] = None,
                account: Optional[str] = None,
-               native_raw: Optional[int] = None) -> None:
+               native_raw: Optional[int] = None,
+               receipt_state: Optional[str] = None) -> None:
         """Record one completed spend.
+
+        ``receipt_state`` (098 TS-23): ``"pending_receipt"`` when the verb booked
+        the broadcast before its receipt was known (an interrupted or timed-out
+        wait); :mod:`core.money.receipt_state` resolves it later.
 
         ``native_raw`` (core handoff W6, 090 R4) stamps the native wei a v4
         liquidity add sent, so the LP program caps (``LP_ETH_CAP``,
@@ -377,6 +391,8 @@ class SpendLedger:
             entry["account"] = str(account).lower()
         if native_raw is not None:
             entry["native_raw"] = int(native_raw)
+        if receipt_state:
+            entry["receipt_state"] = str(receipt_state)
         self._audit.append(entry)
         # Release the submission interlock only after a DURABLE cap charge.
         # A plain-list test/embedded sink cannot prove persistence.
@@ -409,6 +425,23 @@ class SpendLedger:
                 # spend. The spend above stands regardless.
                 logger.debug("position-store write skipped (fail-open)",
                              exc_info=True)
+
+    def note_receipt(self, entry: dict, state: str, *, block: Optional[int] = None) -> bool:
+        """098 TS-23: append the ONE receipt resolution of a ``pending_receipt``
+        entry (call under :meth:`reserve`). False when it is already resolved or
+        the table forbids the edge. Moves no money; a ``reverted`` receipt only
+        takes the entry out of the rolling caps."""
+        from core.money.receipt_state import receipt_entry, receipt_states
+        self._sync_shared_ledger()
+        from core.money.receipt_state import PENDING
+        current = receipt_states(self._audit).get(str(entry.get("result_ref")))
+        if current != PENDING:
+            return False   # never booked pending, or already resolved
+        new = receipt_entry(entry, state, current=current, ts=self._now(), block=block)
+        if new is None:
+            return False
+        self._audit.append(new)
+        return True
 
     @property
     def audit_log(self) -> List[dict]:

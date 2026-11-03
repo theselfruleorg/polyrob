@@ -24,3 +24,10 @@ class UserCredentialCacheMixin:
                 self._credentials_cache.pop(self._user_id, None)
             return credentials
         return None
+
+    def invalidate_user_credentials(self, user_id: str) -> None:
+        """098 MO-19: a credential write (enable, limits, wallet, key, L2 creds)
+        drops that user's cached credentials and signing client at once."""
+        self._credentials_cache.pop(user_id, None)
+        for name in ("_exchange_clients", "_clob_clients"):
+            getattr(self, name, {}).pop(user_id, None)

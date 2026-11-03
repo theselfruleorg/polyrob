@@ -36,9 +36,8 @@ X exposes two different private-message protocols:
   `tweet.read`. Events contain ciphertext; POLYROB uses the official Chat XDK
   and the account's Chat keys to verify, decrypt and encrypt them.
 - **Legacy Direct Messages**: the plaintext send still delivers (it is the cold
-  open path). The read, `GET /2/dm_events`, is **obsolete**: X stopped delivering
-  new DMs to it in September 2026, so it shows only old history; results are
-  marked `obsolete`.
+  open path). The read, `GET /2/dm_events`, is **obsolete**: X no longer delivers
+  new DMs to it, so it shows only old history; results are marked `obsolete`.
 
 `twitter_dm` sends on encrypted X Chat. When X Chat refuses the send (a 4xx — X
 Chat rejects a cold first contact — a recipient without X Chat keys, or a thread
@@ -174,7 +173,9 @@ When the agent runs on a headless server, capture on the desktop with
 `--out x-session.json`, copy the file over and run
 `polyrob x-account import-session x-session.json --handle <handle>` on the
 server (or enter the two login cookies at hidden prompts with `--cookies`); the encrypted
-store itself is per-box and cannot be copied. See the self-hosting guide.
+store itself is per-box and cannot be copied. See
+[Moving an X login onto the box](self-hosting.md#the-isolated-browser-required-with-a-wallet)
+in the self-hosting guide.
 
 Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
 
@@ -184,6 +185,9 @@ Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
   blocked for delegated/forged turns.
 - `x_post`: publish a post, also approval-gated.
 - `x_reply`: reply under an existing post (status URL or id) — the lane the API tier refuses for non-mentioners; approval-gated like `x_post`.
+
+What counts as proof that an `x_post` or an `x_reply` landed is in
+[Proof per rail](rails-verification.md).
 - `x_login_check`: verify the captured session.
 - `x_signup_start`: register the agent's own X account. It always waits for your
   approval. It fills the form, reads the code from the agent's own mailbox, and

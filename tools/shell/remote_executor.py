@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 #: coreutils ``timeout`` exit codes (124 = it fired; 137 = 128+SIGKILL).
 _TIMEOUT_EXIT_CODES = frozenset({124, 137})
+#: ssh's own exit code for "could not reach the far side" (098 TS-12).
+_SSH_UNREACHABLE = 255
 
 #: Unix-socket paths are capped at 104 (macOS) / 108 (Linux) bytes. ``ssh-%C``
 #: expands to 44 characters, so a longer control dir moves to a short private one.
@@ -220,8 +222,13 @@ class RemoteShellExecutor:
         self.kind = kind
         self.default_cwd = default_cwd
         self._jobs_dir = jobs_dir
-        self._ready = False
         self._abs_jobs = ""
+        # 098 TS-12: the prepared far side is a ResourceLifecycle — a transport
+        # failure (ssh exit 255, a backend error) degrades it and the next call
+        # re-runs setup() + the dirs (a recycled pack sandbox comes back).
+        from core.state.lifecycle import ResourceLifecycle
+        self._lc = ResourceLifecycle(f"remote-shell:{kind}", create=self._prepare_far_side,
+                                     backoff_base=0.0)
         self._jobs: Set[str] = set()
 
     @property
@@ -232,9 +239,25 @@ class RemoteShellExecutor:
     def capabilities(self) -> Dict[str, object]:
         return self._transport.capabilities
 
+    @property
+    def _ready(self) -> bool:
+        return self._lc.is_ready()
+
     async def _prepare(self) -> None:
-        if self._ready:
-            return
+        self._abs_jobs = await self._lc.start()
+
+    async def _run_script(self, script: str, *, timeout: float):
+        """``transport.run_script`` + the unreachable signal (098 TS-12)."""
+        try:
+            rc, out, err, timed_out = await self._transport.run_script(script, timeout=timeout)
+        except Exception as e:
+            await self._lc.fail(e)
+            raise
+        if rc == _SSH_UNREACHABLE and self.kind == "ssh":
+            await self._lc.fail(RemoteShellError(f"ssh exit {rc}: {(err or '').strip()[:200]}"))
+        return rc, out, err, timed_out
+
+    async def _prepare_far_side(self) -> str:
         await self._transport.setup()
         q = shlex.quote
         rc, out, err, _ = await self._transport.run_script(
@@ -247,15 +270,14 @@ class RemoteShellExecutor:
                 f"{self.kind}: could not prepare the remote session dirs (exit {rc}): "
                 f"{(err or out).strip()[:300]}")
         # Every job path is ABSOLUTE from here on: a job's cwd moves, its files do not.
-        self._abs_jobs = jobs[-1]
-        self._ready = True
+        return jobs[-1]
 
     # --- foreground ---------------------------------------------------------------
     async def run_foreground(self, command: str, state: ShellState, *, timeout: float,
                              workdir: str = "") -> Tuple[str, ShellState, int]:
         await self._prepare()
         script = wrap_command(command, state, fallback_cwd=self.default_cwd, workdir=workdir)
-        rc, out, err, timed_out = await self._transport.run_script(script, timeout=timeout)
+        rc, out, err, timed_out = await self._run_script(script, timeout=timeout)
         clean, new_state = parse_state(out or "", state)
         if err:
             clean = f"{clean}\n[stderr]\n{err}" if clean else f"[stderr]\n{err}"
@@ -308,7 +330,7 @@ class RemoteShellExecutor:
         if callable(spawn):
             await spawn(script)
         else:
-            rc, out, err, _ = await self._transport.run_script(script, timeout=30)
+            rc, out, err, _ = await self._run_script(script, timeout=30)
             if rc != 0:
                 raise RemoteShellError(
                     f"{self.kind}: job launch failed (exit {rc}): {(err or out).strip()[:300]}")
@@ -316,16 +338,19 @@ class RemoteShellExecutor:
 
     async def _one_liner(self, code: str, timeout: float = 15) -> str:
         await self._prepare()
-        rc, out, _err, _ = await self._transport.run_script(code, timeout=timeout)
+        rc, out, _err, _ = await self._run_script(code, timeout=timeout)
         return out or ""
 
     async def poll(self, job_id: str) -> str:
+        from tools.shell.jobs import pid_reused_sh  # 098 TS-10: reused pid = gone
         f = {k: shlex.quote(v) for k, v in self._files(job_id).items()}
         out = await self._one_liner(
             f"if [ -f {f['rc']} ]; then echo DONE; else "
             f"pid=$(cat {f['pid']} 2>/dev/null); "
             "if [ -z \"$pid\" ]; then echo UNKNOWN; "
-            "elif kill -0 \"$pid\" 2>/dev/null; then echo RUNNING; else echo DONE; fi; fi")
+            "elif kill -0 \"$pid\" 2>/dev/null; then "
+            f"if {pid_reused_sh(f['start'])}; then echo DONE; else echo RUNNING; fi; "
+            "else echo DONE; fi; fi")
         out = out.strip().upper()
         if out.startswith("RUNNING"):
             return "running"
@@ -404,10 +429,12 @@ class RemoteShellExecutor:
         return False, "this job has no stdin (it was started without one)"
 
     async def kill(self, job_id: str) -> bool:
+        from tools.shell.jobs import pid_reused_sh  # 098 TS-10: never signal a reused pid
         f = {k: shlex.quote(v) for k, v in self._files(job_id).items()}
         out = await self._one_liner(
             f"pid=$(cat {f['pid']} 2>/dev/null); "
-            "if [ -n \"$pid\" ]; then "
+            f"if [ -n \"$pid\" ] && {pid_reused_sh(f['start'])}; then echo REUSED; "
+            "elif [ -n \"$pid\" ]; then "
             f"j=$(cat {f['jpid']} 2>/dev/null); "
             "kill -TERM -\"$pid\" 2>/dev/null; pkill -TERM -P \"$pid\" 2>/dev/null; "
             "[ -n \"$j\" ] && pkill -TERM -P \"$j\" 2>/dev/null; "
@@ -433,7 +460,7 @@ class RemoteShellExecutor:
             await self._transport.close()
         except Exception:
             logger.debug("%s shell: transport close failed", self.kind, exc_info=True)
-        self._ready = False
+        await self._lc.stop()
 
 
 def safe_session_component(session_id: str) -> str:

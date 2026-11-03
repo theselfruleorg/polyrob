@@ -19,6 +19,25 @@ from core.goal_vocab import (
 from agents.task.goals.board_types import (
     ASK_AUTO_UNBLOCK, Goal, _ask_goal_keys, title_similarity,
 )
+from agents.task.goals.machines import ASK_MACHINE
+from agents.task.goals.payload_keys import (
+    append_capped, patch as _patch_payload, update_key_cas,
+)
+
+#: A guard every ask-payload writer adds (TS-14): only an OPEN ask is widened or
+#: refreshed — a decided ask's payload belongs to its decision.
+_OPEN_ASK = f"kind='{KIND_ASK}' AND status='{ASK_OPEN}'"
+
+#: ``payload.expires_at`` is unset, or later than the bound ``now``.
+_NOT_EXPIRED = ("(json_extract(payload, '$.expires_at') IS NULL "
+                "OR json_extract(payload, '$.expires_at') > ?)")
+
+
+def _widen(blocks):
+    """A ``blocks_goal_ids`` merge function for :func:`update_key_cas`."""
+    def _fn(cur):
+        return sorted(set(cur if isinstance(cur, list) else []) | set(blocks))
+    return _fn
 
 # The board's logger name, so a log filter on agents.task.goals.board still sees these.
 logger = logging.getLogger("agents.task.goals.board")
@@ -136,13 +155,14 @@ class BoardAsksMixin:
             row = self.get(ask_id)
             if row is None:
                 return []
-            payload = dict(row.payload or {})
-            merged = sorted(set(payload.get("blocks_goal_ids") or []) | set(wanted))
-            if merged == sorted(payload.get("blocks_goal_ids") or []):
+            merged = sorted(set((row.payload or {}).get("blocks_goal_ids") or []) | set(wanted))
+            if merged == sorted((row.payload or {}).get("blocks_goal_ids") or []):
                 return merged
-            payload["blocks_goal_ids"] = merged
-            execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                          (json.dumps(payload), ask_id))
+            # TS-14/AG-21: a CAS on this ONE key of an OPEN ask — never a write
+            # of the whole payload (that reset `grant_consumed` after a redeem).
+            if not update_key_cas(self.db_path, ask_id, "blocks_goal_ids", _widen(wanted),
+                                  where_extra=_OPEN_ASK):
+                return []
             return merged
         except Exception:
             logger.warning("could not widen blocks_goal_ids on ask %s", ask_id,
@@ -189,21 +209,18 @@ class BoardAsksMixin:
                                            reason="superseded_by_agent_ask", payload=ap)
                         blocks = sorted(set(blocks) | set(ap.get("blocks_goal_ids") or []))
                         break
-                    ap["blocks_goal_ids"] = sorted(
-                        set(ap.get("blocks_goal_ids") or []) | set(blocks))
-                    execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                                  (json.dumps(ap), a.id))
+                    if not update_key_cas(self.db_path, a.id, "blocks_goal_ids",
+                                          _widen(blocks), where_extra=_OPEN_ASK):
+                        continue  # decided meanwhile — not ours to refresh
                     self._event(a.id, "ask_refreshed", {"what": what[:200],
                                                         "dedup": "same_goal"})
                     return self.get(a.id)
         if not force and threshold > 0:
             for a in self.asks(user_id=user_id, status=ASK_OPEN):
                 if title_similarity(what, a.title) >= threshold:
-                    merged = sorted(set((a.payload or {}).get("blocks_goal_ids", [])) | set(blocks))
-                    payload = dict(a.payload or {})
-                    payload["blocks_goal_ids"] = merged
-                    execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
-                                  (json.dumps(payload), a.id))
+                    if not update_key_cas(self.db_path, a.id, "blocks_goal_ids",
+                                          _widen(blocks), where_extra=_OPEN_ASK):
+                        continue
                     self._event(a.id, "ask_refreshed", {"what": what[:200]})
                     return self.get(a.id)
         payload: Dict[str, Any] = {"blocks_goal_ids": blocks}
@@ -247,24 +264,29 @@ class BoardAsksMixin:
         ``(ok, unblocked_count)``.
         """
         now = self._now()
-        ask = self.get(ask_id)
-        payload = dict(ask.payload or {}) if ask else {}
-        payload["decision"] = "approved" if approved else "rejected"
+        decision = "approved" if approved else "rejected"
+        keys: Dict[str, Any] = {"decision": decision}
         answer_text = (answer or "").strip()[:2000]
         if answer_text:
-            payload["answer"] = answer_text
+            keys["answer"] = answer_text
             # H04: WHERE the text was recorded (an owner seat verb vs an agent
             # turn's `owner_ask(answer=)`) — rendered as provenance, never trust.
-            payload["answer_via"] = (answer_via or "owner seat").strip()[:120]
-        new_status = ASK_FULFILLED if approved else ASK_REJECTED
-        rc = execute_retry(
-            self.db_path,
-            "UPDATE goals SET status=?, completed_at=?, payload=? "
-            "WHERE id=? AND kind=? AND status=? AND user_id=?",
-            (new_status, now, json.dumps(payload), ask_id, KIND_ASK, ASK_OPEN, user_id),
-        )
-        if rc != 1:
+            keys["answer_via"] = (answer_via or "owner seat").strip()[:120]
+        # TS-14: ONE guarded write — the status CAS sets ONLY the keys this
+        # decision owns (json_set). A key another writer set meanwhile
+        # (`poller_gone`, `grant_consumed`) survives. An ask past its
+        # `expires_at` cannot be decided: the owner is told to ask again.
+        from core.state.sql import cas_transition
+        ok = cas_transition(
+            self.db_path, "goals", key="id=?", key_params=(ask_id,), machine=ASK_MACHINE,
+            to=ASK_FULFILLED if approved else ASK_REJECTED, from_states=(ASK_OPEN,),
+            set_cols={"completed_at": now}, json_set=keys,
+            where_extra=f"kind=? AND user_id=? AND {_NOT_EXPIRED}",
+            where_params=(KIND_ASK, user_id, now))
+        if not ok:
             return (False, 0)
+        ask = self.get(ask_id)
+        payload = dict(ask.payload or {}) if ask else {}
         self._event(ask_id, "ask_fulfilled" if approved else "ask_rejected", {})
         if approved and str(payload.get("rail_id") or "").startswith("cron:"):
             # 2026-10-07: an ask a CRON run raised has no goal to flip; pull the
@@ -272,7 +294,7 @@ class BoardAsksMixin:
             from agents.task.goals.rail_answers import rearm_cron_rail
             rearm_cron_rail(self, self.get(ask_id))
         unblocked = 0
-        blocks = [str(g) for g in ((ask.payload or {}).get("blocks_goal_ids") or [])] if ask else []
+        blocks = [str(g) for g in (payload.get("blocks_goal_ids") or [])]
         # 2026-10-13 review B1/B2: EVERY goal the ask is about — the goals it
         # holds AND the goal whose run raised it (`rail_id="goal:<id>"`) — gets
         # the decision on its payload, WHATEVER its status. Before, only a
@@ -283,35 +305,35 @@ class BoardAsksMixin:
             dep = self.get(gid)
             if dep is None or dep.kind != "goal" or dep.user_id != user_id:
                 continue
-            dep_payload = dict(dep.payload or {})
             record = {"ts": now, "ask_id": ask_id,
                       "question": str(getattr(ask, "title", "") or "")[:300],
-                      "decision": payload["decision"]}
+                      "decision": decision}
             if answer_text:
                 record["answer"] = answer_text
                 record["answer_via"] = payload.get("answer_via", "")
-            dep_payload["owner_answers"] = (
-                list(dep_payload.get("owner_answers") or []) + [record])[-_OWNER_ANSWERS_KEPT:]
+            _goal_guard = ("kind='goal' AND user_id=?", (user_id,))
+            # AG-21: each key is its own write — a capped append (CAS on the
+            # one key), then the unblock stamp — never the whole document.
+            append_capped(self.db_path, gid, "owner_answers", record, _OWNER_ANSWERS_KEPT,
+                          where_extra=_goal_guard[0], where_params=_goal_guard[1])
             flip = approved and gid in blocks
             if flip:
                 # 2026-07-14 night-2: stamp the fulfillment onto the goal payload so
                 # the retry prompt (context.build_goal_run_task) tells the run the
                 # blocker was FIXED — without this the agent reads only the old
                 # failure ledger and declares BLOCKED from memory without retrying.
-                dep_payload["owner_unblocked"] = {"ts": now, "ask_id": ask_id}
+                unblocked_rec = {"ts": now, "ask_id": ask_id}
                 if answer_text:
-                    dep_payload["owner_unblocked"]["answer"] = answer_text
-                    dep_payload["owner_unblocked"]["answer_via"] = payload.get("answer_via", "")
+                    unblocked_rec["answer"] = answer_text
+                    unblocked_rec["answer_via"] = payload.get("answer_via", "")
                 # T2.1 final-review Fix 1: an ask-fulfillment unblock is also an
                 # owner reset — clear the stale block_kind (see unblock()'s
                 # docstring for the full rationale). provider_requeues /
                 # provider_retry_exhausted are untouched (only this ONE key is
                 # popped) so the requeue-cap ledger survives the episode.
-                dep_payload.pop("block_kind", None)
-            execute_retry(
-                self.db_path,
-                "UPDATE goals SET payload=? WHERE id=? AND kind='goal' AND user_id=?",
-                (json.dumps(dep_payload), gid, user_id))
+                _patch_payload(self.db_path, gid, set_keys={"owner_unblocked": unblocked_rec},
+                               remove=("block_kind",), where_extra=_goal_guard[0],
+                               where_params=_goal_guard[1])
             if not flip:
                 continue
             rc2 = execute_retry(
@@ -380,12 +402,13 @@ class BoardAsksMixin:
             remaining = [g for g in blocks if g != goal_id]
             payload["blocks_goal_ids"] = remaining
             if remaining:
-                # Still needed by another goal — record the release, stay open.
-                execute_retry(
-                    self.db_path,
-                    "UPDATE goals SET payload=? WHERE id=? AND kind=? AND user_id=?",
-                    (json.dumps(payload), ask.id, KIND_ASK, user_id),
-                )
+                # Still needed by another goal — record the release, stay open
+                # (a CAS on this one key of an OPEN ask, TS-14).
+                update_key_cas(
+                    self.db_path, ask.id, "blocks_goal_ids",
+                    lambda cur: [g for g in (cur if isinstance(cur, list) else [])
+                                 if g != goal_id],
+                    where_extra=f"{_OPEN_ASK} AND user_id=?", where_params=(user_id,))
                 continue
             if self._obsolete_ask(ask.id, user_id=user_id, reason=reason,
                                   payload=payload, event_extra={"goal_id": goal_id}):
@@ -410,17 +433,18 @@ class BoardAsksMixin:
     def _obsolete_ask(self, ask_id: str, *, user_id: str, reason: str,
                       payload: Dict[str, Any],
                       event_extra: Optional[Dict[str, Any]] = None) -> bool:
-        payload = dict(payload)
-        payload["decision"] = "obsolete"
-        payload["obsolete_reason"] = reason
-        rc = execute_retry(
-            self.db_path,
-            "UPDATE goals SET status=?, completed_at=?, payload=? "
-            "WHERE id=? AND kind=? AND status=? AND user_id=?",
-            (ASK_OBSOLETE, self._now(), json.dumps(payload), ask_id, KIND_ASK,
-             ASK_OPEN, user_id),
-        )
-        if rc != 1:
+        # TS-14: the status CAS writes only the keys this close owns; the
+        # caller's ``payload`` copy is never written back. ``blocks_goal_ids``
+        # rides along only when the caller changed it (a release).
+        keys: Dict[str, Any] = {"decision": "obsolete", "obsolete_reason": reason}
+        if "blocks_goal_ids" in (payload or {}):
+            keys["blocks_goal_ids"] = list(payload.get("blocks_goal_ids") or [])
+        from core.state.sql import cas_transition
+        if not cas_transition(
+                self.db_path, "goals", key="id=?", key_params=(ask_id,),
+                machine=ASK_MACHINE, to=ASK_OBSOLETE, from_states=(ASK_OPEN,),
+                set_cols={"completed_at": self._now()}, json_set=keys,
+                where_extra="kind=? AND user_id=?", where_params=(KIND_ASK, user_id)):
             return False
         ev = {"reason": reason}
         ev.update(event_extra or {})
@@ -474,6 +498,42 @@ class BoardAsksMixin:
                                              payload=payload):
                 closed += 1
         return closed
+
+    def expire_open_asks(self, *, limit: int = 200) -> int:
+        """TS-14: close every OPEN ask whose ``payload.expires_at`` passed, as
+        ``obsolete`` (reason ``expired``) — never "fulfilled". A tap on it then
+        reads "expired — ask again". Cross-tenant sweep; never raises."""
+        now, closed = self._now(), 0
+        try:
+            rows = execute_retry(
+                self.db_path,
+                "SELECT id, user_id FROM goals WHERE kind=? AND status=? "
+                "AND json_extract(payload, '$.expires_at') IS NOT NULL "
+                "AND json_extract(payload, '$.expires_at') <= ? LIMIT ?",
+                (KIND_ASK, ASK_OPEN, now, int(limit)), fetch="all") or []
+        except Exception:
+            logger.debug("ask expiry sweep: unreadable", exc_info=True)
+            return 0
+        for r in rows:
+            try:
+                if self._obsolete_ask(r["id"], user_id=r["user_id"], reason="expired",
+                                      payload={}):
+                    closed += 1
+            except Exception:
+                logger.debug("ask expiry: %s not closed", r["id"], exc_info=True)
+        return closed
+
+    def ask_expired(self, ask: Any) -> bool:
+        """True when *ask* passed its ``expires_at`` (open or already closed by
+        the sweep with reason ``expired``)."""
+        p = dict(getattr(ask, "payload", None) or {})
+        if getattr(ask, "status", None) == ASK_OBSOLETE:
+            return str(p.get("obsolete_reason") or "") == "expired"
+        try:
+            exp = p.get("expires_at")
+            return exp is not None and float(exp) <= self._now()
+        except (TypeError, ValueError):
+            return False
 
     def fulfill_ask(self, ask_id: str, *, user_id: str) -> tuple:
         """Mark an ask fulfilled and flip its BLOCKED dependent goals back to ready.

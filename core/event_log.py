@@ -453,3 +453,12 @@ def _register_position_telemetry() -> None:
 
 
 _register_position_telemetry()
+
+
+def _register_state_sink() -> None:
+    """098: state-machine refusals (``state_illegal_transition``) land here."""
+    from core.state.machine import set_event_sink
+    set_event_sink(lambda kind, attrs: emit(kind, source="core.state", attrs=attrs))
+
+
+_register_state_sink()

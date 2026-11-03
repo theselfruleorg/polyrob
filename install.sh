@@ -364,7 +364,11 @@ hashed_install() {
 # pack. It is stdlib-only and ships in the public tree; an older tree has none.
 retire_pack_dists() {
   [[ -f "${SRC_DIR}/core/packs/retire.py" ]] || return 0
-  "${VPY}" "${SRC_DIR}/core/packs/retire.py"
+  "${VPY}" "${SRC_DIR}/core/packs/retire.py" || return $?
+  # Dropped third-party dependencies (core/retired_deps.py) whose pins would
+  # fail `pip check` on a re-run over an existing venv. Named, never fatal.
+  [[ -f "${SRC_DIR}/core/retired_deps.py" ]] || return 0
+  "${VPY}" "${SRC_DIR}/core/retired_deps.py" || warn "a retired dependency is still installed (see above)"
 }
 
 info "Installing polyrob from ${SRC_DIR}${EXTRAS:+ with extras: ${EXTRAS}} (hash-checked) ..."

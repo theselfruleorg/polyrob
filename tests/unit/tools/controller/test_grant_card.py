@@ -26,9 +26,9 @@ def test_paramless_card_still_renders_verbs():
 
 def test_extra_params_are_compact_and_bounded():
     card = render_grant_card(
-        "shell_run", {"command": "x" * 500, "cwd": "/tmp", "timeout": 30},
+        "shell_run", {"command": "ls", "note": "x" * 500, "cwd": "/tmp", "timeout": 30},
         "tap-9")
-    assert "…" in card          # long value truncated
+    assert "…" in card          # long extra value truncated
     assert len(card) < 800
 
 

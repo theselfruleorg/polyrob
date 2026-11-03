@@ -123,23 +123,20 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     # Extension -> artifact kind. `kind` decides what the ship rail may do with a
     # file (only a `page` is servable as a static page), so it is asserted at
     # write time rather than sniffed later by whoever happens to publish.
-    _ARTIFACT_KINDS = {
-        ".html": "page", ".htm": "page",
-        ".py": "code", ".js": "code", ".ts": "code", ".sh": "code", ".css": "code",
-        ".md": "report", ".txt": "report", ".rst": "report",
-        ".json": "data", ".csv": "data", ".yaml": "data", ".yml": "data",
-    }
-
     def _record_artifact(self, file_path: str) -> Optional[str]:
         """Record the just-written file in the artifact ledger.
 
         This is the ONE write-time choke point — write_file routes through
-        _verify_file_write, which calls this (append_file does NOT call
-        _verify_file_write and records no artifact today; 043 A13 fix round 1).
-        Recording here replaces the run-end
-        guesswork in agents/task/runtime/evidence.py::collect_artifacts, which on
-        a shared project-root workspace attributed other runs' files to this run
-        and, after the 2026-08-17 wipe, found nothing at all.
+        _verify_file_write, which calls this; append_file calls it directly.
+        Recording here replaces the run-end guesswork in
+        agents/task/runtime/evidence.py::collect_artifacts, which on a shared
+        project-root workspace attributed other runs' files to this run and,
+        after the 2026-08-17 wipe, found nothing at all.
+
+        ⚠️ Goes through ``core.artifacts.record_artifact`` — never the ledger
+        directly — so the registered artifact hooks (the KB auto-ingest) run.
+        Calling ``ledger.record()`` here skipped them, and every document the
+        agent wrote with write_file stayed out of the knowledge base (097 W1).
 
         Fail-open by construction: the ledger is bookkeeping, and a bookkeeping
         failure must never fail a write the agent already completed.
@@ -152,15 +149,10 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             user_id = getattr(self, "user_id", None)
             if not user_id:
                 return None
-            import os as _os
-            ext = _os.path.splitext(file_path)[1].lower()
-            from core.artifacts import get_artifact_ledger
-            artifact = get_artifact_ledger().record(
+            from core.artifacts import record_artifact
+            return record_artifact(
                 str(user_id), file_path,
-                session_id=str(getattr(self, "session_id", "") or ""),
-                kind=self._ARTIFACT_KINDS.get(ext, "file"),
-            )
-            return artifact.id if artifact is not None else None
+                session_id=str(getattr(self, "session_id", "") or ""))
         except Exception:
             self.logger.debug("artifact ledger record skipped for %s", file_path,
                               exc_info=True)

@@ -6,6 +6,7 @@ X login's ``storage_state`` was silently dropped, service workers were not
 blocked (a bypass of the SSRF route guard) and every session and tenant shared
 one cookie jar that persisted on disk in the browser's user-data-dir.
 """
+import asyncio
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -25,6 +26,7 @@ def _ctx(browser_config: BrowserConfig, **cfg):
     ctx = BrowserContext.__new__(BrowserContext)
     ctx.logger = logging.getLogger("test")
     ctx.session = None
+    ctx._session_lock = asyncio.Lock()
     ctx.browser = SimpleNamespace(browser_config=browser_config)
     ctx.config = BrowserContextConfig(**cfg)
     return ctx

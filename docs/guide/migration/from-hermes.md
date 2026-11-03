@@ -16,11 +16,11 @@ anything load-bearing against its repo.*
 | Profiles | **Profiles** (`polyrob -P <name>`) | A whole isolated home per identity: env, characters, skills, memory, goals, sessions. See [profiles.md](../profiles.md) |
 | Gateway | `polyrob gateway`, or one process per chat app | Same idea: every enabled chat app in one process. Hermes now serves each of its `profile`s from one gateway; POLYROB runs one gateway (or systemd unit) per `profile` |
 | Skills | Skills, plus agent-authored ones under `SKILLS_WRITABLE` | Different frontmatter shape — see below |
-| Memory (`MEMORY.md`, `USER.md`, chat search) | `MEMORY_BACKEND` | SQLite FTS5 by default, optional local vector recall, scoped per user. See [§4](#4-memory) for bringing the two files over |
+| Memory (`MEMORY.md`, `USER.md`, chat search) | `MEMORY_BACKEND` | Hybrid keyword + vector recall by default on the CLI (keyword-only without the `memory-vector` extra, and on a server), scoped per user. See [§4](#4-memory) for bringing the two files over |
 | `cron` jobs | Scheduled jobs | Durable scheduled runs. See [streams.md](../streams.md) |
 | Kanban board, `/goal` | The goal board | A goal carries acceptance criteria and dependencies and survives a restart; Hermes' `/goal` lives in one chat |
 | `/heartbeat`, `/loop` | Self-wake, or a scheduled job | Hermes wakes an idle chat on a timer; POLYROB's self-wake fires when observable state changes. Use a scheduled job for a fixed interval |
-| Terminal backends | `AGENT_COMPUTE_POSTURE` 0–3, `SHELL_BACKEND` | Hardened Docker exec, then a persistent `shell` and `process` manager in a dev container, then gated self-maintenance verbs, then (posture 3) the host shell for your own terminal turn. Hermes' local backend is its default; here it is opt-in and refused with a signing key in the process |
+| Terminal backends | `AGENT_COMPUTE_POSTURE` 0–3, `SHELL_BACKEND` | Sandboxed code execution (`local_subprocess` by default on your own machine; a server needs a sandbox backend such as `docker`), then a persistent `shell` and `process` manager in a dev container, then gated self-maintenance verbs, then (posture 3) the host shell for your own terminal turn. The host shell is posture 3 only, and it is refused while the process holds a signing key |
 | Terminal backends (remote) | `SHELL_BACKEND=ssh\|modal\|daytona\|vercel_sandbox\|singularity`, `CODE_EXEC_DOCKER_BINARY=podman` | ssh keeps one ControlMaster session; the cloud backends are optional packs (`polyrob[modal]`, …). Remote sandboxes do not sync your workspace |
 | Dangerous-command approval (`approvals.mode`: `smart` / `manual` / `off`) | The shell command guard, `SHELL_APPROVAL_MODE` (`smart` / `every` / `per_command`), `SHELL_ALLOW`/`SHELL_DENY` | A floor no approval lifts (inside containers too); the dangerous class waits for you; unattended runs refuse it. `smart` may deny anything but approves only inside a sandbox |
 | `process` (write/submit/close, pty, notify) | `process` + `shell_run(pty=, notify=)` | Same verbs; a notify note wakes the session, and receipts survive a restart |
@@ -140,9 +140,10 @@ polyrob kb add ~/.hermes/memories
 polyrob kb search "deployment approval"
 ```
 
-POLYROB's own memory is on by default, cross-session and tenant-scoped.
-`MEMORY_BACKEND=local_vector` adds hybrid vector recall (`pip install
-"polyrob[memory-vector]"`); `/memory` in the REPL shows which provider is live.
+POLYROB's own memory is on by default, cross-session and tenant-scoped. On the CLI
+the default is hybrid keyword + vector recall (`local_vector`; it needs
+`pip install "polyrob[memory-vector]"` and falls back to keyword search without it);
+a server defaults to keyword search. `/memory` in the REPL shows which provider is live.
 
 ---
 
@@ -197,7 +198,7 @@ with per-room policy, roles and caps. See [groups.md](../groups.md).
 - **ACP for editors, and an importer** — `hermes import-agent` has no POLYROB
   counterpart; this guide is the migration.
 
-Agent-created skills are **not** on this list any more: POLYROB's learning loop ships
+Agent-created skills are **not** on this list: POLYROB's learning loop ships
 behind `SKILLS_WRITABLE`. Neither is provider failover or a durable task board — both
 projects have those now — nor `A2A`, an OpenAI-compatible API or portable `profile`s,
 which Hermes now ships as well.

@@ -2,6 +2,7 @@
 annotations`` — the action closures' Pydantic param models are Registry-introspected.
 """
 import logging
+import time
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,12 @@ from pydantic import BaseModel, Field
 from tools.base_tool import BaseTool
 from agents.task.loop_types.controller_types import ActionResult
 from tools.shell.process_registry import get_process_registry
+from tools.shell.job_state import FINISHED, LOST, LOST_NOTE
+
+
+def _lost_or_none(status: str) -> Optional[str]:
+    """The receipt status a finalize must force (lost); done comes from the probe."""
+    return LOST if status == LOST else None
 
 
 class ProcessListParams(BaseModel):
@@ -86,6 +93,10 @@ class ProcessTool(BaseTool):
             execution_context, kind=getattr(job, "backend", None) or "docker")
 
     async def _status_line(self, executor, job_id: str, status: str) -> str:
+        if status == "unknown":
+            return f"job `{job_id}`: running (not observed this time; retrying)"
+        if status == "lost":
+            return f"job `{job_id}`: lost — {LOST_NOTE}"
         if status != "done":
             return f"job `{job_id}`: {status}"
         rc = None
@@ -126,6 +137,13 @@ class ProcessTool(BaseTool):
             getattr(self, "logger", logging.getLogger(__name__)).debug(
                 "process: receipt write failed", exc_info=True)
 
+    def _live_job(self, sid: str, job_id: str):
+        """The registry job while it may still run. A finished one (098 TS-09: a
+        torn-down session's jobs are killed) answers from its receipt, so a late
+        poll never spawns a fresh sandbox just to look."""
+        job = self._registry.get(sid, job_id)
+        return job if job is not None and job.status not in FINISHED else None
+
     def _no_job(self, execution_context, job_id: str):
         """The answer for an id the live registry does not hold: its receipt, or
         a plain 'no such job'."""
@@ -147,9 +165,10 @@ class ProcessTool(BaseTool):
             return None, None, ActionResult(error=(
                 f"job `{job_id}` runs on the {getattr(executor, 'kind', '?')} shell backend, "
                 "which has no stdin support"))
-        status = await executor.poll(job_id)
-        if status != "running":
-            await self._finalize(executor, job, execution_context)
+        status = self._registry.observe(self._sid(execution_context), job_id,
+                                        await executor.poll(job_id), now=time.time())
+        if status in FINISHED:
+            await self._finalize(executor, job, execution_context, status=_lost_or_none(status))
             return None, None, ActionResult(error=f"job `{job_id}` is not running ({status}); "
                                                   "its stdin is gone")
         return executor, job, None
@@ -223,7 +242,7 @@ class ProcessTool(BaseTool):
             return self._deny()
         import time
         sid = self._sid(execution_context)
-        job = self._registry.get(sid, params.job_id)
+        job = self._live_job(sid, params.job_id)
         if job is None:
             rec, err = self._no_job(execution_context, params.job_id)
             if err is not None:
@@ -232,14 +251,15 @@ class ProcessTool(BaseTool):
             return ActionResult(extracted_content=receipt_status_line(rec), include_in_memory=True)
         try:
             executor = await self._executor(execution_context, job)
-            status = await executor.poll(params.job_id)
+            status = self._registry.observe(sid, params.job_id,
+                                            await executor.poll(params.job_id), now=time.time())
             line = await self._status_line(executor, params.job_id, status)
         except Exception as e:
             getattr(self, "logger", logging.getLogger(__name__)).error(f"process_poll failed: {e}")
             return ActionResult(error=f"process_poll failed: {e}")
-        if status != "running":
-            await self._finalize(executor, job, execution_context)
-        else:
+        if status in FINISHED:
+            await self._finalize(executor, job, execution_context, status=_lost_or_none(status))
+        elif status == "running":
             self._registry.mark(sid, params.job_id, status, now=time.time())
         return ActionResult(extracted_content=line, include_in_memory=True)
 
@@ -252,7 +272,7 @@ class ProcessTool(BaseTool):
         import time
         from tools.code_exec.limits import dev_exec_max_timeout_sec
         sid = self._sid(execution_context)
-        job = self._registry.get(sid, params.job_id)
+        job = self._live_job(sid, params.job_id)
         if job is None:
             rec, err = self._no_job(execution_context, params.job_id)
             if err is not None:
@@ -269,20 +289,22 @@ class ProcessTool(BaseTool):
             deadline = time.monotonic() + budget
             status = await executor.poll(params.job_id)
             delay = 0.25
-            while status == "running" and time.monotonic() < deadline:
+            while status in ("running", "unknown") and time.monotonic() < deadline:
+                status = self._registry.observe(sid, params.job_id, status, now=time.time())
+                if status == "lost":
+                    break
                 await asyncio.sleep(min(delay, max(0.0, deadline - time.monotonic())))
                 delay = min(delay * 2, 5.0)
                 status = await executor.poll(params.job_id)
+            status = self._registry.observe(sid, params.job_id, status, now=time.time())
             line = await self._status_line(executor, params.job_id, status)
             tail = await executor.read_log(params.job_id, max_bytes=4000)
         except Exception as e:
             getattr(self, "logger", logging.getLogger(__name__)).error(f"process_wait failed: {e}")
             return ActionResult(error=f"process_wait failed: {e}")
-        if status != "running":
-            await self._finalize(executor, job, execution_context)
-        else:
-            self._registry.mark(sid, params.job_id, status, now=time.time())
-        if status == "running":
+        if status in FINISHED:
+            await self._finalize(executor, job, execution_context, status=_lost_or_none(status))
+        if status in ("running", "unknown"):
             line += f" (still running after {budget:g}s)"
         from tools.shell.output import shape_output
         tail_text, _ = shape_output(tail or "", max_chars=4000)
@@ -293,7 +315,7 @@ class ProcessTool(BaseTool):
     async def process_log(self, params: ProcessLogParams, execution_context=None):
         if not self._allowed(execution_context):
             return self._deny()
-        job = self._registry.get(self._sid(execution_context), params.job_id)
+        job = self._live_job(self._sid(execution_context), params.job_id)
         if job is None:
             rec, err = self._no_job(execution_context, params.job_id)
             if err is not None:
@@ -322,7 +344,7 @@ class ProcessTool(BaseTool):
             return self._deny()
         import time
         sid = self._sid(execution_context)
-        job = self._registry.get(sid, params.job_id)
+        job = self._live_job(sid, params.job_id)
         if job is None:
             rec, err = self._no_job(execution_context, params.job_id)
             if err is not None:

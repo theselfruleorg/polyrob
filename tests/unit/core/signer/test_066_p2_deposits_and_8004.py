@@ -93,7 +93,10 @@ async def test_the_sweeper_asks_the_signer_in_remote_mode(signer_home, monkeypat
     await sweeper._sweep_deposit(deposit)
     assert calls == [{"user_id": "u", "chain": "ethereum", "token_symbol": "ETH",
                       "deposit_address": "0x" + "1" * 40}]
-    db.execute.assert_awaited_once()
+    # 098 MO-01: the group claim, then the record — no receipt on this path,
+    # so the sweep is swept_unproven (never booked on the balance mark).
+    assert db.execute.await_count == 2
+    assert db.execute.await_args.args[1][0] == "swept_unproven"
 
 
 @pytest.mark.asyncio

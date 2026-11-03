@@ -33,7 +33,7 @@ to type. It is deliberately not a configuration form. A thread you do not own
 answers 404 rather than an access-denied page.
 
 On a public posture, `/` is also the status page an unauthenticated visitor sees:
-"polyrob is live", the instance id, the version. Signing in replaces it with the
+"POLYROB is live", the instance id, the version and the uptime. Signing in replaces it with the
 console.
 
 **Inbox** is the one list of what is blocked on a person, composed from the same seven
@@ -72,8 +72,7 @@ screenshots it captured. (`/session/{id}` is a permanent redirect to it.)
 its feed and its workspace reads are owner-only — possessing the link gives you
 nothing. There is one narrow bypass left in the code — an expiring preview token
 scoped to a single session's `/serve/` subtree is still accepted — but nothing
-hands one out: the endpoint that minted them was removed because no screen had
-ever called it. So today there is no way to share a session at all.
+hands one out, so there is no way to share a session.
 
 ---
 
@@ -190,8 +189,10 @@ local CLI (`polyrob config set`). The config screen marks those settings and the
 refusal names the command to use instead. Preferences and ordinary flags write
 normally; a guarded one asks for an explicit confirmation.
 
-**A page outside its posture is absent, not denied.** Admin pages and sign-in exist
-only in `multitenant`; elsewhere the route is not registered and the request 404s.
+**A page outside its posture is absent, not denied.** The owner sign-in
+(`/owner-login`) exists in every posture. The admin pages and the tenant sign-in
+(`/signin`) exist only in `multitenant`; elsewhere the route is not registered and
+the request 404s.
 Inside `multitenant`, a signed-in non-admin following an admin link is redirected
 home.
 

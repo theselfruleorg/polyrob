@@ -608,9 +608,9 @@ def init_cmd(
             extras = installed_extras(ctx_install.repo_root)
         except Exception:
             extras = []
-        # No path: the record goes to the per-user config home. The data home
-        # is cwd-scoped by design, and an install fact written there reads as
-        # "never bootstrapped" from every other directory.
+        # No path: the record goes to the per-user config home. (The data
+        # home is no longer cwd-scoped — resolve_data_home() converges on
+        # <polyrob_home>/data — but the install record is a per-user fact.)
         write_marker(version=get_version(),
                      install_method=ctx_install.method, extras=extras,
                      soul_seed_sha=seed_sha)

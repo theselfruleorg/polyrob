@@ -38,6 +38,8 @@ class BaseComponent(ABC):
             return
             
         async with self._lock:
+            if self._initialized:  # 098 CO-06: a waiter that lost the race
+                return
             try:
                 self.logger.debug(f"Validating dependencies for {self.name}")
                 await self._validate_dependencies()
@@ -75,18 +77,22 @@ class BaseComponent(ABC):
         pass
 
     async def cleanup(self) -> None:
-        """Clean up component resources."""
+        """Clean up component resources. 098 CO-06: under the same lock as
+        initialize() (a cleanup waits for an init in flight), re-checked inside.
+        ``_cleanup`` must not call ``cleanup()``/``initialize()`` (not re-entrant)."""
         if not self._initialized:
             return
-            
-        try:
-            self.logger.info(f"Cleaning up {self.name}")
-            await self._cleanup()
-            self._initialized = False
-            self.logger.info(f"Successfully cleaned up {self.name}")
-        except Exception as e:
-            self.logger.error(f"Failed to clean up {self.name}: {e}")
-            raise
+        async with self._lock:
+            if not self._initialized:
+                return
+            try:
+                self.logger.info(f"Cleaning up {self.name}")
+                await self._cleanup()
+                self._initialized = False
+                self.logger.info(f"Successfully cleaned up {self.name}")
+            except Exception as e:
+                self.logger.error(f"Failed to clean up {self.name}: {e}")
+                raise
 
     @abstractmethod
     async def _cleanup(self) -> None:

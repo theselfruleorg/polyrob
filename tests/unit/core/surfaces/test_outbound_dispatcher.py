@@ -356,3 +356,20 @@ async def test_drain_drops_an_attachment_swapped_since_enqueue(tmp_path):
     d = OutboundDispatcher(q, lambda sid: _S([]), rate_per_sec=1000, burst=1000)
     assert await d.drain_once(now=100.0) == 1
     assert seen == [[]]
+
+
+@pytest.mark.asyncio
+async def test_start_after_stop_runs_again(tmp_path):
+    """098 CO-08: stop() clears the task, so a later start() runs the loop again."""
+    import asyncio
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    d = OutboundDispatcher(q, lambda sid: None)
+    d.start()
+    first = d._task
+    await d.stop()
+    assert d._task is None and first.done()
+    d.start()
+    assert d._task is not None and d._task is not first and not d._stop.is_set()
+    await asyncio.sleep(0)
+    assert not d._task.done()
+    await d.stop()

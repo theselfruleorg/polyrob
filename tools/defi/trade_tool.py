@@ -647,7 +647,9 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
                     counterparty=counterparty, idempotency_key=idem,
                     result_ref=tx_hash, chain=intent.chain, asset=asset,
                     positions=_positions,
-                    account=(held.account if held is not None else None))
+                    account=(held.account if held is not None else None),
+                    receipt_state=(  # 098 TS-23: a timed-out wait resolves later
+                        "pending_receipt" if receipt.status == "pending" else None))
         # 046: a CONFIRMED registration is the only thing that may write the
         # identity record, which is in turn the only thing that earns
         # `trustMode: onchain` + `attestation: verified` in the served file.

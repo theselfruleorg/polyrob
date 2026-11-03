@@ -15,6 +15,6 @@ _TAL = pathlib.Path(__file__).resolve().parents[3] / "agents" / "task_agent_lite
 def test_run_session_treats_initializing_as_runnable():
     text = _TAL.read_text()
     # the created branch now also accepts initializing and transitions it to running
-    assert "('created', 'initializing')" in text
+    assert "('created', 'initializing', 'cancelled')" in text  # 098 AG-14
     # it must NOT be left to dead-end only in the else "Cannot run session"
     assert "Cannot run session" in text  # the else still exists for truly-unrunnable states

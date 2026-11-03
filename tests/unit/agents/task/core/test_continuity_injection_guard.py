@@ -24,6 +24,9 @@ class _Agent(MemoryPrefetchMixin):
         self.state = SimpleNamespace(n_steps=1)
         self._is_sub_agent = False
         self._session_bootstrap_done = bootstrap_done
+        if bootstrap_done:  # 098 AG-22: the injector's own latch closed earlier
+            from agents.task.agent.core.memory_prefetch import bootstrap_latch
+            bootstrap_latch(self, "auto_bridge")._done = True
         self.session_id = "sess-guard-test"
         self.user_id = "user_abc"
         self.message_manager = MagicMock()

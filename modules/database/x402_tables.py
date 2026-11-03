@@ -386,6 +386,9 @@ class X402Tables:
             # 046 Phase 0: the asset columns. Shared with migration v1.9.0, so a
             # FRESH install and an UPGRADED one can never disagree about them.
             await add_payment_asset_columns(self.db, logger)
+            # 098 W1 (MO-02/03/06): claim lane, refund close-out, first payable
+            # block. Shared with migration v1.12.0.
+            await add_invoice_state_columns(self.db, logger)
 
             await self.db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_x402_requests_nonce
@@ -583,3 +586,45 @@ async def add_payment_asset_columns(db, log) -> None:
         except Exception as e:
             log.error("  x402_payment_requests: could not add %s (%s) — the 046 "
                       "asset rail will refuse rather than guess", name, e)
+
+
+#: 098 W1 (MO-02, MO-03, MO-06). ``claim_lane``/``claimed_at`` separate a local
+#: `/pay` claim (safe to release on age) from a facilitator submission (never);
+#: ``refunded_*`` close a ``refund_due`` row; ``created_block`` is the first
+#: block an invoice could be paid in (the scan seed). All nullable: a legacy row
+#: keeps NULL and every reader treats NULL as "unknown".
+_INVOICE_STATE_COLUMNS = (
+    ("claim_lane", "TEXT"),
+    ("claimed_at", "INTEGER"),
+    ("refunded_at", "TEXT"),
+    ("refund_tx_hash", "TEXT"),
+    ("refund_note", "TEXT"),
+    ("created_block", "INTEGER"),
+)
+
+
+async def add_invoice_state_columns(db, log) -> None:
+    """Add the 098 W1 invoice-state columns + claim index, idempotently.
+    Shared by `X402Tables.create_tables()` and migration v1.12.0."""
+    try:
+        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
+    except Exception:
+        table_cols = None
+    if not table_cols:
+        return
+    existing = {c["name"] for c in table_cols}
+    for name, sql_type in _INVOICE_STATE_COLUMNS:
+        if name in existing:
+            continue
+        try:
+            await db.execute(
+                f"ALTER TABLE x402_payment_requests ADD COLUMN {name} {sql_type}")
+            log.info("  x402_payment_requests: added column %s %s", name, sql_type)
+        except Exception as e:
+            log.error("  x402_payment_requests: could not add %s (%s)", name, e)
+    try:
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_x402_requests_claim "
+            "ON x402_payment_requests(status, claim_lane, claimed_at)")
+    except Exception as e:
+        log.error("  x402_payment_requests: claim index failed (%s)", e)

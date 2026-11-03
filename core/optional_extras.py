@@ -62,7 +62,9 @@ EXTRA_FOR_MODULE: dict[str, str] = {
     "x402": "crypto",
     "hyperliquid": "crypto",
     "aiogram": "telegram",
-    "tweepy": "twitter",
+    "requests_oauthlib": "twitter",  # the X pack's carried tweepy runs on it
+    "oauthlib": "twitter",
+    "urllib3": "twitter",  # the carried tweepy's streaming module imports it
     "faster_whisper": "voice",
     # 073 W7: the cloud sandbox packs (SHELL_BACKEND=modal|daytona|vercel_sandbox).
     "modal": "modal",
@@ -94,7 +96,7 @@ MODULES_FOR_EXTRA: dict[str, tuple[str, ...]] = {
     "memory-vector": ("sentence_transformers", "apsw", "sqlite_vec", "numpy"),
     "crypto": ("web3", "eth_account"),
     "telegram": ("aiogram",),
-    "twitter": ("tweepy",),
+    "twitter": ("requests_oauthlib",),
     "voice": ("faster_whisper",),
     "gemini": ("google.generativeai",),
     "anthropic": ("anthropic",),

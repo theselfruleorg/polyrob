@@ -86,7 +86,7 @@ or a stop leaves every exit job running until its trade is closed.
 ### Narrow pauses with their own verbs
 
 ```bash
-polyrob owner pause-entries    # refuse NEW treasury positions; exits still run
+polyrob owner pause-entries    # refuse NEW trading entries; exits still run
 polyrob owner resume-entries
 polyrob owner halt             # alias of `polyrob autonomy pause`
 polyrob owner resume           # alias of `polyrob autonomy resume`
@@ -110,13 +110,13 @@ A pause is live and needs no restart. Turning autonomy **off** is a durable
 configuration change that applies to the next process:
 
 ```bash
-polyrob autonomy off --global
-polyrob autonomy on [--mode supervised|autonomous] --global
+polyrob autonomy off
+polyrob autonomy on [--mode supervised|autonomous]
 polyrob autonomy status
 ```
 
-Pass `--global` on the command line: without it the flag goes to
-`./.polyrob/.env`, which the CLI does not read.
+Both write to `~/.polyrob/.env`, the only file the CLI loads. `--global` is
+still accepted so that old scripts keep working; it changes nothing.
 
 Use `pause` to stop what is happening now; use `off` when you do not want the
 loops to start at all. What each mode moves:
@@ -138,9 +138,7 @@ so.
 
 `/restart` restarts the background service once its current work is done
 (`/restart now` cuts it); `/update` updates it to the latest release, rolls back
-on any failure, and restarts. `/update now` (confirmed with `/update now go`) lets a
-deploy that the operator already started skip its wait for a quiet chat, once; it
-still waits for running jobs and goals. Both show a quote with a Confirm button, both are
+on any failure, and restarts. Both show a quote with a Confirm button, both are
 owner-only and refused in a group room, and the service answers in the chat you
 asked from when it is back: `✅ Back online on 1.7.0 (abc1234) — restart took 14 s.` A setting that
 waits for a restart is listed in `/status` with `/restart` as its remedy. The
@@ -211,9 +209,13 @@ Raise your own budget — the preference wins unless the deployment set an
 explicit ceiling, in which case it may only tighten it:
 
 ```bash
-polyrob config set delivery.daily_cap 60
-polyrob config set delivery.rate_per_hour 20
+polyrob config set delivery.daily_cap 60 --user <owner id>
+polyrob config set delivery.rate_per_hour 20 --user <owner id>
 ```
+
+These are per-user preferences, so the command line needs `--user`: the owner id
+that `polyrob owner show` prints, or `local` when it says the owner is unbound. In the REPL,
+`/config set delivery.daily_cap 60` needs no `--user`.
 
 Safety-bearing messages never queue behind ordinary traffic and never spend
 your budget: an approval you are blocked on, a blocked goal, a transaction that
@@ -262,6 +264,33 @@ gets **no** access to the wallet — no MCP tool can reach the signer, and no mo
 verb accepts calldata from outside the process. Aave's server, for example,
 prepares *unsigned* transactions, so installing it gives the agent Aave's
 markets, positions and health factors to read, and no ability to spend.
+
+## First contact on a chat surface
+
+A chat surface starts locked. On Telegram:
+
+- **No allowlist yet.** `polyrob telegram` prints `no allowlist set — message
+  the bot once and it will reply with your id, then set ALLOWED_TELEGRAM_USER_IDS
+  and restart.` Your first private message gets your numeric id and the exact
+  `polyrob config set ALLOWED_TELEGRAM_USER_IDS <id>` line. The agent does not
+  run on that message, and each sender gets that reply once per process.
+- **Allowlist set.** A private message from an id that is not on the list gets
+  no answer at all. A single id on the list is your owner seat.
+- **Pairing on** (`POLYROB_REQUIRE_PAIRING=true`). A sender who passes the
+  allowlist but is not the owner and not paired gets
+  `🔒 I'm not allowed to talk to you yet.` with a pairing code. On the box,
+  `polyrob owner pair pending` lists the waiting codes and
+  `polyrob owner pair approve <code>` approves one.
+
+⚠️ A paired sender is treated as you, the owner, on that surface. Approve only a
+code that your own account received. A code expires after 15 minutes and works
+once; `polyrob owner pair revoke <user_id>` removes a pairing.
+
+Email has no owner seat: a mail from an address the agent wrote to first is a
+correspondent reply, delivered to that session as data, never as instructions.
+Every other mail is refused. Feishu and DingTalk use pairing for the owner
+([feishu-dingtalk.md](feishu-dingtalk.md)); group rooms have their own allowlist
+([groups.md](groups.md)).
 
 ## Approving what the agent proposes
 
@@ -356,7 +385,7 @@ vhost and certificate: [deployment-postures.md](deployment-postures.md).
 
 Every money verb has the same shape as `/bridge`: a **quote by default**, and
 an explicit `go` to execute. The full list, with `/pay`, `/lp`, `/launch`,
-`/deploy`, `/book` and `/invoices`, is in [cli.md](cli.md#slash-commands-repl),
+`/deploy`, `/book` and `/invoices`, is in [chat-commands.md](chat-commands.md),
 and `/help` lists the verbs you can run where you are. Typing `go` is YOUR
 act: you typed the amount and the address, so there is no second tap, and the
 pause and the autonomous ceiling (which bound what I do on my own) do not
@@ -387,7 +416,7 @@ buttons — the chain, then the token, then the recipient (from sends you confir
 before) or the token to buy, then the amount (a share of the balance). The last tap
 gets the real quote. Nothing moves until you tap Confirm on that quote.
 
-**Action cards.** A quote no longer ends with a line to type again. It is a
+**Action cards.** A quote is a
 card with **Confirm**, **Refresh** and **Cancel** buttons (Telegram), the same
 buttons in the console chat and Inbox, and the typed tokens in the terminal
 (`/card_<id>_ok`). Confirm runs the exact line the quote showed — the stored
@@ -408,7 +437,7 @@ spend on that turn — a next payment comes to you as a new decision.
 
 A token-identity question ("which XYZ is real?") arrives in `/pending` with a
 *trust it* and a *not trusted* tap per contract — see
-[payments.md §10.4b](payments.md#104b-which-tokens-the-agent-trusts).
+[onchain.md](onchain.md#which-tokens-the-agent-trusts).
 
 There is no default network. Name it with `on <chain>`: `/nft`, `/identity`
 and `/deploy` refuse a line without it and list the networks you can use.
@@ -433,7 +462,8 @@ private chat, like the rest of the money and control verbs.
 ## See also
 
 - [operate-the-service.md](operate-the-service.md) — restart and update, from chat or a shell
-
+- [chat-commands.md](chat-commands.md) — every slash command, per seat
+- [rails-verification.md](rails-verification.md) — what counts as proof that a send arrived
 - [configuration.md §1](configuration.md#1-the-six-axes) — the six axes, and §6 the autonomy dial
 - [cli.md](cli.md#polyrob-owner) — every `polyrob owner` verb
 - [security-model.md](security-model.md) — what stops the agent when you are not watching

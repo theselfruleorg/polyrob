@@ -82,9 +82,12 @@ def pause_goal(board: Any, *, user_id: str, goal: Any) -> VerbResult:
         return VerbResult(True, status, f"{gid} is already paused. Resume it: /goal retry {gid}")
     if status not in _PAUSABLE:
         return VerbResult(False, status, f"{gid} is {status} — there is nothing to pause.")
-    if not board.update_status(goal.id, STATUS_PAUSED, user_id=user_id):
-        return VerbResult(False, status, f"Could not pause {gid} — see /goals.")
-    note = (" It is running right now — this run finishes, and no new one starts."
+    # AG-17: the edge is the one decided on (the snapshot status); a row that
+    # moved since is a miss, never an overwrite.
+    if not board.update_status(goal.id, STATUS_PAUSED, user_id=user_id,
+                               from_states=(status,)):
+        return VerbResult(False, status, f"{gid} changed — see /goals.")
+    note = (" It was running — the current run stops now, and no new one starts."
             if status == STATUS_RUNNING else "")
     return VerbResult(True, STATUS_PAUSED,
                       f"{gid} paused by you.{note} Resume it: /goal retry {gid}")
@@ -110,13 +113,14 @@ def retry_goal(board: Any, *, user_id: str, goal: Any) -> VerbResult:
     gid, status = _gid(goal), goal.status
     if status == STATUS_BLOCKED:
         if not board.update_status(goal.id, STATUS_READY, reset_failures=True,
-                                   user_id=user_id):
-            return VerbResult(False, status, f"Could not retry {gid} — see /goals.")
+                                   user_id=user_id, from_states=(STATUS_BLOCKED,)):
+            return VerbResult(False, status, f"{gid} changed — see /goals.")
         return VerbResult(True, STATUS_READY, f"{gid} → ready (failures cleared).")
     if status == STATUS_PAUSED:
         target = STATUS_WAITING if _unfinished_deps(board, goal) else STATUS_READY
-        if not board.update_status(goal.id, target, reset_failures=True, user_id=user_id):
-            return VerbResult(False, status, f"Could not resume {gid} — see /goals.")
+        if not board.update_status(goal.id, target, reset_failures=True, user_id=user_id,
+                                   from_states=(STATUS_PAUSED,)):
+            return VerbResult(False, status, f"{gid} changed — see /goals.")
         tail = (" It runs after the goal it depends on." if target == STATUS_WAITING
                 else "")
         return VerbResult(True, target, f"{gid} → {target} (pause lifted).{tail}")

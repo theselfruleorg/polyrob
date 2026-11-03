@@ -188,13 +188,15 @@ class TestChunkStraddle:
 
 class TestTables:
     def test_markdown_table_degrades_to_pre(self):
-        text = "| a | b |\n|---|---|\n| 1 | 2 |"
+        # 096 W6: only a WIDE table (> 3 columns) stays a <pre> block.
+        text = "| a | b | c | d |\n|---|---|---|---|\n| 1 | 2 | 3 | 4 |"
         out = markdown_to_html(text)
         assert out.startswith("<pre>")
-        assert "| a | b |" in out
+        assert "| a | b | c | d |" in out
 
     def test_table_inside_prose(self):
-        text = "before\n\n| h1 | h2 |\n| --- | --- |\n| x | y |\n\nafter"
+        text = ("before\n\n| h1 | h2 | h3 | h4 |\n| --- | --- | --- | --- |\n"
+                "| x | y | z | w |\n\nafter")
         out = markdown_to_html(text)
         assert "<pre>" in out and "before" in out and "after" in out
 

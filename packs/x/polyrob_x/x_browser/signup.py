@@ -9,8 +9,16 @@ CAPTCHA.
 Invariants:
 - ONE account per tenant: a stored ``x`` session refuses a new signup.
 - The generated password is stored (encrypted) BEFORE it is ever typed.
-- Progress persists after every completed step under the ``x_signup`` provider,
-  so a paused signup resumes at the recorded step.
+- Progress persists after every step under the ``x_signup`` provider as
+  ``{signup_step, step_done, signup_state}``. ``step_done`` is True only after
+  the page guard passed (098 CL-11): a step that stopped on an obstacle stays
+  NOT done, and resume probes the page before it moves past it.
+- The password lives in ONE place: the login record (provider ``x``).
+- An undecryptable login record blocks a new signup (it is not "absent").
+- Cross-process resume (098 CL-11): progress also keeps the page URL. A resume
+  on a BLANK page (a new process, or a fresh browser context) first imports the
+  saved storage state and returns to that URL; with no saved state it refuses
+  and says to restart from the first step.
 - The account bio carries an automation disclosure.
 """
 from __future__ import annotations
@@ -135,7 +143,7 @@ class SignupFlow:
         obstacle = classify_page(await self.driver.probe())
         if obstacle is None:
             return
-        await self._persist(self._current_step)
+        await self._persist(self._current_step, done=False)
         prompt = {
             Obstacle.INTERACTIVE_CHALLENGE:
                 "X is showing a challenge (likely a CAPTCHA). Solve it in the "
@@ -149,17 +157,52 @@ class SignupFlow:
         }[obstacle]
         raise SignupPaused(obstacle, prompt, resume_token=self.user_id)
 
-    async def _persist(self, step: str) -> None:
+    async def _persist(self, step: str, *, done: bool = True) -> None:
         try:
             state = await self.driver.export_storage_state()
         except Exception:
             state = {}
-        self.progress.save(self.user_id,
-                           extra={"signup_step": step, "signup_state": state})
+        extra = {"signup_step": step, "step_done": bool(done), "signup_state": state}
+        url_fn = getattr(self.driver, "current_url", None)
+        if callable(url_fn):
+            try:
+                extra["signup_url"] = str(await url_fn() or "")
+            except Exception:
+                pass
+        self.progress.save(self.user_id, extra=extra)
 
-    def _resume_step(self) -> Optional[str]:
+    async def _restore_page(self, rec: dict) -> None:
+        """098 CL-11: a resume on a blank page (another process, or a fresh
+        context) imports the saved browser state first — else every later step
+        runs on a page that has no form. A driver without the seam (or a page
+        that still shows the flow) is left as it is."""
+        blank_fn = getattr(self.driver, "page_is_blank", None)
+        if not callable(blank_fn) or not await blank_fn():
+            return
+        state = rec.get("signup_state") or {}
+        if not (isinstance(state, dict) and (state.get("cookies") or state.get("origins"))):
+            raise SignupPaused(
+                Obstacle.VALUE_NEEDED,
+                "this signup cannot resume in a new browser: its saved browser state "
+                "is missing. Run the signup again without resume (it starts from "
+                "the first step).")
+        await self.driver.import_storage_state(state, url=str(rec.get("signup_url") or ""))
+
+    async def _resume_index(self) -> int:
+        """The first step to run on resume. A done step resumes after it. A step
+        that stopped on an obstacle (``step_done`` False) is re-probed: a wall
+        still there pauses again; a clear page continues after it. A legacy
+        record without ``step_done`` keeps its old meaning (done)."""
         rec = self.progress.load(self.user_id) or {}
-        return rec.get("signup_step")
+        last = rec.get("signup_step")
+        if last not in STEPS:
+            return 0
+        await self._restore_page(rec)
+        if rec.get("step_done", True) is False:
+            self._current_step = last
+            await self._guard_page()
+            await self._persist(last)
+        return STEPS.index(last) + 1
 
     # -- run --------------------------------------------------------------
 
@@ -167,7 +210,17 @@ class SignupFlow:
         # One account per tenant — but only a COMPLETED session (storage_state
         # present) blocks a new signup. A password-only partial record from an
         # interrupted attempt must NOT trip the guard, or resume can never run.
-        existing_rec = self.store.load(self.user_id)
+        load_checked = getattr(self.store, "load_checked", None) or self.store.load
+        try:
+            existing_rec = load_checked(self.user_id)
+        except Exception as e:
+            if type(e).__name__ != "XSessionUndecryptable":
+                raise
+            raise SignupPaused(
+                Obstacle.BLOCKED,
+                "a stored X login exists but cannot be decrypted — restore "
+                "MCP_ENCRYPTION_KEY, or delete it with `polyrob x-account delete`, "
+                "then retry. Not signing up a second account.") from e
         if existing_rec is not None and existing_rec.get("storage_state") is not None:
             existing = existing_rec.get("handle", "unknown")
             raise SignupPaused(
@@ -175,11 +228,7 @@ class SignupFlow:
                 f"an X account (@{existing}) already exists for this agent — "
                 "one account per instance. Delete it first to re-register.")
 
-        start_index = 0
-        if resume:
-            last = self._resume_step()
-            if last in STEPS:
-                start_index = STEPS.index(last) + 1
+        start_index = await self._resume_index() if resume else 0
 
         email = self._agent_email()
         if not email:
@@ -256,11 +305,19 @@ class SignupFlow:
         return resolve_agent_email() or ""
 
     def _ensure_password(self) -> str:
-        """Generate + store the password BEFORE it is ever typed into the page."""
-        rec = self.progress.load(self.user_id) or {}
-        pw = rec.get("password")
+        """Generate + store the password BEFORE it is ever typed into the page.
+
+        CL-11: ONE copy, in the login record. An older progress record that
+        still carries a password is migrated there, then the copy is dropped."""
+        login = self.store.load(self.user_id) or {}
+        pw = login.get("password")
+        old = (self.progress.load(self.user_id) or {}).get("password")
+        if not pw and old:
+            pw = old
+            self.store.save(self.user_id, password=pw)
+        if old:
+            self.progress.save(self.user_id, extra={"password": None})
         if not pw:
             pw = secrets.token_urlsafe(24)
             self.store.save(self.user_id, password=pw)
-            self.progress.save(self.user_id, password=pw)
         return pw

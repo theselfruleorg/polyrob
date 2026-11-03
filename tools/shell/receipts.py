@@ -159,6 +159,8 @@ def receipt_status_line(rec: Dict[str, Any]) -> str:
     from tools.shell.output import exit_note
     rc = rec.get("exit_code")
     status = rec.get("status") or "done"
+    if rec.get("note"):
+        status = f"{status} — {rec['note']}"
     if rc is None:
         return f"job `{rec.get('id')}`: {status} (from the durable receipt)"
     note = exit_note(rc)
@@ -168,7 +170,7 @@ def receipt_status_line(rec: Dict[str, Any]) -> str:
 
 async def finalize_job(executor, job, *, session_id: str, user_id: Optional[str],
                        registry=None, status: Optional[str] = None,
-                       overwrite: bool = False) -> Optional[Path]:
+                       overwrite: bool = False, status_note: bool = False) -> Optional[Path]:
     """Read the finished job's exit code + log through its executor and write the
     receipt. ``status`` overrides the executor's view (``killed``)."""
     import asyncio
@@ -176,21 +178,24 @@ async def finalize_job(executor, job, *, session_id: str, user_id: Optional[str]
         rc = None
         for _ in range(10):  # a pty pump writes .rc a moment after the exit
             rc = await executor.exit_code(job.id)
-            if rc is not None or status == "killed":
+            if rc is not None or status in ("killed", "lost"):
                 break
             await asyncio.sleep(0.1)
         log = await executor.read_log(job.id, max_bytes=RECEIPT_LOG_MAX_CHARS)
     except Exception:
         logger.debug("shell receipt: executor read failed", exc_info=True)
         rc, log = None, ""
-    final = status or (job.status if job.status in ("killed",) else "done")
+    final = status or (job.status if job.status in ("killed", "lost") else "done")
     if registry is not None:
         try:
             registry.mark(session_id, job.id, final, now=time.time())
         except Exception:
             pass
+    from tools.shell.job_state import KILLED, KILLED_NOTE, LOST, LOST_NOTE
+    note = {LOST: LOST_NOTE}.get(final) or (KILLED_NOTE if final == KILLED and status_note else None)
     return write_receipt(session_id, user_id, job, status=final, exit_code=rc,
-                         log_text=log, overwrite=overwrite)
+                         log_text=log, overwrite=overwrite,
+                         extra={"note": note} if note else None)
 
 
 __all__ = [

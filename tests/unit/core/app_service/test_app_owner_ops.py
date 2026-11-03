@@ -30,6 +30,7 @@ def test_approve_reject_kill_and_lines(tmp_path):
     assert not ok and "not pending" in msg
     ok, msg = owner_ops.reject(r2, "st", "u1", via="cli")
     assert not ok and "kill" in msg
+    r2.claim("st", "u1", "approved", "deploying")
     r2.record_live("st", "u1", host_port=18000, container_name="c", public_url="https://st.apps.x")
     show = owner_ops.show_lines(r2, "u1", "st")
     assert show[0] == "st [live] https://st.apps.x" and "cmd python server.py" in show[2]
@@ -68,6 +69,7 @@ def test_status_snapshot_apps_section(tmp_path, monkeypatch):
     assert any(h.key == "apps_pending" and h.severity == "crit" for h in snap.health)
     assert render_section_lines(snap, "apps")[0].startswith("• Apps: 1 pending")
     r.mark_approved("st", "u1")
+    r.claim("st", "u1", "approved", "deploying")
     r.record_failed("st", "u1", error="health check failed")
     snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
     assert [h.key for h in snap.section("apps").health] == ["apps_failed"]
