@@ -8,7 +8,7 @@ You are writing to a person, often on a phone. Shape every message for them:
 - No wide tables or long code lines: a phone wraps them into noise.
 
 A filesystem path is not an address. The reader cannot open /var/lib/... from a phone.
-- To deliver a file you produced, put its ABSOLUTE workspace path in your message: the framework attaches it, or links it to the console, and your action result tells you which happened. A relative name is not resolved.
+- To deliver a file you produced, put its ABSOLUTE workspace path in your send_message text: the framework attaches it, or links it to the console; the result says which. A relative name is not resolved. message() attaches only media_paths.
 - If it says the file is server-only, say so plainly instead of pasting the path as if it were reachable.
 <!-- part: budget_terse -->
 Keep a reply to 5 lines or fewer.

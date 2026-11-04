@@ -6,7 +6,7 @@ metadata:
   polyrob-when: 'Moving funds between chains (bridge)'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["defi_trade"]}'
-  polyrob-version: '3'
+  polyrob-version: '4'
 ---
 # Bridge — moving value between chains
 
@@ -51,35 +51,32 @@ the asset that routes straight into a position with no allowance,
 `token_out="weth"` costs you more slippage and buys you nothing unless WETH is
 wanted for its own sake.
 
-**Caps, not taps.** The bridge is bounded by the caps, not by a tap on every
-move:
+**Caps, not taps — the bridge is the exception.** The general lane rule for
+the money verbs is in `trade-execution` ("The lane and the caps"). The bridge
+differs from it:
 
-- under `DEFI_AUTONOMOUS_MAX_USD` you run it and report — no tap;
+- under the autonomous ceiling you run it and report — no tap, whatever
+  `DEFI_TIERED_SPEND_LANE` says;
 - above it, the durable owner queue decides — one tap, and it is the verb's own
   ask (it names the recipient, the USD value, the arrival floor and the relay id);
-- the owner's own `/bridge … go` is his act: the ceiling and the pause do not
-  hold it (the caps do);
+- the owner's own `/bridge … go` is the owner's act: the ceiling and the pause
+  do not hold it (the caps do);
 - a delegated **sub-agent/leaf still never bridges**. Report back and let the
   parent run it. That is not a size question.
 
-This is NOT the same as `swap`. A `swap` you start on your own sits on the
-spend approval lane and waits for the owner's tap even under the ceiling,
-unless the owner turned on `DEFI_TIERED_SPEND_LANE`. Read the dry run's `lane:` line for the verb you are
-about to use; do not carry one verb's lane over to another.
+Read the dry run's `lane:` line for the verb you are about to use; do not carry
+one verb's lane over to another. The caps bind the bridge too, and the one that
+bites on a big move is the **rolling 24h cap**, not the per-transaction one. If a
+bridge refuses on the daily cap, say the NUMBER — how much headroom is left and
+when the window rolls — rather than "refused by PolicyGate".
 
-The same ceilings as every other money verb apply, and the one that bites on a
-big move is the **rolling 24h `WALLET_DAILY_CAP_USD`**, not the per-transaction
-ceiling. If a bridge refuses on the daily cap, say the NUMBER — how much headroom
-is left and when the window rolls — rather than "refused by PolicyGate".
-
-The owner reaches the same rail from chat with `/bridge <from> <to> <amount>`
-(the quote is an action card; Confirm executes it). When he asks you to move
-value between chains, **that is the answer** — do not tell him it cannot be
-done, and do not ask him to grant you a tool. To put a specific bridge to him,
-call `propose_action(command="/bridge <from> <to> <amount>", why=…)`: he gets a
-card with one Confirm tap. Never write the line out for him to copy, and never
-name a `polyrob …` shell command on a chat seat (a terminal REPL may name
-`polyrob wallet bridge`, labeled as a terminal command).
+The owner reaches the same rail from chat with `/bridge <from> <to> <amount>
+[from usdc] [as <asset>]` (the quote is an action card; Confirm executes it).
+When the owner asks you to move value between chains, **that is the answer** —
+do not say it cannot be done, and do not ask for a tool grant. To put a specific
+bridge to the owner, call `propose_action(command="/bridge <from> <to>
+<amount>", why=…)`: the owner gets a card with one Confirm tap. Without
+`propose_action`, follow the command-line rule in `trade-execution`.
 
 **⚠️ The one rule that costs real money if you get it wrong.** A bridge that has
 not arrived by the deadline comes back as **`in_flight`** — that is neither
@@ -112,10 +109,8 @@ structural, i.e. your buying power sits on a chain you are not hunting on.
 
 ## If a tool is missing
 
-The trading verbs need `defi_trade` (and `defi_data` for reads) in THIS session.
-If they are not loaded, do the read steps you can, write the plan in your run report or
-the watchlist, and tell the owner which grant is missing. Never work around a missing
-verb with a raw `call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

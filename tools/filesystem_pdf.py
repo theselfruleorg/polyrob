@@ -43,18 +43,57 @@ def _require_pypdf() -> None:
             "'polyrob[docs]'. The file is unchanged in the workspace.")
 
 
+#: The binary documents `filesystem_read_file` turns into text (extension -> parser kind).
+#: Every other binary office format (.doc, .xls/.xlsx, .ppt/.pptx) has no parser here.
+DOCUMENT_KINDS = {'.pdf': 'pdf', '.docx': 'docx'}
+
+
 class PdfExtractionMixin:
     """Mixin providing PDF extraction capabilities for FileSystem."""
 
-    async def _process_pdf(self, content) -> Dict[str, Any]:
-        """Parse in a bounded worker; failures never fall back into this process."""
-        from tools.document_parser import parse_document_async
+    async def _process_document(self, kind: str, content) -> Dict[str, Any]:
+        """Parse in a bounded worker; failures never fall back into this process.
+
+        A DocumentParseError text is our own (the missing extra, the budget, a busy
+        parser) and names the remedy, so it reaches the caller; any other failure
+        may carry document bytes and is reported generically.
+        """
+        from tools.document_parser import DocumentParseError, parse_document_async
         if isinstance(content, str):
             content = content.encode('utf-8')
+        label = kind.upper()
         try:
-            return await parse_document_async('pdf', content)
+            return await parse_document_async(kind, content)
+        except DocumentParseError as exc:
+            raise ServiceError(f'{label} parsing refused: {exc}') from exc
         except Exception as exc:
-            raise ServiceError('PDF parsing refused or resource limit reached') from exc
+            raise ServiceError(f'{label} parsing refused or resource limit reached') from exc
+
+    async def _process_pdf(self, content) -> Dict[str, Any]:
+        return await self._process_document('pdf', content)
+
+    async def _read_document_text(self, path: str, root: str):
+        """The extracted text of a .pdf / .docx at *path*, or None for any other file.
+
+        The bytes come through the same O_NOFOLLOW descriptor walk as a text read;
+        the parser enforces the input, page and text budgets (tools/document_worker.py).
+        A PDF without a text layer (a scan) says so instead of returning nothing.
+        """
+        kind = DOCUMENT_KINDS.get(os.path.splitext(path)[1].lower())
+        if kind is None:
+            return None
+        from core.security.workspace_io import read_bytes
+        from tools.document_worker import MAX_INPUT_BYTES
+        content = read_bytes(path, root, max_bytes=MAX_INPUT_BYTES + 1, shared_ok=True)
+        if len(content) > MAX_INPUT_BYTES:
+            raise ServiceError(
+                f'{os.path.basename(path)} is over the {MAX_INPUT_BYTES // (1024 * 1024)} MB '
+                f'document read limit. The file is unchanged in the workspace.')
+        text = (await self._process_document(kind, content)).get('content') or ''
+        if not text.strip():
+            return (f'[{os.path.basename(path)}: no text could be extracted. A scanned '
+                    f'{kind.upper()} holds only images, and this reader does no OCR.]\n')
+        return text
 
     def _read_pdf_with_recovery(self, file_obj) -> "pypdf.PdfReader":
         """Read PDF with additional recovery options."""

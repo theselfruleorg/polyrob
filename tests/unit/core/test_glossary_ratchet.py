@@ -28,7 +28,7 @@ _REPO = Path(__file__).resolve().parents[3]
 CEILINGS = {
     "webview_copy": 70,
     "core_copy": 3,
-    "verbs": 22,
+    "verbs": 21,
     "prefs": 0,
     "inbox_render": 15,
     "telegram_owner": 42,
@@ -37,7 +37,7 @@ CEILINGS = {
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
     "guide_docs": 1687,
-    "guide_skill": 241,
+    "guide_skill": 240,
 }
 
 _INBOX_RENDER = ("core/surfaces/inbox_render.py", "core/surfaces/owner_admin.py")

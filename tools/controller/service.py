@@ -208,6 +208,9 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# 086 W5: the trading mandate's intake card (same gates as propose_action).
 		from tools.controller.trade_mandate_action import register_trade_mandate_action
 		register_trade_mandate_action(self)
+		# 099: selling — offer_manage (owner turns, cards) and order_deliver (the order's run).
+		from tools.controller.offer_actions import register_offer_actions
+		register_offer_actions(self)
 		# 093 D1: a setting change as a one-tap owner card (same gates + owner turn).
 		from tools.controller.setting_actions import register_setting_actions
 		register_setting_actions(self)

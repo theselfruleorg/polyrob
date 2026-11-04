@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Save a PNG screenshot of the current page into the workspace (screenshots/) and return its path. To show it, attach that path with message(media_paths=[...]).",
+    "name": "browser_screenshot",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for saving a screenshot of the current page into the workspace.",
+      "properties": {
+        "full_page": {
+          "default": false,
+          "description": "Capture the whole page, not only the viewport",
+          "type": "boolean"
+        },
+        "name": {
+          "default": null,
+          "description": "File name without a folder (\".png\" is added); default: a timestamp",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

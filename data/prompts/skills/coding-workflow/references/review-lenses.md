@@ -70,17 +70,17 @@ held. "Looks fine" is not a result.
 ## 3. Boundaries
 
 Walk every branch and edge the change adds: empty, one, many, the maximum,
-missing, malformed, concurrent, and the error path out of each. On our money
-and messaging rails, also check: what happens when the call half-succeeds (sent
-but no receipt, broadcast but unconfirmed)?
+missing, malformed, concurrent, and the error path out of each. Where a call
+moves money or sends a message, also check: what happens when the call
+half-succeeds (sent but no receipt, broadcast but unconfirmed)?
 
 ## 4. Shape
 
 Compare the shape of the change with the shape of the codebase. Is the logic
-in the right layer (`core <- modules <- agents <- tools <- surfaces`)? Does it
-add a second copy of something that already has one owner (a second status
-reader, a second env parser, a second verb table)? Will the next change have to
-undo it?
+in the layer the codebase already uses for it? Does it add a second copy of
+something that already has one owner (a second config reader, a second
+registry, a second parser for one format)? Will the next change have to undo
+it?
 
 ## 5. Words
 

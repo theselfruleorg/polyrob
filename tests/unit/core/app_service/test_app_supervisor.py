@@ -396,3 +396,116 @@ def test_a_tree_edited_after_the_tested_digest_is_not_published(rig):
     row = rig.reg.get("demo-status", "owner-1")
     assert row["status"] == "failed" and "tested workspace digest" in row["last_failure_error"]
     assert rig.docker.argv_of(["run", "-d"]) == []
+
+
+# --- the end of the lifecycle: remove, and the owner's start --------------------
+
+def test_remove_of_a_live_app_tears_down_and_deletes_files_and_row(rig):
+    asyncio.run(rig.sup.tick())
+    app_dir = rig.tmp / "data" / "apps" / "owner-1" / "demo-status"
+    assert app_dir.is_dir()
+    assert rig.reg.request_remove("demo-status", "owner-1") == "queued"
+    row = rig.reg.get("demo-status", "owner-1")
+    assert row["status"] == "stopped" and row["remove_requested"]
+    # a redeploy cannot resurrect a row that is being removed
+    with pytest.raises(ValueError, match="being removed"):
+        requeue(rig)
+    counts = asyncio.run(rig.sup.tick())
+    assert counts["stopped"] == 1 and counts["removed"] == 1
+    assert ["rm", "-f", "polyrob-app-owner-1-demo-status"] in rig.docker.log
+    assert not (rig.tmp / "apps.d" / "demo-status.conf").exists()
+    assert not app_dir.exists()
+    assert rig.reg.get("demo-status", "owner-1") is None
+    assert rig.reg.last_attempt_epoch("demo-status", "owner-1") is None
+    assert rig.events.rows[-1][0] == "app_removed"
+    # the slug is free again: a new request is a NEW owner ask
+    rig.reg.upsert_request("demo-status", "owner-1", source_dir=str(rig.proj),
+                           cmd=["python", "server.py"], container_port=8765,
+                           health_path="/", egress="none", egress_allow=[], env={},
+                           workspace_digest=tree_digest(str(rig.proj)))
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "pending"
+
+
+def test_remove_of_a_never_approved_row_is_immediate(rig):
+    rig.reg.upsert_request("other-app", "owner-1", source_dir=str(rig.proj),
+                           cmd=["python", "server.py"], container_port=8000,
+                           health_path="/", egress="none", egress_allow=[], env={},
+                           workspace_digest=tree_digest(str(rig.proj)))
+    assert rig.reg.request_remove("other-app", "owner-1") == "deleted"
+    assert rig.reg.get("other-app", "owner-1") is None
+    assert rig.reg.request_remove("other-app", "owner-1") == "missing"
+
+
+def test_owner_start_runs_a_stopped_app_again(rig):
+    from core.app_service import owner_ops
+    asyncio.run(rig.sup.tick())
+    ok, _ = owner_ops.kill(rig.reg, "demo-status", "owner-1", via="test")
+    assert ok
+    asyncio.run(rig.sup.tick())
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "stopped"
+    ok, msg = owner_ops.start(rig.reg, "demo-status", "owner-1", via="test")
+    assert ok, msg
+    counts = asyncio.run(rig.sup.tick())
+    assert counts["deployed"] == 1
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "live"
+    # start refuses a live app and a pending one
+    ok, msg = owner_ops.start(rig.reg, "demo-status", "owner-1", via="test")
+    assert not ok and "not stopped" in msg
+
+
+def test_owner_remove_and_start_refusals(rig):
+    from core.app_service import owner_ops
+    ok, msg = owner_ops.remove(rig.reg, "nope", "owner-1", via="test")
+    assert not ok and "no app" in msg
+    ok, msg = owner_ops.remove(rig.reg, "demo-status", "owner-1", via="test")
+    assert ok and "removal queued" in msg
+    ok, msg = owner_ops.start(rig.reg, "demo-status", "owner-1", via="test")
+    assert not ok and "being removed" in msg
+
+
+def test_remove_keeps_the_row_while_the_container_cannot_be_removed(rig):
+    """A failed `docker rm -f` must not delete the only record of a container
+    that may still serve the app; the next tick retries."""
+    asyncio.run(rig.sup.tick())
+    assert rig.reg.request_remove("demo-status", "owner-1") == "queued"
+    real = rig.docker.__call__
+
+    async def failing_rm(args, *, input=None, timeout=None):
+        if args[:2] == ["rm", "-f"]:
+            rig.docker.log.append(list(args))
+            return (1, "", "Error response from daemon: timeout")
+        return await real(args, input=input, timeout=timeout)
+
+    rig.sup._docker = failing_rm
+    counts = asyncio.run(rig.sup.tick())
+    assert counts["removed"] == 0
+    row = rig.reg.get("demo-status", "owner-1")
+    assert row is not None and row["remove_requested"]
+    assert (rig.tmp / "data" / "apps" / "owner-1" / "demo-status").is_dir()
+    rig.sup._docker = rig.docker  # the daemon recovers
+    counts = asyncio.run(rig.sup.tick())
+    assert counts["removed"] == 1
+    assert rig.reg.get("demo-status", "owner-1") is None
+
+
+def test_remove_is_one_guarded_write_from_the_status_read(rig):
+    """098 S2: the removal edge carries the status it read; a row that moved
+    underneath on every try reports `changed`, never a blind overwrite."""
+    from core.app_service import owner_ops
+    reg = rig.reg
+    real_get = reg.get
+    flip = {"n": 0}
+
+    def moving_get(slug, user_id):
+        row = real_get(slug, user_id)
+        if row is not None and flip["n"] < 10:
+            flip["n"] += 1
+            row = dict(row, status="deploying" if row["status"] != "deploying" else "live")
+        return row
+
+    reg.get = moving_get
+    assert reg.request_remove("demo-status", "owner-1") == "changed"
+    ok, msg = owner_ops.remove(reg, "demo-status", "owner-1", via="test")
+    assert not ok and "changed state" in msg
+    reg.get = real_get
+    assert reg.request_remove("demo-status", "owner-1") == "queued"

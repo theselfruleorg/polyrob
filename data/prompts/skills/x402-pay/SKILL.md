@@ -1,12 +1,12 @@
 ---
 name: x402-pay
-description: 'Pay for an API over x402: what the payer supports (Base USDC, exact scheme), the caps and the autonomous ceiling, request_id for deliberate repeat calls, quote and probe before paying, the result headers, and the send interlock after an unknown outcome.'
+description: 'Pay for an API over x402: what the payer supports (Base USDC, exact scheme), the caps and the autonomous ceiling, quote and probe before paying, expected_pay_to from the quote, request_id for deliberate repeat calls, the result headers, and the send interlock after an unknown outcome.'
 license: MIT
 metadata:
   polyrob-when: 'Paying for an API over x402'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["x402_pay"]}'
-  polyrob-version: '3'
+  polyrob-version: '4'
 ---
 # x402 Pay — paying for an API with the wallet
 
@@ -17,8 +17,8 @@ whole rail.
 
 ## What the payer supports today
 
-- The `exact` scheme on **Base**, paid in **canonical Base USDC**
-  (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`), x402 v1 and v2 headers.
+- The `exact` scheme on **Base**, paid in the chain registry's pinned Base
+  USDC (the asset pin is in code), x402 v1 and v2 headers.
 - A server that lists several payment options is priced (`x402_quote` and the
   preflight) and paid through the SAME entry — its Base-USDC one — even when
   that entry is not first.
@@ -33,7 +33,9 @@ whole rail.
 - Every payment is capped by the `max_amount_usd` you declare; a challenge above
   it is refused before anything is signed. The wallet's per-transaction and
   daily caps (and the x402 daily venue cap) apply on top.
-- Autonomous payments go up to `X402_AUTONOMOUS_MAX_USD`. A larger payment goes to the owner queue and waits for the owner. When autonomy
+- Autonomous payments go up to `X402_AUTONOMOUS_MAX_USD`, a ceiling of their
+  own (the on-chain lane rule is in `trade-execution`). A larger payment goes
+  to the owner queue and waits for the owner. When autonomy
   is armed, a goal you write yourself CAN carry `x402_pay` (as it can carry
   `defi_trade`); the same caps bound it. A sub-agent, a self-wake, a delegation
   result and a correspondent-tainted turn cannot pay.
@@ -50,15 +52,20 @@ whole rail.
    `x402_pay.x402_probe(url=…, method=…, body=…)` for the full terms (price,
    `accepts[]`, network, a 0–5 payability score). "No x402 price found" on a
    plain GET is NOT proof the resource is free — a POST-only paywall looks the
-   same. Probe with the real method.
+   same. Probe with the real method. Write down the recipient (`payTo`) the
+   quote or the probe prints: the payment needs it. To compare several
+   endpoints at once, `x402_pay.x402_sweep(targets=[…])` probes each one and
+   never pays.
 2. **Decide if it is worth it.** Is the data needed for the task, and is the
    price in line with what the probe showed? A price that jumped between probe
    and pay is refused by the cap.
 3. **Check funds:** `x402_pay.x402_wallet_status()` — Base USDC balance. USDC on
    another chain cannot pay a Base challenge.
 4. **Pay:** `x402_pay.x402_fetch(url=…, method=…, body=…, max_amount_usd=…,
+   expected_pay_to=<the payTo that x402_quote or x402_probe printed>,
    request_id=…)`. Set `max_amount_usd` to the probed price, not a round
-   ceiling.
+   ceiling. Without `expected_pay_to`, or with a recipient that changed since
+   the quote, the payment is refused — quote again, never guess the address.
    - **`request_id`** names ONE deliberate call. A retry of the same call MUST
      reuse its id (so it can never pay twice). A new, deliberate call to the
      same metered URL needs a new id.
@@ -80,9 +87,11 @@ whole rail.
 If `x402_pay` is not loaded in this session, you cannot pay. Do not fetch the
 resource another way to dodge the paywall. Put it to the owner with
 `propose_action(command="/pay <url> <max_usd>", why="<the probed price and why
-the data is needed>")`: his card fetches the real price and he confirms it. Do
-not write the `/pay … go` line for him to copy. `/pay` names each command as its
-own call (a re-delivered message never pays twice).
+the data is needed>")`: the card fetches the real price and the owner confirms
+it. Without `propose_action`, give the `/pay <url> <max_usd>` line WITHOUT
+`go`, and say that no card was made. `/pay` names each command as its own call (a re-delivered
+message never pays twice). For any other missing tool, follow
+`harness-manual`.
 
 ## Related
 

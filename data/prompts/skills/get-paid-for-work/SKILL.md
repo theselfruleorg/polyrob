@@ -1,12 +1,13 @@
 ---
 name: get-paid-for-work
-description: 'Get paid to do a task: scope and quote, an x402_request invoice sent to the payer, no paid work before settlement, deliver on the settlement wake, one notice on expiry, never claim payment without the settlement record.'
+description: 'Get paid for a one-off task the owner or a goal names: scope and quote, an x402_request invoice sent to the payer, no paid work before settlement, deliver on the settlement wake, one notice on expiry, never claim payment without the settlement record.'
 license: MIT
 metadata:
   polyrob-when: 'Quoting, invoicing and getting paid for a task'
   polyrob-priority: '3'
-  polyrob-triggers: '{"tool_ids":["goal","cronjob"]}'
-  polyrob-version: '1'
+  polyrob-owner-only: 'true'
+  polyrob-triggers: '{"tool_ids":["x402_invoice","goal","cronjob"]}'
+  polyrob-version: '2'
 ---
 # Get Paid for Work — quote, invoice, deliver on settlement
 
@@ -29,7 +30,11 @@ Call `x402_request` with:
 
 - `amount_usd` — the quoted price;
 - `purpose` — one line the payer sees ("Translation of 3 pages, EN to DE");
-- `payer_contact` and, if you have it, `payer_address`;
+- `payer_surface` + `payer_address` — the surface and the handle of a
+  correspondent you already talk to (for example `telegram` and their handle;
+  not a wallet address). The settlement then reaches you as DATA;
+- `payer_contact` — free text shown on the invoice (a name, an email, a
+  handle);
 - `expiry_hours` — from the goal, else the default;
 - `asset_id` and `chain` — when the goal names an asset other than the default.
 

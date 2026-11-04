@@ -180,6 +180,9 @@ register_router("payments", "api.payment_endpoints:router", prefix="/api",
 register_router("x402", "api.x402_endpoints:router", prefix="/api", tags=("x402",),
                 source=_SOURCE, announce=f"{__name__}:announce_x402",
                 missing_level=logging.DEBUG)  # as before: a debug line
+# 099 W6: live offers listed on `http402` (public reads + orders, per-IP limited).
+register_router("x402", "api.commerce_endpoints:router", prefix="/api", tags=("offers",),
+                source=_SOURCE)
 register_router("eip8004", "api.eip8004_endpoints:router",
                 tags=("eip8004-trustless-agents",), source=_SOURCE,
                 announce=f"{__name__}:announce_eip8004")

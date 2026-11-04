@@ -235,6 +235,14 @@ def step_6_assert_deltas(c: GuardContext) -> Optional[Decision]:
             _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                       detail=f"collection_reveal: {_reveal_err}")
             return Decision(False, f"refused: {_reveal_err}")
+    elif intent.is_resource_call:
+        # 099 W2: a resource call moves nothing; its receipt is the shape.
+        from core.wallet import resource_call as _resource_call
+        _rc_err = _resource_call.assert_simulation(intent, deltas, holder, c.offer_recipient)
+        if _rc_err:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"resource_call: {_rc_err}")
+            return Decision(False, f"refused: {_rc_err}")
     elif intent.is_registration or intent.is_journal_entry:
         # (A journal entry, J1, moves nothing either — its own assertions run above.)
         # Registering sends NO value, so the native branch below cannot serve --

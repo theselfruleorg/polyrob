@@ -50,6 +50,8 @@ class GuardContext:
     deploy_facts: Optional[object] = None
     #: steps 6/7: a paired-leg implied LP valuation.
     lp_implied: bool = False
+    #: step 2: the order's recipient when the run fulfils an order (099), else None.
+    offer_recipient: Optional[str] = None
     #: step 6: the measured outflow.
     outflow_raw: int = 0
     #: step 6: the LP position the simulation minted.

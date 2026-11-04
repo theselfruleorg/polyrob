@@ -23,16 +23,14 @@ torn down in a ``finally`` block.
 """
 from __future__ import annotations
 
-import shutil
 import time
 import uuid
 
 import pytest
 
+from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
 from tools.code_exec.backends.docker import DockerBackend
 from tools.code_exec.result import ExecutionRequest
-
-_needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
 
 
 def _pin_workdir(monkeypatch, path: str) -> None:
@@ -776,7 +774,10 @@ async def test_real_ps_and_inspect_output_shapes_are_parseable(tmp_path, monkeyp
     await b.setup()
     cname = b._container
     try:
-        from tools.code_exec.backends.docker import _default_docker_runner, _age_from_docker_timestamp
+        from tools.code_exec.backends.docker import (
+            _age_from_docker_timestamp,
+            _default_docker_runner,
+        )
 
         code, out, _err = await _default_docker_runner(
             ["ps", "-aq", "--filter", f"label=polyrob.session={session_id}"]

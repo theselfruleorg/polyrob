@@ -30,7 +30,8 @@ def test_the_pack_is_loaded_and_owns_its_rows():
     assert "delegate_blocked" in TOOL_CAPABILITIES["x_browser"]
     assert TOOL_PERMISSIONS["twitter"] == ("network.read", "network.write", "social.post")
     assert policy_for("twitter_dm").effect == "comms"
-    assert policy_for("x_browser_x_signup_start").approval == frozenset({"always_queued"})
+    assert policy_for("x_browser_x_signup_start").approval == frozenset(
+        {"recommended", "always_queued"})
     assert gate_for("twitter") is not None and gate_for("x_browser") is not None
     assert get_tool_class("twitter").__module__ == "polyrob_x.twitter_tool"
     row = catalog.get("x")

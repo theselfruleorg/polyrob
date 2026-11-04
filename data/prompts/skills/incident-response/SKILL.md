@@ -5,8 +5,9 @@ license: MIT
 metadata:
   polyrob-when: 'Something is broken live, or a secret leaked'
   polyrob-priority: '2'
+  polyrob-owner-only: 'true'
   polyrob-requires: '["secret-handling"]'
-  polyrob-version: '1'
+  polyrob-version: '2'
 ---
 # Incident Response
 
@@ -67,12 +68,27 @@ review after the fact with nothing still broken (write the record from
   everything. Call `autonomy_control` yourself only when the owner explicitly
   asks you to stop; only the owner can `/resume`.
 - Do not move funds on your own initiative to "save" them. Moving funds is an
-  owner decision: if he wants it, put the move in front of him with
-  `propose_action` (a `/send` quote card he confirms). If that action is
-  unavailable, write the exact verb line for him to send.
-- If a spender contract or dapp is the problem, clear its allowance with
-  `revoke_approval` (dry run first). If the turn cannot broadcast it, give the
-  owner the verb to run.
+  owner decision: if the owner wants it, put the move in front of them with
+  `propose_action` (a `/send` quote card they confirm). If that action is
+  unavailable, give the `/send …` line WITHOUT `go`, and say that no card was
+  made.
+- A refusal "unaccounted wallet submission … reconcile before …" (another send,
+  or further spending) freezes every on-chain and x402 send by design. Do not
+  retry. Read the tx (`defi_data.wallet_activity` or the explorer), give the
+  owner the reference, and say that the release is an operator step on the
+  server (the terminal commands `polyrob wallet submissions`, then
+  `polyrob wallet release-submission <ref> --charge-usd N`, labeled as terminal
+  commands).
+- Cut standing authority in this order: the dapp session
+  (`dapp_browser.dapp_disconnect`; the owner's `/dapp revoke <session-id>`),
+  then the token allowance (`defi_trade.revoke_approval`) or the NFT operator
+  approval (`defi_trade.nft_revoke_approval`), then the open approvals on an
+  owned NFT account (`agent_nft_revoke_all`). Dry-run each revoke first. If the turn cannot broadcast it,
+  give the owner the verb to run.
+- A transfer that says `BROADCAST BUT NOT CONFIRMED` and a bridge that is
+  `in_flight` are never sent again: check the reference first (`defi-bridge`).
+- `wallet_sign_status` lists the stored site credentials (ids and
+  fingerprints only); a leaked one is cut at the site that issued it.
 - Do not touch an unknown token, airdrop or contract that appeared in the
   wallet. Interacting with it can be the attack.
 
@@ -107,8 +123,8 @@ this order:
 
 ⚠️ A wallet seed phrase or private key cannot be revoked or rotated. The only
 containment is moving the funds to a new wallet the owner creates — an owner
-decision, and an urgent one. Tell him at once, send nothing more to the
-exposed address, and never ask him to show you the seed.
+decision, and an urgent one. Tell the owner at once, send nothing more to the
+exposed address, and never ask the owner to show you the seed.
 
 ## Telling the owner
 
@@ -116,12 +132,12 @@ exposed address, and never ask him to show you the seed.
   the call returns success; if it fails, record that and try another reachable
   route (e.g. `email`).
 - First message: what is broken, who is affected, the severity, what you are
-  doing now, what you need from him, and when you will update next.
+  doing now, what you need from the owner, and when you will update next.
 - Then update on each change of state, not on a timer. State only causes you
   observed and recoveries you verified. Say "suspected" when it is a guess.
 - For a decision with a few clear options (roll back or hold), use
   `present_choice` on a live owner turn. An autonomous run cannot wait, so use
-  `owner_ask` there and keep the safe state until he answers.
+  `owner_ask` there and keep the safe state until the owner answers.
 - Never include a secret value, a full key or a seed phrase in any message,
   even to the owner.
 

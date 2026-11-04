@@ -4,14 +4,15 @@
     "name": "browser_scroll_to_text",
     "parameters": {
       "additionalProperties": false,
-      "description": "Model for sending keyboard keys.",
+      "description": "Model for scrolling to a text on the page. ``keys`` (the old shared\nSendKeysAction field) still validates, so a replayed call keeps working.",
       "properties": {
-        "keys": {
+        "text": {
+          "description": "The visible text to scroll to (a part of it is enough)",
           "type": "string"
         }
       },
       "required": [
-        "keys"
+        "text"
       ],
       "type": "object"
     }

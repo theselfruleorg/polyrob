@@ -4,8 +4,9 @@ description: Company/project analysis workflow with social presence and sentimen
 license: MIT
 metadata:
   polyrob-when: 'Analyzing a company or crypto project'
-  polyrob-priority: '1'
-  polyrob-version: '1'
+  polyrob-priority: '6'
+  polyrob-triggers: '{"tool_ids":["anysite","web_fetch","browser"]}'
+  polyrob-version: '2'
 ---
 # Project Analyzer
 
@@ -22,7 +23,14 @@ Gather core company data:
 - LinkedIn company page: posts, follower count, content themes
 - Web search: recent news, press releases, acquisitions
 
-If `anysite` is available, discover endpoints for company sources (LinkedIn, Crunchbase, web search) before querying — do not assume endpoint paths. Fall back to `web_fetch` for known URLs and `perplexity` for news synthesis. Use `browser` only for pages requiring interaction.
+If `anysite` is available, discover endpoints for company sources (LinkedIn, Crunchbase, web search) with `anysite_describe` before you query with `anysite_api` — do not assume endpoint paths. Fall back to `web_fetch_fetch_url` for known URLs and `perplexity_search` for news synthesis. Use the `browser` tool only for pages requiring interaction.
+
+### Phase 1b: On-chain identity (crypto projects only)
+For a project with a token, fix WHICH contract first: load the `token-identity` skill and
+use `defi_data_token_resolve` → `defi_data_token_info` (holders with
+`defi_data_token_holders`, deploy origin with `defi_data_token_origin`) before any social
+read. A ticker alone names nothing; social accounts and the contract must point at each
+other. If `defi_data` is not available, say the on-chain part is unverified.
 
 ### Phase 2: Social presence audit
 Map the company across platforms:
@@ -45,7 +53,7 @@ Discover the relevant anysite endpoints for people search and profile lookups.
 What people say about the company:
 - Reddit discussions (search for company name, reviews, comparisons)
 - HackerNews threads
-- G2/Capterra/Trustpilot reviews (use `web_fetch` or `browser`)
+- G2/Capterra/Trustpilot reviews (use `web_fetch_fetch_url` or the `browser` tool)
 - Twitter/X mentions and community conversations
 
 ### Phase 5: Synthesize

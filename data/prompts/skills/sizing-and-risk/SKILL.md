@@ -19,10 +19,9 @@ to buy. The code bounds the worst case; you choose the size under it.
   take it (`swap`, `solana_swap`, `approve_token`, `transfer`, the LP and deploy
   verbs). Not every money verb has it: `bridge` is bounded by the amount you
   bridge, `x402_fetch` by `max_amount_usd`, venue orders by the venue live cap.
-- The per-transaction ceiling and the rolling 24-hour cap apply to every lane.
-  Above the autonomous ceiling a trade you start on your own needs the owner's
-  tap: a LIVE call raises the card (a dry run does not), and an approved call is
-  sent. A spend the owner asks for himself is not held by the ceiling.
+- Which live spend waits for the owner's card, and the caps that bind every
+  lane: the one rule is in `trade-execution` ("The lane and the caps"); your
+  context's "Spend limits now" block gives the live values.
 - An unverified token above $5 without an agreeing route check is refused.
 - Venue trades (Hyperliquid, Polymarket) have their own live cap
   (`HYPERLIQUID_TRADE_MAX_USD`, `POLYMARKET_TRADE_MAX_USD`, $5 by default) and
@@ -49,7 +48,7 @@ to buy. The code bounds the worst case; you choose the size under it.
    mid cap ≤5%, small cap ≤2%, micro cap or meme ≤0.5%. All memes together are
    ONE correlated bucket.
 3. **Inside a mandate, the preset sizes the ticket:** the tier's rung on the
-   preset ladder (the preset's doctrine skill; the tier ceiling comes from
+   preset ladder (the numbers live in the preset, never in a skill; the tier ceiling comes from
    `token_info`'s survivability line), capped by the mandate's stage ticket
    (probe, small or normal). The mandate's allocation already is the bucket,
    so the percent caps above are for a trade outside a mandate. If the ticket
@@ -83,11 +82,8 @@ factor — a thousand times or more. If the USD value surprises you, stop.
 
 ## If a tool is missing
 
-These steps need `defi_data` (reads) and `defi_trade` (trades) in THIS session.
-If `defi_trade` is not loaded, do the read steps, write the plan, and tell the
-owner which grant is missing. If `defi_data` is not loaded either, you cannot
-measure anything — say so and stop. Never work around a missing verb with a raw
-`call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

@@ -6,7 +6,7 @@ metadata:
   polyrob-when: 'Extracting structured data from a URL'
   polyrob-priority: '6'
   polyrob-triggers: '{"tool_ids":["anysite","browser","web_fetch"]}'
-  polyrob-version: '2'
+  polyrob-version: '3'
 ---
 # Web Scraping
 
@@ -46,13 +46,14 @@ web_fetch_fetch_url(url="https://example.com/page")
 Returns the page as markdown. Extract the relevant sections. For paginated sites, follow the `next` link and repeat — cap at a reasonable page count (suggest ≤20 pages unless told otherwise).
 
 ### 4. For browser sources
-Navigate to the page, scroll or interact as needed to reveal content, extract DOM elements or use screenshot for visual verification. Respect rate limits — add short pauses between page loads. Never loop aggressively.
+Navigate to the page, scroll or interact to reveal the content, then read it with `browser_extract_page_content()`. To check the page visually, `browser_screenshot(name=…)` saves a PNG into the workspace and returns its path; to show it, put that ABSOLUTE path in your `send_message` text (use `message(media_paths=[…])` only to send it to another chat). Respect rate limits — add short pauses between page loads. Never loop aggressively.
 
 ### 5. Structure and clean the data
 - Parse raw content into a consistent schema (JSON, CSV, or markdown table).
 - Remove duplicates; normalize fields (dates to ISO 8601, prices to a single currency, names trimmed).
 - Validate completeness — flag rows with missing required fields.
-- Save to workspace: `filesystem_write_file(file_path="data/extracted.json", content=...)`.
+- Save to workspace: `filesystem_write_file(filePath="data/extracted.json", content=...)`.
+- Deliver the result file: put its ABSOLUTE workspace path in your `send_message` text (the framework attaches it or links it; the result says which). Use `message(media_paths=[…])` only to send it to another chat.
 
 ### 6. Output a summary
 ```markdown
@@ -69,6 +70,6 @@ Navigate to the page, scroll or interact as needed to reveal content, extract DO
 - Do not store credentials or session tokens in workspace files.
 - For structured multi-page data from known sources, anysite is almost always faster and more reliable than browser automation.
 - If anysite returns nothing for a known-good source, run a schema refresh first (anysite_schema_update if available), then retry.
-- **Cost discipline:** anysite charges credits per call and the native Twitter API is PAYG (~$0.015/call) — neither is free. Discover once, cache/reuse the result, and filter locally; don't re-fetch data you already pulled this session.
+- **Cost discipline:** anysite charges credits per call and the native Twitter API is metered per call — neither is free. Discover once, cache/reuse the result, and filter locally; don't re-fetch data you already pulled this session.
 - For broad public X/Twitter reads (search, profiles, posts), prefer anysite. Use native `twitter` for authoritative own-account reads (mentions/timeline/API DMs) and gated writes; use `x_browser` only when the captured visible inbox is the required source. For finding people/conversations to engage, see **social-discovery**.
 - For general research (the core `web-research` and `market-research-brief` skills), the order of the discovery tools is in `references/research-sources.md`.

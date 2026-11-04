@@ -311,6 +311,13 @@ async def _trade(c: AdminCall) -> Any:
                                    via="telegram")
 
 
+async def _offer(c: AdminCall) -> str:
+    # 099: offers and orders — the agent proposes, the owner's seat decides.
+    from modules.commerce.owner_verb import offer_reply
+    return await offer_reply(c.user_id, c.args,
+                             container=getattr(c.task_agent, "container", None))
+
+
 async def _job(c: AdminCall) -> str:
     # 080 WS-2: one handler for `/jobs` (the list) and `/job <sub> …`.
     from surfaces.telegram import job_ops
@@ -434,6 +441,7 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/mcp": _mcp,
     "/bridge": _bridge,
     "/trade": _trade,
+    "/offer": _offer,
     "/jobs": _job,
     "/job": _job,
     "/goal": _goal,

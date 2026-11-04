@@ -83,8 +83,9 @@ def x402_invoicing_enabled() -> bool:
     and the autonomy-runtime settlement watcher startup gate. Default OFF; ON
     under effective AUTONOMY_MODE=autonomous via _mode_capability_default (013 T2
     review fix, Finding 2 — was raw-env-only, leaving invoices creatable but
-    unpayable/unsettleable under autonomous mode). Explicit X402_INVOICE_ENABLED
-    always wins. Lazy + guarded import, fail-closed to OFF on any fault.
+    unpayable/unsettleable under autonomous mode). A posture member: only
+    ``POLYROB_OVERRIDES`` (or its bundle) moves it — a direct
+    ``X402_INVOICE_ENABLED=`` env line is ignored. Fail-closed to OFF on any fault.
 
     polyrob/app/autonomy_runtime.py does NOT import this (a core-tier module importing
     modules.x402 would put a server-tier module on the core import graph — the
@@ -99,8 +100,8 @@ def x402_settle_onchain_detect_enabled() -> bool:
     the treasury address for plain USDC transfers (no facilitator) and
     auto-settles the matching pending invoice. Default OFF; ON under effective
     AUTONOMY_MODE=autonomous via _mode_capability_default (W1.5, 2026-08-21 —
-    receive-side only, same lane as X402_INVOICE_ENABLED; explicit env always
-    wins). The watcher ALSO requires a scannable chain + treasury before it
+    receive-side only, same lane as X402_INVOICE_ENABLED; a posture member, so
+    only ``POLYROB_OVERRIDES`` moves it, never a direct env line). The watcher ALSO requires a scannable chain + treasury before it
     actually scans (see `settlement_watcher.py::_resolve_scan_target`); this
     getter is the single flag-parse SSOT shared by that gate and the
     amount-jitter gate below."""
@@ -179,7 +180,7 @@ def _row_metadata(row: Dict[str, Any]) -> dict:
 #: public read path, so a kind missing from this set produces rows that mint
 #: fine, take real money, and then read as NOT FOUND — no challenge, no
 #: settlement, no way for anyone to see what happened.
-PAYABLE_KINDS = (INVOICE_KIND, "room_action")
+PAYABLE_KINDS = (INVOICE_KIND, "room_action", "offer_order")  # 099: an order of a live offer
 
 
 def is_invoice_row(row: Dict[str, Any]) -> bool:
@@ -1013,7 +1014,7 @@ async def settled_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
             "correspondent_ref": meta.get("correspondent_ref") or None,
             "subscription_id": meta.get("subscription_id") or None,
             # 046: what this payment BOUGHT, when it bought something.
-            "kind": meta.get("kind") or INVOICE_KIND,
+            "kind": meta.get("kind") or INVOICE_KIND, "status": row.get("status"),
             "room_action": meta.get("room_action") or None,
         })
     return out

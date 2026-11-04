@@ -216,6 +216,12 @@ async def _handle_rpc_method(
         config = params.get("configuration")
         msg_request = SendMessageRequest(message=message, configuration=config)
 
+        # 099 W6: an order of a live offer (a data part with offer_id / order_id) is
+        # answered by the order service — no compute credit; the order has its own invoice.
+        from api.commerce_endpoints import a2a_order
+        order_reply = await a2a_order(params, user_id)
+        if order_reply is not None:
+            return order_reply
         # Check if this is a new task or continuation
         if message.taskId:
             # A new compute turn needs current credit/payment admission too.

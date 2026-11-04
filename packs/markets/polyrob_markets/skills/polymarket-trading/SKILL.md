@@ -36,7 +36,7 @@ leaf / sub-agent, or while the session is correspondent-tainted. If unsure, stop
 ## How execution works
 - Trades settle through a **gasless relayer**; you authorize orders within standing
   collateral + CTF token allowances (no per-trade gas, but allowances must exist).
-  Since CLOB V2 (2026-04-28) the collateral is **pUSD**, not USDC.e; read what you
+  On CLOB V2 the collateral is **pUSD**, not USDC.e; read what you
   have with `get_balance()` (`collateral_balance`).
 - Orders are priced as probability (`0.0`–`1.0`). **Slippage**: a market order walks
   the book, so a thin book can fill far from the displayed mid — size accordingly.

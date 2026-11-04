@@ -38,7 +38,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "05c1fe29edcb"
+      "sha": "cf236a687c3b"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -54,7 +54,7 @@
     },
     {
       "name": "filesystem_read_file",
-      "sha": "b61712453fd9"
+      "sha": "2c40c9eb9c67"
     },
     {
       "name": "filesystem_write_file",
@@ -67,6 +67,14 @@
     {
       "name": "load_tool",
       "sha": "a7b2720e3dbc"
+    },
+    {
+      "name": "offer_manage",
+      "sha": "33b8b7853317"
+    },
+    {
+      "name": "order_deliver",
+      "sha": "de43909365bb"
     },
     {
       "name": "owner_ask",

@@ -94,7 +94,7 @@
     {
       "name": "/apps",
       "group": "work",
-      "help": "Deployed apps: approve an address, check health, or kill one",
+      "help": "Deployed apps: approve an address, check health, stop, start or remove one",
       "aliases": []
     },
     {
@@ -131,6 +131,12 @@
       "name": "/trade",
       "group": "money",
       "help": "Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop",
+      "aliases": []
+    },
+    {
+      "name": "/offer",
+      "group": "money",
+      "help": "What I sell: offers, their orders, quotes, disputes; pause, resume or retire one",
       "aliases": []
     },
     {

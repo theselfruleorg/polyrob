@@ -1,19 +1,20 @@
 ---
 name: token-launch
-description: 'Launching or deploying a token, claiming its creator fees, getting gas back, metadata that must be set before a launch, and using a dapp with the native wallet.'
+description: 'Launching or deploying a token (launchpad, ERC-20, SPL, compiled bytecode), trading on a launchpad curve, claiming its creator fees, the metadata that must be set before a launch, and putting a launch, deploy or claim to the owner as a card.'
 license: MIT
 metadata:
-  polyrob-when: 'Launching a token, claiming its fees, or using a dapp'
+  polyrob-when: 'Launching or deploying a token, or claiming its fees'
   polyrob-priority: '2'
-  polyrob-triggers: '{"tool_ids":["defi_trade","launchpad","dapp_browser"]}'
-  polyrob-version: '2'
+  polyrob-triggers: '{"tool_ids":["defi_trade","launchpad"]}'
+  polyrob-version: '3'
 ---
-# Token Launch — launching, deploying, claiming, and dapps
+# Token Launch — launching, deploying, claiming
 
 Launching and deploying are separate from trading: read this before `launchpad_launch`, `deploy_token`,
-`deploy_contract`, `launchpad_claim` or `dapp_browser.dapp_connect`.
+`deploy_contract` or `launchpad_claim`. A raw `call` and a web dapp are in
+`contract-call`; `wrap`/`unwrap` are in `trade-execution`.
 
-## Launching a token, deploying one, and using a dapp
+## Launching a token, and deploying one
 
 If a memory of an older run tells you one of these verbs does not exist, check
 your toolset before you believe it, then say which of the two is true. Never
@@ -66,35 +67,12 @@ against, so the guard can promise the constructor moved no token and granted no
 allowance, and nothing at all about what the contract does afterwards. If what
 you want is a token, `deploy_token` is the verb.
 
-**`defi_trade.call`** executes calldata you built yourself, for a protocol
-nobody integrated ahead of time. What the guard checks, exactly:
-
-- **the outflow, always:** at most this much leaves (`spend_token` +
-  `spend_max_raw`, or `value`); the simulation refuses a larger outflow and any
-  allowance you did not declare;
-- **the return, only when you declare it:** with `receive_token` and a
-  `receive_min_raw` above 0, the simulation must measure at least that much of
-  that token arriving, or the call is refused. With no declared receipt, the
-  guard bounds only what leaves — a call that spends and gets nothing back
-  passes it. Declare `receive_token` / `receive_min_raw` whenever the call
-  should return something, and declare the minimum honestly;
-- **under a `target_token`:** the call must declare `receive_token` = the
-  target and a `receive_min_raw` above 0, and the guard refuses any simulated
-  NFT inflow (unless from the target contract) and any other non-canonical
-  token inflow. Canonical assets (USDC, the wrapped native) may arrive, and a
-  net delta of zero or less is not an acquisition.
-
-**`dapp_connect`** opens a web dapp with your wallet attached, so its Connect
-button works and you can drive the page with the ordinary browser actions. You
-declare the envelope: the chain, the most ONE transaction may spend, and the most
-the WHOLE session may spend. Use it for a protocol with a UI and no API. Two
-things it will always refuse, and you should not try to route around either:
-**off-chain signature requests** (a permit is submitted by someone else later, so
-no simulation can catch what it authorizes) and **deploying a contract from a
-page**. When a dapp appears to do nothing, run `dapp_status` — every refusal is
-recorded there with its reason, and that is usually the answer. Run
-`dapp_disconnect` when you are done: an armed wallet on an open page is a
-standing authorization.
+**Put it to the owner as a card** when the owner asked for it or it is the
+owner's call: `propose_action(command="/launch <SYMBOL> <name>", why=…)` (add
+`logo <url>`, `desc <text>` or `buy <amount>` when you have them), `"/deploy
+<SYMBOL> <supply> <name> on <chain>"` or `"/claim <token-address>"`. The card
+fetches the live quote; the owner confirms it. The command-line rule is in
+`trade-execution`.
 
 ## Your launches EARN — and the money does not come to you
 
@@ -123,15 +101,6 @@ estimate fees from trading volume. The balance is on the escrow.
 
 Ledger the claim like any other money event: amount, tx, and the escrow balance
 before and after.
-
-## Getting your gas back
-
-`wrap` turns native into WETH. `unwrap` turns it back. Both are 1:1 against the
-chain registry's pinned wrapped-native, never a supplied address.
-
-Use `unwrap` the moment a trade leaves you holding WETH you do not need — a
-wallet that wrapped its gas to trade and then cannot pay for a transaction is
-stuck in a way no other verb can undo.
 
 ## Metadata is not optional (read before any launch)
 
@@ -164,11 +133,9 @@ done something.
 
 ## If a tool is missing
 
-The trading verbs need `defi_trade` (and `defi_data` for reads) in THIS session.
-If they are not loaded, do the read steps you can, write the plan in your run report or
-the watchlist, and tell the owner which grant is missing. Never work around a missing
-verb with a raw `call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 
-`defi-liquidity`, `token-identity`, `trade-execution`.
+`defi-liquidity`, `token-identity`, `trade-execution`, `contract-call`.

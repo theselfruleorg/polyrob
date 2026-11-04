@@ -1271,6 +1271,14 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("goals", _build_goal_ticker(task_agent, data_dir))
         except Exception as e:
             logger.warning("Could not start goal dispatcher: %s", e)
+        try:
+            from polyrob.app import commerce_wiring  # 099: offer gate + order fulfiller
+            commerce_wiring.wire(task_agent, data_dir)
+        except Exception as e:
+            # Its own line: without the wiring a paid order never becomes a goal
+            # (the offer gate is absent, so an order run's spends refuse).
+            logger.warning("Commerce wiring failed (paid orders are not fulfilled): %s", e,
+                           exc_info=True)
     # 056 WS5 (D1): let a due MONEY cron job pre-empt a running board goal. The
     # scheduler owns the trigger, the dispatcher owns the cancel+requeue; this is
     # the one place both are in hand. Fail-open: no hook = never yield.

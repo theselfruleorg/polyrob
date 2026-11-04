@@ -1,11 +1,12 @@
 ---
 name: self-deploy
-description: 'How to bring a fresh instance of yourself online: assess what is already configured (model, wallet, funding, email, X, autonomy grants), provision what you can yourself (own inbox, X account, standing work), ask the owner only for what needs a human (API keys, funding, a CAPTCHA), and report one honest readiness table before you start operating'
+description: 'How to bring a fresh instance of yourself online: assess what is already configured (model, wallet, funding, email, X, autonomy grants), provision what you can yourself (own inbox, standing work), ask the owner only for what needs a human (API keys, funding, a new social account, a CAPTCHA), and report one honest readiness table before you start operating'
 license: MIT
 metadata:
   polyrob-when: 'Bringing a new instance of yourself online'
   polyrob-priority: '1'
-  polyrob-version: '1'
+  polyrob-owner-only: 'true'
+  polyrob-version: '2'
 ---
 # Self-deploy — bring yourself online
 
@@ -24,7 +25,7 @@ Three rules for the whole procedure:
    NOT such a lever — see Step 2. Ask only for what needs a human: a secret
    you cannot mint, money, a CAPTCHA (you never solve one), a setting (the env
    files are hard-denied to you; `propose_setting` files the change for the
-   owner, and it applies at the restart he sends with `/restart`).
+   owner, and it applies at the restart the owner sends with `/restart`).
 3. **Report facts, not hopes.** Every line of the readiness table is one of
    `ready` / `missing → <exact remedy>` / `unverified (<reason>)`. A check
    that did not run is not a check that passed.
@@ -36,12 +37,11 @@ Run these and keep the raw lines; they are the evidence for the table.
 | What | Verb | What to read |
 |---|---|---|
 | Config + loops + wallet balance | `agent_status` | `posture:` (mode/local/compute), `autonomy_loops:`, `wallet:`, `wallet_addresses:` |
-| Identity (email, X API, avatar, ERC-8004) | the `identity` lines of `agent_status` (or ask the owner for his `/status` on a chat seat) | `email:` ready or `none → remedy`; `x:` `api configured @handle` / `PARTIAL — missing …` / `no api keys` |
+| Identity (email, X API, avatar, ERC-8004) | the `identity` lines of `agent_status` (or ask the owner for their `/status` on a chat seat) | `email:` ready or `none → remedy`; `x:` `api configured @handle` / `PARTIAL — missing …` / `no api keys` |
 | Which tools you actually hold | the `<tool-catalog>` in your context | `loaded` / `loadable` / `gated:<reason> + remedy`. A `gated` money tool is an OWNER decision — never a thing to work around |
-| Wallet addresses, both families | `x402_wallet_status` | the EVM address and the SEPARATE Solana address. Read them from the tool; never from memory |
-| On-chain balances per chain | `defi_data.portfolio(chain=…)` for each money chain you will use | the native-coin row (`ETH …`, `SOL …`): a number, `UNKNOWN` (read failed) or `EMPTY` (a real zero) — three different facts |
-| X browser session | `x_login_check` (only if `x_browser` is loaded — the owner chose that rail) | logged in as @handle, or no session |
-| X API rail | `twitter_whoami` (if `twitter` is loaded) | the authenticated handle, or "missing credentials" |
+| Wallet addresses, both families | the `wallet_addresses:` line of `agent_status` (`x402_pay_x402_wallet_status` only when `x402_pay` is already loaded — `load_tool` never loads a money tool) | the EVM address and the SEPARATE Solana address. Read them from the tool; never from memory |
+| On-chain balances per chain | `defi_data_portfolio(chain=…)` for each money chain you will use | the native-coin row (`ETH …`, `SOL …`): a number, `UNKNOWN` (read failed) or `EMPTY` (a real zero) — three different facts |
+| X account | the `x:` identity line above; if the X pack is loaded, its `x-engagement` skill names the checks | the handle, or what is missing |
 | Standing work | `goal_list` / `cronjob_list` (if loaded) | an EMPTY board on a fresh instance is expected, not a stall |
 
 If a verb is not loaded, say so in the table as `unverified (tool not loaded)`
@@ -58,32 +58,9 @@ inbox appears the first time the `email` tool initialises — load it
 this is an owner ask (see Step 3). You need your own address before an X
 signup, and the owner needs it to know who is writing.
 
-**X account.** Decide by what is present:
-
-- `x: api configured @handle` → done. The API rail is the one that can post
-  **polls**, search, and read mentions; prefer it for everything.
-- An API login that has died (a 401, an expired OAuth 2.0 login) → the
-  owner's remedy is `/x login`, a one-tap OAuth re-login link. Put that on
-  the owner's list; do not reach for the browser.
-- No X account and no API keys → this is an OWNER decision, not a default
-  step. ⚠️ X suspends accounts it catches under browser automation, so the
-  browser rail (`x_browser`, including `x_signup_start`) runs only when the
-  owner explicitly chose it. Put "X account: none — create one yourself, or
-  tell me to register it through the browser rail" on the owner's list.
-  Only after the owner tells you to, call `x_signup_start`: it is ALWAYS
-  owner-queued, and it pauses on a CAPTCHA or a phone check — the OWNER
-  clears that; you never solve a CAPTCHA. Report exactly what the result
-  says: the live @handle, whether the handle you requested was applied, and
-  whether the automation disclosure reached the bio. If it says the
-  disclosure was NOT applied, put that on the owner's list — X's automation
-  rules want it on the profile before you post.
-- After the account exists, polls and search still need API keys. Tell the
-  owner in one paragraph: sign in to developer.x.com AS the agent's account,
-  create a project + app with **Read and write** user permissions, generate
-  the OAuth 1.0a **Access Token and Secret** for that account, and set
-  `TWITTER_API_KEY`, `TWITTER_API_SECRET_KEY`, `TWITTER_ACCESS_TOKEN`,
-  `TWITTER_ACCESS_TOKEN_SECRET` (+ `TWITTER_BOT_USERNAME`) in the instance
-  env, then `/restart`. A pay-per-use tier is enough; writes cost ~$0.015 each.
+**A social account (X).** Only if the X pack is loaded: load its
+`x-engagement` skill and follow its account-setup part. A new account is the
+owner's decision; you never solve a CAPTCHA.
 
 **Standing work.** Only if `goals`/`cron` show as loaded AND the owner has
 told you what your mission is. Create the goal(s) with `goal_create`
@@ -91,8 +68,8 @@ told you what your mission is. Create the goal(s) with `goal_create`
 money regime). Trading runs only under a mandate the owner starts with
 `/trade start` (`trading-mandate`); other money work the owner grants with
 `/job new … tools=defi_trade`. Arm any monitor loop with
-`cronjob_schedule`. Never seed work
-the owner did not name.
+`cronjob_schedule` (the `standing-work` skill: goal or job, and the $0 watch
+shape). Never seed work the owner did not name.
 
 **Identity docs.** If the owner gives you durable facts or rules about how
 they want you to operate, write them through `owner_doc_manage` — never as
@@ -123,12 +100,13 @@ Typical items:
 - **Model key** — if `agent_status` shows no usable provider you would not be
   running; skip. If a cheaper aux model is wanted, name the flag
   (`AUX_MODEL_JUDGE` / `AUX_MODEL_COMPACTION`).
-- **Funding** — give the EXACT addresses from `x402_wallet_status`, per chain,
+- **Funding** — give the EXACT addresses from the `wallet_addresses:` line of
+  `agent_status`, per chain,
   and say which asset is gas on each (ETH on Base/Ethereum, SOL on
   Solana, POL on Polygon). Say what you plan to do with the first dollars.
   Never quote an address from memory.
 - **`AGENTMAIL_API_KEY`** — if no email lever exists at all.
-- **X API keys** — as above.
+- **X API keys** — the names the `x-engagement` skill gives (X pack only).
 - **Settings** — not in the ask: each one went through `propose_setting`
   above, unless this is an autonomous run (any `gated:<reason>` tool the
   mission needs; take the setting from the remedy text verbatim).
@@ -138,7 +116,7 @@ Typical items:
   (`DEFI_AUTONOMOUS_MAX_USD`, `WALLET_DAILY_CAP_USD`,
   `AGENT_WALLET_MAX_PER_TX_USD`) are the owner's alone. State what each one
   unlocks; never argue for a higher cap.
-- **A CAPTCHA / phone check** the X signup paused on.
+- **A CAPTCHA / phone check** a signup paused on.
 
 Then stop and wait. Do not loop on the ask, do not re-send it, do not create
 a goal to "wait for keys".
@@ -147,7 +125,7 @@ a goal to "wait for keys".
 
 When the owner says it is done (or after a restart), re-run Step 1. Anything
 the owner claims to have set must be CONFIRMED by a read — `twitter_whoami`
-for X keys, `email:` for the inbox, `defi_data.portfolio` for funding — before
+for X keys, `email:` for the inbox, `defi_data_portfolio` for funding — before
 it moves to `ready`. Then send the readiness table once, in this shape:
 
 ```
@@ -163,8 +141,9 @@ pending      —          <anything still on the owner's list, or "nothing">
 ```
 
 A row that is not `ready` says `missing → <remedy>` or `unverified (<why>)`.
-Save the same table as a `knowledge` note (your KB) so the next session does
-not redo the interview.
+Write the same table to a workspace file (`filesystem_write_file`; when the KB
+is on, a file you write joins its `written` collection) so the next session does not redo
+the interview.
 
 ## What this skill never does
 
@@ -172,7 +151,7 @@ not redo the interview.
   Presence is the fact; the value is the owner's.
 - Never edits an env file, a `streams.yaml`, or a service unit — all are
   hard-denied to you and an attempt is an incident, not a workaround.
-- Never registers a SECOND X account or a second inbox. One identity per
+- Never registers a SECOND social account or a second inbox. One identity per
   instance; if one exists, use it.
 - Never treats a `gated` money tool as a bug to route around, and never
   creates a goal whose purpose is to be granted a tool.

@@ -36,7 +36,7 @@ _RECORD_NAME = "console_write"
 #: here.
 _ALLOWLIST = {
     # apps: core.app_service.owner_ops.record stamps user_id + via="webview".
-    "api_apps_approve", "api_apps_reject", "api_apps_kill",
+    "api_apps_approve", "api_apps_reject", "api_apps_kill", "api_apps_start", "api_apps_remove",
     # pause/halt/resume: core.autonomy_control records AUTONOMY_PAUSED/RESUMED.
     "api_pause", "api_halt", "api_resume",
     # feed / loopback / auth rails in server.py + emit_api.py (out of W4 scope,

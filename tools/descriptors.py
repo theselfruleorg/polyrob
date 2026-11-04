@@ -72,7 +72,7 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
     # ---------------------------------------------------------------------
     'filesystem': ToolDescriptor(
         name='filesystem',
-        description='File system operations and document processing',
+        description='Workspace files: read (PDF/DOCX as text), write, append, list, copy, JSON-lines',
         category=ToolCategory.CORE,
         required_services=['rate_limit_manager'],
         optional_services=['llm_client', 'cache_manager'],

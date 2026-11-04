@@ -30,7 +30,8 @@ def step_3_structural(c: GuardContext) -> Optional[Decision]:
     if intent.amount_raw == 0 and not (intent.is_allowance_op or intent.is_deploy
                                        or intent.is_claim or intent.is_nft_op
                                        or intent.is_registration or intent.is_liquidity_op
-                                       or intent.is_collection_reveal or intent.is_journal_entry):
+                                       or intent.is_collection_reveal or intent.is_journal_entry
+                                       or intent.is_resource_call):
         # A zero-value transfer is meaningless. An allowance op legitimately
         # moves nothing and must say so explicitly — it is never inferred. A
         # deployment commonly endows the constructor with nothing at all, and

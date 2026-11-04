@@ -160,6 +160,8 @@ JOB_CARD_SUBCOMMANDS = {
     "/job": frozenset({"new", "edit"}),
     # 086 W5: the trading mandate's intake, its breaker release, its close-all.
     "/trade": frozenset({"start", "release", "stop"}),
+    # 099: an offer's setup budget, its go-live (pinned by the manifest hash), a dispute.
+    "/offer": frozenset({"setup", "live", "resolve"}),
 }
 #: The most words one job card line holds (a task is prose).
 MAX_JOB_WORDS = 400
@@ -1070,8 +1072,8 @@ def job_card(user_id: str, words: List[str], *, title: str, body: str = "",
     verb = words[0].lower() if words else ""
     shape = JOB_CARD_SUBCOMMANDS.get(verb)
     if shape is None or len(words) < 3 or words[1].lower() not in shape:
-        raise ValueError("a job card carries only /goal new|grant, /job new|edit or "
-                         "/trade start|release|stop")
+        raise ValueError("a job card carries only /goal new|grant, /job new|edit, "
+                         "/trade start|release|stop or /offer setup|live|resolve")
     if verb == "/job" and words[1].lower() == "edit" and (
             len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a job card edits a job only as /job edit <id> grant …")

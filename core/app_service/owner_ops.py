@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.app_service.config import logs_path
 from core.app_service.fingerprint import describe_change
 from core.app_service.registry import (
-    STATUS_PENDING, STATUS_STOPPED, AppServiceRegistry,
+    STATUS_FAILED, STATUS_PENDING, STATUS_STOPPED, AppServiceRegistry,
 )
 
 # The chat seats (Telegram, REPL, console) name the slash verb and the console;
@@ -55,7 +55,7 @@ def row_json(row: Dict[str, Any]) -> Dict[str, Any]:
     keys = ("slug", "user_id", "status", "source_dir", "cmd", "container_port", "health_path",
             "egress", "egress_allow", "env", "workspace_digest", "host_port", "container_name",
             "public_url", "approved_at", "last_deploy", "last_health", "consecutive_failures",
-            "last_failure_error", "approval_change", "created_at", "updated_at")
+            "last_failure_error", "approval_change", "remove_requested", "created_at", "updated_at")
     out = {k: row.get(k) for k in keys}
     out["where"] = where(row)
     out["pending_reason"] = pending_reason(row)
@@ -158,6 +158,44 @@ def kill(registry: AppServiceRegistry, slug: str, user_id: str, *, via: str) -> 
     _emit(APP_STOPPED, user_id, {"slug": slug, "by": "owner", "via": via})
     return True, (f"⏹ {slug!r} stop queued — the supervisor removes its container and stanza "
                   f"within one tick (the address stays approved for a later redeploy).")
+
+
+def start(registry: AppServiceRegistry, slug: str, user_id: str, *, via: str) -> Tuple[bool, str]:
+    """Run a stopped (or failed) app again on the address the owner approved.
+    The supervisor re-verifies the approval against the current configuration,
+    so a configuration that moved since goes back to pending, never runs."""
+    r = registry.get(slug, user_id)
+    if r is None:
+        return False, f"no app {slug!r} for this tenant"
+    if r.get("remove_requested"):
+        return False, f"{slug!r} is being removed"
+    if r["status"] == STATUS_PENDING:
+        return False, f"{slug!r} is pending — approve it instead (/apps approve {slug})"
+    if r["status"] not in (STATUS_STOPPED, STATUS_FAILED):
+        return False, f"{slug!r} is {r['status']}, not stopped"
+    if not r.get("approved_at"):
+        return False, f"{slug!r} was never approved, so there is no address to start it on"
+    if not registry.restart_stopped(slug, user_id):
+        return False, f"{slug!r} changed state underneath — look again (/apps show {slug})"
+    from core.event_kinds import APP_APPROVED
+    _emit(APP_APPROVED, user_id, {"slug": slug, "by": "owner", "via": via, "restart": True})
+    return True, f"▶ {slug!r} start queued — the supervisor deploys it within one tick."
+
+
+def remove(registry: AppServiceRegistry, slug: str, user_id: str, *, via: str) -> Tuple[bool, str]:
+    """Retire an app for good: container, stanza, snapshots, logs, row and the
+    address approval. A redeploy of the slug later is a NEW owner ask."""
+    outcome = registry.request_remove(slug, user_id)
+    if outcome == "missing":
+        return False, f"no app {slug!r} for this tenant"
+    if outcome == "changed":
+        return False, f"{slug!r} changed state underneath — look again (/apps show {slug})"
+    from core.event_kinds import APP_REMOVED
+    _emit(APP_REMOVED, user_id, {"slug": slug, "by": "owner", "via": via, "outcome": outcome})
+    if outcome == "deleted":
+        return True, f"🗑 {slug!r} removed (it never ran)."
+    return True, (f"🗑 {slug!r} removal queued — the supervisor removes its container, files "
+                  f"and record within one tick; the address is released.")
 
 
 def logs_tail(data_dir: Optional[str], user_id: str, slug: str, n: int = 50) -> str:

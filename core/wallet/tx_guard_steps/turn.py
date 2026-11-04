@@ -128,12 +128,33 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
     # its ENTRIES checked by the kernel's mandate step: an intent that receives a
     # token and is not exit-shaped. Exits, sends and approvals are never gated.
     mandate_entry = bool(intent.inflow_token) and not _tg._intent_is_exit_shaped(intent)
+    # 099 W2: an ORDER run (``metadata["mandate"]`` = ``ord_…``) hands the kernel's offer
+    # step what this transaction does: where value goes and which contract it calls.
+    _meta = getattr(execution_context, "metadata", None)
+    _order = str((_meta or {}).get("mandate") or "") if isinstance(_meta, dict) else ""
+    offer_scope = None
+    if _order.startswith("ord_"):
+        from core.money.hooks import offer_recipient
+        c.offer_recipient = offer_recipient(_order)
+        if getattr(intent, "is_deploy", False) or getattr(intent, "via_account", None):
+            return Decision(False, "refused: an order run deploys nothing and acts through no "
+                                   "account; it calls its offer's resources or pays its recipient")
+        _dest = [] if getattr(intent, "is_resource_call", False) else [intent.to] + [
+            g[1] for g in (getattr(intent, "expected_allowance_grants", None) or ())]
+        offer_scope = {"chain": str(intent.chain or "").lower(), "destinations": _dest,
+                       "is_resource_call": bool(getattr(intent, "is_resource_call", False)),
+                       "contract": str(c.tx.get("to") or "").lower(),
+                       "selector": str(c.tx.get("data") or c.tx.get("input") or "")[:10].lower()}
+    elif getattr(intent, "is_resource_call", False):
+        return Decision(False, "refused: a resource call is only for a run that fulfils an order")
     verdict = authorize_spend(
         SpendIntent.turn_origin(mandate=mandate_entry, entry=mandate_entry,
                                 chain=str(intent.chain or ""), token=intent.inflow_token,
-                                usd=intent.max_spend_usd),
+                                usd=intent.max_spend_usd, offer_scope=offer_scope,
+                                idempotency_key=getattr(intent, "idempotency_key", None)),
         execution_context, forged_fn=forged_fn,
-        autonomous_ok_fn=lambda ctx, ts: _tg._autonomous_turn_allowed(ctx, ts, autonomous_ok_fn),
+        autonomous_ok_fn=lambda ctx, ts: _tg._autonomous_turn_allowed(
+            ctx, ts, autonomous_ok_fn, offer_scoped=offer_scope is not None),
         tool_self=tool_self)
     if verdict.refused and verdict.step == "mandate":
         _tg._record_money_refusal("money_gate", tool_self, execution_context,
@@ -150,7 +171,9 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
             # exit here left fired stops unexecutable until the next goal run.
             # Exit-shaped only, main agent only; a sell additionally has its
             # measured quote inflow asserted after simulation.
-            if (_tg.monitor_exits_enabled()
+            # An ORDER run is admitted only through the offer step (099): it never
+            # rides the monitor-exit carve-out past step 4c.
+            if (_tg.monitor_exits_enabled() and offer_scope is None
                         and not getattr(execution_context, "is_sub_agent", False)
                         and getattr(execution_context, "role", "leaf") == "orchestrator"
                         and _tg._intent_is_exit_shaped(intent)):

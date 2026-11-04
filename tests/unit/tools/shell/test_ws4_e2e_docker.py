@@ -6,7 +6,6 @@ published-loopback allowlist. Skipped when docker isn't present.
 """
 import asyncio
 import logging
-import shutil
 import uuid
 
 import pytest
@@ -18,7 +17,7 @@ from tools.shell.backend_pool import get_shell_backend, teardown_session
 from tools.shell.loopback_allow import clear_loopback_ports
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
-_needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
+from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
 
 
 @pytest.fixture(autouse=True)

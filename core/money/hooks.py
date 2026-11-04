@@ -135,6 +135,36 @@ def mandate_gate() -> Optional[Callable[..., Optional[str]]]:
     return _provider(_MANDATE_GATE)
 
 
+_OFFER_GATE = "offer_gate"
+
+
+def register_offer_gate(refuse: Callable[..., Optional[str]]) -> None:
+    _register(_OFFER_GATE, refuse)
+
+
+def offer_gate() -> Optional[Callable[..., Optional[str]]]:
+    """The offer-order step (099), or None (= refuse an order run's spend)."""
+    return _provider(_OFFER_GATE)
+
+
+_OFFER_RECIPIENT = "offer_recipient"
+
+
+def register_offer_recipient(read: Callable[[str], Optional[str]]) -> None:
+    _register(_OFFER_RECIPIENT, read)
+
+
+def offer_recipient(order_id: str) -> Optional[str]:
+    """The order's recipient address for the guard's receipt check, or None.
+    Never raises (None = no recipient = a token emitted by the call refuses)."""
+    read = _provider(_OFFER_RECIPIENT)
+    try:
+        return read(order_id) if read is not None else None
+    except Exception:
+        logger.debug("offer recipient read failed (None)", exc_info=True)
+        return None
+
+
 def registered() -> tuple:
     """The kinds a rail has registered (for status and tests)."""
     return tuple(sorted(_PROVIDERS))

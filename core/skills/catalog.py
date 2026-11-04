@@ -42,7 +42,8 @@ VALID_TOOL_IDS = set(_classified_ids()) - {'tool_manage', 'worker_manage'}
 # strings; there is no second index file to drift from the body.
 
 #: The frontmatter keys that make a skill a RULE (gate, rank, prerequisites).
-_RULE_KEYS = ("polyrob-triggers", "polyrob-priority", "polyrob-auto-activate", "polyrob-requires")
+_RULE_KEYS = ("polyrob-triggers", "polyrob-priority", "polyrob-auto-activate", "polyrob-requires",
+              "polyrob-owner-only")
 
 
 def _int_or(value: Any, default: int) -> int:
@@ -68,6 +69,10 @@ def rule_from_frontmatter(meta: Optional[dict]) -> Optional[dict]:
         "auto_activate": parse_bool(md.get("polyrob-auto-activate", "true")),
         "description": str(meta.get("description") or ""),
     }
+    # The owner's own seats only (095 W4 IN-12): never listed or loaded on a room
+    # or a correspondent's seat (``gate_allows(third_party=True)``). Absent = false.
+    if parse_bool(md.get("polyrob-owner-only", "false")):
+        rule["owner_only"] = True
     requires = md.get("polyrob-requires")
     if requires:
         ids: Any = requires
@@ -194,13 +199,12 @@ def _declares_money(triggers: Optional[dict]) -> bool:
         return True
 
 
-#: 095 W4 (IN-12): skills that only the owner's own seats can act on (they
-#: author skills, deploy the instance, handle a live incident) — never listed or
-#: loaded on a third-party seat, the same seat gate as a money playbook.
-#: The pay/get-paid procedures join them: they drive payouts and invoices through
-#: non-money tools (goal, cronjob, defi_data), so the money-tool test alone misses them.
-OWNER_ONLY_SKILLS = frozenset({"skill-authoring", "self-deploy", "incident-response",
-                               "pay-for-work", "get-paid-for-work"})
+def is_owner_only(rule: Optional[dict]) -> bool:
+    """095 W4 (IN-12): the skill's frontmatter says ``polyrob-owner-only: 'true'``
+    — the owner's own seats act on it (it authors skills, deploys the instance,
+    handles a live incident, pays or invoices, profiles a person). The frontmatter
+    is the ONE source; a pack skill declares it the same way."""
+    return bool(isinstance(rule, dict) and rule.get("owner_only"))
 
 
 def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False,
@@ -210,8 +214,8 @@ def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False,
 
     * ``third_party`` (095 W3) — a room or a correspondent's session: a money
       playbook (it declares a money tool: ``trading-mandate``, ``token-identity``,
-      the trading playbooks) or an :data:`OWNER_ONLY_SKILLS` id is the owner's
-      and never listed or loaded there.
+      the trading playbooks) or an owner-only skill (:func:`is_owner_only`) is
+      the owner's and never listed or loaded there.
     * ``absent`` (095 W4, IN-4) — declared tools this session can never reach
       (``gated:unavailable-on-this-deploy``/``not-constructed``, or refused by
       the seat) count as
@@ -223,10 +227,10 @@ def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False,
       is a listing view (console, export, ``/skills``), not a session, and lists
       an auto-activatable money playbook.
     """
-    if third_party and skill_id in OWNER_ONLY_SKILLS:
-        return False
     if rule is None:
         return True
+    if third_party and is_owner_only(rule):
+        return False
     triggers = rule.get("triggers", {}) or {}
     if third_party and _declares_money(triggers):
         return False

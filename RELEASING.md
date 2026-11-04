@@ -86,6 +86,14 @@ they must show `loaded` with nothing needed.
 names are in `core.packs.index.RETIRED_DISTS` — the loader refuses them, and
 `polyrob pack install` refuses a third-party source that takes one.
 
+## Merge
+
+`main` requires one status check, `ci-ok` (the last job of `ci.yml`, which
+needs every other `ci` job). Merge the release PR once `ci-ok` is green; no
+admin override is needed. A new `ci` job goes into `ci-ok`'s `needs:`
+(`tests/test_ci_required_check.py` refuses one that is missing); the protection
+setting itself does not change.
+
 ## Tag and publish
 
 After the release PR is merged, update local `main`, verify the commit SHA, and

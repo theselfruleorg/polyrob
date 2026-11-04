@@ -11,7 +11,7 @@ metadata:
 # Trading mandate — the owner says it once, code runs it
 
 When the owner says "I want to trade tokens", "start trading", "trade with
-$150 on Solana" or "stop trading", he is asking for a **mandate**: one record,
+$150 on Solana" or "stop trading", they ask for a **mandate**: one record,
 confirmed on one card, that owns every job of the programme. You run the
 intake and propose the card. Code does the rest.
 
@@ -54,13 +54,14 @@ owner what you saw.
 
 ## The intake — at most four questions, in ONE message
 
-Ask only what the owner has not already said. Never re-ask an answer he gave.
+Ask only what the owner has not already said. Never re-ask an answer they gave.
 State the default with each question, by preset NAME:
 
 1. **Style** — a preset. Name the presets the tool offers with one line each
    (for example `majors`: ETH, SOL, BTC wrappers against the pinned stable;
    `dca`: one pinned major, a fixed amount on a schedule). There is NO default
-   style: if the owner did not name one, ask.
+   style: if the owner did not name one, ask. For plain DCA, do not use the
+   `dca` preset today (its hunt buys only once): load the `dca` skill — one job.
 2. **Chains** — default: where the funds already sit. Check first with
    `defi_data.portfolio(chain=…)` on each chain (one chain per read) and name
    what you found ("USDC on Base, SOL on Solana"). Never guess a balance.
@@ -94,9 +95,10 @@ The run's task names the mandate. Before any buy:
 
 1. **Reconcile** — `defi_data.reconcile(chain=…)` for each mandate chain
    — the book against the chain, before anything else.
-2. **Candidates** — the discovery reads on the mandate chains (the
-   preset's doctrine skill names them). An UNAVAILABLE read is not an empty one: say which
-   chain could not be read.
+2. **Candidates** — the discovery reads on the mandate chains
+   (`defi_data.new_pools`, `defi_data.trending`, `defi_data.scan`); a preset's
+   doctrine skill, when it has one, narrows them. An UNAVAILABLE read is not an empty one:
+   say which chain could not be read.
 3. **Screen every candidate** with `defi_data.token_info(chain=…, address=…)`.
    Read its `survivability:` line: `REJECT` means skip, always. Otherwise it
    gives a **tier ceiling** (A, B or C) — you may size at that tier or lower,
@@ -151,7 +153,7 @@ the same lines.
 off, exits on) · `/trade resume` · `/trade stop` (the hunt and review end;
 exits finish the open positions, or the owner chooses "close all") ·
 `/trade release` (a latched breaker). Only the owner resumes, stops or
-releases: a breaker is his call. When the owner says "stop trading" in plain
+releases: a breaker is the owner's call. When the owner says "stop trading" in plain
 words, name the verb or offer the card; chat text is never a command.
 
 ## If a tool is missing
@@ -161,9 +163,9 @@ words, name the verb or offer the card; chat text is never a command.
 - No `defi_trade` on a hunt or exit run: do the read steps, report what you
   would do, and name the missing grant once.
 - Never work around a missing verb with a raw `call`, a browser dapp, a
-  hand-built job or another agent.
+  hand-built job or another agent. For a gated tool, follow `harness-manual`.
 
 ## Related
 
-The preset's doctrine skill (the hunt and review runs pin it), `exits`, `sizing-and-risk`,
+The preset's doctrine skill, when it has one (the hunt run pins it), `exits`, `sizing-and-risk`,
 `position-journal`, `pre-trade-check`, `trade-execution`, `post-trade-verify`.

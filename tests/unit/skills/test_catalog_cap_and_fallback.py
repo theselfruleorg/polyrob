@@ -40,10 +40,11 @@ def _hermetic_home(tmp_path, monkeypatch):
 
 def test_catalog_includes_priority6_tail():
     """web-scraping/lead-research are real priority-6 builtin rules (verified against
-    data/prompts/skills/rules.json) that the old default cap(20) could cut. At the
-    new call-site cap of 50 the full 21-entry auto-activatable library fits."""
+    data/prompts/skills/rules.json) that the old default cap(20) could cut. The session
+    call sites pass max_skills=None (the derived cap, SkillManager.catalog_cap), so
+    the whole library + pack skills fit whatever their count."""
     sm = SkillManager()
-    ids = [s.skill_id for s in sm.get_catalog_skills(user_id="u1", max_skills=50)]
+    ids = [s.skill_id for s in sm.get_catalog_skills(user_id="u1", max_skills=None)]
     assert "web-scraping" in ids
     assert "lead-research" in ids
 

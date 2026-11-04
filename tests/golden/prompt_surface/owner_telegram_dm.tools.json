@@ -34,7 +34,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "b894eb97c2d3"
+      "sha": "0632eb5cf61d"
     },
     {
       "name": "cronjob_show",
@@ -70,7 +70,7 @@
     },
     {
       "name": "filesystem_jsonl_append",
-      "sha": "05c1fe29edcb"
+      "sha": "cf236a687c3b"
     },
     {
       "name": "filesystem_jsonl_remove",
@@ -86,7 +86,7 @@
     },
     {
       "name": "filesystem_read_file",
-      "sha": "b61712453fd9"
+      "sha": "2c40c9eb9c67"
     },
     {
       "name": "filesystem_write_file",
@@ -102,7 +102,7 @@
     },
     {
       "name": "goal_create",
-      "sha": "1e049a63d24e"
+      "sha": "935a96050f20"
     },
     {
       "name": "goal_list",
@@ -135,6 +135,14 @@
     {
       "name": "message",
       "sha": "a477faab6c1f"
+    },
+    {
+      "name": "offer_manage",
+      "sha": "33b8b7853317"
+    },
+    {
+      "name": "order_deliver",
+      "sha": "de43909365bb"
     },
     {
       "name": "owner_ask",

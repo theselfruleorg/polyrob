@@ -234,7 +234,11 @@ def append_prerequisites(result: ActionResult, controller, skill_manager, user_i
             tool_ids = controller.list_tools()
         except Exception:
             tool_ids = []
-        reqs = skill_manager.prerequisites_of(sid, user_id=user_id, tool_ids=tool_ids)
+        from agents.task.session_class import seat_is_third_party
+        reqs = skill_manager.prerequisites_of(
+            sid, user_id=user_id, tool_ids=tool_ids,
+            third_party=seat_is_third_party(controller),
+            absent=getattr(controller, "_absent_tool_ids", None) or ())
     except Exception:
         return result
     activated = getattr(controller, "_activated_skills", None)
@@ -327,3 +331,33 @@ def forget_activated_skill(controller, skill_id) -> None:
     if sid and isinstance(activated, set):
         activated.discard(sid)
         activated.discard(f"{sid}{_SKILL_ACK_SUFFIX}")
+
+
+def third_party_seat_refuses(controller, sid, uid, skill_manager=None) -> bool:
+    """True when a third-party seat may not load (or read resources of) ``sid``.
+
+    A skill in ``_session_skills`` was matched when the session was built,
+    maybe as the owner's. Correspondent taint can arrive mid-session, so a
+    third-party seat re-runs the load gate on EVERY load and resource read,
+    the session set included. An owner seat is never refused here. Fail-closed:
+    an error in the seat check or the gate refuses."""
+    try:
+        from agents.task.session_class import seat_is_third_party
+        if not seat_is_third_party(controller):
+            return False
+    except Exception:
+        return True
+    sid = (sid or "").strip().strip('"')
+    try:
+        if skill_manager is None:
+            from agents.task.agent.skill_manager import get_skill_manager
+            skill_manager = get_skill_manager()
+        try:
+            tool_ids = controller.list_tools()
+        except Exception:
+            tool_ids = []
+        return not skill_manager.may_load_skill(
+            sid, tool_ids=tool_ids, user_id=uid, third_party=True,
+            absent=getattr(controller, '_absent_tool_ids', None) or ())
+    except Exception:
+        return True

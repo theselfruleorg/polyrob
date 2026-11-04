@@ -16,8 +16,8 @@ itself a dollar is a position.
 ## What exists today
 
 - The chain registry pins USDC (and the wrapped native) per chain; `token_info`
-  says `on the pinned canonical list` for those. Base USDC is
-  `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
+  says `on the pinned canonical list` for those. Take a USDC address from that
+  line or from the `portfolio` row, never from memory or a note.
 - Other stables (a chain's own stable, USDT, DAI) are NOT on the canonical
   list. Treat them as verified only when a trusted source covers them (a
   `target_token` the owner typed, the owner's approval — `token_info` says
@@ -40,16 +40,14 @@ itself a dollar is a position.
 4. **Keep the fee reserve outside "cash".** The chain's fee reserve (named on
    the portfolio's native row) pays for every exit; the native coin above it is
    money and counts as buying power.
-5. **Parking idle cash in lending** (Aave, Morpho) has no dedicated verb yet;
-   `defi_trade.call` can reach a protocol, but only on an owner instruction.
+5. **Parking idle cash in lending** has no dedicated verb yet;
+   `defi_trade.call` can reach a lending protocol, but only on an owner
+   instruction (`contract-call`).
 
 ## If a tool is missing
 
-These steps need `defi_data` (reads) and `defi_trade` (trades) in THIS session.
-If `defi_trade` is not loaded, do the read steps, write the plan, and tell the
-owner which grant is missing. If `defi_data` is not loaded either, you cannot
-measure anything — say so and stop. Never work around a missing verb with a raw
-`call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

@@ -503,6 +503,8 @@ polyrob apps show <slug>
 polyrob apps approve <slug>      # the owner decision; the supervisor deploys within a tick
 polyrob apps reject <slug>
 polyrob apps kill <slug>
+polyrob apps start <slug>        # run a stopped app again on its approved address
+polyrob apps remove <slug> [--yes]   # retire it: container, files, record and address
 polyrob apps logs <slug> [-n 50]
 polyrob apps supervise [--once] [--interval N]   # the reconcile loop the unit runs
 polyrob apps install [--domain D] [--publish-root DIR] [--no-publish] [--dry-run]

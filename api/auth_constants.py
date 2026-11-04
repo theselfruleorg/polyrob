@@ -45,6 +45,7 @@ from core.constants import (  # noqa: F401
 PUBLIC_PATHS_EXACT: frozenset = frozenset({
     "/",
     "/health",
+    "/api/offers",       # 099: the HTTP catalog of live offers (see the prefixes)
 })
 
 #: Path PREFIXES that are public. Every entry here is a surface an anonymous
@@ -61,6 +62,9 @@ PUBLIC_PATHS_EXACT: frozenset = frozenset({
 #:   ``/a2a/agent-card``/``/a2a/extended-card`` — the same card on the API path.
 #:   ``/eip8004/registration.json`` — the ERC-8004 tokenURI target; an on-chain
 #:                        consumer cannot authenticate.
+#:   ``/api/offers/``, ``/api/orders/`` — 099: an HTTP buyer has no account. It
+#:                        reads the catalog, orders, and reads ITS order with the
+#:                        bearer order token; the per-IP invoice limiter bounds both.
 PUBLIC_PATH_PREFIXES: Tuple[str, ...] = (
     "/api/auth",
     "/api/x402/",
@@ -70,6 +74,8 @@ PUBLIC_PATH_PREFIXES: Tuple[str, ...] = (
     "/a2a/agent-card",
     "/a2a/extended-card",
     "/eip8004/registration.json",
+    "/api/offers/",
+    "/api/orders/",
 )
 
 

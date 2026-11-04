@@ -426,8 +426,8 @@ class GoalCreateAction(BaseModel):
     skills: Optional[List[str]] = Field(
         None,
         description=("Optional skill ids this goal's runs must load (its doctrine, e.g. "
-                     "['rh-reporting']). Pinned skills load every run instead of depending on "
-                     "keyword matching; they grant no tool. Up to 8; omit to match by keyword."),
+                     "['web-research']). Pinned skills load every run; without a pin the run "
+                     "picks from the skill index. They grant no tool. Up to 8."),
     )
     target_token: Optional[Dict[str, str]] = Field(
         None,
@@ -1056,7 +1056,7 @@ def register_goal_tool(force: bool = False) -> bool:
         ToolDescriptor(
             name="goal",
             description=("Record/list/update/cancel durable cross-session goals "
-                        "(goal_create/list/show/update/cancel)"),
+                        "(goal_create/list/show/ask/unblock/update/cancel)"),
             category=ToolCategory.INTEGRATION,
             required_config=[],
             init_priority=80,

@@ -1,0 +1,68 @@
+{
+  "function": {
+    "description": "Sell something: draft/edit an offer, record its resources and a test, see offers and orders, pause one, and put the setup budget or go-live to the owner as ONE card each. Grants nothing itself.",
+    "name": "offer_manage",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "default": null,
+          "description": "resource: the contract address",
+          "nullable": true,
+          "type": "string"
+        },
+        "budget_usd": {
+          "default": null,
+          "description": "propose_setup: the on-chain setup budget",
+          "maximum": 500,
+          "minimum": 0,
+          "nullable": true,
+          "type": "number"
+        },
+        "chain": {
+          "default": null,
+          "description": "resource: the chain of a contract",
+          "nullable": true,
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "resource: details. A contract needs runtime_hash and functions (the ONLY signatures a fulfillment may call, e.g. [\"mint(address,string)\"]). test: the evidence.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "kind": {
+          "default": null,
+          "description": "resource: contract|file_set|account|endpoint|storage",
+          "nullable": true,
+          "type": "string"
+        },
+        "manifest": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "draft: the whole polyrob.offer/1 manifest (see the sell-anything skill).",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "offer_id": {
+          "default": null,
+          "description": "The offer id (all ops but draft/status).",
+          "nullable": true,
+          "type": "string"
+        },
+        "op": {
+          "description": "One of: draft, resource, test, propose_setup, propose_live, pause, status, orders",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

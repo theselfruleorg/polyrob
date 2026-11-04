@@ -64,7 +64,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/goals` | The goal board summary | every seat |
 | `/jobs` | Scheduled jobs: next run, last outcome, and who wrote each | every seat |
 | `/job <new\|show\|edit\|pause\|resume\|run\|stop> …` | Add, change, grant, pause, resume, run, or stop one scheduled job | every seat, not in a room |
-| `/apps [list\|show\|approve\|reject\|kill\|logs <slug>]` | Deployed apps: approve an address, check health, or kill one | every seat, not in a room |
+| `/apps [list\|show\|approve\|reject\|kill\|start\|remove\|logs <slug>]` | Deployed apps: approve an address, check health, stop, start or remove one | every seat, not in a room |
 | `/skills [words \| <id>]` | The skills I can load, and what each one does; /skills &lt;id&gt; shows one skill's text | every seat, not in a room |
 | `/learn <description>` | Describe how to do something and I draft a skill for you to check | terminal |
 | `/todos` | The todo list in my working files | terminal |
@@ -79,6 +79,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/invoices [status] \| refunded <id> [tx]` | What I have billed and who owes me | every seat |
 | `/settle <id> [tx]` | Mark an invoice paid | every seat |
 | `/trade start\|status\|pause\|resume\|stop\|release` | Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop | every seat |
+| `/offer list\|show\|orders\|quote\|resolve\|pause\|resume\|retire` | What I sell: offers, their orders, quotes, disputes; pause, resume or retire one | every seat |
 | `/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]` | Move value between chains: ETH/native or USDC in; native, WETH or USDC out | every seat |
 | `/launch <SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]` | Launch a token on the launchpad | every seat |
 | `/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]` | Deploy a fixed-supply token | every seat |

@@ -172,6 +172,12 @@ def test_load_tool_pushes_the_skill_index_change(monkeypatch):
     assert "trading-x" in text and "load_skill" in text
     assert "trading-x" in controller._session_skills       # load_skill serves it
     assert controller._skill_index_stale is False
+    # An id that leaves the index leaves the session set (load_skill re-gates it).
+    controller._skill_index_stale = True
+    listed["ids"] = ["trading-x"]
+    text = state_delta.skills_delta_part(agent)
+    assert "No longer in your skill index: a" in text
+    assert "a" not in controller._session_skills
 
 
 def test_gate_withholds_a_skill_whose_every_declared_tool_is_absent():
@@ -186,7 +192,12 @@ def test_gate_withholds_a_skill_whose_every_declared_tool_is_absent():
 
 
 def test_owner_only_skills_are_not_listed_on_a_third_party_seat():
-    from core.skills.catalog import OWNER_ONLY_SKILLS, gate_allows
-    for sid in OWNER_ONLY_SKILLS:
-        assert not gate_allows(None, [], listing=True, third_party=True, skill_id=sid)
-        assert gate_allows(None, [], listing=True, skill_id=sid)
+    """The frontmatter key ``polyrob-owner-only`` is the ONE source (M6)."""
+    from core.skills.catalog import gate_allows, rule_from_frontmatter
+    rule = rule_from_frontmatter({"description": "d",
+                                  "metadata": {"polyrob-owner-only": "true"}})
+    assert rule["owner_only"] is True
+    assert not gate_allows(rule, [], listing=True, third_party=True)
+    assert gate_allows(rule, [], listing=True)
+    plain = rule_from_frontmatter({"description": "d", "metadata": {"polyrob-priority": "3"}})
+    assert "owner_only" not in plain and gate_allows(plain, [], third_party=True)

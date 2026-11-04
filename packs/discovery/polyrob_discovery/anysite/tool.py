@@ -40,7 +40,7 @@ def _unavailable_reason() -> str:
 
 class AnysiteApiParams(BaseModel):
     endpoint: str = Field(..., description="API path, e.g. '/api/linkedin/user' or '/api/yc/companies'")
-    params: Optional[dict] = Field(None, description="Endpoint params as key=value pairs, e.g. {'user': 'satyanadella'}")
+    params: Optional[dict] = Field(None, description="Endpoint params as key=value pairs, e.g. {'user': '<handle>'}")
     output_format: str = Field("json", description="Output format: json | jsonl | csv | table")
 
 
@@ -157,7 +157,7 @@ class AnysiteTool(BaseTool):
     @BaseTool.action(
         "Query AnySite (200+ sources / 1,200+ endpoints: LinkedIn, Twitter/X, Reddit, "
         "YouTube, GitHub, SEC, Google, a universal web scraper, and more). Pass an API "
-        "path and key=value params, e.g. endpoint='/api/linkedin/user', params={'user':'satyanadella'}. "
+        "path and key=value params, e.g. endpoint='/api/linkedin/user', params={'user':'<handle>'}. "
         "Do NOT guess an endpoint path — run anysite_describe first (search=<keyword> to list "
         "paths, then endpoint=<path> for its exact params).",
         param_model=AnysiteApiParams,

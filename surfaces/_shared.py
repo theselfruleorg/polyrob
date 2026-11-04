@@ -99,6 +99,17 @@ class TextSink:
             return False
 
 
+def _storefront_buyer(inbound) -> str:
+    """The storefront buyer of *inbound*: its DM chat id, or ``""`` when it is not a
+    person's DM (a group, a channel, a synthetic or bot message). Fail-closed."""
+    if getattr(inbound, "internal", False) or getattr(inbound, "sender_is_bot", False):
+        return ""
+    src = getattr(getattr(inbound, "identity", None), "source", None)
+    if getattr(src, "chat_type", None) != "dm":
+        return ""
+    return str(getattr(src, "chat_id", "") or "")
+
+
 class BaseHarness:
     """The surface-agnostic half of a chat-surface harness.
 
@@ -148,6 +159,19 @@ class BaseHarness:
                     logger.warning("%s deliver failed", self.surface_id, exc_info=True)
                     return
 
+        # 099 W3: the storefront answers /offers, /buy, /order by code (no model, no
+        # tools) while a live offer lists this surface; anything else routes as before.
+        # DMs only, like Telegram: the buyer is the DM's chat (one person), never the
+        # reply target — a Slack target is (channel, thread_ts), so a thread would be a
+        # new buyer, and a group channel would let anyone in it read or cancel orders.
+        buyer = _storefront_buyer(inbound)
+        if buyer:
+            from modules.commerce.storefront import storefront_reply
+            reply = await storefront_reply(self._container, self.surface_id, buyer,
+                                           getattr(inbound, "text", "") or "")
+            if reply is not None:
+                await _deliver(reply)
+                return
         try:
             await self._before_route(target)
         except Exception:

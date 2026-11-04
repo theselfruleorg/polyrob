@@ -121,7 +121,7 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
         _decimals = int(getattr(_row, "native_decimals", 18) or 18)
         amount_usd = ((outflow_raw + _worst_fee_wei) / (10 ** _decimals)) * unit_price
     elif (intent.is_claim or intent.is_nft_op or intent.is_registration or intent.is_collection_reveal
-            or intent.is_journal_entry
+            or intent.is_journal_entry or intent.is_resource_call
             or (intent.is_liquidity_op and not intent.lp_outflows)):
         # The cost of a claim is its FEE. Nothing leaves, so pricing an outflow
         # would book it at $0.00 — the confident-zero class that let 114
@@ -343,6 +343,7 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
     fee_already_priced = (intent.is_collection_mint or intent.is_deploy or intent.is_claim
                          or intent.is_nft_op or intent.is_registration
                          or intent.is_collection_reveal or intent.is_journal_entry
+                         or intent.is_resource_call
                          or (intent.is_liquidity_op and not intent.lp_outflows))
     # The declared max_spend_usd asserts the transaction's VALUE (what it moves
     # or grants); the network fee added below is charged to the PolicyGate caps

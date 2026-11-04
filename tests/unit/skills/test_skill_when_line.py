@@ -29,6 +29,39 @@ def test_every_shipped_skill_says_when_to_load_it(md):
     assert validate_authored(meta, md.parent.name) == []
 
 
+def test_every_shipped_when_line_is_distinct():
+    """The index line is the routing text: two skills with one line cannot be told apart."""
+    seen = {}
+    for md in SHIPPED:
+        when = when_line(parse_frontmatter(md.read_text(encoding="utf-8"))[0]).lower()
+        assert when not in seen, f"{md.parent.name} and {seen.get(when)} share {when!r}"
+        seen[when] = md.parent.name
+
+
+PACK_SKILLS = [p for p in SHIPPED if "/packs/" in p.as_posix()]
+
+
+def _required_ids():
+    from core.skills.catalog import rule_from_frontmatter
+    out = set()
+    for md in SHIPPED:
+        rule = rule_from_frontmatter(parse_frontmatter(md.read_text(encoding="utf-8"))[0])
+        out.update((rule or {}).get("requires") or [])
+    return out
+
+
+@pytest.mark.parametrize("md", PACK_SKILLS, ids=[p.parent.name for p in PACK_SKILLS])
+def test_a_pack_skill_ranks_in_the_pack_band(md):
+    """SKILL_AUTHORING_STANDARD 9c: a pack skill's priority is 5-7, so a pack never
+    heads the index above the builtin library. A safety prerequisite (an id another
+    skill ``requires``, e.g. ``crypto-trading-safety``) may rank higher."""
+    md_meta = parse_frontmatter(md.read_text(encoding="utf-8"))[0].get("metadata") or {}
+    priority = int(md_meta.get("polyrob-priority", "5"))
+    if md.parent.name in _required_ids():
+        return
+    assert 5 <= priority <= 7, f"{md.parent.name}: priority {priority}"
+
+
 def test_the_index_line_is_the_when_line():
     skill = MatchedSkill("defi-bridge", 2, ["catalog"], "body",
                          description="a long description " * 20, when="Moving funds between chains")

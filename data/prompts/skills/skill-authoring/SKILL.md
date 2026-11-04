@@ -5,7 +5,8 @@ license: MIT
 metadata:
   polyrob-when: 'Writing or editing a skill'
   polyrob-priority: '4'
-  polyrob-version: '3'
+  polyrob-owner-only: 'true'
+  polyrob-version: '4'
 ---
 # Skill Authoring
 
@@ -18,8 +19,20 @@ How to write a durable, safe skill in this system.
   rewrite a whole body from memory — a stale rewrite can lose hard-won detail.
 - A rule the owner stated is not a procedure: record it with `owner_doc_manage`, not in a
   skill. Only the terms of a programme the owner runs as jobs live in its pinned skill.
-- An overwrite of an existing ACTIVE skill becomes a `.pending` proposal that the owner
-  must promote. Do not expect an edit to take effect immediately; surface the pending id.
+- Every skill you create or change lands as a `.pending` draft by default, and the owner
+  promotes it (`promote` is owner-only). A fix to a bundled skill also waits for the owner.
+  Do not expect a change to take effect at once: say it is a draft and give its id.
+
+## The calls
+- Create: `skill_manage(action="create", skill_id=…, content=…, when="<= 60 chars",
+  reason="<one sentence>")`.
+- Change: `load_skill(skill_id)` first, then `skill_manage(action="patch", skill_id=…,
+  old_string=…, new_string=…, expected_sha256=<the sha256 load_skill gave>, reason=…)`.
+  `edit` replaces the whole body with the same two fields. A stale sha256 is refused:
+  read the skill again. `when` alone (with `expected_sha256`) changes only the index line.
+- An owner turn must give `reason`: the owner decides from it.
+- `delete` archives the skill; `rollback` restores an archived revision. A builtin or pack
+  id can never be created or deleted under your name.
 
 ## Shape
 - Start with a single `# Title` heading. Keep the body under 20,000 characters

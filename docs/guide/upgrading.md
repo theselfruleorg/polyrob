@@ -105,6 +105,22 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.4
+
+1.7.3 was never published; 1.7.4 carries its changes. No database migration: the
+offers store (`commerce.db`) is created on first use.
+
+- **Your own skills stay with you.** A group or a person who is not you no longer
+  sees or loads the skills you wrote, project skills or ecosystem skills; only the
+  bundled and pack skills that allow it. If a group relied on one of your skills, put
+  what it needs in the group's own instructions.
+- **An owner-only skill is marked in its frontmatter** (under `metadata:`) with
+  `polyrob-owner-only: 'true'`. A pack or skill author who relied on the old
+  built-in id list must add the key.
+- **X account signup now asks for approval** wherever posting does.
+- **New commands:** `/offer` (yours) and, only on a chat that a live offer lists,
+  `/offers`, `/buy`, `/order` for buyers; `/apps start` and `/apps remove`.
+
 ### Upgrading to 1.7.2
 
 - **Back up `bot.db` first.** It migrates to schema 1.15 on the first start (x402

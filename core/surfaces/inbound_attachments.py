@@ -309,7 +309,23 @@ def inject_file_content(
     return (f"{message_text}\n\n[Attached file: {name} ({_human_size(size)})]\n"
             f"File type: {ext or 'unknown'}\n"
             f"Path in workspace: {rel_path}\n"
-            f'To read it, use: filesystem_read_file(file_path="{rel_path}")'), None
+            f"{_read_hint(ext, rel_path)}"), None
+
+
+#: Binary office formats `filesystem_read_file` cannot decode (it extracts .pdf / .docx).
+_UNREADABLE_OFFICE_EXTENSIONS = {".doc", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".rtf"}
+
+
+def _read_hint(ext: str, rel_path: str) -> str:
+    """The read route that works for this file type (filePath = the schema field)."""
+    call = f'filesystem_read_file(filePath="{rel_path}")'
+    if ext in _UNREADABLE_OFFICE_EXTENSIONS:
+        return (f"{call} cannot decode a {ext} file. Read it with a script through "
+                f"code_execution when that tool is loaded (for example openpyxl for a "
+                f"spreadsheet); otherwise say that you cannot read it.")
+    if ext in (".pdf", ".docx"):
+        return f"To read its text, use: {call} (offset/limit page a long document)"
+    return f"To read it, use: {call}"
 
 
 # --- the rail --------------------------------------------------------------

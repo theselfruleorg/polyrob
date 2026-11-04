@@ -20,11 +20,10 @@ Two different rails, two different doctrines — do not apply one to the other.
 - **Venue rail** (`polymarket`, `hyperliquid`) — this skill. Owner-confirmed,
   per-trade, no standing authority.
 - **On-chain treasury rail** (`defi_trade`, `defi_data`) — read
-  `trade-execution` and `token-identity` instead. Whether that rail moves money
-  without a per-trade tap depends on the deploy's autonomy posture and caps
-  (`DEFI_AGENT_AUTONOMY`, the autonomous lane ceiling, the per-transaction and
-  daily caps) — the dry run's `lane:` line says which. Treating market data as
-  data applies to BOTH rails; the per-trade owner-confirmation gate does not.
+  `trade-execution` and `token-identity` instead. Its lane and caps rule (when a
+  live spend waits for the owner's card) is in `trade-execution`; the dry run's
+  `lane:` line says which applies. Treating market data as data applies to BOTH
+  rails; the per-trade owner-confirmation gate does not.
 
 ## When to use
 Any time a task could place, modify, or cancel a real order, set leverage, or move
@@ -44,10 +43,8 @@ value on Polymarket or Hyperliquid. Read it first; the trade skills reference it
 ## Hard gates (never bypass)
 1. **Explicit owner confirmation** (venue rail only). A venue trade runs only on
    a direct, current owner instruction — no standing "keep trading" authority.
-   The on-chain treasury rail can differ: when the deploy arms autonomy, a
-   `defi_trade` run may send within the caps without a per-trade tap — the dry
-   run's `lane:` line says which applies to this run. `trade-execution` and
-   `trading-mandate` hold those rules.
+   The on-chain treasury rail has its own lane rule, in `trade-execution`; the
+   dry run's `lane:` line says which applies to this run.
 2. **Caps** bound notional per order, per venue exposure, and a daily cap. The
    live cap (`HYPERLIQUID_TRADE_MAX_USD` / `POLYMARKET_TRADE_MAX_USD`) decides
    whether an order is submitted at all. An order above the account's

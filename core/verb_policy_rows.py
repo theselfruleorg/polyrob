@@ -58,6 +58,10 @@ CORE_VERB_ROWS = {
         # the owner's seat writes the mandate. Same reach as propose_action.
         "trade_mandate_propose": dict(effect="none", correspondent_blocked=True,
                                       room_denied=True),
+        # 099: offers — drafts, resources and the setup/go-live CARDS (Confirm runs the owner's
+        # seat line); order_deliver ends one order's run and messages ITS buyer.
+        "offer_manage": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        "order_deliver": dict(effect="comms", correspondent_blocked=True, room_denied=True),
         # 093 D1: a setting card (Confirm re-runs the owner's own seat line) or an
         # operator request on the board. Speaks to the owner as the agent; owner turn only.
         "propose_setting": dict(effect="none", correspondent_blocked=True, room_denied=True),
@@ -92,6 +96,7 @@ CORE_VERB_ROWS = {
         "app_service_logs": dict(effect="none"),
         "app_service_deploy": dict(effect="public"),
         "app_service_stop": dict(effect="public"),
+        "app_service_remove": dict(effect="public"),
     },
     "browser": {
         # Navigation and reading are read egress (the same class as web_fetch). Only the verbs
@@ -106,6 +111,8 @@ CORE_VERB_ROWS = {
         "browser_scroll_down": dict(effect="none"),
         "browser_scroll_to_text": dict(effect="none"),
         "browser_scroll_up": dict(effect="none"),
+        # Writes a PNG into the session workspace only; nothing leaves the box.
+        "browser_screenshot": dict(effect="none"),
         "browser_search_google": dict(effect="none"),
         "browser_switch_tab": dict(effect="none"),
         "browser_click_element": dict(effect="network"),

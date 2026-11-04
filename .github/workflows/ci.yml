@@ -205,3 +205,20 @@ jobs:
   # job was removed: it required pinning an exact agentskills commit SHA and, unpinned,
   # reded the CI badge on every push for no runtime benefit. Re-add it (pinned to a
   # real SHA) only if cross-checking against the upstream reference rule set is needed.
+
+  # The ONE required status check (branch protection on `main` requires only
+  # `ci-ok`). It passes only when every job above passed, so a new job, a renamed
+  # job or a new matrix shard is gated by adding it to `needs:` here, never by
+  # editing the protection settings. `if: always()` makes it report (red) when a
+  # job above failed or was cancelled, instead of being skipped.
+  ci-ok:
+    if: always()
+    needs: [static, test, base-install, prod-extras, secrets]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every ci job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || { echo "a ci job is $r"; exit 1; }; done

@@ -73,7 +73,7 @@ settings — a described procedure is always owner-reviewed first.
 
 When the `skill_manage` action is loaded (its setting is a posture member of
 the autonomy group — see `references/configuration.md`), you can
-create/patch/delete/promote skills. Safety:
+create/patch/edit/delete/rollback skills (`promote` is the owner's). Safety:
 
 - Tenant-confined (`user_<uid>/` only), anonymous users blocked.
 - Every write is threat-scanned (`is_suspicious`) — fails CLOSED on a scan
@@ -92,5 +92,7 @@ create/patch/delete/promote skills. Safety:
 ## Read-before-edit
 
 When refining an existing skill: `load_skill(skill_id=...)` to read the
-current body first, plan the minimal diff, then `skill_manage(action="patch",
-...)` — never blind-overwrite from memory of what a skill "probably" says.
+current body and its sha256 first, plan the minimal diff, then
+`skill_manage(action="patch", expected_sha256=<that sha256>, reason=…, ...)` — a
+stale sha256 is refused; never blind-overwrite from memory of what a skill
+"probably" says. The `skill-authoring` skill has every call.

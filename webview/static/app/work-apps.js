@@ -21,9 +21,9 @@
  * 3. **"Nothing built" is only claimed when every store answered and every one
  *    was empty.** If one store errored, the empty state is NOT shown — the page
  *    names the store that did not answer instead.
- * 4. **It decides nothing.** Approve / kill live in the Inbox (a pending app IS
- *    the owner ask); this tab is reach, and links out to a live app, never a
- *    money or deploy verb.
+ * 4. **It decides nothing new.** Approve lives in the Inbox (a pending app IS
+ *    the owner ask); this tab carries only the registry's own lifecycle verbs
+ *    (stop, start, remove) and links out to a live app, never a money verb.
  *
  * ⚠️ The artifact ledger reader (`/api/webgate/artifacts`) is SESSION-scoped and
  * the whole-Work view names no session, so the Published and Made tiers read
@@ -102,6 +102,17 @@ const STATUS_WORD = {
 //: A pending or stopped row has nothing to stop and no log to show; drawing
 //: the buttons there would be two controls that can only refuse.
 const RUNNING_STATUSES = new Set(["live", "unhealthy"]);
+//: The statuses whose app is NOT running and not waiting on the owner: Start and
+//: Remove are the verbs there.
+const RETIRED_STATUSES = new Set(["stopped", "failed"]);
+
+function verbButton(verb, app, copy) {
+  const b = el("button", "btn btn-quiet", (copy && copy[verb]) || "");
+  b.type = "button";
+  b.dataset.appVerb = verb;
+  b.dataset.slug = String((app && app.slug) || "");
+  return b;
+}
 
 /** One app service: its name (linked when it has a public URL), its plain
  *  state, where it is, and an Open it for a reachable one. A live or unhealthy
@@ -145,6 +156,15 @@ export function appEntry(app, copy, opts = {}) {
     entry.appendChild(el("p", "entry-meta", String(app.pending_reason)));
   }
   const running = RUNNING_STATUSES.has(status);
+  const retired = RETIRED_STATUSES.has(status) && !(app && app.remove_requested);
+  if (retired && !readOnly && canDecide) {
+    // A stopped or failed app keeps its row: Start runs it again on the approved
+    // address, Remove retires it for good (`core.app_service.owner_ops`).
+    const actions = el("div", "entry-actions");
+    if (app && app.approved_at) actions.appendChild(verbButton("start", app, copy));
+    actions.appendChild(verbButton("remove", app, copy));
+    entry.appendChild(actions);
+  }
   if ((app && app.public_url) || running) {
     const actions = el("div", "entry-actions");
     if (app && app.public_url) {
@@ -377,16 +397,21 @@ export const loadAppLogs = (slug, f) =>
 
 /** Stop one app. Returns `{ok, message}`; a refusal is the server's sentence. */
 export async function killApp(slug, copy, opts = {}) {
+  return appVerb("kill", slug, copy, opts);
+}
+
+/** Run one owner verb (`kill` | `start` | `remove`) on one app. */
+export async function appVerb(verb, slug, copy, opts = {}) {
   try {
     const { ok, body } = await postJson(
-      `/api/webgate/apps/${encodeURIComponent(slug)}/kill`, undefined,
+      `/api/webgate/apps/${encodeURIComponent(slug)}/${verb}`, undefined,
       { fetcher: opts.fetcher });
     const message = serverAnswer(body, (copy && copy.unreachable) || "");
     const accepted = body && Object.prototype.hasOwnProperty.call(body, "ok")
       ? Boolean(body.ok) : Boolean(ok);
     return { ok: accepted, message };
   } catch (err) {
-    console.error("[work-apps] the stop did not reach the console", err);
+    console.error(`[work-apps] the ${verb} did not reach the console`, err);
     return { ok: false, message: (copy && copy.unreachable) || "" };
   }
 }
@@ -454,9 +479,12 @@ function bind() {
       btn.disabled = false;
       return;
     }
-    if (btn.dataset.appVerb === "kill") {
+    const verb = btn.dataset.appVerb;
+    if (verb === "kill" || verb === "start" || verb === "remove") {
+      if (verb === "remove" && typeof window !== "undefined" && window.confirm
+          && !window.confirm(copy.remove_confirm || "")) return;
       btn.disabled = true;
-      const { ok, message } = await killApp(slug, copy);
+      const { ok, message } = await appVerb(verb, slug, copy);
       if (entry) {
         let line = entry.querySelector(".entry-answer");
         if (!line) { line = el("p", "entry-meta entry-answer"); entry.appendChild(line); }

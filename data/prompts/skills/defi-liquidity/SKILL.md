@@ -20,9 +20,8 @@ require `DEFI_LIQUIDITY_ENABLED=true`, default to dry_run, and pass the shared
 money guard. Run each exact token approval separately when the verb names it.
 The owner's chat verb is `/lp`; `propose_action` cannot carry it (it is not a
 card verb), so to put a liquidity move to the owner, dry-run it yourself and
-report the numbers, and name `/lp` as his verb. Never name a `polyrob …` shell
-command on a chat seat (in a terminal REPL, `polyrob wallet lp` is the same
-rail — label it as a terminal command). Fee is in millionths:
+report the numbers, and name `/lp` as the owner's verb (the command-line rule
+is in `trade-execution`). Fee is in millionths:
 3000 means 0.3%, not 3000 bps. Amounts are human token units; max_spend_usd bounds
 the sum of deposit legs (or gas for remove/collect). Native is accepted on add;
 withdrawals return wrapped native. A new pool needs an explicit initial_price
@@ -53,10 +52,8 @@ with unverified receipt must be reconciled before any retry.
 
 ## If a tool is missing
 
-The trading verbs need `defi_trade` (and `defi_data` for reads) in THIS session.
-If they are not loaded, do the read steps you can, write the plan in your run report or
-the watchlist, and tell the owner which grant is missing. Never work around a missing
-verb with a raw `call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

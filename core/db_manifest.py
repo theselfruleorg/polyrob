@@ -121,6 +121,8 @@ DB_REGISTRY: Tuple[DbSpec, ...] = (
        note="an open or confirmed card is a decision in flight"),
     _S("trading.db", "data", "core/trading_mandate.py", "init_schema",
        note="086: the owner's trading mandates; a latched breaker lives here"),
+    _S("commerce.db", "data", "core/commerce/store.py", "init_schema",
+       note="099: offers, their confirmed versions, resources and orders"),
     # --- not sidecars: their own homes ------------------------------------------
     _S("bot.db", "bot", "modules/database/database_manager.py", backup=True,
        note="relational DB; schema = migrations/ + the modules/database table classes"),

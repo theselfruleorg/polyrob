@@ -13,8 +13,8 @@ Companion doc: ``tools/code_exec/SANDBOX_SECURITY.md`` (threat model + the
 reasoning behind every flag). If a test here starts failing, treat it as a
 sandbox regression, not a flaky test — do not silence it.
 
-Tests that touch the real daemon are ``@pytest.mark.skipif(shutil.which("docker")
-is None, ...)`` + ``@pytest.mark.asyncio``, and each carries a small, explicit
+Tests that touch the real daemon are ``@_needs_docker`` (``tests.docker_rig``)
++ ``@pytest.mark.asyncio``, and each carries a small, explicit
 ``timeout=`` on its ``ExecutionRequest`` so a stuck container can't hang the
 suite. ``test_pids_limit_present_in_argv`` is deliberately NOT daemon-gated —
 it proves ``--pids-limit`` is wired via the pure argv builder, no Docker
@@ -25,8 +25,6 @@ host mutation outside a pytest ``tmp_path``.
 """
 from __future__ import annotations
 
-import shutil
-
 import pytest
 
 from tools.code_exec.backends.docker import DockerBackend
@@ -36,9 +34,7 @@ from tools.code_exec.result import ExecutionRequest
 # backend's own CODE_EXEC_MAX_TIMEOUT_SEC default (30s) clamp.
 TIMEOUT = 20.0
 
-_needs_docker = pytest.mark.skipif(
-    shutil.which("docker") is None, reason="docker not installed"
-)
+from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
 
 
 async def _ready_backend(monkeypatch) -> DockerBackend:

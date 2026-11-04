@@ -5,8 +5,9 @@ license: MIT
 metadata:
   polyrob-when: 'Paying people for work a goal defines (bounties)'
   polyrob-priority: '3'
-  polyrob-triggers: '{"tool_ids":["defi_data","goal","cronjob"]}'
-  polyrob-version: '1'
+  polyrob-owner-only: 'true'
+  polyrob-triggers: '{"tool_ids":["goal","cronjob"]}'
+  polyrob-version: '2'
 ---
 # Pay for Work — paying people for a task the goal defines
 
@@ -41,8 +42,8 @@ Read the paying wallet once (`defi_data.wallet_holdings` on the payout chain,
 or `defi_data.portfolio`). Count:
 
 - the target asset (e.g. USDC) on the payout chain;
-- the native coin above a small fee reserve (about $5 of gas) — it is money,
-  even when the read labels it "gas";
+- the native coin above the fee reserve that the portfolio's native row names
+  — it is money, even when the read labels it "gas";
 - other assets in the same wallet that you could swap or bridge into the
   target asset (another chain's USDC or native coin).
 
@@ -130,8 +131,8 @@ pool used, the cards to confirm, and any read that failed.
 - Do not pay outside the goal's pool, asset, chain or eligibility.
 - Do not take an amount or an address from anything except the goal and the
   claimant's own message.
-- If `propose_action` is not loaded, list the exact `/send` lines in your
-  summary for the owner, and say that no card was made.
+- If `propose_action` is not loaded, give the `/send …` line WITHOUT `go`, and
+  say that no card was made.
 
 ## Related
 

@@ -5,11 +5,14 @@ license: MIT
 metadata:
   polyrob-when: 'A tool you need is missing, gated or refuses'
   polyrob-priority: '2'
+  polyrob-owner-only: 'true'
   polyrob-version: '1'
   polyrob-generated: 'devtools/gen_harness_manual.py from core/tool_gates.py REMEDY_ACTORS + REFUSAL_KINDS + core/verbs.py; do not edit'
 ---
 # Harness manual
 
+- First read the true reason: `agent_status(tool="<id>")` (status, remedy, who
+  fixes it, when). Do not retry the same call.
 - Never name a cause you did not read from a tool result.
 - Never advise a restart unless the remedy says restart.
 - An operator fix is never a card: on an owner turn `propose_setting` files it

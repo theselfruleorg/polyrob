@@ -1,0 +1,43 @@
+{
+  "function": {
+    "description": "End an order's fulfillment: record the proof, write the receipt and tell the buyer (or failed=true with the reason). Only the order's own run or the owner.",
+    "name": "order_deliver",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "failed": {
+          "default": false,
+          "description": "True when the deliverable could not be made.",
+          "type": "boolean"
+        },
+        "message": {
+          "default": "",
+          "description": "A short note for the buyer.",
+          "maxLength": 1500,
+          "type": "string"
+        },
+        "order_id": {
+          "description": "The order this run fulfils.",
+          "type": "string"
+        },
+        "proof": {
+          "additionalProperties": true,
+          "description": "tx_receipt: {tx_hash}; file_hash: {sha256}; url: {url}. Optional media_paths: files sent to the buyer.",
+          "properties": {},
+          "type": "object"
+        },
+        "reason": {
+          "default": "",
+          "description": "failed=true: why.",
+          "maxLength": 500,
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

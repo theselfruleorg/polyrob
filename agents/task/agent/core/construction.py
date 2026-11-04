@@ -221,6 +221,7 @@ from agents.task.agent.core.seat_skills import (  # noqa: F401 — re-exported (
 	owner_seat_skill_ids,
 	rail_skill_ids,
 	report_missing_rail_skills,
+	seat_persona_skills,
 )
 
 
@@ -815,7 +816,29 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			
 			user_id = self.orchestrator.user_id if hasattr(self.orchestrator, 'user_id') else None
 			from agents.task.templates import seeded_skills_for
-			_seeded = seeded_skills_for(os.environ.get("POLYROB_PERSONA"))
+			# 095 W3: a room or a correspondent's session gets no money playbook
+			# and no owner-only or owner-authored skill.
+			from core.surfaces.room_policy import is_public_session
+			from agents.task.session_class import correspondent_facing
+			_third_party = (is_public_session(self.orchestrator)
+			                or correspondent_facing(self.orchestrator))
+			# MED-1: set the seat flag at once, so a later raise cannot leave it unset.
+			if self.controller is not None:
+				self.controller._third_party_seat = _third_party
+			# 095 W4 (IN-4): a declared tool this deploy or seat can never reach
+			# is absent — its skill's index line and load_skill follow it.
+			_absent = set()
+			if self.controller is not None:
+				try:
+					_absent = self.controller.absent_tool_ids(
+						skill_manager.declared_tool_ids(user_id))
+				except Exception as _abs_err:
+					self.logger.debug(f"skill index availability probe skipped: {_abs_err}")
+			# M2 (review 2026-11-03): the persona seeds pass the seat gate (rail pins
+			# and OWNER_SEAT_SKILLS never reach a third-party seat).
+			_seeded = seat_persona_skills(
+				self, skill_manager, seeded_skills_for(os.environ.get("POLYROB_PERSONA")),
+				tool_ids=tool_ids, user_id=user_id, third_party=_third_party, absent=_absent)
 			# 081 Q2: only PINNED skills load at session start — the persona seeds and
 			# the rail's pins (060 WS-5: `payload.skills` on a cron job or goal, or
 			# TaskSessionConfig.skills), then their `requires`. Every other session
@@ -826,31 +849,18 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			_seeded = list(dict.fromkeys(list(_seeded or []) + _rail_skills
 			                             + owner_seat_skill_ids(self)))
 			matched_skills = skill_manager.get_pinned_skills(
-				seeded_skill_ids=_seeded or None, tool_ids=tool_ids, user_id=user_id)
+				seeded_skill_ids=_seeded or None, tool_ids=tool_ids, user_id=user_id,
+				third_party=_third_party, absent=_absent)
 			if _rail_skills:
 				report_missing_rail_skills(self, _rail_skills, matched_skills)
 			# D5: the skills THIS session pinned — before the index entries are appended.
 			_session_matched = list(matched_skills)
 			# 081 WS-4.6: the run record splits skills_loaded into auto (pinned
 			# here) and explicit (load_skill), per regime (modules.memory.episodic).
-			# 095 W3: a room or a correspondent's session gets no money playbook.
-			from core.surfaces.room_policy import is_public_session
-			from agents.task.session_class import correspondent_facing
-			_third_party = (is_public_session(self.orchestrator)
-			                or correspondent_facing(self.orchestrator))
-			# 095 W4 (IN-4): a declared tool this deploy or seat can never reach
-			# is absent — its skill's index line and load_skill follow it.
-			_absent = set()
 			if self.controller is not None:
 				from agents.task.session_class import session_regime
 				self.controller._auto_skills = {s.skill_id for s in _session_matched}
 				self.controller._skill_regime = session_regime(self)
-				self.controller._third_party_seat = _third_party
-				try:
-					_absent = self.controller.absent_tool_ids(
-						skill_manager.declared_tool_ids(user_id))
-				except Exception as _abs_err:
-					self.logger.debug(f"skill index availability probe skipped: {_abs_err}")
 				self.controller._absent_tool_ids = _absent
 
 			# The short index: every skill this session may load (SKILL_CATALOG_INCLUDE_ALL,

@@ -146,12 +146,13 @@ def _offer_store_with(monkeypatch, status):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("offer_status,notified", [("refused", False), ("expired", True)])
-async def test_expired_invoice_of_refused_offer_is_silent(x402_db, monkeypatch,
-                                                          offer_status, notified):
-    """A cancelled (refused) offer's invoice expires with no notice — not the
-    room post, not the owner push, not the session notice. An offer that
-    simply timed out still gets all three."""
+@pytest.mark.parametrize("offer_status,word", [("refused", "withdrawn"),
+                                               ("expired", "expired unpaid")])
+async def test_expired_invoice_notice_names_what_happened(x402_db, monkeypatch,
+                                                          offer_status, word):
+    """No silent expiry: a cancelled (refused) offer's invoice still reaches
+    the room, the owner and the session — with words that say it was
+    withdrawn. An offer that timed out says "expired unpaid"."""
     rid = await _mint(x402_db, status="expired", kind="room_action",
                       extra={"room_action": {"offer_id": "off_c"}})
     rows = await invoicing.expired_unnotified_invoices(db=x402_db)
@@ -162,17 +163,18 @@ async def test_expired_invoice_of_refused_offer_is_silent(x402_db, monkeypatch,
         _room_container = object()
 
         async def _deliver_session_notice(self, inv, text, kind):
-            sessions.append(kind)
+            sessions.append(text)
             return False
 
         async def _post_to_room(self, offer_id, text):
-            posted.append(offer_id)
+            posted.append(text)
             return True
     w = _EW(x402_db)
     assert await w._wake_once(rows[0], w._notify_expired)
-    assert bool(posted) is notified and bool(sessions) is notified
-    assert bool(w.notices) is notified
-    # Either way the wake is closed, so it is never retried or re-sent.
+    assert len(posted) == 1 and word in posted[0]
+    assert len(sessions) == 1 and w.notices
+    if offer_status == "refused":
+        assert "unpaid" not in posted[0] and "cancelled or refused" in sessions[0]
     assert (await _meta(x402_db, rid))["wake_state"] == "delivered"
 
 

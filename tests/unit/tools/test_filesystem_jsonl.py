@@ -133,6 +133,11 @@ def test_str_replace_params_coerce_an_object_to_its_compact_line():
     assert p.coerced_note and "coerced" in p.coerced_note
 
 
+def test_the_coercion_note_is_not_a_model_facing_parameter():
+    from tools.coding.tool import StrReplaceParams
+    assert "coerced_note" not in StrReplaceParams.model_json_schema()["properties"]
+
+
 def test_append_file_action_coerces_an_object_to_its_compact_line():
     from tools.controller.views import AppendFileAction
     a = AppendFileAction(file_path="c.jsonl", content={"id": "1", "x": "é"})

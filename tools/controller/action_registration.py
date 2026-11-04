@@ -16,7 +16,7 @@ from tools.controller.doc_authoring import DocAuthoringMixin
 from tools.controller.preferences_action import PreferencesActionMixin
 from tools.controller._helpers import (
 	append_prerequisites,
-	build_load_skill_result,
+	build_load_skill_result, third_party_seat_refuses,
 	build_session_search_hint,
 	forget_activated_skill,
 	read_skill_resource_confined,
@@ -334,6 +334,8 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				skill_dir = _skill_manager.resolve_skill_dir(params.skill_id, uid)
 			except Exception:
 				skill_dir = None
+			if third_party_seat_refuses(self, params.skill_id, uid, _skill_manager):  # S1: the session set too
+				return ActionResult(error=f"Unknown skill_id '{params.skill_id}'.", include_in_memory=True)
 			result = build_load_skill_result(
 				getattr(self, '_session_skills', {}), params.skill_id,
 				activated=getattr(self, '_activated_skills', None),
@@ -357,23 +359,20 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					# content="" -> same "Unknown skill_id" error shape as before,
 					# no exception leaks to the model.
 					content = ""
-					# P1-1: make the auto_activate gate REAL on the load path. A gated
-					# skill (auto_activate:false — the money/trading playbooks) is only
-					# loadable when the session has actually loaded its required tools;
-					# otherwise refuse (same "Unknown skill_id" shape) so a model that
-					# guesses the id cannot pull the gated playbook. A legitimately-
-					# available gated skill is preloaded into _session_skills via the
-					# catalog and never reaches this fallback.
+					# P1-1: the auto_activate gate is REAL on the load path: a gated skill
+					# (money/trading playbooks) loads only once its required tools are
+					# loaded, else the same "Unknown skill_id" shape. An available gated
+					# skill is preloaded into _session_skills and never reaches here.
 					_loaded_tool_ids = []
 					try:
 						_loaded_tool_ids = self.list_tools()
 					except Exception:
 						_loaded_tool_ids = []
-					_gate_ok = True
+					from agents.task.session_class import seat_is_third_party; _tp = seat_is_third_party(self)
 					try:
-						_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid, third_party=getattr(self, '_third_party_seat', False) is True, absent=getattr(self, '_absent_tool_ids', None) or ())
+						_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid, third_party=_tp, absent=getattr(self, '_absent_tool_ids', None) or ())
 					except Exception:
-						_gate_ok = True  # fail-open on the gate check; path/tenant guards still apply
+						_gate_ok = not _tp  # fail-closed on a third-party seat; owner: path/tenant guards still apply
 					if _gate_ok and _skill_manager.resolve_skill_dir(sid, uid) is not None:
 						content = _skill_manager._load_skill_content(sid, user_id=uid)
 					if content:
@@ -437,7 +436,8 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 		async def read_skill_resource(params: ReadSkillResourceAction, execution_context=None):
 			session_skills = getattr(self, '_session_skills', {}) or {}
 			sid = (params.skill_id or "").strip().strip('"')
-			if sid not in session_skills:
+			if sid not in session_skills or third_party_seat_refuses(
+					self, sid, getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)):
 				available = ", ".join(session_skills.keys()) or "(none)"
 				return ActionResult(
 					error=(

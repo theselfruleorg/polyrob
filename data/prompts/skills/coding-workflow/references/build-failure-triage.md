@@ -7,8 +7,8 @@ here".
 
 ## 1. Get a fresh, complete failure
 
-- Re-run the failing command yourself if you can (`coding.run_tests`, or the
-  `shell`/`code_execution` tool where it is available) and keep the exact
+- Re-run the failing command yourself if you can (`coding_run_tests`, or
+  `shell_run` / `code_execution_run_code` where that tool is loaded) and keep the exact
   command, the exit status and the output. If you cannot run it, say so and
   work from the log you were given.
 - An old log is a clue, not the current state. Do not report a failure as

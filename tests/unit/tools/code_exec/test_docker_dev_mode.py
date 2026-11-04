@@ -13,16 +13,14 @@ Dev entitlement rides on ``ExecutionRequest.dev_mode`` (per-call) and
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 import uuid
 
 import pytest
 
+from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
 from tools.code_exec.backends.docker import DockerBackend
 from tools.code_exec.result import ExecutionRequest
-
-_needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
 
 
 def _argv(request, workdir="/tmp/ws"):

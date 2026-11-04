@@ -9,7 +9,9 @@ from agents.task.agent.skill_manager import SkillManager
 
 def test_get_catalog_skills_returns_all_available_skills():
     sm = SkillManager()
-    catalog = sm.get_catalog_skills()
+    # The session call sites pass max_skills=None (the derived cap); a pack skill
+    # ranks 5-7 (SKILL_AUTHORING_STANDARD 9c), so the default cap of 20 can cut it.
+    catalog = sm.get_catalog_skills(max_skills=None)
     ids = {s.skill_id for s in catalog}
     # the exact skill the live S9 run could not find
     assert "project-analyzer" in ids

@@ -18,7 +18,7 @@ def apps_reply(user_id: str, data_dir: str, args: List[str],
     rest = args[1:]
     if sub in ("list", "ls"):
         return "\n".join(owner_ops.list_lines(reg, user_id))
-    if sub in ("show", "approve", "reject", "kill", "logs") and not rest:
+    if sub in ("show", "approve", "reject", "kill", "start", "remove", "logs") and not rest:
         return f"Usage: /apps {sub} <slug>"
     if sub == "show":
         return "\n".join(owner_ops.show_lines(reg, user_id, rest[0]))
@@ -28,6 +28,10 @@ def apps_reply(user_id: str, data_dir: str, args: List[str],
         return owner_ops.reject(reg, rest[0], user_id, via=via)[1]
     if sub == "kill":
         return owner_ops.kill(reg, rest[0], user_id, via=via)[1]
+    if sub == "start":
+        return owner_ops.start(reg, rest[0], user_id, via=via)[1]
+    if sub == "remove":
+        return owner_ops.remove(reg, rest[0], user_id, via=via)[1]
     if sub == "logs":
         n = 30
         if len(rest) > 1:
@@ -36,4 +40,4 @@ def apps_reply(user_id: str, data_dir: str, args: List[str],
             except ValueError:
                 pass
         return owner_ops.logs_tail(data_dir, user_id, rest[0], n)
-    return "Usage: /apps [list|show|approve|reject|kill|logs <slug>]"
+    return "Usage: /apps [list|show|approve|reject|kill|start|remove|logs <slug>]"
