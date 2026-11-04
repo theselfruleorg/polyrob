@@ -281,9 +281,11 @@ class TxIntent:
     #: 0, ``token`` None; requires ``via_account``). The same entry checks as the batch leg, and
     #: the simulation must show nothing of the account move and the ``Entry`` event emitted.
     is_journal_entry: bool = False
+    #: 099 W2 — a zero-value call to an offer's contract RESOURCE, in an order run only; the
+    #: receipt is the shape (``core.wallet.resource_call``), the scope ``core.money.offer_gate``.
+    is_resource_call: bool = False
     #: The collection reveal (069 v4; a pinned collection profile with the ``reveal``
-    #: capability): ``reveal(uint256[] ids)`` on a pinned collection, signed by the
-    #: treasury, value 0. The
+    #: capability): ``reveal(uint256[] ids)`` on a pinned collection, value 0. The
     #: registration precedent: it moves nothing, so the RECEIPT is the shape — the simulation
     #: must show exactly one ``Revealed``/``Recommitted`` per id in ``reveal_ids``, every log
     #: from the collection, and no movement of the signer (``core.wallet.collection_reveal``). Its
@@ -620,18 +622,16 @@ def _intent_is_exit_shaped(intent: TxIntent) -> bool:
         and intent.amount_raw <= intent.held_balance_raw)
 
 
-def _autonomous_turn_allowed(execution_context, tool_self, autonomous_ok_fn) -> bool:
-    """True only for a goal/cron-dispatched MAIN-agent turn, with the flag on.
-
-    Fails CLOSED on every uncertainty: flag off, a ``supervised`` money regime,
-    no detector supplied, detector says no, or detector raises. The detector is
-    injected for the same layering reason ``forged_fn`` is, and it must be
-    STRICTER than ``forged_fn`` — it answers "is this specifically an autonomous
-    goal run?", never merely "is this not a genuine owner turn?".
-    """
+def _autonomous_turn_allowed(execution_context, tool_self, autonomous_ok_fn, *,
+                             offer_scoped: bool = False) -> bool:
+    """A goal/cron-dispatched MAIN-agent turn with the trading flag on. An ORDER run (099) only
+    through step 2 with the offer facts (``offer_scoped``: the kernel's step 4c binds it) — never
+    via another gate, whatever the flag. Fails CLOSED; the detector is STRICTER than ``forged_fn``."""
     from core.config_policy.money_regime import unattended_money_allowed
-    if not autonomous_turn_trading_enabled() or autonomous_ok_fn is None \
-            or not unattended_money_allowed():
+    meta = getattr(execution_context, "metadata", None)
+    order_run = isinstance(meta, dict) and str(meta.get("mandate") or "").startswith("ord_")
+    if (order_run and not offer_scoped) or not (autonomous_turn_trading_enabled() or order_run) \
+            or autonomous_ok_fn is None or not unattended_money_allowed():
         return False
     try:
         return bool(autonomous_ok_fn(execution_context, tool_self))

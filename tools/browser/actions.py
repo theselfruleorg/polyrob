@@ -4,7 +4,7 @@ This module contains all Pydantic models for browser tool actions.
 """
 
 from typing import Optional
-from pydantic import BaseModel, model_validator, Field, field_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, model_validator, Field, field_validator, ConfigDict
 
 
 class SearchGoogleAction(BaseModel):
@@ -93,6 +93,23 @@ class ScrollAction(BaseModel):
 class SendKeysAction(BaseModel):
 	"""Model for sending keyboard keys."""
 	keys: str
+
+
+class ScrollToTextAction(BaseModel):
+	"""Model for scrolling to a text on the page. ``keys`` (the old shared
+	SendKeysAction field) still validates, so a replayed call keeps working."""
+	text: str = Field(validation_alias=AliasChoices('text', 'keys'),
+					  description='The visible text to scroll to (a part of it is enough)')
+
+
+class ScreenshotAction(BaseModel):
+	"""Model for saving a screenshot of the current page into the workspace."""
+	model_config = ConfigDict(extra='forbid')
+
+	name: Optional[str] = Field(
+		default=None,
+		description='File name without a folder (".png" is added); default: a timestamp')
+	full_page: bool = Field(default=False, description='Capture the whole page, not only the viewport')
 
 
 class NoParamsAction(BaseModel):

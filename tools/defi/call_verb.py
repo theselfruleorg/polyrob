@@ -171,6 +171,11 @@ def _register_card_context() -> None:
 _register_card_context()
 
 
+def _order_run(execution_context) -> bool:
+    meta = getattr(execution_context, "metadata", None)
+    return isinstance(meta, dict) and str(meta.get("mandate") or "").startswith("ord_")
+
+
 async def perform_call(tool, params, execution_context=None):
     from core.wallet import tx_guard, tx_notify
     from core.wallet.broadcast.evm import EvmRail
@@ -339,7 +344,11 @@ async def perform_call(tool, params, execution_context=None):
         idempotency_key=idem,
         inflow_token=receive_token,
         min_inflow_raw=(int(params.receive_min_raw) or None),
-        payout_shape=payout)
+        payout_shape=payout,
+        # 099 W2: a zero-value call in an ORDER run is a resource call — the guard and the
+        # kernel's offer step decide whether `to` really is one of the offer's resources.
+        is_resource_call=_order_run(execution_context) and not value_wei and not spend_token
+        and not receive_token and not grants)
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():

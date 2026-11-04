@@ -543,7 +543,7 @@ async def test_container_write_is_base64_and_bounded():
     assert "job-c.closed" in be.runs[-1].code and "job-c.keeper" in be.runs[-1].code
 
 
-_needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
+from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
 
 
 @_needs_docker

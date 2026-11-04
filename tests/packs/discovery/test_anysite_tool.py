@@ -24,12 +24,12 @@ async def test_anysite_api_returns_stdout(monkeypatch):
 
     async def fake_run(argv, **kw):
         assert "api" in argv
-        return AnysiteResult(stdout='{"name": "Satya"}', stderr="", exit_code=0, timed_out=False)
+        return AnysiteResult(stdout='{"name": "Example User"}', stderr="", exit_code=0, timed_out=False)
 
     monkeypatch.setattr("polyrob_discovery.anysite.tool.run_anysite", fake_run)
-    res = await tool.anysite_api(AnysiteApiParams(endpoint="/api/linkedin/user", params={"user": "satyanadella"}))
+    res = await tool.anysite_api(AnysiteApiParams(endpoint="/api/linkedin/user", params={"user": "example-user"}))
     assert res.error is None
-    assert "Satya" in res.extracted_content
+    assert "Example User" in res.extracted_content
 
 
 @pytest.mark.asyncio

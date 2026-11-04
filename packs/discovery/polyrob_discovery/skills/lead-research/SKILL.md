@@ -6,7 +6,7 @@ metadata:
   polyrob-when: 'Finding and qualifying sales leads'
   polyrob-priority: '6'
   polyrob-triggers: '{"tool_ids":["anysite"]}'
-  polyrob-version: '1'
+  polyrob-version: '2'
 ---
 # Lead Research
 
@@ -27,14 +27,14 @@ If the requester hasn't specified these, ask or make your assumptions explicit i
 
 ### 2. Source leads via anysite
 If `anysite` is available, use it as the primary research tool:
-- Discover what endpoints are available for LinkedIn people search and company search.
+- Discover with `anysite_describe(search=…)` what endpoints are available for LinkedIn people search and company search.
 - Run searches using keywords that match the ICP (role, company, industry).
-- For each promising result, fetch the public profile data using the appropriate endpoint (discovered first — do not assume paths).
+- For each promising result, fetch the public profile data with `anysite_api(endpoint=…, params={…})` on the endpoint you discovered (do not assume paths).
 
 If `anysite` is unavailable or returns nothing:
-- Use `web_fetch` to read public LinkedIn search result pages or company team pages if you have the URL.
-- Use `perplexity` to search for named individuals by role + company.
-- Use `browser` as a last resort for pages requiring interaction.
+- Use `web_fetch_fetch_url` to read public LinkedIn search result pages or company team pages if you have the URL.
+- Use `perplexity_search` to search for named individuals by role + company.
+- Use the `browser` tool as a last resort for pages requiring interaction.
 
 ### 3. Qualify each lead
 For each candidate, assess:
@@ -68,7 +68,7 @@ Cross-reference company data: a VP at a 10-person seed startup is very different
 
 ### [Name] — [Title] at [Company]
 - **Why now:** [specific trigger or signal]
-- **Recommended channel:** [LinkedIn DM / email / warm intro]
+- **Recommended channel:** [email to an allowed address / X reply or DM / warm intro / LinkedIn — the owner's own action]
 - **Opening angle:** [specific, referencing their context or signal]
 
 ## Data Gaps
@@ -82,5 +82,9 @@ Cross-reference company data: a VP at a 10-person seed startup is very different
 ## Notes
 - Use `anysite` for LinkedIn profile and search data. Discover endpoints before querying; never hardcode endpoint paths.
 - Respect privacy: only use publicly available information. Do not attempt to bypass privacy settings or access gated content.
-- If using `perplexity`, cross-check Tier 1 leads against a second source before committing to a priority.
+- If using `perplexity_search`, cross-check Tier 1 leads against a second source before committing to a priority.
 - State confidence: if a key field (email, exact role) is uncertain, flag it rather than guessing.
+- The report recommends a channel; it does not open one. You can reach a person only on a
+  rail you hold: email to an allowed address (the owner allows a new one with
+  `/allow email <address>`; see email-comms), or an X reply/DM under the x-engagement
+  rules. There is no LinkedIn write tool: a LinkedIn message is the owner's own action.

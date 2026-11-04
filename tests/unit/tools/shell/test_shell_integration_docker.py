@@ -6,7 +6,6 @@ Skipped when the docker CLI isn't on PATH. Proves against a REAL container:
 """
 import asyncio
 import logging
-import shutil
 import uuid
 
 import pytest
@@ -17,7 +16,7 @@ from tools.shell.process_tool import ProcessTool, ProcessJobParams
 from tools.shell.process_registry import ProcessRegistry
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
-_needs_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
+from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
 
 
 def _pin_workdir(monkeypatch, path):

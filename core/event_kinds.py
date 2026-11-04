@@ -213,6 +213,7 @@ APP_APPROVED = "app_approved"        # owner approved the address / a redeploy w
 APP_LIVE = "app_live"                # supervisor: healthy behind its URL
 APP_FAILED = "app_failed"            # supervisor: docker/nginx/health failure
 APP_STOPPED = "app_stopped"          # owner kill / agent app_stop / pause edge
+APP_REMOVED = "app_removed"          # an app retired for good (row, snapshots, logs gone)
 # On-chain money execution (039 Unit A). Two kinds, not one: the window between
 # a broadcast and its settlement is exactly when a transaction is invisible, and
 # a single "it happened" event cannot describe it.

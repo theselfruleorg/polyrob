@@ -20,6 +20,8 @@ MONEY_VERBS: tuple = (
     Verb("/settle", "money", "Mark an invoice paid"),
     Verb("/trade", "money",
          "Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop"),
+    Verb("/offer", "money",
+         "What I sell: offers, their orders, quotes, disputes; pause, resume or retire one"),
     Verb("/bridge", "money", "Move value between chains: ETH/native or USDC in; native, WETH or USDC out",
          background="Bridge"),
     Verb("/launch", "money", "Launch a token on the launchpad",

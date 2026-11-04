@@ -339,7 +339,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     # ---------------------------------------------------------------------------
 
     @BaseTool.action(
-        'Read a file from the workspace. For large files (>25K tokens), use offset and limit parameters to read specific line ranges (or coding_grep to search for content, when the coding tool is loaded).',
+        'Read a file from the workspace. A .pdf or .docx returns its extracted text (other office files, e.g. .xlsx, need code_execution). For large files (>25K tokens), use offset and limit parameters to read specific line ranges (or coding_grep to search for content, when the coding tool is loaded).',
         param_model=ReadFileAction
     )
     async def read_file(self, params: ReadFileAction, execution_context=None) -> str:
@@ -376,8 +376,13 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
             # Read file with offset/limit support. H09: through the descriptor
             # walk (O_NOFOLLOW after the realpath check), not a plain open().
+            # A .pdf / .docx is read as its extracted text (bounded parser
+            # subprocess, PdfExtractionMixin); every window below pages that text.
             import io
-            lines = io.StringIO(self._safe_read_text(file_path, root), newline='\n').readlines()
+            text = await self._read_document_text(file_path, root)
+            if text is None:
+                text = self._safe_read_text(file_path, root)
+            lines = io.StringIO(text, newline='\n').readlines()
 
             # Handle character-based chunking (for JSON/dense files)
             if params.char_offset is not None or params.char_limit is not None:
@@ -485,7 +490,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                         f"1. Use `char_offset` and `char_limit` for character-based reading:\n"
                         f"   - First {safe_chars:,} chars: {{\"filePath\": \"{params.file_path}\", \"char_offset\": 0, \"char_limit\": {safe_chars}}}\n"
                         f"   - Next chunk: {{\"filePath\": \"{params.file_path}\", \"char_offset\": {safe_chars}, \"char_limit\": {safe_chars}}}\n"
-                        f"2. For JSON: use shell command to extract specific keys with jq\n"
+                        f"2. For JSON: extract specific keys with a script (code_execution, or jq through shell) when that tool is loaded\n"
                         f"3. The data was saved by MCP - consider using a smaller `limit` parameter in the original MCP call"
                     )
                 else:
@@ -1279,7 +1284,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
     @BaseTool.action(
         'Append one record (or a list of records) to a JSON-lines file: each object '
-        'becomes ONE compact line. Use this for targets.jsonl / contact-log.jsonl — '
+        'becomes ONE compact line. Use this for any JSON-lines log or list — '
         'never write_file or a pretty-printed object.',
         param_model=JsonlAppendAction
     )

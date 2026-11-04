@@ -179,6 +179,23 @@ def test_always_gated_verbs_stay_owner_queued(monkeypatch, tmp_path):
     assert "shell_run" in queued and "shell_run" not in reported
 
 
+@pytest.mark.parametrize("autonomous", [False, True])
+def test_x_signup_gated_wherever_x_post_is(monkeypatch, tmp_path, autonomous):
+    """X account signup is an identity-creating act. `always_queued` alone only
+    routes an ALREADY-gated verb to the owner queue, so the signup row also
+    carries `recommended`: it is gated wherever x_post is, and under autonomous
+    mode it lands in the owner-queued lane (never act-and-report)."""
+    if autonomous:
+        _enable_full(monkeypatch)
+    _posture2(monkeypatch)
+    gates, _provider = approval.effective_approval_state("alice", tmp_path)
+    assert "x_browser_x_post" in gates
+    assert "x_browser_x_signup_start" in gates
+    queued, reported = approval.autonomous_gating_lanes(gates)
+    assert "x_browser_x_signup_start" in queued
+    assert "x_browser_x_signup_start" not in reported
+
+
 def test_owner_pref_pin_still_tightens(monkeypatch, tmp_path):
     """approvals.require additions land in the owner-queued lane even under
     autonomous mode."""

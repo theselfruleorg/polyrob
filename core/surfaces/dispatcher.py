@@ -53,7 +53,7 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/halt", "/resume", "/pause",  # owner pause record (031; /halt = alias of /pause)
              "/jobs", "/job",  # 080 WS-2: scheduled jobs (list; new/show/edit/pause/resume/run/stop)
              "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
-             "/trade",  # owner-launched money-granted run (2026-09-09)
+             "/trade", "/offer",  # trading mandate (086); offers + orders (099)
              "/bridge",  # 037 cross-chain move; owner-only, approval-gated
              "/launch", "/deploy", "/lp",  # token/liquidity writes; owner-only, capped
              "/claim",   # 046/E6: the launchpad creator-fee claim, from the phone

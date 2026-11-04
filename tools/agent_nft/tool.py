@@ -127,8 +127,8 @@ class MintParams(BaseModel):
     capability (``core/wallet/collection_registry.py``)."""
     model_config = ConfigDict(extra="forbid")
     to: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
-        "Recipient. Omit (default) = this instance's treasury, the only recipient accepted: the "
-        "guard must see every minted token arrive in the paying wallet."))
+        "Must be this instance's treasury, or omitted (the default, the same thing). Any other "
+        "address is refused: the guard must see every minted token arrive in the paying wallet."))
     qty: int = Field(1, ge=1, le=10, description="How many to mint in one call (1..10); the price is qty × 0.033 ETH.")
     min_pnl_out: int = Field(0, ge=0, description=(
         "Least PNL (raw token units) each new account must receive from the mint's buy, "

@@ -34,8 +34,11 @@ A run is about **2 × N child runs** (N = 3 to 5; default 3, so about six).
 Each child can take 10-60+ model calls, and `delegate_task` with `tasks` blocks
 your turn until every child finishes. On a chat seat, tell the owner with
 `send_message` what you are about to run and roughly what it costs before you
-start, unless he already asked for it. In an autonomous run, use it only when
-the goal or the owner explicitly calls for it.
+start, unless the owner already asked for it. In an autonomous run, use it only
+when the goal or the owner explicitly calls for it. ⚠️ In a goal or cron run the
+children's spend counts toward that run's `AUTONOMOUS_RUN_BUDGET_USD` cap: a
+panel can halt the run before you judge. Check the budget line in your
+environment block first, and use fewer seats when it is low.
 
 If `delegate_task` is unavailable this session, do not fake a panel by
 playing every seat yourself and calling the result independent. Either tell

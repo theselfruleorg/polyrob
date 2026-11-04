@@ -305,7 +305,7 @@ def _guard_ctx(mandate_id, inflow=MEME, chain="base"):
 @pytest.fixture
 def guard(monkeypatch, kernel):
     from core.wallet import tx_guard as _tg
-    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn: True)
+    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn, **kw: True)
     monkeypatch.setattr(_tg, "_principal_refusal", lambda ctx: None)
     monkeypatch.setattr(_tg, "_record_money_refusal", lambda *a, **k: None)
     return _tg
@@ -334,7 +334,7 @@ def test_svm_turn_gate_refuses_a_mandate_entry(kernel, monkeypatch, paths):
     import tools.controller.turn_origin as to
     monkeypatch.setattr(_tg, "_halted", lambda: False)
     monkeypatch.setattr(_tg, "_entry_paused", lambda: False)
-    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn: True)
+    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn, **kw: True)
     monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", lambda c, t: True)
     monkeypatch.setattr(to, "_is_forged_or_autonomous_turn", lambda c, t: True)
     import core.wallet.authority as wa

@@ -1285,6 +1285,9 @@ STRINGS.update({
 
     # A22 — the app registry's own verbs, which had no console caller.
     "work.apps.kill": "Stop it",
+    "work.apps.start": "Start it",
+    "work.apps.remove": "Remove it",
+    "work.apps.remove_confirm": "Remove this app for good? Its files, record and address go.",
     "work.apps.logs": "Show the log",
     "work.apps.logs_hide": "Hide the log",
     "work.apps.logs_empty": "The log is empty.",

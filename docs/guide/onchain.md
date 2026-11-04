@@ -745,7 +745,8 @@ owner's Confirm creates one.
   allocation latch until `/trade release`; consecutive losses start a cooldown that
   expires. A latch pauses the hunt and asks the owner one decision.
 - **Presets** hold the numbers. Core ships `majors` (5–10 % of the allocation per ticket,
-  up to 3 open) and `dca`; there is no default, so the intake asks. An install adds its
+  up to 3 open) and `dca`; there is no default, so the intake asks. ⚠️ The `dca`
+  preset buys only once today; for a plain DCA, ask for one scheduled job instead. An install adds its
   own presets (and its own screen lines, `screen.pool` / `screen.survival`) in
   `trading_presets.json` in its data home; a mandate whose preset is gone refuses entries
   and names that file. The agent may only tighten a number; the owner may tune any on the

@@ -182,7 +182,7 @@ _USAGE = {
     "/fulfill": "<id> [what you want to tell the run]",
     "/job": "<new|show|edit|pause|resume|run|stop> …",
     "/goal": "new <what> · <show|retry|pause|stop [--forever]|allow> <id>",
-    "/apps": "[list|show|approve|reject|kill|logs <slug>]",
+    "/apps": "[list|show|approve|reject|kill|start|remove|logs <slug>]",
     "/mcp": "[add <id> <url>|remove <id>|test <id>]",
     "/recap": "[window]",
     "/journey": "[window]",
@@ -191,7 +191,7 @@ _USAGE = {
     "/unquarantine": "<chain> <address> [go]",
     "/invoices": "[status] | refunded <id> [tx]",
     "/settle": "<id> [tx]",
-    "/trade": "start|status|pause|resume|stop|release",
+    "/trade": "start|status|pause|resume|stop|release", "/offer": "list|show|orders|quote|resolve|pause|resume|retire",
     "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
     "/lp": "positions|pool|quote|add|remove|collect",
     "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
@@ -405,7 +405,7 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/unmute", "/ban", "/unban",   # 046 phase 2
                          "/halt", "/resume", "/pause", "/run",
                          "/jobs", "/job", "/goal", "/wallet", "/invoices", "/settle",
-                         "/trade", "/bridge", "/launch", "/deploy", "/lp",
+                         "/trade", "/offer", "/bridge", "/launch", "/deploy", "/lp",
                          "/claim", "/pay", "/nft", "/dapp", "/identity", "/contacts", "/thread",
                          "/why",
                          "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
@@ -1225,6 +1225,7 @@ from surfaces.telegram.prefs_ops import (  # noqa: E402,F401
     _config_reply, _is_configured_source, _prefs_home, _prefs_reply,
 )
 from surfaces.telegram.kb_ops import _files_reply, _kb_reply  # noqa: E402,F401
+from surfaces.telegram.storefront_ops import _storefront  # noqa: E402 — 099 W3 buyer seat
 from surfaces.telegram.approval_ops import (  # noqa: E402,F401
     _correspondent_decision, _decide_pending_item, _pending_set,
 )
@@ -2472,6 +2473,8 @@ class TelegramHarness:
         if tg_id is not None and raw_allowlist_applies(update):
             gate = owner_allowed(tg_id)
             if gate is False:
+                if await _storefront(self, update):  # 099 W3: a stranger may BUY, never steer
+                    return None
                 _record_drop(update, tg_id, "raw_allowlist")
                 return None  # not on the allowlist -> silently ignore
             if gate is None:

@@ -58,7 +58,7 @@
         },
         "skills": {
           "default": null,
-          "description": "Optional skill ids this goal's runs must load (its doctrine, e.g. ['rh-reporting']). Pinned skills load every run instead of depending on keyword matching; they grant no tool. Up to 8; omit to match by keyword.",
+          "description": "Optional skill ids this goal's runs must load (its doctrine, e.g. ['web-research']). Pinned skills load every run; without a pin the run picks from the skill index. They grant no tool. Up to 8.",
           "items": {
             "type": "string"
           },

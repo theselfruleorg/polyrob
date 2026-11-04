@@ -46,6 +46,13 @@ async def h_wallet(ctx) -> None:
     )
 
 
+async def h_offer(ctx) -> None:
+    """Offers and orders (099) — the same ``offer_reply`` the phone runs."""
+    from modules.commerce.owner_verb import offer_reply
+    reply = await offer_reply(_tenant(ctx), list(ctx.args or []))
+    ctx.emit(reply, title="offer")
+
+
 async def h_trade(ctx) -> None:
     """The trading mandate (086 W5) — the same ``trade_ops`` the phone runs."""
     import asyncio
@@ -143,6 +150,11 @@ def register(reg, Command) -> None:
         "Wallet addresses, network, caps — and the one cap you may set from chat",
         usage="[balances|tokens|trust|untrust|autonomous <usd>]", group="money",
         help_long=HELP_WALLET[0], elsewhere=HELP_WALLET[1],
+    ))
+    reg.register(Command(
+        "offer", h_offer,
+        "What I sell: offers, their orders, quotes, disputes; pause, resume or retire one",
+        usage="[list]|show|orders|quote|resolve|pause|resume|retire …", group="money",
     ))
     reg.register(Command(
         "trade", h_trade,

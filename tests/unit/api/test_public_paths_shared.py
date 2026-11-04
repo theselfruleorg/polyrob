@@ -27,6 +27,11 @@ DOCUMENTED_PUBLIC_PATHS = [
     "/webhooks/telegram",
     "/.well-known/agent.json",
     "/eip8004/registration.json",
+    # 099: an anonymous HTTP buyer (the order token guards its own order)
+    "/api/offers",
+    "/api/offers/custom-art",
+    "/api/offers/custom-art/orders",
+    "/api/orders/ord_abc",
 ]
 
 
@@ -46,6 +51,7 @@ def test_documented_public_paths_are_public(path):
     "/openapi.json",
     "/v1/models",
     "/api/health",
+    "/api/offersx",
 ])
 def test_private_paths_are_not_public(path):
     assert not is_public_path(path)

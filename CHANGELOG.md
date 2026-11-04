@@ -10,6 +10,44 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.4] — 2026-11-03
+
+### Added
+
+- Skills: 16 generic core skills (scheduled work, goal runs, memory, apps, data, shell, git, APIs, MCP,
+  correspondents, rooms, wallet, sending, wallet login, agent identity, contract calls).
+- Files and browser: `filesystem_read_file` reads PDF and DOCX; `browser_screenshot` saves a PNG into the
+  workspace.
+- Selling: `/offer`; the owner confirms an offer on one card, buyers order on public chats (not email), HTTP,
+  MCP, A2A or a configured MCP marketplace, and one goal run fulfills each paid order inside its own budget.
+- Apps: an app can be removed for good (container, snapshots, logs, record and address) by the agent
+  (`app_service` `remove`) and the owner (`/apps remove`), and the owner can start a stopped app again.
+
+### Fixed
+
+- Skills: 40 bundled and pack skills corrected against the code (book size is simulated; every live spend asks
+  unless the tiered lane is on; `x402_fetch` needs `expected_pay_to`; DCA runs as one job; file delivery; tiers).
+
+- Payments: a paid invoice whose session cannot be resumed says so in the owner notice; the x402 `/pay` challenge
+  asks for the stored raw amount; a room-action payment is reported once; a failed delivery to the payer asks for no on-chain feedback.
+
+### Security
+
+- Skills: rooms and correspondents (also a live session that takes correspondent text) never list or load the
+  owner's own or ecosystem skills; owner-only is a frontmatter key; X account signup is gated wherever posting is.
+
+## [1.7.3] — 2026-11-03
+
+### Changed
+
+- Docs: `CONFIGURATION.md` says a posture member has no row of its own; set one member with `POLYROB_OVERRIDES`
+  (a direct env line of a member name is ignored).
+
+### Fixed
+
+- Paid room actions: an expired invoice of a cancelled or refused offer is no longer silent — the room, the owner
+  and the session hear "withdrawn; nothing was applied"; a timed-out offer keeps "expired unpaid".
+
 ## [1.7.2] — 2026-11-03
 
 ### Added

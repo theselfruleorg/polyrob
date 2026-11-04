@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Read a file from the workspace. For large files (>25K tokens), use offset and limit parameters to read specific line ranges (or coding_grep to search for content, when the coding tool is loaded).",
+    "description": "Read a file from the workspace. A .pdf or .docx returns its extracted text (other office files, e.g. .xlsx, need code_execution). For large files (>25K tokens), use offset and limit parameters to read specific line ranges (or coding_grep to search for content, when the coding tool is loaded).",
     "name": "filesystem_read_file",
     "parameters": {
       "additionalProperties": false,

@@ -36,8 +36,12 @@ def test_count_authored_skills_matches_bundled_library_size():
     # 093 C2 added harness-manual, the generated operations manual owner seats pin (40).
     # 095 B2 moved crypto-trading-safety, person-analyzer and project-analyzer into their
     # packs and deleted robinhood-chain (36). 095 B1 removed treasury-trading and
-    # memecoin-scouting, an install's programme, not core doctrine (34).
-    assert mgr.count_authored_skills() == 34
+    # memecoin-scouting, an install's programme, not core doctrine (34). 099 added
+    # sell-anything, the one skill for selling to any buyer (35). The 2026-11-03
+    # skills-vs-capabilities review added 16 generic skills for jobs no skill taught
+    # (scheduling, goal runs, memory, apps, data, shell, git, APIs, MCP, correspondents,
+    # rooms, wallet overview, sending, wallet login, agent identity, contract calls) (51).
+    assert mgr.count_authored_skills() == 51
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():

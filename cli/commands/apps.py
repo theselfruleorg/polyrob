@@ -1,5 +1,5 @@
 """``polyrob apps`` — the durable app service (proposal 032): the owner seat
-(list/show/approve/reject/kill/logs) and the supervisor loop the unit runs.
+(list/show/approve/reject/kill/start/remove/logs) and the supervisor loop the unit runs.
 
 Lazy-registered (cli/polyrob.py::_LAZY_SUBCOMMANDS); nothing heavy at import.
 """
@@ -16,7 +16,7 @@ from cli._admin_home import as_root_option
 
 @click.group("apps")
 def apps():
-    """Durable apps: approve an address, watch health, kill, read logs, supervise."""
+    """Durable apps: approve an address, watch health, kill, start, remove, read logs, supervise."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
@@ -183,6 +183,36 @@ def kill_cmd(slug, user):
     """Stop a running app (container + stanza removed on the next tick)."""
     from core.app_service.owner_ops import kill
     ok, msg = kill(_registry(write=True), slug, _tenant(user), via="cli")
+    click.echo(msg)
+    if not ok:
+        raise SystemExit(1)
+
+
+@apps.command("start")
+@click.argument("slug")
+@click.option("--user", default=None)
+@as_root_option
+def start_cmd(slug, user):
+    """Run a stopped app again on its approved address (next tick)."""
+    from core.app_service.owner_ops import start
+    ok, msg = start(_registry(write=True), slug, _tenant(user), via="cli")
+    click.echo(msg)
+    if not ok:
+        raise SystemExit(1)
+
+
+@apps.command("remove")
+@click.argument("slug")
+@click.option("--user", default=None)
+@click.option("--yes", is_flag=True, help="Do not ask for confirmation.")
+@as_root_option
+def remove_cmd(slug, user, yes):
+    """Remove an app for good: container, snapshots, logs, record and its address."""
+    from core.app_service.owner_ops import remove
+    if not yes:
+        click.confirm(f"Remove {slug!r} for good (files, record and approved address)?",
+                      abort=True)
+    ok, msg = remove(_registry(write=True), slug, _tenant(user), via="cli")
     click.echo(msg)
     if not ok:
         raise SystemExit(1)

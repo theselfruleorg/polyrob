@@ -68,6 +68,11 @@ class StopParams(BaseModel):
     slug: str = Field(..., description="Slug of an app to stop (container removed, address kept).")
 
 
+class RemoveParams(BaseModel):
+    slug: str = Field(..., description="Slug of an app to remove for good (container, files, "
+                                       "record and the approved address).")
+
+
 class ListAppsParams(BaseModel):
     pass
 
@@ -146,7 +151,7 @@ class AppServiceTool(BaseTool):
         "Requires a successful coding_run_tests in this session with no coding edit since "
         "(ship == tested: it proves a green test run happened, not what the tests covered; "
         "writes by other tools are not tracked). "
-        "The supervisor deploys it; app_list shows the URL and health.",
+        "The supervisor deploys it; app_service_list_apps shows the URL and health.",
         param_model=DeployParams,
     )
     async def deploy(self, params: DeployParams, execution_context=None) -> ActionResult:
@@ -246,7 +251,7 @@ class AppServiceTool(BaseTool):
                 extracted_content=(
                     f"{headline} Approve with: {APPROVE_HINT.format(slug=slug)}. "
                     f"After approval the supervisor deploys the tested tree "
-                    f"{digest[:12]} and app_list shows the URL. Do not report this as shipped."),
+                    f"{digest[:12]} and app_service_list_apps shows the URL. Do not report this as shipped."),
                 include_in_memory=True,
                 metadata={"slug": slug, "status": row["status"]},
             )
@@ -255,7 +260,7 @@ class AppServiceTool(BaseTool):
         return ActionResult(
             extracted_content=(
                 f"Redeploy of {slug!r} queued on its approved address; the supervisor deploys "
-                f"the tested tree {digest[:12]} within one tick. Check app_list for the URL "
+                f"the tested tree {digest[:12]} within one tick. Check app_service_list_apps for the URL "
                 f"and health before calling it shipped."),
             include_in_memory=True,
             metadata={"slug": slug, "status": row["status"]},
@@ -285,12 +290,40 @@ class AppServiceTool(BaseTool):
                                               f"removes its container within one tick.",
                             include_in_memory=True)
 
+    @BaseTool.action("Remove an app for good: its container, snapshots, logs and record are "
+                     "deleted and the approved address is released (a later deploy of the "
+                     "slug is a NEW owner ask). Use stop to pause an app you will run again.",
+                     param_model=RemoveParams)
+    async def remove(self, params: RemoveParams, execution_context=None) -> ActionResult:
+        deny = _deny_reason(execution_context, "app_remove")
+        if deny:
+            return ActionResult(error=deny)
+        user_id = str(getattr(execution_context, "user_id", "") or "")
+        if not user_id:
+            return ActionResult(error="app_remove denied: no tenant on the execution context")
+        outcome = self._get_registry().request_remove(params.slug, user_id)
+        if outcome == "missing":
+            return ActionResult(error=f"app_remove: no app {params.slug!r} for this tenant")
+        if outcome == "changed":
+            return ActionResult(error=f"app_remove: {params.slug!r} changed state underneath; "
+                                      f"list the apps and try again")
+        from core.event_kinds import APP_REMOVED
+        _emit_event(APP_REMOVED, execution_context,
+                    {"slug": params.slug, "by": "agent", "outcome": outcome})
+        if outcome == "deleted":
+            return ActionResult(extracted_content=f"{params.slug!r} removed (it never ran).",
+                                include_in_memory=True)
+        return ActionResult(extracted_content=(
+            f"Removal of {params.slug!r} queued; the supervisor removes its container, files "
+            f"and record within one tick. app_service_list_apps stops showing it then."),
+            include_in_memory=True)
+
     @BaseTool.action("List this tenant's apps with status, URL and last health.",
                      param_model=ListAppsParams)
     async def list_apps(self, params: Any = None, execution_context=None) -> ActionResult:
         user_id = str(getattr(execution_context, "user_id", "") or "")
         if not user_id:
-            return ActionResult(error="app_list denied: no tenant on the execution context")
+            return ActionResult(error="app_service_list_apps denied: no tenant on the execution context")
         rows = self._get_registry().list_for(user_id)
         if not rows:
             return ActionResult(extracted_content="No apps yet.")
@@ -303,10 +336,10 @@ class AppServiceTool(BaseTool):
     async def logs(self, params: LogsParams, execution_context=None) -> ActionResult:
         user_id = str(getattr(execution_context, "user_id", "") or "")
         if not user_id:
-            return ActionResult(error="app_logs denied: no tenant on the execution context")
+            return ActionResult(error="app_service_logs denied: no tenant on the execution context")
         row = self._get_registry().get(params.slug, user_id)
         if row is None:
-            return ActionResult(error=f"app_logs: no app {params.slug!r} for this tenant")
+            return ActionResult(error=f"app_service_logs: no app {params.slug!r} for this tenant")
         path = logs_path(self._data_dir(), user_id, params.slug)
         if not os.path.isfile(path):
             return ActionResult(extracted_content=f"No logs yet for {params.slug!r} "
@@ -330,6 +363,8 @@ def _where(r: Dict[str, Any]) -> str:
 
 
 def _health(r: Dict[str, Any]) -> str:
+    if r.get("remove_requested"):
+        return " — removal queued"
     if r.get("last_failure_error") and r["status"] in ("failed", "stopped"):
         return f" — {str(r['last_failure_error'])[:120]}"
     if r.get("last_health"):

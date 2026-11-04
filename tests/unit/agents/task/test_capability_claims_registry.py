@@ -113,6 +113,75 @@ def _x402_payer_is_base_exact_only() -> bool:
     text = (ROOT / "tools/x402/real_client.py").read_text(encoding="utf-8").lower()
     return "upto" not in text and "solana_x402" not in text
 
+
+def _zero_cost_watch_is_defi_data_only() -> bool:
+    """True while every $0 read_verb / precheck verb is a defi_data read (H4)."""
+    from cron.read_job import _read_verbs
+    return {v.split(".", 1)[0] for v in _read_verbs()} == {"defi_data"}
+
+
+# ---- work-tool skills (skills review 2026-11-03, P4) ------------------------
+
+def _browser_action_names():
+    import ast
+    tree = ast.parse((ROOT / "tools/browser/browser.py").read_text(encoding="utf-8"))
+    return [n.name.lower() for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any("action" in ast.unparse(d) for d in n.decorator_list)]
+
+
+def _no_site_login_store() -> bool:
+    """True while no core browser verb saves or restores a site login and no
+    credential store exists (storage_state lives only in the X pack)."""
+    words = ("login", "credential", "storage_state", "cookie", "password")
+    if any(w in a for a in _browser_action_names() for w in words):
+        return False
+    for base in ("tools", "core"):
+        for pattern in ("**/*credential_store*.py", "**/*site_login*.py",
+                        "**/*password_store*.py"):
+            if any((ROOT / base).glob(pattern)):
+                return False
+    return True
+
+
+def _no_browser_upload_verb() -> bool:
+    return not any("upload" in a for a in _browser_action_names())
+
+
+def _click_downloads_not_saved() -> bool:
+    """True while nothing sets BrowserContextConfig.save_downloads_path."""
+    import re
+    pat = re.compile(r"save_downloads_path\s*=\s*(?!None)")
+    for base in ("tools", "agents", "core", "polyrob", "packs"):
+        for path in (ROOT / base).rglob("*.py"):
+            if pat.search(path.read_text(encoding="utf-8", errors="ignore")):
+                return False
+    return True
+
+
+def _no_core_web_search_tool() -> bool:
+    from core.tool_capabilities import TOOL_CAPABILITIES
+    return not any("search" in tid for tid in TOOL_CAPABILITIES)
+
+
+def _no_stored_secret_reference() -> bool:
+    """True while no entry point fills the registry's <secret> map
+    (sensitive_data) and http_request adds no stored key."""
+    roots = ["api", "cli", "surfaces", "polyrob", "cron", "webview",
+             "agents/task/session", "agents/task/runtime"]
+    files = [p for r in roots for p in (ROOT / r).rglob("*.py")]
+    files += list((ROOT / "agents/task").glob("task_agent_*.py"))
+    if any("sensitive_data" in p.read_text(encoding="utf-8", errors="ignore") for p in files):
+        return False
+    text = (ROOT / "tools/http_request/tool.py").read_text(encoding="utf-8")
+    return "<secret>" not in text and "getenv" not in text and "os.environ" not in text
+
+
+def _office_files_not_decoded_by_read_file() -> bool:
+    from tools.filesystem_pdf import DOCUMENT_KINDS
+    return not ({".xlsx", ".xls", ".doc", ".pptx"} & set(DOCUMENT_KINDS))
+
+
 CLAIMS = (
     CapabilityClaim(
         id="nft-no-rail",
@@ -179,6 +248,66 @@ CLAIMS = (
         phrase="not supported yet: solana payments, the `upto` scheme",
         still_true=_x402_payer_is_base_exact_only,
         why="the x402 payer would need a Solana (solana_x402) or `upto` path",
+    ),
+    CapabilityClaim(
+        id="standing-work-zero-cost-watch-defi-only",
+        file="data/prompts/skills/standing-work/SKILL.md",
+        phrase="a web page, a feed or any other source runs the model on every tick",
+        still_true=_zero_cost_watch_is_defi_data_only,
+        why="a non-defi_data read verb (e.g. a web_fetch watch) would need to join "
+            "cron/read_job.py::_READ_JOB_TOOLS and the read_job policy rows",
+    ),
+    CapabilityClaim(
+        id="p4-browser-no-site-login-store",
+        file="data/prompts/skills/browser-automation/SKILL.md",
+        phrase="there is no site-password store",
+        still_true=_no_site_login_store,
+        why="a core browser verb that saves/restores a site login, or a credential "
+            "store, would need to ship",
+    ),
+    CapabilityClaim(
+        id="p4-browser-no-upload-verb",
+        file="data/prompts/skills/browser-automation/SKILL.md",
+        phrase="there is no file-upload verb",
+        still_true=_no_browser_upload_verb,
+        why="a browser upload action would need to ship in tools/browser/browser.py",
+    ),
+    CapabilityClaim(
+        id="p4-browser-click-download-not-saved",
+        file="data/prompts/skills/browser-automation/SKILL.md",
+        phrase="a download started by a click is not saved to the workspace",
+        still_true=_click_downloads_not_saved,
+        why="something would need to set BrowserContextConfig.save_downloads_path",
+    ),
+    CapabilityClaim(
+        id="p4-core-no-browserless-search",
+        file="data/prompts/skills/web-research/SKILL.md",
+        phrase="browser-less web search",
+        still_true=_no_core_web_search_tool,
+        why="a core web-search tool would need to join core/tool_capabilities.py",
+    ),
+    CapabilityClaim(
+        id="p4-api-no-stored-secret-reference",
+        file="data/prompts/skills/api-integration/SKILL.md",
+        phrase="a tool argument has no stored-secret reference",
+        still_true=_no_stored_secret_reference,
+        why="an entry point would need to fill sensitive_data (the <secret> map) or "
+            "http_request would need a stored-key lookup",
+    ),
+    CapabilityClaim(
+        id="p4-secret-handling-no-stored-secret-reference",
+        file="data/prompts/skills/secret-handling/SKILL.md",
+        phrase="a tool argument has no stored-secret reference",
+        still_true=_no_stored_secret_reference,
+        why="an entry point would need to fill sensitive_data (the <secret> map) or "
+            "http_request would need a stored-key lookup",
+    ),
+    CapabilityClaim(
+        id="p4-read-file-no-office-decode",
+        file="data/prompts/skills/file-data-ops/SKILL.md",
+        phrase="`filesystem_read_file` cannot decode them",
+        still_true=_office_files_not_decoded_by_read_file,
+        why="tools/filesystem_pdf.py::DOCUMENT_KINDS would need an office parser",
     ),
 )
 

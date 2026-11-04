@@ -187,7 +187,8 @@ def _initialize(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tools_list(params: Dict[str, Any]) -> Dict[str, Any]:
-    return {"tools": TOOL_DESCRIPTORS}
+    from api.commerce_endpoints import mcp_tools  # 099 W6: only while an offer is listed
+    return {"tools": TOOL_DESCRIPTORS + mcp_tools()}
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +344,22 @@ async def _call_pending_approvals(
     return _text_result({"pending_approvals": pending})
 
 
+async def _call_offers(name, arguments, user_id, container):
+    # 099 W6: the offers listed on `mcp` — list, order, read YOUR order.
+    from api.commerce_endpoints import mcp_call
+    return await mcp_call(name, arguments, user_id)
+
+
+def _offer_tool(name):
+    async def _fn(arguments, user_id, container):
+        return await _call_offers(name, arguments, user_id, container)
+    return _fn
+
+
 _TOOL_DISPATCH = {
+    "polyrob_list_offers": _offer_tool("polyrob_list_offers"),
+    "polyrob_create_order": _offer_tool("polyrob_create_order"),
+    "polyrob_order_status": _offer_tool("polyrob_order_status"),
     "polyrob_usage_summary": _call_usage_summary,
     "polyrob_goals_list": _call_goals_list,
     "polyrob_goal_show": _call_goal_show,

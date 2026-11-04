@@ -241,14 +241,25 @@ class SkillManager(SkillWriterMixin):
     MAX_PREREQUISITES = 2
 
     def _with_prerequisites(self, result: List["MatchedSkill"], all_rules: dict,
-                            tool_ids, user_id) -> List["MatchedSkill"]:
+                            tool_ids, user_id, *, third_party: bool = False,
+                            absent=()) -> List["MatchedSkill"]:
         """Append the ``requires`` skills of every pinned skill, once each.
 
         A rule may declare ``polyrob-requires: '["<id>", ...]'`` in its frontmatter. The
         2026-09-25 wrong-token buy ran with the memecoin playbook loaded and the
-        identity procedure absent. A prerequisite loads only when its own money-tool
-        gate passes for this session, and at most ``MAX_PREREQUISITES`` are added.
+        identity procedure absent. At most ``MAX_PREREQUISITES`` are added; one the
+        cap drops is logged (WARNING), never dropped silently.
 
+        * A MONEY playbook (its rule declares a money tool) brings its safety
+          prerequisites whatever tools the session holds at construction: its
+          tools may arrive later by ``load_tool``, and the playbook must never run
+          without its identity and pre-trade steps (review 2026-11-03 M3). A
+          prerequisite of a NON-money skill still passes its own money-tool gate
+          (a plain skill does not drag a trading procedure into a session that
+          cannot trade).
+        * The seat gate applies to every prerequisite (``third_party`` / ``absent``,
+          ``core.skills.catalog.gate_allows``): a room never gets an owner-only or
+          money procedure through ``requires``.
         * A prerequisite whose effective rule says ``auto_activate: false`` is NOT
           pulled in: ``requires`` never re-enables a disabled skill. A skill the
           rail PINS explicitly is still loaded — a pin is explicit intent.
@@ -256,13 +267,13 @@ class SkillManager(SkillWriterMixin):
         """
         present = {m.skill_id for m in result}
         extra: List[MatchedSkill] = []
+        dropped: List[str] = []
         for m in list(result):
             rule = all_rules.get(m.skill_id)
             if not isinstance(rule, dict):
                 continue
+            parent_money = catalog._declares_money(rule.get("triggers", {}))
             for req in rule.get("requires") or []:
-                if len(extra) >= self.MAX_PREREQUISITES:
-                    return result + extra
                 if not isinstance(req, str) or req in present:
                     continue
                 req_rule = all_rules.get(req)
@@ -270,7 +281,17 @@ class SkillManager(SkillWriterMixin):
                     continue
                 if req_rule.get("auto_activate", True) is False:
                     continue  # disabled (by the user or the system) stays disabled
-                if not self._money_tool_gate_ok(req_rule.get("triggers", {}), tool_ids):
+                if (third_party or absent) and not catalog.gate_allows(
+                        req_rule, None, listing=True, third_party=third_party,
+                        skill_id=req, absent=absent):
+                    continue
+                if third_party and self._third_party_refused(req, user_id):
+                    continue  # the owner's authored / ecosystem skills (LOW-4)
+                if not parent_money and not self._money_tool_gate_ok(
+                        req_rule.get("triggers", {}), tool_ids):
+                    continue
+                if len(extra) >= self.MAX_PREREQUISITES:
+                    dropped.append(f"{req} (requires:{m.skill_id})")
                     continue
                 content = self._load_skill_content(req, user_id=user_id)
                 if not content:
@@ -279,20 +300,26 @@ class SkillManager(SkillWriterMixin):
                                          reason=f"requires:{m.skill_id}",
                                          trigger_type="prerequisite"))
                 present.add(req)
+        if dropped:
+            logger.warning("skill prerequisites over the cap of %d not loaded: %s — "
+                           "load each one with load_skill before you act",
+                           self.MAX_PREREQUISITES, ", ".join(dropped))
         return result + extra
 
     def prerequisites_of(self, skill_id: str, *, user_id: Optional[str],
-                         tool_ids=None) -> List["MatchedSkill"]:
+                         tool_ids=None, third_party: bool = False,
+                         absent=()) -> List["MatchedSkill"]:
         """The ``polyrob-requires`` skills of ONE skill, by the pin rule
-        (:meth:`_with_prerequisites`): 095 W10 (IN-8) — ``load_skill`` honours
-        them the way a pin does. ``[]`` for an unknown id."""
+        (:meth:`_with_prerequisites`, the seat gate included): 095 W10 (IN-8) —
+        ``load_skill`` honours them the way a pin does. ``[]`` for an unknown id."""
         all_rules = self._effective_rules(user_id)
         rule = all_rules.get(skill_id)
         if not isinstance(rule, dict):
             return []
         head = self._entry(skill_id, rule, "", user_id, reason="load_skill",
                            trigger_type="on_demand")
-        return self._with_prerequisites([head], all_rules, list(tool_ids or []), user_id)[1:]
+        return self._with_prerequisites([head], all_rules, list(tool_ids or []), user_id,
+                                        third_party=third_party, absent=absent)[1:]
 
     def _effective_rules(self, user_id: Optional[str]) -> dict:
         """The system rules with the tenant's rules merged over them."""
@@ -320,6 +347,8 @@ class SkillManager(SkillWriterMixin):
         seeded_skill_ids: Optional[List[str]] = None,
         tool_ids: Optional[List[str]] = None,
         user_id: Optional[str] = None,
+        third_party: bool = False,
+        absent=(),
     ) -> List[MatchedSkill]:
         """The skills a session loads at START: its PINS, then their prerequisites.
 
@@ -332,13 +361,18 @@ class SkillManager(SkillWriterMixin):
 
         An unknown id or an id with no SKILL.md is skipped (the caller names a
         missing rail pin). A pin is explicit intent, so it loads even when its
-        rule is gated.
+        rule is gated — except on a third-party seat, where every pin passes the
+        seat gate (:meth:`may_load_skill`): a money playbook never loads on a room
+        without the prerequisites that seat refuses (review 2026-11-03 LOW-3).
         """
         if not seeded_skill_ids:
             return []
         all_rules = self._effective_rules(user_id)
         result: List[MatchedSkill] = []
         for sid in dict.fromkeys(seeded_skill_ids):
+            if third_party and not self.may_load_skill(
+                    sid, tool_ids or [], user_id, third_party=True, absent=absent):
+                continue
             rule = all_rules.get(sid)
             content = self._load_skill_content(sid, user_id=user_id)
             if not content:
@@ -351,7 +385,8 @@ class SkillManager(SkillWriterMixin):
                 rule = self._rule_from_content(content)
             result.append(self._entry(sid, rule, content, user_id, reason="seeded:preset",
                                       trigger_type="seeded", priority=rule.get("priority", 99)))
-        result = self._with_prerequisites(result, all_rules, tool_ids or [], user_id)
+        result = self._with_prerequisites(result, all_rules, tool_ids or [], user_id,
+                                          third_party=third_party, absent=absent)
         if result:
             logger.info(f"Pinned {len(result)} skills for session: {[m.skill_id for m in result]}")
         return result
@@ -377,6 +412,25 @@ class SkillManager(SkillWriterMixin):
         if not isinstance(user_rules, dict):
             return set()
         return {sid for sid in user_rules if sid not in self.skill_rules}
+
+    #: Where a skill is served from when it is the owner's or the operator's own:
+    #: a tenant-authored skill, a trusted project skill, an ecosystem skill
+    #: (``~/.claude/skills``, ``~/.agents/skills``). ``core.skills.scopes.Resolved.scope``.
+    _OWNER_SCOPES = frozenset({"user", "project", "user-external"})
+
+    def _third_party_refused(self, skill_id: str, user_id: Optional[str]) -> bool:
+        """A room or a correspondent's seat never lists or loads the owner's own
+        skills (review 2026-11-03 H1, M5): the tenant's authored skills (they hold
+        programme terms by design) and every non-pack ecosystem skill. Those seats
+        run under the owner's user_id, so the tenant check is not enough.
+        Fail-closed: a lookup error refuses."""
+        if skill_id in self._authored_ids(user_id):
+            return True
+        try:
+            res = self._resolve(skill_id, user_id)
+        except Exception:
+            return True
+        return res is not None and res.scope in self._OWNER_SCOPES
 
     def catalog_cap(self, user_id: Optional[str] = None) -> int:
         """095 W12 (IN-3): the session index cap, DERIVED — every library skill
@@ -432,6 +486,9 @@ class SkillManager(SkillWriterMixin):
                                        skill_id=skill_id, absent=absent):
                 withheld.add(skill_id)
                 continue
+            if third_party and skill_id in authored:
+                withheld.add(skill_id)  # H1: the owner's own skill, never a room's
+                continue
             content = self._load_skill_content(skill_id, user_id=user_id)
             if not content:
                 continue
@@ -450,6 +507,9 @@ class SkillManager(SkillWriterMixin):
         existing_ids = {m.skill_id for m in entries}
         for ext_id, ds in self._load_external_skills().items():
             if ext_id in existing_ids or ext_id in withheld:
+                continue
+            # M5: a room or a correspondent gets shipped pack skills only.
+            if third_party and not ds.scope.startswith("pack:"):
                 continue
             # The catalog lists only what load_skill serves: an id that a
             # tenant skill shares with a project/user-external one is refused.
@@ -605,9 +665,31 @@ class SkillManager(SkillWriterMixin):
     ) -> bool:
         """Gate for on-demand loading (P1-1, 067 P0.1): the same predicate the
         session catalog applies (``core.skills.catalog.gate_allows``), so listing
-        and loading agree. An unknown id is loadable; other guards apply."""
-        return catalog.gate_allows(self.get_skill_rule(skill_id, user_id=user_id), tool_ids,
-                                   third_party=third_party, skill_id=skill_id, absent=absent)
+        and loading agree. An unknown id is loadable; other guards apply.
+
+        Like the index: a third-party seat may not load the owner's own skills
+        (:meth:`_third_party_refused`), and no seat loads a non-pack ecosystem
+        skill that trips the injection scan the index applies (M5)."""
+        if not catalog.gate_allows(self.get_skill_rule(skill_id, user_id=user_id), tool_ids,
+                                   third_party=third_party, skill_id=skill_id, absent=absent):
+            return False
+        if third_party and self._third_party_refused(skill_id, user_id):
+            return False
+        return not self._external_refused(skill_id, user_id)
+
+    def _external_refused(self, skill_id: str, user_id: Optional[str]) -> bool:
+        """True for a project / user-ecosystem skill the index scan removed
+        (:meth:`_external_content_suspicious`). Pack, builtin and tenant skills
+        are not scanned here (shipped, or scanned at write)."""
+        try:
+            res = self._resolve(skill_id, user_id)
+        except Exception:
+            return False
+        ds = getattr(res, "external", None)
+        if ds is None or str(ds.scope).startswith("pack:"):
+            return False
+        return self._external_content_suspicious(
+            skill_id, ds.meta.get("description", ""), ds.body, user_id=user_id)
 
     def declared_tool_ids(self, user_id: Optional[str] = None) -> Set[str]:
         """095 W4: every tool id a skill rule declares (``triggers.tool_ids``) —
@@ -650,7 +732,9 @@ class SkillManager(SkillWriterMixin):
                 except Exception:
                     logger.warning("refusing user skill %s: could not read revision metadata", skill_id)
                     return ""
-            if cache_key in self.skill_cache and expected is None:
+            revision = self._file_revision(res.path / "SKILL.md") if expected is None else None
+            if (cache_key in self.skill_cache and expected is None
+                    and self._body_revisions().get(cache_key, revision) == revision):
                 return self.skill_cache[cache_key]
             try:
                 skill_file = res.path / "SKILL.md"
@@ -663,11 +747,32 @@ class SkillManager(SkillWriterMixin):
                 logger.warning("refusing mismatched user skill body for '%s'", skill_id)
                 return ""
             meta, body = parse_frontmatter(raw)
+            if expected is None:
+                if (res.scope == "builtin" and cache_key in self._body_revisions()
+                        and self._body_revisions()[cache_key] != revision):
+                    # M7: the file changed under us (an owner-accepted fix written by
+                    # another process): its rule (priority, triggers) is rebuilt too.
+                    self._rules_loaded = False
+                self._body_revisions()[cache_key] = revision
         self.skill_meta_cache[cache_key] = meta
         body = self._note_allowed_tools(cache_key, skill_id, meta, body)
         self.skill_cache[cache_key] = body
         logger.debug(f"Loaded {res.scope} skill content for '{skill_id}' ({len(body)} chars)")
         return body
+
+    def _body_revisions(self) -> Dict[str, Any]:
+        """``{cache_key: (mtime_ns, size)}`` of each cached on-disk body (M7)."""
+        return self.__dict__.setdefault("_skill_revisions", {})
+
+    @staticmethod
+    def _file_revision(path: Path):
+        """The revision a cached body is checked against: ``(mtime_ns, size)``, or
+        ``None`` when the file cannot be stat'ed. One ``stat`` per cache hit."""
+        try:
+            st = path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
 
     def _note_allowed_tools(self, cache_key: str, skill_id: str, meta: Dict[str, Any],
                             body: str) -> str:
@@ -714,10 +819,12 @@ class SkillManager(SkillWriterMixin):
 
         sections = []
         sections.append("<skills>")
-        sections.append("These are recommended workflows for this task. Prefer them when "
-                         "they apply, and use the tools they specify.")
-        sections.append("Use judgment: if a step is impossible or a specified tool is "
-                         "unavailable, adapt and use the best available alternative.")
+        sections.append("Follow these pinned skills for this task, and use the tools they "
+                         "specify.")
+        sections.append("A skill's stop, refusal and safety rules are binding. Only the "
+                         "procedure may adapt: if a step needs a tool you do not have, say so "
+                         "and use the fallback the skill names. Never skip a safety step "
+                         "or a stop rule.")
         sections.append("")
 
         for skill in matched_skills:
@@ -854,6 +961,7 @@ class SkillManager(SkillWriterMixin):
         self.skill_cache.clear()
         self.skill_meta_cache.clear()
         self.skill_allowed_tools.clear()
+        self._body_revisions().clear()
         self._external_index = None  # Task 14: force external re-scan too
         self._ensure_rules_loaded()
         logger.info("Skill rules reloaded")

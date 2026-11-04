@@ -114,11 +114,13 @@ effect = "none"
 effect = "social"
 approval = ["recommended", "always_queued"]
 outbound = "write"
-# Registering an X account is an identity-creating act: owner-queued even
+# Registering an X account is an identity-creating act: gated wherever
+# x_post is (`recommended` = the posture>=2 gated set; `always_queued` only
+# routes an ALREADY-gated verb to the owner queue) and owner-queued even
 # under autonomous mode.
 [tools.x_browser.verbs.x_browser_x_signup_start]
 effect = "social"
-approval = ["always_queued"]
+approval = ["recommended", "always_queued"]
 [tools.x_browser.verbs.x_browser_x_reply]
 approval = ["recommended", "always_queued"]
 outbound = "write"

@@ -1,9 +1,9 @@
 """P0 Task 3 — DockerBackend argv hardening (no Docker required) + guarded integration."""
 import os
-import shutil
 
 import pytest
 
+from tests.docker_rig import needs_docker
 from tools.code_exec.backends.docker import DockerBackend
 from tools.code_exec.result import ExecutionRequest
 
@@ -151,7 +151,7 @@ def test_docker_user_env_override_wins_even_when_host_is_root(monkeypatch):
     assert DockerBackend().user == "7:7"
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
+@needs_docker
 @pytest.mark.asyncio
 async def test_docker_runs_and_blocks_network(monkeypatch):
     monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)

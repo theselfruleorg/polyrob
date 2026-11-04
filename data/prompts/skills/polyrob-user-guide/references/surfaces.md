@@ -74,8 +74,9 @@ setting on as well; the email one is a posture member (`POLYROB_OVERRIDES` or
 `polyrob config set`). The legacy X DM surface accepts OAuth1 user-context keys or
 `TWITTER_OAUTH2_ACCESS_TOKEN` plus `X_SURFACE_ENABLED`. Agent-driven reads can
 also use encrypted X Chat through `twitter_get_dms`; plaintext requires the
-account's Chat passphrase or exported key blob. `x_browser` is the captured-session
-fallback when the visible inbox is authoritative — see `references/configuration.md`).
+account's Chat passphrase or exported key blob. The browser path (`x_browser`)
+runs only when the owner chose it for the account; DMs are read with
+`twitter_get_dms` (encrypted X Chat) — see `references/configuration.md`).
 
 **Access tiers** (when the correspondent model is on — `AUTONOMY_MODE=autonomous`
 turns it on; see `references/configuration.md`):
@@ -87,22 +88,25 @@ turns it on; see `references/configuration.md`):
   an instruction, and capability-gated (money/comms/code-exec/delegation/
   browser tools are blocked while a session is correspondent-tainted).
 - **GROUP_MEMBER** (group chats on) — in an allow-listed group chat, a
-  non-owner member's @mention routes the same way as a correspondent message —
-  DATA into the bound group session, never a command. Each room also carries a
-  per-chat ROLE: `admin` (promoted by the owner — his line STEERS the room
-  session), `member` (the default; his line is data) and `blocked` (the only
-  per-member deny, resolved to DENIED).
-- **DENIED** — unknown/unverified sender, or a non-allow-listed group. Group
-  denials are silent (no auth-spam in shared channels).
+  member's line starts or steers nothing of the owner's: it is a turn of the
+  room's own PUBLIC session, which only reads and replies into the room (a
+  read-only toolset, never the correspondent DATA path). Each room also
+  carries a per-chat ROLE: `admin` (promoted by the owner — their line STEERS
+  the room session), `member` (the default; their line is data) and `blocked`
+  (the only per-member deny, resolved to DENIED).
+- **DENIED** — anyone else: an unknown or unverified sender, or a
+  non-allow-listed group. Group denials are silent (no auth-spam in shared
+  channels).
 
 Admin: `polyrob owner show|correspondents|approve|invite`, and
 `polyrob owner groups allow|deny|list` for the group allowlist.
 `CORRESPONDENT_REQUIRE_APPROVAL` (default ON) means a newly auto-seeded
 correspondent is PENDING until the owner approves it.
 
-Email v1 is correspondent-only — there is no owner-by-email tier (a `From:`
-header is trivially forged), so even the real owner emailing in is treated as
-a correspondent unless they've paired another way.
+Email has no owner tier (a `From:` header is trivially forged). An email
+sender is a correspondent only when you mailed that address first (an ACTIVE
+correspondent row) AND the receiving server proved the sender (DMARC, or
+aligned DKIM/SPF); every other email, the owner's included, is denied.
 
 ## REST API + A2A (`polyrob serve`)
 

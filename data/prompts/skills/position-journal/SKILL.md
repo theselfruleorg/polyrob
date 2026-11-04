@@ -6,13 +6,13 @@ metadata:
   polyrob-when: 'Recording fills and reading P&L of positions'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
-  polyrob-version: '5'
+  polyrob-version: '6'
 ---
 # Position Journal — the book is the journal
 
 The money rail keeps ONE position book (`open_positions`). You do not write
-it: every confirmed swap whose receipt could be measured records its position
-there. The chain is the truth; the book must match it. Every figure the owner
+it: every CONFIRMED swap records its position there, sized from the guard's
+simulation. The chain is the truth; the book must match it. Every figure the owner
 or the public sees is rendered from this book. Do not keep a second record — no
 markdown ledger, no trade table in the knowledge base, no running total in a
 note. A second record is what disagreed with the chain before.
@@ -20,7 +20,8 @@ note. A second record is what disagreed with the chain before.
 ## What the book holds
 
 - **Positions.** A confirmed `swap` (EVM) or `solana_swap` records the size
-  from the receipt or the vetted simulation and the cost basis in USD. Each
+  from the vetted simulation (`SIMULATED balance change, final fill not
+  measured`) and the cost basis in USD. Each
   sell books its realized P&L. The cost method is AVERAGE COST: a partial sell
   reduces the basis in proportion to the size sold. The native coin or the
   wrapped native bought WITH A STABLE is a position too; the same coin received
@@ -46,10 +47,10 @@ note. A second record is what disagreed with the chain before.
 
 ## The procedure
 
-1. **Verify every fill from its measured receipt** (see `post-trade-verify`):
-   chain, address, side, measured quantity, gas, tx hash. The quantity is the
-   measured chain delta — never the quoted output and never the "fill" a tool
-   result reports.
+1. **Verify every fill** (see `post-trade-verify`): chain, address, side,
+   measured quantity, gas, tx hash. The quantity is the measured chain delta
+   (`portfolio` before and after) — never the quoted output, never the book's
+   simulated size, and never the "fill" a tool result reports.
 2. **Read P&L from the verbs.** `defi_data.positions` per chain; `/trade
    status` for a mandate (allocation used, PROTECTED/UNPROTECTED, realized
    gross, the mandate's LLM cost). Repeat their figures as written. Do not keep
@@ -60,9 +61,10 @@ note. A second record is what disagreed with the chain before.
    positions: NONE" while the chain holds positions; never publish a book
    claim you did not reconcile.
 4. **Holdings the book does not explain** are either a position bought outside
-   the money rail or something someone sent you (dust; never interact). Say
-   which in your report. `reconcile` names an unpriced token the book does not
-   hold as `unsolicited`: it is not an issue, and you never interact with it.
+   the money rail or something someone sent you — the rule for those is
+   "Tokens you did not buy" in `trade-execution`. Say which in your report.
+   `reconcile` names an unpriced token the book does not hold as
+   `unsolicited`: it is not an issue.
 5. **A book row the chain does not back:** if the measured balance is zero or
    dust, retire it with `defi_data.retire_row` (it refuses unless the chain
    proves it). A loss to close is the owner's `/writeoff`.
@@ -73,11 +75,8 @@ note. A second record is what disagreed with the chain before.
 
 ## If a tool is missing
 
-These steps need `defi_data` (reads) and `defi_trade` (trades) in THIS session.
-If `defi_trade` is not loaded, do the read steps, write the plan, and tell the
-owner which grant is missing. If `defi_data` is not loaded either, you cannot
-measure anything — say so and stop. Never work around a missing verb with a raw
-`call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

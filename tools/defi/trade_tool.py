@@ -1307,7 +1307,9 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             exit_shaped = bool(exit_shaped_fn())
         except Exception:
             exit_shaped = False
-        if (tx_guard.monitor_exits_enabled()
+        _meta = getattr(execution_context, "metadata", None)
+        order_run = isinstance(_meta, dict) and str(_meta.get("mandate") or "").startswith("ord_")
+        if (tx_guard.monitor_exits_enabled() and not order_run
                 and not getattr(execution_context, "is_sub_agent", False)
                 and getattr(execution_context, "role", "leaf") == "orchestrator"
                 and exit_shaped):

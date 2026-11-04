@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS app_services (
     approved_fingerprint TEXT,
     approved_config      TEXT,
     approval_mac         TEXT,
+    remove_requested     REAL,
     created_at           REAL NOT NULL,
     updated_at           REAL NOT NULL,
     PRIMARY KEY (slug, user_id)
@@ -175,7 +176,8 @@ class AppServiceRegistry:
         from core.sqlite_util import init_schema
         init_schema(self.db_path, _SCHEMA, columns={"app_services": tuple(
             (col, "TEXT") for col in
-            ("approved_fingerprint", "approved_config", "approval_mac"))})
+            ("approved_fingerprint", "approved_config", "approval_mac"))
+            + (("remove_requested", "REAL"),)})
 
     # --- row shape ---------------------------------------------------------
 
@@ -318,6 +320,9 @@ class AppServiceRegistry:
             return self.get(slug, user_id)
         if existing["status"] == STATUS_DEPLOYING:
             raise ValueError(f"{slug!r} is deploying right now; request again after it finishes")
+        if existing.get("remove_requested"):
+            raise ValueError(f"{slug!r} is being removed; request it again after the supervisor "
+                             f"finishes the removal (one tick)")
         requested = approval_config(cmd=cmd, container_port=container_port,
                                     health_path=health_path, egress=egress,
                                     egress_allow=allow, env=clean_env, source_dir=source_dir)
@@ -497,6 +502,74 @@ class AppServiceRegistry:
             "UPDATE app_services SET status=?, host_port=NULL, container_name=NULL, "
             "public_url=NULL, updated_at=? WHERE slug=? AND user_id=? AND status=?",
             (STATUS_STOPPED, time.time(), slug, user_id, STATUS_STOPPED))
+
+    def request_remove(self, slug: str, user_id: str) -> str:
+        """Retire an app for good: ``"deleted"`` when the row never ran (never
+        approved, so no container, snapshot or log exists) and is gone now;
+        ``"queued"`` when the row is stopped and flagged for the supervisor,
+        which tears the container down, deletes ``<data>/apps/<tenant>/<slug>``
+        and then the row (:meth:`delete_removed`); ``"missing"`` when there is
+        no such row. A removed address is released (``stopped`` holds none)."""
+        row = self.get(slug, user_id)
+        if row is None:
+            return "missing"
+        if not row.get("approved_at") and row["status"] in (STATUS_PENDING, STATUS_STOPPED,
+                                                             STATUS_FAILED):
+            rc = execute_retry(
+                self.db_path,
+                "DELETE FROM app_services WHERE slug=? AND user_id=? AND status=? "
+                "AND approved_at IS NULL",
+                (slug, user_id, row["status"]))
+            if rc == 1:
+                execute_retry(self.db_path,
+                              "DELETE FROM app_deploy_attempts WHERE slug=? AND user_id=?",
+                              (slug, user_id))
+                return "deleted"
+            row = self.get(slug, user_id)
+            if row is None:
+                return "missing"
+        # One guarded write (098 S2): the edge is from the status just read;
+        # every status may move to ``stopped`` (stopped -> stopped only flags).
+        for _ in range(3):
+            rc = execute_retry(
+                self.db_path,
+                "UPDATE app_services SET status=?, remove_requested=COALESCE(remove_requested, ?), "
+                "last_failure_error=?, updated_at=? WHERE slug=? AND user_id=? AND status=?",
+                (STATUS_STOPPED, time.time(), "removal queued", time.time(), slug, user_id,
+                 row["status"]))
+            if rc == 1:
+                return "queued"
+            row = self.get(slug, user_id)
+            if row is None:
+                return "missing"
+        return "changed"
+
+    def delete_removed(self, slug: str, user_id: str) -> bool:
+        """The supervisor's last step of a removal: delete the row (and its
+        attempt history) only while it is still ``stopped`` and flagged."""
+        rc = execute_retry(
+            self.db_path,
+            "DELETE FROM app_services WHERE slug=? AND user_id=? AND status=? "
+            "AND remove_requested IS NOT NULL",
+            (slug, user_id, STATUS_STOPPED))
+        if rc == 1:
+            execute_retry(self.db_path,
+                          "DELETE FROM app_deploy_attempts WHERE slug=? AND user_id=?",
+                          (slug, user_id))
+        return rc == 1
+
+    def restart_stopped(self, slug: str, user_id: str) -> bool:
+        """Owner ``start``: ``stopped -> approved`` for an address the owner
+        approved before (the supervisor still verifies the approval MAC against
+        the CURRENT configuration, so a moved config goes back to ``pending``).
+        False for a never-approved row or one queued for removal."""
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE app_services SET status=?, consecutive_failures=0, last_failure_error=NULL, "
+            "updated_at=? WHERE slug=? AND user_id=? AND status IN (?,?) "
+            "AND approved_at IS NOT NULL AND remove_requested IS NULL",
+            (STATUS_APPROVED, time.time(), slug, user_id, STATUS_STOPPED, STATUS_FAILED))
+        return rc == 1
 
     def record_attempt(self, slug: str, user_id: str) -> None:
         execute_retry(

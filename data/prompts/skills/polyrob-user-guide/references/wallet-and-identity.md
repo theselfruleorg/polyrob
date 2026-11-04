@@ -47,7 +47,7 @@ auto-created — the owner opts into each explicitly on their own terminal.
   bounded by the wallet caps, the per-call `max_amount_usd`, and the owner
   pause (`/pause`; it binds a payment you start on your own, not the owner's
   own `/pay … go`). An autonomous payment above `X402_AUTONOMOUS_MAX_USD`
-  (default $1) goes to the owner queue and is paid only once he approves it.
+  (default $1) goes to the owner queue and is paid only once the owner approves it.
   Below that, it is NOT routed through the approval queue unless the operator
   adds it to `APPROVAL_REQUIRED_TOOLS`. Don't tell an owner "every payment goes
   through your approval queue" — it does not.
@@ -56,16 +56,17 @@ auto-created — the owner opts into each explicitly on their own terminal.
   SPL token. Both are `dry_run` by default and go through the money guard:
   the per-tx cap, the daily cap and the simulation bind every send, and a
   send you start above the autonomous ceiling waits for the owner's approval.
-  The owner has his own verbs for it: `/send <amount> <native|token-address>
+  The owner has their own verbs for it: `/send <amount> <native|token-address>
   to <address> on <chain>` and `/swap <amount> <native|token-address> to
   <token-address> on <chain>` (a ticker is refused — name the contract). The quote is an **action card** — Confirm sends exactly that quote
   (at most the quote + 5%), once. `/send` or `/swap` ALONE builds the order
   with buttons (chain → token → recipient or token to buy → amount).
-- **Putting a move to the owner.** When he wants funds moved, or you want him
-  to decide one, call `propose_action(command="/send 0.5 native to 0x… on
-  base", why="…")`: he gets a card whose only button fetches the real quote,
-  and he confirms that. Never write out a command line for him to copy, and
-  never say it is done or queued — nothing moves from your card. To ask him
+- **Putting a move to the owner.** When the owner wants funds moved, or you
+  want the owner to decide one, call `propose_action(command="/send 0.5 native
+  to 0x… on base", why="…")`: the owner gets a card whose only button fetches
+  the real quote, and confirms that. Never write out a command line for the
+  owner to copy, and never say it is done or queued — nothing moves from your
+  card. To ask the owner
   to choose between a few options and wait for the answer in this turn, call
   `present_choice(question=…, options=[…])` (not in an autonomous run — use
   `owner_ask` there).
@@ -73,22 +74,22 @@ auto-created — the owner opts into each explicitly on their own terminal.
 ## Which tokens you trust — and the owner's verbs for it
 
 A buy is checked against WHICH contract it names. Trusted = canonical (USDC,
-wrapped native), our own launch, a `target_token` the owner wrote from a seat or typed in his message, or
+wrapped native), our own launch, a `target_token` the owner wrote from a seat or typed in their message, or
 the owner's approval (`owner_approved`; an older CLI pin reads `owner_pin`).
 You can grant none of these yourself — writing an address into a prompt,
 memory or a message changes nothing for the check.
 
 When the check refuses because nothing is trusted, it has ALREADY asked the
 owner in `/pending` (one question per chain + symbol, with a tap per
-contract). Do not message him about it, do not `owner_ask`, do not retry with
-another address. His answer lands in the store the check reads; the next run
+contract). Do not message the owner about it, do not `owner_ask`, do not retry
+with another address. The owner's answer lands in the store the check reads; the next run
 passes by itself.
 
 These owner verbs are REAL — never tell the owner one is made up:
 `/wallet tokens`, `/wallet trust|untrust <chain> <address> [go]`,
 `/writeoff <chain> <address> [go]` (loss = recorded cost basis, nothing is
 sold), `/unquarantine <chain> <address> [go]`. Point the owner at these chat
-verbs; he never needs a shell for this.
+verbs; the owner never needs a shell for this.
 
 ## Export & backup — the honest section
 

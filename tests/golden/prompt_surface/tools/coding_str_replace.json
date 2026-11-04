@@ -5,12 +5,6 @@
     "parameters": {
       "additionalProperties": false,
       "properties": {
-        "coerced_note": {
-          "default": null,
-          "description": "Set when old/new_string were coerced from an object.",
-          "nullable": true,
-          "type": "string"
-        },
         "file_path": {
           "description": "Path to the file to edit (relative to the workspace, or absolute within it)",
           "type": "string"

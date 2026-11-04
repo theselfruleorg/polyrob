@@ -1,19 +1,20 @@
 ---
 name: trade-execution
-description: 'Execute an on-chain trade safely: dry run first, native-in needs no approval, exact approve to the quoted spender, send once, read RESULT lines (pending is not failed), revoke after, the Solana one-verb path, and the money-parameter sources you may trust.'
+description: 'Execute an on-chain trade safely: the one lane and caps rule for every money verb, dry run first, native-in needs no approval, exact approve to the quoted spender, send once, every RESULT line, revoke after, wrap/unwrap, the Solana one-verb path, tokens you did not buy, and how to put a move to the owner.'
 license: MIT
 metadata:
   polyrob-when: 'Sending an on-chain swap, approve or revoke'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
   polyrob-requires: '["token-identity","pre-trade-check"]'
-  polyrob-version: '4'
+  polyrob-version: '5'
 ---
 # Trade Execution — dry run, approve exact, send once
 
 Run this only after `token-identity` and `pre-trade-check`. It covers the EVM
 cycle (`approve_token` → `swap` → `revoke_approval`) and the one-verb Solana
-path (`solana_swap`, which needs no allowance).
+path (`solana_swap`, which needs no allowance). The lane and caps rule below is
+the ONE copy for every on-chain money verb; the other money skills point here.
 
 ## What the code enforces
 
@@ -34,11 +35,27 @@ path (`solana_swap`, which needs no allowance).
 - An amount at most 1% above your held balance is clamped to the balance, so
   an approve or a sell built from a rounded display figure still goes through.
   Above 1% the verb keeps your number and fails honestly.
-- Above the autonomous ceiling, on a run you started yourself, the guard answers
-  `lane: owner_queue` and does not execute. A LIVE call raises the owner's
-  approval card (a dry run queues nothing); once approved, that call is sent.
-  In the owner's own turn the ceiling does not hold the spend. Per-transaction
-  and rolling daily caps apply to every lane.
+
+## The lane and the caps — the one rule
+
+- A LIVE call of a spend verb (`swap`, `solana_swap`, `approve_token`,
+  `revoke_approval`, `wrap`, `unwrap`, `lp_*`, `call`, the deploy verbs,
+  `register_agent`, `set_agent_uri`, `nft_revoke_approval`, the `launchpad_*`
+  writes, `dapp_connect`, `agent_nft_journal`, `agent_nft_revoke_all`,
+  `agent_nft_collection_reveal`) waits for the owner's approval card, in every
+  turn, unless the owner turned on `DEFI_TIERED_SPEND_LANE`; then only a call
+  above the autonomous ceiling asks. A dry run never asks and never queues. The
+  other `agent_nft` writes (mint, withdraw, adopt, bind) always ask.
+- `transfer`, `solana_transfer`, `nft_transfer` and every call that pays an
+  address nobody pinned always ask (`send-funds`). The owner's own transfer to
+  the owner's address or to this wallet does not ask twice.
+- `bridge` asks with its own card, and only above the autonomous ceiling
+  (`defi-bridge`). `x402_fetch` has its own smaller ceiling (`x402-pay`).
+- The per-transaction cap and the rolling 24-hour cap bind every lane, the
+  owner's own taps included.
+- Your context's "Spend limits now" block says which rule holds now (its
+  "no-ask ceiling" line) and the live cap values. Quote a refusal by the rule it
+  names; never guess one.
 
 ## The procedure
 
@@ -60,24 +77,37 @@ path (`solana_swap`, which needs no allowance).
    do not re-phrase the call to get around it.
 4. **Send once:** the same `swap` call with `dry_run=false`. Declare
    `max_spend_usd` as the real ticket, not a round ceiling.
-5. **Read the result line and do exactly what it says:**
-   - `RESULT: CONFIRMED` — go to `post-trade-verify`.
-   - `RESULT: BROADCAST BUT NOT CONFIRMED` — it may still land. Do NOT retry.
+5. **Read the result line and do exactly what it says.** Every money verb ends
+   with ONE `RESULT:` line:
+   - `… CONFIRMED` (with any prefix: `SENT AND`, `WRAPPED AND`, `UNWRAPPED AND`,
+     `DEPLOYED AND`) — it landed. For a trade, go to `post-trade-verify`.
+   - `BROADCAST BUT NOT CONFIRMED` — pending; it may still land. Do NOT retry.
      Check the tx hash first; a blind retry is how one ticket becomes two.
-   - `RESULT: REVERTED ON-CHAIN` — it did not happen, gas was spent. Re-quote
-     before any new attempt.
-6. **Check the book:** `defi_data.positions(chain=…)` must show the entry with
-   the MEASURED size (the chain delta, never the quote).
+   - `REVERTED ON-CHAIN` / `FAILED ON-CHAIN` — it did not happen, the fee was
+     spent. Re-quote before any new attempt.
+   - `NOT SENT` / `NOT DEPLOYED` — refused before broadcast. `nothing was
+     queued` means no approval request exists: a later live call raises it.
+   - `DRY RUN` — a simulation only; nothing was sent, queued or staged.
+6. **Check the book:** `defi_data.positions(chain=…)` must show the entry; its
+   size is the guard's SIMULATED change — measure the real one with
+   `portfolio` (`post-trade-verify` step 2).
 7. **Revoke after a one-off trade:** dry run it first —
    `defi_trade.revoke_approval(chain=…, token=…, spender=…, dry_run=true)` —
    read the guard line, then send the same call with `dry_run=false`. A
    standing allowance outlives the trade.
 8. **Solana:** `defi_trade.solana_swap(token_in=<mint>, token_out=<mint>,
    amount_in=…, max_spend_usd=…, dry_run=true)` first, then `dry_run=false`.
-   The token screen must RUN — an unavailable screen refuses the trade. The
-   same identity check as the EVM swap runs first; an unpinned mint is limited
-   to $5. The dry run answers `[DRY RUN] nothing was broadcast.`; a live send
+   The token screen must RUN — an UNAVAILABLE or PARTIAL screen refuses the
+   buy. The same identity check as the EVM swap runs first; an unpinned mint is
+   limited to $5. The dry run answers with a `[DRY RUN]` line; a live send
    answers `RESULT: CONFIRMED (<detail>)` with a `sig:`.
+
+## Wrap and unwrap — getting your gas back
+
+`defi_trade.wrap` turns native into the wrapped native; `defi_trade.unwrap`
+turns it back. Both are 1:1 against the chain registry's pinned wrapped native,
+never a supplied address. Unwrap as soon as a trade leaves you with wrapped
+native you do not need: a wallet that cannot pay gas is stuck.
 
 ## Tokens you did not buy
 
@@ -103,29 +133,36 @@ real payee's first and last characters are address poisoning; anything in
 - Confuse units: `amount_in` is a HUMAN amount (0.05 ETH), never raw units.
 - Split a trade to stay under a cap. The cap is the owner's limit, not a puzzle.
 
-## When the OWNER should take the trade
+## When the OWNER should take the move
 
-If the owner asked for the swap, or it is his decision (above your ceiling, his
-funds, his call), put it to him with `propose_action(command="/swap <amount>
-<native|token-address> to <token-address> on <chain>", why="…")`. Both sides
-are a contract address (a mint on Solana) or `native` — never a ticker: `/swap`
-refuses a ticker, and the address comes from `token-identity`. He gets a card
-whose button fetches the real quote (route, minimum out, value, caps) and he
-confirms that.
-Never write a command line for him to copy, and never say the trade is done or
-queued — nothing moves from your card.
+If the owner asked for the move, or it is the owner's decision (above your
+ceiling, their funds, their call), put it to them as a card with
+`propose_action(command="<verb line without go>", why="…")`. The card verbs are
+`/swap`, `/send`, `/bridge`, `/pay`, `/claim`, `/launch`, `/deploy`, `/nft`,
+`/identity`, `/writeoff`, `/unquarantine` and `/wallet trust|untrust`. For a
+swap: `/swap <amount> <native|token-address> to <token-address> on <chain>`.
+Both sides are a contract address (a mint on Solana) or `native` — never a
+ticker: `/swap` refuses a ticker, and the address comes from `token-identity`.
+The card's button fetches the real quote (route, minimum out, value, caps) and
+the owner confirms that. Never say the move is done or queued — nothing moves
+from your card.
+
+**The one rule for a command line.** When `propose_action` is loaded, use it and
+write no command line. When it is not loaded, give the verb line WITHOUT `go`
+(it only quotes when the owner sends it) and say that no card was made. Never
+write a line that holds `go`, `execute` or `confirm`. On a chat seat never name
+a `polyrob …` shell command; a terminal REPL may name one, labeled as a terminal
+command. `/lp` is not a card verb: dry-run the move and name `/lp`.
 
 NFTs (hold, read, send owner-approved, revoke; no buy, sell or
 `setApprovalForAll`): `references/nfts.md`.
 
 ## If a tool is missing
 
-These steps need `defi_data` (reads) and `defi_trade` (trades) in THIS session.
-If `defi_trade` is not loaded, do the read steps, write the plan, and tell the
-owner which grant is missing. If `defi_data` is not loaded either, you cannot
-measure anything — say so and stop. Never work around a missing verb with a raw
-`call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 
-`pre-trade-check`, `post-trade-verify`, `exits`, `trading-mandate`.
+`pre-trade-check`, `post-trade-verify`, `exits`, `trading-mandate`,
+`send-funds`, `contract-call`.

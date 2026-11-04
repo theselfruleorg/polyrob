@@ -367,10 +367,12 @@ A new app address is an owner decision; the agent's deploy records it as
 /apps approve <slug>       # the owner decision; the supervisor deploys within one tick
 /apps reject <slug>        # a pending app never runs
 /apps kill <slug>          # stop a running app (the address stays approved)
+/apps start <slug>         # run a stopped app again on its approved address
+/apps remove <slug>        # retire an app: container, files, record and address go
 /apps logs <slug> [n]      # recent container log lines
 ```
 
-CLI: `polyrob apps list|show|approve|reject|kill|logs`; the console offers the
+CLI: `polyrob apps list|show|approve|reject|kill|start|remove|logs`; the console offers the
 same decisions ([console.md](console.md)).
 A pending app leads the health block on every status seat until you decide.
 `/pause deploying` stops deploys and live containers; `/resume deploying` brings

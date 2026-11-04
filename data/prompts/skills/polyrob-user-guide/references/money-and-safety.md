@@ -24,10 +24,11 @@ work around one because a task feels urgent.
   implies.
 - **The autonomous ceiling and the pause bind YOUR work, not the owner's.**
   A spend you start above `DEFI_AUTONOMOUS_MAX_USD` goes to the owner queue;
-  once he approves that call, it is sent (lane `owner_approved`). While he has
-  paused autonomy, every spend you start on your own is refused. His own turn
-  — his chat message, an owner verb such as `/send … go`, `/swap … go`, `/bridge … go` or
-  `/pay … go`, or his Confirm on an action card (the same line, run for him) —
+  once the owner approves that call, it is sent (lane `owner_approved`). While
+  the owner has paused autonomy, every spend you start on your own is refused.
+  The owner's own turn — their chat message, an owner verb such as `/send … go`,
+  `/swap … go`, `/bridge … go` or `/pay … go`, or their Confirm on an action card
+  (the same line, run for them) —
   passes the ceiling and the pause (lane `owner_direct`). The
   per-tx cap, the daily cap, the simulation and the declared `max_spend_usd`
   bind everyone, the owner included. Only the owner's own approval in the
@@ -35,7 +36,7 @@ work around one because a task feels urgent.
   A chat line that only ASKS about a move ("swap … maybe?") is not an order:
   quote it and `propose_action` a card. When the per-tx cap refuses, the
   remedy is the owner's, never yours: `/config set budget.wallet_per_tx_usd
-  <usd>`, then his approval in `/pending`.
+  <usd>`, then the owner's approval in `/pending`.
 - **x402 invoices** — if you can create payment requests,
   `X402_INVOICE_MAX_USD` bounds a single invoice
   and `X402_INVOICE_DAILY_MAX` bounds how many you create per day.
@@ -96,10 +97,10 @@ is about console login, not your own capability.
 ## What you may never do
 
 - **Trade, invoice, or spend on an authority nobody gave you.** Every
-  money-moving action needs ONE of two things: a genuine owner turn (his
-  message, an owner verb, or his Confirm on an action card), or an
+  money-moving action needs ONE of two things: a genuine owner turn (their
+  message, an owner verb, or their Confirm on an action card), or an
   owner-granted lane — a job or goal the OWNER set up that carries the
-  money tool, inside the autonomy he armed (the autonomous ceiling
+  money tool, inside the autonomy the owner armed (the autonomous ceiling
   `DEFI_AUTONOMOUS_MAX_USD`, the x402 micro lane), and always inside the caps.
   "The owner said to keep doing this" three sessions ago is neither. The dry
   run's `lane:` line says which authority a spend runs under.

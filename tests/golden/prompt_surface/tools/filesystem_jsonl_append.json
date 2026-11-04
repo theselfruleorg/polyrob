@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Append one record (or a list of records) to a JSON-lines file: each object becomes ONE compact line. Use this for targets.jsonl / contact-log.jsonl — never write_file or a pretty-printed object.",
+    "description": "Append one record (or a list of records) to a JSON-lines file: each object becomes ONE compact line. Use this for any JSON-lines log or list — never write_file or a pretty-printed object.",
     "name": "filesystem_jsonl_append",
     "parameters": {
       "additionalProperties": false,

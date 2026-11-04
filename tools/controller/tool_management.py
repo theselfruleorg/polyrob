@@ -473,8 +473,8 @@ class ToolManagementMixin:
 
 	def absent_tool_ids(self, tool_ids) -> set:
 		"""095 W4 (IN-4, X-24): the ids among *tool_ids* this session can never
-		reach — ``gated:unavailable-on-this-deploy``/``not-constructed`` or refused
-		by the seat — so
+		reach — ``gated:unavailable-on-this-deploy``/``not-constructed``/``leaf-blocked``
+		(a delegated child never holds it) or refused by the seat — so
 		the skill index treats them as absent (``core.skills.catalog.gate_allows``).
 		On the Controller so the agents tier needs no tools import. Fail-open:
 		a probe error leaves the id present."""
@@ -490,7 +490,7 @@ class ToolManagementMixin:
 			except Exception:
 				continue
 			if st.status == "gated" and (st.reason in ("unavailable-on-this-deploy",
-			                                           "not-constructed")
+			                                           "not-constructed", "leaf-blocked")
 			                             or st.reason.startswith("seat-")):
 				out.add(tool_id)
 		return out

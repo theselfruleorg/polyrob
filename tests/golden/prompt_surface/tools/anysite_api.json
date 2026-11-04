@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Query AnySite (200+ sources / 1,200+ endpoints: LinkedIn, Twitter/X, Reddit, YouTube, GitHub, SEC, Google, a universal web scraper, and more). Pass an API path and key=value params, e.g. endpoint='/api/linkedin/user', params={'user':'satyanadella'}. Do NOT guess an endpoint path — run anysite_describe first (search=<keyword> to list paths, then endpoint=<path> for its exact params).",
+    "description": "Query AnySite (200+ sources / 1,200+ endpoints: LinkedIn, Twitter/X, Reddit, YouTube, GitHub, SEC, Google, a universal web scraper, and more). Pass an API path and key=value params, e.g. endpoint='/api/linkedin/user', params={'user':'<handle>'}. Do NOT guess an endpoint path — run anysite_describe first (search=<keyword> to list paths, then endpoint=<path> for its exact params).",
     "name": "anysite_api",
     "parameters": {
       "additionalProperties": false,
@@ -17,7 +17,7 @@
         "params": {
           "additionalProperties": true,
           "default": null,
-          "description": "Endpoint params as key=value pairs, e.g. {'user': 'satyanadella'}",
+          "description": "Endpoint params as key=value pairs, e.g. {'user': '<handle>'}",
           "nullable": true,
           "properties": {},
           "type": "object"

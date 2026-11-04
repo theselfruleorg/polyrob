@@ -39,7 +39,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/goals` — The goal board summary
 - `/jobs` — Scheduled jobs: next run, last outcome, and who wrote each
 - `/job` — Add, change, grant, pause, resume, run, or stop one scheduled job (not inside a group)
-- `/apps` — Deployed apps: approve an address, check health, or kill one (not inside a group)
+- `/apps` — Deployed apps: approve an address, check health, stop, start or remove one (not inside a group)
 - `/skills` — The skills I can load, and what each one does; /skills <id> shows one skill's text (not inside a group)
 - `/learn` — Describe how to do something and I draft a skill for you to check (only in the terminal REPL)
 - `/todos` — The todo list in my working files (only in the terminal REPL)
@@ -52,6 +52,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/invoices` — What I have billed and who owes me
 - `/settle` — Mark an invoice paid
 - `/trade` — Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop
+- `/offer` — What I sell: offers, their orders, quotes, disputes; pause, resume or retire one
 - `/bridge` — Move value between chains: ETH/native or USDC in; native, WETH or USDC out
 - `/launch` — Launch a token on the launchpad
 - `/deploy` — Deploy a fixed-supply token

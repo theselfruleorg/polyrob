@@ -202,6 +202,35 @@ reactivates them (`polyrob owner sub list`, `polyrob owner sub cancel <id>`,
 subscription back to `active` for one period from now, by your word: no payment is
 taken or recorded. A `canceled` subscription stays canceled.
 
+### 2.6 Selling — offers and orders
+
+Say "sell …" in chat. The agent drafts an **offer** (what is sold, the price, what
+the buyer gives, what is delivered, where it is listed), writes the steps it
+follows for each order, and asks you for two decisions:
+
+1. **Setup** (only when the offer needs a contract, files or an account):
+   `/offer setup <id> <usd>` gives it one setup budget (a limit you state that the
+   wallet does not check: your normal spend limits still apply).
+2. **Go live**: `/offer live <id> <hash>` — the decision shows the price, where it
+   is sold, the abilities each order uses, what one order may spend and the contract
+   functions it may call. Confirm, and buyers can order.
+
+Buyers order in the chats you list (`/offers`, `/buy <offer> field=value`,
+`/order <id>`, `/order <id> cancel`, `/order <id> dispute <reason>` — answered by
+code, never by the AI), over HTTP (`GET /api/offers`, `POST /api/offers/<id>/orders`,
+then `GET /api/orders/<id>?token=…` for the status), as other agents and apps, or on
+a marketplace the operator configures in `<data_home>/commerce_markets.json`.
+**Email is never a way to buy.** Each order gets its own invoice; when the payment
+arrives on the network, one goal run delivers the order inside its own budget and
+only to the buyer's address. Deliver by a contract call (for example a mint): a
+direct token or NFT send always waits for your approval, order by order.
+
+Your verbs: `/offer` (list), `/offer show <id>`, `/offer orders`,
+`/offer quote <order> <usd>` (a quote-priced order), `/offer resolve <order>
+accept|refund` (a dispute), `/offer pause|resume|retire <id>`. Refunds are always
+yours: refund the order's invoice to the buyer's refund address — never to the
+address the payment came from.
+
 ---
 
 ## 3. Payment assets — what the treasury can be paid in

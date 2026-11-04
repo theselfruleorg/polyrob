@@ -1004,9 +1004,9 @@ def _h_apps(ctx: CommandContext) -> None:
     from surfaces.telegram.apps_ops import apps_reply
     args = list(ctx.args or [])
     # `via` IS the audit field that records WHERE the decision was made, and
-    # approve/reject/kill MUTATE the shared home (057 WS-G euid rule).
+    # approve/reject/kill/start/remove MUTATE the shared home (057 WS-G euid rule).
     # Everything else here (list/show/logs, and the bare verb) is a READ.
-    writes = bool(args) and args[0].lower() in ("approve", "reject", "kill")
+    writes = bool(args) and args[0].lower() in ("approve", "reject", "kill", "start", "remove")
     try:
         from cli._admin_home import admin_owner_tenant
         ctx.emit(apps_reply(admin_owner_tenant(ctx.user_id), admin_data_dir(write=writes),
@@ -1443,7 +1443,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command("goals", _h_goals, "Show goals board summary", group="work", **help_kwargs("goals")))
     reg.register(Command("apps", _h_apps,
                          "Deployed apps: approve an address, check health, or kill one",
-                         usage="[list|show|approve|reject|kill|logs <slug>]",
+                         usage="[list|show|approve|reject|kill|start|remove|logs <slug>]",
                          group="work"))
     reg.register(Command("subagents", _h_subagents, "Show delegation capability info", group="work"))
     reg.register(Command("todos", _h_todos, "Show workspace todos from todo.md", group="work"))

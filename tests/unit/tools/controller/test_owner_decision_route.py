@@ -182,7 +182,7 @@ def test_load_skill_names_its_prerequisites(tmp_path):
     from tools.controller._helpers import append_prerequisites, build_load_skill_result
 
     class _SM:
-        def prerequisites_of(self, sid, *, user_id, tool_ids):
+        def prerequisites_of(self, sid, *, user_id, tool_ids, **seat):
             assert sid == "lane"
             return [MatchedSkill(skill_id="safety", priority=1, match_reasons=[],
                                  content="# Safety\n\nCheck first.")]

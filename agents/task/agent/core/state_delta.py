@@ -122,6 +122,7 @@ def skills_delta_part(agent) -> Optional[str]:
     controller._skill_index_stale = False
     try:
         from agents.task.agent.skill_manager import catalog_line, get_skill_manager
+        from agents.task.session_class import seat_is_third_party
         sm = get_skill_manager()
         user_id = getattr(getattr(agent, "orchestrator", None), "user_id", None)
         tool_ids = controller.list_tools()
@@ -135,12 +136,16 @@ def skills_delta_part(agent) -> Optional[str]:
             baseline = controller._skill_index_baseline = set(session)
         now = {s.skill_id: s for s in sm.get_catalog_skills(
             user_id=user_id, max_skills=None, tool_ids=tool_ids, absent=absent,
-            third_party=getattr(controller, "_third_party_seat", False) is True)}
+            third_party=seat_is_third_party(controller))}
         pinned = set(getattr(controller, "_auto_skills", None) or ())
         added = [now[i] for i in now if i not in baseline]
         removed = sorted(i for i in baseline if i not in now and i not in pinned)
         for skill in added:
             session.setdefault(skill.skill_id, skill)
+        # A session hit is served by load_skill with no gate: an id that left the
+        # index leaves the session set too (load_skill's fallback re-gates it).
+        for sid in removed:
+            session.pop(sid, None)
         lines = []
         if added:
             lines.append("Now in your skill index (load_skill):")

@@ -46,7 +46,7 @@ from core.app_service.registry import (
 from core.app_service.snapshot import open_owned_dir, snapshot_tree
 from core.autonomy_control import allows
 from core.container_hardening import hardening_flags
-from core.event_kinds import APP_FAILED, APP_LIVE, APP_STOPPED
+from core.event_kinds import APP_FAILED, APP_LIVE, APP_REMOVED, APP_STOPPED
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,18 @@ async def _default_http_probe(url: str, timeout: float) -> bool:
         return bool(await asyncio.to_thread(_get))
     except Exception:
         return False
+
+
+
+def _step_ok(label: str, res: Any) -> bool:
+    """A teardown step's result: ``(code, out, err)`` from docker, ``(ok, msg)``
+    from nginx/egress. A container that is already gone is success."""
+    if not isinstance(res, tuple) or not res:
+        return True
+    if label == "container":
+        code, err = res[0], (res[2] if len(res) > 2 else "") or ""
+        return code == 0 or "No such container" in err
+    return bool(res[0])
 
 
 class AppSupervisor:
@@ -180,8 +192,8 @@ class AppSupervisor:
     # --- the tick ----------------------------------------------------------
 
     async def tick(self) -> Dict[str, int]:
-        counts = dict(paused=0, resumed=0, deployed=0, failed=0, stopped=0, healthy=0,
-                      unhealthy=0)
+        counts = dict(paused=0, resumed=0, deployed=0, failed=0, stopped=0, removed=0,
+                      healthy=0, unhealthy=0)
         dec = self._allows("app_serve")
         if not getattr(dec, "allowed", False):
             reason = getattr(dec, "reason", "paused")
@@ -211,6 +223,8 @@ class AppSupervisor:
                 await self._teardown(row)
                 self.registry.record_stopped(row["slug"], row["user_id"])
                 counts["stopped"] += 1
+            if row.get("remove_requested") and await self._remove_one(row):
+                counts["removed"] += 1
         for row in self.registry.list_by_status((STATUS_APPROVED,)):
             why = self._unsafe(row)
             if why:
@@ -512,20 +526,71 @@ class AppSupervisor:
 
     # --- teardown / pruning ------------------------------------------------
 
-    async def _teardown(self, row: Dict[str, Any]) -> None:
+    async def _teardown(self, row: Dict[str, Any]) -> bool:
+        """Remove the container, its nginx stanza, its egress table and its
+        network. True when everything that EXPOSES the app is gone (the
+        container, the stanza, the egress table; a left-over network exposes
+        nothing). Every step runs even after one fails; idempotent."""
         slug = row["slug"]
         name = self.container_name(row)  # derived, never the row's own text
         net = self.network_name(row)
-        for step in (
-            lambda: self._docker(["rm", "-f", name], timeout=60),
-            lambda: self.nginx.remove(slug),
-            lambda: self.egress.remove(slug),
-            lambda: self._docker(["network", "rm", net], timeout=60),
+        ok = True
+        for label, step, exposes in (
+            ("container", lambda: self._docker(["rm", "-f", name], timeout=60), True),
+            ("nginx", lambda: self.nginx.remove(slug), True),
+            ("egress", lambda: self.egress.remove(slug), True),
+            ("network", lambda: self._docker(["network", "rm", net], timeout=60), False),
         ):
             try:
-                await step()
+                res = await step()
             except Exception:
-                logger.debug("app_service: teardown step failed for %s", name, exc_info=True)
+                logger.warning("app_service: teardown step %s failed for %s", label, name,
+                               exc_info=True)
+                ok = ok and not exposes
+                continue
+            if exposes and not _step_ok(label, res):
+                logger.warning("app_service: teardown step %s failed for %s: %s", label, name,
+                               str(res)[:300])
+                ok = False
+        return ok
+
+    async def _remove_one(self, row: Dict[str, Any]) -> bool:
+        """The end of an app's life: tear down again and require it to succeed
+        (idempotent; the stopped branch above may have failed silently), then delete ``<data>/apps/<tenant>/<slug>`` (snapshots +
+        logs) descriptor-relative and no-follow, then the row. A row whose
+        fields fail H07 is never turned into a path; it is deleted as-is (its
+        slug never reached the disk)."""
+        if not self._unsafe(row) and not await self._teardown(row):
+            # The container (or its stanza) may still serve the app: keep the
+            # row — it is the only record that names it — and retry next tick.
+            logger.warning("app_service: removal of %s/%s waits: teardown incomplete",
+                           row["user_id"], row["slug"])
+            return False
+        if not self._unsafe(row):
+            try:
+                fd = open_owned_dir(self.data_dir, ["apps", safe_tenant(row["user_id"])],
+                                    create=False)
+            except OSError:
+                fd = None  # nothing was ever written for this tenant
+            if fd is not None:
+                try:
+                    st = os.stat(row["slug"], dir_fd=fd, follow_symlinks=False)
+                    if stat.S_ISDIR(st.st_mode):
+                        shutil.rmtree(row["slug"], dir_fd=fd)
+                    else:
+                        os.unlink(row["slug"], dir_fd=fd)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("app_service: could not delete the files of %s/%s",
+                                   row["user_id"], row["slug"], exc_info=True)
+                    return False  # retried next tick; the row stays visible
+                finally:
+                    os.close(fd)
+        if not self.registry.delete_removed(row["slug"], row["user_id"]):
+            return False
+        self._emit(APP_REMOVED, row, {"by": "remove"})
+        return True
 
     def _prune_snapshots(self) -> None:
         if self.retain_days <= 0:

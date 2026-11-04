@@ -293,7 +293,9 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
         except Exception:
             logger.warning("settlement watcher: subscription processing failed", exc_info=True)
 
-        return {"expired": len(expired), "settled_notified": notified,
+        from modules.commerce.service import tick as _commerce_tick  # 099: orders
+        commerce = await _commerce_tick(container=getattr(self.task_agent, "container", None))
+        return {"expired": len(expired), "settled_notified": notified, "commerce": commerce,
                 "expired_notified": expired_notified,
                 "settling_reverted": settling_reverted,
                 "onchain_settled": onchain_settled,

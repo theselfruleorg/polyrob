@@ -46,7 +46,7 @@
         "read_verb": {
           "additionalProperties": true,
           "default": null,
-          "description": "W9: make this a DETERMINISTIC read job — one allowlisted read verb, no LLM turn per tick: {'verb': 'defi_data.pool_metrics', 'params': {...the verb's params...}, 'deliver_on': 'alert'|'always'|'never'}. 'alert' (default) delivers only a result with an ALERT line or an error. Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, defi_data.wallet_holdings (public reads only). A price/value watch adds 'alert': {'field': '<key of the verb result metadata>', 'below': n, 'above': n} — the verb compares, you never do; an unreadable value alerts.",
+          "description": "W9: make this a DETERMINISTIC read job — one allowlisted read verb, no LLM turn per tick: {'verb': 'defi_data.pool_metrics', 'params': {...the verb's params...}, 'deliver_on': 'alert'|'always'|'never'}. 'alert' (default) delivers only a result with an ALERT line or an error. Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, defi_data.wallet_holdings, defi_data.position_mark, defi_data.discovery_count (public on-chain reads only; a web page or any other source cannot be a read verb). A price/value watch adds 'alert': {'field': '<key of the verb result metadata>', 'below': n, 'above': n} — the verb compares, you never do; an unreadable value alerts.",
           "nullable": true,
           "properties": {},
           "type": "object"
@@ -63,7 +63,7 @@
         },
         "skills": {
           "default": null,
-          "description": "Optional skill ids this job's runs must load (its doctrine, e.g. ['x-engagement']). Pinned skills load every run instead of depending on keyword matching; they grant no tool. Up to 8; omit to match by keyword.",
+          "description": "Optional skill ids this job's runs must load (its doctrine, e.g. ['x-engagement']). Pinned skills load every run; without a pin the run picks from the skill index. They grant no tool. Up to 8.",
           "items": {
             "type": "string"
           },

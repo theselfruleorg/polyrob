@@ -57,3 +57,34 @@ def report_missing_rail_skills(agent, pinned: list, matched) -> list:
 	     session_id=str(getattr(orch, "session_id", "") or ""),
 	     attrs={"missing": missing, "pinned": list(pinned)})
 	return missing
+
+
+def seat_persona_skills(agent, skill_manager, seeds, *, tool_ids, user_id,
+                        third_party: bool, absent) -> list:
+	"""The persona seeds (``POLYROB_PERSONA``) this seat may pin: each passes the
+	seat gate ``load_skill`` applies (``SkillManager.may_load_skill``), so a room
+	never pins an owner-only, owner-authored or money skill (review 2026-11-03 M2).
+	A seed that does not resolve, or that the seat refuses, is named in the journal
+	(L9: a persona naming a skill of a pack that is off drops it loudly)."""
+	seeds = [s for s in dict.fromkeys(seeds or []) if isinstance(s, str) and s.strip()]
+	if not seeds:
+		return []
+	kept, refused = [], []
+	for sid in seeds:
+		try:
+			if third_party and not skill_manager.may_load_skill(
+					sid, tool_ids=tool_ids, user_id=user_id, third_party=True, absent=absent):
+				refused.append(sid)
+				continue
+			if skill_manager.resolve_skill_dir(sid, user_id) is None:
+				refused.append(sid)  # named; get_pinned_skills skips what does not load
+		except Exception:
+			refused.append(sid)
+			continue
+		kept.append(sid)
+	if refused:
+		agent.logger.warning(
+			"persona skill seed(s) %s not pinned (unknown id, pack off, or refused on "
+			"this seat)", refused)
+	return kept
+

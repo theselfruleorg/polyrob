@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from tools.base_tool import BaseTool
 from tools.coding.edit import apply_str_replace_ex, apply_patch, EditError
@@ -48,7 +49,9 @@ class StrReplaceParams(BaseModel):
                                              "For a JSONL row pass the row's exact text (a JSON object is coerced to its compact line).")
     new_string: str = Field(..., description="Replacement text (a JSON object is coerced to its compact single line)")
     replace_all: bool = Field(False, description="Replace every occurrence instead of failing on ambiguity")
-    coerced_note: Optional[str] = Field(None, exclude=True, description="Set when old/new_string were coerced from an object.")
+    # Internal: set by the validator below, never a model-facing parameter
+    # (SkipJsonSchema keeps it out of the tool schema; exclude= only hid it on dump).
+    coerced_note: SkipJsonSchema[Optional[str]] = Field(None, exclude=True)
 
     @model_validator(mode="before")
     @classmethod

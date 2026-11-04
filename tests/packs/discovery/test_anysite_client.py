@@ -6,14 +6,14 @@ from polyrob_discovery.anysite.client import build_api_argv, build_describe_argv
 
 
 def test_build_api_argv_basic():
-    argv = build_api_argv("/api/linkedin/user", {"user": "satyanadella"}, "json")
+    argv = build_api_argv("/api/linkedin/user", {"user": "example-user"}, "json")
     # argv[0] is now the RESOLVED path (the venv bin is not on a
     # systemd unit's PATH), so assert the program, not the literal.
     assert argv[0].endswith("anysite")
     assert argv[1] == "--non-interactive"
     assert argv[2] == "api"
     assert argv[3] == "/api/linkedin/user"
-    assert "user=satyanadella" in argv
+    assert "user=example-user" in argv
     assert "--format" in argv and "json" in argv
 
 

@@ -240,3 +240,37 @@ def test_a_live_app_is_not_reconfigured_by_a_redeploy(tmp_path, owner_ctx, app_e
     row = tool._registry.get("demo-status", "owner-1")
     assert row["status"] == "live" and row["cmd"] == ["python", "server.py"]
     assert row["egress"] == "none"
+
+
+def test_remove_deletes_a_never_approved_app_and_queues_a_live_one(tmp_path, owner_ctx, app_env,
+                                                                    green_orch, events):
+    from tools.app_service.tool import ListAppsParams, RemoveParams
+    tool = make_tool(tmp_path, orch=green_orch)
+    run_deploy(tool, owner_ctx)
+    res = asyncio.run(tool.remove(RemoveParams(slug="demo-status"), execution_context=owner_ctx))
+    assert not res.error and "never ran" in res.extracted_content
+    assert tool._registry.get("demo-status", "owner-1") is None
+    assert events[-1] == ("app_removed", {"slug": "demo-status", "by": "agent",
+                                          "outcome": "deleted"})
+    # an approved, live app: queued for the supervisor, listed as such
+    run_deploy(tool, owner_ctx)
+    tool._registry.mark_approved("demo-status", "owner-1")
+    tool._registry.claim("demo-status", "owner-1", "approved", "deploying")
+    tool._registry.record_live("demo-status", "owner-1", host_port=18000, container_name="c",
+                               public_url="https://demo-status.apps.example.test")
+    res = asyncio.run(tool.remove(RemoveParams(slug="demo-status"), execution_context=owner_ctx))
+    assert not res.error and "queued" in res.extracted_content
+    res = asyncio.run(tool.list_apps(ListAppsParams(), execution_context=owner_ctx))
+    assert "removal queued" in res.extracted_content
+    res = asyncio.run(tool.remove(RemoveParams(slug="nope"), execution_context=owner_ctx))
+    assert res.error
+
+
+def test_remove_is_refused_on_a_sub_agent_turn(tmp_path, owner_ctx, app_env, green_orch):
+    from tools.app_service.tool import RemoveParams
+    tool = make_tool(tmp_path, orch=green_orch)
+    run_deploy(tool, owner_ctx)
+    owner_ctx.is_sub_agent = True
+    res = asyncio.run(tool.remove(RemoveParams(slug="demo-status"), execution_context=owner_ctx))
+    assert res.error and "app_remove denied" in res.error
+    assert tool._registry.get("demo-status", "owner-1") is not None

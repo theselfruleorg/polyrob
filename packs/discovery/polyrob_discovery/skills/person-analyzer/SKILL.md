@@ -4,8 +4,10 @@ description: Person intelligence workflow using LinkedIn and web research
 license: MIT
 metadata:
   polyrob-when: 'Researching a person (LinkedIn and the web)'
-  polyrob-priority: '1'
-  polyrob-version: '2'
+  polyrob-priority: '6'
+  polyrob-triggers: '{"tool_ids":["anysite","web_fetch","browser"]}'
+  polyrob-owner-only: 'true'
+  polyrob-version: '3'
 ---
 # Person Analyzer
 
@@ -22,9 +24,9 @@ Start with whatever identifiers you have (name, LinkedIn URL, company, role).
 If `anysite` is available, find the LinkedIn endpoints first with `anysite_describe(search="linkedin user")`, read the chosen one's params with `anysite_describe(endpoint=<path>)`, then query it with `anysite_api(endpoint=<path>, params={...})`. Do not hardcode endpoint paths.
 
 If `anysite` is unavailable or returns nothing, use this fallback order:
-- `web_fetch` — read the person's LinkedIn or personal site URL if you have it
-- `perplexity` — search for the person by name + company to find articles, bios, interviews
-- `browser` — only for JS-rendered or login-gated pages (last resort)
+- `web_fetch_fetch_url` — read the person's LinkedIn or personal site URL if you have it
+- `perplexity_search` — search for the person by name + company to find articles, bios, interviews
+- the `browser` tool — only for JS-rendered pages (last resort; never to pass a login wall)
 
 ### Phase 2: Gather activity data
 Posts reveal priorities better than profile text. Collect at least 10–20 recent posts/comments if available.
@@ -42,7 +44,7 @@ Understand the employer:
 - Recent news, leadership changes, product launches
 - The company's social footprint
 
-Use `anysite` (discover endpoints first) or `perplexity` / `web_fetch` for company data.
+Use `anysite_describe` → `anysite_api`, or `perplexity_search` / `web_fetch_fetch_url` for company data.
 
 ### Phase 4: External intelligence
 Supplement with public sources:
@@ -50,7 +52,7 @@ Supplement with public sources:
 - GitHub, personal blog, academic papers (if technical role)
 - Public community participation (Reddit, forums)
 
-Use `web_fetch` for known URLs, `perplexity` for news synthesis.
+Use `web_fetch_fetch_url` for known URLs, `perplexity_search` for news synthesis.
 
 ### Phase 5: Synthesize and output
 
@@ -86,7 +88,7 @@ Use `web_fetch` for known URLs, `perplexity` for news synthesis.
 - **Recent Signals:** [funding rounds, news, product changes]
 
 ## Connection Strategy
-- **Best Channel:** [LinkedIn DM / warm intro / email / comment]
+- **Best Channel:** [email to an allowed address / X reply or DM / warm intro / LinkedIn — the owner's own action]
 - **Conversation Starters:** [grounded in actual posts/topics they discuss]
 - **Suggested Opening:** "[Specific line referencing their real content]"
 
@@ -117,7 +119,13 @@ Use `web_fetch` for known URLs, `perplexity` for news synthesis.
 - Detailed connection strategy
 
 ## Notes
+- **Privacy:** public, professional information only. No home address, family, health
+  or private accounts, and do not combine sources to locate a person.
 - State confidence and gaps explicitly — never fabricate details.
-- If LinkedIn is paywalled or unavailable, note it and rely on web/perplexity.
+- If LinkedIn is paywalled or unavailable, note it and rely on `web_fetch_fetch_url` / `perplexity_search`.
 - Cross-reference at least two sources for key claims.
 - Always discover anysite endpoints before querying; never assume specific paths are available.
+- The report recommends a channel; it does not open one. You can reach a person only on a
+  rail you hold: email to an allowed address (the owner allows a new one with
+  `/allow email <address>`; see email-comms), or an X reply/DM under the x-engagement
+  rules. There is no LinkedIn write tool: a LinkedIn message is the owner's own action.

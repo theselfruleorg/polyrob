@@ -79,6 +79,10 @@ class SpendIntent:
     mandate: bool = False
     chain: str = ""
     token: Optional[str] = None
+    #: 099: the facts the guard measured for an ORDER run's offer step (4c):
+    #: ``{"chain", "destinations", "is_resource_call", "contract"}``. ``None`` on a
+    #: turn-checked spend of an order run = refused (it did not pass the guard).
+    offer_scope: Optional[Mapping[str, Any]] = None
 
     # -- the named bar sets (W5): a caller picks one, never a hand-mixed set --
 
@@ -241,8 +245,30 @@ def authorize_spend(intent: SpendIntent, context=None, *,
         if refusal:
             return _refused("pause", refusal)
 
+    # -- 4c. offer order (099): EVERY turn-checked spend of an order run ------
+    meta = getattr(context, "metadata", None)
+    run_mandate = str((meta.get("mandate") if isinstance(meta, dict) else None) or "").strip()
+    if intent.turn and run_mandate.startswith("ord_") \
+            and not owner_direct_turn(context, forged_fn, tool_self):
+        try:
+            from core.money.hooks import offer_gate
+            gate = offer_gate()
+            if gate is None:
+                return _refused("offer", "refused: this run fulfils an order and no offer "
+                                "gate is registered; failing closed")
+            refusal = gate(run_mandate, user_id=str(getattr(context, "user_id", "") or ""),
+                           scope=intent.offer_scope, usd=intent.usd, dry_run=intent.dry_run,
+                           key=intent.idempotency_key,
+                           session_id=getattr(context, "session_id", None))
+            if refusal:
+                return _refused("offer", refusal)
+        except Exception as exc:
+            return _refused("offer", f"refused: offer probe failed ({exc}); failing closed",
+                            detail=str(exc))
+
     # -- 4b. trading mandate (entries only) ------------------------------
     if intent.mandate and intent.entry and not intent.dry_run \
+            and not run_mandate.startswith("ord_") \
             and not owner_direct_turn(context, forged_fn, tool_self):
         try:
             from core.money.hooks import MANDATE_METADATA_KEY, mandate_gate

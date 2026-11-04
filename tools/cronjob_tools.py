@@ -99,8 +99,8 @@ class CronScheduleAction(BaseModel):
     skills: Optional[List[str]] = Field(default=None,
                                         description="Optional skill ids this job's runs must load (its "
                                                     "doctrine, e.g. ['x-engagement']). Pinned skills load "
-                                                    "every run instead of depending on keyword matching; "
-                                                    "they grant no tool. Up to 8; omit to match by keyword.")
+                                                    "every run; without a pin the run picks from the "
+                                                    "skill index. They grant no tool. Up to 8.")
     target_token: Optional[Dict[str, str]] = Field(
         default=None,
         description="For a job that BUYS one specific token: {'chain': ..., 'address': ...}. "
@@ -114,7 +114,9 @@ class CronScheduleAction(BaseModel):
                     "{...the verb's params...}, 'deliver_on': 'alert'|'always'|'never'}. "
                     "'alert' (default) delivers only a result with an ALERT line or an error. "
                     "Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, "
-                    "defi_data.wallet_holdings (public reads only). A price/value watch adds "
+                    "defi_data.wallet_holdings, defi_data.position_mark, "
+                    "defi_data.discovery_count (public on-chain reads only; a web page or "
+                    "any other source cannot be a read verb). A price/value watch adds "
                     "'alert': {'field': '<key of the verb result metadata>', 'below': n, "
                     "'above': n} — the verb compares, you never do; an unreadable value alerts.")
     precheck: Optional[Dict[str, Any]] = Field(
@@ -591,7 +593,7 @@ class CronJobTool(BaseTool):
             _precheck_line(p),
             _provider_line(p),
             f"deliver: {p.get('deliver') or '(silent)'}",
-            f"skills: {', '.join(p.get('skills') or []) or '(keyword match)'}",
+            f"skills: {', '.join(p.get('skills') or []) or '(none pinned: the run picks from the skill index)'}",
         ]
         if job.status == "cancelled":
             lines.append(_cancel_line(job.id))

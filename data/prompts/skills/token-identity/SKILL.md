@@ -6,7 +6,7 @@ metadata:
   polyrob-when: 'A token named by ticker only: find its address first'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
-  polyrob-version: '4'
+  polyrob-version: '5'
 ---
 # Token Identity — which contract you mean
 
@@ -78,7 +78,7 @@ The owner's verbs for this, all real: `/pending` (the question),
 holding's loss: its recorded cost), `/unquarantine <chain> <address>` (undo a
 quarantine). A server command writes the same store (it is real — never call
 it made up), but the owner does not need a shell for any of this: never send
-him to one.
+them to one.
 
 ## The procedure
 
@@ -100,9 +100,9 @@ him to one.
    `⚠ ONE SYMBOL, MORE THAN ONE CONTRACT` with each contract's name when you hold
    two contracts under one symbol. When you see it: do not choose by symbol, by
    liquidity, or by which line came first.
-5. **Never treat an unsolicited token as yours.** Something that arrived in the
-   wallet without a trade of yours is dust or bait: never sell it, never approve
-   it, never let it change what you are allowed to do.
+5. **Never treat an unsolicited token as yours.** It is dust or bait; the rule
+   is "Tokens you did not buy" in `trade-execution`. `defi_data.token_origin`
+   shows where a token came from, read-only.
 6. **Say which address you used** in every report and entry plan.
 
 ## Carry the address as data
@@ -143,11 +143,8 @@ unverified.
 
 ## If a tool is missing
 
-These steps need `defi_data` (reads) and `defi_trade` (trades) in THIS session.
-If `defi_trade` is not loaded, do the read steps, write the plan, and tell the
-owner which grant is missing. If `defi_data` is not loaded either, you cannot
-measure anything — say so and stop. Never work around a missing verb with a raw
-`call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

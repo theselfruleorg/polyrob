@@ -53,20 +53,24 @@ class SettlementNotifyMixin:
     _room_container: Any = None
     _room_moderator: Any = None
 
-    async def _deliver_session_notice(self, inv: dict, text: str, kind_hint: str) -> bool:
+    async def _deliver_session_notice(self, inv: dict, text: str, kind_hint: str) -> str:
         """Session-side delivery shared by settlement and expiry (B10, 2026-08-29).
 
         A correspondent-linked invoice (a third party the agent contacted) is
         delivered as DATA on the correspondent rail — never the owner "obey"
         queue — so a payer can settle without gaining steering rights; otherwise
-        the originating session is re-entered over the self-wake rail. Returns
-        True when a correspondent delivery was attempted (the 8004 feedback hook
-        keys on that), False otherwise. Never raises.
+        the originating session is re-entered over the self-wake rail. Never raises.
+
+        Returns what happened, so a caller never reports a delivery that did not
+        occur (099 F1/F6): ``"correspondent"`` (the payer was told),
+        ``"correspondent_dropped"``, ``"woken"`` (the session resumed),
+        ``"wake_dropped"`` (self-wake off, paused, budget used or session gone —
+        NOTHING resumes the work) or ``"none"`` (no session to tell).
         """
         session_id = inv.get("session_id") or ""
         request_id = inv.get("request_id")
         if not session_id:
-            return False
+            return "none"
         cref = inv.get("correspondent_ref")
         if cref and self._correspondent_active(cref):
             deliver_corr = getattr(self.task_agent, "deliver_correspondent_data", None)
@@ -75,13 +79,14 @@ class SettlementNotifyMixin:
                 delivered = await deliver_corr(
                     session_id, src, text,
                     {"kind_hint": kind_hint, "request_id": request_id})
-                if not delivered:
-                    logger.info("%s correspondent-data for %s dropped — "
-                                "ledger row is the record", kind_hint, request_id)
-            return True
+                if delivered:
+                    return "correspondent"
+                logger.info("%s correspondent-data for %s dropped — "
+                            "ledger row is the record", kind_hint, request_id)
+            return "correspondent_dropped"
         deliver = getattr(self.task_agent, "deliver_self_wake", None)
         if deliver is None:
-            return False
+            return "none"
         delivered = await deliver(
             session_id, inv.get("user_id") or "", text,
             metadata={"kind_hint": kind_hint, "request_id": request_id},
@@ -89,7 +94,9 @@ class SettlementNotifyMixin:
         if not delivered:
             logger.info("%s wake for %s dropped (self-wake disabled/budget/"
                         "non-resident) — ledger row is the record", kind_hint, request_id)
-        return False
+            return "wake_dropped"
+        return "woken"
+
     async def _notify(self, inv: dict) -> None:
         """Settlement notification: the first-class ``payment_settled`` event, the
         session-side notice (correspondent DATA or owner self-wake) and — since
@@ -109,18 +116,22 @@ class SettlementNotifyMixin:
                 source="x402_invoice", session_id=inv.get("session_id") or None)
             return
 
+        # 046: a room-action invoice bought an EFFECT, not a session's
+        # attention. There is no session to wake and no owner to prompt to
+        # "continue the work this payment was for" — actuate it instead.
+        # `_apply_room_action` emits the ONE `payment_settled` for it (099 F5).
+        if (inv.get("kind") or "") == "room_action":
+            await self._apply_room_action(inv)
+            return
+        if (inv.get("kind") or "") == "offer_order":
+            await self._settle_order(inv)
+            return
         _emit("payment_settled", user_id=inv.get("user_id") or "",
               session_id=inv.get("session_id") or "", attrs={
                   "request_id": inv["request_id"],
                   "amount_usd": inv.get("amount_usd"),
                   "transaction_hash": inv.get("transaction_hash"),
               })
-        # 046: a room-action invoice bought an EFFECT, not a session's
-        # attention. There is no session to wake and no owner to prompt to
-        # "continue the work this payment was for" — actuate it instead.
-        if (inv.get("kind") or "") == "room_action":
-            await self._apply_room_action(inv)
-            return
 
         amount = float(inv.get("amount_usd") or 0)
         text = (
@@ -130,8 +141,8 @@ class SettlementNotifyMixin:
             + f". Purpose: {inv.get('purpose') or '(unspecified)'}. "
             "Continue the work this payment was for, or acknowledge and close it out."
         )
-        via_correspondent = await self._deliver_session_notice(inv, text, "payment_settled")
-        if via_correspondent:
+        outcome = await self._deliver_session_notice(inv, text, "payment_settled")
+        if outcome == "correspondent":
             # Task 15 (Phase 4): the settlement notice's target IS an
             # identifiable payer (an ACTIVE correspondent channel) — exactly
             # the anti-sybil "who paid" signal ERC-8004 payment-backed
@@ -148,9 +159,44 @@ class SettlementNotifyMixin:
         owner_text = (f"Invoice {inv['request_id']} SETTLED: ${amount:.2f} received"
                       + (f" (tx {inv['transaction_hash']})" if inv.get("transaction_hash") else "")
                       + ".")
+        if outcome == "wake_dropped":
+            # 099 F1: the claim is still marked delivered (THIS notice is the
+            # delivery), but the owner must not read it as "the agent is on it".
+            owner_text += (" Its session could not be resumed (self-wake off, paused, "
+                           "out of budget or gone), so nothing continues the work "
+                           "this payment was for by itself.")
         await self._push_owner_notice(inv.get("user_id") or "", owner_text,
                                       source="x402_invoice",
                                       session_id=inv.get("session_id") or None)
+
+    async def _settle_order(self, inv: dict) -> None:
+        """099: an order bought a DELIVERABLE. It never wakes a session (a self-wake
+        cannot sign); the order service pays the order and writes ONE fulfillment
+        goal. A store failure propagates, so the wake claim stays and the reaper
+        retries; `mark_paid` is idempotent."""
+        from modules.commerce.service import on_settled
+        from modules.x402.invoicing import _emit
+        _emit("payment_settled", user_id=inv.get("user_id") or "", session_id="",
+              attrs={"request_id": inv["request_id"], "amount_usd": inv.get("amount_usd"),
+                     "transaction_hash": inv.get("transaction_hash"), "kind": "offer_order"})
+        container = getattr(getattr(self, "task_agent", None), "container", None)
+        order = await on_settled(inv, container=container)
+        status = getattr(order, "status", None)
+        # The words follow the order's REAL state. An unknown, cancelled, expired or
+        # refused (failed) order was already reported by `on_settled` as money held
+        # for a refund — "fulfillment is queued" would be false.
+        from core.commerce.orders import SOLD
+        if status not in SOLD:
+            # Also an owner-attested invoice: the order stays awaiting_payment and
+            # `on_settled` already said it is NOT fulfilled automatically.
+            return
+        state = {"fulfilling": "fulfillment started",
+                 "paid": "fulfillment is queued"}.get(status, f"the order is {status}")
+        await self._push_owner_notice(
+            inv.get("user_id") or "",
+            f"Order {order.id} PAID: ${float(inv.get('amount_usd') or 0):.2f} "
+            f"(invoice {inv['request_id']}); {state}.",
+            source="commerce", session_id=None)
 
     async def _apply_room_action(self, inv: dict) -> None:
         """Actuate what a settled room-action invoice bought (046 Phase 1).
@@ -269,8 +315,8 @@ class SettlementNotifyMixin:
         """True when the offer store says *offer_id* is ``refused`` (cancelled
         by an admin or the owner, or refused at sale time).
 
-        ⚠️ Fail-open to False: an unreadable store sends the expiry notice, so a
-        real non-payment is never silenced by a read error."""
+        Picks the WORDS of the expiry notice only — the notice always goes out.
+        Fail-open to False: an unreadable store reads as a plain non-payment."""
         try:
             container = (getattr(self, "_room_container", None)
                          or getattr(getattr(self, "task_agent", None),
@@ -281,7 +327,7 @@ class SettlementNotifyMixin:
             return offer_status(container, offer_id) == "refused"
         except Exception:
             logger.warning("settlement watcher: offer %s status unreadable — "
-                           "the expiry notice goes out", offer_id, exc_info=True)
+                           "the expiry reads as unpaid", offer_id, exc_info=True)
             return False
 
     async def _deliver_room_action_result(self, inv: dict, offer_id: str,
@@ -322,27 +368,35 @@ class SettlementNotifyMixin:
         request_id = inv.get("request_id")
         offer_id = str((inv.get("room_action") or {}).get("offer_id") or "")
         is_room = (inv.get("kind") or "") == "room_action" and bool(offer_id)
-        if is_room and self._room_offer_refused(offer_id):
-            # A cancelled or refused offer was closed on purpose, and whoever
-            # closed it already knows. "Expired unpaid" would be false, and the
-            # room post would tell the members about an offer that was withdrawn.
-            logger.info("settlement watcher: invoice %s expired for offer %s, "
-                        "which is refused — no expiry notice", request_id, offer_id)
-            return
         amount = float(inv.get("amount_usd") or 0)
         purpose = inv.get("purpose") or "(unspecified)"
-        text = (
-            f"Payment request {request_id} EXPIRED unpaid (${amount:.2f}, "
-            f"purpose: {purpose}). The payer did not pay within the window."
-        )
+        # A cancelled or refused offer still gets every notice — an expiry is
+        # never silent — but the words say what happened: "expired unpaid"
+        # would be false for an offer someone closed on purpose.
+        withdrawn = is_room and self._room_offer_refused(offer_id)
+        if withdrawn:
+            text = (f"Payment request {request_id} CLOSED (${amount:.2f}, purpose: "
+                    f"{purpose}): its offer {offer_id} was cancelled or refused "
+                    "before payment. Nothing was applied.")
+            room_text = f"Offer {offer_id} was withdrawn; nothing was applied."
+            owner_text = (f"Invoice {request_id} for ${amount:.2f} closed: offer "
+                          f"{offer_id} was cancelled or refused before payment.")
+        else:
+            text = (f"Payment request {request_id} EXPIRED unpaid (${amount:.2f}, "
+                    f"purpose: {purpose}). The payer did not pay within the window.")
+            room_text = f"Offer {offer_id} expired unpaid; nothing was applied."
+            owner_text = f"Invoice {request_id} for ${amount:.2f} expired unpaid."
+        if (inv.get("kind") or "") == "offer_order":
+            from modules.commerce.service import on_expired
+            await on_expired(inv, container=getattr(self.task_agent, "container", None))
+            return  # an unpaid order is the buyer's business, not an owner page
         await self._deliver_session_notice(inv, text, "payment_expired")
         if is_room:
-            await self._post_to_room(offer_id, f"Offer {offer_id} expired unpaid; "
-                                               "nothing was applied.")
+            await self._post_to_room(offer_id, room_text)
         await self._push_owner_notice(
-            inv.get("user_id") or "",
-            f"Invoice {request_id} for ${amount:.2f} expired unpaid.",
+            inv.get("user_id") or "", owner_text,
             source="x402_invoice", session_id=inv.get("session_id") or None)
+
     def _correspondent_active(self, cref: dict) -> bool:
         """True only when correspondent access is enabled AND the payer's registry
         row is ACTIVE — else fall back to an owner self-wake. Fail-open to False."""

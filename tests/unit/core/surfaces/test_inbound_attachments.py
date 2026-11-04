@@ -97,9 +97,25 @@ def test_binary_file_is_referenced_by_path_not_inlined(ws):
     text, images = inject_file_content(ws, rel, "here")
     assert rel in text
     assert images is None
-    # F12: the read hint uses the real parameter (ReadFileAction is extra=forbid)
-    assert f'filesystem_read_file(file_path="{rel}")' in text
+    # F12: the read hint uses the schema field (ReadFileAction is extra=forbid;
+    # `filePath` is the alias a strict provider schema shows the model)
+    assert f'filesystem_read_file(filePath="{rel}")' in text
     assert "(path=" not in text
+
+
+def test_a_pdf_or_docx_hint_says_the_read_returns_its_text(ws):
+    for name in ("report.pdf", "letter.docx"):
+        rel, _ = persist_inbound_file(ws, name, b"%PDF-1.4" + b"\x00" * 100)
+        text, _ = inject_file_content(ws, rel, "here")
+        assert f'To read its text, use: filesystem_read_file(filePath="{rel}")' in text
+
+
+def test_a_spreadsheet_hint_does_not_send_the_agent_to_a_read_that_fails(ws):
+    rel, _ = persist_inbound_file(ws, "sheet.xlsx", b"PK\x03\x04" + b"\x00" * 100)
+    text, _ = inject_file_content(ws, rel, "here")
+    assert "cannot decode a .xlsx file" in text
+    assert "code_execution" in text
+    assert "To read it, use" not in text
 
 
 def test_inlined_text_file_is_framed_as_data(ws):

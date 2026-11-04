@@ -4,7 +4,7 @@ import pytest
 import core.verbs as V
 from core.verbs import Verb
 
-MONEY = ("/book", "/wallet", "/invoices", "/settle", "/trade", "/bridge", "/launch",
+MONEY = ("/book", "/wallet", "/invoices", "/settle", "/trade", "/offer", "/bridge", "/launch",
          "/deploy", "/lp", "/claim", "/nft", "/dapp", "/paid", "/pay")
 #: W1: a holding's lifecycle — contributed WITH Telegram + REPL handlers.
 HOLDINGS = ("/writeoff", "/unquarantine")

@@ -57,7 +57,7 @@ anysite_api(endpoint='/api/linkedin/get_profile', params={"user": "..."})
 
 **Rule:** Skill bodies must not hardcode `/api/...` paths. Teach the agent to discover endpoints first, then execute.
 
-**Rule:** Skill bodies must never use the retired `mcp_execute_tool` verb. The current shape is `anysite_api(endpoint=..., params={...})` after discovery.
+**Rule:** Skill bodies must never call anysite through `mcp_execute_tool` (the retired shape). The current shape is `anysite_api(endpoint=..., params={...})` after discovery. `mcp_execute_tool` itself is the live MCP action: a skill about an MCP server may name it.
 
 ## 5. No hardcoded absolute paths
 
@@ -124,6 +124,7 @@ metadata:
   polyrob-auto-activate: 'false'   # optional; omit it (default true). 'false' = gated: listed and loadable only with every tool_id loaded
   polyrob-triggers: '{"tool_ids":["defi_trade"]}'   # optional; the gate domain, see 9a
   polyrob-requires: '["token-identity"]'   # optional prerequisite skill ids, see 9b
+  polyrob-owner-only: 'true'       # optional; omit it (default false). 'true' = the owner's own seats only, see 9a
   polyrob-version: '1'
   polyrob-generated: '<generator>; do not edit'   # optional; a generated skill — edit the generator, never the file
 ---
@@ -144,6 +145,7 @@ skill: it is an index line with no rule.
 - **A pin loads it.** A job's or goal's `payload.skills`, `TaskSessionConfig.skills` and the persona seeds load at session start (`SkillManager.get_pinned_skills`). A pin is explicit intent: it loads even when its rule is gated. An owner chat seat pins `OWNER_SEAT_SKILLS` (`agents/task/agent/core/construction.py`: the generated `harness-manual`); a delegated sub-agent does not. The cron lane stop keys on a job's first pinned id, so a pinned id is never renamed or retired.
 - **A programme's own pinned skill is its one source of truth.** A standing programme of several jobs keeps its terms (amounts, asset, windows, cadence, rubric) in its own pinned skill only (a shared procedure such as `dca` is not that skill: one job's parameters stay in that job's text). A job's task text names the skill and the part it runs ("follow Part B of the pinned `<id>` skill") and never restates a term, so a change is one skill edit, not a hunt through job texts and `owner.md`. A version marker such as "v2 terms" belongs in the skill body, not only in a job text.
 - **Otherwise the model chooses.** Every other session — owner chat, room, correspondent, a goal or cron run with no pin — gets the short `<skill-catalog>` index and calls `load_skill` for the line that fits the task.
+- **Seat gate.** A room or a correspondent's seat (`third_party`) runs under the owner's user id, but it lists and loads the shipped library only: never a skill marked `polyrob-owner-only: 'true'` (it authors skills, deploys the instance, handles an incident, pays or invoices, profiles a person, or names operator settings), never a money playbook, never a tenant-authored skill (programme terms live there) and never a project or ecosystem skill. The same gate applies to the index, `load_skill`, the persona seeds and `requires` (`core.skills.catalog.gate_allows`, `SkillManager.may_load_skill`). A pack skill declares owner-only the same way.
 - **Money gate.** A rule that declares a MONEY tool (`core.tool_capabilities.ids_with("money")`, e.g. `defi_trade`) in `tool_ids` is an index line (and a pullable prerequisite) only when the session holds a declared money tool or a declared read tool with no `high_impact` capability (e.g. `defi_data`). A declared action tool that moves no funds (`cronjob`) does not open it.
 
 ### 9b. `requires` — prerequisite procedures
@@ -152,23 +154,24 @@ skill: it is an index line with no rule.
   polyrob-requires: '["token-identity","pre-trade-check"]'   # trade-execution
 ```
 
-- Every pinned skill pulls in its `requires` ids, at most 2 per session (`MAX_PREREQUISITES`).
+- Every pinned skill pulls in its `requires` ids, at most 2 per session (`MAX_PREREQUISITES`); a prerequisite over the cap is logged as a WARNING.
 - One pass, no recursion: a prerequisite's own `requires` are not expanded.
-- A prerequisite whose effective rule says `auto_activate: false` is not pulled in, and it must pass the money gate for the session.
+- A prerequisite whose effective rule says `auto_activate: false` is not pulled in. A MONEY playbook (it declares a money tool) brings its prerequisites whatever tools the session holds (its tools may arrive later by `load_tool`); a prerequisite of a non-money skill must pass the money gate for the session. Every prerequisite passes the seat gate (9a).
 - Under progressive disclosure, prerequisites are pinned first (see section 1).
 
 ### 9c. Priority range
 
 | Priority | Who |
 |---|---|
-| 0-5 | Shipped builtin skills (lower = higher priority); a pack skill carries its own rule priority (5-7 today) |
+| 0-5 | Shipped builtin skills (lower = higher priority) |
+| 5-7 | Pack skills; only a safety prerequisite (an id another skill `requires`, e.g. `crypto-trading-safety`) ranks higher (tested) |
 | 6 | Agent- and user-authored skills (the writer's default) |
 | 9 | Ecosystem skills from `~/.claude/skills`, `~/.agents/skills` or a trusted project root (catalog only; `EXTERNAL_SKILL_PRIORITY`) |
 
 ### 9d. Ids and precedence
 
 - **A user skill can never take a builtin or pack id.** `skill_manage create`, `promote`, `polyrob skill install` and `POST /api/skills` all refuse one (`SkillManager.reserved_skill_ids()`). A legacy user rule under a system id may only disable that skill (`"auto_activate": false`); it never replaces its triggers, `requires`, priority or gate.
-- **One body precedence** (`core.skills.scopes.resolve`): builtin (`data/prompts/skills/`) > the tenant's user skill > pack skill > project > user ecosystem skill. `load_skill`, `resolve_skill_dir` (the `references/` directory) and the catalog use the same order. An ecosystem skill never enters the index under a builtin or pack id. Two non-builtin skills with one id and different bodies (a tenant skill and an ecosystem skill, or two ecosystem roots) are refused and logged once; an identical copy is not.
+- **One body precedence** (`core.skills.scopes.resolve`): builtin (`data/prompts/skills/`, served from its seeded copy `<data_home>/skills/bundled` once seeded) > the tenant's user skill > pack skill > project > user ecosystem skill. `load_skill`, `resolve_skill_dir` (the `references/` directory) and the catalog use the same order. An ecosystem skill never enters the index under a builtin or pack id. Two non-builtin skills with one id and different bodies (a tenant skill and an ecosystem skill, or two ecosystem roots) are refused and logged once; an identical copy is not.
 
 ### 9e. `allowed-tools` is advisory
 
@@ -178,7 +181,7 @@ An agentskills.io `allowed-tools` frontmatter field is recorded and one advisory
 
 `tests/unit/agents/task/test_library_invariants.py` enforces:
 - Every rule in the index has a `SKILL.md` body (true by construction: the index is built from the bodies).
-- No `SKILL.md` contains `mcp_execute_tool`.
+- No `SKILL.md` calls anysite through `mcp_execute_tool`.
 - No `SKILL.md` contains an obvious hardcoded secret (`sk-…`, `AKIA…`, PEM private key).
 - Every bundled skill passes the strict authored validation (`polyrob skills validate`).
 

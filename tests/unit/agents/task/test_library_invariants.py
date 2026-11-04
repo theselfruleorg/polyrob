@@ -3,9 +3,10 @@
 Three checks:
 (a) Every rule in the index has a SKILL.md body on disk (the index is built
     from the bodies' frontmatter since 081 WS-4.2, so this holds by construction).
-(b) No shipped SKILL.md uses the retired ``mcp_execute_tool`` verb.
-    The current anysite shape is ``anysite_api(endpoint=..., params={...})``;
-    see docs/SKILL_AUTHORING_STANDARD.md.
+(b) No shipped SKILL.md calls anysite through ``mcp_execute_tool`` (the retired
+    shape). The current anysite shape is ``anysite_api(endpoint=..., params={...})``;
+    see docs/SKILL_AUTHORING_STANDARD.md. ``mcp_execute_tool`` itself is the live
+    MCP action (``tools/mcp/mcp_tool.py``): a skill may name it.
 (c) No shipped SKILL.md contains an obvious hardcoded secret pattern
     (OpenAI key, AWS access key, or PEM private key header).
 """
@@ -30,10 +31,20 @@ def test_every_auto_activate_rule_has_a_body():
         assert (BASE / sid / "SKILL.md").exists(), f"{sid} has a rule but no body"
 
 
+#: The retired anysite-over-MCP shape: ``mcp_execute_tool(server_name="anysite", ...)``.
+_DEAD_ANYSITE = re.compile(r"mcp_execute_tool\([^)]*anysite", re.I | re.S)
+
+
 def test_no_dead_anysite_shape_in_bodies():
     for md in BASE.glob("*/SKILL.md"):
         t = md.read_text()
-        assert "mcp_execute_tool" not in t, f"{md} uses retired mcp_execute_tool"
+        assert not _DEAD_ANYSITE.search(t), f"{md} calls anysite through mcp_execute_tool"
+
+
+def test_the_live_mcp_action_may_be_named():
+    assert not _DEAD_ANYSITE.search(
+        'mcp_execute_tool(server_name="github", tool_name="list_issues", arguments={})')
+    assert _DEAD_ANYSITE.search('mcp_execute_tool(server_name="anysite", tool_name="x")')
 
 
 def test_no_obvious_secrets_in_bodies():

@@ -164,6 +164,22 @@ def correspondent_facing(orchestrator) -> bool:
         return True
 
 
+def seat_is_third_party(controller) -> bool:
+    """The skill seat gate's ONE question, asked per call: does a third party
+    drive this controller's session? The construction snapshot
+    (``_third_party_seat``) OR a room OR a correspondent-facing session NOW
+    (taint can arrive mid-session: hitl_ingress ``_set_correspondent_taint``).
+    A missing snapshot is not an owner seat. Fail-CLOSED on a probe error."""
+    try:
+        if getattr(controller, "_third_party_seat", False) is True:
+            return True
+        orch = getattr(controller, "orchestrator", None)
+        from core.surfaces.room_policy import is_public_session
+        return bool(is_public_session(orch) or correspondent_facing(orch))
+    except Exception:
+        return True
+
+
 def may_write_owner_memory(orchestrator) -> bool:
     """Third-party sessions must never promote findings into owner recall.
 

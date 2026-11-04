@@ -208,6 +208,13 @@ def catalog(monkeypatch, tmp_path):
         return CATALOG
 
     monkeypatch.setattr(oc, "_fetch", fake_fetch)
+    # register_live_model writes the process-wide registry: restore it, so a
+    # fake catalog row (e.g. an 8k-window image model) never leaks into a later
+    # registry ratchet.
+    from modules.llm.model_registry import get_registry
+    reg = get_registry()
+    monkeypatch.setattr(reg, "_models", dict(reg._models))
+    monkeypatch.setattr(reg, "_aliases", dict(reg._aliases))
     return state
 
 

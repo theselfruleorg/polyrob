@@ -11,28 +11,28 @@
         "tokens": 72
       },
       "skill_catalog": {
-        "chars": 1239,
-        "tokens": 309
+        "chars": 883,
+        "tokens": 220
       },
       "system_prompt": {
-        "chars": 11833,
-        "tokens": 2958
+        "chars": 11854,
+        "tokens": 2963
       },
       "tool_catalog": {
-        "chars": 4348,
-        "tokens": 1087
+        "chars": 4390,
+        "tokens": 1097
       }
     },
     "system": {
-      "chars": 17837,
-      "tokens": 4459
+      "chars": 17544,
+      "tokens": 4386
     },
     "tools": {
-      "chars": 14678,
+      "chars": 14769,
       "count": 24,
-      "tokens": 3669
+      "tokens": 3692
     },
-    "total_tokens": 8128
+    "total_tokens": 8078
   },
   "cron": {
     "layers": {
@@ -53,20 +53,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 6030,
-        "tokens": 1507
+        "chars": 6971,
+        "tokens": 1742
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15275,
-        "tokens": 3818
+        "chars": 15296,
+        "tokens": 3824
       },
       "tool_catalog": {
-        "chars": 4410,
-        "tokens": 1102
+        "chars": 4452,
+        "tokens": 1113
       },
       "workspace": {
         "chars": 113,
@@ -74,15 +74,15 @@
       }
     },
     "system": {
-      "chars": 28484,
-      "tokens": 7121
+      "chars": 29488,
+      "tokens": 7372
     },
     "tools": {
-      "chars": 79794,
-      "count": 90,
-      "tokens": 19948
+      "chars": 83261,
+      "count": 93,
+      "tokens": 20815
     },
-    "total_tokens": 27069
+    "total_tokens": 28187
   },
   "goal": {
     "layers": {
@@ -103,20 +103,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 6030,
-        "tokens": 1507
+        "chars": 6971,
+        "tokens": 1742
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15275,
-        "tokens": 3818
+        "chars": 15296,
+        "tokens": 3824
       },
       "tool_catalog": {
-        "chars": 4410,
-        "tokens": 1102
+        "chars": 4452,
+        "tokens": 1113
       },
       "workspace": {
         "chars": 113,
@@ -124,15 +124,15 @@
       }
     },
     "system": {
-      "chars": 28468,
-      "tokens": 7117
+      "chars": 29472,
+      "tokens": 7368
     },
     "tools": {
-      "chars": 79794,
-      "count": 90,
-      "tokens": 19948
+      "chars": 83261,
+      "count": 93,
+      "tokens": 20815
     },
-    "total_tokens": 27065
+    "total_tokens": 28183
   },
   "leaf": {
     "layers": {
@@ -153,16 +153,16 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 1918,
-        "tokens": 479
+        "chars": 2531,
+        "tokens": 632
       },
       "system_prompt": {
         "chars": 9259,
         "tokens": 2314
       },
       "tool_catalog": {
-        "chars": 4719,
-        "tokens": 1179
+        "chars": 4761,
+        "tokens": 1190
       },
       "workspace": {
         "chars": 113,
@@ -170,15 +170,15 @@
       }
     },
     "system": {
-      "chars": 17543,
-      "tokens": 4385
+      "chars": 18198,
+      "tokens": 4549
     },
     "tools": {
-      "chars": 37469,
+      "chars": 37543,
       "count": 42,
-      "tokens": 9367
+      "tokens": 9385
     },
-    "total_tokens": 13753
+    "total_tokens": 13935
   },
   "owner_repl": {
     "layers": {
@@ -199,20 +199,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 6030,
-        "tokens": 1507
+        "chars": 6971,
+        "tokens": 1742
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15124,
-        "tokens": 3781
+        "chars": 15145,
+        "tokens": 3786
       },
       "tool_catalog": {
-        "chars": 4457,
-        "tokens": 1114
+        "chars": 4499,
+        "tokens": 1124
       },
       "workspace": {
         "chars": 119,
@@ -220,15 +220,15 @@
       }
     },
     "system": {
-      "chars": 28438,
-      "tokens": 7109
+      "chars": 29442,
+      "tokens": 7360
     },
     "tools": {
-      "chars": 62154,
-      "count": 78,
-      "tokens": 15538
+      "chars": 65540,
+      "count": 81,
+      "tokens": 16385
     },
-    "total_tokens": 22648
+    "total_tokens": 23745
   },
   "owner_telegram_dm": {
     "layers": {
@@ -249,20 +249,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 6030,
-        "tokens": 1507
+        "chars": 6971,
+        "tokens": 1742
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15767,
-        "tokens": 3941
+        "chars": 15795,
+        "tokens": 3948
       },
       "tool_catalog": {
-        "chars": 4511,
-        "tokens": 1127
+        "chars": 4553,
+        "tokens": 1138
       },
       "workspace": {
         "chars": 126,
@@ -270,15 +270,15 @@
       }
     },
     "system": {
-      "chars": 29142,
-      "tokens": 7285
+      "chars": 30153,
+      "tokens": 7538
     },
     "tools": {
-      "chars": 64342,
-      "count": 59,
-      "tokens": 16085
+      "chars": 67099,
+      "count": 61,
+      "tokens": 16774
     },
-    "total_tokens": 23371
+    "total_tokens": 24313
   },
   "prod_owner_telegram_dm": {
     "layers": {
@@ -299,20 +299,20 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 6961,
-        "tokens": 1740
+        "chars": 8251,
+        "tokens": 2062
       },
       "step1:state_delta": {
         "chars": 3079,
         "tokens": 769
       },
       "system_prompt": {
-        "chars": 16514,
-        "tokens": 4128
+        "chars": 16542,
+        "tokens": 4135
       },
       "tool_catalog": {
-        "chars": 5237,
-        "tokens": 1309
+        "chars": 5279,
+        "tokens": 1319
       },
       "workspace": {
         "chars": 126,
@@ -320,15 +320,15 @@
       }
     },
     "system": {
-      "chars": 33639,
-      "tokens": 8409
+      "chars": 34999,
+      "tokens": 8749
     },
     "tools": {
-      "chars": 115752,
-      "count": 85,
-      "tokens": 28938
+      "chars": 118509,
+      "count": 87,
+      "tokens": 29627
     },
-    "total_tokens": 37347
+    "total_tokens": 38377
   },
   "room": {
     "layers": {
@@ -341,28 +341,28 @@
         "tokens": 72
       },
       "skill_catalog": {
-        "chars": 1378,
-        "tokens": 344
+        "chars": 876,
+        "tokens": 219
       },
       "system_prompt": {
-        "chars": 13167,
-        "tokens": 3291
+        "chars": 13188,
+        "tokens": 3297
       },
       "tool_catalog": {
-        "chars": 3904,
-        "tokens": 976
+        "chars": 3946,
+        "tokens": 986
       }
     },
     "system": {
-      "chars": 18791,
-      "tokens": 4697
+      "chars": 18352,
+      "tokens": 4588
     },
     "tools": {
       "chars": 23242,
       "count": 27,
       "tokens": 5810
     },
-    "total_tokens": 10508
+    "total_tokens": 10398
   },
   "server_owner_telegram_dm": {
     "layers": {
@@ -379,31 +379,31 @@
         "tokens": 17
       },
       "skill_catalog": {
-        "chars": 6016,
-        "tokens": 1504
+        "chars": 6614,
+        "tokens": 1653
       },
       "step1:state_delta": {
         "chars": 2829,
         "tokens": 707
       },
       "system_prompt": {
-        "chars": 14992,
-        "tokens": 3748
+        "chars": 15020,
+        "tokens": 3755
       },
       "tool_catalog": {
-        "chars": 6061,
-        "tokens": 1515
+        "chars": 6094,
+        "tokens": 1523
       }
     },
     "system": {
-      "chars": 30366,
-      "tokens": 7591
+      "chars": 31025,
+      "tokens": 7756
     },
     "tools": {
-      "chars": 30259,
-      "count": 35,
-      "tokens": 7564
+      "chars": 32935,
+      "count": 37,
+      "tokens": 8233
     },
-    "total_tokens": 15156
+    "total_tokens": 15990
   }
 }

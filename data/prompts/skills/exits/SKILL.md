@@ -40,8 +40,9 @@ What does exist:
   the chain's pinned USDC where the registry pins one (Base, Ethereum,
   Arbitrum, Polygon, and Solana — USDC only, not wSOL), and the wrapped native
   where it pins none (WETH, for example). A sell into any other token is
-  not an exit on this lane. Optimism is READ-ONLY here: you can read prices and
-  balances on it, but no swap can be sent there, so it is never an exit chain.
+  not an exit on this lane. A read-only chain (the Money column of
+  `pre-trade-check`'s `references/chains.md` says `no`) can be read, but no swap
+  can be sent there, so it is never an exit chain.
 - **The exit clamp:** a sell of up to 1% more than the held balance is clamped to
   the balance, so a full exit from a rounded display figure still goes through.
 
@@ -114,11 +115,8 @@ position with an UNKNOWN value is not dust — treat it by the rules above.
 
 ## If a tool is missing
 
-These steps need `defi_data` (reads) and `defi_trade` (trades) in THIS session.
-If `defi_trade` is not loaded, do the read steps, write the plan, and tell the
-owner which grant is missing. If `defi_data` is not loaded either, you cannot
-measure anything — say so and stop. Never work around a missing verb with a raw
-`call`, a browser dapp, or another agent.
+Follow `harness-manual`; do the read steps you can, and never work around a
+missing verb with a raw `call`, a browser dapp or another agent.
 
 ## Related
 

@@ -1,7 +1,7 @@
 # Jobs, goals, decisions and pauses (reference)
 
 Depth for the "Autonomy" section of `polyrob-user-guide/SKILL.md`. The owner
-holds FOUR things when you work without him: a **job**, a **goal**, a
+holds FOUR things when you work without the owner: a **job**, a **goal**, a
 **decision** and a **pause**. Explain every question about standing work with
 these four words — author, status and its reason, schedule and cost are details
 of one of them. Never call a job a "rail", a "stream" or an "objective": those
@@ -40,8 +40,9 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
   separate opt-in (`CRON_DELIVERY_ENABLED`). At `AUTONOMY_POSTURE=full` a
   `change_gated` job skips its paid model call when nothing it watches
   changed — a $0 run.
-- Your own tools: `cronjob_schedule/list/show/edit/cancel` (the tool must be in
-  this session's tool_ids). To change a live job, `cronjob_show` it and
+- Your own tools: `cronjob_schedule/list/show/edit/run_now/cancel` (the tool
+  must be in this session's tool_ids). How to shape a job, and the $0 watch:
+  the `standing-work` skill. To change a live job, `cronjob_show` it and
   `cronjob_edit` it (patch `old_text` → `new_text`) — never cancel and re-type it.
 - A group can run a catch-up job over its own messages:
   `/groups service here every 30m`.
@@ -70,7 +71,11 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
   the queue within `GOAL_BLOCKED_PROVIDER_RETRY_MIN` minutes; any other block
   waits for `/goal retry` or ages out after `GOAL_BLOCKED_MAX_AGE_DAYS`. Tell
   the owner the reason — never try to force it through.
-- Your own tools: `goal_create/list/show/cancel`. A goal you write for yourself
+- Your own tools: `goal_create`, `goal_list` and `goal_show` in every main session (a leaf returns a proposal);
+  `goal_ask` holds your own goal for an owner decision. `goal_update`,
+  `goal_unblock` and `goal_cancel` work only in the owner's own turn — in a goal
+  or scheduled-job run they refuse; name `/goal retry <id>` or `/goal stop <id>` to the
+  owner instead. Inside a run: the `goal-run` skill. A goal you write for yourself
   may ask only for the safe set (filesystem, task, browser, perplexity, MCP,
   AnySite, coding, `web_fetch`, Twitter, email, `message`, `x402_invoice`,
   knowledge, read-only `defi_data`); under an armed autonomous mode that set can
@@ -81,24 +86,26 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
 - `/inbox` lists every open decision, blocking ones first: approvals, your asks,
   quotes and choices on action cards, and signer approvals. `/pending`, `/asks` and `/cards`
   show parts of the same list.
-- He answers with the item's tap, `/approve <id>`, `/reject <id>`, or
+- The owner answers with the item's tap, `/approve <id>`, `/reject <id>`, or
   `/fulfill <id>` for an ask — which puts the goals behind it back in the queue.
-- You open a decision; you never answer one. To put a verb in front of him, use
-  `propose_action` — it becomes a card he confirms.
+- You open a decision; you never answer one. To put a verb in front of the
+  owner, use `propose_action` — it becomes a card the owner confirms.
 
 ## Pause — stop now, keep everything
 
 - `/pause` stops all autonomous work; `/pause <scope>` one scope;
   `/pause <job id|goal id>` one job or goal. `/resume` lifts it. No restart;
   jobs keep their schedules and goals keep their place.
-- You may pause your own work (`autonomy_control(pause)`); only the owner
-  resumes. A plain "stop" in chat is a message, not a switch.
+- Only on the owner's explicit request, in the owner's own turn, you call
+  `autonomy_control(action="pause", scopes=[…])` and quote the result; a
+  goal or scheduled-job run cannot pause or resume. Only the owner resumes (`/resume`). A
+  plain "stop" in chat is a message, not a switch.
 
 ## What standing work may do
 
 Every job and goal runs its tools as written, posts without a per-run tap and
 moderates only the room its text names. A job or goal you create from an
-autonomous run may ask only for the safe set; only his own turn may ask for any
+autonomous run may ask only for the safe set; only the owner's own turn may ask for any
 rig or put a write verb on a job. Under the `supervised` money regime no job or
 goal moves funds unattended.
 

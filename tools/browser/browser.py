@@ -52,7 +52,7 @@ from agents.task.loop_types.controller_types import ActionResult
 from tools.browser.actions import (
 	SearchGoogleAction, GoToUrlAction, ClickElementAction, InputTextAction,
 	SwitchTabAction, OpenTabAction, ScrollAction, SendKeysAction,
-	NoParamsAction, ExtractPageContentAction
+	NoParamsAction, ExtractPageContentAction, ScrollToTextAction, ScreenshotAction
 )
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
@@ -694,13 +694,6 @@ class Browser(BaseTool):
 			element_node = state.selector_map[params.index]
 			initial_pages = len(session.context.pages)
 
-			# Check if element has file uploader
-			if hasattr(self, 'is_file_uploader') and await self.is_file_uploader(element_node):
-				return ActionResult(
-					extracted_content=f'Index {params.index} - has an element which opens file upload dialog. To upload files please use a specific function to upload files',
-					include_in_memory=True
-				)
-
 			download_path = await context._click_element_node(element_node)
 			if download_path:
 				msg = f'💾 Downloaded file to {download_path}'
@@ -1067,13 +1060,13 @@ class Browser(BaseTool):
 
 	@BaseTool.action(
 		'Scroll to specific text on the page.',
-		param_model=SendKeysAction
+		param_model=ScrollToTextAction
 	)
-	async def scroll_to_text(self, params: SendKeysAction, execution_context: Optional[ActionExecutionContext]):
+	async def scroll_to_text(self, params: ScrollToTextAction, execution_context: Optional[ActionExecutionContext]):
 		"""Scroll to text."""
-		if not isinstance(params, SendKeysAction):
+		if not isinstance(params, ScrollToTextAction):
 			from pydantic import TypeAdapter
-			params = TypeAdapter(SendKeysAction).validate_python(params)
+			params = TypeAdapter(ScrollToTextAction).validate_python(params)
 
 		browser_context = execution_context.browser_context
 		if not browser_context:
@@ -1082,16 +1075,16 @@ class Browser(BaseTool):
 		try:
 			page = await browser_context.get_current_page()
 			# Use text locator to find and scroll to element
-			locator = page.get_by_text(params.keys, exact=False).first
+			locator = page.get_by_text(params.text, exact=False).first
 			if await locator.count() > 0:
 				await locator.scroll_into_view_if_needed()
 				return ActionResult(
-					extracted_content=f'📜 Scrolled to text: {params.keys}',
+					extracted_content=f'📜 Scrolled to text: {params.text}',
 					include_in_memory=True
 				)
 			else:
 				return ActionResult(
-					error=f'Text "{params.keys}" not found on page',
+					error=f'Text "{params.text}" not found on page',
 					include_in_memory=True
 				)
 		except Exception as e:
@@ -1188,10 +1181,19 @@ class Browser(BaseTool):
 		except Exception as e:
 			return ActionResult(error=f"Select dropdown option failed: {str(e)}", include_in_memory=True)
 
-	async def is_file_uploader(self, element_node):
-		"""Check if element opens file uploader (placeholder)."""
-		# This is a placeholder - actual implementation would check element type
-		return False
+	@BaseTool.action(
+		'Save a PNG screenshot of the current page into the workspace (screenshots/) and return its path. To show it, attach that path with message(media_paths=[...]).',
+		param_model=ScreenshotAction
+	)
+	async def screenshot(self, params: ScreenshotAction, execution_context: Optional[ActionExecutionContext]):
+		"""The vision capture lives outside the workspace: tools/browser/screenshot.py."""
+		from tools.browser.screenshot import save_page_screenshot
+		if not (execution_context and execution_context.browser_context):
+			return ActionResult(error="Browser context not available", include_in_memory=True)
+		try:
+			return await save_page_screenshot(execution_context.browser_context, params, execution_context)
+		except Exception as e:
+			return ActionResult(error=f"Screenshot failed: {str(e)}", include_in_memory=True)
 
 	async def _wait_for_page_load(self, page, timeout: int = 5000):
 		"""Helper to wait for page load with proper timeout handling.

@@ -146,7 +146,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/job", "work", "Add, change, grant, pause, resume, run, or stop one scheduled job",
          room_refused=True),
     Verb("/apps", "work",
-         "Deployed apps: approve an address, check health, or kill one", room_refused=True),
+         "Deployed apps: approve an address, check health, stop, start or remove one", room_refused=True),
     # money: no core row. Every money verb is CONTRIBUTED
     # (``register_verbs``) — today by ``core/money_verbs.py``, after 067 P5b by
     # the wallet pack. With none registered the group renders its install hint.

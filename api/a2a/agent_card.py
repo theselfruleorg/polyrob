@@ -271,6 +271,9 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
     if x402_option is not None:
         authentication_options["x402"] = x402_option
 
+    # 099 W6: each live offer listed on `a2a` is a skill with its own price.
+    from api.commerce_endpoints import a2a_pricing, a2a_skills
+    skills = skills + a2a_skills()
     # Pricing information (x402 extension)
     pricing = {
         "model": "pay-per-request",
@@ -280,6 +283,8 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
         # system AND the credit system are on (balance_manager registered).
         "credits": _credits_block(),
     }
+    if (offers := a2a_pricing()):
+        pricing["offers"] = offers
 
     # Instance branding: reuse the webview branding seam (POLYROB_BRAND_URL /
     # POLYROB_TERMS_URL / POLYROB_PRIVACY_URL / POLYROB_SUPPORT_URL) so an

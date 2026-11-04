@@ -322,6 +322,24 @@ def _invoice_asset(row):
     return resolve(dict(row).get("asset_id") or DEFAULT_ASSET_ID)
 
 
+def _invoice_atomic(row, decimals: int) -> int:
+    """The ONE raw amount an invoice is paid with (B30; 099 F2).
+
+    The stored ``amount_raw`` wins: a pinned-raw invoice (a room action) carries
+    a random raw tail that its round ``amount_usd`` does not, so a challenge
+    built from the dollars asks for LESS than the row the settlement matches.
+    Only a row without ``amount_raw`` derives it from the dollars.
+    """
+    raw = dict(row).get("amount_raw")
+    try:
+        if raw not in (None, "") and int(raw) > 0:
+            return int(raw)
+    except (TypeError, ValueError):
+        pass
+    from modules.x402.middleware import to_atomic_amount
+    return to_atomic_amount(float(dict(row)["amount_usd"]), decimals)
+
+
 def _challenge_for_invoice(row):
     """``(body, status)`` for a PENDING invoice, chosen by its asset's RAIL.
 
@@ -346,8 +364,7 @@ def _challenge_for_invoice(row):
                            f"this instance — it cannot be paid here"}, 409)
     if asset.rail == "facilitator":
         cfg = _invoice_asset_cfg(inv["chain"])
-        from modules.x402.middleware import to_atomic_amount
-        atomic = to_atomic_amount(float(inv["amount_usd"]), cfg.decimals)
+        atomic = _invoice_atomic(inv, cfg.decimals)
         return ({"x402Version": 1, "amount_usd": inv["amount_usd"], "accepts": [{
             "scheme": "exact", "network": inv["chain"],
             "maxAmountRequired": str(atomic),
@@ -505,8 +522,7 @@ async def _verify_and_settle_invoice(request_id, row, payment_header):
     # `int(round(usd * 10**decimals))` is a SECOND rounding rule, and a cent
     # the two round differently is an authorization for a different amount
     # than the one being settled.
-    from modules.x402.middleware import to_atomic_amount
-    atomic = to_atomic_amount(float(row["amount_usd"]), cfg.decimals)
+    atomic = _invoice_atomic(row, cfg.decimals)
     payment_requirements = PaymentRequirements(
         scheme="exact", network=row["chain"], maxAmountRequired=str(atomic),
         resource=f"/api/x402/requests/{request_id}/pay", description=row["purpose"],
