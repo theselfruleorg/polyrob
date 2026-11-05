@@ -36,6 +36,7 @@ SIZED = (dict, list, set, collections.deque, weakref.WeakKeyDictionary, weakref.
 
 WARM_CYCLES = 3
 CYCLES = 5
+GRAPH_DEATH_POLLS = 60
 
 KEPT_ON_PURPOSE = {
     # The session index: `_durable_chat_session` scans these rows to resume a chat.
@@ -154,11 +155,21 @@ async def test_eviction_frees_the_graph_and_no_map_grows(monkeypatch, tmp_path):
         refs = []
         for i in range(WARM_CYCLES, WARM_CYCLES + CYCLES):
             refs += await _one_cycle(task_agent, i)
-        await asyncio.sleep(0)
-        gc.collect()
+        # A slow machine may still run a background call that holds the session (CI: the
+        # first embedding model load). That ends; a real leak stays until the limit.
+        for _ in range(GRAPH_DEATH_POLLS):
+            await asyncio.sleep(0.5)
+            gc.collect()
+            if all(r() is None for r in refs):
+                break
 
         alive = [r() for r in refs if r() is not None]
-        assert not alive, f"evicted session objects are still alive: {[type(o).__name__ for o in alive]}"
+        holders = sorted({type(h).__name__ for o in alive[:3] for h in gc.get_referrers(o)
+                          if h is not alive})
+        tasks = [t.get_coro().__qualname__ for t in asyncio.all_tasks()]
+        assert not alive, (f"evicted session objects are still alive: "
+                           f"{[type(o).__name__ for o in alive]}; held by {holders}; tasks {tasks}")
+        del alive
 
         grew = _growers(before, {**_module_sizes(), **_service_sizes(container)}, CYCLES)
         new = grew - KEPT_ON_PURPOSE - BOUNDED - KNOWN_LEAKS
