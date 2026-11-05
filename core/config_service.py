@@ -615,10 +615,9 @@ def _route_write(key: str, value: str, *, scope: Optional[str] = None,
     if surface != "local" and remote_write_refused(key, value):
         return SetResult(
             False, "refused",
-            f"'{key}' selects the agent's owner binding, money bounds, approval "
-            f"policy, trust posture or credential surface and is not writable "
-            f"from a remote surface — set it from the local CLI "
-            f"(`polyrob config set {key} <value>`)")
+            f"'{key}' stays on the computer the agent runs on, because it decides money, "
+            f"approvals, trust or a credential. Run this there: "
+            f"`polyrob config set {key} <value>`")
     if key in PREF_SCHEMA:
         return _set_pref(key, value, user_id, home_dir, confirm)
     if scope == "project":

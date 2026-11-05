@@ -230,6 +230,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
 
     def remove_orchestrator(self, session_id: str):
         """Remove and return the orchestrator for ``session_id`` (``None`` if absent)."""
+        self._session_last_activity.pop(session_id, None)
         return self._registry.remove(session_id)
 
     def heartbeat_session(self, session_id: str) -> None:
@@ -243,8 +244,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             if hasattr(registry, "heartbeat"):
                 registry.heartbeat(session_id)
         except Exception:
-            # Fail-open: heartbeat failure is non-critical, continue without it
-            pass
+            pass  # Fail-open: heartbeat failure is non-critical
 
     def active_orchestrators(self) -> List[Any]:
         """Snapshot list of the currently-registered orchestrators."""
@@ -461,7 +461,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # a transport flag.
         orchestrator._public_session = room_session_source(kwargs.get("session_source"))
         orchestrator._rail_skill_ids = list(session_request.skills or [])  # 060 WS-5
-        orchestrator._money_target, orchestrator._recall_seed, orchestrator._mandate = (session_request.money_target, session_request.recall_seed, session_request.mandate)  # 068 G2; B1; 086
+        orchestrator._money_target, orchestrator._recall_seed, orchestrator._mandate, orchestrator._room_admin = (session_request.money_target, session_request.recall_seed, session_request.mandate, session_request.room_admin)  # 068 G2; B1; 086; 101
         bind_memory_scope(actual_id, session_request)  # 025: goal/cron memory scope
         # H16: a session created FOR a correspondent (conversation resume) is
         # third-party-facing for life, owner-only state never enters it (restored from `creator` on recreate).
@@ -577,18 +577,18 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 return "No active session found"
             session_id = sessions[-1]
 
+        # A session that does not exist leaves no lock row behind (102 3.5).
+        info = self.session_manager.get_session_info(session_id)
+        if not info or info.get('user_id') != user_id:
+            return "Session not found or unauthorized"
+
         # Serialize runs for this session; the status transition below also
         # guards against invalid resumes. Child tasks inherit its principal.
-        if session_id not in self._session_execution_locks:
-            self._session_execution_locks[session_id] = asyncio.Lock()
-
         # Acquire lock - only one execution at a time per session
         # This is the PRIMARY protection against race conditions
-        async with self._session_execution_locks[session_id]:
+        async with self._session_execution_locks.setdefault(session_id, asyncio.Lock()):
             from agents.task.billed_request import session_compute
-            info = self.session_manager.get_session_info(session_id)
-            if not info or info.get('user_id') != user_id:
-                return "Session not found or unauthorized"
+            info = self.session_manager.get_session_info(session_id) or info
             async with session_compute(info, user_id, getattr(self, '_container', None)):
                 return await self._run_session_impl(user_id, session_id)
 

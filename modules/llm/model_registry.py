@@ -48,6 +48,7 @@ class ModelRegistry:
     def __init__(self):
         self._models: Dict[str, ModelConfig] = {}
         self._aliases: Dict[str, str] = {}  # alias -> canonical name
+        self._warned_unknown: set = set()
         self._initialize_models()
 
     def _initialize_models(self):
@@ -75,7 +76,10 @@ class ModelRegistry:
         model = self._models.get(canonical_name)
 
         if not model:
-            logger.warning(f"Model '{name}' not found in registry, attempting fallback")
+            # 102 C-3: one token count on an unknown id logged 266 lines.
+            if name not in self._warned_unknown:
+                self._warned_unknown.add(name)
+                logger.warning(f"Model '{name}' not found in registry, attempting fallback")
 
             # Implement fallback logic based on model patterns
             model_lower = name.lower()

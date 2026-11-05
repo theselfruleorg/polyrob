@@ -264,6 +264,29 @@ def _bind_unit_price(home_dir, owner_uid, surface, chat_id, value) -> str:
         return text
     return f"{text} {asset_id}" if asset_id else text
 
+def _grant_refusal(key: str, value: Any, surface: str = "telegram") -> Optional[str]:
+    """Every name in a grant list must be real, so a typo is said at the seat and not
+    silently dropped at read (the read intersects too: a hand-edited file never widens)."""
+    from core.surfaces.room_grants import ADMIN_BUNDLES, ADMIN_SURFACES, member_grantable
+    if key == "chat.room_tools":
+        allowed, what = member_grantable(), "tools a room may be given"
+    elif key == "chat.admin_tools":
+        allowed, what = frozenset(ADMIN_BUNDLES), "admin bundles"
+    else:
+        return None
+    from core.prefs import validate_pref
+    ok, coerced, err = validate_pref(key, value)
+    if not ok:
+        return err
+    if key == "chat.admin_tools" and coerced and surface not in ADMIN_SURFACES:
+        return f"/admin runs on Telegram only, so {surface} cannot hold an /admin bundle"
+    bad = [v for v in coerced if v not in allowed]
+    if bad:
+        return (f"{key}: {', '.join(map(str, bad))} is not in the {what}: "
+                f"{', '.join(sorted(allowed))}")
+    return None
+
+
 def set_key(container: Any, owner_uid: str, surface: str, chat_id: str,
            key: str, value: Any) -> str:
     """Set (or, with ``value`` = ``unset``/``-``, clear) one ``chat.*`` key."""
@@ -292,38 +315,162 @@ def set_key(container: Any, owner_uid: str, surface: str, chat_id: str,
         if not ok:
             return f"❌ {msg}"
         return f"✅ {key} unset for {label} (back to default)."
+    refused = _grant_refusal(key, value, surface)
+    if refused:
+        return f"❌ {refused}"
     ok, msg = chat_policy.set(home_dir, owner_uid, surface, chat_id, key, value)
     if not ok:
         return f"❌ {msg}"
     return f"✅ {key} = {value!r} for {label}."
 
 
+def show_tools(container: Any, owner_uid: str, surface: str, chat_id: str) -> str:
+    """What this room holds beyond its base toolset, and what it could hold."""
+    chat_id = _norm_chat_id(chat_id)
+    from core.surfaces import chat_policy, room_grants
+    pol = chat_policy.load(_data_dir(container), owner_uid, surface, chat_id)
+    from core.surfaces.room_policy import room_tool_ids
+    grantable = sorted(room_grants.member_grantable())
+    if getattr(pol, "unreadable", False):
+        return (f"The settings file of {surface}:{chat_id} could not be read, so its tools "
+                "are UNKNOWN and every /admin bundle refuses. Repair or remove the file.")
+    admin_line = (
+        f"• /admin bundles: {', '.join(room_grants.live_admin_bundles(pol)) or 'none, so /admin is off'}"
+        f" (available: {', '.join(sorted(room_grants.ADMIN_BUNDLES))})"
+        if surface in room_grants.ADMIN_SURFACES else "• /admin: runs on Telegram only")
+    return "\n".join((
+        f"Tools in {surface}:{chat_id}:",
+        f"• every turn: {', '.join(room_tool_ids(policy=pol)) or 'none'}",
+        f"• room tools you added: {', '.join(room_grants.live_room_tools(pol)) or 'none'}"
+        f" (grantable: {', '.join(grantable)})",
+        admin_line,
+        f"• /admin turns per day: {pol.admin_turns_per_day}",
+    ))
+
+
+def set_tools(container: Any, owner_uid: str, surface: str, chat_id: str, *,
+              admin: bool, add: bool, name: str) -> str:
+    """Add or remove one name in ``chat.room_tools`` / ``chat.admin_tools``."""
+    chat_id = _norm_chat_id(chat_id)
+    from core.surfaces import chat_policy
+    field = "admin_tools" if admin else "room_tools"
+    current = list(getattr(chat_policy.load(_data_dir(container), owner_uid, surface,
+                                            chat_id), field) or ())
+    name = str(name).strip().lower()
+    if add and name in current or not add and name not in current:
+        return f"{name} is {'already' if add else 'not'} in chat.{field} for {surface}:{chat_id}."
+    wanted = current + [name] if add else [v for v in current if v != name]
+    if not wanted:
+        return set_key(container, owner_uid, surface, chat_id, f"chat.{field}", "-")
+    return set_key(container, owner_uid, surface, chat_id, f"chat.{field}", ",".join(wanted))
+
+
+def room_ref(surface: str, chat_id: Any) -> str:
+    """``<surface> <chat_id>`` as a seat line names a room from anywhere: a negative
+    Telegram id takes the ``_`` spelling, the one both grammars read."""
+    chat = str(chat_id)
+    return f"{surface} _{chat[1:]}" if chat.startswith("-") else f"{surface} {chat}"
+
+
+def _is_platform_id(ref: str, surface: str = "telegram") -> bool:
+    """A name never writes a role (101 R1); the id a surface sends for an account may."""
+    if ref.isascii() and ref.isdigit():
+        return True
+    from core.surfaces.catalog import get as _surface_row
+    row = _surface_row(surface)
+    return bool(row and row.account_id_shape and ref.isascii()
+                and re.fullmatch(row.account_id_shape, ref))
+
+
+def _name_answer(container: Any, surface: str, chat_id: str, ref: str, role: str) -> str:
+    """A name found in the room log: its uid and the exact line. Writes nothing.
+
+    ⚠️ 101 R1: ``sender_name`` is a first name when a member has no username, so
+    a member who renames himself to ``@bob`` would receive the owner's grant to
+    ``@bob``. The id comes back to a person, who sends it.
+    """
+    from core.surfaces.room_targets import resolve_target
+    ledger = _ledger_for_read(container)
+    rows = []
+    if ledger is not None:
+        try:
+            rows = ledger.tail(surface, chat_id, limit=2000)
+        except Exception as e:
+            logger.warning("group_admin: name lookup failed for %s (%s)", chat_id, e)
+            return (f"❌ I could not read the room log for {ref!r} ({type(e).__name__}). "
+                    "Use their platform id, or reply to their message.")
+    uid, found = resolve_target(rows, ref)
+    if uid is None:
+        why = found if "more than one" in str(found) else f"I found no {ref!r} in the room log."
+        return f"❌ A role needs a platform id or a reply to their message. {why}"
+    return (f"A name is self-chosen, so it does not set a role. {found} is uid {uid} in "
+            f"the room log. If that is the right person, send: /groups role "
+            f"{room_ref(surface, chat_id)} {uid} {role}")
+
+
 def set_role(container: Any, surface: str, chat_id: str, user_ref: str, role: str, *,
             by: str) -> str:
-    """Grant a per-chat role (admin/member/blocked). An unknown role echoes the
-    vocabulary ``GroupRoles.grant`` raises rather than writing a row nothing
-    reads.
+    """Grant a per-chat role (admin/blocked), or `member`, which removes the row.
 
-    044 T18 fix round 1 (Important 4): ``user_ref`` MUST be the raw numeric
-    platform id — ``GroupRoles`` keys on it, so a grant to ``@somebody`` (or
-    any other non-numeric handle, WITH or WITHOUT a leading ``@`` — a ruled
-    NO, since ``@somebody`` cannot be resolved to an id either way) would
-    write a row nothing ever reads, confirming a permission that can never
-    take effect. ``/groups admins here`` (044 T19) is the seam that turns a
-    handle into a real id.
+    An unknown role echoes the vocabulary ``GroupRoles.grant`` raises rather than
+    writing a row nothing reads. ``user_ref`` that is not a raw numeric platform
+    id writes nothing: see :func:`_name_answer`.
     """
     chat_id = _norm_chat_id(chat_id)
     ref = str(user_ref).strip()
-    if not ref.isdigit():
-        return (f"❌ {user_ref!r} is not a numeric id — a room role is keyed on "
-                "the raw platform id, not a handle. See /groups admins here "
-                "for real ids.")
     role_norm = str(role).strip().lower()
+    if not _is_platform_id(ref, surface):
+        return _name_answer(container, surface, chat_id, ref, role_norm)
+    label = f"{surface}:{chat_id}"
+    if role_norm == "member":
+        if _roles(container).revoke(surface, chat_id, ref):
+            return f"✅ {ref} is a plain member again in {label}."
+        return f"{ref} held no role in {label}, so nothing changed."
     try:
         _roles(container).grant(surface, chat_id, ref, role_norm, granted_by=by)
     except ValueError as e:
         return f"❌ {e}"
-    return f"✅ {user_ref} is now {role_norm} in {surface}:{chat_id} (granted by {by})."
+    return f"✅ {ref} is now {role_norm} in {label} (granted by {by})."
+
+
+def list_roles(container: Any, surface: str, chat_id: str) -> str:
+    """POLYROB's own role rows for one room. Unreadable is not empty."""
+    chat_id = _norm_chat_id(chat_id)
+    label = f"{surface}:{chat_id}"
+    if _service(container, "group_roles") is None and not os.path.isfile(_surfaces_db(container)):
+        return f"No role is set in {label}: everyone but the owner is a member."
+    try:
+        rows = _roles(container).list(surface, chat_id)
+    except Exception as e:
+        logger.warning("group_admin: role list failed for %s: %s", label, e)
+        return f"The roles of {label} are UNKNOWN: the store could not be read ({type(e).__name__})."
+    if not rows:
+        return f"No role is set in {label}: everyone but the owner is a member."
+    lines = [f"{len(rows)} role(s) in {label}:"]
+    for r in rows:
+        when = time.strftime("%Y-%m-%d", time.gmtime(float(r.get("created_at") or 0)))
+        lines.append(f"• {r['user_id']} — {r['role']} (by {r.get('granted_by') or '?'}, {when})")
+    return "\n".join(lines)
+
+
+def audit(container: Any, surface: str, chat_id: str, n: int = 30) -> str:
+    """Who ran which admin tool in this room. A read, never a push: a room never
+    writes the owner thread. Rows live as long as ``room_events`` (7 days)."""
+    chat_id = _norm_chat_id(chat_id)
+    label = f"{surface}:{chat_id}"
+    if _service(container, "room_caps") is None and not os.path.isfile(_surfaces_db(container)):
+        return f"No admin tool has run in {label}."
+    try:
+        rows = _room_caps(container).admin_tool_rows(surface, chat_id, limit=max(1, int(n)))
+    except Exception as e:
+        logger.warning("group_admin: audit read failed for %s: %s", label, e)
+        return f"The audit of {label} is UNKNOWN: the store could not be read ({type(e).__name__})."
+    if not rows:
+        return f"No admin tool has run in {label} in the last 7 days."
+    lines = [f"Last {len(rows)} admin tool call(s) in {label}:"]
+    for ts, action, uid in rows:
+        lines.append(f"[{time.strftime('%m-%d %H:%M UTC', time.gmtime(ts))}] {uid}: {action}")
+    return "\n".join(lines)
 
 
 def tail(container: Any, surface: str, chat_id: str, n: int) -> str:
@@ -373,6 +520,6 @@ def mute(container: Any, owner_uid: str, surface: str, chat_id: str, duration: s
 #: room this module does, alias and all.
 normalize_chat_id = _norm_chat_id
 
-__all__ = ["allow_here", "data_home", "deny_here", "is_room_allowed", "list_rooms",
-          "mute", "normalize_chat_id", "room_role", "set_key", "set_mode",
-          "set_role", "tail"]
+__all__ = ["allow_here", "audit", "data_home", "deny_here", "is_room_allowed", "list_roles",
+          "list_rooms", "mute", "normalize_chat_id", "room_ref", "room_role", "set_key",
+          "set_mode", "set_role", "set_tools", "show_tools", "tail"]

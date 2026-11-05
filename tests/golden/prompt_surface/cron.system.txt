@@ -362,6 +362,7 @@ A skill's stop, refusal and safety rules are binding. Only the procedure may ada
 - approval_not_created:duplicate: agent · now · none — final · no retry
 - approval_not_created:closed: agent · now · retry to ask again · retry
 - seat:room: owner-verb · now · the owner runs it from their private chat · no retry
+- seat:room_grant: owner-verb · now · the owner changes this room's grants · no retry
 - seat:correspondent: owner-verb · next-turn · the owner's own message (or they run it from their chat) · no retry
 - money:forged_text: owner-verb · now · the owner runs it from their chat · no retry
 - money:autonomous_unarmed: operator-env · restart · the money regime and DEFI_AUTONOMOUS_TURN_TRADING · no retry

@@ -25,6 +25,7 @@ EXPECTED_ORDER = (
     "step_3_nft_and_revoke_shapes",
     "step_3_claim_deploy_destination",
     "step_4_rpc_trust",
+    "step_4b_nonce_under_reservation",
     "step_5_simulate",
     "step_6_assert_deltas",
     "step_6a_min_inflow",

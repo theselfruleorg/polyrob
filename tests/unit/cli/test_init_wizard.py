@@ -92,7 +92,9 @@ def test_quick_writes_keys(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     env = (home / ".polyrob" / ".env").read_text()
     assert "ANTHROPIC_API_KEY=sk-q2" in env
-    assert "DEFAULT_MODEL=m1" in env
+    # m1 has no known provider: the agent would drop it, so it must not look saved.
+    assert "DEFAULT_MODEL=m1" not in env
+    assert "did not" in res.output
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ class _RecordingLLM:
 		if self.fail_times > 0:
 			self.fail_times -= 1
 			raise ValueError("messages.1: requests with tool_result must define tools")
-		return AIMessage(content="## Active Task\nsummarised")
+		return AIMessage(content="## Active Task\nsummarised\n## End of summary")
 
 
 def _mm(llm, session_id="s-warm", max_input_tokens=4000) -> MessageManager:

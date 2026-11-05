@@ -227,12 +227,12 @@ class TestContextAllocation:
         manager = BrowserManager(config=bot_config)
         await manager.initialize()
 
-        # Create context for session1_agent1
-        context1 = await manager.get_context("session1_agent1")
+        # Create context for agent1_session1
+        context1 = await manager.get_context("agent1_session1")
         assert context1 is not None
 
         # Try to create another context for same base session (should fail)
-        context2 = await manager.get_context("session1_agent2")
+        context2 = await manager.get_context("agent2_session1")
         assert context2 is None  # Per-session limit reached
 
     @patch('tools.browser.browser_manager.Browser')

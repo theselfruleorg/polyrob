@@ -22,3 +22,28 @@ def tenant_toolset(tools, user_id):
     if owner_refusal(user_id) is None:
         return list(tools)
     return [t for t in tools if not money_tool(t)]
+
+
+def default_session_tools(user_id) -> list:
+    """What a session gets when it asked for nothing. 081 WS-3.1: the console is an owner
+    seat. 104 D2: on the owner's own computer the owner starts with the terminal's tools;
+    any other caller keeps the narrow default."""
+    from agents.task.tool_defaults import cli_default_tools, owner_seat_tool_ids
+    from core.config_policy import local_mode_enabled
+    from core.instance import is_owner_local_safe, resolve_owner_principal
+    from tools.controller.approval import is_console_process
+    if (is_console_process() and local_mode_enabled()
+            and is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
+                                    local_enabled=True)):
+        return cli_default_tools()
+    return owner_seat_tool_ids(user_id) or ["browser", "filesystem"]
+
+
+def refuse_terminal_chat(session_info, session_id: str) -> None:
+    """104 D1: a console process never steps a chat the terminal runs, on any route."""
+    from tools.controller.approval import is_console_process
+    creator = (session_info or {}).get("creator") if isinstance(session_info, dict) else None
+    if is_console_process() and creator == "cli":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409, detail=(
+            f"This chat runs in the terminal. To continue it: polyrob run --resume {session_id}."))

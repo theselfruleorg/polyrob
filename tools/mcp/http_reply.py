@@ -24,6 +24,13 @@ ACCEPT = "application/json, text/event-stream"
 #: ``initialize`` is stored. Streamable HTTP first: it is the current spec.
 PROBE_ORDER = ("streamable_http", "http", "sse")
 
+#: The most one reply or one SSE event may hold in memory.
+MAX_REPLY_BYTES = 20 * 1024 * 1024
+#: The session's read limit. aiohttp's default refuses one long SSE line (LineTooLong)
+#: at far under MAX_REPLY_BYTES, and a large tool result is one ``data:`` line.
+READ_BUFSIZE = MAX_REPLY_BYTES
+ERROR_BODY_MAX_BYTES = 64 * 1024
+
 
 def first_body_line(body: Any, limit: int = 200) -> str:
     """The first non-empty line of a response body, cut to ``limit`` chars."""
@@ -71,6 +78,42 @@ def is_notification(message: Any) -> bool:
     return type(message).__name__ == "MCPNotification"
 
 
+def _over_limit() -> ValueError:
+    return ValueError(f"reply is over the {MAX_REPLY_BYTES} byte limit: refused, not parsed")
+
+
+async def _read_capped(response: Any) -> str:
+    """The plain body, in chunks: the read stops at the limit, before the rest is held."""
+    chunks: List[bytes] = []
+    held = 0
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        held += len(chunk)
+        if held > MAX_REPLY_BYTES:
+            raise _over_limit()
+        chunks.append(chunk)
+    return _decode(b"".join(chunks), response)
+
+
+def _decode(body: bytes, response: Any) -> str:
+    try:
+        return body.decode(getattr(response, "charset", None) or "utf-8", "replace")
+    except LookupError:  # the server named a charset Python does not know
+        return body.decode("utf-8", "replace")
+
+
+async def read_error_text(response: Any) -> str:
+    """The start of a refused reply: only a log line or a failure text reads it, so a
+    server cannot put a body of any size on the heap by answering 401 or 500."""
+    chunks: List[bytes] = []
+    held = 0
+    async for chunk in response.content.iter_chunked(ERROR_BODY_MAX_BYTES):
+        chunks.append(chunk)
+        held += len(chunk)
+        if held >= ERROR_BODY_MAX_BYTES:
+            break
+    return _decode(b"".join(chunks)[:ERROR_BODY_MAX_BYTES], response)
+
+
 def _matches(msg: Any, request_id: Any) -> bool:
     if not isinstance(msg, dict) or ("result" not in msg and "error" not in msg):
         return False
@@ -115,7 +158,7 @@ async def read_rpc_reply(response: Any, request_id: Any) -> Optional[Dict[str, A
     when the body carries no matching response."""
     ctype = (response.headers.get("Content-Type", "") or "").lower()
     if "text/event-stream" not in ctype:
-        body = await response.text()
+        body = await _read_capped(response)
         if not body.strip():
             return None
         try:
@@ -124,13 +167,18 @@ async def read_rpc_reply(response: Any, request_id: Any) -> Optional[Dict[str, A
             raise ValueError(f"reply is not JSON: {first_body_line(body)}")
         return pick_reply(_as_messages(data), request_id)
     data_lines: List[str] = []
+    held = 0
     async for raw in response.content:
         line = raw.decode("utf-8", "replace").rstrip("\r\n")
         if line == "":
             found = _event_message(data_lines, request_id)
             data_lines = []
+            held = 0
             if found is not None:
                 return found
         elif line.startswith("data:"):
+            held += len(raw)
+            if held > MAX_REPLY_BYTES:
+                raise _over_limit()
             data_lines.append(line[5:][1:] if line[5:].startswith(" ") else line[5:])
     return _event_message(data_lines, request_id)

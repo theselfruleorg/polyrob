@@ -6,6 +6,7 @@ event buffering, feed directory management, and LLM usage tracking.
 """
 
 import logging
+import re
 import os
 import uuid
 import json
@@ -14,6 +15,7 @@ from typing import Optional, Dict, Any, Union, List
 import time
 from datetime import datetime
 import traceback
+import queue
 import threading
 import tempfile
 
@@ -44,12 +46,49 @@ logger = get_task_logger('telemetry')
 TELEMETRY_BUFFER_SIZE = 500
 TELEMETRY_BUFFER_TIMEOUT = 60.0
 TELEMETRY_EVENTS_MAX_BYTES = 10485760  # 10MB
+#: Rotated events files one session keeps. A live session has no retention cutoff.
+TELEMETRY_EVENTS_KEEP_ROTATED = 3
+_ROTATED_EVENTS_NAME = re.compile(r"^events_\d{8}_\d{6}\.jsonl$")
 
 
 
 POSTHOG_EVENT_SETTINGS = {
 	'process_person_profile': True,
 }
+
+
+#: 102 C-5: a console that accepts and does not answer cost 103 ms per event on the
+#: caller (about 650 ms per step). One thread posts; the feed file is the source of
+#: truth, so a post dropped on a full queue is safe.
+_FEED_POST_QUEUE_MAX = 256
+_feed_posts: "queue.Queue[tuple]" = queue.Queue(maxsize=_FEED_POST_QUEUE_MAX)
+_feed_poster: Optional[threading.Thread] = None
+_feed_poster_lock = threading.Lock()
+
+
+def _post_feed_forever() -> None:
+	import requests
+	while True:
+		url, body, token = _feed_posts.get()
+		try:
+			requests.post(url, json=body, headers={"x-polyrob-internal-token": token},
+				allow_redirects=False, timeout=0.1)
+		except Exception:
+			pass  # Non-critical: the file watcher still picks the event up
+
+
+def _queue_feed_post(url: str, body: Dict[str, Any], token: str) -> None:
+	global _feed_poster
+	try:
+		_feed_posts.put_nowait((url, body, token))
+	except queue.Full:
+		return
+	if _feed_poster is None:
+		with _feed_poster_lock:
+			if _feed_poster is None:
+				_feed_poster = threading.Thread(
+					target=_post_feed_forever, name="polyrob-feed-post", daemon=True)
+				_feed_poster.start()
 
 
 class ProductTelemetry:
@@ -650,7 +689,6 @@ class ProductTelemetry:
 		try:
 			import os as _os
 
-			import requests
 			# 030 D12: honor the configured console port (WEBVIEW_EMIT_URL wins,
 			# else WEBGATE_PORT/WEBVIEW_PORT) — this was hardcoded :5050.
 			url = (_os.getenv("WEBVIEW_EMIT_URL") or "").strip()
@@ -666,12 +704,7 @@ class ProductTelemetry:
 			parsed = urlsplit(url)
 			if not token or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
 				return
-			requests.post(
-				url,
-				json={"session_id": session_id, "event": event},
-				headers={"x-polyrob-internal-token": token}, allow_redirects=False,
-				timeout=0.1  # 100ms timeout, non-blocking
-			)
+			_queue_feed_post(url, {"session_id": session_id, "event": event}, token)
 		except Exception:
 			# Non-critical: file write is source of truth
 			# File watcher will still pick up the event
@@ -1138,6 +1171,19 @@ class ProductTelemetry:
 			for session_id in list(self._event_buffer.keys()):
 				self._flush_event_buffer(session_id, force=True)
 
+	def flush_session(self, session_id: str) -> None:
+		"""Flush one session's buffered events to disk."""
+		self._flush_event_buffer(session_id, force=True)
+
+	def release_session(self, session_id: str) -> None:
+		"""Flush one session and forget it: the one process-wide service keeps no
+		row for a session that left memory (102 N-6)."""
+		with self._buffer_lock:
+			self._flush_event_buffer(session_id, force=True)
+			self._event_buffer.pop(session_id, None)
+			self._last_flush_times.pop(session_id, None)
+			self._feed_write_counts.pop(session_id, None)
+
 	# ------------------------
 	# Retention/rotation utils
 	# ------------------------
@@ -1199,18 +1245,23 @@ class ProductTelemetry:
 					# Rename existing file and create a new empty one
 					telemetry_file.rename(rotated)
 					telemetry_file.touch()
+					self._prune_rotated_events(telemetry_file.parent)
 				self.logger.info(f"Rotated telemetry events file to {rotated}")
 		except Exception as e:
 			self.logger.debug(f"Events rotation error: {e}")
+
+	@staticmethod
+	def _prune_rotated_events(telemetry_dir: Path) -> None:
+		"""Keep the newest rotated files. The name holds the time, so it gives the order."""
+		rotated = sorted((p for p in telemetry_dir.iterdir() if _ROTATED_EVENTS_NAME.match(p.name)),
+			key=lambda p: p.name)
+		for path in rotated[:-TELEMETRY_EVENTS_KEEP_ROTATED]:
+			path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
 # Manager-free feed emission (019)
 # ---------------------------------------------------------------------------
-
-_shared_emitter: Optional[ProductTelemetry] = None
-_shared_emitter_lock = threading.Lock()
-
 
 def emit_feed_event(event: BaseTelemetryEvent) -> None:
 	"""Best-effort feed emission for call sites that hold NO TelemetryManager.
@@ -1218,18 +1269,11 @@ def emit_feed_event(event: BaseTelemetryEvent) -> None:
 	019 P0: the approval layer (``tools/controller/approval.py``) needs to write
 	wait-state events to the session's feed but only has an execution context,
 	not the orchestrator's manager. The event must carry its own ``session_id``
-	(routing happens via ``event.get_session_id()``). Lazily constructs ONE
-	shared ``ProductTelemetry`` for the process; never raises.
+	(routing happens via ``event.get_session_id()``). Uses the ONE process-wide
+	``ProductTelemetry``; never raises.
 	"""
-	global _shared_emitter
 	try:
-		svc = _shared_emitter
-		if svc is None:
-			with _shared_emitter_lock:
-				if _shared_emitter is None:
-					_shared_emitter = ProductTelemetry()
-				svc = _shared_emitter
-		svc.capture(event)
+		get_safe_singleton(ProductTelemetry)().capture(event)
 	except Exception:
 		try:
 			logger.debug("emit_feed_event failed", exc_info=True)

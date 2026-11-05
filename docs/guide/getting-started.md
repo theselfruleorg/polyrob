@@ -16,11 +16,11 @@ polyrob doctor                      # catches a missing or malformed key first
 polyrob run "summarize https://example.com"
 ```
 
-The installer finds Python 3.11+, clones the source into `~/.polyrob/src`, builds
-a virtualenv, puts a `polyrob` command on your `PATH`, and runs the setup wizard
-inside the pipe (it reads `/dev/tty`, so it can still ask you questions). Already
-a Python user? `pipx install "polyrob[all]" && polyrob setup` does the same
-thing without the clone.
+The installer finds Python 3.11+ (or fetches a private copy), clones the source into `~/.polyrob/src`, builds
+a virtualenv, puts a `polyrob` command on your `PATH`, and runs a short setup
+inside the pipe (a key and a model; it reads `/dev/tty`, so it can still ask you; `polyrob setup` shows every option). Already
+a Python user? `pipx install polyrob && polyrob setup` does the same thing without
+the clone. Add extras only as you need them; `polyrob[all]` is about 2 GB.
 
 That last command fetches the page with the lightweight `web_fetch` tool, so no
 browser install is needed. Full browser automation is opt-in
@@ -59,22 +59,27 @@ and the same file is in the repository root. Flags:
 | `--packs x,discovery` | Install the SDKs of these first-party packs (`all` or `none`); the packs themselves ship inside `polyrob` |
 | `--no-setup` | Skip the wizard (run `polyrob setup` later) |
 | `--no-service` | Never offer the background service |
+| `--no-telemetry` | Do not send the install count ([what it holds](#the-install-count)) |
 | `--no-prompt` | Ask nothing at all — for scripts and images (implies `--no-browser` and `--no-service`) |
-| `--branch` / `--commit` | Pin the version it installs |
+| `--branch` / `--commit` | Pin the version it installs (`--commit` takes a commit or a tag such as `v1.7.4`) |
 | `--home DIR` | A different POLYROB home (default `~/.polyrob`) |
 | `--dir DIR` / `--venv-dir DIR` | Install the source tree at `DIR` in place / put the virtualenv elsewhere |
 | `--reset` | Recreate the virtualenv from scratch |
-| `--uninstall` | Remove the command, the `PATH` entry, the venv and the source; your data is kept |
+| `--verbose` | Show every command's output (it goes to `~/.polyrob/logs/install.log` otherwise) |
+| `--uninstall` | Stop the service and remove the command, the `PATH` entry, the venv, the source and the private Python; your data is kept |
 
 It puts code in `~/.polyrob/src`, the virtualenv in `~/.polyrob/venv`, the command
 in `~/.local/bin/polyrob`, and your data — keys, memory, identity — in
-`~/.polyrob/`. Running it again updates in place. Windows without WSL2 is not
-supported; there is no PowerShell installer.
+`~/.polyrob/`. Running it again updates in place. On a machine with no Python
+3.11+, or a Debian or Ubuntu Python without `venv`, it downloads a private Python
+into `~/.polyrob/python` (no `sudo`), using a `uv` build it checks against a pinned
+checksum. It needs `git`. Windows without WSL2 is not supported; there is no
+PowerShell installer.
 
 **pipx** — a clean, isolated install if you already have pipx:
 
 ```bash
-pipx install "polyrob[all]"
+pipx install polyrob
 ```
 
 **pip with the extras you want** — smaller, explicit:
@@ -93,6 +98,19 @@ git clone https://github.com/theselfruleorg/polyrob
 cd polyrob
 pip install -e ".[dev,all]"
 # or: bash install.sh   — installs THIS tree the way the one-liner would
+```
+
+### The install count
+
+When a fresh install works, the installer sends one anonymous count: the POLYROB
+version, the OS and the install method (`managed` or `source`). It has no ID and
+holds no path or host name. A re-run, an update, a CI run and a `pip` install send
+nothing, and the agent itself never sends it. The installer tells you at its start.
+To turn it off, use the flag or the variable:
+
+```bash
+curl -fsSL https://polyrob.dev/install.sh | bash -s -- --no-telemetry
+curl -fsSL https://polyrob.dev/install.sh | DO_NOT_TRACK=1 bash
 ```
 
 ### Extras
@@ -295,7 +313,7 @@ polyrob autonomy on                         # writes AUTONOMY_ENABLED=true
 
 `POLYROB_LOCAL` turns on the **interactive** tools you drive; the
 **self-directed loops** — goals, self-wake, the curator, writable skills — need
-`AUTONOMY_ENABLED` as well. The four axes, what each one moves, and how to stop
+`AUTONOMY_ENABLED` as well. `/mode` says what the agent may do now. Each setting, what it moves, and how to stop
 it again: [configuration.md §6](configuration.md#6-the-autonomy-dial).
 
 ---
@@ -341,7 +359,8 @@ snapshot that whole set together, so a rollback never restores a half of it.
 
 `POLYROB_DATA_DIR` moves the runtime root; a named profile replaces both homes
 at once ([profiles.md](profiles.md)). Nothing leaves your machine except calls
-to the LLM provider you configured and any integration you switch on.
+to the LLM provider you configured, any integration you switch on, and the one
+[install count](#the-install-count) from the one-line installer.
 
 ---
 

@@ -93,6 +93,9 @@ The frame above every destination states, once:
   head line reads `N+`, never a bare `N` — the number is a floor, not a
   measurement;
 - **whether this console can act at all** (the read-only badge, below).
+- **what the agent may do** (Agent › Overview, the same answers as `/mode`). A console on your own
+  computer has the terminal's abilities; a gate waits in the Inbox, and the chat says so. A chat that
+  the terminal runs stays there: the console shows it and names the command that continues it.
 
 The Inbox count rides in the nav. When a source could not be read it says "at
 least N waiting, one list unreadable" rather than a confident number.

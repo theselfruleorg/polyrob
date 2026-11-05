@@ -126,14 +126,14 @@ from agents.task.telemetry.service_detect import (  # noqa: E402
 
 def _screenshot_on_browser_only() -> bool:
 	"""``AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY`` (057 WS-B) — capture a screenshot
-	only on a step where the browser was actually used. Default OFF.
+	only on a step where the browser was actually used. Default ON (102 C-9).
 
 	Why it matters: ``browser`` is in ``AUTONOMOUS_MODE_TOOLS``, so every
 	autonomous session holds a browser context and ``get_state`` captured a
 	screenshot on every step — including the large majority that never touch a
 	page. The 2026-09-19 fix stopped SENDING the image; the capture still ran."""
 	from core.env import bool_env
-	return bool_env("AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY", False)
+	return bool_env("AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY", True)
 
 
 def _should_capture_screenshot(agent: Any, use_vision: bool) -> bool:
@@ -170,6 +170,14 @@ def _note_browser_state(agent: Any, state: Any) -> None:
 	states = getattr(agent, '_last_browser_states', None)
 	if states is not None:
 		states.append(state)
+
+
+def _log_memory_use(logger: Any, rss_mb: float, history_mb: float, step: int) -> None:
+	"""Two sizes, two checks: the process RSS and the message history."""
+	if history_mb > 50:
+		logger.warning(f"Message history using {history_mb:.1f}MB - consider checkpointing")
+	if rss_mb > 1000:
+		logger.warning(f"Process RSS {rss_mb:.0f} MB at step {step}")
 
 
 def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool:
@@ -373,24 +381,13 @@ class StepMixin:
 				# turn any earlier os.* use into an UnboundLocalError.
 
 				process = psutil.Process(os.getpid())
-				memory_mb = process.memory_info().rss / 1024 / 1024
+				rss_mb = process.memory_info().rss / 1024 / 1024
 
 				# NOTE: Removed truncation of _last_result - it was destroying important context
 				# Previous results are needed for task continuity
 
-				# Check memory usage
-				memory_bytes = self.message_manager.get_memory_usage_estimate()
-				memory_mb = memory_bytes / (1024 * 1024)
-				if memory_mb > 50:  # If message history is using > 50MB
-					self.logger.warning(f"Message history using {memory_mb:.1f}MB - consider checkpointing")
-
-				# Periodic memory cleanup
-				self.cleanup_memory(force=False)
-
-				# Log if high memory usage
-				if memory_mb > 1000:  # 1GB
-					self.logger.info(f"Memory usage: {memory_mb:.0f}MB at step {self.state.n_steps}")
-
+				history_mb = self.message_manager.get_memory_usage_estimate() / (1024 * 1024)
+				_log_memory_use(self.logger, rss_mb, history_mb, self.state.n_steps)
 
 			except Exception as e:
 				self.logger.debug(f"Memory cleanup error: {e}")
@@ -471,12 +468,19 @@ class StepMixin:
 					except Exception:
 						self.logger.debug("regime probe failed; owner section not lifted", exc_info=True)
 						self.message_manager.owner_instructions_authority = False
+					self.message_manager.last_summary_report = None
 					_compacted = await self.message_manager.llm_compact_history()
+					_summary = getattr(self.message_manager, 'last_summary_report', None) or {}
 					_emit_compaction_event(
 						self, 'finished', 'llm', tokens_before=_c_before,
 						tokens_after=self.message_manager.get_token_count(),
 						duration_seconds=time.time() - _c_t0,
 						success=bool(_compacted),
+						summary_complete=_summary.get('complete'),
+						summary_retried=_summary.get('retried'),
+						summary_chars=_summary.get('summary_chars'),
+						output_tokens=_summary.get('output_tokens'),
+						tail_tokens=_summary.get('tail_tokens'),
 					)
 					if _compacted:
 						self._last_llm_compaction_step = self.state.n_steps
@@ -500,7 +504,7 @@ class StepMixin:
 
 		try:
 			# Get fresh browser context from orchestrator
-			browser_context = await self.get_browser_context()
+			browser_context = await self.get_used_browser_context()
 
 			# Only get browser state if we have a browser context — and only if
 			# the rail can actually open one. In a custody process with no (or an
@@ -522,8 +526,7 @@ class StepMixin:
 					# itself still ran. Under AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY,
 					# capture only when the browser was ACTUALLY used recently
 					# (_has_active_browser_usage: a browser_* action in the recent
-					# actions, or a real URL on the last state). Default OFF =>
-					# byte-identical.
+					# actions, or a real URL on the last state).
 					state = await browser_context.get_state(
 						capture_screenshot=_should_capture_screenshot(self, self.use_vision))
 					_note_browser_state(self, state)

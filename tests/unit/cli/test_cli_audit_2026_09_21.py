@@ -307,10 +307,10 @@ def test_owner_paid_has_the_write_verbs():
         assert verb in res.output
 
 
-def test_owner_groups_admins_is_honest_without_a_store(tmp_path, monkeypatch):
+def test_owner_groups_roles_is_honest_without_a_store(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     from cli.commands.owner import owner
-    res = _run(owner, ["groups", "admins", "telegram", "_100123"])
+    res = _run(owner, ["groups", "roles", "telegram", "_100123"])
     assert res.exit_code == 0, res.output
     assert "no surface store yet" in res.output
     assert not (tmp_path / "surfaces.db").exists()

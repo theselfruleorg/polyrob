@@ -15,6 +15,7 @@ StreamChunkCallback = Callable[[str, str, str, int], Awaitable[None]]
 """async (session_id, agent_id, chunk, step) -> None"""
 
 # Import centralized path manager
+from agents.task.logging_config import get_task_logger
 from agents.task.path import pm
 
 # Import LLM error types for fallback handling
@@ -189,8 +190,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
             # Create dummy if initialization fails — and be LOUD about it
             # (019 P0.3): a silently-dead telemetry pipeline makes the UI
             # indistinguishable from "agent doing nothing".
-            import logging
-            logger = logging.getLogger(f"task.orchestrator[{session_id}]")
+            logger = get_task_logger("orchestrator", session_id)
             logger.error(f"Failed to initialize TelemetryManager: {e}", exc_info=True)
 
             class DummyTelemetryManager:
@@ -255,8 +255,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
                     balance_manager=balance_manager,
                     telemetry_manager=self.telemetry_manager,
                 )
-                import logging
-                logger = logging.getLogger(f"task.orchestrator[{session_id}]")
+                logger = get_task_logger("orchestrator", session_id)
                 if self.usage_tracker is None:
                     logger.debug("Usage tracker not initialized - missing database manager")
                 elif balance_manager is None:
@@ -266,8 +265,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
             else:
                 self.usage_tracker = None
         except Exception as e:
-            import logging
-            logger = logging.getLogger(f"task.orchestrator[{session_id}]")
+            logger = get_task_logger("orchestrator", session_id)
             logger.error(f"Failed to initialize usage tracker: {e}", exc_info=True)
             self.usage_tracker = None
 
@@ -283,12 +281,11 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         try:
             self.session_id = self.session_manager.create_session(self.session_id, user_id)
             # Create session logger (integrates with core logging automatically)
-            from agents.task.logging_config import get_task_logger
             self.logger = get_task_logger("orchestrator", self.session_id)
             self.logger.debug(f"Session {self.session_id} ready")
         except Exception as e:
             # Create logger before raising error
-            self.logger = logging.getLogger(f"task.orchestrator[{self.session_id}]")
+            self.logger = get_task_logger("orchestrator", self.session_id)
             self.logger.error(f"Error creating/getting session: {e}")
             raise
         

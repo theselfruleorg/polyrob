@@ -18,6 +18,12 @@ class _AR:
         self.metadata = metadata
 
 
+@pytest.fixture(autouse=True)
+def _wallet_on(monkeypatch):
+    """These tests read chains: the no-wallet shortcut has its own test."""
+    monkeypatch.setattr("tools.defi.book._wallet_is_on", lambda: True)
+
+
 def _enable_defi(monkeypatch):
     import tools.defi as defi_pkg
     monkeypatch.setattr(defi_pkg, "defi_data_enabled", lambda: True)

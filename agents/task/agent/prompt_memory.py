@@ -27,6 +27,13 @@ _BRAIN = ("- Your `memory` field each step is what later sessions recall: write 
           "checked, not guesses.")
 
 _NOT_MEMORY = "- Not memory: {parts}."
+_SESSION_ACTIONS = ("- `<session-actions>`, when present, holds what you did, read from the stores. "
+                    "For a count, a paid or unpaid claim, or 'did I already do this', use it or "
+                    "`wallet_activity`, never your memory of the chat.")
+_STANDING_WORK = ("- A scheduled job runs as written, with no adoption and no approval step; a pause "
+                  "stops it. When the owner changes or approves what a job will do, change the job "
+                  "in the same turn and read it back before you say it is armed. Explain a job's "
+                  "stop only from the last report in `cronjob_show`, never from a guess.")
 _SKILLS = "procedures are skills (`load_skill`)"
 _OWNER = "owner rules are owner.md (`owner_doc_manage`)"
 
@@ -109,7 +116,9 @@ def memory_system_content(registered: Optional[Set[str]] = None) -> str:
     lines = [_HEAD]
     if _registered(registered, "session_search", _external_provider_active):
         lines.append(_SESSION_SEARCH.format(kb=_SESSION_SEARCH_KB if _kb_on() else ""))
-    lines += [_RECALLED, _BRAIN]
+    lines += [_RECALLED, _BRAIN, _SESSION_ACTIONS]
+    if _registered(registered, "cronjob_show", lambda: False):
+        lines.append(_STANDING_WORK)
     parts = [text for name, text in (("load_skill", _SKILLS), ("owner_doc_manage", _OWNER))
              if _registered(registered, name, lambda: True)]
     if parts:

@@ -257,7 +257,10 @@ def own_token(chain: str, address: str, *, probe: bool = False,
         return None
     evidence = _probe(key)
     if not evidence:
-        _NEGATIVE[(path,) + key] = time.monotonic()
+        now = time.monotonic()
+        for stale in [k for k, at in _NEGATIVE.items() if now - at >= _NEGATIVE_TTL_S]:
+            del _NEGATIVE[stale]  # a row past its TTL answers nothing: it only holds memory
+        _NEGATIVE[(path,) + key] = now
         return None
     record_own_token(*key, kind="onchain_probe", evidence=evidence, db_path=path)
     return {"chain": key[0], "address": key[1], "kind": "onchain_probe",

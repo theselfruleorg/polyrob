@@ -64,6 +64,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# A dead browser never answers: every close step has a bound.
+_CLOSE_STEP_S = 5.0
+_CONTEXT_CLOSE_S = 10.0
+
 
 class BrowserContextWindowSize(TypedDict):
 	width: int
@@ -174,6 +178,8 @@ class BrowserSession:
 
 
 class BrowserContext:
+	_fresh_context = None  # created for this context, not yet a session; never the operator's
+
 	def __init__(
 		self,
 		browser: 'Browser',
@@ -206,7 +212,7 @@ class BrowserContext:
 
 			# Save cookies before closing
 			try:
-				await self.save_cookies()
+				await asyncio.wait_for(self.save_cookies(), timeout=_CLOSE_STEP_S)
 			except Exception as e:
 				self.logger.debug(f'Failed to save cookies during closure: {e}')
 
@@ -221,17 +227,17 @@ class BrowserContext:
 					except Exception:
 						_stem = str(_stem)
 					trace_path = os.path.join(self.config.trace_path, f'{_stem}.zip')
-					await self.session.context.tracing.stop(path=trace_path)
+					await asyncio.wait_for(self.session.context.tracing.stop(path=trace_path), timeout=_CONTEXT_CLOSE_S)
 					self.logger.debug(f'Saved trace to {trace_path}')
 				except Exception as e:
 					self.logger.debug(f'Failed to stop tracing: {e}')
 
 			# Close all pages first to ensure clean disconnection of websockets
 			try:
-				if self.session.context and self.session.context.pages:
+				if not self.config._force_keep_context_alive and self.session.context and self.session.context.pages:
 					for page in self.session.context.pages:
 						try:
-							await page.close(timeout=5000)  # Higher timeout for page closing
+							await asyncio.wait_for(page.close(), timeout=_CLOSE_STEP_S)
 						except Exception as page_error:
 							self.logger.debug(f'Error closing page: {page_error}')
 			except Exception as pages_error:
@@ -241,24 +247,14 @@ class BrowserContext:
 			if not self.config._force_keep_context_alive:
 				try:
 					# Set a reasonable timeout for context closure
-					await asyncio.wait_for(self.session.context.close(), timeout=10.0)
+					await asyncio.wait_for(self.session.context.close(), timeout=_CONTEXT_CLOSE_S)
 					self.logger.debug('Browser context closed successfully')
 				except asyncio.TimeoutError:
 					self.logger.warning('Context close timed out, attempting force close')
-					try:
-						# Force close using lower-level APIs if available
-						if hasattr(self.session.context, '_impl_obj'):
-							await self.session.context._impl_obj.close()
-					except Exception as force_close_error:
-						self.logger.warning(f'Force close failed: {force_close_error}')
+					await self._bounded_close(self.session.context._impl_obj.close)
 				except Exception as e:
 					self.logger.warning(f'Failed to close context gracefully: {e}')
-					# Try to force close anyway
-					try:
-						if hasattr(self.session.context, '_impl_obj'):
-							await self.session.context._impl_obj.close()
-					except Exception:
-						pass
+					await self._bounded_close(self.session.context._impl_obj.close)
 		except Exception as e:
 			self.logger.warning(f'Exception during browser context closure: {e}')
 		finally:
@@ -272,6 +268,13 @@ class BrowserContext:
 			except Exception:
 				pass
 				
+	async def _bounded_close(self, close) -> None:
+		"""One close attempt within the step bound. Never raises an Exception."""
+		try:
+			await asyncio.wait_for(close(), timeout=_CLOSE_STEP_S)
+		except Exception as e:
+			self.logger.warning(f'Close attempt failed: {e}')
+
 	async def __aenter__(self):
 		"""Async context manager entry - allows `async with BrowserContext() as ctx:`"""
 		await self._initialize_session()
@@ -372,6 +375,7 @@ class BrowserContext:
 				cached_state=initial_state,
 				session_id=self.session_id  # Pass session ID to BrowserSession
 			)
+			self._fresh_context = None
 
 			# Set the page title to include the full session ID
 			if self.session_id:
@@ -381,8 +385,12 @@ class BrowserContext:
 					self.logger.debug(f"Failed to set page title: {e}")
 
 			return self.session
-		except Exception as e:
+		except BaseException as e:
 			self.logger.error(f"Failed to initialize browser session: {e}")
+			# Created, not a session: nothing else can reach it (once per retry in the CDP Chromium).
+			fresh, self._fresh_context = self._fresh_context, None
+			if fresh is not None:
+				await self._bounded_close(fresh.close)
 			raise
 
 	def _add_error_listeners(self, context: PlaywrightBrowserContext):
@@ -451,7 +459,7 @@ class BrowserContext:
 			if not allow_private_urls():
 				context_options["service_workers"] = "block"
 			# Original code for creating new context
-			context = await browser.new_context(**context_options)
+			context = self._fresh_context = await browser.new_context(**context_options)
 
 		# SSRF: validate every intercepted request. Browser-side redirects and DNS
 		# rebinding still need an egress firewall/proxy; this is defense in depth.

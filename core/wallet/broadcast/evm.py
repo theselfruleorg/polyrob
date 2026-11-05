@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from core.wallet import onchain
 
@@ -172,6 +172,35 @@ def _hex_to_int(raw) -> Optional[int]:
         return None
 
 
+class BuiltTx(dict):
+    """A transaction a rail built: the plain fields, plus a way to re-read its nonce.
+
+    A verb builds BEFORE it holds ``gate.reserve()``, so a concurrent send can take
+    the nonce it read. ``tx_guard`` calls :meth:`refresh_nonce` under the reservation
+    (step 4b), which the send holds until its receipt, so authorize, sign and submit
+    all see the nonce the holder really has next. A transaction that crossed the
+    socket to ``polyrob-signer`` is a plain dict: the signer judges the agent's nonce
+    as it arrived and never replaces it.
+    """
+
+    def __init__(self, fields: dict, read_nonce: Callable[[], Optional[int]]):
+        super().__init__(fields)
+        self._read_nonce = read_nonce
+
+    def refresh_nonce(self) -> None:
+        """Move the nonce forward only: a lagging node can never hand back a used one.
+        A failed read keeps the built nonce; the node then decides, as it always did."""
+        try:
+            fresh = self._read_nonce()
+        except Exception as exc:
+            logger.warning("nonce re-read failed, keeping %s: %s", self.get("nonce"), exc)
+            return
+        if fresh is not None and fresh > int(self.get("nonce") or 0):
+            logger.info("nonce moved from %s to %s while this send waited its turn",
+                        self.get("nonce"), fresh)
+            self["nonce"] = fresh
+
+
 class EvmRail:
     def __init__(self, chain: str, signer, *, gas_limit: int = DEFAULT_GAS_LIMIT):
         from core.wallet import chains
@@ -261,9 +290,12 @@ class EvmRail:
         tx = self._finish_tx(to_addr=None, data=init_code, value=int(value))
         return tx
 
+    def _pending_nonce(self) -> Optional[int]:
+        return _hex_to_int(self._rpc("eth_getTransactionCount",
+                                     [self._signer.address, "pending"]))
+
     def _finish_tx(self, *, to_addr, data: str, value: int) -> dict:
-        nonce = _hex_to_int(self._rpc("eth_getTransactionCount",
-                                      [self._signer.address, "pending"]))
+        nonce = self._pending_nonce()
         if nonce is None:
             raise BroadcastError("could not read nonce")
         tip = _hex_to_int(self._rpc("eth_maxPriorityFeePerGas", [])) or 10 ** 8
@@ -278,11 +310,11 @@ class EvmRail:
                 f"estimated max fee {total_fee} wei exceeds the {self.chain} "
                 f"ceiling {self._max_fee_wei} wei — refusing to sign")
 
-        return {
+        return BuiltTx({
             "to": to_addr, "value": value, "data": data, "nonce": nonce,
             "gas": gas, "maxFeePerGas": max_fee, "maxPriorityFeePerGas": tip,
             "chainId": self.chain_id, "type": 2,
-        }
+        }, self._pending_nonce)
 
     def size_gas(self, tx: dict, sim_gas_used: Optional[int]) -> dict:
         """Return *tx* with its gas limit sized from the simulation's gasUsed.

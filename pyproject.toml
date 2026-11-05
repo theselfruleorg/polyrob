@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "1.7.4"
+version = "1.7.5"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -100,7 +100,7 @@ dev = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0", "pytest-xdist>=3.5", "pytest-t
 all = ["polyrob[gemini,anthropic,server,browser,memory-vector,media,docs,anysite,crypto,solana,telegram,twitter,voice,feishu,hf,modal,daytona,vercel-sandbox]"]
 
 [project.urls]
-Homepage = "https://github.com/theselfruleorg/polyrob"
+Homepage = "https://polyrob.dev"
 Repository = "https://github.com/theselfruleorg/polyrob"
 Issues = "https://github.com/theselfruleorg/polyrob/issues"
 

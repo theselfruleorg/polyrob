@@ -504,46 +504,29 @@ class Registry:
 		return params
 
 	def create_action_model(self) -> Type[ActionModel]:
-		"""Creates a Pydantic model from registered actions"""
+		"""The Pydantic model of the registered actions: one class per action set.
+		``tool_call_to_action`` reads it on EVERY tool call, so a build here was the
+		largest per-step cost (102 N-1); the event and class only change with the set."""
+		actions = list(self.registry.actions.items())
+		key = frozenset((name, id(a.param_model), a.description) for name, a in actions)
+		cached = getattr(self, "_action_model_cache", None)
+		if cached is not None and cached[0] == key:
+			return cached[1]
 		fields = {
-			name: (
-				Optional[action.param_model],
-				Field(default=None, description=action.description),
-			)
-			for name, action in self.registry.actions.items()
+			name: (Optional[a.param_model], Field(default=None, description=a.description))
+			for name, a in actions
 		}
-		
-		# Group actions by tool for better logging
-		actions_by_tool = {}
-		# Create thread-safe snapshot to avoid iterator corruption
-		for name, action in list(self.registry.actions.items()):
-			tool = action.tool or "default"
-			if tool not in actions_by_tool:
-				actions_by_tool[tool] = []
-			actions_by_tool[tool].append(name)
-
-		# Log actions by tool
-		for tool, actions in actions_by_tool.items():
-			self.logger.debug(f"Tool '{tool}' has {len(actions)} actions: {', '.join(actions[:5])}..." if len(actions) > 5 else f"Tool '{tool}' has {len(actions)} actions: {', '.join(actions)}")
-		
-		# Prepare registered functions for telemetry
-		registered_functions = [
-			RegisteredFunction(
-				name=name, 
-				params=action.param_model.model_json_schema(),
-				service=action.tool or "default"  # SINGULAR: tool field only, no fallback
-			)
-			for name, action in self.registry.actions.items()
-		]
-
 		self.telemetry.capture(
-			ControllerRegisteredFunctionsTelemetryEvent(
-				registered_functions=registered_functions
-			),
+			ControllerRegisteredFunctionsTelemetryEvent(registered_functions=[
+				RegisteredFunction(name=name, service=a.tool or "default")  # SINGULAR: tool field only
+				for name, a in actions
+			]),
 			session_id=self.session_id
 		)
-
-		return create_model('ActionModel', __base__=ActionModel, **fields)  # type:ignore
+		# The cached class holds each param_model, so an id in the key cannot be reused.
+		model = create_model('ActionModel', __base__=ActionModel, **fields)  # type:ignore
+		self._action_model_cache = (key, model)
+		return model
 
 	def get_prompt_description(self) -> str:
 		"""Get a description of all actions for the prompt"""

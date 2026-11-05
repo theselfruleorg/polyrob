@@ -21,6 +21,13 @@ def build_session_key(source: SessionSource, user_id: Optional[str] = None) -> s
     return base
 
 
+def admin_session_key(room_key: str, raw_uid: object) -> str:
+    """The room+admin session (101). ⚠️ ``:admin:`` goes BEFORE ``:thread:``:
+    ``message_router`` splits on ``:thread:`` and takes the tail as the thread id."""
+    base, sep, thread = str(room_key).partition(":thread:")
+    return f"{base}:admin:{raw_uid}{sep}{thread}"
+
+
 def chat_id_from_session_key(session_key: str) -> str:
     """The inverse of :func:`build_session_key`'s chat segment (030 WS-B3/E1).
 

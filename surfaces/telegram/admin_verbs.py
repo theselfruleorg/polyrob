@@ -69,7 +69,7 @@ async def pre_gate_reply(task_agent: Any, result: Any, cmd: str) -> Optional[str
         # "an admin may block a disruptive member" did not exist on Telegram.
         # `group_ops` re-checks the role itself and refuses every other grant,
         # so forwarding grants ROUTING, never authority.
-        if _groups_verb in ("mode", "tail", "role"):
+        if _groups_verb in ("mode", "tail", "role", "roles"):
             from surfaces.telegram import group_ops
             return await group_ops.groups_reply(task_agent, result, _groups_args)
         return None
@@ -102,10 +102,22 @@ async def _status(c: AdminCall) -> str:
 
 
 async def _mode(c: AdminCall) -> str:
-    # 030 WS-E4: the posture card + how to change it — health first
+    # The four answers, health first. The console runs this table too.
+    from core.permission_levels import LEVELS, level_reply
     from surfaces.telegram.status_ops import _health_header, _mode_reply
+    if c.args and c.args[0] in LEVELS:
+        # 044 I10: an owner write is never run from inside a group a member can talk in.
+        from core.surfaces.room_keys import is_group_session_key
+        if is_group_session_key(getattr(c.result.decision, "session_key", "")):
+            return "Change the level in your private chat with me, not in a group."
+        source = getattr(getattr(c.result.inbound, "identity", None), "source", None)
+        surface = {"webview": "console"}.get(getattr(source, "surface_id", ""), "telegram")
+        return level_reply(c.args[0], surface=surface, user_id=c.user_id)
     header = await _health_header(c.user_id, c.data_dir, c.task_agent)
-    return "\n".join(header) + "\n" + _mode_reply()
+    source = getattr(getattr(c.result.inbound, "identity", None), "source", None)
+    surface = getattr(source, "surface_id", "") or "telegram"
+    seat = {"webview": "console"}.get(surface, surface)
+    return "\n".join(header) + "\n" + _mode_reply(seat, full="all" in (c.args or ()))
 
 
 async def _recap(c: AdminCall) -> str:

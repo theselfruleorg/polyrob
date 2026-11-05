@@ -1,10 +1,14 @@
-"""The two upward seams of commerce (099 §3): the fulfiller and the listing adapters.
+"""The upward seams of commerce (099 §3): the fulfiller, the goal canceller, the listing adapters.
 
 * **Fulfiller** — ``fn(order, manifest, claim_token) -> goal_id``. The settlement
   side (``modules/commerce``) cannot import the goal board (``agents/``), so
   ``polyrob.app`` registers the function that writes the fulfillment goal.
   No fulfiller registered = the order stays ``paid`` and the watch tick names it
   to the owner; nothing is dropped.
+* **Goal canceller** — ``fn(goal_id) -> bool``. Same reason, other direction: an
+  order that takes its goal back (a retry, a passed deadline) stops that goal.
+  None registered = the goal runs on, but it can no longer spend, deliver or fail
+  the order (the money kernel and ``order_deliver`` bind to the CURRENT goal).
 * **Listing adapters** — one :class:`ListingAdapter` per listing kind (``a2a``,
   ``mcp``, ``http402``, ``market:<name>``, ``native:<surface>``). A projection
   that is served on request (A2A card, MCP, HTTP) needs no ``publish``; a
@@ -31,6 +35,20 @@ def register_fulfiller(fn: Optional[Callable[..., Optional[str]]]) -> None:
 
 def fulfiller() -> Optional[Callable[..., Optional[str]]]:
     return _FULFILLER
+
+
+_GOAL_CANCELLER: Optional[Callable[[str], bool]] = None
+
+
+def register_goal_canceller(fn: Optional[Callable[[str], bool]]) -> None:
+    global _GOAL_CANCELLER
+    if fn is not None and not callable(fn):
+        raise TypeError("the goal canceller must be callable")
+    _GOAL_CANCELLER = fn
+
+
+def goal_canceller() -> Optional[Callable[[str], bool]]:
+    return _GOAL_CANCELLER
 
 
 class ListingAdapter(Protocol):
@@ -68,5 +86,6 @@ def listing_adapters() -> Dict[str, ListingAdapter]:
     return dict(_ADAPTERS)
 
 
-__all__ = ["ListingAdapter", "fulfiller", "listing_adapters", "register_fulfiller",
-           "register_listing_adapter", "unregister_listing_adapter"]
+__all__ = ["ListingAdapter", "fulfiller", "goal_canceller", "listing_adapters",
+           "register_fulfiller", "register_goal_canceller", "register_listing_adapter",
+           "unregister_listing_adapter"]

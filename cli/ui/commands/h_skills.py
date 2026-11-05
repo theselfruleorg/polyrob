@@ -249,19 +249,22 @@ def _cmd_catalog(ctx: CommandContext) -> None:
     (never raises into the REPL).
     """
     # 080 D8: the ONE catalog reader the chat seats' `/skills` renders too.
-    from surfaces.telegram.skills_ops import catalog
+    from surfaces.telegram.skills_ops import catalog, unreadable_note
 
     query = " ".join(str(a) for a in (ctx.args or [])).strip()  # every word, like Telegram
     try:
         rows = catalog(ctx.user_id or "local", query, desc_chars=_DESC_WIDTH)
         if not rows and (not query or not catalog(ctx.user_id or "local")):
-            ctx.emit(candy.empty("skills available", yet=False), title="skills")
+            note = unreadable_note()
+            ctx.emit(note or candy.empty("skills available", yet=False), title="skills")
             return
     except Exception as exc:
         ctx.emit(f"Could not load skills: {exc}", title="skills")
         return
+    note = unreadable_note()
     if not rows:
-        ctx.emit(candy.empty(f"skills match {query!r}", yet=False), title="skills")
+        ctx.emit("\n".join(filter(None, (candy.empty(f"skills match {query!r}", yet=False), note))),
+                 title="skills")
         return
 
     lines: List[str] = [f"{len(rows)} skill(s) available:"]
@@ -280,6 +283,8 @@ def _cmd_catalog(ctx: CommandContext) -> None:
             f"Pending review: {pending_count} — approve with `polyrob skill approve <id>` "
             "(or `/skills approve <id>`)."
         )
+    if note:
+        lines.append(note)
     ctx.emit("\n".join(lines), title="skills")
 
 

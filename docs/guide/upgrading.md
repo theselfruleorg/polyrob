@@ -105,6 +105,15 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.5
+
+No database migration.
+
+- **The browser limit is now 6 contexts** (it was 25). An existing `MAX_BROWSER_CONTEXTS` line still wins.
+- **A background step that uses no page takes no screenshot.** A step that uses the browser still takes one.
+- **`SESSION_DIR_GC_APPLY` is gone.** A line that sets it does nothing.
+- **New commands:** `/mode <level>`, `/admin`, `/groups tools`, `/groups audit`, `/groups roles`.
+
 ### Upgrading to 1.7.4
 
 1.7.3 was never published; 1.7.4 carries its changes. No database migration: the

@@ -78,3 +78,20 @@ async def test_a_busy_slot_does_not_starve_the_owner(monkeypatch):
     finally:
         OWNER_VOICE.reset(token)
         shared.release()
+
+
+def test_an_idle_model_is_unloaded_and_a_running_one_is_not(monkeypatch):
+    import modules.transcription.faster_whisper_transcriber as fw
+    trims = []
+    monkeypatch.setattr(fw, "_return_freed_memory", lambda: trims.append(1))
+    monkeypatch.setattr(fw, "IDLE_UNLOAD_S", 3600.0)
+    tool = fw.FasterWhisperTranscriber()
+    tool._model = object()
+    assert tool._begin_use() is tool._model
+    tool._unload_if_idle()
+    assert tool._model is not None and trims == [], "a note is running"
+    tool._end_use()
+    assert tool._idle_timer is not None
+    tool._idle_timer.cancel()
+    tool._unload_if_idle()
+    assert tool._model is None and trims == [1]

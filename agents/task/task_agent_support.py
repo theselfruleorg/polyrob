@@ -82,6 +82,9 @@ class SessionRequest:
     #: 086 W2: the run's trading mandate id (``payload.mandate``); the money kernel's
     #: mandate step reads it from the execution context. None = not a mandate run.
     mandate: Optional[str] = None
+    #: 101: ``{surface, chat_id, uid, user_id, name}`` of a room+admin session, minted
+    #: by the harness from the routed sender. None = an ordinary room session.
+    room_admin: Optional[Dict[str, Any]] = None
     #: B1: the run's own text for memory recall (the cron job / goal text, minus
     #: the overlays the runner prepends to ``task``). None = recall from ``task``.
     recall_seed: Optional[str] = None

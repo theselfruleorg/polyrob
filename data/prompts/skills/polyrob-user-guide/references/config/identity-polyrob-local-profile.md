@@ -82,7 +82,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - POLYROB_CLI_CONFIG — default: unset — CLI config path override (default `~/.polyrob/cli.json`).
 - POLYROB_GITIGNORE_DOTROB — default: ON ("1") — Auto-gitignore the `.polyrob/` home.
 - CLI_WORKSPACE_LOCK — default: ON ("1") — CLI workspace lock to prevent concurrent CWD corruption.
-- SESSION_DIR_GC_APPLY — default: OFF (false) — the stale per-session directory GC (`core/session_gc.py`, `<data>/sessions/<user>/<uuid>/` untouched for 14 days, live/bound sessions protected, never the shared project root) DELETES only when this is `true`; OFF = dry-run, logs + `sessio…
 - CLI_PREFER_ACTION_TEXT — default: ON ('true') — CLI prefers clean action text over raw streamed buffer.
 - CLI_TODO_DOT_ROB — default: ON ("true") — In a project-root workspace, keep the agent TODO file under `.polyrob/` instead of the project root.
 - CONFIG_ENV — default: unset (→ ENV → development) — Highest-precedence spelling of the environment name that selects `config/.env.<env>` (`CONFIG_ENV` > `ENV` > `development`; see the env-files section at the top).

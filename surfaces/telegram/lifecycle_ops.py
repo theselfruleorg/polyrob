@@ -33,6 +33,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.async_bridge import communicate_or_kill
 from core.surfaces.cards import GO_WORDS as _GO
 
 from core import lifecycle as lc
@@ -133,7 +134,7 @@ async def _update_check(channel: str) -> Tuple[Optional[dict], str]:
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_SEC)
+        out, err = await communicate_or_kill(proc, CHECK_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         return None, f"the update check did not answer within {int(CHECK_TIMEOUT_SEC)} s"
     except OSError as exc:

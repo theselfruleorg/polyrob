@@ -97,6 +97,10 @@ def _rail_verdict_line(v):
     if v.kind == "missing_key":
         return (f"{v.key}: no API key since {since} (optional tool, not loaded)", None,
                 f"missing_key:{v.key}")
+    if v.kind == "compaction_summary":
+        return (f"memory: a compaction summary was cut and rebuilt since {since}, {n}× — "
+                f"{v.remedy or '/new starts clean'}",
+                SEVERITY_WARN, "compaction_summary_cut")
     return (f"{v.kind} {v.key}: {v.code or 'rejected'} since {since}, {n}×",
             SEVERITY_WARN, f"rail_{v.kind}")
 

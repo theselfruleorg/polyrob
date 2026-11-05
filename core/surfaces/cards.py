@@ -1,16 +1,11 @@
 """Action cards: one decision the owner can take with a tap, on every seat.
 
-Why (crypto-UX review, 2026-09-27): a money quote ended with a line to type
-again — ``To send it: /send 0.5 native to 0x… on base go`` — because a button
-may only carry ONE token (``core.surfaces.actions``). On a phone the owner
-copied the line or re-typed a 42-character address, and a second typo could
-differ from the address the quote showed. Decision buttons also stayed live
-after a decision, and the agent had no way to offer a choice at all.
+Why: a button may carry only ONE token (``core.surfaces.actions``), so a money quote
+ended with a line to re-type on a phone, and a typo could change the address.
 
-A card is a stored decision with an opaque id. Its buttons are one-token tap
-commands that name the card and an act — ``/card_<id>_ok`` — so the one-token
-rule holds and the payload never carries an amount or an address. What a tap
-DOES is decided from the stored row, never from the button.
+A card is a stored decision with an opaque id. Its buttons are one-token commands
+(``/card_<id>_ok``), so the payload never carries an amount or an address. What a
+tap DOES comes from the stored row, never from the button.
 
 Four kinds:
 
@@ -61,15 +56,11 @@ KIND_CHOICE = "choice"
 #: A /send or /swap built from buttons, one field per step (surfaces/card_builder.py).
 #: A pick advances the SAME card; the last pick runs the verb's QUOTE.
 KIND_BUILDER = "builder"
-#: 085 W3 (D3): standing MONEY work the agent wrote on an owner turn — a goal
-#: or a job carrying a money tool, a money rig or a buy target. The card holds
-#: the owner seat's own line (``/goal new …``, ``/job new …``); Confirm runs it
-#: on the seat, which writes the row with the owner's grant.
+#: 085 W3 (D3): standing MONEY work (a goal or job with a money tool, rig or buy
+#: target). Holds the owner seat's own line; Confirm runs it with the owner's grant.
 KIND_JOB = "job"
-#: 093 D1: a setting change the agent proposed on an owner turn — the owner
-#: seat's own line (``/mcp add …``, ``/config set …``, a non-money grant). It
-#: behaves exactly like a job card: Confirm runs the stored line on the seat.
-#: The shapes are decided in ``core.setting_proposals``.
+#: 093 D1: a setting change the agent proposed (``/mcp add …``, ``/config set …``).
+#: Like a job card; ``core.setting_proposals`` decides the shapes.
 KIND_SETTING = "setting"
 #: The kinds whose Confirm runs the stored seat line itself (no `go`).
 LINE_KINDS = frozenset({KIND_JOB, KIND_SETTING})
@@ -623,6 +614,33 @@ class CardStore:
                     out.append(args[i + 1])
         return out
 
+    def recent_sends(self, user_id: str, since: float, verb: str = "/send",
+                     limit: int = 300) -> List[Tuple[str, str, float, List[str]]]:
+        """``(to, token word, finished_at, args)`` of this owner's rail-confirmed cards for
+        ``verb`` since ``since`` (epoch seconds), and of those whose confirm line runs now."""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT doc, state, updated_at FROM cards WHERE user_id=? AND kind=? AND state IN (?,?) "
+                "AND updated_at>=? ORDER BY updated_at DESC LIMIT ?",
+                (user_id, KIND_QUOTE, S_DONE, S_CONFIRMED, float(since), int(limit))).fetchall()
+        finally:
+            conn.close()
+        out: List[Tuple[str, str, float]] = []
+        for r in rows:
+            doc = json.loads(r["doc"] or "{}")
+            if doc.get("verb") != verb:
+                continue
+            res = str(doc.get("result") or "")
+            if r["state"] == S_DONE and (not any(m in res for m in _SENT_MARKS) or failed_result(res)):
+                continue
+            args = [str(a) for a in doc.get("args") or []]
+            low = [a.lower() for a in args]
+            if "to" not in low or low.index("to") + 1 >= len(args) or len(args) < 2:
+                continue
+            out.append((args[low.index("to") + 1], args[1], float(r["updated_at"]), args))
+        return out
+
 
 _STORE: Optional[CardStore] = None
 
@@ -1157,6 +1175,7 @@ SETTING_CARD_SUBCOMMANDS = {
     "/goal": frozenset({"grant"}),
     "/job": frozenset({"edit"}),
     "/model": frozenset({"default"}),   # 095 W1c: /model <name> default (3rd word)
+    "/groups": frozenset({"role", "tools"}),   # 101: core.setting_proposals._groups
 }
 MAX_SETTING_WORDS = 40
 
@@ -1175,7 +1194,7 @@ def setting_card(user_id: str, words: List[str], *, title: str, body: str = "",
     if (shape is None or len(words) < 3 or sub.lower() not in shape
             or (verb == "/model" and len(words) != 3)):
         raise ValueError("a setting card carries only /mcp add, /config set, "
-                         "/goal grant, /job edit <id> grant or /model <name> default")
+                         "/goal grant, /job edit <id> grant, /model default, /groups role|tools")
     if verb == "/job" and (len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a setting card edits a job only as /job edit <id> grant …")
     args = words[1:]

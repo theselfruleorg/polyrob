@@ -310,8 +310,8 @@ async def startup_event():
         # Those are in polyrob-api.service (port 9000) - frontend calls /api/payments/* which nginx routes there
         # Webview only needs: database (read sessions), memory (session context), cache (performance)
 
-        logger.info("🎉 Webview services initialized - UI server ready!")
-        logger.info("💡 Payment/Auth APIs handled by polyrob-api.service (port 9000) via nginx proxy")
+        from webview.local_model import boot_local_model
+        await boot_local_model(_container, config)  # local only: the console chat answers
 
     except Exception as e:
         logger.error(f"❌ Failed to initialize services: {e}", exc_info=True)
@@ -2227,10 +2227,10 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
             return JSONResponse({"success": True, "message": "Command handled",
                                  "command_reply": cmd_reply})
 
-        # WS-3.1 (2026-07-07): single-service deploys (prod own_ops) have NO
-        # :9000 api service — but the task router + TaskAgent live in THIS
-        # process. Deliver in-process when available; the :9000 proxy below
-        # stays as the fallback for the classic two-service shape.
+        # WS-3.1: deliver in-process; the :9000 proxy below is the two-service fallback.
+        from webview.chat_open import terminal_chat_refusal  # 104 D1
+        if (refused := terminal_chat_refusal(clean_id)) is not None:
+            return refused
         in_proc_agent = _in_process_task_agent() if TASK_ROUTER_MOUNTED else None
         if in_proc_agent is not None:
             return await _send_message_in_process(

@@ -618,7 +618,7 @@ class A2ATaskHandler:
         # able to inject a message into or resume another tenant's session.
         self._authorize_owner(session_info, task_id, user_id)
         from agents.task.billed_request import validate_billed_session
-        validate_billed_session(session_info)
+        validate_billed_session(session_info, inbound_line=True)
 
         # Check if task is in terminal state
         current_state = self._session_status_to_a2a_state(

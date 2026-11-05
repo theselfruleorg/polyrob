@@ -264,7 +264,7 @@ STRINGS = {
     "money.book.no_cost": "no cost recorded",
     "money.book.collision": "One symbol, more than one contract",
     "money.tokens.title": "Tokens the agent trusts",
-    "money.tokens.aside": "a buy of any other contract is checked first",
+    "money.tokens.aside": "what the agent may accept, held or not; a buy of any other contract is checked first",
     "money.tokens.src_canonical": "the chain registry",
     "money.tokens.src_own_launch": "our own launch",
     "money.tokens.src_owner_pin": "your pin",
@@ -526,13 +526,16 @@ STRINGS = {
     "agent.ov_health_none": "Everything checked out",
     "agent.ov_report_link": "See the full health report",
     "agent.ov_unverified": "I could not check: {sources}",
-    "agent.ov_identity_no_avatar": "No avatar set. Set one with `polyrob avatar set <image>`.",
+    "agent.ov_identity_no_avatar": "No avatar set. To set one, run: polyrob avatar set <image>",
     "agent.ov_posture_title": "What the agent may do",
     "agent.ov_posture_aside": "How the agent is set up to act",
     "agent.ov_axis_local_title": "Treat this computer as yours alone?",
     "agent.ov_axis_local_why": "Turns on abilities for one owner. Never on a shared server.",
-    "agent.ov_axis_mode_title": "Act without asking first?",
-    "agent.ov_axis_mode_why": "Money and changes to the agent itself always ask first.",
+    "agent.ov_axis_mode_title": "Reach people and post on its own?",
+    "agent.ov_axis_mode_why": "Turns on chat apps, email and posting when their accounts are connected. Never money, never the computer.",
+    "agent.ov_asks_title": "Ask you first?",
+    "agent.ov_asks_why": "Actions that wait for your answer. Money always waits, unless you set a limit for it.",
+    "agent.ov_asks_none": "Nothing else is set to ask. It changes its own files without asking.",
     "agent.ov_axis_loop_title": "Start work on its own?",
     "agent.ov_axis_loop_why":
         "The agent starts goals, wakes itself and keeps its own schedule.",
@@ -552,12 +555,12 @@ STRINGS = {
     "agent.axis_value.local_on": "Yes",
     "agent.axis_value.local_off": "No",
     "agent.axis_value.mode_autonomous": "Yes",
-    "agent.axis_value.mode_supervised": "No, asks first",
-    "agent.axis_value.loop_silent": "Yes, without telling you",
+    "agent.axis_value.mode_supervised": "No",
+    "agent.axis_value.loop_silent": "Yes, and it says little",
     "agent.axis_value.loop_owner_visible": "Yes, and tells you",
     "agent.axis_value.loop_full": "Yes, all of it",
     "agent.axis_value.loop_off": "No",
-    "agent.axis_value.compute_0": "No, only in a sandbox",
+    "agent.axis_value.compute_0": "No, it runs no commands",
     "agent.axis_value.compute_1": "In a sandbox, with installs",
     "agent.axis_value.compute_2": "In a sandbox, and it can fix itself with your approval",
     "agent.axis_value.compute_3": "Yes, the whole computer",
@@ -799,8 +802,8 @@ STRINGS = {
     "work.now.empty_next": "Nothing is waiting its turn.",
     # 080 F-5: drawn ABOVE the stored goals, never instead of them.
     "work.now.disabled": (
-        "The agent's own work is switched off — the goals below are stored, but "
-        "nothing will run them until it is on."
+        "The agent's own work is off. Nothing starts until you ask, and a stored goal "
+        "does not run. To turn it on, run polyrob autonomy on."
     ),
     "work.now.unreadable": "I could not read the goal board.",
     "work.now.unreadable_why": "Why it failed",
@@ -1035,7 +1038,7 @@ STRINGS = {
     "chat.run_head.task": "What it was asked to do",
     "chat.composer.label": "Message the agent",
     "chat.composer.placeholder": "Ask the agent, or tell it what to do",
-    "chat.composer.placeholder_busy": "Add something while it works",
+    "chat.composer.placeholder_busy": "Write to the agent",
     "chat.composer.hint": "Type a slash for commands.",
     "chat.send": "Send",
     "chat.stop": "Stop",
@@ -1071,6 +1074,9 @@ STRINGS = {
     # it could not read, so the two are indistinguishable here. Making no claim
     # about money is the honest answer; a confident $0.00 is not.
     "chat.open.hero_no_money": "In the last day I finished {goals}.",
+    # Nothing to report is not an achievement to report. It is also the first page
+    # that a new install opens on.
+    "chat.open.hero_idle": "What should we work on?",
     "chat.open.hero_unreadable": "I could not read what I did in the last day.",
     # ⚠️ The recap annotates a rollup whose legs it could not read (core/recap.py
     # H14b). Dropping that note printed "my running cost $0.00" over a leg that
@@ -1085,17 +1091,22 @@ STRINGS = {
     "chat.open.goals_many": "{count} goals",
     "chat.open.income_none": "nothing came in",
     "chat.open.income_some": "{amount} came in",
-    # 070 W0.13: the console process has no language model (until the seat).
+    # A console on the person's own computer has a model when a provider key is set.
+    "chat.open.no_key": (
+        "This console has no model to answer with. Your text is still here. Connect a "
+        "provider with polyrob auth add, then start polyrob dashboard again."
+    ),
+    # 070 W0.13: a server console process has no language model (until the seat).
     "chat.open.no_model": (
-        "The agent cannot answer from this console yet. Your text is still here. "
-        "Talk to the agent on Telegram or in the terminal."
+        "Chat in this console cannot answer yet. Your text is still here. To talk to "
+        "the agent, run polyrob in a terminal."
     ),
     "chat.open.starters_label": "Things you could ask",
 
+    "chat.starter.can": "What can you do?",
     "chat.starter.away": "What did you do while I was away?",
-    "chat.starter.book": "What is the book worth right now?",
-    "chat.starter.cost": "What did that cost?",
-    "chat.starter.pause": "Pause trading until Monday",
+    "chat.starter.cost": "What have you cost me this week?",
+    "chat.starter.schedule": "Check the news every morning at 9",
 
     # The turn's receipt. {elapsed} runs from the turn's FIRST event to its
     # last (event timestamps, not the render time); {steps} is one of the
@@ -1106,6 +1117,7 @@ STRINGS = {
     # A turn still working when you wrote again: what it had done so far.
     "chat.receipt.so_far": "{elapsed} and {steps} before your message.",
     "chat.receipt.waiting": "Waiting for your answer. {elapsed} so far.",
+    "chat.receipt.waiting_inbox": "Waiting for your decision in the Inbox. {elapsed} so far.",
     "chat.receipt.failed": "This did not finish. It failed after {elapsed} and {steps}.",
     # A working turn whose run is no longer live (no process holds it) and
     # that never wrote a closing event: it ended without a final word. Never
@@ -1114,7 +1126,11 @@ STRINGS = {
     # A run that failed before the agent drew anything. The reason is not in the feed
     # yet; the wave-1 turn record carries it.
     "chat.turn_failed": "This chat failed before the agent could answer.",
-    "chat.receipt.steps_none": "no steps",
+    "chat.turn_key_refused": (
+        "{provider} refused the key, so the agent could not answer. Connect it again with "
+        "polyrob auth add {provider}, then start polyrob dashboard again."
+    ),
+    "chat.receipt.steps_none": "no other steps",
     "chat.receipt.steps_one": "1 step",
     "chat.receipt.steps_many": "{count} steps",
     "chat.receipt.cost_known": "Cost {amount}.",
@@ -1144,6 +1160,8 @@ STRINGS = {
         "and in a terminal."
     ),
 
+    "chat.terminal.composer": "This chat runs in the terminal.",
+    "chat.terminal.note": "To continue it: polyrob run --resume {id}. Or start a new chat here.",
     "chat.read_only.composer": "This console is set to look, not touch.",
     "chat.read_only.note": (
         "Talk to me on Telegram, or run polyrob in a terminal. To let this "
@@ -1187,7 +1205,7 @@ STRINGS = {
     "workpane.verdict_unknown": "not checked",
     "workpane.timeline_title": "Timeline",
     "workpane.timeline_note": "Every line is one action, newest last.",
-    "workpane.timeline_empty": "Nothing has happened in this chat yet.",
+    "workpane.timeline_empty": "No step has run in this chat yet.",
     "workpane.timeline_unreadable": "I could not read what this chat did.",
     "workpane.timeline_count": "{count} steps",
     "workpane.timeline_count_one": "1 step",
@@ -1197,6 +1215,11 @@ STRINGS = {
 # Shared settings controls; policy explanations originate in the server payload.
 STRINGS.update({
     "agent.control_saved": "Saved. The effective value is shown above.",
+    "agent.control_applies_live": "It applies now.",
+    "agent.control_applies_next_step": "It applies at the next step.",
+    "agent.control_applies_next_turn": "It applies at the next message.",
+    "agent.control_applies_next_session": "It applies to the next chat.",
+    "agent.control_applies_restart": "It applies when the agent restarts.",
     "agent.control_queued": "Removal requested for review; the effective value stays in place:",
     "agent.control_save": "Save",
     "agent.control_confirm": "Confirm this change",
@@ -1248,6 +1271,7 @@ STRINGS.update({
     "login.username": "Username",
     "login.password": "Password",
     "login.submit": "Sign in",
+    "login.hint": "The terminal that started the console shows the username and password.",
     "login.too_many": "Too many tries. Wait a few minutes, then try again.",
     "login.expired": "This page expired. Reload it and try again.",
     "login.wrong": "That username or password is not right.",
@@ -1267,7 +1291,7 @@ STRINGS.update({
     "error.home": "Go to Chat",
 
     # A1 — the agent's face on Agent, read from the one avatar slot (core/avatar.py).
-    "agent.ov_identity_default": "The default polyrob mark. Set your own with `polyrob avatar set <image>`.",
+    "agent.ov_identity_default": "The default polyrob mark. To set your own, run: polyrob avatar set <image>",
     "agent.ov_identity_source": "Set from {source}",
     "agent.ov_identity_made": "Set on {when}",
     "agent.ov_identity_unreadable": "There is an avatar here, but I could not read its record.",

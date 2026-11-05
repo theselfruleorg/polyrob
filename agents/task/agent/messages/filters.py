@@ -366,8 +366,24 @@ def media_keep_floor() -> int:
 	return int_env("MEDIA_KEEP_FLOOR", 2)
 
 
+def _saved_image_paths(content: list) -> List[str]:
+	"""The saved paths the turn's text names, in order (``inject_file_content`` writes them)."""
+	from core.surfaces.inbound_attachments import IMAGE_PATH_MARKER
+	paths = []
+	for block in content:
+		if isinstance(block, dict) and block.get("type") == "text":
+			for line in str(block.get("text") or "").splitlines():
+				if IMAGE_PATH_MARKER in line:
+					paths.append(line.split(IMAGE_PATH_MARKER, 1)[1].strip())
+	return [p for p in paths if p]
+
+
 def _strip_images_from(message: BaseMessage) -> BaseMessage:
-	"""A copy of ``message`` with every base64 image block replaced by the marker."""
+	"""A copy of ``message`` with every base64 image block replaced by the marker,
+	plus the saved path when the turn names one. Only ever a pure function of the
+	turn: a retired turn stays byte-identical on every later step."""
+	from core.surfaces.inbound_attachments import IMAGE_PATH_MARKER
+	paths = iter(_saved_image_paths(message.content))
 	new_content = []
 	for block in message.content:
 		if (
@@ -375,7 +391,10 @@ def _strip_images_from(message: BaseMessage) -> BaseMessage:
 			and block.get("type") == "image_url"
 			and "base64" in str(block.get("image_url", {}).get("url", ""))
 		):
-			new_content.append({"type": "text", "text": IMAGE_STRIPPED_MARKER})
+			path = next(paths, None)
+			text = IMAGE_STRIPPED_MARKER if path is None else (
+				f"{IMAGE_STRIPPED_MARKER}\n{IMAGE_PATH_MARKER}{path}")
+			new_content.append({"type": "text", "text": text})
 		else:
 			new_content.append(block)
 	stripped = copy.copy(message)
@@ -405,6 +424,8 @@ def strip_historical_media(messages: List[BaseMessage]) -> List[BaseMessage]:
 	IDEMPOTENT: a retired turn no longer carries base64, so it is no longer
 	counted, and the batch is sized to land at or under the ceiling — re-running
 	this on its own output returns the same bytes. Does not mutate the input list.
+	⚠️ The step function holds only over a store that keeps the result: see
+	``FiltersMixin._retire_stored_media``.
 	"""
 	indices = [idx for idx, msg in enumerate(messages) if _message_has_base64_image(msg)]
 	if not indices:
@@ -433,6 +454,33 @@ class FiltersMixin:
 	# declares one — three mixins omitted it until 2026-09-22, so the claim in
 	# this comment was false for as long as it had been written.
 	__slots__ = ()
+
+	def _retire_stored_media(self) -> int:
+		"""Write the batch retirement back to the store, so the deque stops holding
+		retired bytes and a retired turn stays retired. The turn stays in the deque
+		(content only, no cut), and a saved image file stays on disk.
+
+		The tail counts: the screenshot rides the ephemeral rail, and a rule that sees it on
+		the wire but not here brings retired images back on the next step without one.
+		"""
+		with self._history_lock:
+			stored = list(self.history.messages)
+			tail = list(getattr(self, "_ephemeral_messages", None) or ())
+			kept = strip_historical_media([m.message for m in stored] + tail)
+			retired = 0
+			for managed, message in zip(stored, kept):
+				if message is managed.message:
+					continue
+				managed.message = message
+				tokens = self._count_message_tokens(message)
+				self._increment_token_count(tokens - managed.metadata.input_tokens)
+				managed.metadata.input_tokens = tokens
+				retired += 1
+		if retired:
+			from agents.task.agent.messages.retrieval import drop_usage_anchor
+			drop_usage_anchor(self, "stored image bytes retired")
+			self.logger.info(f"Retired the image bytes of {retired} stored turn(s)")
+		return retired
 
 	def _filter_sensitive_data(self, message: BaseMessage) -> BaseMessage:
 		"""Filter out sensitive data from the message, tool calls, and metadata.

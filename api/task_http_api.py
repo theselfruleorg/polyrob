@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime
 
 from api.session_routing import guard_remote
+from api.tenant_tools import refuse_terminal_chat
 from api.upload_sniff import _sniff_upload_mime
 from api.session_preflight import no_model as _no_model
 from api.upload_store import store_upload as _store_upload
@@ -187,17 +188,16 @@ async def send_user_message(
     to an active Task session for processing in the next step.
     """
     try:
-        # OPTIMIZATION: Clean session ID once at API entry
         session_id = clean_session_id_at_entry(session_id)
 
         # Item 6: if this session is owned by another worker, return an honest 409
         # (with owner_pid) instead of a false-404. No-op for the in-process registry.
         guard_remote(agent, session_id)
 
-        # Get session from agent
         session_info = await agent.get_session_by_id(session_id)
         if not session_info:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        refuse_terminal_chat(session_info, session_id)
         
         # Check session status (unified field name)
         status = session_info.get('status', 'unknown').lower()
@@ -224,7 +224,7 @@ async def send_user_message(
         from agents.task.billed_request import validate_billed_session
         await verify_payment_for_request(req, cost_credits=1)
         try:
-            validate_billed_session(session_info)
+            validate_billed_session(session_info, inbound_line=True)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         _record_owner_thread_line(req, agent, session_id, user_id, request)  # 061
@@ -1307,9 +1307,8 @@ async def create_session(
                 logger.warning(f"Model '{session_config.llm.model}' not in registry - defaulting to no vision")
 
         session_config.limits.max_steps = request_body.get("max_steps", interactive_max_steps())
-        from agents.task.tool_defaults import owner_seat_tool_ids  # 081 WS-3.1: the console = an owner seat
-        from api.tenant_tools import tenant_toolset  # 085 A6: a non-owner tenant carries no money tool
-        session_config.tools = tenant_toolset(request_body.get("tools", owner_seat_tool_ids(user_id) or ["browser", "filesystem"]), user_id)
+        from api.tenant_tools import default_session_tools, tenant_toolset  # 085 A6: a tenant carries no money tool
+        session_config.tools = tenant_toolset(request_body.get("tools", default_session_tools(user_id)), user_id)
 
         # MCP server selection — a list of tool_ids like ["mcp:anysite", "mcp:user:myserver"]
         mcp_servers = request_body.get("mcp_servers", [])
@@ -1525,7 +1524,7 @@ async def get_resource_metrics(agent = Depends(get_task_agent)):
             "browser": browser_metrics,
             "memory": {
                 "process_mb": memory_info.rss / 1024 / 1024,
-                "process_mb_peak": memory_info.vms / 1024 / 1024,
+                "process_vms_mb": memory_info.vms / 1024 / 1024,
                 "system_available_mb": psutil.virtual_memory().available / 1024 / 1024,
                 "system_total_mb": psutil.virtual_memory().total / 1024 / 1024,
                 "system_used_pct": psutil.virtual_memory().percent

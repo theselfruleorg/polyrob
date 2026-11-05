@@ -122,13 +122,12 @@ def test_global_help_text_says_the_target_moves_with_the_profile():
         assert "profile" in help_text.lower(), (sub, help_text)
 
 
-def test_home_is_an_alias_of_global():
+def test_set_has_one_home_option():
+    """--home was both a flag and a value option here: click warned on every `config set`."""
     from cli.commands.config import set_cmd
 
-    names = {opt.name for opt in set_cmd.params}
-    assert "is_global" in names
-    opt = next(o for o in set_cmd.params if o.name == "is_global")
-    assert "--home" in opt.opts
+    owners = [o.name for o in set_cmd.params if "--home" in getattr(o, "opts", ())]
+    assert owners == ["home_dir_opt"]
 
 
 # ---------------------------------------------------------------------------

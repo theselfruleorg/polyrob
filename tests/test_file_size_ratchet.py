@@ -108,7 +108,7 @@ CEILINGS = {
     # W2 (2026-10-10): every production file over DEFAULT_CEILING, frozen at its
     # live size. Each is a split candidate (structural review dim 3, W9); lower
     # the row in the commit that splits the file, delete it once <= the default.
-    "surfaces/telegram/harness.py": 2934,  # W9: admin verbs -> admin_verbs.py + *_ops.py
+    "surfaces/telegram/harness.py":     2899,  # W9: admin verbs -> admin_verbs.py + *_ops.py
     "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
     "packs/x/polyrob_x/twitter_tool.py": 2824,
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
@@ -120,8 +120,8 @@ CEILINGS = {
     "cli/commands/owner.py": 1646,
     "agents/task/agent/core/next_action_internal.py": 1614,
     "tools/browser/browser.py": 1604,
-    "core/prefs.py": 1569,
-    "tools/controller/registry/service.py": 1552,
+    "core/prefs.py": 1405,
+    "tools/controller/registry/service.py": 1535,
     "api/admin_endpoints.py": 1328,
 }
 

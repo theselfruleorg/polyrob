@@ -201,3 +201,14 @@ def test_owner_only_skills_are_not_listed_on_a_third_party_seat():
     assert gate_allows(rule, [], listing=True)
     plain = rule_from_frontmatter({"description": "d", "metadata": {"polyrob-priority": "3"}})
     assert "owner_only" not in plain and gate_allows(plain, [], third_party=True)
+
+
+def test_the_owners_new_message_stays_newest_when_a_note_lands_after_it():
+    from modules.llm.messages import HumanMessage, MessageOrigin
+    mm = _mm()
+    mm._add_message_with_tokens(HumanMessage(content="owner words", origin=MessageOrigin.USER))
+    assert mm.update_state_delta({"live_health": "Live health:\nok"})
+    assert mm.history.messages[-1].message.content == "owner words"
+    assert "<state-delta " in str(mm.history.messages[-2].message.content)
+    # The carrier is still found: the same state is not pushed twice.
+    assert not mm.update_state_delta({"live_health": "Live health:\nok"})

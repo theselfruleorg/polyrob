@@ -153,7 +153,8 @@ def remedy(feature: str) -> str:
     """The one sentence every refusal carries: the pip extra, and on a server the
     deploy-side list it belongs in."""
     extra = _FEATURE_EXTRA.get(feature, feature)
-    text = f"pip install 'polyrob[{extra}]'"
+    from core.optional_extras import pip_command
+    text = f"{pip_command()} install 'polyrob[{extra}]'"
     if not lazy_installs_enabled():
         text += (f" (on a deployed server add `{extra}` to the extras your deploy "
                  f"installs and redeploy, or set LAZY_DEPS_MODE=trusted; "
@@ -241,9 +242,19 @@ def _protected_overlay(feature: Path, *, local: bool = False) -> bool:
         if not valid_feature(feature.name):
             return False
         child = feature.absolute()
-        for path in (child, *child.parents):
+        # /home -> /var/home on Fedora Atomic, /tmp -> /private/tmp on macOS. On the owner's
+        # own machine, a symlink that a trusted identity owns is checked like a directory
+        # and the real path is checked too. A protected overlay stays directories only.
+        chain = [child, *child.parents]
+        if local:
+            chain = list(dict.fromkeys((*chain, child.resolve(), *child.resolve().parents)))
+        for path in chain:
             info = path.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_uid not in trusted:
+            if info.st_uid not in trusted:
+                return False
+            if local and stat.S_ISLNK(info.st_mode):
+                continue
+            if not stat.S_ISDIR(info.st_mode):
                 return False
             if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 # A root-owned sticky parent prevents other identities from

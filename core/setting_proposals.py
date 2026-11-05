@@ -32,7 +32,8 @@ REFUSED = "refused"
 #: The shapes, as the refusal names them.
 SHAPES = ("/mcp add <id> <https-url>", "/config set <key> <value>",
           "/goal grant <id> tools=<a,b>", "/job edit <id> grant tools=<a,b>",
-          "/model <name> default")
+          "/model <name> default", "/groups role <surface> _<chat_id> <uid> <role>",
+          "/groups tools <surface> _<chat_id> [admin] add|remove <name>")
 
 MCP_RISK = ("Risk: the server's tools gain network reach from this agent, and what "
             "they return is untrusted input; the server sees every argument the agent "
@@ -267,6 +268,47 @@ def _model_default(words: List[str]) -> SettingProposal:
                            risk=MODEL_RISK, who="owner-verb", when="now")
 
 
+def _groups(words: List[str]) -> SettingProposal:
+    """101: a room role or a room grant, by numeric id, naming the room. The card
+    holds the line and the owner taps; the seat re-runs it through every gate."""
+    shape = "a room card names the room: " + "; ".join(SHAPES[-2:])
+    if len(words) < 5 or words[1] not in ("role", "tools") or not words[2].isalpha():
+        return _refused(shape)
+    surface, chat = words[2].lower(), words[3]
+    from core.surfaces.catalog import get as _surface_row
+    if not re.fullmatch(r"[-_]?\d+", chat) or _surface_row(surface) is None:
+        return _refused(shape)
+    room = f"{surface} _{chat.lstrip('-_')}" if chat[0] in "-_" else f"{surface} {chat}"
+    if words[1] == "role":
+        from core.surfaces.group_roles import ROLES
+        uid, role = (words[4], words[5].lower()) if len(words) == 6 else ("", "")
+        if not (uid.isascii() and uid.isdigit()) or role not in ROLES:
+            return _refused(shape)
+        risk = ("Risk: this person can run every /admin bundle granted in that room and "
+                "moderate its members." if role == "admin" else "")
+        return SettingProposal(CARD, words=["/groups", "role", *room.split(), uid, role],
+                               setting=f"room.{chat}.role.{uid}={role}",
+                               change=f"Make uid {uid} {role} in room {room}.", risk=risk,
+                               who="owner-verb", when="now")
+    from core.surfaces.room_grants import ADMIN_BUNDLES, ADMIN_SURFACES, member_grantable
+    rest = [w.lower() for w in words[4:]]
+    admin = rest[:1] == ["admin"]
+    rest = rest[1:] if admin else rest
+    if admin and surface not in ADMIN_SURFACES:
+        return _refused("/admin runs on Telegram only, so this room cannot hold a bundle")
+    allowed = frozenset(ADMIN_BUNDLES) if admin else member_grantable()
+    if len(rest) != 2 or rest[0] not in ("add", "remove") or rest[1] not in allowed:
+        return _refused(shape + f"; the names are {', '.join(sorted(allowed))}")
+    what = f"the /admin bundle {rest[1]}" if admin else f"the room tool {rest[1]}"
+    return SettingProposal(CARD, words=["/groups", "tools", *room.split(),
+                                        *(["admin"] if admin else []), *rest],
+                           setting=f"room.{chat}.{'admin' if admin else 'tool'}.{rest[1]}={rest[0]}",
+                           change=f"{rest[0].capitalize()} {what} in room {room}.",
+                           risk=("Risk: room admins can run it, at your cost, and its output is "
+                                 "public." if admin else "Risk: every member can use it."),
+                           who="owner-verb", when="now")
+
+
 def _grant(words: List[str]) -> SettingProposal:
     verb = words[0]
     if verb == "/goal":
@@ -388,6 +430,9 @@ def classify(command: str) -> SettingProposal:
         return _grant(words)
     if words[0] == "/model":
         return _model_default(words)
+    if words[0] == "/groups":
+        words[1:2] = [w.lower() for w in words[1:2]]
+        return _groups(words)
     return _refused("propose_setting carries only: " + "; ".join(SHAPES)
                     + ". A money move is propose_action.")
 

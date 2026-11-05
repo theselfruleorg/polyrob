@@ -266,6 +266,15 @@ def _worst(verdicts: List[str]) -> str:
     return max(verdicts, key=lambda v: _VERDICT_RANK.get(v, 0))
 
 
+def _wallet_is_on() -> bool:
+    """False only when the wallet is known to be off: an unreadable config still reads."""
+    try:
+        from core.wallet.config import load_wallet_config
+        return bool(load_wallet_config().enabled)
+    except Exception:
+        return True
+
+
 async def read_book(user_id: str, data_dir: str, *,
                     chains: Optional[List[str]] = None) -> Dict[str, Any]:
     """Portfolio + reconcile over every money chain, one typed overall verdict.
@@ -301,6 +310,12 @@ async def read_book(user_id: str, data_dir: str, *,
     except Exception as exc:
         book_error = (f"the position book (open_positions.db) could not be read "
                       f"({type(exc).__name__}) — this is NOT an empty book")
+
+    # No wallet and no written position is a plain fact about a new install, not a read
+    # that failed: reading chains for a wallet that does not exist showed N red rows.
+    if not positions and not book_error and not _wallet_is_on():
+        return {"chains": {}, "rows": [], "verdict": "no_wallet",
+                "checked_at": checked_at, "error": None}
 
     from tools.defi.data_tool import DefiDataTool, PortfolioParams, ReconcileParams
     tool = DefiDataTool()

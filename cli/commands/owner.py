@@ -1373,17 +1373,16 @@ def groups_role(surface, chat_id, user_id, role):
                                     role, by="cli"))
 
 
-@groups.command("admins")
+@groups.command("roles")
 @click.argument("surface")
 @click.argument("chat_id")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def groups_admins(surface, chat_id, as_json):
+def groups_roles(surface, chat_id, as_json):
     """Who holds a ROLE in a room (admin / member / blocked).
 
     ⚠️ These are the roles POLYROB recorded, not the platform's own admin
-    list. A chat's real admins can only be read through a live connection to
-    that surface — ask `/groups admins here` on Telegram for that, then grant
-    a role here with `polyrob owner groups role`.
+    list. Ask `/groups admins here` on Telegram for that, then grant a role
+    here with `polyrob owner groups role`.
 
     CHAT_ID is negative for Telegram — put `--` before it or use the safe
     `_` alias (see `polyrob owner groups --help`).
@@ -1412,15 +1411,8 @@ def groups_admins(surface, chat_id, as_json):
         click.echo(json.dumps({"surface": surface, "chat_id": chat,
                                "roles": rows}, indent=2, default=str))
         return
-    click.echo(click.style(f"roles in {surface}:{chat}", bold=True))
-    if not rows:
-        from cli.ui.candy import empty
-        click.echo(empty("roles granted here",
-                         "every member is a plain member; the bound owner is "
-                         "always owner"))
-    for r in rows:
-        click.echo(f"  {str(r.get('role')).ljust(8)} {r.get('user_id')}"
-                   f"   (by {r.get('granted_by') or '?'})")
+    from core.surfaces.group_admin import list_roles
+    click.echo(list_roles(_group_container(write=False), surface, chat))
     click.echo(click.style(
         "\nreal platform admins: ask `/groups admins here` on the surface "
         "itself — the CLI has no live connection to it.", dim=True))
@@ -1644,3 +1636,4 @@ for _cmd in (_reopen, _refunded, _deposits, deposit_resolve, invoice_resolve): o
 sub.add_command(sub_reactivate)
 
 owner.add_command(_memory_group)
+from cli.commands import owner_groups_tools  # noqa: E402,F401 — 101: registers on `groups`

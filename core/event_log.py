@@ -46,6 +46,33 @@ CREATE INDEX IF NOT EXISTS idx_te_user ON telemetry_events(user_id);
 """
 
 
+#: A string attr longer than this is shortened; attrs had no cap at all (102 D-7).
+_ATTR_STRING_MAX_CHARS = 16 * 1024
+
+
+def _shorten_strings(value: Any) -> Any:
+    """Shorten long string VALUES only, so every key, number and list item stays.
+    A number is never touched, which is what ``aggregate()`` reads as money."""
+    if isinstance(value, str):
+        if len(value) <= _ATTR_STRING_MAX_CHARS:
+            return value
+        return f"{value[:_ATTR_STRING_MAX_CHARS]}… [shortened, {len(value)} chars]"
+    if isinstance(value, dict):
+        return {k: _shorten_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_shorten_strings(v) for v in value]
+    return value
+
+
+def _encode_attrs(attrs: Dict[str, Any]) -> str:
+    """The stored JSON. It is decoded again only when a value can be over the limit,
+    so the normal row costs one ``dumps`` and ``default=str`` output is covered too."""
+    payload = json.dumps(attrs, default=str)
+    if len(payload) <= _ATTR_STRING_MAX_CHARS:
+        return payload
+    return json.dumps(_shorten_strings(json.loads(payload)))
+
+
 def _migrate_effect_column(db_path: str) -> None:
     """033: the effect class of an ``external_write`` row, promoted to an indexed
     column because ``attrs`` is opaque JSON a reader cannot filter cheaply.
@@ -108,7 +135,7 @@ class TelemetryEventLog:
             except Exception:
                 pass
         try:
-            payload = json.dumps(merged, default=str)
+            payload = _encode_attrs(merged)
         except Exception:
             payload = "{}"
         try:

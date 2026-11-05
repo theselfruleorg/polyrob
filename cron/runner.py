@@ -131,6 +131,10 @@ def run_ev_attrs(run: Any, session_id: Optional[str], data_dir: Optional[str]) -
 _CRON_REGIME = "cron"
 
 _SKIPPED_RE = __import__("re").compile(r"^\s*(?:OUTCOME:\s*)?SKIP(?:PED)?\b")
+#: 103: a record that says in its opening words that the run stopped itself. Prod
+#: 2026-11-04: "C1 content round blocked: ..." read "done" while nothing was posted.
+_SAYS_BLOCKED_RE = __import__("re").compile(
+    r"^.{0,80}?(?<!no longer )(?<!not )\b(?:blocked|not posted)\b", __import__("re").IGNORECASE)
 
 
 def declared_outcome(run: Any) -> tuple:
@@ -144,6 +148,8 @@ def declared_outcome(run: Any) -> tuple:
         first = str(text or "").strip().splitlines()[:1]
         if first and _SKIPPED_RE.match(first[0]):
             return "skipped", first[0].strip()[:300]
+        if first and _SAYS_BLOCKED_RE.match(first[0]):
+            return "blocked", first[0].strip()[:300]
     return "done", ""
 
 
@@ -647,7 +653,12 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                                payload.get("tools"))
             from core.surfaces.room_policy import room_tool_ids
             request["task"] = _room_task
-            request["tools"] = room_tool_ids()
+            from core.runtime_paths import data_dir_or_home
+            from core.surfaces.chat_policy import load_for_chat
+            _group = payload.get("group") if isinstance(payload.get("group"), dict) else {}
+            request["tools"] = room_tool_ids(policy=load_for_chat(
+                data_dir_or_home(None), str(_group.get("surface") or ""),
+                str(_group.get("chat_id") or "")))
             request["session_source"] = _room[0]
             request["chat_session_key"] = _room[1]
             # Bind WITHOUT taking over the room's durable chat<->session row
@@ -780,8 +791,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             # C-11: a run that closed by declaring BLOCKED or SKIPPED did not
             # do the job; its record and its event say so instead of "done".
             _declared, _why = declared_outcome(run)
-            if _declared != "done":
-                job.run_note = {"outcome": _declared, "reason": _why}
+            job.run_note = {"outcome": _declared, "reason": _why, "report": final or ""}
             try:
                 # Provenance was collected into the envelope while the
                 # orchestrator was resident (run_task_to_outcome).

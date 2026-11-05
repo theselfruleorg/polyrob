@@ -739,7 +739,7 @@ def test_a_second_swap_closes_the_client_the_first_built():
     closed = []
 
     class _C:
-        async def _cleanup(self):
+        async def cleanup(self):
             closed.append(1)
 
     async def build(cfg, isolated=False):

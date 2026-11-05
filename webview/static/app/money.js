@@ -392,6 +392,11 @@ export function render(root, data, copy, opts = {}) {
   }
   if (isEmpty(data)) {
     root.appendChild(emptyState(data, copy));
+    // No wallet: the liquidity lines below would describe nothing, in rail words.
+    for (const id of ["money-liquidity", "money-liquidity-recheck"]) {
+      const node = document.getElementById(id);
+      if (node) node.hidden = true;
+    }
     return "empty";
   }
   root.appendChild(verdictBanner(data, copy, opts));

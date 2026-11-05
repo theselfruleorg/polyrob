@@ -93,7 +93,7 @@ def test_anysite_cli_runs_under_custody_with_a_scrubbed_env(monkeypatch, state):
     class _Proc:
         returncode = 0
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b"ok", b""
 
     async def fake_exec(*argv, **kw):

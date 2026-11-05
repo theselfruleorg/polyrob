@@ -25,11 +25,14 @@ that runs as another uid must still read what the agent wrote.
 """
 import os
 import secrets
+import shutil
 import stat
 from contextlib import contextmanager
 from pathlib import Path
 
 from core.security.confined_write import confined_parent
+
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 class UnsafePath(OSError):
@@ -149,9 +152,9 @@ def read_trusted_config(path, *, max_bytes=1024 * 1024) -> str:
             os.close(parent)
 
 
-def write_bytes(path, root, data: bytes, *, mode: int | None = None) -> None:
-    """Atomically replace *path* with *data* (random O_EXCL|O_NOFOLLOW temp +
-    os.replace at the parent descriptor)."""
+def _replace_atomically(path, root, fill, *, mode: int | None = None) -> None:
+    """Replace *path* with what ``fill(stream)`` writes (random O_EXCL|O_NOFOLLOW temp +
+    os.replace at the parent descriptor). A failure leaves the old file and no temp."""
     target, root_real = _split(path, root)
     with confined_parent(target, root_real, create=True) as (directory, name):
         try:
@@ -167,7 +170,7 @@ def write_bytes(path, root, data: bytes, *, mode: int | None = None) -> None:
                      0o666 if mode is None else mode, dir_fd=directory)
         try:
             with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
+                fill(stream)
                 stream.flush()
                 os.fsync(stream.fileno())
                 if mode is not None:
@@ -178,6 +181,25 @@ def write_bytes(path, root, data: bytes, *, mode: int | None = None) -> None:
                 os.unlink(temporary, dir_fd=directory)
             except FileNotFoundError:
                 pass
+
+
+def write_bytes(path, root, data: bytes, *, mode: int | None = None) -> None:
+    """Atomically replace *path* with *data*."""
+    _replace_atomically(path, root, lambda stream: stream.write(data), mode=mode)
+
+
+def copy_file(src, dest, root, *, shared_ok: bool = False) -> int:
+    """Atomically replace *dest* with the bytes of *src*, in chunks: a large file never
+    reaches the heap. Returns the byte count."""
+    with open_read(src, root, shared_ok=shared_ok) as source:
+        copied: list = []
+
+        def _fill(stream) -> None:
+            shutil.copyfileobj(source, stream, _COPY_CHUNK_BYTES)
+            copied.append(stream.tell())
+
+        _replace_atomically(dest, root, _fill)
+    return copied[0]
 
 
 def write_text(path, root, text: str, *, encoding: str = "utf-8", mode: int | None = None) -> None:

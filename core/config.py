@@ -260,6 +260,10 @@ class AgentConfig(BaseSettings):
         return [name for name in PROFILES if name in names]
 
 
+#: The ONE default for MAX_BROWSER_CONTEXTS: about 200 MB per context was measured.
+DEFAULT_MAX_BROWSER_CONTEXTS = 6
+
+
 class ServerConfig(AgentConfig):
     """Full server-side configuration: agent fields (inherited) + server-scope."""
 
@@ -297,7 +301,7 @@ class ServerConfig(AgentConfig):
     cache_ttl: int = Field(default=3600)
     
     # Browser Use Configuration
-    max_browser_contexts: int = Field(default=25, alias='MAX_BROWSER_CONTEXTS', description="Maximum concurrent browser contexts")
+    max_browser_contexts: int = Field(default=DEFAULT_MAX_BROWSER_CONTEXTS, alias='MAX_BROWSER_CONTEXTS', description="Maximum concurrent browser contexts")
     max_contexts_per_session: int = Field(default=2, description="Maximum browser contexts per session")
     browser_headless: bool = Field(default=True, alias='BROWSER_HEADLESS', description="Run browser in headless mode")
     browser_context_timeout: float = Field(default=30.0, description="Timeout (s) for creating a browser context")

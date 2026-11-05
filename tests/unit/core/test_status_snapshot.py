@@ -180,7 +180,7 @@ def test_every_section_is_always_present(degraded):
     assert tuple(snap.sections) == SECTION_ORDER
     rendered = "\n".join(render_status_lines(snap))
     for title in ("Session:", "Providers:", "Goals:", "Approvals:", "Loops:",
-                  "Tool gates:", "Delivery:", "Posture:", "Money:"):
+                  "Tool gates:", "Delivery:", "What the agent may do:", "Money:"):
         assert title in rendered, title
 
 
@@ -313,6 +313,8 @@ def test_clean_fixture_is_ok_with_evidence(tmp_path, monkeypatch):
 
 
 def test_partial_when_a_health_source_is_unreadable(tmp_path, monkeypatch):
+    # With autonomy off, an absent store is not a failed check (test_status_absent_stores).
+    monkeypatch.setattr("core.status_loops.autonomy_idle_reason", lambda: "")
     """No issue found but a source could not be read ⇒ PARTIAL, never OK."""
     data_dir = str(tmp_path)
     monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)

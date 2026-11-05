@@ -12,6 +12,34 @@ Read this page top to bottom once. After that, `polyrob doctor` and
 
 ---
 
+## What the agent may do, on one screen
+
+`/mode` answers four questions on every seat, read from the resolved settings:
+
+1. **Who am I talking to?** You are the owner. The terminal, the console and each chat app
+   keep their own chats; recall is shared, and `/thread` shows them all in order.
+2. **What may it do without asking?** It reads the web and changes files in its work folder.
+   Money waits for you, unless you turned on the spend lane: then a payment up to your limit runs. Commands depend on `AGENT_COMPUTE_POSTURE`. A listed
+   action asks first only under an approval provider that asks (`owner_queue`,
+   `interactive_cli`): under the default `auto`, a list changes nothing.
+   `approvals.provider` also takes `owner_queue` (a wait you answer with `/approve` or the Inbox).
+3. **What does it do when I am away?** Nothing, until `AUTONOMY_ENABLED` is on. Scheduled jobs
+   also need `AUTONOMY_POSTURE=full`, and goals need `POLYROB_LOCAL`.
+4. **How do I change that?** `/mode ask-first`, `/mode standard` or `/mode on-my-own` for one
+   choice, or the settings below. Each write says when it applies. Levels never touch money
+   or the computer.
+
+| Level | Asks first | When you are away |
+|---|---|---|
+| `ask-first` | The recommended set (push, pull requests, posting, self-changes), in the Inbox or with `/approve` | Nothing runs |
+| `standard` (default) | Only money | Nothing runs |
+| `on-my-own` | Only money | Scheduled jobs run, and goals on a computer with `POLYROB_LOCAL`; it tells you |
+
+A chat app or the console may change `AUTONOMY_ENABLED` and `AUTONOMY_POSTURE` (`full` also starts scheduled jobs). `AUTONOMY_MODE`,
+`AGENT_COMPUTE_POSTURE`, `POLYROB_LOCAL` and `APPROVAL_PROVIDER` stay on the computer, so a
+level from a chat app waits in `/pending` for its approval change. `/mode all` prints the
+settings behind the answers. A level is refused inside a group: set it in your private chat.
+
 ## 1. The six axes
 
 Six environment flags decide what the agent IS on this box. Everything else is a
@@ -267,7 +295,7 @@ Adding a key can change the auto-selected default (a new `OPENROUTER_API_KEY`
 on a box that used Anthropic moves the default to OpenRouter). Pin it:
 
 ```bash
-polyrob model set-default anthropic claude-sonnet-4-5   # persists DEFAULT_PROVIDER / DEFAULT_MODEL
+polyrob model set-default anthropic <model>   # persists DEFAULT_PROVIDER / DEFAULT_MODEL
 polyrob run -p openai -m gpt-5 "…"                      # per run
 ```
 
@@ -435,7 +463,7 @@ Inspect the active provider from the REPL with `/memory`.
 ## 6. The autonomy dial
 
 Out of the box the agent is **interactive**: it acts on your messages and on
-nothing else. Autonomy is a set of loops you opt into with axes 2–4 of §1
+nothing else. Autonomy is a set of loops you opt into with the settings in §1
 (`AUTONOMY_ENABLED`, `AUTONOMY_MODE`, `AUTONOMY_POSTURE`). For a single-user box,
 `owner-visible` is the usual posture.
 
@@ -735,7 +763,7 @@ with their current value; from chat, `/config set KEY VALUE`.
 | Autonomy | `autonomy.self_wake`, `autonomy.background_review` | |
 | Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `digest.timezone`, `progress.telegram`, `voice.replies` | owner notices and the daily digest; `voice.replies` also answers you with a voice note on Telegram (needs `OPENAI_API_KEY`, or espeak-ng + ffmpeg) |
 | Outbound | `outbound.policy`, `outbound.domains`, `outbound.max_new_recipients_per_day`, `outbound.daily_send_cap` | |
-| Rooms | `chat.mode`, `chat.name`, `chat.instructions`, `chat.wake_words`, `chat.reply_cap_per_hour`, `chat.member_cooldown_sec`, `chat.context_lines`, `chat.quiet_hours`, `chat.mute_until`, `chat.tone`, `chat.verbosity`, `chat.language` | per room; set with `/groups set here KEY VALUE` |
+| Rooms | `chat.mode`, `chat.name`, `chat.instructions`, `chat.wake_words`, `chat.reply_cap_per_hour`, `chat.member_cooldown_sec`, `chat.context_lines`, `chat.quiet_hours`, `chat.mute_until`, `chat.tone`, `chat.verbosity`, `chat.language`, `chat.room_tools`, `chat.admin_tools`, `chat.admin_turns_per_day` | per room; set with `/groups set here KEY VALUE` |
 | UI | `ui.show_avatar` | |
 
 A guarded preference (approvals, budget) can only tighten what the environment
@@ -747,9 +775,8 @@ allows. The agent may propose a preference change itself; proposals wait in
 ## 12. Server and console
 
 A server (`polyrob serve`) and the console (`polyrob dashboard`) derive their
-posture from how you bind them: `local` on loopback with no auth, `own_ops`
-on a public host with owner login (`--host 0.0.0.0` upgrades to this so a
-no-auth console is never exposed by accident), `multitenant` with wallet
+posture from how you bind them: `local` on loopback with owner login, `own_ops`
+on a public host with a status page and owner login (`--host 0.0.0.0` upgrades to this), `multitenant` with wallet
 sign-in and billing. `WEBVIEW_READ_ONLY=true` makes the console a monitor
 that cannot act.
 
@@ -763,7 +790,7 @@ or resume a session another process owns. See
 
 ### When the context window fills
 
-You do not have to manage this. As the window fills, POLYROB first shortens old
+You do not have to manage this. An owner chat compacts at about 102k tokens of history. As the window fills, POLYROB first shortens old
 tool results to a pointer, then compacts the conversation through the model, and
 prunes without a model call as the last step. How the ladder works, and why it
 waits between compactions:

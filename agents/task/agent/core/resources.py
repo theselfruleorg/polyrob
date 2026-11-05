@@ -1,79 +1,11 @@
-"""Agent resource-management mixin (roadmap P9 decomposition; code-motion from service.py).
-
-Bounded-collection memory management (init + cleanup) and the browser-context
-accessor. Moved verbatim off the ``Agent`` god-file; ``Agent`` composes
-``ResourceMixin`` (call sites unchanged via MRO).
+"""Agent resource mixin (roadmap P9 decomposition; code-motion from service.py): the
+browser-context accessor. ``Agent`` composes ``ResourceMixin`` (call sites unchanged via MRO).
 """
 from __future__ import annotations
 
-from typing import Dict
-
 
 class ResourceMixin:
-    """Memory-management (bounded collections) + browser-context accessor for Agent."""
-
-    def _initialize_memory_management(self) -> None:
-        """Initialize memory management using bounded collections."""
-        from utils.bounded_collections import BoundedDict
-
-        # Use BoundedDict for automatic LRU eviction
-        self._telemetry_requests = BoundedDict(max_size=100)
-        self._file_references = BoundedDict(max_size=500)
-
-        # NOTE: User message queue removed - managed by HITLManager
-
-        self.logger.debug("Initialized memory management with bounded collections")
-
-    def cleanup_memory(self, force: bool = False) -> Dict[str, int]:
-        """Clean up memory using bounded collections.
-
-        Args:
-            force: If True, perform aggressive cleanup regardless of thresholds
-
-        Returns:
-            Dictionary with cleanup statistics
-        """
-        from datetime import timedelta
-
-        cleanup_stats = {}
-
-        try:
-            # 1. Telemetry cleanup - BoundedDict handles eviction automatically
-            if hasattr(self, '_telemetry_requests') and force:
-                removed = self._telemetry_requests.cleanup_old(max_age=timedelta(minutes=5))
-                if removed > 0:
-                    cleanup_stats['telemetry_entries_removed'] = removed
-
-            # 2. File references cleanup - BoundedDict handles eviction automatically
-            if hasattr(self, '_file_references') and force:
-                removed = self._file_references.cleanup_old(max_age=timedelta(hours=1))
-                if removed > 0:
-                    cleanup_stats['files_cleaned'] = removed
-
-            # 3. Browser state history (keep existing logic)
-            if hasattr(self, '_last_browser_states') and len(self._last_browser_states) > 3:
-                while len(self._last_browser_states) > 3:
-                    self._last_browser_states.popleft()
-                    cleanup_stats['states_removed'] = cleanup_stats.get('states_removed', 0) + 1
-
-            # 4. Force garbage collection if requested
-            if force:
-                import gc
-                collected = gc.collect()
-                cleanup_stats['gc_collected'] = collected
-
-            # Log results
-            total_cleaned = sum(v for k, v in cleanup_stats.items() if k != 'gc_collected')
-            if total_cleaned > 10 or force:
-                self.logger.info(f"Memory cleanup removed {total_cleaned} items: {cleanup_stats}")
-            elif total_cleaned > 0:
-                self.logger.debug(f"Memory cleanup: {cleanup_stats}")
-
-            return cleanup_stats
-
-        except Exception as e:
-            self.logger.error(f"Error during memory cleanup: {e}", exc_info=True)
-            return cleanup_stats
+    """Browser-context accessor for Agent."""
 
     async def get_browser_context(self):
         """Get browser context from orchestrator.
@@ -89,3 +21,29 @@ class ResourceMixin:
         except Exception as e:
             self.logger.debug(f"Failed to get browser context: {e}")
             return None
+
+    async def get_used_browser_context(self):
+        """The context for a state read, or None until this session has used a page: a
+        blank page costs 681 ms per step (healthy Chromium, 102 N-4) and a launch of
+        about 200 MB for a step that may never touch the browser. Sticky once used."""
+        if not getattr(self, "_browser_page_used", False):
+            if not self._has_active_browser_usage():
+                return None
+            self._browser_page_used = True
+        return await self.get_browser_context()
+
+    def actions_need_browser(self, actions) -> bool:
+        """True when a planned action, direct or through the ``tool_call`` bridge, belongs
+        to the browser tool. The controller refuses such an action with no context."""
+        registry = self.controller.registry
+        for action in actions or ():
+            dump = action.model_dump(exclude_unset=True) if hasattr(action, "model_dump") else {}
+            for name, params in (dump or {}).items():
+                names = [name]
+                if name == "tool_call" and isinstance(params, dict):
+                    names.extend(str(v) for v in params.values() if isinstance(v, str))
+                for candidate in names:
+                    found = registry.get_action(candidate)
+                    if getattr(found, "tool", None) == "browser" or candidate.startswith("browser_"):
+                        return True
+        return False

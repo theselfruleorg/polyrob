@@ -21,6 +21,31 @@ import threading
 from typing import Any, Coroutine, Optional
 
 
+_REAP_WAIT_S = 5.0
+
+
+async def communicate_or_kill(proc: Any, timeout: Optional[float], input: Optional[bytes] = None):
+    """``proc.communicate(input)`` within ``timeout``: ``(stdout, stderr)``.
+
+    ``wait_for`` cancels the read, not the OS process. On a timeout or a cancel the child
+    is killed and reaped, then the exception goes on. The reap has a bound: a grandchild
+    can hold the pipes after the child is gone.
+    """
+    try:
+        return await asyncio.wait_for(proc.communicate(input), timeout)
+    except BaseException:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        try:
+            await asyncio.wait_for(proc.wait(), _REAP_WAIT_S)
+        except asyncio.TimeoutError:
+            pass
+        raise
+
+
 class _PersistentLoop:
     def __init__(self) -> None:
         self._loop: Optional[asyncio.AbstractEventLoop] = None

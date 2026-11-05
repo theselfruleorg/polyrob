@@ -92,7 +92,11 @@ async def test_send_email_skips_missing_attachment_but_still_sends(tmp_path, cap
 class _DeadSMTP:
     """Simulates a connection the server has already closed (e.g. after a
     timeout) — send_message raises instead of the object being falsy, so a
-    naive `if not self.smtp_connection` check never reconnects."""
+    naive `if not self.smtp_connection` check never reconnects. It has a DATA step
+    that it never reaches: a fake with no such step reads as "delivery unknown"."""
+
+    def data(self, msg):
+        raise AssertionError("the send failed before DATA")
 
     def send_message(self, msg):
         raise smtplib.SMTPServerDisconnected("please run connect() first")

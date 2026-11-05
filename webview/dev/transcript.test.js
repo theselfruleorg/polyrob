@@ -1087,6 +1087,27 @@ describe("human attribution", () => {
     tx.apply({ type: "user_message", data: { text: "hello", metadata: { origin: "owner", sender_user_id: "owner" } } });
     expect(thread.querySelector(".person-label").textContent).toBe("Person (identity unavailable)");
   });
+  it("calls the signed-in person You", () => {
+    const thread = makeThread();
+    document.body.dataset.viewerId = "local";
+    const tx = new Transcript(thread, COPY, { sessionId: "s1" });
+    tx.apply({ type: "user_message", data: { text: "hello", sender_user_id: "local", sender_surface: "api" } });
+    delete document.body.dataset.viewerId;
+    expect(thread.querySelector(".person-label").textContent).toBe("You");
+  });
+  it("draws one bubble for the unnamed and the named copy of a line, in either order", () => {
+    for (const order of [[0, 1], [1, 0]]) {
+      const thread = makeThread();
+      const tx = new Transcript(thread, COPY, { sessionId: "s1" });
+      const copies = [
+        { type: "user_message_during_execution", data: { message: "second" } },
+        { type: "user_message", data: { text: "second", sender_user_id: "u1", sender_surface: "api" } },
+      ];
+      order.forEach((i) => tx.apply(copies[i]));
+      expect(thread.querySelectorAll(".bubble").length).toBe(1);
+      expect(thread.querySelector(".person-label").textContent).toBe("Person: u1 on api");
+    }
+  });
   it("keeps identical messages from different senders separate", () => {
     const thread = makeThread();
     const tx = new Transcript(thread, COPY, { sessionId: "s1" });
@@ -1096,5 +1117,44 @@ describe("human attribution", () => {
     expect(thread.querySelectorAll(".turn-person").length).toBe(2);
     expect(thread.textContent).toContain("alice");
     expect(thread.textContent).toContain("bob");
+  });
+});
+
+describe("a reply with markdown", () => {
+  it("draws bold, code and a code block as nodes, and never as HTML", async () => {
+    const { appendRichText } = await import("../static/app/rich-text.js");
+    const node = document.createElement("div");
+    appendRichText(node, "**Yes** run `ls`\n\n```sh\nrm <b>\n```\n\n<img src=x onerror=alert(1)>");
+    expect(node.querySelector("strong").textContent).toBe("Yes");
+    expect(node.querySelector("p code").textContent).toBe("ls");
+    expect(node.querySelector("pre code").textContent).toBe("rm <b>");
+    expect(node.querySelector("img")).toBeNull();
+    expect(node.textContent).toContain("<img src=x");
+  });
+});
+
+describe("a run that fails", () => {
+  const refused = { type: "provider_failure", data: { failed_provider: "openrouter", error_type: "LLMAuthenticationError", fallback_provider: null } };
+  const ended = { type: "session_completion", data: { success: false } };
+
+  it("names the fix when the provider refused the key", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, { ...COPY, turn_key_refused: "{provider} refused: polyrob auth add {provider}" }, { sessionId: "s1" });
+    tx.apply(refused);
+    tx.apply(ended);
+    expect(thread.querySelector(".is-failed").textContent).toBe("openrouter refused: polyrob auth add openrouter");
+  });
+  it("says it failed when the cause is something else", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1" });
+    tx.apply(ended);
+    expect(thread.querySelector(".is-failed").textContent).toBe(COPY.turn_failed);
+  });
+  it("says nothing for a run that fell back and worked", () => {
+    const thread = makeThread();
+    const tx = new Transcript(thread, COPY, { sessionId: "s1" });
+    tx.apply({ ...refused, data: { ...refused.data, fallback_provider: "anthropic" } });
+    tx.apply({ type: "session_completion", data: { success: true } });
+    expect(thread.querySelector(".is-failed")).toBeNull();
   });
 });

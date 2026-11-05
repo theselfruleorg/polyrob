@@ -33,8 +33,8 @@ import click
 _BEGIN = "# >>> polyrob >>>"
 _END = "# <<< polyrob <<<"
 
-_RC_FILES = (".zshrc", ".bashrc", ".bash_profile", ".profile",
-             ".config/fish/config.fish")
+_RC_FILES = (".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".bash_login",
+             ".profile", ".config/fish/config.fish")
 
 
 def remove_path_blocks(home: Path) -> list[Path]:

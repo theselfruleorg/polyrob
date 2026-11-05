@@ -129,7 +129,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - BROWSER_CDP_URL — default: unset — Chrome DevTools Protocol endpoint of a browser running as its OWN principal (`polyrob browser install` → `polyrob-browser.service`, `http://127.0.0.1:9222`).
 - BROWSER_WSS_URL — default: unset — Playwright-server WebSocket endpoint of a remote browser (`ws://<private-ip>:3000/<token>`), for a browser on a SECOND host; requires the same Playwright version on both ends.
 - BROWSER_HEADLESS — default: ON (True) — Run the local Playwright browser headless.
-- MAX_BROWSER_CONTEXTS — default: 25 — Pool-wide limit on concurrent browser contexts.
+- MAX_BROWSER_CONTEXTS — default: 6 — Pool-wide limit on concurrent browser contexts.
 - GITHUB_TOKEN / GH_TOKEN — default: unset (secret, masked) — GitHub token for the `github` tool when no per-user OAuth token is stored (`GITHUB_TOKEN` wins; the standard gh-CLI/Actions names).
 - TWITTER_WRITE_MAX_PER_HOUR — default: 15 — Durable hourly attempt cap shared by X API and browser clients across tools and workers in the same data home.
 - TWITTER_DM_MAX_PER_HOUR — default: 5 — Durable hourly attempt cap for X DMs, reserved on top of `TWITTER_WRITE_MAX_PER_HOUR` in the same budget store; `0` or less refuses every DM.

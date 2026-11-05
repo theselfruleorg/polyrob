@@ -92,7 +92,7 @@ _TOP_KEYS = frozenset({"id", "version", "summary", "homepage", "license", "pack_
                        "requires_core", "requires_packs", "tier", "capabilities",
                        "flags_doc", "lazy_features", "cli", "tools", "surfaces",
                        "delivery_channels", "extra", "console"})
-_TOOL_KEYS = frozenset({"capabilities", "untrusted_output", "cli", "gate", "permissions",
+_TOOL_KEYS = frozenset({"capabilities", "untrusted_output", "room_grantable", "cli", "gate", "permissions",
                         "verbs", "requires"})
 #: A pack tool is registered by the loader's phase 2, never by the CLI's
 #: row-derived registrars (``polyrob.app.bootstrap``): no ``optional`` (it would need a
@@ -325,6 +325,7 @@ def _tool(tool_id: str, spec: Any) -> ToolPolicy:
         raise ManifestError(f"tools.{tool_id}: untrusted_output must be a boolean")
     try:
         row = ToolRow(caps, untrusted_output=untrusted_output,
+                      room_grantable=spec.get("room_grantable") is True,
                       cli=cli, gate=ToolGate(**gate) if gate is not None else None)
     except (TypeError, ValueError) as exc:
         raise ManifestError(f"tools.{tool_id}: {exc}") from exc

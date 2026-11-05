@@ -159,7 +159,7 @@ def test_a_note_carrying_markup_cannot_become_markup():
 def test_nothing_happened_says_so(client, chat_open, monkeypatch):
     _entries(monkeypatch, chat_open, [])
     hero = _soup(client).select_one(".open-hero").get_text(" ", strip=True)
-    assert "nothing" in hero.lower()
+    assert hero == "What should we work on?"
 
 
 def test_a_recap_failure_is_honest_and_still_offers_the_composer(

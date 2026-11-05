@@ -166,14 +166,15 @@ def register_setting_actions(controller) -> None:
     class ProposeSetting(BaseModel):
         command: str = Field(..., min_length=5, max_length=600, description=(
             "The owner's line: `/mcp add <id> <https-url>`, `/config set <key> <value>`, "
-            "`/goal grant <id> tools=a,b`, `/job edit <id> grant tools=a,b` or "
-            "`/model <name> default`."))
+            "`/goal grant <id> tools=a,b`, `/job edit <id> grant tools=a,b`, "
+            "`/model <name> default`, `/groups role telegram _<chat_id> <uid> <admin|blocked|member>` "
+            "or `/groups tools telegram _<chat_id> [admin] add|remove <name>`."))
         why: str = Field("", max_length=600, description="One line: why.")
 
     @controller.registry.action(
         "Propose a setting change to the OWNER as a one-tap card (owner turn only). An "
-        "operator-only setting is filed for the operator and you get its id. Not for "
-        "money (propose_action).",
+        "operator-only setting is filed for the operator and you get its id. It also makes "
+        "someone a room admin or grants a room a tool. Not for money (propose_action).",
         param_model=ProposeSetting,
     )
     async def propose_setting(params: ProposeSetting, execution_context=None) -> ActionResult:

@@ -35,7 +35,7 @@ class ExtractUrlsAction(BaseModel):
     text: str = Field(..., description="Text content to extract URLs from")
 
 # Constants
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB, the most read_file holds in memory
 MAX_TEXT_LENGTH = 100000  # 100k chars (reasonable for file content)
 CHUNK_SIZE = 4096  # 4KB chunks
 CACHE_TTL = 3600  # 1 hour
@@ -381,7 +381,8 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             import io
             text = await self._read_document_text(file_path, root)
             if text is None:
-                text = self._safe_read_text(file_path, root)
+                text = await asyncio.to_thread(
+                    self._safe_read_text, file_path, root, max_bytes=MAX_FILE_SIZE)
             lines = io.StringIO(text, newline='\n').readlines()
 
             # Handle character-based chunking (for JSON/dense files)
@@ -581,9 +582,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
-            # Add a small delay to handle potential race conditions with other operations
-            await asyncio.sleep(0.2)
-
+            # ⚠️ 101: no await between the assignments above and _normalize_path. One
+            # FileSystem serves every session, so a sleep here (there was one) let another
+            # session's call move this write into that session's workspace.
             # Normalize file path with additional logging
             try:
                 normalized_path = self._normalize_path(file_path)
@@ -639,11 +640,12 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             from core.security.workspace_io import write_text as _safe_write_text
             max_retries = 3
             last_error = None
+            writer_session = getattr(self, "session_id", None)  # a retry awaits below
             for retry_count in range(max_retries):
                 try:
                     _safe_write_text(file_path, root, processed_content)
                     if not target_existed:
-                        mark_written(getattr(self, "session_id", None), file_path)
+                        mark_written(writer_session, file_path)
                     self.logger.info(f"Successfully wrote {len(processed_content)} chars to {file_path}")
                     verification = await self._verify_file_write(file_path, processed_content, original_path,
                                                                   root=root)
@@ -696,9 +698,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
-            # Add a small delay to handle potential race conditions with other operations
-            await asyncio.sleep(0.2)
-
+            # ⚠️ 101: no await between the assignments above and _normalize_path. One
+            # FileSystem serves every session, so a sleep here (there was one) let another
+            # session's call move this write into that session's workspace.
             # Normalize file path with additional logging
             try:
                 normalized_path = self._normalize_path(file_path)
@@ -958,13 +960,19 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         return msg
 
     @staticmethod
-    def _safe_read_text(path: str, root: str) -> str:
+    def _safe_read_text(path: str, root: str, max_bytes: Optional[int] = None) -> str:
         """H09: read through core.security.workspace_io (O_NOFOLLOW walk after the
-        realpath check) with the universal-newline decoding a text-mode open() did."""
+        realpath check) with the universal-newline decoding a text-mode open() did.
+        ``max_bytes`` stops the read itself, so a file over it never reaches memory."""
         import io
         from core.security.workspace_io import read_bytes
-        stream = io.TextIOWrapper(io.BytesIO(read_bytes(path, root, shared_ok=True)),
-                                  encoding='utf-8', errors='replace')
+        limit = None if max_bytes is None else max_bytes + 1
+        data = read_bytes(path, root, max_bytes=limit, shared_ok=True)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ServiceError(
+                f"This file is larger than {max_bytes // (1024 * 1024)} MB, so read_file did not "
+                "load it. Read a part with a shell command (head, tail, sed -n, grep) or coding_grep.")
+        stream = io.TextIOWrapper(io.BytesIO(data), encoding='utf-8', errors='replace')
         return stream.read()
 
     def _normalize_path(self, file_path: str) -> str:
@@ -1214,23 +1222,28 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if os.path.realpath(src) == os.path.realpath(dst):
                 raise ServiceError("source and destination are the same file")
 
-            from core.security.workspace_io import read_bytes, write_bytes
-            data = read_bytes(src, root, shared_ok=True)
+            from core.doc_kind import is_doc_path
+            from core.security.workspace_io import copy_file, read_bytes
             target_existed = os.path.lexists(dst)
-            # 060 WS-3: an overwrite of a RECORD document is a rewrite.
+            # 060 WS-3: an overwrite of a RECORD document is a rewrite. Only that check
+            # needs the text, so only that case holds the source in memory, up to the limit.
             from tools.filesystem_doc_kind import mark_written, record_refusal
-            _refusal = record_refusal(self, dst, params.dest_path, root,
-                                      data.decode("utf-8", errors="replace"))
-            if _refusal:
-                raise ServiceError(_refusal)
+            if is_doc_path(dst) and os.path.isfile(dst):
+                data = read_bytes(src, root, shared_ok=True, max_bytes=MAX_FILE_SIZE + 1)
+                if len(data) > MAX_FILE_SIZE:
+                    raise ServiceError(f"source is too large to replace a document: "
+                                       f"{params.source_path} (over {MAX_FILE_SIZE} bytes)")
+                _refusal = record_refusal(self, dst, params.dest_path, root,
+                                          data.decode("utf-8", errors="replace"))
+                if _refusal:
+                    raise ServiceError(_refusal)
             os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
             # Copy through a random O_EXCL|O_NOFOLLOW sibling temp, then atomic
             # replace (H09) — a reader never sees a half-written destination and
             # a planted symlink at a predictable temp name redirects nothing.
-            write_bytes(dst, root, data)
+            size = copy_file(src, dst, root, shared_ok=True)
             if not target_existed:
                 mark_written(getattr(self, "session_id", None), dst)
-            size = len(data)
             return f"Copied {params.source_path} -> {params.dest_path} ({size} bytes)"
 
         except ServiceError:
@@ -1257,6 +1270,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
 
         Reads through the descriptor-anchored helper when *root* is given (H09);
         *text* scans an in-memory rewrite instead of a file."""
+        from tools.filesystem_jsonl import jsonl_record
         total, recs, bad = 0, [], []
         if text is None:
             if root is not None:
@@ -1271,15 +1285,11 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             if not line.strip():
                 continue
             total += 1
-            try:
-                obj = json.loads(line)
-            except ValueError as e:
-                bad.append((n, str(e)[:60]))
-                continue
-            if not isinstance(obj, dict):
-                bad.append((n, "not a JSON object"))
-                continue
-            recs.append((n, obj, line))
+            obj, err = jsonl_record(line)
+            if err:
+                bad.append((n, err))
+            else:
+                recs.append((n, obj, line))
         return total, recs, bad
 
     @BaseTool.action(
@@ -1300,18 +1310,21 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
             path = self._normalize_path(params.file_path)
             root = self._guard_path(path, params.file_path, write=True)
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            from core.security.workspace_io import append_bytes, read_bytes
+            from core.security.workspace_io import append_bytes, open_read
             # A file that does not end in a newline gets one first, so the new
             # record never glues onto the previous line.
             needs_nl = False
             if os.path.lexists(path):
-                existing = read_bytes(path, root)
-                needs_nl = bool(existing) and not existing.endswith(b"\n")
+                with open_read(path, root) as stream:
+                    if stream.seek(0, os.SEEK_END):
+                        stream.seek(-1, os.SEEK_END)
+                        needs_nl = stream.read(1) != b"\n"
             payload = ("\n" if needs_nl else "") + "".join(
                 json.dumps(i, ensure_ascii=False, separators=(",", ":")) + "\n" for i in items)
             append_bytes(path, root, payload.encode("utf-8"))
-            total, _, bad = self._jsonl_scan(path, root)
-            note = f"; WARNING {len(bad)} pre-existing bad line(s) (first: {bad[0][0]})" if bad else ""
+            from tools.filesystem_jsonl import jsonl_tally
+            total, bad, first_bad = jsonl_tally(path, root)
+            note = f"; WARNING {bad} pre-existing bad line(s) (first: {first_bad})" if bad else ""
             return (f"Appended {len(items)} record(s) to {params.file_path} "
                     f"({total} line(s) now{note})")
         except ServiceError:
@@ -1360,9 +1373,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 raise ServiceError("jsonl_remove refused: rewrite did not verify; file left untouched")
             # H09: backup and rewrite through random O_EXCL|O_NOFOLLOW temps +
             # os.replace (the fixed `.rewrite-tmp` name followed a planted link).
-            from core.security.workspace_io import read_bytes, write_bytes, write_text
+            from core.security.workspace_io import copy_file, write_text
             self._guard_path(bak, os.path.basename(bak), write=True, root=root)
-            write_bytes(bak, root, read_bytes(path, root))
+            copy_file(path, bak, root)
             write_text(path, root, rewritten)
             missing = sorted(wanted - set(removed_vals))
             out = (f"{params.file_path}: removed {len(removed_vals)} line(s) where {params.key} in "

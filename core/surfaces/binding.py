@@ -122,6 +122,21 @@ def _room_paid_note(container: Any, surface_id: Any, chat_id: str) -> str:
         return ""
 
 
+def _admin_session(orchestrator: Any, container: Any, surface_id: Any, chat_id: str) -> Optional[dict]:
+    """101: the facts of a stamped admin session. ⚠️ Ids and the closed bundle names
+    only: a display name is attacker-authorable and never enters a system prompt."""
+    stamp = getattr(orchestrator, "_room_admin", None)
+    if not isinstance(stamp, dict):
+        return None
+    from core.runtime_paths import container_data_home
+    from core.surfaces.chat_policy import load_for_chat
+    from core.surfaces.room_grants import live_admin_bundles
+    bundles = live_admin_bundles(load_for_chat(container_data_home(container),
+                                               str(surface_id), chat_id))
+    return {"uid": str(stamp.get("uid") or ""), "bundles": ", ".join(bundles) or "none",
+            "surface_id": str(surface_id), "chat_id": chat_id}
+
+
 def surface_profile(orchestrator: Any) -> Optional[dict]:
     """What the agent needs to know about the surface it is speaking into.
 
@@ -188,6 +203,7 @@ def surface_profile(orchestrator: Any) -> Optional[dict]:
             "chat_name": _name,
             "chat_instructions": _instructions,
             "chat_paid_actions": _paid,
+            "chat_admin_session": _admin_session(orchestrator, container, surface_id, _chat_id),
             # C2 (2026-09-29): a DM driven by a correspondent is NOT the owner's
             # chat. Same stamps as agents.task.session_class.correspondent_facing
             # (core may not import agents; a parity test pins the two together).

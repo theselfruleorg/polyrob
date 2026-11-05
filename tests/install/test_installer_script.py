@@ -159,3 +159,90 @@ def test_root_install_accepts_a_root_owned_tree():
 def test_root_install_check_runs_before_the_venv_is_built():
     src = INSTALLER.read_text()
     assert src.index('untrusted_root_path "${_tree}"') < src.index("# 3. Virtualenv + install")
+
+
+def test_a_truncated_download_runs_nothing(tmp_path):
+    """`curl | bash` executes what it has read so far: a cut connection must not
+    run a prefix of the script. Cut anywhere, the script is one unfinished
+    function and bash refuses it."""
+    src = INSTALLER.read_text()
+    assert src.rstrip().endswith('main "$@"')
+    marker = tmp_path / "ran"
+    body = src.replace("main() {\n", f"main() {{\n: > {marker}\n", 1)
+    for cut in (0.4, 0.7, 0.95):
+        res = _pipe(input_text=body[: int(len(body) * cut)],
+                    env={"HOME": str(tmp_path), "POLYROB_HOME": str(tmp_path / "h")})
+        assert res.returncode != 0
+        assert not marker.exists(), f"a download cut at {cut:.0%} ran the installer"
+
+
+def test_a_child_reading_stdin_cannot_eat_the_script(tmp_path):
+    """Under a pipe stdin IS the script. Run with a real command that drains stdin
+    and the installer must still reach its end."""
+    src = INSTALLER.read_text()
+    probe = 'main() {\ncat >/dev/null\necho STILL_RUNNING\nexit 0\n'
+    res = _pipe(input_text=src.replace("main() {\n", probe, 1))
+    assert "STILL_RUNNING" in res.stdout, res.stderr
+
+
+def _functions(names):
+    """The named helpers from install.sh, for running one in isolation."""
+    src = INSTALLER.read_text()
+    out = []
+    for name in names:
+        start = src.index(f"{name}() {{")
+        end = src.index("\n}\n", start) + 3
+        out.append(src[start:end])
+    return "\n".join(out)
+
+
+def test_every_supported_uv_target_has_a_checksum():
+    """A platform with no pin refuses; a typo in one would be a refusal in the field."""
+    script = _functions(["uv_pin"]) + (
+        '\nfor t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu '
+        'x86_64-unknown-linux-musl aarch64-unknown-linux-musl '
+        'x86_64-apple-darwin aarch64-apple-darwin; do uv_pin "$t"; done\n')
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0, res.stderr
+    digests = res.stdout.split()
+    assert len(digests) == 6 and all(len(d) == 64 for d in digests) and len(set(digests)) == 6
+
+
+def test_the_shim_keeps_a_custom_home(tmp_path):
+    """--home wrote the keys there; the command read ~/.polyrob and found none."""
+    src = INSTALLER.read_text()
+    assert "${SHIM_HOME_LINE}exec" in src
+    assert 'export POLYROB_HOME=' in src
+
+
+def test_uninstall_covers_every_rc_file_the_installer_writes():
+    from cli.commands.uninstall import _RC_FILES
+
+    src = INSTALLER.read_text()
+    for rel in _RC_FILES:
+        assert f"${{HOME}}/{rel}" in src, rel
+    assert "${HOME}/.zprofile" in src and "${HOME}/.profile" in src
+
+
+def test_uninstall_stops_the_service_before_the_venv_goes():
+    src = INSTALLER.read_text()
+    assert src.index("service uninstall </dev/null") < src.index('rm -rf "${VENV_DIR}"; info "Removed')
+
+
+def test_uninstall_removes_the_private_python_and_keeps_the_home(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    data = tmp_path / "ph"
+    for sub in ("python/cpython", "tools/uv", "data"):
+        (data / sub).mkdir(parents=True)
+    res = _pipe(["--uninstall", "--home", str(data)], env={"HOME": str(home), "SHELL": "/bin/bash"})
+    assert res.returncode == 0, res.stderr + res.stdout
+    assert not (data / "python").exists() and not (data / "tools").exists()
+    assert (data / "data").is_dir()
+
+
+def test_the_closing_text_does_not_claim_a_per_project_memory():
+    """The data home moved to <home>/data; this banner said the opposite."""
+    src = INSTALLER.read_text()
+    assert "separate memory per project" not in src
+    assert "${POLYROB_HOME_DIR}/data" in src

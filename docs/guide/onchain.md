@@ -55,7 +55,7 @@ constructed and nothing is broadcast**, so this tool cannot move value:
 | `nft_info` | One NFT straight from the chain: owner, standard, metadata URI; an unanswered field reads NOT CHECKED (needs `NFT_TOOLS_ENABLED`) | EVM |
 | `contract_read` | Raw `eth_call` (returns raw hex, gas- and size-capped) | EVM |
 | `wallet_holdings` | ANY wallet's public holdings on one chain — "check this address". A base58 address reads on Solana; a 0x address needs its chain. The agent's own address through it stays an owner read | all, incl. Solana |
-| `wallet_activity` | ANY wallet's recent transfers and swaps, with a net-flow summary the verb computes (not a cost-basis P&L) | Solana; EVM via Blockscout (not Robinhood mainnet) |
+| `wallet_activity` | ANY wallet's recent transfers and swaps, with a net-flow summary the verb computes (not a cost-basis P&L) | Solana; EVM via Blockscout, or via `ALCHEMY_API_KEY` where Blockscout has no open API (Robinhood mainnet) or does not answer |
 | `token_origin` | Who deployed a token, what else they deployed, whether they still hold it; on Solana the launch buyers and any shared funder ("addresses, not people") | Solana; EVM via Blockscout |
 | `positions` | The agent's own open positions: quantity, basis (or "basis unknown"), value, unrealized and realized P&L by average cost, high-water mark — the verb does the arithmetic | all money chains |
 | `retire_row` | Closes a record of a holding whose tokens are gone or dust (under $1). It measures the wallet's balance itself, refuses anything else, and stores the measurement as proof. It moves nothing — the one record `defi_data` writes | every money network, incl. Solana |
@@ -800,7 +800,7 @@ set.
 > ⚠️ **The four order-placement verbs are also `PAYMENT_APPROVAL_TOOLS`, and approval
 > fires BEFORE the dry-run decision.** The owner-approval pre-hook gates on ACTION NAME,
 > not on whether the order will actually be live — so under the default
-> `PAYMENT_APPROVAL_MODE=approve`, even a pure paper-trading posture
+> `PAYMENT_APPROVAL_MODE=approve`, even a pure paper-trading setup
 > (`CRYPTO_TRADE_LIVE_ENABLED` OFF) requires **one owner approval per dry-run order**. An
 > autonomous/forged turn (goal, cron, self-wake) has no one to tap "approve" for it, so it
 > **cannot paper-trade at all**; exercise dry-run trading interactively, or call the venue tool directly outside the

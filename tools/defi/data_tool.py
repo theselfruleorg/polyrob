@@ -1051,7 +1051,11 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             self._record_precondition_failed(params, execution_context, f"{type(exc).__name__}: {exc}")
             raise
         if getattr(res, "error", None):
-            self._record_precondition_failed(params, execution_context, str(res.error))
+            # No wallet is a choice, not a gate that fell. Recording it read as a critical
+            # "money-rail gate down" on every new install, and each console view added one.
+            from core.wallet.config import WALLET_OFF_TEXT
+            if WALLET_OFF_TEXT not in str(res.error):
+                self._record_precondition_failed(params, execution_context, str(res.error))
         return res
 
     async def _reconcile_impl(self, params: ReconcileParams, execution_context=None):

@@ -123,6 +123,11 @@ class APIError(BotError):
     """Raised when there's an error communicating with external APIs."""
     pass
 
+class DeliveryUnknownError(APIError):
+    """A send ended with no answer and the far side may have it. Never retry this:
+    a second attempt can deliver twice. Report that the delivery is unknown."""
+    pass
+
 class AuthenticationError(APIError):
     """Raised when authentication fails with an external service."""
     pass

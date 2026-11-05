@@ -34,6 +34,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -167,6 +168,30 @@ def _holds_artifact(tree: Path, artifact_paths: Set[str]) -> bool:
     return any(p.startswith(prefix) for p in artifact_paths)
 
 
+def _is_uuid(name: str) -> bool:
+    try:
+        uuid.UUID(name)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def _newest_mtime(path: str) -> float:
+    """The newest mtime anywhere in the tree; 0.0 when nothing could be read."""
+    newest = 0.0
+    try:
+        newest = os.lstat(path).st_mtime
+    except OSError:
+        pass
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                newest = max(newest, os.lstat(os.path.join(root, name)).st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
 def plan_sweep(data_dir: str, *, days: Optional[int] = None,
                now: Optional[float] = None,
                sessions_root: Optional[str] = None,
@@ -179,8 +204,6 @@ def plan_sweep(data_dir: str, *, days: Optional[int] = None,
     directory of the user's own project. Only UUID-named session trees are
     candidates, and age is the newest mtime anywhere in the tree.
     """
-    from core.session_gc import _is_uuid, _newest_mtime_and_size
-
     now = float(now if now is not None else time.time())
     days = int(retention_days() if days is None else days)
     data_home = Path(data_dir).resolve()
@@ -237,7 +260,7 @@ def plan_sweep(data_dir: str, *, days: Optional[int] = None,
                 continue
             # The newest file anywhere in the tree decides — a live session can
             # leave its top-level directory untouched for months.
-            mtime, _size = _newest_mtime_and_size(entry.path)
+            mtime = _newest_mtime(entry.path)
             if mtime <= 0:
                 plan.errors.append(f"{entry.path}: could not stat; kept")
                 plan.keep[entry.path] = KEEP_RECENT

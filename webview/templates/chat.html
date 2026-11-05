@@ -16,7 +16,7 @@
   thread itself is a READ and renders on every posture.
 #}
 {% extends "shell.html" %}
-{% block body_attrs %} data-session-id="{{ session_id or 'new' }}" data-is-new="{{ 'true' if is_new else 'false' }}" data-is-owner="{{ 'true' if is_owner else 'false' }}" data-is-authenticated="{{ 'true' if is_authenticated else 'false' }}" data-read-only="{{ 'true' if read_only else 'false' }}" data-first-line="{{ first_line if run_kind == 'chat' else '' }}" data-run-kind="{{ run_kind }}" data-run-live="{{ run_live }}"{% endblock %}
+{% block body_attrs %} data-session-id="{{ session_id or 'new' }}" data-is-new="{{ 'true' if is_new else 'false' }}" data-is-owner="{{ 'true' if is_owner else 'false' }}" data-is-authenticated="{{ 'true' if is_authenticated else 'false' }}" data-read-only="{{ 'true' if read_only else 'false' }}" data-first-line="{{ first_line if run_kind == 'chat' else '' }}" data-first-line-yours="{{ 'true' if creator in ('api', 'cli') and is_owner else 'false' }}" data-viewer-id="{{ viewer_id or '' }}" data-run-kind="{{ run_kind }}" data-run-live="{{ run_live }}"{% endblock %}
 {% block body %}
 {#- The composer, drawn once: under the thread (inside .chat-col) on a bound
     chat, under the hero on the cold open, alone when ownership is unknown. #}
@@ -36,8 +36,13 @@
          only that the console could not TALK, so `/pause` looked like a thing
          you could still do from a read-only seat. #}
       <p class="composer-note">{{ t('chat.read_only.verbs') }}</p>
+{%- elif creator == 'cli' and not is_new %}
+      <div class="composer" style="opacity:.55;border-style:dashed">
+        <p class="composer-input">{{ t('chat.terminal.composer') }}</p>
+      </div>
+      <p class="composer-note">{{ t('chat.terminal.note', id=session_id) }}</p>
 {%- else %}
-      <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}" data-no_model="{{ t('chat.open.no_model') }}">
+      <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}" data-no_model="{{ t(no_model_key or 'chat.open.no_model') }}">
         <textarea class="composer-input" id="chat-input" rows="1"
                   aria-label="{{ t('chat.composer.label') }}"
                   placeholder="{{ t('chat.composer.placeholder') if is_new else t('chat.composer.placeholder_busy') }}"></textarea>
@@ -168,9 +173,11 @@
          data-cost_unknown="{{ t('chat.receipt.cost_unknown') }}"
          data-receipt_so_far="{{ t('chat.receipt.so_far') }}"
          data-receipt_waiting="{{ t('chat.receipt.waiting') }}"
+         data-receipt_waiting_inbox="{{ t('chat.receipt.waiting_inbox') }}"
          data-receipt_failed="{{ t('chat.receipt.failed') }}"
          data-receipt_ended="{{ t('chat.receipt.ended') }}"
          data-turn_failed="{{ t('chat.turn_failed') }}"
+         data-turn_key_refused="{{ t('chat.turn_key_refused') }}"
          data-steps_none="{{ t('chat.receipt.steps_none') }}"
          data-steps_one="{{ t('chat.receipt.steps_one') }}"
          data-steps_many="{{ t('chat.receipt.steps_many') }}"

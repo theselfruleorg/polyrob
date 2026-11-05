@@ -17,10 +17,38 @@ try:
 except ImportError:
     CORE_LOGGING_AVAILABLE = False
 
-# Cache for created loggers
+# Cache for created loggers: one per component, never one per session
 _LOGGER_CACHE = {}
 
-def get_task_logger(component_name: str, session_id: Optional[str] = None) -> logging.Logger:
+
+class _SessionNameFilter(logging.Filter):
+    """Writes the session onto the record's name, so a log line, the console formatter
+    and ``cli/ui/log_squelch.py`` still read ``task.agent[abc12345]``."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        session = record.__dict__.get("task_session")
+        if session:
+            record.name = f"{record.name}[{session}]"
+        return True
+
+
+_SESSION_NAME_FILTER = _SessionNameFilter()
+
+
+class _SessionLogger(logging.LoggerAdapter):
+    """One session's view of its component logger. It dies with the session; a logger
+    named per session stays in ``logging.root.manager`` for the process life (102 M-C)."""
+
+    @property
+    def level(self) -> int:
+        return self.logger.level
+
+    def process(self, msg, kwargs):
+        kwargs["extra"] = {**(kwargs.get("extra") or {}), **self.extra}
+        return msg, kwargs
+
+
+def get_task_logger(component_name: str, session_id: Optional[str] = None, child: Optional[str] = None):
     """
     Get a logger for task agent components.
 
@@ -32,7 +60,7 @@ def get_task_logger(component_name: str, session_id: Optional[str] = None) -> lo
         session_id: Optional session ID for session-aware logging
 
     Returns:
-        Configured logger instance with appropriate handlers and formatting
+        The component's logger, or with a session id an adapter over it
 
     Examples:
         >>> logger = get_task_logger('agent', 'abc123')
@@ -41,13 +69,17 @@ def get_task_logger(component_name: str, session_id: Optional[str] = None) -> lo
         >>> logger = get_task_logger('orchestrator')
         >>> logger.debug('Session created')
     """
-    # Create consistent logger name
+    logger = _component_logger(f"task.{component_name}")
     if session_id:
         # Truncate session ID to first 8 chars for readability
-        logger_name = f"task.{component_name}[{session_id[:8]}]"
-    else:
-        logger_name = f"task.{component_name}"
+        # A child id is unique: it goes on the record, never in a logger name, which
+        # the logging manager keeps for the process life (102 M-C).
+        label = f"{session_id[:8]}/{child}" if child else session_id[:8]
+        return _SessionLogger(logger, {"task_session": label})
+    return logger
 
+
+def _component_logger(logger_name: str) -> logging.Logger:
     # Return cached logger if available
     if logger_name in _LOGGER_CACHE:
         return _LOGGER_CACHE[logger_name]
@@ -56,6 +88,7 @@ def get_task_logger(component_name: str, session_id: Optional[str] = None) -> lo
     if CORE_LOGGING_AVAILABLE:
         try:
             logger = get_component_logger(logger_name)
+            logger.addFilter(_SESSION_NAME_FILTER)
             _LOGGER_CACHE[logger_name] = logger
             return logger
         except Exception:
@@ -64,6 +97,7 @@ def get_task_logger(component_name: str, session_id: Optional[str] = None) -> lo
 
     # Fallback to basic logger configuration
     logger = logging.getLogger(logger_name)
+    logger.addFilter(_SESSION_NAME_FILTER)
 
     # Only configure if not already configured
     if not logger.handlers:

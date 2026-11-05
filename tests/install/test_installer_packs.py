@@ -39,6 +39,7 @@ def _stub(tmp_path):
     # pip: record argv, copy any -r file aside, succeed. cli.polyrob: succeed.
     py.write_text(
         '#!/bin/bash\n'
+        'if [ "$1" = "-I" ]; then shift; fi\n'
         'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then\n'
         '  printf "%s\\n" "$*" >> "$CALLS"; printf "%s\\n" "$*" >> "$CALLS.all"\n'
         '  prev=""; for a in "$@"; do [ "$prev" = "-r" ] && cat "$a" >> "$CALLS.reqs"; prev="$a"; done\n'

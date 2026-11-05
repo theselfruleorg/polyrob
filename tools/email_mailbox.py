@@ -40,6 +40,9 @@ from tools.email_providers.mime import (
 
 #: The most messages one ``email_list`` returns.
 MAX_LIST = 100
+#: The most one IMAP message may hold in memory: a 25 MB attachment is about 35 MB encoded.
+MAX_MESSAGE_BYTES = 50 * 1024 * 1024
+_RFC822_SIZE = re.compile(rb"RFC822\.SIZE (\d+)")
 #: Body characters ``email_read`` returns by default (the caller can raise it).
 DEFAULT_READ_CHARS = 20000
 #: Links ``email_read`` extracts from one message.
@@ -334,6 +337,14 @@ class EmailMailboxMixin:
 
     @staticmethod
     def _fetch_raw(conn, uid: str) -> bytes:
+        # The size first: BODY.PEEK[] brings the whole message into memory.
+        _typ, sized = conn.uid("FETCH", uid, "(RFC822.SIZE)")
+        for item in sized or []:
+            found = _RFC822_SIZE.search(item) if isinstance(item, bytes) else None
+            if found and int(found.group(1)) > MAX_MESSAGE_BYTES:
+                raise ValueError(
+                    f"message {uid} is {int(found.group(1)) // (1024 * 1024)} MB, over the "
+                    f"{MAX_MESSAGE_BYTES // (1024 * 1024)} MB read limit; it stays in the mailbox")
         typ, data = conn.uid("FETCH", uid, "(BODY.PEEK[])")
         for item in data or []:
             if isinstance(item, tuple) and len(item) > 1:

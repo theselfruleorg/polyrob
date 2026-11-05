@@ -470,6 +470,7 @@ async def test_the_ws_bridge_hands_events_to_the_main_loop_and_stops(monkeypatch
     await conn.stop()
     await asyncio.wait_for(runner, 10)          # the swallowed first stop is not the last
     assert runner.exception() is None
+    assert seen["thread_loop"].is_closed()      # no selector or socket pair left behind
 
 
 @pytest.mark.asyncio
@@ -481,7 +482,7 @@ async def test_a_refused_long_connection_names_the_platform_code(monkeypatch):
             super().__init__(msg)
             self.code = code
 
-    _fake_lark(monkeypatch, fail=ClientException(1000040350, "exceed conn limit"))
+    seen = _fake_lark(monkeypatch, fail=ClientException(1000040350, "exceed conn limit"))
 
     async def handler(payload):
         pass
@@ -489,3 +490,4 @@ async def test_a_refused_long_connection_names_the_platform_code(monkeypatch):
     with pytest.raises(RuntimeError) as ei:
         await asyncio.wait_for(FeishuLongConnection("a", "s3cr3t", domain="d").run(handler), 10)
     assert "1000040350" in str(ei.value) and "s3cr3t" not in str(ei.value)
+    assert seen["thread_loop"].is_closed()

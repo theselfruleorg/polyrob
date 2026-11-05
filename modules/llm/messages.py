@@ -52,6 +52,7 @@ class MessageOrigin:
     TOOL_NOTICE = "tool_notice"         # tool deferral / throttling notice
     CORRESPONDENT = "correspondent"     # WS-A: reply from a third party the agent
                                         # contacted — DATA, never an instruction
+    ACTION_LEDGER = "action_ledger"     # 103: what the agent did, read from the stores
     COMPACTION_SUMMARY = "compaction_summary"  # lossy LLM summary of compacted history (derived, not a user turn)
     SELF_WAKE = "self_wake"             # forged re-entry turn (self-wake / autonomy rail),
                                         # NOT a genuine human message

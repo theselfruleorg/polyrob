@@ -11,7 +11,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - WEBVIEW_EMIT_URL — default: unset — Loopback-only authenticated fast-push, using a token derived from `API_AUTH_TOKEN` or `WEBGATE_JWT_SECRET`; unset credentials use the file watcher.
 - WEBGATE_JWT_SECRET — default: unset (secret, masked) — Fallback secret for the loopback telemetry fast-push token when `API_AUTH_TOKEN` is unset (HMAC-derived; the secret itself never travels).
 - WEBGATE_PORT / WEBVIEW_PORT — default: 5050 — Bind port. `WEBGATE_PORT` wins over `WEBVIEW_PORT` when both are set. (`server_launcher.py`'s own code-level default is 3000; the production systemd unit sets `WEBVIEW_PORT=5050`, which `webgate.bind_port()` also defaults to.)
-- POLYROB_OWNER_USERNAME — default: unset — Owner login username for `own_ops`/`multitenant` posture (Posture 1/2 console access).
+- POLYROB_OWNER_USERNAME — default: unset — Owner login username for `own_ops`/`multitenant` posture (`own_ops`/2 console access).
 - POLYROB_OWNER_PASSWORD_HASH — default: unset — Argon2 hash of the owner password — **never plaintext**. `verify_owner_password` always runs a real argon2 verify (against a precomputed dummy hash when the username doesn't match) so a wrong username can't be distinguished from a wrong pa…
 - POLYROB_CONSOLE_NAME — default: "POLYROB Console" — Opt-in override of the web console's product display name.
 - POLYROB_SUPPORT_URL — default: unset ("") — Support link shown on the console sign-in page.

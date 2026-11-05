@@ -246,7 +246,7 @@
     },
     {
       "name": "propose_setting",
-      "sha": "9d443cf89616"
+      "sha": "fc030760ca08"
     },
     {
       "name": "read_skill_resource",
@@ -254,7 +254,7 @@
     },
     {
       "name": "recent_activity",
-      "sha": "81d042365cd7"
+      "sha": "57d8872afa36"
     },
     {
       "name": "room_moderate",

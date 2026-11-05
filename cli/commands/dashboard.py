@@ -15,7 +15,9 @@ NOTE: the dashboard is a viewer + chat UI; it does NOT run the autonomy loops
 the autonomy runtime is up (`polyrob serve` / `polyrob gateway` / the REPL under
 POLYROB_LOCAL) — not from the dashboard alone.
 """
+import logging
 import os
+import threading
 import webbrowser
 
 import click
@@ -74,6 +76,13 @@ def ensure_jwt_secret() -> None:
 def _hash_password(password: str) -> str:
     from argon2 import PasswordHasher
     return PasswordHasher().hash(password)
+
+
+def _open_browser(url: str) -> None:
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 def ensure_local_owner_login() -> None:
@@ -167,8 +176,8 @@ def dashboard(multitenant, posture, host, port, no_browser, set_password):
     load_env()
     if not usable_providers_with_credentials(os.environ):
         click.echo(click.style("[polyrob] WARN: ", fg="yellow")
-                   + "no usable provider key — chat will fail until you set one "
-                     "(`polyrob init` / `polyrob config set`). View-only pages still work.")
+                   + "no usable provider key, so chat cannot answer. Run `polyrob auth add`, "
+                     "then start the dashboard again. View-only pages still work.")
 
     _anchor_session_root()
 
@@ -191,6 +200,13 @@ def dashboard(multitenant, posture, host, port, no_browser, set_password):
             f"refusing to bind {bind_host}: the 'local' posture is loopback-only. "
             "Use --posture own_ops, bind "
             f"127.0.0.1, or set {ALLOW_FLAG}=1 if your own auth layer fronts it.")
+
+    # 104 D2: a console on the owner's own computer has the terminal's abilities. Only here:
+    # a served console (own_ops, multitenant, or a fronted local) never sets it, a server
+    # signal aborts the boot in posture_guard, and an explicit POLYROB_LOCAL=0 stays.
+    if (webgate.posture() == "local" and not non_loopback_bind(bind_host)
+            and not _allow_override(os.environ)):
+        os.environ.setdefault("POLYROB_LOCAL", "1")
 
     # A 0.0.0.0 bind is reachable locally via loopback — show a clickable URL.
     display_host = "127.0.0.1" if bind_host in ("0.0.0.0", "") else bind_host
@@ -215,16 +231,24 @@ def dashboard(multitenant, posture, host, port, no_browser, set_password):
         ensure_jwt_secret()
         ensure_local_owner_login()
 
-    if not no_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
-
     import uvicorn
 
+    # The one-run password above is what a person needs from this terminal. 80 INFO lines
+    # moved it off the screen, so the terminal gets warnings. The log file gets all of it.
+    def _quiet_console() -> None:
+        for handler in logging.getLogger().handlers:
+            if not isinstance(handler, logging.FileHandler):
+                handler.setLevel(logging.WARNING)
+
+    _quiet_console()
     # Import AFTER the flags are set so the route table is built for the chosen posture.
     from webview.server import app
 
+    _quiet_console()  # the import builds a container, which sets up logging again
+
+    if not no_browser:
+        # Not before the server listens: the browser opened on a refused connection.
+        threading.Timer(1.5, _open_browser, args=(url,)).start()
+
     click.echo(click.style(f"binding {bind_host}:{bind_port} … (Ctrl-C to stop)", dim=True))
-    uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")
+    uvicorn.run(app, host=bind_host, port=bind_port, log_level="warning")

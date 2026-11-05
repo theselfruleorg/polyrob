@@ -165,3 +165,26 @@ def test_a_finished_runs_release_never_closes_the_next_run(pool):
         await orch.release_shell_sandbox(generation=orch.shell_sandbox_generation())
         assert bp.is_session_closed("s1")
     asyncio.run(go())
+
+
+def test_a_session_that_never_ran_a_shell_keeps_no_marker(pool):
+    """102 3.5: the markers grew for EVERY session, not only for shell users."""
+    async def go():
+        bp.reopen_session("s1")
+        await bp.teardown_session("s1", generation=bp.session_generation("s1"))
+        assert bp.session_generation("s1") == 1, "a run's release leaves the generation"
+        assert "s1" not in bp._SESSION_LOCKS and not bp.is_session_closed("s1")
+
+        await bp.teardown_session("s1")   # the session's own end
+        assert "s1" not in bp._GEN and "s1" not in bp._SESSION_LOCKS
+        assert not bp.is_session_closed("s1")
+    asyncio.run(go())
+
+
+def test_a_session_that_ran_a_shell_keeps_its_closed_marker(pool):
+    async def go():
+        bp.reopen_session("s1")
+        await bp.get_shell_backend("s1")
+        await bp.teardown_session("s1")
+        assert bp.is_session_closed("s1") and "s1" in bp._GEN
+    asyncio.run(go())

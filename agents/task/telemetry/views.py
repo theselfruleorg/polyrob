@@ -56,7 +56,6 @@ class BaseTelemetryEvent(ABC):
 @dataclass
 class RegisteredFunction:
 	name: str
-	params: dict[str, Any]
 	service: str = "default"  # Track which service the function belongs to
 
 
@@ -737,6 +736,12 @@ class CompactionFinishedEvent(BaseTelemetryEvent):
 	tokens_after: Optional[int] = None
 	duration_seconds: float = 0.0
 	success: bool = True
+	#: 103: did the summary reach its end line, did it need the retry, how long is it.
+	summary_complete: Optional[bool] = None
+	summary_retried: Optional[bool] = None
+	summary_chars: Optional[int] = None
+	output_tokens: Optional[int] = None
+	tail_tokens: Optional[int] = None
 	session_id: Optional[str] = None
 	name: str = 'compaction_finished'
 

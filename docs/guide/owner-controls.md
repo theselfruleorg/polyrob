@@ -118,6 +118,10 @@ polyrob autonomy status
 Both write to `~/.polyrob/.env`, the only file the CLI loads. `--global` is
 still accepted so that old scripts keep working; it changes nothing.
 
+`/mode` states what the agent may do without you and what it does when you are away;
+`/mode ask-first`, `/mode standard` and `/mode on-my-own` set one level
+([configuration.md](configuration.md#what-the-agent-may-do-on-one-screen)).
+
 Use `pause` to stop what is happening now; use `off` when you do not want the
 loops to start at all. What each mode moves:
 [configuration.md §6](configuration.md#6-the-autonomy-dial).

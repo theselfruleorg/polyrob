@@ -16,6 +16,12 @@ from modules.llm.messages import BaseMessage
 from agents.task.agent.views import AgentOutput, ActionResult
 from agents.task.telemetry.views import AgentRunTelemetryEvent
 
+#: The longest tool result the output log parses to count its items.
+JSON_PARSE_MAX_CHARS = 1024 * 1024
+
+#: tool_outputs.jsonl is forensics and has no rotation: the writer stops here.
+TOOL_OUTPUT_LOG_MAX_BYTES = 20 * 1024 * 1024
+
 
 class LoggingIOMixin:
     """Response/context/conversation/tool-output logging for Agent."""
@@ -302,36 +308,57 @@ class LoggingIOMixin:
         try:
             import json
             from datetime import datetime as _dt
+            from agents.task.robust_parse_config import RobustParseConfig
+
+            # This runs BEFORE the spill, so an oversized result is still whole here.
+            # The spill file holds the rest; the log keeps the start and the size.
+            cap = RobustParseConfig.MAX_EXTRACTED_CONTENT_SIZE
 
             for idx, (action, result) in enumerate(zip(actions, results)):
                 tool_name = action.get('name') if isinstance(action, dict) else getattr(action, 'name', 'unknown')
                 arguments = action.get('arguments', {}) if isinstance(action, dict) else {}
 
+                size = len(result.extracted_content or "")
+                truncated = size > cap
                 log_entry = {
                     "timestamp": _dt.now().isoformat(),
                     "step": step_number,
                     "tool": tool_name,
                     "arguments": arguments,
                     "result": {
-                        "content": result.extracted_content,
+                        "content": result.extracted_content[:cap] if truncated else result.extracted_content,
                         "error": result.error,
-                        "bytes": len(result.extracted_content or "")
+                        "bytes": size
                     }
                 }
+                if truncated:
+                    log_entry["result"]["truncated"] = True
 
-                # Add item count for lists
-                if result.extracted_content:
+                # Add item count for lists. Parsing runs before any cap: a large payload
+                # would hold many times its size as Python objects, for one number.
+                if result.extracted_content and size <= JSON_PARSE_MAX_CHARS:
                     try:
                         parsed = json.loads(result.extracted_content)
                         if isinstance(parsed, list):
                             log_entry["result"]["item_count"] = len(parsed)
-                            log_entry["result"]["first_item"] = parsed[0] if parsed else None
+                            # One element can be the whole result: past the cap it stays out.
+                            if not truncated:
+                                log_entry["result"]["first_item"] = parsed[0] if parsed else None
                     except (json.JSONDecodeError, TypeError, AttributeError):
                         pass  # Content may not be JSON - skip enhanced logging
 
                 # Write to JSONL
-                with open(self.tool_output_log_path, 'a') as f:
-                    f.write(json.dumps(log_entry) + '\n')
+                try:
+                    log_size = os.path.getsize(self.tool_output_log_path)
+                except FileNotFoundError:
+                    log_size = 0
+                if log_size < TOOL_OUTPUT_LOG_MAX_BYTES:
+                    with open(self.tool_output_log_path, 'a') as f:
+                        f.write(json.dumps(log_entry) + '\n')
+                elif not getattr(self, '_tool_output_log_stopped', False):
+                    self._tool_output_log_stopped = True
+                    self.logger.warning(
+                        f"Tool output log stopped at {log_size} bytes: {self.tool_output_log_path}")
 
                 # Console log with count
                 if "item_count" in log_entry["result"]:

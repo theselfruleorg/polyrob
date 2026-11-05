@@ -436,7 +436,6 @@ class TimeoutConfig:
     SUB_AGENTS_ENABLED = True  # C-DELEG: ON by default; use get_sub_agents_enabled() for dynamic value
     SUB_AGENT_TIMEOUT = 600
     PARALLEL_SUBTASKS_TIMEOUT = 900
-    MAX_CONCURRENT_SUB_AGENTS = 3
     MAX_SUB_AGENT_DEPTH = 1
 
     # ========== STEP/SESSION TIMEOUTS ==========

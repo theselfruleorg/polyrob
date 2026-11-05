@@ -55,7 +55,7 @@ added later is owner-only until it is named a read.
 ```bash
 polyrob                 # or: polyrob chat
 polyrob --plain
-polyrob -p anthropic -m claude-sonnet-4-5
+polyrob -p anthropic -m <model>
 ```
 
 A persistent agent session. Type your goal and press Enter; the agent acts step
@@ -78,7 +78,7 @@ after attaching to start the next turn.
 
 The line at the bottom of the REPL is the live meter:
 
-    claude-sonnet-4-6 · 41.9k↑ 3.2k↓ · ctx 31% · cache 93% · $0.0412 · ready
+    <model> · 41.9k↑ 3.2k↓ · ctx 31% · cache 93% · $0.0412 · ready
 
 `ctx` is how full the context window is, read from the provider's own token
 count once it has reported one. `cache` is the share of prompt tokens the
@@ -236,7 +236,7 @@ The read verbs take `--json`. How the routing and precedence work:
 polyrob model                              # the picker (provider, then model)
 polyrob model list                         # models + which provider keys are present
 polyrob model set-default                  # the same picker
-polyrob model set-default anthropic claude-sonnet-4-5
+polyrob model set-default anthropic <model>
 ```
 
 ### `polyrob update`
@@ -707,7 +707,7 @@ polyrob owner allow <surface> <target>          # outbound send permission
 polyrob owner deny <surface> <target>
 polyrob owner allowlist
 polyrob owner pair pending|approve <code>|revoke <user>
-polyrob owner groups allow|deny|list|mode|set|role|admins|tail|service …
+polyrob owner groups allow|deny|list|mode|set|role|roles|tools|audit|admins|tail|service …
 polyrob owner correspondents --history <surface> <address>   # the stored transcript
 ```
 
@@ -721,7 +721,7 @@ execution (`run_code`, `run_tests`) in local mode. Remove a pairing with
 
 `owner correspondents`, `owner approve --all` and `owner invoices` are scoped to
 this instance's owner tenant; pass `--all-tenants` to see every bucket on the
-box. `owner groups admins <surface> <chat>` lists the ROLES POLYROB recorded for
+box. `owner groups roles <surface> <chat>` lists the ROLES POLYROB recorded for
 a room — the platform's own admin list needs a live connection to that surface
 (`/groups admins here` on Telegram).
 

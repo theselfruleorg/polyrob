@@ -66,6 +66,27 @@ class _SingleLineErrorFormatter(logging.Formatter):
         return f"{glyph} {_short_name(record.name)}: {text}".rstrip()
 
 
+#: A rejected key already ends the turn with a panel that names the fix. The layers that
+#: log it on the way up added five red lines above that panel, and two more above the
+#: banner when the REPL opened with a bad key. The log file keeps every one.
+_AUTH_FAILURE_MARKERS = ("error code: 401", "authenticationerror",
+                         "no fallback provider", "consecutive failures",
+                         "could not build isolated client")
+
+
+#: A malformed tool call goes back to the model, which fixes it on the next step. If it
+#: never does, the run ends with a panel that says so. Neither case needs the steps.
+_TOOL_RETRY_MARKERS = ("validation failed for", "failed to convert", "available actions (first",
+                       "this action has no required params", "tool call 0:")
+
+
+class _ProviderAuthFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        lowered = record.getMessage().lower()
+        return not any(marker in lowered
+                       for marker in _AUTH_FAILURE_MARKERS + _TOOL_RETRY_MARKERS)
+
+
 class _CascadeFilter(logging.Filter):
     """Collapse a re-wrapped exception to its FIRST line on the console.
 
@@ -130,6 +151,7 @@ def apply_single_line_errors() -> None:
                 continue
             handler.setFormatter(_SingleLineErrorFormatter(handler.formatter))
             handler.addFilter(_BrowserPrerequisiteFilter())
+            handler.addFilter(_ProviderAuthFilter())
             handler.addFilter(_CascadeFilter())
     except Exception:
         pass

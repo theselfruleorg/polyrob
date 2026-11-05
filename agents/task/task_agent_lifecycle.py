@@ -9,15 +9,15 @@ from core.exceptions import AgentError, SessionOwnershipError
 from datetime import datetime
 from typing import Optional, Dict, Any, Union, List
 import asyncio
+import gc
 import json
 import re
 import time
-from agents.task.task_agent_support import (
-    MAX_SESSIONS_PER_USER,
-    _spawn_detached,
-)
+from agents.task.task_agent_support import MAX_SESSIONS_PER_USER
 
 logger = logging.getLogger("agents.task_agent_lite")
+#: How long a finished goal or cron session stays resident (102 D1: chat keeps its TTL).
+AUTONOMOUS_SESSION_TTL_S = 900
 
 
 class TaskAgentLifecycleMixin:
@@ -66,49 +66,12 @@ class TaskAgentLifecycleMixin:
                 delay = 86400
 
                 if self.session_manager:
-                    cleaned = self.session_manager.cleanup_old_workspaces(max_age_days=7)
+                    cleaned = await asyncio.to_thread(self.session_manager.cleanup_old_workspaces, max_age_days=7)
                     logger.info(f"Workspace cleanup: removed {cleaned} old workspaces")
-                self._session_dir_gc()
 
             except Exception as e:
                 logger.error(f"Error in workspace cleanup: {e}")
 
-    def _session_dir_gc(self) -> None:
-        """056 WS8: collect stale per-session dirs (dry-run unless
-        SESSION_DIR_GC_APPLY=true). Live/resident session ids are protected;
-        the report is logged and recorded as a `session_gc` event so the owner
-        sees the numbers before the switch is flipped."""
-        try:
-            from agents.task.path import pm
-            from agents.task.session_registry import resident_session_ids
-            from core.session_gc import collect_stale_sessions
-            sessions_root = str(getattr(pm(), "data_root", "") or "")
-            protect = set()
-            try:
-                protect.update(resident_session_ids(self))
-            except Exception:
-                pass
-            try:
-                if self.session_manager:
-                    protect.update(self.session_manager.get_active_sessions())
-            except Exception:
-                pass
-            rep = collect_stale_sessions(sessions_root, max_age_days=14, protect=protect)
-            logger.info("session gc (%s): candidates=%s removed=%s bytes=%s kept_recent=%s "
-                        "protected=%s errors=%s sample=%s",
-                        "APPLY" if rep.get("apply") else "DRY-RUN", rep.get("candidates"),
-                        rep.get("removed"), rep.get("bytes"), rep.get("kept_recent"),
-                        rep.get("protected"), rep.get("errors"), rep.get("sample"))
-            try:
-                from core.event_log import get_event_log, event_log_enabled
-                from core.event_kinds import SESSION_GC
-                if event_log_enabled():
-                    get_event_log().record(SESSION_GC, user_id="", source="lifecycle",
-                                           **{k: v for k, v in rep.items() if k != "sample"})
-            except Exception:
-                pass
-        except Exception as e:
-            logger.warning("session gc skipped: %s", e)
     @staticmethod
     def _session_age_seconds(created_at, now: Optional[datetime] = None) -> Optional[float]:
         """Age in seconds from an ISO 'created_at' string, or None if unparseable."""
@@ -163,6 +126,7 @@ class TaskAgentLifecycleMixin:
         return len(stale)
     async def _cleanup_old_sessions(self):
         """Remove sessions that haven't been active recently."""
+        from core.autonomy_marker import is_autonomous
         # First retire never-run 'created' sessions that the activity-keyed GC below
         # can never see (they have no _session_last_activity entry).
         await self._cleanup_stale_created_sessions()
@@ -176,17 +140,23 @@ class TaskAgentLifecycleMixin:
         for session_id, last_activity in list(self._session_last_activity.items()):
             if last_activity < ttl_threshold:
                 sessions_to_evict.append((session_id, 'ttl'))
+            elif last_activity < now - AUTONOMOUS_SESSION_TTL_S and is_autonomous(session_id):
+                # 102 M-K: no owner returns to a finished goal or cron run. A resume or an
+                # approval recreates it from disk, and a live run is skipped by the eviction.
+                sessions_to_evict.append((session_id, 'autonomous_idle'))
 
         # Evict by TTL
         for session_id, reason in sessions_to_evict:
-            logger.info(f"Evicting session {session_id} (TTL {self.session_ttl_seconds}s exceeded)")
-            await self._evict_session(session_id, reason='ttl')
+            logger.info(f"Evicting session {session_id} ({reason})")
+            await self._evict_session(session_id, reason=reason)
 
         # Also enforce max sessions limit (LRU eviction)
         if self._registry.count() > self.max_sessions_in_memory:
-            # Sort by last activity (oldest first)
+            # Sort by last activity (oldest first). A stale id holds no memory: it is
+            # not an LRU candidate, or a real session stays over the limit (102 N-7).
             sorted_sessions = sorted(
-                self._session_last_activity.items(),
+                ((sid, ts) for sid, ts in self._session_last_activity.items()
+                 if self._registry.get(sid) is not None),
                 key=lambda x: x[1]
             )
 
@@ -197,6 +167,13 @@ class TaskAgentLifecycleMixin:
             for session_id, _ in sorted_sessions[:excess_count]:
                 logger.info(f"Evicting session {session_id} (max sessions limit: {self.max_sessions_in_memory})")
                 await self._evict_session(session_id, reason='lru')
+                sessions_to_evict.append((session_id, 'lru'))
+
+        # 102 C-2: an evicted Agent graph holds cycles, and a busy box may wait long
+        # for an automatic gen2. This is the collect the end of a run used to carry.
+        if sessions_to_evict:
+            gc.collect()
+
     def _prune_chat_mappings(self, session_id: str) -> None:
         """Drop any _chat_sessions / _chat_locks entries pointing at an evicted session.
 
@@ -279,7 +256,6 @@ class TaskAgentLifecycleMixin:
                     set_residency(self, session_id, "evicted")
                     evicted = True
 
-                self._session_last_activity.pop(session_id, None)
                 self._prune_chat_mappings(session_id)  # P7/F2: don't leak chat-key → session maps
 
                 logger.info(f"Evicted session {session_id} from memory (reason: {reason}) with persistence")
@@ -291,6 +267,8 @@ class TaskAgentLifecycleMixin:
             # Drop the lock objects only when nobody holds or waits on them: a
             # waiter on a popped lock and a newcomer on a fresh one would overlap.
             if evicted or self._registry.get(session_id) is None:
+                # 102 N-7: not resident, so not a candidate on the next sweep either.
+                self._session_last_activity.pop(session_id, None)
                 if lock_is_idle(exec_lock):
                     self._session_execution_locks.pop(session_id, None)
                 if lock_is_idle(recreate_lock):
@@ -469,11 +447,6 @@ class TaskAgentLifecycleMixin:
             if info:
                 sessions[session_id] = info
         return sessions
-    def _remove_session(self, user_id: str, session_id: str) -> None:
-        """Remove a session and cleanup."""
-        orchestrator = self._registry.remove(session_id)
-        if orchestrator:
-            _spawn_detached(orchestrator.cleanup())
     async def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session info by ID (API compatibility)."""
         if not self.session_manager:

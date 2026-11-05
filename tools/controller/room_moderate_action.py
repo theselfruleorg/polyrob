@@ -37,6 +37,8 @@ from pydantic import BaseModel, Field
 
 from agents.task.agent.views import ActionResult
 
+from core.surfaces.room_targets import resolve_target  # noqa: F401 (the one resolver)
+
 logger = logging.getLogger(__name__)
 
 _VERBS = ("mute", "unmute", "ban", "unban", "delete")
@@ -61,42 +63,6 @@ class _Row:
 def _out(text: str) -> ActionResult:
     return ActionResult(extracted_content=f"room_moderate: {text}",
                         include_in_memory=True)
-
-
-def resolve_target(rows, target: str, *, allow_unseen: bool = False):
-    """``(user_id, display_name)`` or ``(None, reason)`` from the room ledger.
-
-    Matches the sender id exactly, or the sender name with or without ``@``,
-    case-insensitive. A bare number with no ledger row is taken as a user id.
-    Ambiguity refuses — a ban must never land on the nearest name.
-    """
-    want = (target or "").strip()
-    if not want:
-        return None, "name the target (user id or @name from room_read)."
-    bare = want.lstrip("@").lower()
-    hits = {}
-    for r in rows:
-        # Only the agent's OWN rows are skipped. Another bot (a spam bot) is a
-        # valid target; the live-status probe still protects an admin bot.
-        if not r.sender_id or r.sender_id == "agent":
-            continue
-        name = (r.sender_name or "").strip()
-        if want == r.sender_id or (name and name.lstrip("@").lower() == bare):
-            hits[r.sender_id] = name or r.sender_id
-    if len(hits) == 1:
-        uid, name = next(iter(hits.items()))
-        return uid, name
-    if len(hits) > 1:
-        listed = ", ".join(f"{n} (uid={u})" for u, n in hits.items())
-        return None, f"'{want}' matches more than one member: {listed}. Use the uid."
-    # ⚠️ A uid with no ledger row is accepted ONLY to LIFT a mute/ban (the
-    # member may have aged out of the ledger). A mute/ban/delete must name
-    # someone who actually posted here, so a planted line cannot aim one at an
-    # arbitrary account.
-    if allow_unseen and bare.lstrip("-").isdigit():
-        return want.lstrip("@"), want.lstrip("@")
-    return None, (f"no member named '{want}' in this room's ledger. Read the "
-                  f"room with room_read and pass the uid.")
 
 
 def _job_names_room(task: str, chat_id: str, title: str = "") -> bool:
@@ -200,8 +166,10 @@ def register_room_moderate_action(controller) -> None:
         from core.surfaces import chat_policy as _chat_policy
         from core.surfaces.group_allowlist import GroupAllowlist
         from core.surfaces.room_label import room_name
-        rooms = [r for r in GroupAllowlist(f"{home}/group_allowlist.db").list_all()
-                 if r.get("status") == "active"]
+        from core.surfaces.room_targets import scoped_rooms
+        rooms = scoped_rooms(controller, [
+            r for r in GroupAllowlist(f"{home}/group_allowlist.db").list_all()
+            if r.get("status") == "active"])
 
         def _title(r):
             try:

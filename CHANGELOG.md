@@ -10,6 +10,96 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.5] — 2026-11-05
+
+### Added
+
+- `/mode` answers on every seat who you talk to, what runs without asking, what happens when you are away
+  and how to change it; `/mode ask-first|standard|on-my-own` sets one level, never money or compute.
+  A console on your own computer has the terminal's abilities, and its gates wait in the Inbox.
+- Group rooms: the owner grants tools per room (`/groups tools`, closed bundles), and a room admin runs them with `/admin <task>` in
+  a separate session. Role and grant are read at every tool call; money and owner data stay out. `/groups audit`, `/status`.
+- `install.sh` sends one anonymous count when a fresh install works: version, OS and install method, with no ID. It says so at
+  its start; `--no-telemetry` or `DO_NOT_TRACK=1` turns it off, and a re-run or a CI run sends nothing.
+- One short owner rule given in the owner's own turn applies at once, unless external tool output, a browser page or a correspondent entered the turn.
+- The agent reads what it did from the stores: a `<session-actions>` block holds exact counts and recent lines of every decided
+  card and outward act, survives compaction and `/new`, and never reaches a room or correspondent. `recent_activity scope=actions` reads more.
+- New goals and cron jobs wait under 500 MB of available memory, at 90% of `memory.high`, or under 2 GB of free disk (on a small
+  machine, 1/10 of memory and 1/20 of disk). The work stays due and no owner turn waits. `/status` names a hold and an unread source.
+- `/status` shows the worst event-loop stall of the last heartbeat window, and the log names the blocking call
+  while a stall of over 2 s is still running.
+
+### Changed
+
+- README and PyPI page: a banner with the current logo and the project address replaces the old logo;
+  README links are absolute so they work on PyPI; the package homepage is the project site.
+- Idle goal and cron sessions leave memory after 15 minutes, the voice model unloads when idle, and a session opens no browser until it uses a page.
+  The browser limit counts real sessions, a hold of over an hour tells the owner, and `/status` names an email with unknown delivery.
+- The installer fetches a private Python, checked against a pinned `uv` checksum, when a machine has no Python 3.11+
+  or no `venv` module, and its first run asks only for a key and a model.
+- A chat app may set `AUTONOMY_POSTURE`, and a console Save says when it applies. A terminal chat in the console names the
+  command that continues it, and a line sent to it answers 409 instead of disappearing.
+- An owner chat compacts at about 102k of history, not 68k, so a busy chat stalls less and keeps more recent detail.
+- `AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY` is now ON by default: an autonomous step that uses no page takes no screenshot.
+  A step that uses the browser still takes one.
+- The browser context limit defaults to 6 (it was 25), and one constant holds that default. About 200 MB per context
+  was measured, so 25 contexts could not fit the unit. An existing `MAX_BROWSER_CONTEXTS` line still wins.
+
+### Removed
+
+- `SESSION_DIR_GC_APPLY`, `core/session_gc.py` and the `session_gc` event: that second sweep had no artifact guard and could delete
+  what session retention protects. Session retention is now the only sweep of session trees; a line that sets the flag does nothing.
+
+### Fixed
+
+- Two payments confirmed at the same time from one wallet now both reach the chain; the second no longer fails with
+  "nonce too low".
+- `propose_action` refuses a `/send` that repeats a recent or running send of the same asset to the same address on the same
+  chain within 72 h, unless it is also owed.
+- An owner's chat message always gets an answer: `done()` with no reply earns one corrective step that quotes the owner, then a
+  line that says so. The owner's new message stays the newest in the context, ahead of the state note that hid a voice note.
+- Voice notes: Discord, Slack, Signal and Feishu now transcribe through the shared seam, with the same guard and echo as Telegram
+  and WhatsApp. A WhatsApp voice note in a continued chat no longer tells the agent that the note could not be stored.
+- A file write could land in another session's workspace, a line during a group admin task could clear its safety state,
+  and a group's first line ran during an owner pause. Off Telegram, `/admin` is one line and no task.
+- Console chat answers on your own computer: `polyrob dashboard` loads the same model and tools as the terminal. A refused key
+  names its fix, replies draw bold and code, and your own line appears once.
+- Room admins: grant by reply, `/groups roles` (CLI `owner groups roles`), `member` removes the row, an admin's own `/help`, a room
+  note when their DM is refused. A name never sets a role, and a forum topic's implicit reply targets nobody (`/mute` too).
+- A Telegram group that becomes a supergroup keeps its allowlist, roles, policy, log and service jobs (blocked stays blocked).
+- `polyrob update --apply` rolled back on every install without the `crypto` extra, because a table module
+  imported a package whose `__init__` needed `eth_account`; `migrations.migrate upgrade` now runs on a base install.
+- The installer: a cut download runs nothing, a failure names its step and log, `--commit` takes a tag, `--home`
+  survives the install, a broken managed venv rebuilds, the `PATH` entry reaches login shells, and `--uninstall` stops the service.
+- First run: the wizard tests a key with the provider and keeps it through Ctrl-C, a mistyped OpenRouter model warns with the
+  nearest names, and `polyrob doctor` on a new install says `NEW` instead of listing missing stores as errors.
+- An order that is retried, passes its deadline or fails now stops its old goal.
+- An unreadable skill folder no longer breaks the catalog; the log, the catalog and `/skills` name it.
+- Startup no longer warns about a missing preferred LLM client or a replaced `llm` service.
+- A reply can no longer send the owner to a command that does not exist, and `cronjob_show` gives a run's own report; a run that
+  says it stopped records `blocked`, not `done`. A shipped skill may not add an owner gate of its own.
+- An SMTP send no longer blocks the event loop or waits with no limit (30 s socket timeout). A failure before the mail body retries. After a
+  timeout or lost connection during the body, the mail may have gone out: the agent reads "delivery unknown" and nothing retries.
+- A compaction summary can no longer lose its end unseen: it must reach an end line, a cut one is retried once and then
+  rebuilt with its gap named, each section is bounded, and the cron output cap no longer narrows owner chat on the shared client.
+- `message_history.json` is written atomically, so a crash during the write cannot truncate the only copy of a session history.
+- `read_file` stops at 20 MB and says how to read a part, off the event loop, and an MCP reply over 20 MB and an IMAP message
+  over 50 MB are refused by name. A large MCP result on one SSE line now reads up to that limit.
+- Stdio MCP servers run in their own session and close ends the whole group, so `npx` leaves no node child behind. One thread
+  owns each pipe: an idle poll no longer leaks a thread or drops a reply, and a failed start no longer blocks the event loop.
+- Long sessions hold less: a session that leaves memory drops its map rows, loggers, LLM clients, shell markers and telemetry;
+  a finished sub-agent keeps a short record; the stored history holds at most 6 images; browser contexts that fail are closed.
+- Files stop growing without limit: `tool_outputs.jsonl` and durable event attributes have a cap, each rotation keeps 3
+  `events_*.jsonl`, SQLite `-wal` files shrink past 64 MB, and the step ledger appends to JSONL with a tail in memory.
+- Fewer stalls: stream chunks and feed events leave through a bounded sender, the action model rebuilds only when the action set
+  changes, `<live-health>` rebuilds at most every 30 s, and the collect after a run moved to the eviction batch.
+- A long `-` or `_` chain in any text no longer stalls every session in the secret scrub: 50 KB took 66 s and now takes
+  about 30 ms. A key behind a longer prefix still redacts.
+- `MAX_CONCURRENT_SUB_AGENTS` now sets the sub-agent limit. The semaphore read a class constant, so the flag changed
+  only what the CLI displayed.
+- `wallet_activity` reads EVM history through `ALCHEMY_API_KEY` where Blockscout has no open API or does not answer, so the
+  agent can see its own payments on those chains.
+
 ## [1.7.4] — 2026-11-03
 
 ### Added

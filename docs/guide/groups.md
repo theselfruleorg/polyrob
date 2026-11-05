@@ -46,7 +46,7 @@ Three things make a room work, in order:
   block stays empty, the agent answers each line with no history of the
   conversation, and a service job there always reports no-change. The agent logs
   one warning per surface naming this. Allowlisting, roles, modes and caps work
-  on every surface; the *memory of the room* does not.
+  on every surface; the *memory of the room* does not. Off Telegram, a role takes the account id.
 
 ---
 
@@ -79,9 +79,10 @@ outbound messages).
 | Line appended to the ledger | yes | yes | yes | yes (context only) |
 | Mention / reply-to-bot / wake word triggers a turn | yes | yes | yes | no |
 | Triggers without a mention (`chat.mode=active`) | yes | yes | judged by the agent | no |
-| `/groups mode\|tail`, `/mute`, `/cancel`, `/new` in the room | yes | yes | no | no |
-| `/groups allow\|deny\|list\|set\|role\|service\|admins` (owner-only, confirmed by DM) | yes | no | no | no |
+| `/groups mode\|tail\|roles`, `/mute`, `/cancel`, `/new` in the group | yes | yes | no | no |
+| `/groups allow\|deny\|list\|set\|role\|tools\|audit\|service\|admins` (owner-only, confirmed by DM) | yes | no | no | no |
 | Tools on the turn | room toolset | room toolset | room toolset | — |
+| `/admin <what to do>`, with the bundles the owner granted this group | yes | yes | no | no |
 | Money, self-mod, host, secrets, recall, `/pause`, `/dev`, wallet, trade, deploy | never in a room — the owner uses the DM | no | no | no |
 
 The **owner** is the bound owner principal, resolved from the authenticated sender —
@@ -90,10 +91,21 @@ still shows their real numeric id on every ledger line, so the owner's replies c
 never be impersonated. `blocked` is the only per-member deny; there is no row for a
 member who has done nothing — an unlisted sender defaults to `member`.
 
-Grant/revoke a role with `/groups role here <numeric id> admin|member|blocked` (owner;
-an admin may only set `blocked`) or `polyrob owner groups role <surface> <chat_id>
-<user_id> <role>`. `/groups admins here` reads Telegram's own admin list as
-**suggestions** — nothing is granted until the owner confirms each one explicitly.
+Grant a role with `/groups role here <numeric id> admin|blocked`, or in the group reply
+to the person's message with `/groups role here admin|blocked` (owner; an admin may
+only set `blocked`, and never on an admin or the owner). `member` removes the row. The
+CLI form is `polyrob owner groups role <surface> <chat_id> <user_id> <role>`.
+`/groups roles here` (owner or admin) lists who holds what. `/groups admins here` reads
+Telegram's own admin list as **suggestions**: nothing is granted until the owner
+confirms each one.
+
+⚠️ A name never sets a role. A member with no username picks their own display name,
+so `/groups role here @name admin` writes nothing: it answers with the uid it found in the
+group's log and the line to send. Check the person, then send that line.
+
+⚠️ An admin's command reply goes to their DM. Telegram refuses that until the person
+has started the bot, so ask each admin to send `/start` once. Until then the group gets
+a short note and no output.
 
 ⚠️ A Telegram room id is negative (`-<chat_id>`), and on the command line a
 leading dash reads as an option. Write the id with an underscore in place of the
@@ -107,6 +119,61 @@ polyrob owner groups service --every 30m --max 3 telegram -- -<chat_id>
 ```
 
 ---
+
+## Admin abilities (`/admin`)
+
+An admin's ordinary line has the same abilities as a member's line. Extra abilities run only
+through `/admin <what to do>`, in a separate chat for that group and that person. A member's
+line never enters that chat and can never merge into its run. It stays public: no owner
+facts, no memory, no owner chat history, and everything it writes is public.
+
+You grant a group's admins a bundle. Nothing is on by default:
+
+| Bundle | Reaches | Limit |
+|---|---|---|
+| `moderation` | `room_read`, `room_moderate` | This group only. See the rules below |
+| `files` | the files of that chat | Those files only. Off when the agent works in a shared project |
+| `http` | `http_request` | The private-network guard, no stored credential, and no request after outside text |
+| `browser` | the browser | A remote browser only (`BROWSER_CDP_URL` or `BROWSER_WSS_URL`), fresh, with no login |
+
+```text
+/groups tools here                       # what this group holds, and what it could hold
+/groups tools here admin add moderation  # or remove; owner only
+/groups set here admin_turns_per_day 10  # default 20, 0 turns /admin off
+/groups audit here                       # who ran what, last 7 days
+```
+
+`polyrob owner groups tools` and `polyrob owner groups audit` do the same from a terminal.
+You can also ask the agent in your DM: it sends you a decision to tap, and nothing changes first.
+
+An admin runs `/admin <what to do>`, `/admin stop` and `/admin new`. Each spends your AI cost,
+so a daily limit counts per group. The role, the allow row and the grant are read again at
+EVERY step: when you remove any of them, the next step refuses, even in a running turn.
+
+**Moderation rules.** An admin can already mute and ban by reply. This bundle adds reading and
+deleting by name, with these limits:
+
+- The admin's own `/admin` line must ask for the action in English: mute, silence, unmute, ban, kick, unban, delete, remove or clear.
+- In reply to a message, it can moderate only the author of that message.
+- With no reply, that line must also name the person (uid or name) or the message id.
+- After it reads outside text (`room_read`, a web page, a file, a quoted message), it cannot send an `http` request or fetch a page that line does not name. With no reply, it also cannot moderate. It says so, and the next `/admin` line can.
+- A line sent while `/admin` runs joins that work. It is not a new request for these rules.
+- The owner, a group admin and a live chat administrator can never be a target.
+
+⚠️ What no bundle reaches, whoever asks: money, the wallet, host execution, self-changes,
+memory, the knowledge base, goals, scheduled jobs, email, X, and new abilities. Do those in your DM.
+
+⚠️ A local browser stays off because a web page can redirect it to this machine's private network,
+and the guard does not see a redirect. Grant `browser` only with a remote browser. A page can
+still steer that browser, and it can send what the admin's chat holds to another site.
+
+⚠️ `/admin` is Telegram only. On another app it answers with one line and runs nothing, and that group cannot hold a bundle. An anonymous admin has no identity on the message, so `/admin`
+does not reach them. They must post as themselves.
+
+⚠️ `chat.room_tools` adds an ability to EVERY turn, for every member. Only a read ability with no
+money, execution or write power counts, so today it can restore `task`, `web_fetch` or
+`defi_data` where `GROUP_TURN_TOOLS` narrowed them, or add a read ability from a pack. Use a bundle
+for anything else.
 
 ## Behaviour (`chat.*` keys)
 
@@ -129,6 +196,9 @@ groups set <surface> <chat_id> <key> <value>` (`unset`/`-` clears it back to def
 | `chat.quiet_hours` | `HH-HH` (0-23, local) | tenant `digest.quiet_hours` | Demotes the room to `listen` inside the window: an addressed owner or admin still gets an answer, a member does not, whatever `chat.mode` says |
 | `chat.mute_until` | float (unix epoch) | `0` (not muted) | Written by `/mute`; demotes the room to `listen` until it elapses |
 | `chat.member_verbs` | list | `help` | The slash verbs a plain member may type in this room. Only `help`, `mute`, `unmute`, `ban`, `unban` and `paid` (the price list only) can be granted; any other name stays ordinary room chatter. See [Paid moderation actions](#paid-moderation-actions) |
+| `chat.room_tools` | list | empty | Set it with `/groups tools`. An ability added to every turn in this group |
+| `chat.admin_tools` | list | empty | Set it with `/groups tools here admin`. The bundles `/admin` can use, on Telegram only |
+| `chat.admin_turns_per_day` | int | `20` | How many `/admin` lines can start work in this group in 24 hours |
 | `chat.paid_*` | see below | off | What the room sells, at what price and in what token — [Paid moderation actions](#paid-moderation-actions) |
 
 `set` refuses any other key with `unknown preference key: chat.<key>` and names the
@@ -198,7 +268,7 @@ A reply that is exactly `[SILENT]` costs nothing — an `active`-mode judgement 
 
 ## What the agent can and cannot do in a room
 
-Every room turn — owner included — runs on a `SessionProfile.PUBLIC` session and a
+Every room turn — owner included, unless `/groups tools` or `/admin` adds to it — runs on a `SessionProfile.PUBLIC` session and a
 fixed, read-only toolset (`GROUP_TURN_TOOLS`, default
 `task,web_fetch,defi_data`). That list is a **bound, not a floor**: unlike a private session, a
 room is never widened with the base defaults, so it has no `filesystem` and no
@@ -277,7 +347,6 @@ Whose decision a moderation is:
 | The turn | What happens |
 |---|---|
 | An owner turn that has read no third-party content | It runs: this is the owner's own instruction |
-| An owner turn that read room lines (or any other outside text) | Each moderation waits for the owner's tap |
 | An autonomous run | Only under a standing cron job or goal whose text names the room (by chat id or title); any other run is refused |
 | A room turn, or a correspondent-tainted session | Refused |
 
@@ -424,8 +493,7 @@ always wins.
 
 ⚠️ Focus is a POINTER, not a permission. It decides which room `here` means and
 nothing else: your role is still resolved for that room on every verb, so
-focusing a room you are only a member of buys you nothing. It is per-person, so
-one admin's `/groups use` never redirects another's `here`.
+focusing a group you are only a member of buys you nothing. Only the owner works from a DM.
 
 ⚠️ A `chat.` prefix is optional in `/groups set` — `paid_ban_max_duration` and
 `chat.paid_ban_max_duration` are the same key. An unknown key is still refused.
@@ -622,6 +690,10 @@ profile*); the reference with a code anchor per row is
 | `/groups mode here <mode>` · `polyrob owner groups mode <surface> <chat_id> <mode>` | Telegram (owner/admin), CLI | Set `chat.mode` |
 | `/groups set here <key> <value>` · `polyrob owner groups set <surface> <chat_id> <key> <value>` | Telegram (owner), CLI | Set any `chat.*` key |
 | `/groups role here <id> <role>` · `polyrob owner groups role <surface> <chat_id> <user_id> <role>` | Telegram (owner; admin may only set `blocked`), CLI | Grant a per-chat role |
+| `/groups roles here` · `polyrob owner groups roles <surface> <chat_id>` | Telegram (owner or admin), CLI | Who holds a POLYROB role in this group |
+| `/groups tools here [admin] [add\|remove <name>]` · `polyrob owner groups tools` | Telegram (owner), CLI | What the owner granted this group |
+| `/groups audit here [n]` · `polyrob owner groups audit` | Telegram (owner), CLI | Who ran what with `/admin`, last 7 days |
+| `/admin <what to do>` · `/admin stop` · `/admin new` | Telegram, in the group (owner or admin) | Run it with this group's bundles |
 | `/groups admins here` | Telegram only (needs the live bot connection) | Telegram's own admin list as suggestions, confirmed one by one |
 | `/paid status\|offers\|cancel <id>` · `polyrob owner paid list\|show\|cancel` | Telegram (owner/admin), CLI | Read this room's paid actions; withdraw a PENDING offer |
 | `/paid enable\|disable\|price <verb> <usd>\|asset <id>` | Telegram (owner) | Configure what this room sells, at what price, in what token |
@@ -631,4 +703,5 @@ profile*); the reference with a code anchor per row is
 | `/mute here 2h` | Telegram only (owner/admin) | `chat.mode=listen` with an expiry |
 
 The status snapshot (`/status`, `polyrob doctor`, the console) carries a `groups`
-section: rooms served, mode, replies today, cap hits, ledger size, last write.
+section: rooms served, mode, replies today, ledger size, last write, and who holds an admin
+role or bundle. A settings file it cannot read shows `bundles=UNKNOWN`.

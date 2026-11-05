@@ -163,6 +163,8 @@ async def lifespan(app: FastAPI):
         # payments) on top of the core phases 1-5 that build_bot does.
         from polyrob.app.bootstrap import build_server_bot
         bot = await build_server_bot()
+        from polyrob.app.bootstrap import freeze_startup_heap
+        freeze_startup_heap()
 
         app_state["config"] = bot.container.config
         app_state["bot"] = bot

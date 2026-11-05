@@ -43,14 +43,14 @@ def coerce_media(items: list) -> List[Media]:
 def kind_for_mime(mime: Optional[str]) -> str:
     """The ``Media.kind`` for a platform attachment's MIME type (064 F3).
 
-    ⚠️ Audio maps to ``document``, not ``audio``: ``absorb_inbound_media`` skips
-    the transcribed kinds (voice/audio), and the polled harnesses (Discord,
-    Slack, Signal) do not transcribe — an ``audio`` kind there would be neither
-    heard nor stored, the exact silent drop the media rail exists to end.
+    Audio maps to ``audio``: ``surfaces._shared.BaseHarness`` transcribes it, and
+    ``absorb_inbound_media`` still stores it (only ``voice`` is never stored).
     """
     m = (mime or "").lower()
     if m.startswith("image/"):
         return "image"
     if m.startswith("video/"):
         return "video"
+    if m.startswith("audio/"):
+        return "audio"
     return "document"

@@ -47,18 +47,18 @@ class TestMultiAgentBrowserManagement:
             await manager.initialize()
 
             # Session 1: Should get 2 contexts
-            ctx1_1 = await manager.get_context("session1_agent1")
-            ctx1_2 = await manager.get_context("session1_agent2")
+            ctx1_1 = await manager.get_context("agent1_session1")
+            ctx1_2 = await manager.get_context("agent2_session1")
             assert ctx1_1 is not None
             assert ctx1_2 is not None
 
             # Session 1: Third agent should fail (per-session limit)
-            ctx1_3 = await manager.get_context("session1_agent3", wait=False)
+            ctx1_3 = await manager.get_context("agent3_session1", wait=False)
             assert ctx1_3 is None
 
             # Session 2: Should get 2 contexts (different session)
-            ctx2_1 = await manager.get_context("session2_agent1")
-            ctx2_2 = await manager.get_context("session2_agent2")
+            ctx2_1 = await manager.get_context("agent1_session2")
+            ctx2_2 = await manager.get_context("agent2_session2")
             assert ctx2_1 is not None
             assert ctx2_2 is not None
 
@@ -280,9 +280,9 @@ class TestMultiAgentBrowserManagement:
 
                 # Acquire contexts
                 for i in range(num_agents):
-                    ctx = await manager.get_context(f"{session_id}_agent{i}")
+                    ctx = await manager.get_context(f"agent{i}_{session_id}")
                     if ctx:
-                        contexts.append((f"{session_id}_agent{i}", ctx))
+                        contexts.append((f"agent{i}_{session_id}", ctx))
                     await asyncio.sleep(0.01)
 
                 # Use contexts

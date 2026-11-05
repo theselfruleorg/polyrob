@@ -171,6 +171,16 @@ def check_provider_model(provider: str, model: str) -> Tuple[bool, str]:
     if get_profile(provider) is None:
         return False, ""
     known = AVAILABLE_MODELS.get(provider, [])
+    if provider == "openrouter" and model not in known:
+        # The registry knows few OpenRouter slugs; the live list knows them all. A list that
+        # cannot be read says nothing: a typo must not be claimed from an outage.
+        from modules.llm.openrouter_catalog import lookup, nearest
+        entry, read = lookup(model)
+        if entry is None and read:
+            near = nearest(model)
+            hint = f" Did you mean: {', '.join(near)}?" if near else ""
+            return True, f"'{model}' is not on OpenRouter; persisting anyway.{hint}"
+        return True, ""
     if known and model not in known:
         return True, f"'{model}' isn't a known {provider} model; persisting anyway."
     return True, ""

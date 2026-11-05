@@ -91,10 +91,13 @@ def emit_loop_heartbeats(entries, *, source: str = "supervisor") -> None:
         if not event_log_enabled():
             return
         log = get_event_log()
+        from core.loop_watch import take_lag_ms_max
+        lag = take_lag_ms_max()
+        extra = {} if lag is None else {"loop_lag_ms_max": lag}
         for name, task in entries:
             alive = not task.done()
             log.record("autonomy_tick", source=source, loop=name,
-                       alive=alive, reason=None if alive else "task_exited")
+                       alive=alive, reason=None if alive else "task_exited", **extra)
         # Keep the event log bounded (retention discipline; fail-open).
         try:
             import time as _t

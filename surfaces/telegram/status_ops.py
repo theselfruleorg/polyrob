@@ -226,31 +226,20 @@ def _pause_reply(data_dir: str, cmd: str, args: list, *, via: str = "telegram") 
     return render_pause_result(res, resume_hint="/resume")
 
 
-def _mode_reply() -> str:
-    """`/mode` — JUST the effective-posture card + how to change it (030 WS-E4,
-    read-only v1).
+def _mode_reply(seat: str = "telegram", *, full: bool = False) -> str:
+    """`/mode` — the four answers a person needs (104 §2); `/mode all` adds the card.
 
-    `/status` already embeds the card inside a long snapshot; `/mode` answers
-    the single question "what may this instance do right now, and why" with
-    nothing else around it. `/config set` writes preferences AND the flag keys
-    the config oracle allows from chat (the master switch); mode and posture
-    are refused remotely, so the copy says they need the server.
-    """
-    lines = ["Effective posture (all axes):"]
+    The seat decides the first line and the "to change" line: a write the terminal may do
+    must not read "needs the server" there. A level name writes that level (104 §4)."""
     try:
-        from core.config_policy.posture_card import render_posture_card
-        lines.extend(render_posture_card(prefix="• "))
+        from core.config_policy.posture_card import build_answers, render_posture_card
+        lines = list(build_answers(seat))
+        if full:
+            lines += ["", "All settings behind this:"] + render_posture_card(prefix="• ")
+        else:
+            lines += ["", "/mode all shows every setting behind this."]
     except Exception:
-        logger.debug("telegram /mode posture card failed", exc_info=True)
-        return ("I could not read my own posture card. Ask me again in a "
+        logger.debug("/mode answers failed", exc_info=True)
+        return ("I could not read my own settings. Ask me again in a "
                 "moment, or run `polyrob autonomy status` on my box.")
-    lines.append("")
-    # A11: `/config set` is NOT prefs-only — it writes the flag keys the
-    # oracle (core.config_service.set_value, surface="telegram") allows. The
-    # master switch is one of them; the capability mode and the postures are
-    # refused on every remote surface, so they need the server.
-    lines.append("To change: `/config set AUTONOMY_ENABLED true|false` turns the "
-                 "master on or off from here (applies on the next restart). The "
-                 "capability mode and the postures need the server. Live pause: "
-                 "/pause and /resume.")
     return "\n".join(lines)

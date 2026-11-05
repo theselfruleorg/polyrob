@@ -25,6 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_DOCS = ["README.md", "docs/comparison.md", "docs/examples.md",
                "docs/CONFIGURATION.md"]
 
+#: The README links here by absolute URL, because PyPI cannot resolve a relative link.
+PUBLIC_BLOB = "https://github.com/theselfruleorg/polyrob/blob/main/"
+
 _LINK_RE = re.compile(r"\]\(\s*([^)\s]+?)\s*\)")
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 
@@ -62,10 +65,15 @@ def test_public_doc_relative_links_resolve():
         rel_doc = doc.relative_to(REPO_ROOT)
         for lineno, line in enumerate(doc.read_text().splitlines(), 1):
             for target in _LINK_RE.findall(line):
-                if target.startswith(("http://", "https://", "mailto:")):
+                base = REPO_ROOT
+                if target.startswith(PUBLIC_BLOB):
+                    target = target[len(PUBLIC_BLOB):]
+                elif target.startswith(("http://", "https://", "mailto:")):
                     continue
+                else:
+                    base = doc.parent
                 path_part, _, anchor = target.partition("#")
-                resolved = (doc.parent / path_part).resolve() if path_part else doc
+                resolved = (base / path_part).resolve() if path_part else doc
                 if not resolved.exists():
                     broken.append(f"{rel_doc}:{lineno} -> {target} (no such file)")
                     continue
@@ -78,3 +86,11 @@ def test_public_doc_relative_links_resolve():
     assert not broken, (
         "Broken relative links in the public docs — a reader following one of "
         "these lands nowhere:\n  " + "\n  ".join(broken))
+
+
+def test_readme_links_work_on_pypi():
+    """PyPI shows the README without the repository, so a relative link is dead there."""
+    text = (REPO_ROOT / "README.md").read_text()
+    relative = [t for t in _LINK_RE.findall(text)
+                if not t.startswith(("http://", "https://", "mailto:", "#"))]
+    assert not relative, f"Use {PUBLIC_BLOB}<path> in README.md: {relative}"

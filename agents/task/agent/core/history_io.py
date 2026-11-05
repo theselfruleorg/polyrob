@@ -9,8 +9,9 @@ are unchanged.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from agents.task.constants import MemoryConfig
 from agents.task.agent.views import AgentOutput, ActionResult, AgentHistory
@@ -18,8 +19,28 @@ from agents.task.loop_types.browser_views import BrowserState, BrowserStateHisto
 from agents.task.path import pm
 
 
+#: Steps of EARLIER turns a resident agent keeps in memory (about 9 KB each). The full
+#: record is the step file. The ledger readers need more than one turn: the digest gate
+#: and the edit-verify nudge walk it, so this is well over a normal turn.
+STEP_HISTORY_KEEP = 200
+
+
 class HistoryIOMixin:
     """History/screenshot persistence for Agent (see module docstring)."""
+
+    def trim_step_history(self) -> None:
+        """Bound the in-memory ledger, at the start of a run and never during one.
+
+        Every outcome of the last turn is built by then, and each ledger index a run
+        takes (``start_turn``) comes after this. An index taken BEFORE the run (the
+        chat baseline, ``since_steps``) is absolute: ``absolute_step_count``. A
+        sub-agent lives for one run, and its caller reads the whole ledger of that run.
+        """
+        if getattr(self, "_is_sub_agent", False):
+            return
+        dropped = self.history.trim(STEP_HISTORY_KEEP)
+        if dropped:
+            self.logger.debug(f"Step history: {dropped} older step(s) left memory")
 
     async def _make_history_item(
         self,
@@ -101,7 +122,7 @@ class HistoryIOMixin:
             history_path = pm().get_history_dir(
                 clean_id,
                 self.user_id
-            ) / f"agent_history_{self.agent_name}.json"
+            ) / f"agent_history_{self.agent_name}.jsonl"
 
             # Update session data
             if hasattr(self, 'session_data') and self.session_data:
@@ -116,15 +137,31 @@ class HistoryIOMixin:
                 except Exception as e:
                     self.logger.debug(f"Could not update session metadata: {e}")
 
-            # Ensure directory exists and save using pathlib
-            try:
-                Path(history_path).parent.mkdir(parents=True, exist_ok=True)
-                self.history.save_to_file(history_path)
-            except Exception as e:
-                self.logger.error(f"Failed to save history file {history_path}: {e}", exc_info=True)
+            self._append_step_line(history_path, history_item)
 
         except Exception as e:
             self.logger.warning(f"Error saving history: {e}")
+
+    def _append_step_line(self, history_path: Any, item: AgentHistory) -> None:
+        """Append one step: a rewrite of the whole ledger grew with the session (114 ms at
+        2000 steps, on the loop), and a recreated agent overwrote the earlier steps."""
+        try:
+            Path(history_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(history_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(item.model_dump()) + "\n")
+        except Exception as e:
+            self.logger.error(f"Failed to save history file {history_path}: {e}", exc_info=True)
+
+    def _ledger_terminal_item(self, item: AgentHistory) -> None:
+        """A run's last item goes in the ledger too: no later step can write it now."""
+        session_id = getattr(self, "session_id", None)
+        if not session_id:
+            return
+        try:
+            self._append_step_line(pm().get_history_dir(session_id, self.user_id)
+                                   / f"agent_history_{self.agent_name}.jsonl", item)
+        except Exception as e:
+            self.logger.warning(f"Terminal history item not saved: {e}")
 
     def append_terminal_error_item(self, error_msg: str) -> List[ActionResult]:
         """Append a loop-level terminal error to in-memory history so the session
@@ -134,7 +171,6 @@ class HistoryIOMixin:
         (e.g. the RUN_BUDGET_USD gate). Lives here, not in run_loop, because the
         blank BrowserStateHistory needs this module's agents.task.loop_types.browser_views import
         (a new agents->tools edge in run_loop would fail the layering ratchet).
-        In-memory only: the per-step history file is written by _make_history_item.
         """
         result = [ActionResult(error=error_msg, include_in_memory=True)]
         self.history.history.append(AgentHistory(
@@ -142,6 +178,7 @@ class HistoryIOMixin:
             result=result,
             state=BrowserStateHistory(url="", title="", tabs=[], interacted_element=[None]),
         ))
+        self._ledger_terminal_item(self.history.history[-1])
         return result
 
     def append_terminal_summary_item(self, text: str) -> List[ActionResult]:
@@ -156,6 +193,7 @@ class HistoryIOMixin:
             result=result,
             state=BrowserStateHistory(url="", title="", tabs=[], interacted_element=[None]),
         ))
+        self._ledger_terminal_item(self.history.history[-1])
         return result
 
     def save_history(self, file_path: Optional[str | Path] = None) -> None:

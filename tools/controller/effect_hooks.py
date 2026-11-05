@@ -23,6 +23,7 @@ NOTE: no ``from __future__ import annotations`` in this package — it stringize
 the registry's first-param annotations.
 """
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +124,25 @@ def _outcome(result):
     return "error" if getattr(result, "error", None) else "ok"
 
 
-def _record(controller, action_name, params, execution_context, tool_id, verdict, outcome):
+#: 103: what the action produced: a tx hash, or the id a surface gave. The act's content
+#: is never stored; these are references to quote and to check.
+_REF_PATTERNS = (re.compile(r"\b0x[0-9a-fA-F]{64}\b"),
+                 re.compile(r"\b(?:tweet_id|post_id|message_id)\W{1,4}([\w-]{4,64})"))
+
+
+def _result_ref(result):
+    text = str(getattr(result, "extracted_content", "") or "")[:4000]
+    for pattern in _REF_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(match.lastindex or 0)
+    return ""
+
+
+def _record(controller, action_name, params, execution_context, tool_id, verdict, outcome,
+            result=None):
     from core.effects import record_external_write
+    ref = _result_ref(result)
     record_external_write(
         effect=verdict.effect, tool=tool_id or "", action=action_name,
         target=_target(params), surface=_surface(execution_context),
@@ -132,7 +150,8 @@ def _record(controller, action_name, params, execution_context, tool_id, verdict
         confidence=verdict.confidence, outcome=outcome,
         user_id=str(getattr(execution_context, "user_id", "") or ""),
         session_id=str(getattr(execution_context, "session_id", "") or ""),
-        fingerprint=_fingerprint(params))
+        fingerprint=_fingerprint(params),
+        extra={"ref": ref} if ref else None)
 
 
 def make_effect_record_hook(controller):
@@ -146,7 +165,7 @@ def make_effect_record_hook(controller):
             if verdict is None:
                 return
             _record(controller, action_name, params, execution_context,
-                    tool_id, verdict, _outcome(result))
+                    tool_id, verdict, _outcome(result), result)
         except Exception:
             logger.debug("effect record hook failed (fail-open)", exc_info=True)
 

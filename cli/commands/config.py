@@ -199,7 +199,7 @@ def _prompt_for_value(key: str) -> str:
 @config.command("set")
 @click.argument("key")
 @click.argument("value", required=False)
-@click.option("--global", "--home", "is_global", is_flag=True, default=True, flag_value=True,
+@click.option("--global", "is_global", is_flag=True, default=True, flag_value=True,
               help="Write to the ACTIVE home's .env ($POLYROB_HOME) — that is ~/.polyrob/.env normally, and the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default for flags and secrets: the active home.)")
 @click.option("--project", "project_scope", is_flag=True, default=False,
               help="Refused: ./.polyrob/.env is not loaded (a cloned directory "

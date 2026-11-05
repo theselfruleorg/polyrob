@@ -70,3 +70,28 @@ def test_chromium_missing_hint_none_for_other_errors():
     from core.optional_extras import chromium_missing_hint
 
     assert chromium_missing_hint("net::ERR_CONNECTION_REFUSED") is None
+
+
+def test_a_managed_install_names_its_own_pip(tmp_path, monkeypatch):
+    """install.sh's venv is never activated, so a bare `pip` installs the extra into
+    some other Python and the capability stays absent."""
+    import sys
+    from core import optional_extras as oe
+
+    home = tmp_path / "home"
+    (home / "venv").mkdir(parents=True)
+    (home / "src").mkdir()
+    (home / "src" / "pyproject.toml").write_text("")
+    monkeypatch.setattr(sys, "prefix", str(home / "venv"))
+    python = str((home / "venv" / "bin" / "python").resolve())
+    assert oe.pip_hint("crypto") == f"{python} -m pip install 'polyrob[crypto]'"
+    assert oe.pip_hint("browser").endswith(f"&& {python} -m playwright install chromium")
+
+
+def test_any_other_install_keeps_the_plain_hint(tmp_path, monkeypatch):
+    import sys
+    from core import optional_extras as oe
+
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "project" / ".venv"))
+    assert oe.pip_hint("crypto") == "pip install 'polyrob[crypto]'"
+

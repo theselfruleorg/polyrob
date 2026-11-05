@@ -1,7 +1,7 @@
 """Surface-agnostic voice→text seam. The Transcriber is built ONCE and registered on the
 container (was a lazy per-Telegram-harness instance — invisible to Email/WhatsApp). Every
-surface normalizes inbound audio to Media (core.surfaces.media) and calls
-transcribe_inbound_media(); the untranscribed-voice outcome is handled by one shared guard
+surface normalizes inbound audio to Media (core.surfaces.media) and reaches the engine
+through this module; the untranscribed-voice outcome is handled by one shared guard
 (core.surfaces.voice_guard) so no surface can silently route an empty voice turn."""
 import logging
 from typing import List, Optional
@@ -9,6 +9,13 @@ from typing import List, Optional
 from core.surfaces.media import Media
 
 logger = logging.getLogger(__name__)
+
+#: Marks a transcribed note for the AGENT: without it the agent sees plain text and,
+#: asked "can you understand voice?", denies having speech-to-text. The clean transcript
+#: is stamped separately on the Media, so this marker never reaches the echo.
+VOICE_TRANSCRIPT_PREFIX = "[voice message, auto-transcribed] "
+#: The total deadline of one note: download plus transcription.
+VOICE_TIMEOUT_SECONDS = 90
 
 
 def voice_present(media: List[Media]) -> bool:
@@ -68,6 +75,21 @@ async def transcribe_inbound_media(container, media: List[Media]) -> Optional[st
         logger.debug("transcribe_inbound_media failed: %s", e)
         return None
     return (text or "").strip() or None
+
+
+async def apply_voice_transcript(container, inbound) -> None:
+    """Make a transcribed note the text of ``inbound`` and stamp it on its Media.
+
+    The marker also keeps a transcript that starts with "/" from routing as a COMMAND
+    (CHAT-4). No transcript leaves the inbound as it is, for ``voice_guard``."""
+    text = await transcribe_inbound_media(container, inbound.media)
+    if not text:
+        return
+    inbound.text = f"{VOICE_TRANSCRIPT_PREFIX}{text}"
+    for item in inbound.media:
+        if getattr(item, "kind", None) in ("voice", "audio"):
+            item.transcript = text
+            break
 
 
 def log_transcription_readiness(container) -> None:

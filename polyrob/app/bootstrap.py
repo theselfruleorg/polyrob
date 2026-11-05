@@ -7,6 +7,7 @@ Separating this from the FastAPI lifespan means any entry point
 can construct a fully initialized container without spinning up uvicorn.
 """
 
+import gc
 import os
 import sys
 import importlib
@@ -582,6 +583,32 @@ def _resolve_workspace_lock_dir(data_home, ws_is_project_root: bool, project_roo
     return str(data_home)
 
 
+async def register_llm_service(container, config, *, require: bool) -> bool:
+    """Register LLMManager, and skip the connection check for a fast start.
+
+    Clients validate on the first real call. ``require=False``: a box with no usable
+    key gets a container without the 'llm' service (L11) and the answer False.
+    """
+    from modules.llm.llm_manager import LLMManager
+    from modules.llm.llm_client import LLMClient
+    LLMClient._skip_validate = True
+    try:
+        llm = LLMManager(name='llm', config=config, container=container)
+        await llm.initialize()
+        container.register_service('llm', llm)
+        return True
+    except Exception:
+        if require:
+            raise
+        logging.getLogger(__name__).info(
+            "LLM unavailable (no usable provider key) — building read-only "
+            "container without the 'llm' service")
+        return False
+    finally:
+        # Always restore the class flag, even when initialize() raises.
+        LLMClient._skip_validate = False
+
+
 async def build_cli_container(
     env: Optional[str] = None,
     log_level: Optional[str] = None,
@@ -715,26 +742,7 @@ async def build_cli_container(
     from core.identity import ConstantIdentity, resolve_identity
     container.register_service("identity", ConstantIdentity(resolve_identity()))
 
-    # Register LLMManager — skip connection validation for fast startup.
-    # Clients will validate lazily on first actual API call.
-    from modules.llm.llm_manager import LLMManager
-    from modules.llm.llm_client import LLMClient
-    LLMClient._skip_validate = True
-    try:
-        llm = LLMManager(name='llm', config=config, container=container)
-        await llm.initialize()
-        container.register_service('llm', llm)
-    except Exception:
-        if require_llm:
-            raise
-        # L11: read-only container on a zero-key box — no 'llm' service.
-        logging.getLogger(__name__).info(
-            "LLM unavailable (no usable provider key) — building read-only "
-            "container without the 'llm' service")
-    finally:
-        # Always restore the class flag, even when initialize() raises (the old
-        # inline form leaked _skip_validate=True on failure).
-        LLMClient._skip_validate = False
+    await register_llm_service(container, config, require=require_llm)
 
     # Lazily register the embedding model when KB / local_vector / local-mode is active.
     maybe_register_cli_embedder(container, config)
@@ -792,6 +800,20 @@ async def build_cli_container(
     container.register_agent("task_agent", task_agent)
 
     return container
+
+
+_startup_heap_frozen = False
+
+
+def freeze_startup_heap() -> None:
+    """Move what startup built out of every later gen2 pass (102 C-2): the end-of-run
+    collect cost 62-117 ms on the loop, and 0-2 ms frozen. Safe: nothing in these
+    processes forks. Once per process; only startup state that later dies stays."""
+    global _startup_heap_frozen
+    if not _startup_heap_frozen:
+        _startup_heap_frozen = True
+        gc.collect()
+        gc.freeze()
 
 
 async def build_server_bot(

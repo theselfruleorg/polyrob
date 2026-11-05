@@ -16,11 +16,11 @@ documents the posture model **as built**; the code is the source of truth
 
 | Posture | Who it's for | What `/` shows a visitor | Bind default | Auth |
 |---|---|---|---|---|
-| `local` (Posture 0) | Single-user, own machine | Owner login | `127.0.0.1` (loopback only) | Owner username/password → JWT cookie |
-| `own_ops` (Posture 1) | You self-host on a public host, for yourself only | A minimal "polyrob is live" status page; the console appears after login | `0.0.0.0` | Owner username/password login |
-| `multitenant` (Posture 2) | Several tenants with their own accounts | The same status page until sign-in; account and admin pages exist only here | `0.0.0.0` | Wallet/SIWE JWT + admin pages |
+| `local` | Single-user, own machine | Owner login | `127.0.0.1` (loopback only) | Owner username/password → JWT cookie |
+| `own_ops` | You self-host on a public host, for yourself only | A minimal "polyrob is live" status page; the console appears after login | `0.0.0.0` | Owner username/password login |
+| `multitenant` | Several tenants with their own accounts | The same status page until sign-in; account and admin pages exist only here | `0.0.0.0` | Wallet/SIWE JWT + admin pages |
 
-The primitive is `local`: loopback bind and owner login; the authenticated owner can open every session. `own_ops` and `multitenant` are layers on top, gated by
+The primitive is `local`: loopback bind and owner login; the authenticated owner can open every session. `polyrob dashboard` at `local` also has the terminal's abilities (it sets `POLYROB_LOCAL`), and the host shell stays at the terminal. `own_ops` and `multitenant` are layers on top, gated by
 posture — they don't replace the local behavior, they add to it.
 
 ### How posture is resolved
@@ -46,15 +46,15 @@ ignored, and resolution goes on as if it were unset.
 ### Running it
 
 ```bash
-# Posture 0 — local (default): loopback with owner login
+# local (default): loopback with owner login
 polyrob dashboard
 
-# Posture 1 — own_ops: public status page + owner login for the console
+# own_ops: public status page + owner login for the console
 polyrob dashboard --posture own_ops
 # or, if binding non-loopback directly:
 polyrob dashboard --host 0.0.0.0
 
-# Posture 2 — multitenant: full JWT/SIWE + admin/billing layer
+# multitenant: full JWT/SIWE + admin/billing layer
 polyrob dashboard --multitenant
 ```
 
@@ -279,7 +279,7 @@ even behind owner-login — run it as `local` (loopback-only, the default) and
 reach it through a private tunnel instead of opening a port:
 
 ```bash
-polyrob dashboard          # Posture 0: binds 127.0.0.1:5050, owner login
+polyrob dashboard          # local: binds 127.0.0.1:5050, owner login
 
 # On a machine joined to the same Tailscale network:
 tailscale serve https / http://127.0.0.1:5050
@@ -287,7 +287,7 @@ tailscale serve https / http://127.0.0.1:5050
 ssh -L 5050:localhost:5050 you@your-host
 ```
 
-This keeps the app in Posture 0 with owner login
+This keeps the app at `local` with owner login
 while still letting you reach it from another device — the console never
 listens on a public interface, and traffic never leaves your private
 network/tunnel. Prefer this over `own_ops` when the only person who ever

@@ -349,7 +349,7 @@ class Browser(BaseTool):
 							# Check if it's actually running
 							if xvfb_process.poll() is None:
 								logging.info("Successfully started Xvfb with PID: %d", xvfb_process.pid)
-								# Save PID for potential cleanup
+								# Not held for close(): another browser can find this display by pgrep.
 								pid_dir = os.path.dirname(os.path.abspath(__file__))
 								with open(os.path.join(pid_dir, "xvfb.pid"), "w") as f:
 									f.write(str(xvfb_process.pid))

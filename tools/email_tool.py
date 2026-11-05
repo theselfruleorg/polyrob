@@ -17,7 +17,7 @@ import asyncio
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.config import BotConfig
-from core.exceptions import ConfigurationError, APIError, AuthenticationError, ToolError
+from core.exceptions import ConfigurationError, APIError, AuthenticationError, DeliveryUnknownError, ToolError
 from tools.base_tool import BaseTool, ToolStatus
 from agents.task.loop_types.controller_types import ActionResult
 from tools.email_providers.mime import _decode, auto_headers
@@ -33,6 +33,36 @@ from core.credential_verdicts import SMTP_TTL_SEC as SMTP_AUTH_BACKOFF_SEC  # no
 #: Seconds one IMAP socket operation may block before it fails (EM1). Without
 #: it a half-open server held the read forever.
 IMAP_TIMEOUT_S = 30
+SMTP_TIMEOUT_S = 30
+
+
+def _send_marking_data(conn: Any, msg: Any, reached_data: list) -> None:
+    """``conn.send_message(msg)`` that notes when the DATA step starts (worker thread)."""
+    real_data = getattr(conn, "data", None)
+    if real_data is None:
+        reached_data.append(True)  # no DATA step to see: never assume it was not reached
+    else:
+        def _data(*args, **kwargs):
+            reached_data.append(True)
+            return real_data(*args, **kwargs)
+        conn.data = _data
+    conn.send_message(msg)
+    if real_data is not None:
+        conn.data = real_data
+
+
+def _delivery_unknown(exc: BaseException, reached_data: list) -> bool:
+    """After a timeout or a lost connection in DATA, the server may hold the mail. Before
+    DATA nothing can have gone out, so a retry is safe. A reply from the server
+    (``SMTPResponseException``) is a definite answer."""
+    return bool(reached_data) and not isinstance(exc, smtplib.SMTPResponseException)
+
+
+def _close_smtp_quietly(conn: Any) -> None:
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 def smtp_verdict_key(server: Any, port: Any, user: Any, secret: Any = None) -> str:
@@ -315,11 +345,8 @@ class EmailTool(EmailMailboxMixin, BaseTool):
             self._warn_smtp_verdict_once(refusal)
             raise ToolError(refusal)
         try:
-            context = ssl.create_default_context()
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls(context=context)
-            server.login(self.config.gmail_email, self.config.gmail_app_password)
-            server.quit()
+            server = await self.run_smtp(self._open_smtp)
+            await self.run_smtp(server.quit)
             try:
                 # A working login means the RAIL is up: drop every smtp verdict,
                 # including one an old (since-replaced) password earned.
@@ -358,7 +385,7 @@ class EmailTool(EmailMailboxMixin, BaseTool):
         try:
             # Close SMTP connection
             if self.smtp_connection:
-                self.smtp_connection.quit()
+                await self.run_smtp(self.smtp_connection.quit)
                 self.smtp_connection = None
 
             # Close IMAP connection
@@ -384,19 +411,21 @@ class EmailTool(EmailMailboxMixin, BaseTool):
             self.logger.error(f"Error during email service cleanup: {e}")
             raise ToolError(f"Failed to cleanup email service: {e}")
 
-    async def _connect_smtp(self) -> None:
-        """Establish SMTP connection."""
+    def _open_smtp(self) -> Any:
+        """A logged-in connection, or none left open (blocking: see :meth:`run_smtp`)."""
+        conn = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=SMTP_TIMEOUT_S)
         try:
-            # Create SSL context
-            context = ssl.create_default_context()
-            
-            # Connect to SMTP server
-            self.smtp_connection = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            self.smtp_connection.starttls(context=context)
-            
-            # Login
-            self.smtp_connection.login(self.config.gmail_email, self.config.gmail_app_password)
-            
+            conn.starttls(context=ssl.create_default_context())
+            conn.login(self.config.gmail_email, self.config.gmail_app_password)
+        except BaseException:
+            _close_smtp_quietly(conn)
+            raise
+        return conn
+
+    async def _connect_smtp(self) -> None:
+        """Establish SMTP connection (off the loop; assigned only after the login)."""
+        try:
+            self.smtp_connection = await self.run_smtp(self._open_smtp)
         except smtplib.SMTPAuthenticationError as e:
             # D30: the LIVE send path rejected the credential. Only the
             # `test_connection` probe used to write a verdict, so on a box whose
@@ -443,6 +472,52 @@ class EmailTool(EmailMailboxMixin, BaseTool):
             self._imap_lock_pair = held
         async with held[1]:
             return await asyncio.to_thread(fn, *args)
+
+    async def run_smtp(self, fn, *args):
+        """Run one blocking ``smtplib`` step OFF the event loop, one at a time per tool,
+        on its own lock (a slow send must not stop a mailbox read). The socket carries
+        :data:`SMTP_TIMEOUT_S`. Do not nest two calls."""
+        loop = asyncio.get_running_loop()
+        held = getattr(self, "_smtp_lock_pair", None)
+        if held is None or held[0] is not loop:
+            held = (loop, asyncio.Lock())
+            self._smtp_lock_pair = held
+        async with held[1]:
+            return await asyncio.to_thread(fn, *args)
+
+    async def _send_smtp(self, msg: Any, message_id: str) -> None:
+        """Send once; reconnect and retry once only when nothing can have gone out.
+
+        A previously-live connection can go stale (e.g. the server closes it after a
+        timeout) without ``smtp_connection`` becoming None, so a retry on a fresh
+        connection keeps the tool from staying wedged until a restart.
+        ⚠️ Never retry a :func:`_delivery_unknown` failure: a retry can send twice.
+        """
+        for may_retry in (True, False):
+            if not self.smtp_connection:
+                await self._connect_smtp()
+            conn, reached_data = self.smtp_connection, []
+            try:
+                await self.run_smtp(_send_marking_data, conn, msg, reached_data)
+                return
+            except asyncio.CancelledError:
+                self.smtp_connection = None  # the worker thread still owns the socket
+                raise
+            except (smtplib.SMTPException, OSError) as e:
+                self.smtp_connection = None
+                _close_smtp_quietly(conn)
+                if _delivery_unknown(e, reached_data):
+                    from core.event_kinds import EMAIL_DELIVERY_UNKNOWN
+                    from core.event_log import emit
+                    emit(EMAIL_DELIVERY_UNKNOWN, source="email", attrs={"message_id": message_id})
+                    raise DeliveryUnknownError(
+                        f"delivery unknown: the mail server did not confirm the send ({e}), "
+                        f"so this mail may have gone out (Message-ID {message_id}). Do not "
+                        "send it again; check the Sent folder or ask the owner.") from e
+                if not may_retry:
+                    raise
+                self.logger.warning(f"send_email_ex: SMTP send failed on existing connection ({e}), "
+                                    "reconnecting and retrying once")
 
     async def _connect_imap(self) -> None:
         """Establish IMAP connection (off the loop, with a socket timeout)."""
@@ -671,28 +746,14 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                 else:
                     all_recipients.append(bcc)
 
-            # Send email. A previously-live connection can go stale (e.g. the
-            # server closes it after a timeout) without smtp_connection becoming
-            # None, so `send_message` on it raises instead of triggering a
-            # reconnect. Retry once against a freshly-established connection
-            # rather than leaving the tool wedged until process restart.
-            if not self.smtp_connection:
-                await self._connect_smtp()
-
-            try:
-                self.smtp_connection.send_message(msg)
-            except (smtplib.SMTPException, OSError) as e:
-                self.logger.warning(
-                    f"send_email_ex: SMTP send failed on existing connection ({e}), "
-                    "reconnecting and retrying once"
-                )
-                self.smtp_connection = None
-                await self._connect_smtp()
-                self.smtp_connection.send_message(msg)
+            await self._send_smtp(msg, message_id)
 
             self.logger.info(f"Email sent successfully to {msg['To']}")
             return message_id
 
+        except DeliveryUnknownError as e:
+            self.logger.error(f"Email to {msg['To']}: {e}")
+            raise
         except Exception as e:
             self.logger.error(f"Failed to send email: {str(e)}")
             raise APIError(f"Failed to send email: {str(e)}")
@@ -914,6 +975,8 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                 cc=cc or None, bcc=bcc or None, attachments=files or None,
                 in_reply_to=in_reply_to, references=references,
                 extra_files=extra_files or None)
+        except DeliveryUnknownError as e:  # not "failed": a retry can send it twice
+            return ActionResult(error=str(e), include_in_memory=True)
         except Exception as e:
             return ActionResult(error=f"send failed: {e}", include_in_memory=True)
 

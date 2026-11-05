@@ -112,7 +112,7 @@ def test_doctor_default_view_surfaces_missing_credential(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["doctor"])
     assert result.exit_code == 0, result.output
     assert "no provider credential found" in result.output
-    assert "polyrob init" in result.output
+    assert "polyrob setup" in result.output
 
 
 def test_doctor_default_view_stays_quiet_with_a_usable_credential(tmp_path, monkeypatch):

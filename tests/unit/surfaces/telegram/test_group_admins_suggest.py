@@ -107,7 +107,7 @@ def test_admins_here_renders_the_confirm_command(env):
     result = _result("/groups admins here", chat_role="owner")
     out = asyncio.run(groups_reply(agent, result, ["admins", "here"]))
     assert "@bob" in out and "9911" in out
-    assert "/groups role here 9911 admin" in out
+    assert "/groups role telegram _100 9911 admin" in out
 
 
 def test_admins_here_no_suggestions(env):

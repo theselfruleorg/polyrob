@@ -50,7 +50,7 @@ translation:
 
 ```bash
 DEFAULT_PROVIDER=openrouter
-DEFAULT_MODEL=gpt-4o
+DEFAULT_MODEL=<model>
 OPENROUTER_API_KEY=sk-or-...
 MEMORY_BACKEND=sqlite
 ```

@@ -2,7 +2,7 @@
 
 Pure (no container, no pm() import): callers pass the session directory.
 Readers tolerate both the current layout (``memory/message_history.json``,
-``history/agent_history_*.json``, ``data/llm_usage/*.json``) and the legacy
+``history/agent_history_*.jsonl``, ``data/llm_usage/*.json``) and the legacy
 root-level fallbacks, and never raise on missing/corrupt files.
 """
 from __future__ import annotations
@@ -34,10 +34,28 @@ def read_message_history(session_dir: Path) -> dict:
     return {}
 
 
-def read_agent_steps(session_dir: Path) -> list:
-    """Concatenate every ``agent_history_*.json`` ``history`` list.
+def _read_step_lines(path: Path) -> list:
+    """The steps of one append-only ledger. A crash can tear only the line it was writing."""
+    steps: list = []
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        logger.warning("datagen: unreadable agent history %s", path)
+        return steps
+    for line in lines:
+        try:
+            steps.append(json.loads(line))
+        except json.JSONDecodeError:
+            logger.warning("datagen: unreadable step line in %s", path)
+    return steps
 
-    The live ledger is written via ``pm().get_history_dir()`` =
+
+def read_agent_steps(session_dir: Path) -> list:
+    """Concatenate every ledger file: one step per line in ``agent_history_*.jsonl``,
+    or the older ``history`` list of ``agent_history_*.json``. A session from before
+    the change can hold both, and the name order reads the older file first.
+
+    The live ledger is appended via ``pm().get_history_dir()`` =
     ``<session>/data/history/`` (agents/task/agent/core/history_io.py) — that
     candidate comes first; ``history/`` and the session root are legacy
     fallbacks."""
@@ -45,13 +63,16 @@ def read_agent_steps(session_dir: Path) -> list:
     files: list[Path] = []
     for hist_dir in (session_dir / "data" / "history", session_dir / "history"):
         if hist_dir.is_dir():
-            files = sorted(hist_dir.glob("agent_history_*.json"))
+            files = sorted(hist_dir.glob("agent_history_*.json*"))
             if files:
                 break
     if not files:
-        files = sorted(session_dir.glob("agent_history_*.json"))
+        files = sorted(session_dir.glob("agent_history_*.json*"))
     steps: list = []
     for f in files:
+        if f.suffix == ".jsonl":
+            steps.extend(_read_step_lines(f))
+            continue
         try:
             payload = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):

@@ -81,6 +81,9 @@ class SurfaceSpec:
     #: Bot-to-bot loop guard (F4): at most ``events`` per ``window_s`` per
     #: (bot, bot) pair, then ``cooldown_s`` of silence.
     bot_pair_limit: Tuple[int, int, int] = (20, 60, 60)
+    #: 101: a regex for the account id this surface sends when it is not all digits. The
+    #: platform assigns it and no person chooses it, so it may write a role; a name may not.
+    account_id_shape: str = ""
     #: Configured = on: ``polyrob gateway`` starts the surface when its required
     #: credentials are set, with no enable flag (the flag stays an explicit
     #: override: ``false`` keeps it off, ``true`` forces it). False for a
@@ -129,6 +132,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         cli_command="cli.commands.email:email", state_dbs=("email_dedup.db",)),
     SurfaceSpec(
         id="slack", label="Slack", module="surfaces.slack",
+        account_id_shape=r"[UW][A-Z0-9]{2,}",
         enabled_flag="SLACK_SURFACE_ENABLED", owner_env="OWNER_SLACK_ID",
         owner_seat=True, forgeable=False, transport="ws", extra=None,
         cron_target=True, region="global", max_message_chars=4000,
@@ -143,6 +147,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         cli_command="cli.commands.discord:discord", state_dbs=("discord_dedup.db",)),
     SurfaceSpec(
         id="signal", label="Signal", module="surfaces.signal",
+        account_id_shape=r"\+\d{5,}|[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}",
         enabled_flag="SIGNAL_SURFACE_ENABLED", owner_env="OWNER_SIGNAL_ID",
         owner_seat=True, forgeable=False, transport="sse", extra=None,
         cron_target=True, region="global", max_message_chars=2000,
@@ -164,6 +169,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
     # "x" (X DMs): the x pack's pack.toml row (067 P3b).
     SurfaceSpec(
         id="feishu", label="Feishu / Lark", module="surfaces.feishu",
+        account_id_shape=r"(ou|on)_\w+",
         enabled_flag="FEISHU_SURFACE_ENABLED", owner_env="OWNER_FEISHU_ID",
         owner_seat=True, forgeable=False, transport="ws", extra="feishu",
         # cron delivery is not wired yet (order 0001 is text chat only).
@@ -174,6 +180,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         state_dbs=("feishu_dedup.db",)),
     SurfaceSpec(
         id="dingtalk", label="DingTalk", module="surfaces.dingtalk",
+        account_id_shape=r"[\w-]*\d[\w-]*|\$:\S+",
         enabled_flag="DINGTALK_SURFACE_ENABLED", owner_env="OWNER_DINGTALK_ID",
         owner_seat=True, forgeable=False, transport="ws", extra=None,
         # Stream Mode is hand-rolled on aiohttp (JSON frames) — no SDK, no extra.

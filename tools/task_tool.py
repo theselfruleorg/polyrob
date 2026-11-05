@@ -107,6 +107,14 @@ class TaskTool(BaseTool):
         self._next_id.clear()
         self.logger.info("Task tool cleanup complete")
 
+    def release_session(self, session_id: str) -> None:
+        """Forget a session that left memory. Each write saved to todo.md, and
+        ``_get_todos`` reloads it on a miss."""
+        from agents.task.path import pm
+        clean_id = pm().clean_session_id(session_id)
+        self._todos.pop(clean_id, None)
+        self._next_id.pop(clean_id, None)
+
     # ===== Internal State Management =====
 
     def _get_todos(self, session_id: str, user_id: Optional[str] = None) -> List[TodoItem]:

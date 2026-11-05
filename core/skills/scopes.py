@@ -25,6 +25,7 @@ sources (user, project, user-external) that ship different bodies under one id
 are ambiguous: neither is served, and the ambiguity is logged once (review C-9).
 """
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -176,9 +177,15 @@ def project_external_roots() -> List[Path]:
     for _ in range(64):
         for rel in (".agents/skills", ".claude/skills"):
             cand = cur / rel
-            if cand.is_dir():
-                roots.append(cand)
-        if (cur / ".git").exists():
+            try:
+                if cand.is_dir():
+                    roots.append(cand)
+            except OSError as exc:
+                _note_unreadable(str(cand), cand, exc)
+        try:
+            if (cur / ".git").exists():
+                break
+        except OSError:
             break
         parent = cur.parent
         if parent == cur:
@@ -199,17 +206,49 @@ def trust_project_skills_effective() -> bool:
     return _bool_env("POLYROB_TRUST_PROJECT_SKILLS", True)
 
 
+#: source root -> why the latest scan could not read all of it. An unreadable store is
+#: not an empty one: the scan goes on without it, and the catalog names it.
+_UNREADABLE: Dict[str, str] = {}
+#: Paths already logged in this process (the index is rebuilt per skill manager).
+_UNREADABLE_LOGGED: set = set()
+
+
+def _note_unreadable(source: str, path, exc: OSError) -> None:
+    _UNREADABLE[source] = type(exc).__name__
+    if str(path) not in _UNREADABLE_LOGGED:
+        _UNREADABLE_LOGGED.add(str(path))
+        logger.warning("skill discovery: could not read %s (%s); the skills there are not "
+                       "listed, which does not mean there are none", path, exc)
+
+
+def unreadable_sources() -> List[str]:
+    """The skill roots the latest scan could not read in full, for a person or a model
+    to read: the home directory shows as ``~``."""
+    home = None
+    try:
+        home = str(Path.home())
+    except (OSError, RuntimeError):
+        pass
+    return sorted("~" + p[len(home):] if home and p.startswith(home + os.sep) else p
+                  for p in _UNREADABLE)
+
+
 def discover_skills(root: Path, scope: str, *, max_depth: int = 4,
                     max_count: int = 2000) -> List[DiscoveredSkill]:
     """Lenient load of every SKILL.md under ``root``: warn and load; skip only on an
-    error-level issue. ``max_count`` bounds the directories visited."""
+    error-level issue. ``max_count`` bounds the directories visited. What cannot be
+    read is skipped and named (:func:`unreadable_sources`), never raised: one locked
+    directory must not cost the whole catalog."""
     from core.skills.frontmatter import parse_frontmatter, validate_consumed
     out: List[DiscoveredSkill] = []
+    source = str(root)
+    _UNREADABLE.pop(source, None)
     try:
         root = root.resolve()
-    except OSError:
-        return out
-    if not root.is_dir():
+        if not root.is_dir():          # a missing root IS empty; a locked one raises
+            return out
+    except OSError as exc:
+        _note_unreadable(source, root, exc)
         return out
     root_depth = len(root.parts)
     stack = [root]
@@ -218,10 +257,16 @@ def discover_skills(root: Path, scope: str, *, max_depth: int = 4,
         d = stack.pop()
         visited += 1
         md = d / "SKILL.md"
-        if md.is_file():                       # a skill dir is a LEAF — never descend into its resources
+        try:
+            is_skill = md.is_file()
+        except OSError as exc:
+            _note_unreadable(source, d, exc)
+            continue
+        if is_skill:                           # a skill dir is a LEAF — never descend into its resources
             try:
                 raw = md.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            except OSError as exc:
+                _note_unreadable(source, md, exc)
                 continue
             meta, body = parse_frontmatter(raw)
             issues = validate_consumed(meta, d.name)
@@ -239,11 +284,15 @@ def discover_skills(root: Path, scope: str, *, max_depth: int = 4,
             continue
         try:
             entries = list(d.iterdir())
-        except OSError:
+        except OSError as exc:
+            _note_unreadable(source, d, exc)
             continue
         for e in entries:
-            if e.is_dir() and e.name not in _SCAN_SKIP and not e.name.startswith("."):
-                stack.append(e)
+            try:
+                if e.is_dir() and e.name not in _SCAN_SKIP and not e.name.startswith("."):
+                    stack.append(e)
+            except OSError as exc:
+                _note_unreadable(source, e, exc)
     return out
 
 

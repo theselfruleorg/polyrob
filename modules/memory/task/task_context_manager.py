@@ -917,6 +917,10 @@ class TaskContextManager(BaseComponent):
             "llm": llm, "meter_ctx": meter_ctx,
         }
 
+    def reflection_llm_for(self, session_id: str):
+        """The aux model registered for this session, or None."""
+        return (self._reflection_by_session.get(session_id) or {}).get("llm")
+
     def clear_reflection_context(self, session_id: str) -> None:
         """Drop a session's reflection context (called on session removal)."""
         self._reflection_by_session.pop(session_id, None)

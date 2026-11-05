@@ -12,6 +12,7 @@ not an absence of lines).
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import List, Optional
 
@@ -34,7 +35,7 @@ _SECTION_TITLES = {
     "harness": "Tool gates",
     "knowledge": "Knowledge",
     "delivery": "Delivery",
-    "posture": "Posture",
+    "posture": "What the agent may do",
     "security": "Security",
     "identity": "Identity",
     "rules": "Rules",
@@ -52,6 +53,54 @@ _SECTION_TITLES = {
 }
 
 
+_NO_STORE_RE = re.compile(r"FileNotFoundError: (\S+) not found at (\S+)")
+
+
+_ABSENT_IN_LINE_RE = re.compile(r"unavailable \(FileNotFoundError: (\S+) not found at \S+\)")
+
+
+def _plain_absent(line: str) -> str:
+    """A store that does not exist is not an error: it is made on first use."""
+    return _ABSENT_IN_LINE_RE.sub(r"nothing yet (\1 not created)", line)
+
+
+def _is_new_home(snap: StatusSnapshot) -> bool:
+    """True when every source we could not read is a store that does not EXIST.
+
+    A new install has no goals.db yet, and ``polyrob doctor`` is the first command
+    the installer names, so it must not open on seven tracebacks. The snapshot
+    stays ``partial``: only the wording changes, and it still names the other
+    reading, a data dir pointed at the wrong place. An unreadable store never
+    matches, and neither does one absent store beside readable ones.
+    """
+    if snap.overall != OVERALL_PARTIAL or not snap.unavailable_sources:
+        return False
+    return all(_NO_STORE_RE.search(src) for src in snap.unavailable_sources) and not any(
+        sec.state != STATE_UNAVAILABLE and name in ("work", "delivery", "security")
+        for name, sec in snap.sections.items())
+
+
+def absent_while_idle(snap: StatusSnapshot) -> bool:
+    """Every unread source is a store that does not exist, and autonomy is off.
+
+    goals.db and cron.db are made on first use, so an agent that has only chatted has
+    neither: that is not a thing "could not verify". With autonomy on, something should
+    have made them, so the same reading stays PARTIAL. A store that exists and cannot
+    be read never matches.
+    """
+    if snap.overall != OVERALL_PARTIAL or not snap.unavailable_sources:
+        return False
+    if not all(_NO_STORE_RE.search(src) for src in snap.unavailable_sources):
+        return False
+    from core.status_loops import autonomy_idle_reason
+    return bool(autonomy_idle_reason())
+
+
+def unverified_sources(snap: StatusSnapshot) -> List[str]:
+    """What a seat may call "could not check": a store made on first use is not that."""
+    return [] if absent_while_idle(snap) else list(snap.unavailable_sources)
+
+
 def health_headline(snap: StatusSnapshot) -> str:
     n_crit = sum(1 for h in snap.health if h.severity == SEVERITY_CRIT)
     if snap.overall == OVERALL_DEGRADED:
@@ -61,6 +110,13 @@ def health_headline(snap: StatusSnapshot) -> str:
         if snap.unavailable_sources:
             head += f"; {len(snap.unavailable_sources)} source(s) unreadable"
         return head
+    if _is_new_home(snap):
+        where = _NO_STORE_RE.search(snap.unavailable_sources[0]).group(2)
+        return ("Health: NEW — nothing has run here yet, so there is nothing to check "
+                f"(no store yet in {where.rsplit('/', 1)[0]}; if this agent has run "
+                "before, its data dir is set wrong)")
+    if absent_while_idle(snap):
+        return "Health: OK — no issue found, and no goal or job has run yet"
     if snap.overall == OVERALL_PARTIAL:
         return ("Health: PARTIAL — no issue found, but could not verify: "
                 + "; ".join(snap.unavailable_sources))
@@ -93,13 +149,20 @@ def render_section_lines(snap: StatusSnapshot, name: str, *, prefix: str = "• 
     sec = snap.sections[name]
     title = _SECTION_TITLES.get(name, name)
     if sec.state == STATE_UNAVAILABLE:
+        missing = (_NO_STORE_RE.search(sec.reason or "")
+                   if _is_new_home(snap) or absent_while_idle(snap) else None)
+        if missing:
+            return [f"{prefix}{title}: nothing yet ({missing.group(1)} not created)"]
         return [f"{prefix}{title}: unavailable ({sec.reason})"]
     if not sec.lines:
         return [f"{prefix}{title}: (no data)"]
     if name == "posture":
-        return [f"{prefix}Posture:"] + [f"{prefix}  {ln}" for ln in sec.lines]
-    first = f"{prefix}{title}: {sec.lines[0]}"
-    rest = [f"{prefix}  {ln}" for ln in sec.lines[1:]]
+        return [f"{prefix}{title}:"] + [f"{prefix}  {ln}" for ln in sec.lines]
+    # A missing store reads as "nothing yet" only where absence is expected; a wrong data
+    # directory under running autonomy keeps its plain "absent".
+    plain = _plain_absent if _is_new_home(snap) or absent_while_idle(snap) else str
+    first = f"{prefix}{title}: {plain(sec.lines[0])}"
+    rest = [f"{prefix}  {plain(ln)}" for ln in sec.lines[1:]]
     return [first] + rest
 
 

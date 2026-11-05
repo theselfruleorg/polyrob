@@ -237,15 +237,11 @@ async def quote_order(order_id: str, amount_usd: str, *, user_id: str, db=None,
 
 async def on_settled(inv: Dict[str, Any], *, container=None,
                      path: Optional[str] = None) -> Optional[ords.Order]:
-    """An ``offer_order`` invoice COMPLETED: pay the order and start fulfillment.
-    Only a ``completed`` invoice pays an order (an owner ``/settle`` completes it
-    too). A payment for an order that is no longer open (cancelled, expired) is
-    money held against nothing: the owner is told to refund it."""
-    if str(inv.get("status") or "completed") != "completed":
-        await owner_notice(container, str(inv.get("user_id") or ""),
-                           f"Invoice {inv.get('request_id')} was marked paid without an "
-                           f"on-chain transaction; its order is NOT fulfilled automatically.")
-        return ords.by_request(str(inv.get("request_id") or ""), path=path)
+    """An ``offer_order`` invoice COMPLETED: pay the order and start fulfillment. An
+    order invoice has no other settled state: ``X402_INVOICE`` has no edge into
+    ``settled_no_tx``, only a machine payment's INSERT starts there, and an owner
+    ``/settle`` completes it. A payment for an order that is no longer open (cancelled,
+    expired) is money held against nothing: the owner is told to refund it."""
     order = ords.mark_paid(str(inv.get("request_id") or ""),
                            payment_tx=inv.get("transaction_hash"), path=path)
     if order is None:
@@ -387,10 +383,31 @@ async def fail(order_id: str, reason: str, *, user_id: str, container=None,
         await owner_notice(container, order.user_id,
                            f"Order {order.id} attempt {order.attempts} failed ({reason[:200]}); "
                            f"it is retried.")
-        return ords.get(order.id, path=path)
-    ords.fail(order.id, reason, path=path)
-    await _failed_notices(container, ords.get(order.id, path=path), reason)
-    return ords.get(order.id, path=path)
+        current = ords.get(order.id, path=path)
+    else:
+        ords.fail(order.id, reason, path=path)
+        current = ords.get(order.id, path=path)
+        await _failed_notices(container, current, reason)
+    # Last: this can be the order's own run, and a cancel lands on its next await.
+    _stop_goal(order.goal_id)
+    return current
+
+
+def _stop_goal(goal_id: Optional[str]) -> None:
+    """Stop the goal an order just took back. It can no longer spend, deliver or fail
+    the order, but it would run its other tools until it ended. Never raises."""
+    if not goal_id or str(goal_id).startswith("claim:"):
+        return                     # only a claim token: no goal was ever written
+    from core.commerce.hooks import goal_canceller
+    fn = goal_canceller()
+    if fn is None:
+        logger.warning("commerce: goal %s is left running; this process wires no canceller",
+                       goal_id)
+        return
+    try:
+        fn(str(goal_id))
+    except Exception:
+        logger.warning("commerce: goal %s could not be stopped", goal_id, exc_info=True)
 
 
 async def _failed_notices(container, order: ords.Order, reason: str) -> None:
@@ -431,8 +448,10 @@ async def tick(*, container=None, path: Optional[str] = None,
             m = st.live_version(o.offer_id, o.offer_version, path=path)
             if m and o.attempts < m.max_attempts and ords.release_for_retry(o.id, path=path):
                 out["retried"] += 1
+                _stop_goal(o.goal_id)
             elif ords.fail(o.id, "fulfillment deadline passed", path=path):
                 out["failed"] += 1
+                _stop_goal(o.goal_id)
                 await _failed_notices(container, ords.get(o.id, path=path),
                                       "fulfillment deadline passed")
         for o in (ords.list_orders(statuses=[ords.PAID], limit=20, path=path)

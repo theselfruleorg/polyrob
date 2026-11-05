@@ -60,7 +60,7 @@ setting. In the terminal chat, send `/autonomy on`. See
 [configuration.md](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/configuration.md#6-the-autonomy-dial).
 
 **What may you do on your own right now?**
-Send `/mode`. It shows the effective permissions and how to change them.
+Send `/mode`. It says what the agent may do without you, what it does when you are away, and how to change that.
 
 **How do I schedule a daily job?**
 Send `/job new <when> <what>`; `/jobs` lists the scheduled jobs. `/help job`
@@ -334,6 +334,10 @@ recent ones.
 #### '{action}' is not available in a group chat: this session speaks into a public room and can only read and reply. Only the owner, from their private chat with me, can do it
 
 `seat:room` — who can act: you; what changes it: the owner runs it from their private chat; a retry can help: no.
+
+#### '{action}' refused in this group chat: {detail}. Nothing was done
+
+`seat:room_grant` — who can act: you; what changes it: the owner changes this room's grants; a retry can help: no.
 
 #### '{action}' is blocked: the latest input is untrusted correspondent DATA, so no high-impact action runs on this turn; it needs the owner's own message
 

@@ -23,7 +23,7 @@ from agents.task.telemetry.views import (
     SessionCompletionTelemetryEvent,
     MultiAgentRelationshipEvent
 )
-from agents.task.path import pm
+from agents.task.path import get_safe_singleton, pm
 
 # Import logger
 from agents.task.logging_config import get_task_logger
@@ -48,7 +48,9 @@ class TelemetryManager:
         # Session ID is already cleaned by Orchestrator - do NOT re-clean
         self._session_id = session_id
         self._agent_id = agent_id
-        self._service = ProductTelemetry()
+        # 102 N-6: the one process-wide service, the same one get_telemetry() returns.
+        # A second instance kept its own buffers, out of reach of a session's flush.
+        self._service = get_safe_singleton(ProductTelemetry)()
         self.logger = logger
 
     def capture_step(
@@ -432,11 +434,18 @@ class TelemetryManager:
             self.logger.error(f"Failed to capture agent registration: {e}", exc_info=True)
 
     def flush_buffers(self) -> None:
-        """Flush all buffered telemetry events to disk."""
+        """Flush this session's buffered telemetry events to disk."""
         try:
-            self._service.flush_all_buffers()
+            self._service.flush_session(self._session_id)
         except Exception as e:
             self.logger.error(f"Failed to flush telemetry buffers: {e}", exc_info=True)
+
+    def release_session(self) -> None:
+        """Flush this session and drop its rows from the shared service (full cleanup)."""
+        try:
+            self._service.release_session(self._session_id)
+        except Exception as e:
+            self.logger.error(f"Failed to release telemetry session: {e}", exc_info=True)
 
     def get_health_stats(self) -> Dict[str, Any]:
         """Get telemetry health statistics.

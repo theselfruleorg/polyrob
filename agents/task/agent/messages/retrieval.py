@@ -265,6 +265,10 @@ class MessageRetrievalMixin:
 
 		# 2.1: Recent conversation (from history deque)
 		# Use all available messages (up to MAX_RECENT_MESSAGES=10)
+		try:
+			self._retire_stored_media()
+		except Exception as e:  # the pure pass below still bounds the wire copy
+			self.logger.warning(f"stored media retirement skipped: {e}")
 		conversation_messages = [m.message for m in self.history.messages]
 		conversation.extend(conversation_messages)
 

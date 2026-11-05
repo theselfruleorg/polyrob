@@ -60,6 +60,7 @@ def _no_indexer_network(monkeypatch):
     monkeypatch.setattr("core.wallet.solana_onchain._rpc", _blocked, raising=False)
     # 071 W4: the history / origin reads (Blockscout GET + Solana RPC).
     monkeypatch.setattr("core.wallet.activity._get", _blocked, raising=False)
+    monkeypatch.setattr("core.wallet.activity._alchemy_post", _blocked, raising=False)
     monkeypatch.setattr("core.wallet.activity._rpc", _blocked, raising=False)
     # 071 W2: the merged screen's chain facts and keyless audit providers.
     # Blocked, each source reads NOT CHECKED — never a pass.

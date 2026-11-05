@@ -18,6 +18,7 @@ from core.surfaces.act import InboundResult  # noqa: F401 — canonical home sin
 from core.surfaces.dispatcher import route_inbound, RouteDecision
 from core.surfaces.envelopes import InboundMessage, Identity, SessionSource
 from core.surfaces.media import Media
+from core.surfaces.transcription import VOICE_TRANSCRIPT_PREFIX
 # 044 fix round 1 (minor): triggers.py has no internal deps, so this is hoisted
 # to a module-level import instead of three separate inline imports.
 from surfaces.telegram.triggers import (
@@ -28,13 +29,6 @@ from surfaces.telegram.triggers import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Prefix stamped onto a transcribed voice note so the AGENT knows the message arrived
-# as voice and was auto-transcribed. Without it the agent sees indistinguishable plain
-# text and, asked "can you understand voice?", denies having speech-to-text (the
-# 2026-07-03 self-awareness bug). The clean transcript is still stamped separately on
-# the voice Media for voice-echo, so this marker never leaks into the echo.
-VOICE_TRANSCRIPT_PREFIX = "[voice message, auto-transcribed] "
 
 
 #: H06 (2026-09-23): every field Telegram sets on a FORWARDED message — the

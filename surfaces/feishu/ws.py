@@ -37,6 +37,20 @@ def event_payload(data) -> dict:
             "event": getattr(data, "event", None) or {}}
 
 
+def _close_thread_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """The stopped SDK leaves its tasks on the thread's loop: end them, then free the
+    selector and the socket pair. A task that ignores the cancel must not hold run()."""
+    try:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.wait(pending, timeout=_STOP_POLL_S * 5))
+        loop.close()
+    except Exception as e:  # noqa: BLE001 - run() must still end
+        logger.debug("feishu: thread loop not closed: %s", e)
+
+
 class FeishuLongConnection:
     def __init__(self, app_id: str, app_secret: str, *, domain: str) -> None:
         self._app_id = app_id
@@ -102,6 +116,7 @@ class FeishuLongConnection:
                 if not self._stopping.is_set():
                     failure.append(e)
             finally:
+                _close_thread_loop(loop)
                 try:
                     main_loop.call_soon_threadsafe(done.set)
                 except RuntimeError:

@@ -19,6 +19,13 @@ update it to a new release, and do both from a shell **or from your chat**.
 | Stop / start | `polyrob service stop` (`--now` cuts the turn, Linux only) / `start` | — |
 | Read the log | `polyrob service logs -f` | — |
 
+## Memory and the event loop
+
+An idle goal or job leaves memory after 15 minutes, and a chat opens no browser
+until it uses a page. `/status` shows the worst event-loop stall of the last heartbeat window;
+the log line `event loop stuck` names the blocking call. To lower memory use, lower
+`MAX_BROWSER_CONTEXTS` (default 6, about 200 MB each).
+
 ## What a restart does
 
 A restart never cuts you off in the middle of a reply:

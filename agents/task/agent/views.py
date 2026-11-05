@@ -229,8 +229,17 @@ class AgentHistoryList(BaseModel):
 	"""List of agent history items"""
 
 	history: list[AgentHistory]
-	
+	trimmed_steps: int = 0  # Older steps dropped from memory; they stay in the step file
+
 	model_config = ConfigDict(slots=True)
+
+	def trim(self, keep: int) -> int:
+		"""Drop all but the newest ``keep`` steps from memory. Returns the number dropped."""
+		drop = max(0, len(self.history) - keep)
+		if drop:
+			del self.history[:drop]
+			self.trimmed_steps += drop
+		return drop
 
 	def __str__(self) -> str:
 		"""Representation of the AgentHistoryList object"""

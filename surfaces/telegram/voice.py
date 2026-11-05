@@ -6,8 +6,9 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+from core.surfaces.transcription import VOICE_TIMEOUT_SECONDS
+
 logger = logging.getLogger(__name__)
-VOICE_TIMEOUT_SECONDS = 90
 
 
 def extract_voice_file_id(update: dict) -> Optional[str]:

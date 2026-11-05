@@ -263,6 +263,19 @@ class SessionCleanupMixin:
         except Exception:
             pass
 
+    def _release_session_maps(self) -> None:
+        """Drop this session's rows from the process-wide maps (102 3.5), last, so no
+        event of the cleanup writes one again. Each one reloads on a resume: todos from
+        todo.md, the feed sequence from the feed folder, the model pin from the record."""
+        from agents.task.model_pin_state import forget_session
+        from agents.task.telemetry.sequence import SequenceGenerator
+        task_tool = self.controller.get_tool('task') if getattr(self, "controller", None) else None
+        release_todos = getattr(task_tool, "release_session", None)
+        if callable(release_todos):
+            release_todos(self.session_id)
+        SequenceGenerator.reset(self.session_id)
+        forget_session(self.session_id)
+
     def _is_shared_tool_instance(self, tool_name: str, tool) -> bool:
         """True if ``tool`` is a process-wide shared instance this session must
         NOT tear down: the DependencyContainer's registered service (identity
@@ -332,7 +345,8 @@ class SessionCleanupMixin:
             if outcome is None:
                 return False
             _agent = _primary_agent(self)
-            _mark = len(getattr(_agent_history(_agent), "history", None) or ())
+            from agents.task.runtime.run_outcome import absolute_step_count
+            _mark = absolute_step_count(_agent_history(_agent))
             if _mark and getattr(self, "_chat_episode_mark", None) == _mark and (
                     getattr(self, "_chat_episode_llm", False) or not use_llm):
                 # Nothing happened since this session's last episode (an LLM
@@ -537,6 +551,7 @@ class SessionCleanupMixin:
             if full_cleanup:
                 self.logger.info(f"Performing full cleanup for session {self.session_id}")
 
+                _reflection_llms = []
                 # PERSISTENCE: Save message history and agent state before cleanup
                 # Skip sub-agents - they don't need persistence (their results are captured)
                 for agent_id, agent in list(self.agents.items()):
@@ -578,6 +593,11 @@ class SessionCleanupMixin:
                                 # froze the loop up to ~30s (and deadlocked its own metering).
                                 # Mirrors the per-step reflection offload (memory_writer.py).
                                 import asyncio as _asyncio
+                                # 102 M-M: the close clears this slot and may still reflect,
+                                # so hold the model here and close it after.
+                                _reflection_of = getattr(agent.task_context_manager, "reflection_llm_for", None)
+                                if callable(_reflection_of):
+                                    _reflection_llms.append(_reflection_of(self.session_id))
                                 try:  # 095 W9: the regime may ask for close-time reflection
                                     from agents.task.session_class import regime_policy
                                     _reflect = bool(regime_policy(agent).reflect_on_close)
@@ -649,53 +669,20 @@ class SessionCleanupMixin:
                     except Exception as e:
                         self.logger.error(f"Failed to save state for agent {agent_id}: {e}")
 
-                # Close all agents
+                # M2 FIX, 102 M-M: close the per-session ISOLATED clients. They are built
+                # fresh (not cached, not in self.llm_clients), so nothing else closes them.
+                from agents.task.agent.core.model_swap import close_agent_llms, close_own_llm
+                _container = getattr(self, "container", None)
                 for agent_id, agent in list(self.agents.items()):
                     try:
-                        if hasattr(agent, 'cleanup'):
-                            await agent.cleanup()
-                        self.logger.debug(f"Cleaned up agent {agent_id}")
+                        await close_agent_llms(agent, _container)
+                        _tcm = getattr(agent, "task_context_manager", None)
+                        if _tcm is not None and hasattr(_tcm, "clear_reflection_context"):
+                            _tcm.clear_reflection_context(self.session_id)
                     except Exception as e:
-                        self.logger.error(f"Error cleaning up agent {agent_id}: {e}")
-
-                # M2 FIX: close per-session ISOLATED aux/reflection LLM clients. These are
-                # built fresh (not cached, not in self.llm_clients) by
-                # _provision_aux_llm(isolated=True) for compaction/reflection, so nothing
-                # else closes them — their httpx connection pools would leak per session
-                # whenever AUX_* / REFLECTION_LLM_ENABLED is set.
-                for agent_id, agent in list(self.agents.items()):
-                    for owner, attr in (
-                        (getattr(agent, 'message_manager', None), 'aux_llm'),
-                        (getattr(agent, 'task_context_manager', None), 'reflection_llm'),
-                        # P2-8: the cheap 'judge' aux client is cached on the agent by
-                        # _validate_output / background review / goal judge but was never
-                        # closed here — its httpx pool leaked per session when
-                        # AUX_MODEL_JUDGE / VALIDATE_OUTPUT / background review was active.
-                        (agent, '_judge_llm'),
-                    ):
-                        if owner is None:
-                            continue
-                        aux = getattr(owner, attr, None)
-                        if aux is None:
-                            continue
-                        # aux is a BaseChatModel adapter wrapping the real client in ._client
-                        underlying = getattr(aux, '_client', aux)
-                        try:
-                            cleanup_fn = getattr(underlying, 'cleanup', None) or getattr(underlying, 'aclose', None)
-                            if cleanup_fn is not None:
-                                import asyncio
-                                if asyncio.iscoroutinefunction(cleanup_fn):
-                                    await cleanup_fn()
-                                else:
-                                    cleanup_fn()
-                                self.logger.debug(f"✓ Closed isolated {attr} for agent {agent_id}")
-                        except Exception as e:
-                            self.logger.warning(f"Error closing isolated {attr} for {agent_id}: {e}")
-                        finally:
-                            try:
-                                setattr(owner, attr, None)
-                            except Exception:
-                                pass
+                        self.logger.warning(f"Error closing isolated LLM clients for {agent_id}: {e}")
+                for _llm in _reflection_llms:
+                    await close_own_llm(_llm, _container)
 
                 # Clear message queues and callbacks from HITL managers
                 for agent_id, agent in list(self.agents.items()):
@@ -809,13 +796,9 @@ class SessionCleanupMixin:
                             self.logger.error(f"Error closing LLM client {client_name}: {e}", exc_info=True)
                     self.llm_clients.clear()
 
-                # Flush telemetry
+                # Flush telemetry and leave the shared service
                 if hasattr(self, 'telemetry_manager') and self.telemetry_manager:
-                    try:
-                        await self.telemetry_manager.flush_buffers()
-                        self.logger.debug("Flushed telemetry buffers")
-                    except Exception as e:
-                        self.logger.debug(f"Error flushing telemetry: {e}")
+                    self.telemetry_manager.release_session()
 
                 # Release SESSION-OWNED controller tools.
                 #
@@ -938,6 +921,9 @@ class SessionCleanupMixin:
                     self.logger.debug(f"Updated session status to: {status}")
                 else:
                     self.logger.debug(f"Preserved status '{cur}', not overwriting with: {status}")
+
+            if full_cleanup:
+                self._release_session_maps()
 
             cleanup_type = "full" if full_cleanup else "partial"
             self.logger.info(f"Session {self.session_id} {cleanup_type} cleanup complete, status: {status}")

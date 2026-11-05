@@ -172,6 +172,8 @@ async def run_surface(
         for _noisy in silence_loggers:
             _logging.getLogger(_noisy).setLevel(_logging.WARNING)
 
+    from polyrob.app.bootstrap import freeze_startup_heap
+    freeze_startup_heap()
     task_agent = container.get_agent("task_agent")
     if not task_agent:
         click.echo(click.style("[polyrob] ERROR: ", fg="red")

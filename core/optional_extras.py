@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import sys
+from pathlib import Path
 from typing import Iterable, Optional
 
 #: import name (top-level module) -> its distribution, where the two differ
@@ -117,11 +119,37 @@ MODULES_FOR_EXTRA: dict[str, tuple[str, ...]] = {
 MODULES_FOR_EXTRA["feishu"] = ("lark_oapi",)   # surfaces/feishu/ws.py
 
 
+def _managed_python() -> Optional[str]:
+    """The interpreter of an install.sh venv, else None.
+
+    ⚠️ That venv is never activated and the launcher hides it, so a bare ``pip``
+    in the owner's shell installs into some OTHER Python and the extra stays
+    absent, with a success message. Only this layout needs the path spelled out.
+    """
+    # The layout install.sh writes: <home>/venv beside <home>/src. Read from the
+    # interpreter's own path, because this module sits under the status readers and
+    # an import of the home resolver would pull it into their import cycle.
+    try:
+        venv = Path(sys.prefix).resolve()
+        if venv.name == "venv" and (venv.parent / "src" / "pyproject.toml").is_file():
+            return str(venv / "bin" / "python")
+    except OSError:
+        pass
+    return None
+
+
+def pip_command() -> str:
+    """How to run pip for THIS install."""
+    python = _managed_python()
+    return f"{python} -m pip" if python else "pip"
+
+
 def pip_hint(extra: str) -> str:
     """The canonical remedy string for a missing extra."""
-    hint = f"pip install 'polyrob[{extra}]'"
+    hint = f"{pip_command()} install 'polyrob[{extra}]'"
     if extra == "browser":
-        hint += " && python -m playwright install chromium"
+        python = _managed_python() or "python"
+        hint += f" && {python} -m playwright install chromium"
     return hint
 
 

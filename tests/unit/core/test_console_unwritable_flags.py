@@ -51,6 +51,10 @@ def _approval(n):
 
 
 def _posture_trust(n):
+    # 104 D5 (owner decision): AUTONOMY_ENABLED already moves remotely, and this flag moves
+    # no money key. `full` also turns on scheduled jobs.
+    if n == "AUTONOMY_POSTURE":
+        return False
     return (n.startswith(("WEBGATE_", "CODE_EXEC_"))
             or "POSTURE" in _segs(n)
             or n in {"POLYROB_LOCAL", "POLYROB_LOCAL_OWNER", "AUTONOMY_MODE",
@@ -77,7 +81,7 @@ REVIEW_NAMED = (
     "DEFI_SOLANA_RPC", "DEFI_EVM_RPC_BASE", "BASE_RPC_URL",
     "PAYMENT_APPROVAL_MODE", "APPROVAL_PROVIDER", "APPROVAL_REQUIRED_TOOLS",
     "DEFAULT_APPROVAL_REQUIRED_TOOLS", "TWITTER_REQUIRE_APPROVAL",
-    "POLYROB_LOCAL", "AUTONOMY_MODE", "AUTONOMY_POSTURE", "AGENT_COMPUTE_POSTURE",
+    "POLYROB_LOCAL", "AUTONOMY_MODE", "AGENT_COMPUTE_POSTURE",
     "POLYROB_POSTURE", "WEBVIEW_READ_ONLY",
     "WEBGATE_HOST", "DELEGATE_BLOCKED_TOOLS",
     "CODE_EXEC_ENABLED", "CODE_EXEC_BACKEND", "SELF_ENV_ENABLED",
@@ -105,7 +109,7 @@ def test_set_value_refuses_them_on_a_remote_surface(key):
     res = config_service.set_value(key, "x", surface="console")
     assert res.ok is False, key
     assert res.outcome == "refused", key
-    assert "local CLI" in res.message, key
+    assert "polyrob config set" in res.message, key
 
 
 # 024 §2.6/§7.5: where inference goes or where credentials live.

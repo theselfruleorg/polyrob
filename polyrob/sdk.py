@@ -65,6 +65,7 @@ _EXPORTS: Dict[str, str] = {
     # --- workspace and execution ---------------------------------------------
     "resolve_session_workspace": "tools.controller.message_send:_resolve_session_workspace",
     "run_group": "tools.code_exec.backends._proc:run_group",
+    "communicate_or_kill": "core.async_bridge:communicate_or_kill",
     # --- 098 state primitives (atomic files, leases) --------------------------
     "atomic_write_json": "core.state.files:atomic_write_json",
     "file_lock": "core.state.files:file_lock",

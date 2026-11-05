@@ -1762,14 +1762,14 @@ async def api_doctor(request: Request):
             unbound_reason=unbound_reason))
     try:
         from core.status_snapshot import build_status_snapshot
-        from core.status_render import render_health_lines, render_status_lines
+        from core.status_render import render_health_lines, render_status_lines, unverified_sources
         snap = await asyncio.to_thread(build_status_snapshot, owner, data_dir=_data_dir(),
                                        include_money=True)
         health = {"overall": snap.overall,
                   "items": [{"key": h.key, "severity": h.severity, "text": h.text,
                              "remedy": h.remedy} for h in snap.health],
-                  "unverified": list(snap.unavailable_sources),
-                  "unverified_words": _section_words(snap.unavailable_sources),
+                  "unverified": unverified_sources(snap),
+                  "unverified_words": _section_words(unverified_sources(snap)),
                   "lines": render_health_lines(snap, prefix="")}
         status_lines = render_status_lines(snap, prefix="")
     except Exception as e:

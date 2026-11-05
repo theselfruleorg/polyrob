@@ -29,6 +29,7 @@ STEPS = (
     shape.step_3_nft_and_revoke_shapes,
     shape.step_3_claim_deploy_destination,
     shape.step_4_rpc_trust,
+    shape.step_4b_nonce_under_reservation,
     measure.step_5_simulate,
     measure.step_6_assert_deltas,
     measure.step_6a_min_inflow,

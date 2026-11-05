@@ -382,6 +382,9 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
         "'{action}' is not available in a group chat: this session speaks into a "
         "public room and can only read and reply. Only the owner, from their private "
         "chat with me, can do it"),
+    "seat:room_grant": _k(
+        "room_toolset", "owner-verb", "now", "the owner changes this room's grants", False,
+        "'{action}' refused in this group chat: {detail}. Nothing was done"),
     "seat:correspondent": _k(
         "correspondent_taint", "owner-verb", "next-turn",
         "the owner's own message (or they run it from their chat)", False,

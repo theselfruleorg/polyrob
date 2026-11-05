@@ -37,7 +37,7 @@ class _StubLLM:
         self.calls.append(messages)
         if self.fail:
             raise RuntimeError("aux llm down")
-        return AIMessage(content=self.reply)
+        return AIMessage(content=f"{self.reply}\n## End of summary")
 
 
 class _Harness(CompactorMixin):

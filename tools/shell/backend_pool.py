@@ -71,6 +71,13 @@ def _refuse_closed(sid: str) -> None:
             "to get a fresh sandbox (background jobs of the closed session were killed).")
 
 
+def _opened_a_shell(sid: str) -> bool:
+    """Setup and teardown both take the session lock, so a session with no lock row,
+    pool entry or remote entry never started a sandbox."""
+    return (sid in _SESSION_LOCKS or sid in _POOL or sid in _HOST
+            or any(key[0] == sid for key in _REMOTE))
+
+
 def _session_lock(sid: str) -> asyncio.Lock:
     lock = _SESSION_LOCKS.get(sid)
     if lock is None:
@@ -172,6 +179,14 @@ async def teardown_session(session_id: str, *, generation: Optional[int] = None)
     except Exception:
         pass
     sid = session_id or "shell"
+    if not _opened_a_shell(sid):
+        # 102 3.5: most sessions never run a shell, so nothing here needs a lock or a
+        # closed marker. ⚠️ A popped _GEN reads as 0: only a session teardown drops it,
+        # and that names no generation. A run's own release keeps it for the next run.
+        await _teardown_locked(sid)  # no sandbox, so no setup to wait for: jobs, watchers
+        if generation is None:
+            _GEN.pop(sid, None)
+        return
     if generation is not None and session_generation(sid) != generation:
         return  # a later run reopened the session: its sandbox is not ours
     async with _session_lock(sid):  # waits for a setup in flight (098 TS-09)

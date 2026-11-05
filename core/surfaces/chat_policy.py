@@ -56,21 +56,25 @@ class ChatPolicy:
 
     mode: str = "mention"
     name: str = ""
-    persona: str = ""
     tone: str = ""
     verbosity: str = ""
     language: str = ""
     instructions: str = ""
     wake_words: Tuple[str, ...] = ()
-    tool_deny: Tuple[str, ...] = ()
     member_verbs: Tuple[str, ...] = ("help",)
     reply_cap_per_hour: int = 20
     member_cooldown_sec: int = 20
     context_lines: int = 30
     quiet_hours: str = ""
     mute_until: float = 0.0
-    thread_scope: str = "topic"
-    reply_mode: str = "first"
+
+    # --- 101: what the owner granted this room (core/surfaces/room_grants.py).
+    room_tools: Tuple[str, ...] = ()
+    admin_tools: Tuple[str, ...] = ()
+    admin_turns_per_day: int = 20
+    #: The file exists and could not be parsed. Set by ``load`` only, never a preference:
+    #: a reader says "unknown" here, because an unreadable store is not an empty one.
+    unreadable: bool = False
 
     # --- 046: paid room actions. FLAT names on purpose — `load` maps
     # `chat.<field>` straight onto a dataclass field, so a dotted key would be
@@ -127,7 +131,7 @@ class ChatPolicy:
 
 
 #: Fields whose TOML value is a list and whose dataclass field is a tuple.
-_TUPLE_FIELDS = ("wake_words", "tool_deny", "member_verbs")
+_TUPLE_FIELDS = ("wake_words", "member_verbs", "room_tools", "admin_tools")
 
 
 def chat_preferences_path(home_dir, owner_uid, surface, chat_id,
@@ -188,7 +192,7 @@ def load(home_dir, owner_uid, surface, chat_id, *,
         logger.warning("chat policy unreadable (%s) — falling back to `listen` "
                        "(owner/admin only) so a corrupt file cannot widen the "
                        "room: %s", path, e)
-        return base.with_mode("listen")
+        return _dc_replace(base.with_mode("listen"), unreadable=True)
     kw: dict = {}
     for key, value in flat.items():
         if not key.startswith("chat."):

@@ -215,6 +215,7 @@ def _host_refusal():
 
 async def run_anysite(argv, *, timeout=60.0, env=None):
     """Run `anysite …`; capture stdout/stderr, enforce timeout + output cap."""
+    from polyrob.sdk import communicate_or_kill
     refusal = _host_refusal()
     if refusal:
         return AnysiteResult(stdout="", stderr=f"anysite CLI {refusal}",
@@ -226,7 +227,7 @@ async def run_anysite(argv, *, timeout=60.0, env=None):
         env=build_anysite_env(env),
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out, err = await communicate_or_kill(proc, timeout)
         return AnysiteResult(
             stdout=out.decode("utf-8", "replace")[:_MAX_OUTPUT],
             stderr=err.decode("utf-8", "replace")[:_MAX_OUTPUT],
@@ -234,8 +235,4 @@ async def run_anysite(argv, *, timeout=60.0, env=None):
             timed_out=False,
         )
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except Exception:
-            pass
         return AnysiteResult(stdout="", stderr="anysite CLI timed out", exit_code=-1, timed_out=True)

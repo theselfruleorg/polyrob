@@ -461,7 +461,11 @@ class SelfContextWriter:
         # Always prefer an existing PENDING draft (so a patch refines the proposal in
         # flight rather than silently discarding it by editing the active doc); fall
         # back to the active doc only when there is no pending draft.
-        target_is_pending = pending_f.is_file()
+        # 103 (D3): an explicit pending=False from a real author edits the ACTIVE doc
+        # only. A live draft holds text the owner has not reviewed, so it stays a draft;
+        # promote rebases it, and the line applied here stays live.
+        apply_now = pending is False and created_by not in _NON_USER_AUTHORS
+        target_is_pending = pending_f.is_file() and not apply_now
         src = pending_f if target_is_pending else active
         if not src.is_file():
             return SelfContextWriteResult(False, errors=["no self-context doc to patch"])

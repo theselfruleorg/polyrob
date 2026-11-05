@@ -72,7 +72,7 @@ from core.surfaces.catalog import cli_commands as _surface_cli_commands  # noqa:
 
 CLI_COMMAND_NAMES: FrozenSet[str] = frozenset({
     "approvals", "apps", "auth", "autonomy", "avatar", "browser", "config", "cron", "job",
-    "dashboard", "datagen", "doctor", "finance",
+    "dashboard", "datagen", "doctor", "finance", "status",
     "gateway", "goals", "identity", "init", "journey", "kb", "keys", "knowledge",
     "model", "models", "owner", "pack", "persona", "profile", "profiles",
     "run", "serve", "session", "sessions", "skill", "skills",

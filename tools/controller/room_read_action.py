@@ -151,8 +151,9 @@ def register_room_read_action(controller) -> None:
                                   "deploy — cannot read the room ledger.",
                 include_in_memory=True)
 
-        rooms = [r for r in GroupAllowlist(
-            f"{home}/group_allowlist.db").list_all() if r.get("status") == "active"]
+        from core.surfaces.room_targets import scoped_rooms
+        rooms = scoped_rooms(controller, [r for r in GroupAllowlist(
+            f"{home}/group_allowlist.db").list_all() if r.get("status") == "active"])
         if not rooms:
             return ActionResult(
                 extracted_content="room_read: no allowlisted rooms on this "

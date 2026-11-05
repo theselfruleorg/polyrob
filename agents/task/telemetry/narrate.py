@@ -54,6 +54,10 @@ def narrate(event: Any) -> str:
         # Never surface the raw error string here — it can carry a repr.
         return t("chat.act.failed")
 
+    # 104: a refused load is a normal result to the agent and a refusal to the person.
+    if action == "load_tool" and str(_pick(event, "result_preview") or "").startswith("load_tool refused"):
+        return t("chat.act.refused")
+
     running = success is None
     line = _known(tool, action, running, event)
     if line is not None:

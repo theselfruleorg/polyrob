@@ -26,17 +26,17 @@ _REPO = Path(__file__).resolve().parents[3]
 #: Strings with at least one banned word, per corpus. Lower a number in the
 #: same commit that removes a hit; never raise one.
 CEILINGS = {
-    "webview_copy": 70,
+    "webview_copy": 68,
     "core_copy": 3,
-    "verbs": 21,
+    "verbs": 20,
     "prefs": 0,
     "inbox_render": 15,
     "telegram_owner": 42,
-    "repl_owner": 22,
+    "repl_owner": 19,
     # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
-    "guide_docs": 1687,
+    "guide_docs": 1682,
     "guide_skill": 240,
 }
 

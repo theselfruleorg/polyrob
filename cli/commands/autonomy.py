@@ -155,9 +155,7 @@ def status_cmd(as_json):
 @autonomy.command("on")
 @click.option("--mode", "mode", default=None,
               help="Also set AUTONOMY_MODE (supervised|autonomous)")
-@click.option("--global", "is_global", is_flag=True, default=True,
-              help="Accepted for old scripts: the write always goes to the home "
-                   ".env (~/.polyrob/.env), the only file the CLI loads.")
+@click.option("--global", "is_global", is_flag=True, default=True, hidden=True)
 def on_cmd(mode, is_global):
     """Turn the autonomy master ON (writes AUTONOMY_ENABLED=true).
 
@@ -175,9 +173,7 @@ def on_cmd(mode, is_global):
 @autonomy.command("off")
 @click.option("--mode", "mode", default=None,
               help="Also set AUTONOMY_MODE (supervised|autonomous)")
-@click.option("--global", "is_global", is_flag=True, default=True,
-              help="Accepted for old scripts: the write always goes to the home "
-                   ".env (~/.polyrob/.env), the only file the CLI loads.")
+@click.option("--global", "is_global", is_flag=True, default=True, hidden=True)
 def off_cmd(mode, is_global):
     """Turn the autonomy master OFF (writes AUTONOMY_ENABLED=false).
 

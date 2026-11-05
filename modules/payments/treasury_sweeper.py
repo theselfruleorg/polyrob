@@ -239,7 +239,7 @@ class TreasurySweeper:
 
         w3 = Web3(Web3.HTTPProvider(
             chain_config['rpc_url'], request_kwargs={'timeout': 15}))
-        if w3.eth.chain_id != chain_config['chain_id']:
+        if await asyncio.to_thread(lambda: w3.eth.chain_id) != chain_config['chain_id']:
             raise ValueError('Treasury RPC chain does not match configured chain')
         user_address = deposit['user_address']
         token_symbol = deposit['token_symbol']

@@ -333,7 +333,7 @@ def _read_hint(ext: str, rel_path: str) -> str:
 #: Media kinds the transcription path owns. A voice note is never absorbed as an
 #: attachment: ``voice_guard``/``voice_echo`` read ``media[0]`` and the transcript
 #: is already the turn's text.
-_TRANSCRIBED_KINDS = {"voice"}
+TRANSCRIBED_KINDS = {"voice"}
 
 
 async def absorb_inbound_media(
@@ -365,7 +365,7 @@ async def absorb_inbound_media(
         return text, None
 
     candidates = [m for m in media
-                  if getattr(m, "kind", None) not in _TRANSCRIBED_KINDS]
+                  if getattr(m, "kind", None) not in TRANSCRIBED_KINDS]
     if not candidates:
         return text, None
 

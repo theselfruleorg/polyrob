@@ -203,6 +203,11 @@ async def perform_message_action(*, action="send", text="", media_paths=None,
     if invalid:
         return {"success": False, "tier": None, "surface": kw.get("surface"),
                 "target": kw.get("target"), "error": invalid}
+    from tools.controller.send_message_route import stale_verb_note
+    stale = stale_verb_note(kw.get("controller"), text)
+    if stale:
+        return {"success": False, "tier": None, "surface": kw.get("surface"),
+                "target": kw.get("target"), "error": stale}
     return await perform_message_send(action=action, text=text,
                                       media_paths=media_paths, **kw)
 

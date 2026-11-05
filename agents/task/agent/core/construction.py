@@ -259,7 +259,6 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		self._init_aux_models(p)
 		self._init_state(p)
 		self._wire_runtime_state()
-		self._initialize_memory_management()  # bounded collections
 		self._init_metering(p)
 		self._save_initial_task()  # task.json for the webview chat
 		self._init_tool_output_log(p)
@@ -364,7 +363,8 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 
 		# Initialize logger early so it's available for profile and session config processing
 		from agents.task.logging_config import get_task_logger
-		self.logger = get_task_logger(self.agent_name, self.orchestrator.session_id)
+		self.logger = (get_task_logger("sub_agent", self.orchestrator.session_id, child=self.agent_name)
+			if is_sub_agent else get_task_logger(self.agent_name, self.orchestrator.session_id))
 
 		# RESTORATION (P7: extracted to _restore_tool_call_tracker). Load saved
 		# tool-call-tracker state from a previous session — after logger init.
@@ -626,12 +626,14 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 				build_correspondent_gate, build_tool_resolver)
 			from core.surfaces.room_policy import is_public_session, make_room_gate_hook
 			from core.security.policy_order import install_session_gates
+			from agents.task.agent.core.room_admin_wiring import room_seat_for
 			_orch_room = self.orchestrator
 			install_session_gates(
 				self.controller,
 				correspondent_hook=build_correspondent_gate(self.controller, self.orchestrator),
 				room_hook=make_room_gate_hook(lambda: is_public_session(_orch_room),
-				                              resolve_tool=build_tool_resolver(self.controller)))
+				                              resolve_tool=build_tool_resolver(self.controller),
+				                              seat=room_seat_for(self.controller, _orch_room)))
 			# 095 W3: a verb the seat's gate refuses on every call ships no schema.
 			from agents.task.agent.core.seat_schemas import exclude_seat_refused_schemas
 			exclude_seat_refused_schemas(self.controller, self.orchestrator)
@@ -737,7 +739,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 				# A separate name: p.config stays the AgentConfig (persona_block source).
 				bot_config = self.orchestrator.container.config if self.orchestrator.container else BotConfig()
 				self.task_context_manager = TaskContextManager(
-					name=f"task_context_{self.session_id}",
+					name="task_context",  # the name keys a logger: one per process, not per session
 					config=bot_config
 				)
 				self._created_task_context_manager = True
@@ -887,7 +889,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 				# serves them without re-reading disk.
 				_eager, _load_first = skill_manager.split_progressive(_session_matched)
 				skill_content = skill_manager.format_progressive(
-					_eager, matched_skills, _load_first)
+					_eager, matched_skills, _load_first, third_party=_third_party)
 				if self.controller is not None:
 					self.controller._session_skills = {s.skill_id: s for s in matched_skills}
 					_act = getattr(self.controller, '_activated_skills', None)
@@ -1227,7 +1229,8 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		# the model and the billing context together in one call.
 		from core.config_policy import reflection_llm_enabled_default
 		_reflection_llm = None
-		if reflection_llm_enabled_default():
+		# A sub-agent's NullTaskContextManager never reflects, so it builds no client for it.
+		if reflection_llm_enabled_default() and not self._is_sub_agent:
 			try:
 				_reflection_llm = self._provision_aux_llm("reflection")
 			except Exception as e:

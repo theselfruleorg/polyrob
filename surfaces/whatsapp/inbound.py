@@ -202,7 +202,10 @@ class WhatsAppInbound(WebhookSurface):
             mime = body.get("mime_type") or None
             caption = body.get("caption") or None
             text = caption or ""
-            media = [Media(kind=kind_for_mime(mime) if mime else _FILE_TYPES[mtype],
+            # An audio DOCUMENT stays a document: `hydrate_media` reads `filename` as the
+            # Graph media id, and here it is a file name.
+            kind = kind_for_mime(mime) if mime else _FILE_TYPES[mtype]
+            media = [Media(kind="document" if kind == "audio" else kind,
                            mime=mime, caption=caption, ref=body.get("id") or None,
                            filename=body.get("filename") or None)]
         # CHAT-20 (H06 on WhatsApp): a forwarded body is quoted third-party

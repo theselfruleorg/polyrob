@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from core.event_kinds import EMAIL_DELIVERY_UNKNOWN
 from core.status_types import (  # noqa: F401
     HealthItem, MISSED_IN_SNAPSHOT, MISSED_TEXT_CHARS, SEVERITY_CRIT, SEVERITY_WARN,
     Section, _K_OWNER_NOTICE, _K_RUN_DEGRADED, _K_SURFACE_POLL_ERROR, _K_TOOL_DENIED,
@@ -181,6 +182,9 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
     cap = int(effective_daily_cap(user_id, prefs_home_dir()))
     sec.data["cap"] = cap
     if not tele.available:
+        if "not found" in str(tele.reason):  # a new install: nothing was sent, nothing to verify
+            sec.lines.append("nothing yet (telemetry_events.db not created)")
+            return sec
         # The cap gate's memory IS the telemetry log: without it we cannot say
         # how many messages were suppressed — say exactly that.
         raise RuntimeError(f"delivery rail memory unreadable ({tele.reason})")
@@ -275,6 +279,13 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             remedy="connect a chat surface (`polyrob surface list`), then /missed"))
     sec.health.extend(_digest_health(user_id, data_dir))
     sec.health.extend(_surface_poll_health(tele))
+    unknown_mail = len(_tele_rows(tele, EMAIL_DELIVERY_UNKNOWN))
+    if unknown_mail:
+        sec.health.append(HealthItem(
+            key="email_delivery_unknown", severity=SEVERITY_WARN,
+            text=f"{unknown_mail} email(s) in 24h: the server did not confirm the send, and "
+                 "nothing retries them because a retry can send twice",
+            remedy="check the Sent folder, and send a mail again only if it is not there"))
     timeouts = len(_tele_rows(tele, _K_TOOL_TIMEOUT))
     degraded = len(_tele_rows(tele, _K_RUN_DEGRADED))
     denied = len(_tele_rows(tele, _K_TOOL_DENIED))

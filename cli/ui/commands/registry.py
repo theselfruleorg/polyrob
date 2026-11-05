@@ -236,7 +236,10 @@ class CommandRegistry:
             from cli.ui.commands.h_cards import dispatch_token
             if await dispatch_token(self, line, ctx):
                 return True
-            ctx.emit(f"Unknown command: /{name} — type /help")
+            from core.surfaces.verb_check import verb_note
+            note = verb_note(f"/{name}")
+            ctx.emit(f"/{name} is gone. {note}" if note
+                     else f"Unknown command: /{name} — type /help")
             return True
 
         # F5: a crashing slash handler must NOT propagate out of dispatch and

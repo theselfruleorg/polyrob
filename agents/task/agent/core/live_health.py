@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,9 @@ def live_health_injected(agent) -> bool:
         return False
 
 
+LIVE_HEALTH_TTL_S = 30.0
+
+
 class LiveHealthMixin:
     async def _live_health_part(self) -> str:
         """The ``<live-health>`` text, or "" where this seat gets none."""
@@ -123,13 +127,23 @@ class LiveHealthMixin:
         orch = getattr(self, "orchestrator", None)
         cfg = getattr(getattr(orch, "container", None), "config", None)
         status_tool = has_status_tool(getattr(self, "controller", None))
+        # 102 C-1: every step rebuilt the whole snapshot (16-51 ms of SQL, 204 ms at
+        # the row limit). Fresh text on a session's first step, then at most every 30 s.
+        now = time.monotonic()
+        cached = getattr(self, "_live_health_cache", None)
+        state = getattr(self, "state", None)
+        if cached is not None and now - cached[0] < LIVE_HEALTH_TTL_S \
+                and getattr(state, "n_steps", 0) != 1:
+            return cached[1]
         try:
-            return await asyncio.to_thread(
+            text = await asyncio.to_thread(
                 build_live_health_text, getattr(self, "user_id", None),
                 data_dir=getattr(cfg, "data_dir", None),
                 task_agent=getattr(orch, "task_agent", None),
                 session_id=getattr(self, "session_id", None), status_tool=status_tool,
                 with_operations=_operations_injected(self))
+            self._live_health_cache = (now, text)
+            return text
         except Exception as e:
             hint = "call agent_status or say" if status_tool else "say"
             return (f"Live health: unavailable ({type(e).__name__}: {str(e)[:120]}) — "

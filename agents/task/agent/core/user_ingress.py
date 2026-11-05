@@ -111,6 +111,10 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
         # The owner is speaking again: the ONE clear point.
         from core.security.taints import clear_on_owner_turn
         clear_on_owner_turn(orchestrator)
+        for agent in (getattr(orchestrator, "agents", None) or {}).values():
+            manager = getattr(agent, "message_manager", None)
+            if manager is not None:
+                manager._untrusted_since_owner = False
 
     # P1 finalization: a genuine (non-forged) batch means the owner is driving
     # again — clear the self-wake re-entry budget for this session. Previously the

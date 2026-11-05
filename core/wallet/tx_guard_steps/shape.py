@@ -378,3 +378,19 @@ def step_4_rpc_trust(c: GuardContext) -> Optional[Decision]:
         except Exception as exc:
             return Decision(False, f"refused: liquidity pin/ownership verification failed ({exc})")
     return None
+
+
+def step_4b_nonce_under_reservation(c: GuardContext) -> Optional[Decision]:
+    """4b. Take the nonce under the reservation, before the simulation reads it.
+
+    A verb builds before it holds ``gate.reserve()``: two sends that wait in line read
+    the same nonce, and the second one died at the node with "nonce too low" (a real
+    payment failed this way). Only a rail-built transaction can do this, in place,
+    because the caller signs this same dict; a deployment's predicted address and the
+    signer attestation both come after this step, so they see the final nonce. The
+    replay key stays the one built, so a duplicated call in one turn is still a replay.
+    """
+    refresh = getattr(c.outer_tx, "refresh_nonce", None)
+    if refresh is not None:
+        refresh()
+    return None

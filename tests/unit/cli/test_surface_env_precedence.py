@@ -79,6 +79,8 @@ def test_gateway_file_value_beats_correspondent_default(monkeypatch):
 
     _fake_preflight_setting(monkeypatch, "CORRESPONDENT_ACCESS_ENABLED", "false")
     _fail_container_build(monkeypatch)
+    # With no surface at all the gateway stops before the container, which this test fails.
+    monkeypatch.setattr("cli.commands.gateway._enabled_specs", lambda skip=frozenset(): [object()])
 
     with pytest.raises(SystemExit):
         asyncio.run(_run_gateway(8080, None, False))

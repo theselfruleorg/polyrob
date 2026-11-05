@@ -119,15 +119,16 @@ class BaseAgent(BaseComponent):
         if not self.container:
             return None
             
-        # Get preferred client name from config
+        # The config's choice, else the primary the LLMManager already chose from the
+        # keys and the operator's pin. A fixed provider name here was missing on every
+        # box without that provider's key.
         preferred_client = self.config.get(self.name, {}).get('llm_client')
         if not preferred_client:
-            # Default preference - use GPT-4.1 for task agent
-            if self.name == 'task_agent':
-                preferred_client = 'openai_client'
-            else:
-                preferred_client = 'anthropic_client'
-        
+            preferred_client = getattr(self.container.get_service('llm'),
+                                       'primary_client_name', None)
+        if not preferred_client:
+            return None
+
         # Try to get the preferred client
         client = self.container.get_service(preferred_client)
         if client:

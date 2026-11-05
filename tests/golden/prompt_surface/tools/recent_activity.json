@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Recall YOUR OWN recent activity — the goals, cron jobs, and chats you ran, newest-first, with outcome and spend. USE THIS (not the filesystem, not notes) for 'what did I do', 'what ran since X', 'what have I been up to'. Optional `since` ('8h'/'2d'/ISO), `kind` ('goal'/'cron'/'chat'), `limit` (1-20).",
+    "description": "Recall YOUR OWN recent activity — the goals, cron jobs, and chats you ran, newest-first, with outcome and spend. USE THIS (not the filesystem, not notes) for 'what did I do', 'what ran since X', 'what have I been up to'. Optional `since` ('8h'/'2d'/ISO), `kind` ('goal'/'cron'/'chat'), `limit` (1-20). `scope='actions'`: every card, payment, post and send of the last 48 h, exact counts.",
     "name": "recent_activity",
     "parameters": {
       "additionalProperties": false,
@@ -13,6 +13,11 @@
         "limit": {
           "default": 20,
           "type": "integer"
+        },
+        "scope": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
         },
         "since": {
           "default": null,

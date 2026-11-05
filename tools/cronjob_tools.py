@@ -587,6 +587,7 @@ class CronJobTool(BaseTool):
             f"schedule: {job.schedule_spec}",
             f"next run: {job.next_run_at.isoformat() if job.next_run_at else '-'}",
             f"last run: {last_outcome(job)}",
+            f"last report: {(p.get('last_outcome') or {}).get('report') or '(none stored)'}",
             f"max duration: {job.max_duration_seconds}s",
             f"rig: {p.get('rig') or '(default)'}",
             _tools_line(p),

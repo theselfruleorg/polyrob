@@ -256,7 +256,7 @@
     {
       "name": "/mode",
       "group": "control",
-      "help": "The effective autonomy posture and how to change it",
+      "help": "What I may do without you, what I do when you are away, and how to change it",
       "aliases": []
     },
     {

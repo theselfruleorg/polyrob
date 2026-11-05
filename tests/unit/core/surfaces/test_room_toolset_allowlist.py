@@ -78,3 +78,54 @@ def test_money_tools_are_forbidden_by_capability_not_by_name():
     forbidden = _forbidden_tool_ids()
     for tool_id in ids_with("money"):
         assert tool_id in forbidden, f"{tool_id} is a money tool and must never be a room tool"
+
+
+# --- 101 Phase 2: what the owner granted one room ---------------------------
+from types import SimpleNamespace  # noqa: E402
+
+from core.surfaces.group_admin import _grant_refusal as validate_grant  # noqa: E402
+from core.surfaces.room_grants import (ADMIN_BUNDLES, live_admin_bundles,  # noqa: E402
+                                       member_grantable)
+
+
+def _policy(**kw):
+    return SimpleNamespace(room_tools=kw.get("room_tools", ()),
+                           admin_tools=kw.get("admin_tools", ()))
+
+
+def test_a_grant_adds_to_the_room_toolset(monkeypatch):
+    monkeypatch.setenv("GROUP_TURN_TOOLS", "task")
+    assert room_tool_ids(policy=_policy(room_tools=("web_fetch",))) == ["task", "web_fetch"]
+
+
+def test_a_hand_edited_policy_never_widens():
+    for tool in ("filesystem", "browser", "http_request", "defi_trade", "shell", "mcp", "nope"):
+        assert tool not in room_tool_ids(policy=_policy(room_tools=(tool,)))
+    assert live_admin_bundles(_policy(admin_tools=("moderation", "root", "exec"))) == ("moderation",)
+
+
+def test_a_lockdown_still_gives_no_base_tools(monkeypatch):
+    monkeypatch.setenv("GROUP_TURN_TOOLS", "")
+    assert room_tool_ids() == []
+    assert room_tool_ids(policy=_policy()) == []
+
+
+def test_a_row_alone_cannot_make_a_dangerous_tool_member_wide(monkeypatch):
+    """R11: a pack writes its own row, so the capability check runs at read."""
+    import core.tool_capabilities as tc
+    for caps in (("money",), ("exec",), ("high_impact",), ("writes_network",),
+                 ("shared_identity",), ("delegate_blocked",)):
+        monkeypatch.setitem(tc.TOOL_CAPABILITIES, "evil_tool",
+                            tc.ToolRow(set(caps), room_grantable=True))
+        assert "evil_tool" not in member_grantable(), caps
+    monkeypatch.setitem(tc.TOOL_CAPABILITIES, "good_tool", tc.ToolRow(room_grantable=True))
+    assert "good_tool" in member_grantable()
+
+
+def test_a_write_names_the_closed_set():
+    assert "filesystem" in validate_grant("chat.room_tools", "web_fetch,filesystem")
+    assert validate_grant("chat.room_tools", "web_fetch") is None
+    assert "root" in validate_grant("chat.admin_tools", "moderation,root")
+    assert validate_grant("chat.admin_tools", "moderation,files") is None
+    assert validate_grant("chat.mode", "active") is None
+    assert set(ADMIN_BUNDLES) == {"moderation", "files", "http", "browser"}

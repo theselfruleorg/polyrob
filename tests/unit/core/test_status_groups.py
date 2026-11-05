@@ -40,7 +40,8 @@ def test_an_allowed_room_is_reported_with_its_name_and_mode(tmp_path, monkeypatc
     assert label.startswith('label: "The Lobby" (set 20')
     assert rooms == [
         {"surface": "telegram", "chat_id": "-1", "name": "The Lobby",
-         "mode": "active", "replies_today": 0, "ledger_rows": 0, "last_write": None,
+         "mode": "active", "admins": [], "admin_bundles": [], "settings_unreadable": False, "room_tools": [],
+         "admin_turns_today": 0, "replies_today": 0, "ledger_rows": 0, "last_write": None,
          "note": "surfaces.db absent"},
     ]
     assert any("The Lobby" in ln and "mode=active" in ln
