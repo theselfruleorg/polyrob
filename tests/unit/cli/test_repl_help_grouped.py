@@ -235,14 +235,14 @@ def test_verb_help_no_line_over_80_at_columns_80(_columns_80):
         assert not long_lines, f"/{name}: line(s) over 80 cols: {long_lines}"
 
 
-def test_width_floors_at_60(monkeypatch):
-    """A tiny/piped terminal never collapses the wrap below the 60-col floor."""
+def test_width_floors_at_56(monkeypatch):
+    """A tiny/piped terminal never collapses the wrap below the floor."""
     import os
 
     from cli.ui.commands.h_help import _width
 
     monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((10, 24)))
-    assert _width() == 60
+    assert _width() == 56
 
 
 def test_help_kwargs_empty_for_unauthored_verb():

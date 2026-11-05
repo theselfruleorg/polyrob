@@ -210,3 +210,14 @@ def test_explicit_model_without_provider_is_preserved(monkeypatch):
     )
     assert provider == "openai"
     assert model == "custom-model"
+
+
+def test_a_mistyped_openrouter_slug_warns_and_an_outage_does_not(monkeypatch):
+    """104: a typo with a provider connected used to fail only at the first message."""
+    from cli.config_store import check_provider_model
+    monkeypatch.setattr("modules.llm.openrouter_catalog.lookup", lambda m: (None, True))
+    monkeypatch.setattr("modules.llm.openrouter_catalog.nearest", lambda m: ["vendor/model-1"])
+    known, warning = check_provider_model("openrouter", "vendor/modle-1")
+    assert known and "not on OpenRouter" in warning and "vendor/model-1" in warning
+    monkeypatch.setattr("modules.llm.openrouter_catalog.lookup", lambda m: (None, False))
+    assert check_provider_model("openrouter", "vendor/modle-1") == (True, "")

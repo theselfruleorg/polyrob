@@ -14,8 +14,16 @@ from core.exceptions import MCPError, MCPConnectionError, MCPProtocolError, MCPT
 from core.security.pinned_resolver import PinnedResolver, is_ip_literal, url_host_key
 from core.logging import get_component_logger
 from .transport_state import CLOSED, OPEN, PEER_LOST, fail_future, fail_pending, mark
+from .http_reply import READ_BUFSIZE, read_error_text
+from .stdio_group import stop_group, track
+from .stdio_reader import LineReader, StderrDrain
 
 _protocol_logger = get_component_logger("MCPTransportSecurity")
+
+#: How long a stdio server gets to fail at once, and how long a failed start waits for
+#: its stderr: a grandchild can hold the pipe open past the leader's exit.
+_START_CHECK_S = 0.1
+_START_STDERR_WAIT_S = 1.0
 
 
 def _client_version() -> str:
@@ -381,6 +389,8 @@ class MCPStdioTransport(MCPTransport):
         self._read_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._health_task: Optional[asyncio.Task] = None
+        self._stdout_reader: Optional[LineReader] = None
+        self._stderr_drain: Optional[StderrDrain] = None
 
     async def _monitor_process_health(self) -> None:
         """Monitor subprocess health."""
@@ -393,14 +403,9 @@ class MCPStdioTransport(MCPTransport):
                         self.logger.error(
                             f"❌ MCP subprocess exited with code {returncode}!"
                         )
-                        # Try to read stderr for error info
-                        if self.process.stderr:
-                            try:
-                                stderr = self.process.stderr.read()
-                                if stderr:
-                                    self.logger.error(f"Subprocess stderr: {stderr}")
-                            except Exception:
-                                pass
+                        stderr = self._stderr_drain.tail() if self._stderr_drain else ""
+                        if stderr:
+                            self.logger.error(f"Subprocess stderr: {stderr}")
                         mark(self, PEER_LOST)
                         break
 
@@ -410,19 +415,6 @@ class MCPStdioTransport(MCPTransport):
                 self.logger.error(f"Error in health monitor: {e}")
                 await asyncio.sleep(5)
 
-    async def _read_stderr(self) -> None:
-        """Read stderr for debugging."""
-        try:
-            if self.process and self.process.stderr:
-                while self.process.poll() is None:
-                    line = await asyncio.to_thread(self.process.stderr.readline)
-                    if line:
-                        self.logger.debug(f"MCP stderr: {line.strip()}")
-                    else:
-                        await asyncio.sleep(0.1)
-        except Exception as e:
-            self.logger.debug(f"Stderr reader ended: {e}")
-    
     async def connect(self) -> None:
         """Start the subprocess and establish connection."""
         try:
@@ -452,28 +444,30 @@ class MCPStdioTransport(MCPTransport):
                 stderr=subprocess.PIPE,
                 text=True,
                 env=full_env,
-                bufsize=0  # Unbuffered for better real-time communication
+                bufsize=0,  # Unbuffered for better real-time communication
+                start_new_session=True,  # one group: close() reaches npx's node child
             )
-            
+            track(self.process)
+            if self.process.stderr:
+                self._stderr_drain = StderrDrain(self.process.stderr, logger=self.logger)
+
             # Wait a bit for process to start
-            await asyncio.sleep(0.1)
-            
+            await asyncio.sleep(_START_CHECK_S)
+
             # Check if process started successfully
             if self.process.poll() is not None:
                 stderr_output = ""
-                if self.process.stderr:
-                    stderr_output = self.process.stderr.read()
+                if self._stderr_drain:
+                    await asyncio.to_thread(self._stderr_drain.join, _START_STDERR_WAIT_S)
+                    stderr_output = self._stderr_drain.tail()
+                await stop_group(self.process)  # a grandchild can outlive the leader
                 raise MCPConnectionError(f"Process failed to start: {stderr_output}")
-            
+
             self.logger.info(f"Started MCP STDIO process with PID {self.process.pid}")
 
             # Start health monitor
             self._health_task = asyncio.create_task(self._monitor_process_health())
 
-            # Start stderr reader task for debugging
-            if self.process.stderr:
-                self._stderr_task = asyncio.create_task(self._read_stderr())  # retained
-            
         except Exception as e:
             raise MCPConnectionError(f"Failed to start STDIO transport: {e}")
     
@@ -533,12 +527,13 @@ class MCPStdioTransport(MCPTransport):
         
         async with self._read_lock:
             try:
-                # Read line from stdout with timeout
-                line = await asyncio.wait_for(
-                    asyncio.to_thread(self.process.stdout.readline),
-                    timeout=receive_timeout
-                )
-                
+                reader = self._stdout_reader
+                if reader is None or reader.stream is not self.process.stdout:
+                    reader = self._stdout_reader = LineReader(
+                        self.process.stdout, asyncio.get_running_loop(),
+                        name=str(getattr(self.process, "pid", "?")))
+                line = await reader.get(receive_timeout)
+
                 if not line:  # EOF: the peer is gone (098 TS-02), not "no message"
                     mark(self, PEER_LOST)
                     raise MCPConnectionError("peer closed (stdio EOF)")
@@ -583,31 +578,24 @@ class MCPStdioTransport(MCPTransport):
                 raise MCPProtocolError(f"Failed to receive message: {e}")
     
     async def close(self) -> None:
-        """Close the STDIO transport."""
+        """Close the STDIO transport: the server's whole process group ends here."""
         await super().close()
-        
+        if self._health_task is not None:
+            self._health_task.cancel()
+
         if self.process:
             try:
-                # Terminate process gracefully
-                self.process.terminate()
-                
-                # Wait for process to end
-                try:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(self.process.wait),
-                        timeout=5.0
-                    )
-                except asyncio.TimeoutError:
-                    # Force kill if it doesn't terminate
-                    self.process.kill()
-                    await asyncio.to_thread(self.process.wait)
-                
-                self.logger.info(f"Closed MCP STDIO process PID {self.process.pid}")
-                
+                pid = self.process.pid
+                await stop_group(self.process)
+                self.logger.info(f"Closed MCP STDIO process PID {pid}")
             except Exception as e:
                 self.logger.error(f"Error closing STDIO transport: {e}")
             finally:
                 self.process = None
+                if self._stdout_reader is not None:
+                    self._stdout_reader.stop()
+                    self._stdout_reader = None
+                self._stderr_drain = None
 
 
 class MCPSSETransport(MCPTransport):
@@ -672,7 +660,8 @@ class MCPSSETransport(MCPTransport):
             self.session = aiohttp.ClientSession(
                 headers=self.headers,
                 timeout=timeout,
-                connector=connector
+                connector=connector,
+                read_bufsize=READ_BUFSIZE,
             )
 
             # FIX: Connect to SSE endpoint with proper headers and sessionId query parameter
@@ -698,7 +687,7 @@ class MCPSSETransport(MCPTransport):
             )
             
             if self._response.status != 200:
-                body = await self._response.text()
+                body = await read_error_text(self._response)
                 self.logger.error(
                     f"SSE connection failed - Status: {self._response.status}, "
                     f"Body: {body[:500]}"
@@ -839,13 +828,13 @@ class MCPSSETransport(MCPTransport):
                     allow_redirects=False
                 ) as response:
                     if response.status == 401:
-                        response_text = await response.text()
+                        response_text = await read_error_text(response)
                         self.logger.debug(f"MCP send 401 body: {response_text[:200]}")
                         raise _MCPUnauthorized(MCPProtocolError(
                             "Failed to send message, status: 401"
                         ))
                     if response.status not in (200, 202, 204):
-                        response_text = await response.text()
+                        response_text = await read_error_text(response)
                         self.logger.error(
                             f"Failed to send message - Status: {response.status}, "
                             f"Body: {response_text[:200]}"
@@ -938,7 +927,8 @@ class MCPHTTPTransport(MCPTransport):
             timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
             # SECURITY (SSRF/DNS rebinding): validate + pin resolved IP at connect time.
             connector = _validate_and_pin_connector(self.url, allow_http=self.allow_http, ssl=True, limit=10, validate_ssrf=self.validate_ssrf)
-            self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+            self.session = aiohttp.ClientSession(timeout=timeout, connector=connector,
+                                                 read_bufsize=READ_BUFSIZE)
             self.logger.info(f"✅ {self.__class__.__name__} ready: {self.url}")
         except Exception as e:
             await self.close()
@@ -963,9 +953,9 @@ class MCPHTTPTransport(MCPTransport):
                 self._session_id = response.headers.get('mcp-session-id', self._session_id)
                 if response.status == 401:
                     raise _MCPUnauthorized(MCPProtocolError(
-                        http_failure_text(401, await response.text())))
+                        http_failure_text(401, await read_error_text(response))))
                 if response.status not in (200, 202, 204):
-                    failure = http_failure_text(response.status, await response.text())
+                    failure = http_failure_text(response.status, await read_error_text(response))
                     if is_notification(message):
                         # A refused notification (e.g. `initialized`) does not end the session.
                         self.logger.warning(f"MCP notification {label} refused: {failure}")

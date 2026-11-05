@@ -7,6 +7,8 @@
   reads: the confirmed playbook pinned, the confirmed tools granted
   (``actor=owner_seat`` — the owner confirmed them on the live card), the order id
   as the run's mandate, and the buyer's text fenced as DATA.
+* The goal canceller stops the goal an order took back (a retry, a passed deadline):
+  a board cancel, so its run stops at once here and at its next heartbeat elsewhere.
 
 Called by ``start_autonomy`` when goals run; the order service retries a paid
 order on every settlement tick until a fulfiller exists.
@@ -39,11 +41,19 @@ def make_fulfiller(data_dir: Optional[str] = None, *, board=None):
     return _fulfil
 
 
+def make_goal_canceller(data_dir: Optional[str] = None, *, board=None):
+    def _cancel(goal_id: str) -> bool:
+        b = board if board is not None else _board(data_dir)
+        return b.cancel(goal_id)
+    return _cancel
+
+
 def wire(task_agent: Any = None, data_dir: Optional[str] = None) -> None:
-    from core.commerce.hooks import register_fulfiller
+    from core.commerce.hooks import register_fulfiller, register_goal_canceller
     from core.money import offer_gate
     offer_gate.register()
     register_fulfiller(make_fulfiller(data_dir))
+    register_goal_canceller(make_goal_canceller(data_dir))
     try:
         from tools.commerce.market_adapter import register as register_markets
         kinds = register_markets(getattr(task_agent, "container", None), data_dir)
@@ -53,4 +63,4 @@ def wire(task_agent: Any = None, data_dir: Optional[str] = None) -> None:
     logger.info("commerce: offer gate and fulfiller wired; markets: %s", kinds or "none")
 
 
-__all__ = ["make_fulfiller", "wire"]
+__all__ = ["make_fulfiller", "make_goal_canceller", "wire"]

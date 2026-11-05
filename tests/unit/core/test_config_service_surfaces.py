@@ -13,7 +13,7 @@ def test_console_surface_refuses_credential_flags():
                 "LLM_CREDENTIAL_BORROW", "MEMORY_SCOPES_ENABLED"):
         res = config_service.set_value(key, "x", surface="console")
         assert res.ok is False, key
-        assert "local CLI" in res.message, key
+        assert "polyrob config set" in res.message, key
 
 
 def test_local_surface_still_writes_credential_flags(monkeypatch):

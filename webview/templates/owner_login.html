@@ -1,5 +1,6 @@
 {% extends "layout.html" %}
 {% block title %}{{ t('login.title') }}{% endblock %}
+{% block nav %}{% endblock %}
 {% block content %}
 <div class="login-page" style="max-width: 40ch; margin: 4rem auto;">
   <h1>{{ t('login.heading') }}</h1>
@@ -11,5 +12,6 @@
     <label>{{ t('login.password') }} <input type="password" name="password" autocomplete="current-password" required></label>
     <button type="submit">{{ t('login.submit') }}</button>
   </form>
+  <p style="margin-top: 1rem;">{{ t('login.hint') }}</p>
 </div>
 {% endblock %}

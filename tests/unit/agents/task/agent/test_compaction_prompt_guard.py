@@ -62,8 +62,14 @@ paths, tool outcomes, and decisions verbatim where short.
 ## Pending User Asks
 ## Relevant Files & Data
 ## Remaining Work
+## End of summary
 
-Target length: ~{budget_words} words. Focus on WHAT was accomplished, not HOW.
+Target length: ~{budget_words} words, and never more than 1500 words. One short
+line per item. Focus on WHAT was accomplished, not HOW. Write Completed Actions NEWEST FIRST.
+When you are over the size, remove the OLDEST finished items first; a stale detail can be
+re-read from its file, an answer cut at the output limit loses everything after the cut.
+
+The LAST line of your answer must be exactly: ## End of summary
 
 TEMPORAL ANCHORING: record finished work as DONE (past tense, with its outcome) under
 Completed Actions. Do NOT list an already-completed action under In Progress or
@@ -207,8 +213,8 @@ def test_guard_off_prior_summary_keeps_legacy_bytes(monkeypatch):
     assert "<prior_summary_data>" not in prompt
     assert "DATA to merge" not in prompt
     legacy_block = (
-        "## PRIOR SUMMARY (update this — PRESERVE all existing information, "
-        "merge in new facts, drop nothing):\n"
+        "## PRIOR SUMMARY (update this: merge in new facts and keep the size "
+        "limit):\n"
         f"{prior}\n\n"
     )
     assert legacy_block in prompt

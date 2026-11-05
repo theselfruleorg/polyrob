@@ -67,6 +67,8 @@ def _parse(s: Optional[str]) -> Optional[datetime]:
 #: marks the treasury rails (e.g. exit / safety / watcher / scout / a recurring swap); a due
 #: money job pre-empts a running board goal (GOAL_YIELD_FOR_MONEY_RAIL).
 CRON_PRIORITY_MONEY = "money"
+#: 103: the head of the run's own report, so a reader takes the real cause from it.
+LAST_REPORT_MAX_CHARS = 300
 
 
 def default_max_duration_sec() -> int:
@@ -371,7 +373,8 @@ class CronJobStore:
             logger.debug("cron side rows not dropped for %s", job_id, exc_info=True)
 
     def record_outcome(self, job_id: str, outcome: str, at: datetime,
-                       reason: Optional[str] = None) -> None:
+                       reason: Optional[str] = None,
+                       report: Optional[str] = None) -> None:
         """Store the last run's outcome on the row (``payload.last_outcome``):
         recurring jobs go back to 'scheduled' after every run, so the status
         alone never says how the last run ended. *reason* (why a run did not
@@ -380,6 +383,9 @@ class CronJobStore:
         rec = {"outcome": str(outcome), "at": _iso(at)}
         if reason:
             rec["reason"] = str(reason)[:200]
+        if report:
+            from core.secret_scrub import scrub_secret_shapes
+            rec["report"] = scrub_secret_shapes(str(report))[:LAST_REPORT_MAX_CHARS]
         execute_retry(
             self.db_path,
             "UPDATE cron_jobs SET payload=json_set(payload, '$.last_outcome', json(?)) WHERE id=?",

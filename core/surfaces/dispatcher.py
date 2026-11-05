@@ -199,6 +199,8 @@ class RouteKind(str, Enum):
                                                # <group-context> block + an attributed
                                                # <addressed> line (member = data,
                                                # owner/admin = steer)
+    ROOM_ADMIN_TURN = "room_admin_turn"        # 101: `/admin <task>` runs the room+admin
+                                               # PUBLIC session with the granted bundles
 
 
 @dataclass
@@ -364,6 +366,15 @@ def _is_groups_verb(text: str) -> bool:
     return first == "/groups"
 
 
+def _is_admin_control(text: str) -> bool:
+    """101 R14: `/admin stop` and `/admin new` are the control plane of a running
+    `/admin` turn, so the cooldown must not refuse them. A bare `/admin` is its usage
+    line: no paid turn, so it neither starts the cooldown nor waits for it."""
+    words = (text or "").split()
+    return _command_token(text) == "/admin" and (
+        len(words) == 1 or (len(words) == 2 and words[1].lower() in ("stop", "new")))
+
+
 def _owner_principal_of(user_id: Any) -> bool:
     """The bound owner principal, room rules (no pairing, no local bypass).
     Fail-CLOSED: an unreadable owner check is not the owner."""
@@ -489,6 +500,8 @@ async def _route_inbound_impl(
     #: the owner's control plane must keep working in a capped room).
     _room_reply_capped = False
     _cap_why = ""
+    #: 101: an admin's `/admin` inside the cooldown: answered, never dropped in silence.
+    _admin_wait = False
     if _group_enabled:
         # 044 C2: the room rail is BUILT on the Singular Chat bus — the
         # chat<->session registry (which session a room resolves to), the room
@@ -537,14 +550,16 @@ async def _route_inbound_impl(
             _role = getattr(inbound.identity, "chat_role", None)
             _control = bool(_slash) and (
                 tier == AccessTier.OWNER or _role == "owner"
-                or (_role == "admin" and _command_token(text)
-                    in _GROUP_ADMIN_COMMANDS))
+                or (_role == "admin" and (_command_token(text) in _GROUP_ADMIN_COMMANDS
+                                          or _is_admin_control(text))))
             if caps is not None:
                 if _is_bot and not mentioned:
                     return RouteDecision(RouteKind.DENIED, session_key, silent=True,
                                          reason="bot_loop_guard", tier=tier.value)
                 ok, why = caps.may_trigger(_surf, _chat, _sender, is_bot=_is_bot)
-                if not ok and not _control:
+                _admin_wait = bool(not ok and not _control and _slash and not _is_bot
+                                   and _role == "admin" and _command_token(text) == "/admin")
+                if not ok and not _control and not _admin_wait:
                     logger.info("route_inbound: room trigger refused (%s) %s:%s",
                                why, _surf, _chat)
                     return RouteDecision(RouteKind.DENIED, session_key, silent=True,
@@ -599,6 +614,33 @@ async def _route_inbound_impl(
                                        granted_command=_granted_command):
                 return RouteDecision(RouteKind.DENIED, session_key, silent=True,
                                      reason="no_mention", tier=tier.value)
+            # 101: `/admin <task>` — a SEPARATE session keyed to this room and this
+            # speaker, so a member's line can never enter its history or merge into
+            # its run. ⚠️ Telegram only (U7), never a bot (R7). A plain member's
+            # `/admin` has no route: the mode gate above refused it, or in an
+            # `active` room it is ordinary chatter into the shared session.
+            if (_slash and not _is_bot and role in ("owner", "admin")
+                    and _command_token(text) == "/admin"):
+                from core.surfaces.room_grants import ADMIN_SURFACES
+                if _surf not in ADMIN_SURFACES:
+                    # One room line and no turn: this text is not a task for the model.
+                    return RouteDecision(RouteKind.COMMAND, session_key, command="/admin",
+                                         tier=tier.value)
+                from core.surfaces.session_chat_registry import admin_session_key
+                key = admin_session_key(session_key, _sender)
+                if _admin_wait or (_room_reply_capped and not _control):
+                    return RouteDecision(RouteKind.ROOM_ADMIN_TURN, key, tier=tier.value,
+                                         reason="wait" if _admin_wait else "room_cap")
+                registry = container.get_service("session_chat_registry")
+                admin_row = registry.resolve(key) if registry is not None else None
+                # A control verb reads a stale row too: an old run is still a run.
+                admin_sid = (admin_row.get("session_id") if admin_row
+                             and (_is_admin_control(text)
+                                  or not _room_session_is_stale(admin_row, key)) else None)
+                if caps is not None and not _is_admin_control(text):
+                    caps.record_trigger(_surf, _chat, _sender, is_bot=False)
+                return RouteDecision(RouteKind.ROOM_ADMIN_TURN, key, session_id=admin_sid,
+                                     tier=tier.value)
             if tier == AccessTier.GROUP_MEMBER:
                 row = None
                 try:

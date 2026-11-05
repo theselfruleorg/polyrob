@@ -23,6 +23,8 @@ Flags:
                     bridge so a just-collected key isn't prompted for again.
 """
 from __future__ import annotations
+import shutil
+import textwrap
 from pathlib import Path
 
 import click
@@ -32,6 +34,81 @@ import core.paths as _core_paths
 from cli.config_store import migrate_to_dotenv
 
 
+def _say(text: str, indent: str = "") -> None:
+    """Echo wrapped to the terminal: an unwrapped line breaks inside a word."""
+    width = max(40, min(shutil.get_terminal_size((80, 24)).columns, 100))
+    click.echo(textwrap.fill(text, width=width, initial_indent=indent,
+                             subsequent_indent=indent + "  ",
+                             break_long_words=False, break_on_hyphens=False))
+
+
+def _env_with_home_file() -> dict:
+    """The process env plus the home .env, read and not loaded: a re-run must see the key
+    that the last run saved, and this question must not change the process."""
+    import os as _os
+
+    merged = dict(_os.environ)
+    try:
+        for line in (_core_paths.polyrob_home() / ".env").read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not key.lstrip().startswith("#"):
+                merged.setdefault(key.strip(), value.strip())
+    except OSError:
+        pass
+    return merged
+
+
+def _save_key_now(env_key: str, value: str) -> None:
+    """A pasted key survives a Ctrl-C at any later question. Fail-open: the closing
+    write reports a failure to save."""
+    try:
+        _write_env(_core_paths.polyrob_home() / ".env", {env_key: value})
+    except (OSError, ValueError):
+        pass
+
+
+def _check_key(profile, entered: str) -> bool:
+    """Report on a pasted key. False only when the provider REJECTED it.
+
+    The old check looked at the shape of the key and said "present", so a dead key
+    passed setup and failed on the first message.
+    """
+    import os as _os
+
+    from cli.commands.auth import _stdin_isatty
+    from modules.llm.profiles import credential_status
+    env = dict(_os.environ)
+    env[profile.env_key] = entered
+    try:
+        status = credential_status(env).get(profile.name)
+    except Exception:
+        status = None
+    interactive = _stdin_isatty()
+    if status is not None and not status.usable:
+        _say(f"{profile.name}: present but unusable — {status.reason}", "  ")
+        return not interactive  # a script has no one to answer "keep it anyway?"
+    if not interactive:
+        # No one to answer, and a script may have no network.
+        if status is not None:
+            click.echo(f"  {profile.name}: present")
+        return True
+    click.echo(f"  Checking the key with {profile.display_name} ...")
+    try:
+        from cli.commands.auth import _probe_key
+        from modules.llm.provider_spec import get_spec
+        verdict, _detail = _probe_key(get_spec(profile.name), entered)
+    except Exception:
+        verdict = None
+    if verdict is False:
+        click.echo(click.style(f"  {profile.display_name} rejected this key.", fg="red"))
+        return False
+    if verdict:
+        click.echo(click.style("  The key works.", fg="green"))
+    else:
+        click.echo("  I could not check the key now. It is saved; the first message will test it.")
+    return True
+
+
 def _prompt_provider_keys(collected_keys: dict) -> None:
     """One provider choice + one validated key prompt, looping on "connect
     another" (027 WP4 — the old flow prompted for SIX keys in a row with zero
@@ -39,7 +116,7 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
     ``run_quick_key_setup`` so there is ONE prompt implementation."""
     import os as _os
 
-    from modules.llm.profiles import all_profiles, credential_status
+    from modules.llm.profiles import all_profiles, usable_providers_with_credentials
 
     onboardable = []
     deferred = []
@@ -57,37 +134,36 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
     by_name = {p.name: p for p in onboardable}
     names = ", ".join(p.name for p in onboardable)
 
-    click.echo(f"Providers: {names}")
+    _say(f"Providers: {names}")
+    connected = sorted(usable_providers_with_credentials(_env_with_home_file()) or [])
+    if connected:
+        _say(f"Already connected: {', '.join(connected)}. Press Enter to keep it.")
     while True:
         choice = click.prompt(
-            "Provider to connect ('skip' for none)", default="openrouter"
+            "Provider to connect ('skip' for none)",
+            default="skip" if connected else "openrouter",
         ).strip().lower()
         if choice in ("skip", "none", "no", "-", ""):
             break
         profile = by_name.get(choice)
         if profile is None:
-            click.echo(
-                f"  unknown provider '{choice}' — one of: {names} "
-                "(the full list: `polyrob auth add <name>`)")
+            _say(f"unknown provider '{choice}' — one of: {names} "
+                 "(the full list: `polyrob model list`)", "  ")
             continue
         hint = f" ({profile.signup_url})" if profile.signup_url else ""
         entered = click.prompt(
             f"{profile.display_name} API key{hint} (blank to skip)",
             default="", show_default=False, hide_input=True)
         if entered:
+            # Say NOW when a key cannot work, not at the first message.
+            if not _check_key(profile, entered):
+                if click.confirm("Keep this key anyway?", default=False):
+                    collected_keys[profile.env_key] = entered
+                    _save_key_now(profile.env_key, entered)
+                continue
             collected_keys[profile.env_key] = entered
-            # auth-add-style feedback: say NOW when a paste is malformed, not
-            # at the first real run.
-            try:
-                env = dict(_os.environ)
-                env[profile.env_key] = entered
-                st = credential_status(env).get(profile.name)
-                if st is not None and not st.usable:
-                    click.echo(f"  doctor: {profile.name}: present but unusable — {st.reason}")
-                elif st is not None:
-                    click.echo(f"  doctor: {profile.name}: present")
-            except Exception:
-                pass
+            _save_key_now(profile.env_key, entered)
+            connected = connected or [profile.name]
         if not click.confirm("Connect another provider?", default=False):
             break
 
@@ -96,15 +172,10 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
         # of provider names in the middle of a first-run wizard.
         subs = [p for p in deferred if p.subscription][:3]
         sample = ", ".join(p.display_name for p in (subs or deferred[:3]))
-        click.echo(
-            f"\n{len(deferred)} more providers are available (subscription plans "
-            f"like {sample}, gateways, regional endpoints)."
-        )
-        click.echo(
-            "  `polyrob model list` to see them; `polyrob auth add <provider>` to "
-            "connect one (subscription key plans included — it shows the signup "
-            "URL and prompts for the key, out of your shell history)."
-        )
+        click.echo("")
+        _say(f"{len(deferred)} more providers are available (subscription plans "
+             f"like {sample}, gateways, regional endpoints). `polyrob model list` "
+             "names them, and `polyrob auth add <provider>` connects one.")
 
 
 def run_quick_key_setup() -> bool:
@@ -218,7 +289,38 @@ def _character_home(profile_name, home_env):
     return Path(home_env).parent / "characters"
 
 
-@click.command("init")
+class _WizardCommand(click.Command):
+    """Ctrl-C is a choice, not an error: say what is kept and how to go on."""
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except click.Abort:
+            if ctx.params.get("skip_keys"):
+                raise  # the inline key wizard reports its own cancellation
+            click.echo("\nSetup stopped. Any key you entered is saved. "
+                       "Run `polyrob setup` to finish.")
+            ctx.exit(130)
+
+
+def _section(number: int, title: str, quick: bool) -> None:
+    total = 2 if quick else 7
+    click.echo(f"\n=== Section {number}/{total}: {title} ===")
+
+
+def _recommended_model() -> str:
+    """The default model of the provider that would run now, or ""."""
+    try:
+        from modules.llm.profiles import usable_providers_with_credentials
+        from modules.llm.provider_spec import get_spec
+        for name in usable_providers_with_credentials(_env_with_home_file()) or []:
+            return get_spec(name).default_model or ""
+    except Exception:
+        pass
+    return ""
+
+
+@click.command("init", cls=_WizardCommand)
 @click.option("--anthropic-key", default=None, help="Anthropic API key")
 @click.option("--openai-key", default=None, help="OpenAI API key")
 @click.option("--default-model", default=None, help="Default model for `polyrob run`")
@@ -267,7 +369,7 @@ def init_cmd(
     character_from,
     skip_keys,
 ):
-    """Initialize POLYROB for this project (file-first: ~/.polyrob + ./.polyrob)."""
+    """Set up POLYROB: your provider key, your model and optional settings."""
     # --non-interactive is a true alias of --no-prompt.
     no_prompt = no_prompt or non_interactive
 
@@ -293,7 +395,7 @@ def init_cmd(
     if openai_key:
         collected_keys["OPENAI_API_KEY"] = openai_key
 
-    # Populated by Section 6/7 (Autonomy & guardrails), below; skipped entirely
+    # Populated by section 6 (Autonomy & guardrails), below; skipped entirely
     # (stays empty) under --quick / --no-prompt / --non-interactive.
     guardrail_updates: dict[str, str] = {}
 
@@ -303,20 +405,34 @@ def init_cmd(
         # interactive provider sweep (quick = fast, non-nagging). The full interactive
         # wizard (non-quick) still prompts every provider.
         if not (quick and collected_keys) and not skip_keys:
-            click.echo("\n=== Section 1/7: LLM provider keys ===")
+            _section(1, "LLM provider keys", quick)
             click.echo("Recommended: OpenRouter — one key, access to every model, auto-failover.")
             _prompt_provider_keys(collected_keys)
 
         # ── Section (b): Default model ───────────────────────────────────────
-        click.echo("\n=== Section 2/7: Default model ===")
+        _section(2, "Default model", quick)
+        recommended = _recommended_model()
+        _say("Press Enter to use the recommended model"
+             + (f" ({recommended})" if recommended else "")
+             + ". `polyrob model` changes it at any time.")
         default_model = default_model or click.prompt(
-            "Default model (blank to skip)", default="", show_default=False)
+            "Default model", default="", show_default=False)
+        if default_model:  # a typo reads here, not at the first message
+            try:
+                from cli.config_store import _provider_for_model, check_provider_model
+                _pick = (default_provider or _provider_for_model(default_model)
+                         or ("openrouter" if "/" in default_model else None))
+                _note = check_provider_model(_pick, default_model)[1] if _pick else ""
+                if _note:
+                    _say(_note)
+            except Exception:
+                pass  # a check, never a stop
 
         if not quick:
             # ── Section (c): Toolset ─────────────────────────────────────────
-            click.echo("\n=== Section 3/7: Toolset ===")
+            _section(3, "Toolset", quick)
             toolset_choices = list(TOOLSETS.keys())
-            click.echo(f"Available toolsets: {', '.join(toolset_choices)}")
+            _say(f"Available toolsets: {', '.join(toolset_choices)}")
             default_ts = effective_toolset or "default"
             chosen_toolset = click.prompt(
                 "Toolset", default=default_ts, show_default=True)
@@ -327,13 +443,16 @@ def init_cmd(
                 effective_toolset = "default"
 
             # ── Section (d): Template / persona ──────────────────────────────
-            click.echo("\n=== Section 4/7: Template / persona ===")
+            _section(4, "Template / persona", quick)
             from agents.task.templates import TEMPLATES
             template_choices = list(TEMPLATES.keys())
             click.echo(f"Available templates: {', '.join(template_choices)}")
             default_tpl = effective_persona or "general"
             chosen_template = click.prompt(
                 "Template", default=default_tpl, show_default=True)
+            if chosen_template not in TEMPLATES:
+                click.echo(f"Unknown template '{chosen_template}', using 'general'.")
+                chosen_template = "general"
             resolved = resolve_template(chosen_template)
             effective_persona = resolved.name
 
@@ -361,15 +480,12 @@ def init_cmd(
                         click.echo(f"'{slug}' is not a valid slug — skipping the "
                                    "character step (`polyrob persona init` later).")
             # If user didn't already pick a toolset explicitly, let the template drive it.
-            if not toolset_name and not (not quick):
-                # (already set above — this branch is not reachable but kept for clarity)
-                pass
-
             # ── Section (e): Owner pairing ────────────────────────────────────
             # Pair this instance to an owner id so autonomy/self-evolution surfaces
             # know who to answer to. Single-user local: the owner id and instance id
             # are typically the same (both default "polyrob"). Explicit flags win.
-            click.echo("\n=== Section 5/7: Owner pairing ===")
+            _section(5, "Owner pairing", quick)
+            _say("These names matter only if you run several agents. Press Enter to keep them.")
             from core.instance import DEFAULT_INSTANCE_ID
             if instance_id is None:
                 instance_id = click.prompt(
@@ -379,24 +495,17 @@ def init_cmd(
                     "Owner user id (blank = same as instance id)",
                     default=(instance_id or DEFAULT_INSTANCE_ID), show_default=True) or None
 
-            # ── Section 6/7: Autonomy & guardrails ───────────────────────────
+            # ── Section 6: Autonomy & guardrails ───────────────────────────
             # All prompts blank-to-skip. Env keys land in ``guardrail_updates``
             # (merged into the ~/.polyrob/.env upsert below); the digest choice
             # writes a typed preference instead when an owner uid is known
             # (which it always is here — Owner pairing above just defaulted
             # one), falling back to an env note only if it somehow isn't.
-            click.echo("\n=== Section 6/7: Autonomy & guardrails ===")
+            _section(6, "Autonomy & guardrails", quick)
             # 030 WS-F7 (C8): name the capability axes ONCE, before the prompts —
             # a new operator used to meet a 4-axis cascade with no introduction.
-            click.echo(
-                "POLYROB has four capability axes (see `polyrob autonomy status` "
-                "any time):\n"
-                "  • POLYROB_LOCAL          — interactive local tools (coding/git/KB)\n"
-                "  • AUTONOMY_ENABLED       — self-directed loops master switch\n"
-                "  • AUTONOMY_MODE          — supervised vs autonomous capability "
-                "defaults (needs a bound owner)\n"
-                "  • AGENT_COMPUTE_POSTURE  — host access ladder 0-3 (frozen at "
-                "start; never changed here)")
+            _say("These questions set what the agent may do without you. "
+                 "`polyrob autonomy status` shows the result at any time.")
             # 0.9.0: two honest prompts. Interactive local tools (coding/git/KB/RAG)
             # are the safe, useful default; the self-directed autonomy loops
             # (goals/self-wake/self-editing) are a separate, off-by-default opt-in.
@@ -404,6 +513,9 @@ def init_cmd(
                 "Enable interactive local tools (coding, git, knowledge base, RAG)?",
                 default=True):
                 guardrail_updates["POLYROB_LOCAL"] = "1"
+            else:
+                # The terminal sets it by default, so "no" must be written to hold.
+                guardrail_updates["POLYROB_LOCAL"] = "0"
             if click.confirm(
                 "Enable autonomy (agent works on its own between your messages — "
                 "goals, self-wake, self-editing)?", default=False):
@@ -449,20 +561,23 @@ def init_cmd(
                         "preferences instead."
                     )
 
-            # ── Section 7/7: Reach me ────────────────────────────────────────
+            # ── Section 7: Reach me ────────────────────────────────────────
             # 062: the wizard configured everything EXCEPT the one thing that
             # makes the agent reachable. A chat surface needs BOTH its token
             # and its *_SURFACE_ENABLED flag — `polyrob gateway` starts a
             # surface only when the flag is on, and doctor has been explaining
             # that trap to people the wizard itself created.
-            click.echo("\n=== Section 7/7: Reach me ===")
+            _section(7, "Reach me", quick)
             from cli.surfaces_config import flag_var, surface_choices, token_var
             click.echo("Talk to the agent from a chat app (blank = terminal only).")
             click.echo(f"Options: {', '.join(surface_choices())}")
+            click.echo("Others (Signal, WhatsApp and more): `polyrob surfaces list`, then `polyrob surfaces add <name>`.")
             picked = (click.prompt("Surface", default="", show_default=False) or "").strip().lower()
             if picked and picked in surface_choices():
                 tvar, fvar = token_var(picked), flag_var(picked)
                 if tvar:
+                    if picked == "telegram":
+                        _say("Get a token from @BotFather in Telegram: send /newbot.")
                     token = click.prompt(f"{tvar} (blank to skip)", default="",
                                          show_default=False, hide_input=True).strip()
                     if token:
@@ -472,8 +587,7 @@ def init_cmd(
                         click.echo("  Run it:  polyrob gateway   "
                                    "(or keep it running: polyrob service install)")
                     else:
-                        click.echo(f"Skipped — later: polyrob config set {tvar} <token> "
-                                   f"--global && polyrob config set {fvar} true --global")
+                        click.echo(f"Skipped. Later: polyrob surfaces add {picked}")
                 else:
                     # email has no token of its own; it needs IMAP/SMTP or an
                     # AgentMail key, which `polyrob doctor` names.
@@ -493,6 +607,8 @@ def init_cmd(
                              "invoicing needs one more flag — all approval-gated)?",
                              default=False):
                 try:
+                    from core.optional_extras import require_extra
+                    require_extra("crypto")
                     from cli.commands.wallet import run_wallet_init_flow
                     run_wallet_init_flow(mnemonic=None, raw_seed=None,
                                          home=_core_paths.polyrob_home(),
@@ -502,6 +618,8 @@ def init_cmd(
                                "(off by default).")
                 except click.ClickException as exc:
                     click.echo(f"wallet setup skipped: {exc.message}", err=True)
+                except ImportError as exc:
+                    _say(f"Wallet skipped: {exc}")
                 except Exception as exc:
                     click.echo(f"wallet setup failed (you can retry anytime with "
                                f"`polyrob wallet init`): {exc}", err=True)
@@ -532,6 +650,12 @@ def init_cmd(
             default_provider = click.prompt(
                 f"Provider for model '{default_model}' (blank to skip)",
                 default="", show_default=False) or None
+        if not default_provider and not no_prompt:
+            # A model with no provider is dropped when the agent starts: writing it
+            # would look saved and do nothing.
+            _say(f"I do not know which provider serves '{default_model}', so I did not "
+                 "save it. `polyrob model list` shows the names that work.")
+            default_model = None
 
     # Persist into ~/.polyrob/.env — split by scope (W4, closes the §1.3
     # global-identity leak): IDENTITY keys go to the target profile's .env when
@@ -622,8 +746,8 @@ def init_cmd(
     from cli.gitignore import ensure_polyrob_gitignored
     ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
 
-    click.echo(f"Initialized POLYROB. Global config: {home_env}")
-    click.echo(f"Project sessions: {sessions}")
+    click.echo(f"\nPOLYROB is set up.\n  Config: {home_env}\n  Data:   {sessions.parent}")
+    has_provider = True
     # O3 (2026-07-14 review): the closing key-check must see every layer
     # `polyrob run` honors (shell env, ./.polyrob/.env, ~/.polyrob/.env,
     # config/.env.*) — checking only the file just written false-alarmed users
@@ -644,27 +768,44 @@ def init_cmd(
         except OSError:
             pass
     if not usable_providers_with_credentials(env=merged_env):
+        has_provider = False
         click.echo("⚠ No usable LLM API key set — add one with "
-                   "`polyrob config set OPENROUTER_API_KEY <key> --global`")
+                   "`polyrob auth add openrouter`")
     # 030 WS-F7 (C8): the scripted install path (`--no-prompt`, the README's
     # recommendation) used to end with SILENCE about the capability axes — the
     # user was never told the axes exist or where they landed. Print the same
     # effective-posture card every seat renders. Fail-open.
-    try:
-        from core.config_policy.posture_card import render_posture_card
-        click.echo("\nEffective posture (all axes; `polyrob autonomy status` re-shows this):")
-        for line in render_posture_card(prefix="  "):
-            click.echo(line)
-    except Exception:
-        pass
+    # A person at the wizard just answered these questions, or took the safe defaults:
+    # one line. The full card is for the scripted path, which asked nothing.
+    if not no_prompt:
+        try:
+            from core.config_policy.posture_card import build_answers
+            # This process read the env before the wizard wrote: state what was just chosen.
+            import os as _os
+            _os.environ.update({k: str(v) for k, v in guardrail_updates.items()
+                               if k in ("POLYROB_LOCAL", "AUTONOMY_ENABLED", "AUTONOMY_MODE",
+                                        "APPROVAL_REQUIRED_TOOLS", "APPROVAL_PROVIDER")})
+            _say("What the agent may do:")
+            for line in build_answers("terminal"):
+                _say(f"  {line}")
+        except Exception as e:
+            _say(f"What the agent may do: unavailable({type(e).__name__}). Run `polyrob autonomy status`.")
+    else:
+        try:
+            from core.config_policy.posture_card import render_posture_card
+            click.echo("\nEffective posture (all axes; `polyrob autonomy status` re-shows this):")
+            for line in render_posture_card(prefix="  "):
+                click.echo(line)
+        except Exception:
+            pass
+    if has_provider:
+        click.echo("\nStart now:  polyrob     (then ask \"what can you do?\")")
+    click.echo("\nLater, if you want them:")
+    click.echo("  polyrob surfaces add <name>   talk to it from a chat app")
+    click.echo("  polyrob service install       keep it running in the background")
+    click.echo("  polyrob wallet init           give it a crypto wallet")
+    click.echo("  polyrob persona init <slug>   give it its own voice")
+    click.echo("  polyrob soul init --force     rewrite its generic identity docs")
+    click.echo("  polyrob doctor                check the health of this install")
     if skills_home:
-        click.echo(f"Your own skills go in: {skills_home}")
-    click.echo("\nNext steps (all optional):")
-    click.echo("  • agent wallet:   polyrob wallet init")
-    click.echo("  • avatar:         polyrob avatar set <image>   (or /avatar in the chat)")
-    click.echo("  • surfaces:       polyrob setup           (re-run — section 7 wires a chat app)")
-    click.echo("  • keep running:   polyrob service install (background service)")
-    click.echo("  • character:      polyrob persona init <slug>  (give it its own voice)")
-    click.echo("  • identity:       polyrob soul init --force    (the seeded docs are generic)")
-    click.echo("  • health check:   polyrob doctor")
-    click.echo('\nAsk me anything about myself — try "what can you do?"')
+        click.echo(f"  Your own skills go in {skills_home}")

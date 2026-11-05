@@ -158,6 +158,7 @@ class _Exec(StepExecutionMixin, _Agent):
         self._deferred_mcp_actions = []
         self.tool_call_tracker = None
         self.calls = 0
+        self.actions_need_browser = lambda actions: False
         agent = self
 
         class _Ctrl:

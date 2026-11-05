@@ -86,7 +86,8 @@ class ChainRow:
     #: for this chain, which the verbs render as "history: NOT AVAILABLE" —
     #: never another chain's host. Each host was checked live on 2026-10-02
     #: (``/addresses/{a}/token-transfers`` → 200 JSON). Robinhood mainnet's
-    #: Blockscout sits behind a browser challenge (403) and stays ``None``.
+    #: Blockscout sits behind a browser challenge (403) and stays ``None``;
+    #: ``wallet_activity`` reads it through ``alchemy_slug`` and ``ALCHEMY_API_KEY``.
     blockscout_api: Optional[str] = None
     #: The LI.FI Diamond on THIS chain — the one address a third-party route may
     #: be approved to spend from (proposal 029). Pinned per chain for the same

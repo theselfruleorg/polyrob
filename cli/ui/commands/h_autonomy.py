@@ -154,12 +154,11 @@ def _h_autonomy(ctx: CommandContext):
                for name, val in snap["flags"])
     lines = [candy.kv_lines(rows), ""]
 
-    # 030 WS-E5: the same effective-posture card every seat renders — including
-    # the compute axis, which this panel used to omit entirely.
+    # The four answers every seat reads; `/mode all` has the card.
     try:
-        from core.config_policy.posture_card import render_posture_card
-        lines.append(candy.section("effective posture (all axes)"))
-        lines.extend(f"{candy.GUTTER}{ln}" for ln in render_posture_card())
+        from core.config_policy.posture_card import build_answers
+        lines.append(candy.section("what the agent may do"))
+        lines.extend(f"{candy.GUTTER}{ln}" for ln in build_answers("terminal"))
         lines.append("")
     except Exception:
         pass

@@ -28,6 +28,9 @@ from agents.task.agent.views import ActionResult
 class _FakeAgent(RunLoopMixin, MemoryPrefetchMixin):
     """Minimal stand-in exercising the real run()/injector interaction."""
 
+    def trim_step_history(self):
+        pass
+
     def __init__(self):
         self.task = "chat with the owner"
         self.session_id = "sess-bootstrap-once"

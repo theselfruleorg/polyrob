@@ -307,3 +307,11 @@ def test_a_tree_with_a_recent_file_is_kept_despite_an_old_top_level(home):
 
     assert plan.keep[str(live)] == KEEP_RECENT
     assert plan.remove == []
+
+
+def test_retention_is_the_one_sweep_of_session_trees():
+    """The second sweep had no artifact guard: it deleted what this one protects."""
+    import importlib.util
+    from core.flags_catalog import CATALOG
+    assert importlib.util.find_spec("core.session_gc") is None
+    assert "SESSION_DIR_GC_APPLY" not in {row[0] for row in CATALOG}

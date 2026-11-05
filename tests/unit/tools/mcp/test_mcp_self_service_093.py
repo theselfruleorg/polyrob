@@ -154,11 +154,18 @@ class _Resp:
     @property
     def content(self):
         lines = [ln + b"\n" for ln in self._body.encode().split(b"\n")]
+        body = self._body.encode()
 
-        async def _gen():
-            for ln in lines:
-                yield ln
-        return _gen()
+        class _Stream:
+            def __aiter__(self):
+                async def _gen():
+                    for ln in lines:
+                        yield ln
+                return _gen()
+
+            async def iter_chunked(self, _size):
+                yield body
+        return _Stream()
 
 
 @pytest.mark.asyncio

@@ -31,6 +31,9 @@ def _openai_response(reason, completion_tokens=None):
 def _clean(monkeypatch):
     monkeypatch.delenv("AUTONOMOUS_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("LLM_MAX_OUTPUT_TOKENS", raising=False)
+    apply_output_budget(0)
+    yield
+    apply_output_budget(0)
 
 
 def test_cap_is_the_existing_ceiling_by_default():
@@ -45,7 +48,7 @@ def test_env_ceiling_still_wins(monkeypatch):
 def test_budget_is_off_without_the_flag():
     mark_autonomous("ob-goal-1", "g1")
     llm = _Llm(_Client())
-    assert apply_session_output_budget(llm, "ob-goal-1") == 0
+    assert apply_session_output_budget("ob-goal-1") == 0
     assert output_token_cap(llm._client, 16384) == 16384
 
 
@@ -53,14 +56,14 @@ def test_autonomous_session_is_narrowed(monkeypatch):
     monkeypatch.setenv("AUTONOMOUS_MAX_OUTPUT_TOKENS", "8192")
     mark_autonomous("ob-goal-2", "g2")
     llm = _Llm(_Client())
-    assert apply_session_output_budget(llm, "ob-goal-2") == 8192
+    assert apply_session_output_budget("ob-goal-2") == 8192
     assert output_token_cap(llm._client, 16384) == 8192
 
 
 def test_an_owner_chat_is_not_narrowed(monkeypatch):
     monkeypatch.setenv("AUTONOMOUS_MAX_OUTPUT_TOKENS", "8192")
     llm = _Llm(_Client())
-    assert apply_session_output_budget(llm, "ob-chat-1") == 0
+    assert apply_session_output_budget("ob-chat-1") == 0
     assert output_token_cap(llm._client, 16384) == 16384
 
 
@@ -69,7 +72,7 @@ def test_the_budget_never_raises_a_lower_ceiling(monkeypatch):
     monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "2048")
     mark_autonomous("ob-goal-3", "g3")
     llm = _Llm(_Client())
-    apply_session_output_budget(llm, "ob-goal-3")
+    apply_session_output_budget("ob-goal-3")
     assert output_token_cap(llm._client, 16384) == 2048
 
 
@@ -106,13 +109,57 @@ def test_unreadable_response_is_unknown_never_a_confident_no():
     assert output_was_truncated(_Llm(_Client(None))) is False
 
 
-def test_modules_tier_stamping_is_session_agnostic():
-    """The layering half: modules/llm stamps, agents decides who gets one."""
-    llm = _Llm(_Client())
-    assert apply_output_budget(llm, 4096) == 4096
-    assert output_token_cap(llm._client, 16384) == 4096
-    assert apply_output_budget(None, 4096) == 0
-    assert apply_output_budget(llm, 0) == 0
+def test_modules_tier_cap_is_session_agnostic():
+    """The layering half: modules/llm holds the cap, agents decides who gets one."""
+    assert apply_output_budget(4096) == 4096
+    assert output_token_cap(_Client(), 16384) == 4096
+    assert apply_output_budget(0) == 0
+    assert output_token_cap(_Client(), 16384) == 16384
+
+
+def test_a_cron_cap_does_not_reach_an_owner_chat_on_the_shared_client(monkeypatch):
+    """Prod 2026-11-04: a cron run's stamp on the shared client cut the owner's
+    compaction summary at 8,192."""
+    import asyncio
+    monkeypatch.setenv("AUTONOMOUS_MAX_OUTPUT_TOKENS", "8192")
+    mark_autonomous("ob-goal-4", "g4")
+    shared = _Client()
+    seen = {}
+    cron_set, chat_read = asyncio.Event(), asyncio.Event()
+
+    async def _cron():
+        apply_session_output_budget("ob-goal-4")
+        cron_set.set()
+        await chat_read.wait()
+        seen["cron"] = output_token_cap(shared, 16384)
+
+    async def _chat():
+        await cron_set.wait()
+        apply_session_output_budget("ob-chat-2")
+        seen["chat"] = output_token_cap(shared, 16384)
+        chat_read.set()
+
+    async def _main():
+        await asyncio.gather(_cron(), _chat())
+
+    asyncio.run(_main())
+    assert seen == {"cron": 8192, "chat": 16384}
+
+
+def test_a_chat_spawned_from_a_cron_task_clears_the_inherited_cap(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("AUTONOMOUS_MAX_OUTPUT_TOKENS", "8192")
+    mark_autonomous("ob-goal-5", "g5")
+
+    async def _child():
+        apply_session_output_budget("ob-chat-3")
+        return output_token_cap(_Client(), 16384)
+
+    async def _parent():
+        apply_session_output_budget("ob-goal-5")
+        return await asyncio.create_task(_child())
+
+    assert asyncio.run(_parent()) == 16384
 
 
 def test_bounded_output_is_per_task_and_never_stamps_the_shared_client(monkeypatch):

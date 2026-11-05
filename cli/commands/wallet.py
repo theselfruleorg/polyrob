@@ -151,16 +151,15 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         pass
     if ctx.invoked_subcommand is not None:
         return
+    from cli.commands._errors import require_extra_or_exit
+    require_extra_or_exit("crypto")
     from core.wallet.factory import get_agent_wallet
     try:
         w = get_agent_wallet()
     except ValueError as e:
-        # AgentWallet.__init__ raises ValueError only for a missing/short seed;
-        # but load_wallet_config() (called first, inside the same try) can ALSO
-        # raise ValueError from a malformed numeric env (e.g. a non-numeric
-        # AGENT_WALLET_MAX_PER_TX_USD/WALLET_DAILY_CAP_USD) — a wholly different
-        # problem that this handler used to mislabel as "seed missing/short"
-        # (Finding 3, 2026-07-14 final review).
+        # AgentWallet.__init__ raises ValueError for a missing/short seed; so does
+        # load_wallet_config() for a malformed numeric env, a different problem
+        # that this handler must not call "seed missing/short".
         #
         # M12 (2026-07-15): check AGENT_WALLET_ENABLED FIRST — a *disabled* wallet
         # must say "not enabled", never "ENABLED but …" (the malformed-cap config
@@ -706,6 +705,8 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
     ``--from-mnemonic ""``) to be prompted for the secret with a HIDDEN prompt,
     keeping it off the shell history and `ps` output (M14).
     """
+    from cli.commands._errors import require_extra_or_exit
+    require_extra_or_exit("crypto")
     from pathlib import Path as _P
     from polyrob.app.bootstrap import load_env
     try:

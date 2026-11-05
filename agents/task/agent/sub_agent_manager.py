@@ -31,7 +31,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Set, Union, TYPE_CHECKING
@@ -39,6 +39,7 @@ from typing import Dict, List, Optional, Any, Set, Union, TYPE_CHECKING
 # F28: the parent context a child inherits is third-party DATA, not task text.
 # `core.security` is a lower tier than `agents`, so this is a downward import.
 from core.security.untrusted_wrap import wrap_untrusted
+from agents.task.agent.core.model_swap import close_agent_llms
 from agents.task.agent.core.run_budget import attach_parent_run_budget
 from agents.task.runtime.stop_reason import StopReason, describe_stop_reason, label_last_report
 
@@ -203,6 +204,17 @@ class SubAgentResult:
         return None
 
 
+COMPACT_RESULT_CHARS = 500
+
+
+def _compact_result(result: SubAgentResult) -> SubAgentResult:
+    """What the manager keeps after the parent has the full result: the stats and a short
+    text. A resident session runs many children, and each report can be large (102 M-E)."""
+    output = result.output
+    text = output.to_string() if isinstance(output, SubAgentOutput) else str(output or "")
+    return replace(result, output=text[:COMPACT_RESULT_CHARS], task=result.task[:COMPACT_RESULT_CHARS])
+
+
 class SubAgentManager:
     """
     Manages sub-agent spawning and execution for subtask delegation.
@@ -278,11 +290,12 @@ class SubAgentManager:
 
         # FIX (Jan 2026): Semaphore to limit concurrent sub-agents
         from agents.task.constants import TimeoutConfig
-        self._concurrency_semaphore = asyncio.Semaphore(TimeoutConfig.MAX_CONCURRENT_SUB_AGENTS)
+        max_concurrent = max(1, TimeoutConfig.get_max_concurrent_sub_agents())
+        self._concurrency_semaphore = asyncio.Semaphore(max_concurrent)
         self._max_depth = TimeoutConfig.MAX_SUB_AGENT_DEPTH
 
         self.logger.info(
-            f"SubAgentManager initialized (max_concurrent={TimeoutConfig.MAX_CONCURRENT_SUB_AGENTS}, "
+            f"SubAgentManager initialized (max_concurrent={max_concurrent}, "
             f"max_depth={self._max_depth})"
         )
 
@@ -901,7 +914,7 @@ class SubAgentManager:
                     max_steps=max_steps,
                 )
 
-                self._results[sub_agent_id] = result
+                self._results[sub_agent_id] = _compact_result(result)
                 self.logger.info(
                     f"✅ Sub-agent {sub_agent_id} completed in {duration:.1f}s "
                     f"({result.steps_taken} steps, {usage.credits_charged} credits)"
@@ -947,7 +960,7 @@ class SubAgentManager:
                     virtual_session_id=virtual_session_id
                 )
 
-                self._results[sub_agent_id] = result
+                self._results[sub_agent_id] = _compact_result(result)
                 return result
 
             finally:
@@ -964,8 +977,7 @@ class SubAgentManager:
                 # Cleanup sub-agent to prevent resource leaks
                 if sub_agent:
                     try:
-                        if hasattr(sub_agent, 'cleanup'):
-                            await sub_agent.cleanup()
+                        await close_agent_llms(sub_agent, getattr(self.orchestrator, "container", None))
                     except Exception as cleanup_error:
                         self.logger.debug(f"Sub-agent cleanup error: {cleanup_error}")
 
@@ -976,6 +988,7 @@ class SubAgentManager:
                         if agent_id in self.orchestrator.agents:
                             del self.orchestrator.agents[agent_id]
                             self.logger.debug(f"Removed sub-agent {agent_id} from orchestrator.agents")
+                        self._forget_browser_config(agent_id)
                         # Also clean up tracking dicts
                         for tracking_dict in [
                             self.orchestrator.agent_types,
@@ -989,7 +1002,18 @@ class SubAgentManager:
                     # Remove from local tracking
                     self._sub_agents.pop(sub_agent_id, None)
                 self._live_meta.pop(sub_agent_id, None)
+                self._parent_map.pop(sub_agent_id, None)
     
+    def _forget_browser_config(self, agent_id: str) -> None:
+        """The session's full cleanup walks ``orchestrator.agents``, and a finished
+        child has left it, so its browser config must go here (102 3.5)."""
+        manager = getattr(self.orchestrator, "browser_manager", None)
+        if manager is not None:
+            try:
+                manager.forget_session_config(agent_id)
+            except Exception as e:
+                self.logger.debug(f"Could not forget the browser config of {agent_id}: {e}")
+
     async def _worker_llm(self, parent_agent_id: str, worker: Any) -> Any:
         """Build the worker's pinned model on the parent's LLM factory (isolated
         client). None on any failure — the child then inherits the parent's."""
@@ -1445,8 +1469,7 @@ class SubAgentManager:
         """Cleanup all sub-agents."""
         for agent_id, agent in self._sub_agents.items():
             try:
-                if hasattr(agent, 'cleanup'):
-                    await agent.cleanup()
+                await close_agent_llms(agent, getattr(self.orchestrator, "container", None))
                 self.logger.debug(f"Cleaned up sub-agent {agent_id}")
             except Exception as e:
                 self.logger.warning(f"Error cleaning up sub-agent {agent_id}: {e}")

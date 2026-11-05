@@ -681,6 +681,11 @@ class LLMManager(InventoryMixin, BaseComponent):
                 f"Check your API keys and initialization logs for '{provider}' provider."
             )
 
+        # 102 C-11a: a missing SDK polls time.sleep up to 120 s; the factory call is then a no-op.
+        if provider in ("anthropic", "gemini"):
+            from core.lazy_deps import ensure_provider
+            await asyncio.to_thread(ensure_provider, f"provider.{provider}")
+
         # Import here to avoid circular imports
         from modules.llm.llm_factory import create_chat_model
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from core.exceptions import DeliveryUnknownError
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
 from core.surfaces.surface import Surface
 
@@ -126,6 +127,11 @@ class EmailSurface(Surface):
                 self._record_outbound_conversation(chat_row, addr, msg.text or "",
                                                    mid, subject)
             return SendResult(success=bool(ok))
+        except DeliveryUnknownError as e:
+            # The server may hold the mail: "" tells the outbound queue nothing is owed,
+            # because its retry could deliver the mail twice.
+            logger.error("EmailSurface.send to %s: %s", addr, e)
+            return SendResult(success=False, error=str(e), remaining_text="")
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("EmailSurface.send to %s failed: %s", addr, e, exc_info=True)
             return SendResult(success=False, error=str(e))

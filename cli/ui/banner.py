@@ -19,6 +19,8 @@ Design constraints (mirrors ``blocks.py``):
 
 from __future__ import annotations
 
+import shutil
+
 from typing import Any, List, Optional, Sequence
 
 from rich.text import Text
@@ -131,7 +133,7 @@ def banner_panel(
     body.append(f"polyrob v{version}", style=style("speaker_name"))
     body.append(f" {ICONS.bullet} {model} ({provider})\n", style=style("meta"))
     second = f"  session {_short_session(session_id)} {ICONS.bullet} tools {_tools_str(tool_ids)}"
-    if show_help_hint:
+    if show_help_hint and len(second) + 18 <= shutil.get_terminal_size((200, 24)).columns - 2:
         second += f" {ICONS.bullet} /help {ICONS.bullet} /session"
     body.append(second, style=style("meta"))
     info = _session_info_str(
@@ -161,7 +163,8 @@ def banner_plain(
 ) -> str:
     """Build the deterministic plain-text first-run banner (no ANSI, 2 or 3 lines)."""
     second = f"session {_short_session(session_id)} · tools {_tools_str(tool_ids)}"
-    if show_help_hint:
+    # The toolbar names /help too, so the hint goes first when the line would wrap.
+    if show_help_hint and len(second) + 18 <= shutil.get_terminal_size((200, 24)).columns - 2:
         second += " · /help · /session"
     out = f"polyrob v{version} · {model} ({provider})\n{second}"
     info = _session_info_str(

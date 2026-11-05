@@ -164,6 +164,46 @@ def _open_sends_to(cards, user_id: str, words) -> list:
             and _send_recipient(c.args) and same_address(_send_recipient(c.args), to)]
 
 
+#: A /send of the same token to the same address that finished inside this window
+#: is "already paid": a proposal repeating it needs ``also_owed``. (Prod 2026-11-04:
+#: four round winners already paid got a second card each in a re-proposed batch.)
+_PAID_WINDOW_S = 72 * 3600.0
+
+
+def _send_asset(args) -> tuple:
+    """``(chain, token)`` of /send arguments: the chain's gas symbol reads as ``native``,
+    so ``/send 1 eth`` repeats ``/send 1 native``. The same word on another chain differs."""
+    low = [str(a).lower() for a in args]
+    chain = low[low.index("on") + 1] if "on" in low[:-1] else ""
+    token = low[1] if len(low) > 1 else ""
+    try:
+        from tools.defi.send_order import _native_on
+        if chain and _native_on(chain, token)[0]:
+            token = "native"
+    except Exception as e:
+        logger.debug("native check skipped for /send repeat guard: %s", e)
+    return chain, token
+
+
+def _paid_recently(cards, user_id: str, words, now: Optional[float] = None) -> list:
+    """/send cards of the same asset to the same address, done or running, inside
+    ``_PAID_WINDOW_S``."""
+    if not words or words[0].lower() != "/send" or len(words) < 3:
+        return []
+    to = _send_recipient(words[1:])
+    if not to:
+        return []
+    import time as _time
+    from core.wallet.addresses import same_address
+    try:
+        recent = cards.store().recent_sends(
+            user_id, (now if now is not None else _time.time()) - _PAID_WINDOW_S)
+    except Exception:
+        return []
+    asset = _send_asset(words[1:])
+    return [r for r in recent if same_address(r[0], to) and _send_asset(r[3]) == asset]
+
+
 def _send_precheck(words) -> Optional[str]:
     """Why a /send card would be dead on arrival, or None — the seat's OWN parser
     (``tools.defi.send_order``) and the address-poisoning rule, before the card
@@ -401,6 +441,15 @@ def register_card_actions(controller) -> None:
                 f"An open card already pays this address: {listed}. Pass "
                 f"replaces=[<id>] to supersede it, or also_owed=true if BOTH payments "
                 f"are owed. Nothing was proposed."), include_in_memory=True)
+        paid = _paid_recently(cards, user_id, words)
+        if paid and not params.also_owed:
+            import datetime as _dt
+            when = _dt.datetime.fromtimestamp(paid[0][2], _dt.timezone.utc).strftime("%m-%d %H:%MZ")
+            return ActionResult(error=(
+                f"This address was already paid the same token by a confirmed /send "
+                f"({len(paid)} in the last 72 h, the latest {when}). Nothing was "
+                f"proposed. Pass also_owed=true only if ANOTHER payment is really owed."),
+                include_in_memory=True)
         sid = _session_id(controller, execution_context)
         group_id = _group_for(user_id, sid)
         try:

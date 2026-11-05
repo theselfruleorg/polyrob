@@ -210,7 +210,7 @@ give `aria` its own home with `POLYROB_HOME`:
 `POLYROB_DATA_DIR` moves only the data home; `POLYROB_HOME` moves the `.env` and
 the data home together.
 
-### Running two instances simultaneously (server mode)
+### Running two instances simultaneously on a server
 
 On the server, a working directory isn't the natural unit of isolation — use a
 distinct `POLYROB_DATA_DIR` per instance instead, plus a distinct port and env file:

@@ -847,15 +847,30 @@ class SkillManager(SkillWriterMixin):
         return "\n".join(sections)
     
     def format_skill_catalog(self, matched_skills: List[MatchedSkill],
-                             load_first: Optional[Set[str]] = None) -> str:
+                             load_first: Optional[Set[str]] = None,
+                             third_party: bool = False) -> str:
         """The short skill index (081 Q2): one line per skill, id + when to use it.
 
         The model loads a body with ``load_skill``. ``load_first`` (D5): ids this
         run PINNED that did not fit the eager budget; they are listed first with a
         ``LOAD FIRST`` mark. Returns "" when there is no skill.
+
+        A source that could not be read is named (an unreadable store is not an empty
+        one), except to a room or a correspondent: they get shipped skills only, and
+        the owner's paths are not theirs to read.
         """
         if not matched_skills:
             return ""
+        text = self._fitted_catalog(matched_skills, load_first)
+        unread = [] if third_party else scopes.unreadable_sources()
+        if unread:
+            note = ("Could not read skills from: " + ", ".join(unread)
+                    + ". There can be skills there; this index does not list them.")
+            text = text.replace("</skill-catalog>", note + "\n</skill-catalog>")
+        return text
+
+    def _fitted_catalog(self, matched_skills: List[MatchedSkill],
+                        load_first: Optional[Set[str]]) -> str:
         load_first = set(load_first or ())
         ordered = ([s for s in matched_skills if s.skill_id in load_first]
                    + [s for s in matched_skills if s.skill_id not in load_first])
@@ -934,7 +949,8 @@ class SkillManager(SkillWriterMixin):
 
     def format_progressive(self, eager: List[MatchedSkill],
                            catalog: List[MatchedSkill],
-                           load_first: Optional[Set[str]] = None) -> str:
+                           load_first: Optional[Set[str]] = None,
+                           third_party: bool = False) -> str:
         """The pinned skill message under progressive disclosure (D5): the eager
         bodies, then the catalog of everything else."""
         eager_ids = {s.skill_id for s in eager}
@@ -943,7 +959,8 @@ class SkillManager(SkillWriterMixin):
             parts.append(self.format_skills_for_prompt(eager))
         rest = [s for s in catalog if s.skill_id not in eager_ids]
         if rest:
-            parts.append(self.format_skill_catalog(rest, load_first=load_first))
+            parts.append(self.format_skill_catalog(rest, load_first=load_first,
+                                                   third_party=third_party))
         return "\n\n".join(parts)
 
     def get_skill_ids(self) -> List[str]:

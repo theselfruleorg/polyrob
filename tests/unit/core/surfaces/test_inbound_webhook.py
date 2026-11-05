@@ -73,7 +73,7 @@ async def test_voice_guard_fires_route_not_called(tmp_path, monkeypatch):
     # Transcription returns None (not available / disabled) — guard must still fire fail-open.
     async def _null_transcribe(container, media):
         return None
-    monkeypatch.setattr("core.surfaces.inbound_webhook.transcribe_inbound_media", _null_transcribe)
+    monkeypatch.setattr("core.surfaces.transcription.transcribe_inbound_media", _null_transcribe)
 
     wa = _VoiceWA(IdempotencyStore(os.path.join(tmp_path, "v.db")))
     result = await wa.handle_post(None, {}, b"{}", task_agent=object())
@@ -97,7 +97,7 @@ async def test_voice_transcribed_text_reaches_route(tmp_path, monkeypatch):
     monkeypatch.setattr("core.surfaces.inbound_webhook.act_on_inbound", fake_act)
     async def _transcribe(container, media):
         return "hello world"
-    monkeypatch.setattr("core.surfaces.inbound_webhook.transcribe_inbound_media", _transcribe)
+    monkeypatch.setattr("core.surfaces.transcription.transcribe_inbound_media", _transcribe)
 
     wa = _VoiceWA(IdempotencyStore(os.path.join(tmp_path, "v2.db")))
     result = await wa.handle_post(None, {}, b"{}", task_agent=object())

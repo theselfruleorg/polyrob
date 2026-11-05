@@ -6,8 +6,10 @@
 A tap here is the owner typing ``/card_<id>_<act>`` into the console chat box:
 it runs through ``webview.console_commands.run_console_line`` → the shared
 owner-verb plane (``surfaces.telegram.harness._handle_command``), so the owner
-gate, the room refusal and every money gate are the SAME ones Telegram and the
-REPL apply. This module carries no policy and builds no owner context.
+gate and every money gate are the SAME ones Telegram and the REPL apply. A console
+line is the owner's own private line (its session key is a DM), so the room refusal,
+which guards a verb typed where members talk, does not apply here. This module
+carries no policy and builds no owner context.
 
 Contributed to the Inbox destination (``webview.contributions``).
 """

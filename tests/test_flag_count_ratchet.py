@@ -26,7 +26,7 @@ from core.flags_catalog import CATALOG
 # The live count. Lower it when a flag is retired; raise it only with the reason
 # in the commit message. The history lives in `git log -p` of this line and in
 # CHANGELOG.md — not here, so parallel flag commits do not conflict on a comment.
-CEILING = 649  # 098 TS-14: +APPROVAL_ASK_TTL_HOURS (an open owner ask expires); +2 from 096/097 rows. 095 W10: -MCP_SELF_INSTALL_ENABLED, -MCP_INSTALL_CATALOG_FILE, -MCP_INSTALL_ALLOWLIST (mcp_install deleted)
+CEILING = 648  # 102 D-2: -SESSION_DIR_GC_APPLY (the second session sweep removed). 098 TS-14: +APPROVAL_ASK_TTL_HOURS (an open owner ask expires); +2 from 096/097 rows. 095 W10: -MCP_SELF_INSTALL_ENABLED, -MCP_INSTALL_CATALOG_FILE, -MCP_INSTALL_ALLOWLIST (mcp_install deleted)
 # A flag row is a deliberate act — unlike file line counts there is no ordinary
 # churn to absorb, so the ceiling tracks the real count exactly.
 SLACK = 0

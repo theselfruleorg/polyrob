@@ -36,7 +36,7 @@ from core.surfaces.idempotency import AcceptedEventJournal, IdempotencyStore
 from core.surfaces.dispatcher import route_inbound
 from core.surfaces.serialize import KeyedLock
 from core.surfaces.session_chat_registry import build_session_key
-from core.surfaces.transcription import voice_present, transcribe_inbound_media
+from core.surfaces.transcription import apply_voice_transcript, voice_present
 from core.surfaces.voice_guard import voice_needs_guard, voice_unavailable_message
 from core.surfaces.voice_echo import voice_transcript, voice_echo_message
 from core.surfaces.config import SurfaceConfig
@@ -272,17 +272,10 @@ class WebhookSurface(ABC):
                     # Fix 2a: transcribe voice-only turns; guard untranscribed voice (never route empty)
                     if voice_present(inbound.media) and not (inbound.text or "").strip():
                         try:
-                            _vtext = await transcribe_inbound_media(container, inbound.media)
-                        except Exception:
-                            _vtext = None
-                        if _vtext:
-                            # CHAT-4: marked as voice, so a transcript that
-                            # starts with "/" is never routed as a COMMAND.
-                            inbound.text = f"[voice message, auto-transcribed] {_vtext}"
-                            for _m in inbound.media:
-                                if getattr(_m, "kind", None) in ("voice", "audio"):
-                                    _m.transcript = _vtext
-                                    break
+                            await apply_voice_transcript(container, inbound)
+                        except Exception as e:
+                            logger.warning("%s voice transcription failed: %s",
+                                           self.surface_id, e)
                     if voice_needs_guard(inbound.media, inbound.text):
                         await self._send_immediate(
                             inbound,

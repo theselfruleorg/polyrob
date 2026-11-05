@@ -146,3 +146,25 @@ def test_rotation_takes_the_append_lock(tele, tmp_path, monkeypatch):
     f.write_text("{}\n{}\n")
     t._rotate_events_file(f)
     assert taken == ["events.jsonl.lock"], taken
+
+
+def test_rotation_keeps_only_the_newest_rotated_files(tele, tmp_path, monkeypatch):
+    """A live owner session has no retention cutoff, so rotated files had no limit."""
+    import agents.task.telemetry.service as svc
+    t, _ = tele
+    monkeypatch.setattr(svc, "TELEMETRY_EVENTS_MAX_BYTES", 1)
+    old = [f"events_2020010{i}_000000.jsonl" for i in range(1, 6)]
+    for name in old:
+        (tmp_path / name).write_text("{}\n")
+    # Others that share the directory are not this loop's to remove.
+    for name in ("events.jsonl.lock", "events_notes.jsonl", "events_20200101_000000.txt"):
+        (tmp_path / name).write_text("x")
+    f = tmp_path / "events.jsonl"
+    f.write_text("{}\n{}\n")
+    t._rotate_events_file(f)
+    rotated = sorted(p.name for p in tmp_path.glob("events_2*.jsonl"))
+    assert len(rotated) == svc.TELEMETRY_EVENTS_KEEP_ROTATED == 3
+    assert rotated[:2] == old[-2:], "the two newest old files stay, with the new one"
+    assert f.read_text() == "", "the live file restarts empty"
+    for name in ("events.jsonl.lock", "events_notes.jsonl", "events_20200101_000000.txt"):
+        assert (tmp_path / name).exists(), name

@@ -26,6 +26,7 @@ from typing import Any, List, Optional
 
 _SEEN_ATTR = "_owner_thread_seen_ts"
 _REPLY_ATTR = "_owner_thread_reply_to"
+_LEDGER_SEEN_ATTR = "_action_ledger_seen"
 
 
 class OwnerThreadInjectMixin:
@@ -88,6 +89,7 @@ class OwnerThreadInjectMixin:
             if not self._owner_thread_applicable():
                 return
             self._inject_card_outcomes()
+            self._inject_action_ledger()
             from core.surfaces.owner_thread import (
                 rail_slice, referent, render_block, thread_tail)
             container = getattr(self, "container", None)
@@ -174,6 +176,63 @@ class OwnerThreadInjectMixin:
                 self._owner_thread_push(text)
         except Exception as e:
             self.logger.debug(f"card outcomes skipped: {e}")
+
+    # --- 103: what the agent did, from the stores -------------------------------
+    def _read_action_ledger(self) -> Any:
+        """The ledger this session may see, or None. Asked again on every read: a
+        session that a correspondent tainted later must stop seeing the owner's money."""
+        if not self._owner_thread_applicable():
+            return None
+        from agents.task.session_class import regime_policy
+        scope = regime_policy(self).action_ledger
+        if not scope:
+            return None
+        from core.session_ledger import read_ledger
+        user_id = getattr(self, "user_id", "")
+        if scope == "owner":
+            return read_ledger(user_id)
+        from core.autonomy_marker import cron_job_for_session, goal_for_session
+        from core.surfaces import card_groups as G
+        goal = goal_for_session(self.session_id)
+        job = cron_job_for_session(self.session_id)
+        origin, ref = ((G.ORIGIN_GOAL, goal) if goal else
+                       (G.ORIGIN_CRON, job) if job else ("", ""))
+        return read_ledger(user_id, session_id=self.session_id, origin=origin, origin_ref=ref or "")
+
+    def _action_ledger_text(self) -> str:
+        """The whole block, for a compaction rebuild or a prune. Never raises."""
+        try:
+            ledger = self._read_action_ledger()
+            if ledger is None:
+                return ""
+            from core.session_ledger import line_keys, render
+            setattr(self, _LEDGER_SEEN_ATTR,
+                    set(getattr(self, _LEDGER_SEEN_ATTR, None) or ()) | line_keys(ledger))
+            return render(ledger)
+        except Exception as e:
+            self.logger.warning(f"action ledger skipped: {type(e).__name__}")
+            return ""
+
+    def _inject_action_ledger(self) -> None:
+        """First step of a turn: the whole block for a fresh session; later, only the
+        lines this session has not seen, plus the current counts."""
+        try:
+            ledger = self._read_action_ledger()
+            mm = getattr(self, "message_manager", None)
+            if ledger is None or mm is None:
+                return
+            mm.action_ledger_source = self._action_ledger_text
+            from core.session_ledger import line_keys, render
+            seen = getattr(self, _LEDGER_SEEN_ATTR, None)
+            if seen is not None and not (line_keys(ledger) - seen) and not ledger.errors:
+                return
+            text = render(ledger, skip=seen or ())
+            setattr(self, _LEDGER_SEEN_ATTR, set(seen or ()) | line_keys(ledger))
+            if text:
+                from modules.llm.messages import MessageOrigin, make_control_message
+                mm.push_control_message(make_control_message(text, MessageOrigin.ACTION_LEDGER))
+        except Exception as e:
+            self.logger.warning(f"action ledger skipped: {type(e).__name__}")
 
     def _inject_owner_thread_referents(self, messages: List[dict]) -> None:
         """A drained STEER batch: render the referent of each quote-reply."""

@@ -41,7 +41,11 @@ whatever tool-calling shape the new provider needs. Nothing to do but note it.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import inspect
+import logging
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _self_facts(agent, cause, previous_model):
@@ -251,10 +255,11 @@ class ModelSwapMixin:
         self.adopt_active_llm(new_llm, model, resolved_provider)
         self._swap_built_llm = new_llm
         if _own_old:
-            await _close_llm(old_llm)
+            await close_own_llm(old_llm, getattr(self, "container", None))
         if reasoning is not _KEEP:
             _set_level(self, reasoning)
-        self._after_swap(model, resolved_provider, prev.get("model"), cause=cause)
+        for replaced in self._after_swap(model, resolved_provider, prev.get("model"), cause=cause):
+            await close_own_llm(replaced, getattr(self, "container", None))
 
         self.logger.info(f"model swapped {prev['provider']}/{prev['model']} -> {resolved_provider}/{model}")
 
@@ -266,23 +271,29 @@ class ModelSwapMixin:
         }
 
     def _after_swap(self, model: str, provider: str, previous_model: Optional[str],
-                    cause: str = "owner") -> None:
+                    cause: str = "owner") -> List[Any]:
         """094: a deliberate swap = the shared model-change refresh + the aux
-        models (compaction, reflection, the lazy judge) on the new main chain."""
+        models (compaction, reflection, the lazy judge) on the new main chain.
+        Returns the replaced aux models, for the caller to close."""
         self._refresh_after_model_change(cause, previous_model)
+        replaced: List[Any] = []
         try:
-            self._reprovision_aux_models()
+            self._reprovision_aux_models(replaced)
         except Exception as e:
             self.logger.debug(f"aux re-provision after swap failed: {e}")
+        return replaced
 
-    def _reprovision_aux_models(self) -> None:
-        """Compaction + reflection on the NEW main model's chain; the judge lazily."""
+    def _reprovision_aux_models(self, replaced: List[Any]) -> None:
+        """Compaction + reflection on the NEW main model's chain; the judge lazily.
+        Each model this replaces goes on ``replaced``: it is this session's own."""
         manager = getattr(self, "message_manager", None)
         if manager is not None:
+            replaced.append(getattr(manager, "aux_llm", None))
             try:
                 manager.aux_llm = self._provision_compaction_llm()
             except Exception:
                 manager.aux_llm = None
+        replaced.append(getattr(self, "_judge_llm", None))
         self._judge_llm = None
         from core.config_policy import reflection_llm_enabled_default
         tcm = getattr(self, "task_context_manager", None)
@@ -291,6 +302,7 @@ class ModelSwapMixin:
                 and hasattr(tcm, "set_reflection_context")):
             return
         current = (getattr(tcm, "_reflection_by_session", {}) or {}).get(session_id) or {}
+        replaced.append(current.get("llm"))
         tcm.set_reflection_context(session_id, self._provision_aux_llm("reflection"),
                                    current.get("meter_ctx"))
 
@@ -342,14 +354,45 @@ class ModelSwapMixin:
         return result
 
 
-async def _close_llm(llm: Any) -> None:
-    client = getattr(llm, "_client", None)
-    cleanup = getattr(client, "_cleanup", None)
-    if callable(cleanup):
-        try:
-            await cleanup()
-        except Exception:
-            pass
+async def close_own_llm(llm: Any, container: Any = None) -> None:
+    """Close a model this session built on an isolated client (aux, judge, swap).
+
+    ⚠️ Never the shared per-provider client: closing it stops every session that
+    uses the provider. Each caller holds only isolated models, and the check against
+    the manager's registered clients is the second lock on that door.
+    """
+    if llm is None:
+        return
+    client = getattr(llm, "_client", llm)
+    try:
+        manager = container.get_service("llm") if container is not None else None
+        shared = (getattr(manager, "clients", None) or {}).values()
+    except Exception:
+        shared = ()
+    if any(client is registered for registered in shared):
+        logger.warning("refused to close the shared LLM client %s", type(client).__name__)
+        return
+    close = getattr(client, "cleanup", None) or getattr(client, "aclose", None)
+    if not callable(close):
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception as e:
+        logger.debug("closing an isolated LLM client failed: %s", e)
+
+
+async def close_agent_llms(agent: Any, container: Any = None) -> None:
+    """Close and clear the models one agent owns. The session's reflection model
+    has its own slot on the task context manager, so the session cleanup holds it."""
+    for owner, attr in ((getattr(agent, "message_manager", None), "aux_llm"),
+                        (agent, "_judge_llm"), (agent, "_swap_built_llm")):
+        llm = getattr(owner, attr, None) if owner is not None else None
+        if llm is None:
+            continue
+        setattr(owner, attr, None)
+        await close_own_llm(llm, container)
 
 
 def _set_level(agent: Any, level: Optional[str]) -> None:

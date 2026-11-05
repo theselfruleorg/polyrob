@@ -39,6 +39,16 @@ def catalog(user_id: str, query: str = "", *,
     return sorted(rows)
 
 
+def unreadable_note() -> str:
+    """The line a listing adds for a skill source it could not read, or ""."""
+    from core.skills.scopes import unreadable_sources
+    unread = unreadable_sources()
+    if not unread:
+        return ""
+    return ("I could not read skills from " + ", ".join(unread)
+            + ". That is not 'no skills' there.")
+
+
 def _fold(skill_id: str) -> str:
     """The tap form of an id (``core.surfaces.tappable.read_token``): ``-`` → ``_``."""
     return str(skill_id or "").lower().replace("-", "_")
@@ -90,9 +100,10 @@ def skills_reply(user_id: str, args: list) -> str:
         rows = catalog(user_id, query)
     except Exception as exc:  # noqa: BLE001 — an unread store is not "none"
         return f"I could not read the skills ({type(exc).__name__}). That is not 'no skills'."
+    note = unreadable_note()
     if not rows:
-        return (f"No skill matches '{query}'." if query
-                else "No skills are installed.")
+        return "\n".join(filter(None, (f"No skill matches '{query}'." if query
+                                       else "No skills are installed.", note)))
     from core.surfaces.tappable import read_token
     lines = [f"{len(rows)} skill(s) I can load:"]
     for sid, desc in rows:
@@ -100,4 +111,6 @@ def skills_reply(user_id: str, args: list) -> str:
         lines.append(f"• {sid}" + (f" — {desc}" if desc else "")
                      + (f" · {tap}" if tap else ""))
     lines.append("Skills waiting for your review are in /pending.")
+    if note:
+        lines.append(note)
     return "\n".join(lines)

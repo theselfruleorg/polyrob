@@ -28,6 +28,8 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
+from core.async_bridge import communicate_or_kill
+
 _TIMEOUT_SEC = 30
 
 #: Readable only by the agent identity + root (deployment/hardening/
@@ -110,7 +112,6 @@ async def perform_dev_command(text: str) -> str:
     msg = (text or "").strip()
     argv = [script, "--status"] if not msg else [script]
     env = _child_env(spool_auth_env(msg) if msg else {})
-    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -119,14 +120,9 @@ async def perform_dev_command(text: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await asyncio.wait_for(
-            proc.communicate(input=msg.encode("utf-8", errors="replace")),
-            _TIMEOUT_SEC)
+        out, err = await communicate_or_kill(
+            proc, _TIMEOUT_SEC, input=msg.encode("utf-8", errors="replace"))
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except Exception:
-            pass
         return "Dev rail timed out — the host side is stuck; check the loop by hand."
     except Exception as e:
         return f"Dev rail failed to run: {e}"

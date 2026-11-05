@@ -112,18 +112,17 @@ def stamp_owner_seat(orchestrator=None, *, session_id: Optional[str] = None,
         return False
 
 
-def apply_session_output_budget(llm, session_id: Optional[str]) -> int:
-    """Stamp ``AUTONOMOUS_MAX_OUTPUT_TOKENS`` on *llm* for an autonomous session.
+def apply_session_output_budget(session_id: Optional[str]) -> int:
+    """Set this task's output cap: ``AUTONOMOUS_MAX_OUTPUT_TOKENS`` for an autonomous
+    session, none for any other.
 
     The agents-tier half of 057 WS-B's output budget: ``modules/llm`` owns the
-    stamping and the ceiling arithmetic, this owns the session-class decision
+    cap and the ceiling arithmetic, this owns the session-class decision
     (``modules`` may not import ``agents``). Returns the cap in force, 0 = none.
     """
     from modules.llm.output_budget import apply_output_budget, autonomous_max_output_tokens
     cap = autonomous_max_output_tokens()
-    if cap <= 0 or not budget_class_autonomous(session_id):
-        return 0
-    return apply_output_budget(llm, cap)
+    return apply_output_budget(cap if cap > 0 and budget_class_autonomous(session_id) else 0)
 
 
 def apply_session_cache_ttl(llm, session_id: Optional[str]) -> Optional[str]:
@@ -256,7 +255,8 @@ class RegimePolicy:
 
     __slots__ = ("pin_initial_task", "latest_owner_turn_wins", "demote_automation_recall",
                  "recall_own_runs_first", "owner_memory", "run_record",
-                 "child_owner_brief", "model_tier", "review_after_run", "reflect_on_close")
+                 "child_owner_brief", "model_tier", "review_after_run", "reflect_on_close",
+                 "action_ledger")
 
     def __init__(self, *, pin_initial_task: bool, latest_owner_turn_wins: bool,
                  demote_automation_recall: bool, recall_own_runs_first: bool,
@@ -288,6 +288,10 @@ class RegimePolicy:
         #: 095 W9 (IN-7): consolidate this session's findings at close (one aux call)
         #: even when the REFLECTION_ON_SESSION_CLOSE posture member is off.
         self.reflect_on_close = False
+        #: 103: what ``core.session_ledger`` shows this regime. ``owner`` = every card
+        #: and outward act of the owner, ``rail`` = this run and its goal or job, ``""``
+        #: = nothing: a public or third-party session never reads the owner's money.
+        self.action_ledger = ""
 
 
 REGIME_POLICY = {
@@ -314,6 +318,12 @@ REGIME_POLICY = {
                         owner_memory=False, run_record=False),
 }
 
+
+# 103 column: everything else keeps the "" default, so a new regime starts closed.
+REGIME_POLICY[OWNER_CHAT].action_ledger = "owner"
+for _regime in (CRON, GOAL, AUTONOMOUS):
+    REGIME_POLICY[_regime].action_ledger = "rail"
+del _regime
 
 # WS5 D4 column (kept out of the row literals so parallel column additions merge).
 for _regime in (OWNER_CHAT, CRON, GOAL, AUTONOMOUS):

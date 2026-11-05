@@ -364,8 +364,10 @@ def _set_autonomous_ceiling(rest: List[str], user_id: Optional[str],
     try:
         from core import prefs
         from core.runtime_paths import prefs_home_dir
-        prefs.write_preference(prefs_home_dir(), user_id,
-                               "budget.defi_autonomous_usd", value)
+        written, why = prefs.write_preference(prefs_home_dir(), user_id,
+                                              "budget.defi_autonomous_usd", value)
+        if not written:
+            return f"Could not save it: {why}"
         from core.wallet import tx_guard
         effective = tx_guard.autonomous_max_usd(user_id, prefs_home_dir())
     except Exception as e:
@@ -390,11 +392,9 @@ def wallet_reply(args: List[str], user_id: Optional[str] = None,
     `/wallet balances` rather than paid for on every status glance.
 
     `/wallet autonomous <usd>` sets how much executes WITHOUT interrupting the
-    owner. That is deliberately the only cap writable from chat: it cannot
-    widen maximum loss, because the catastrophic per-transaction ceiling still
-    binds above it (and is clamped to it at the read site). The catastrophic
-    ceiling itself stays env-only — if a chat surface could raise it, a
-    compromised chat surface could drain the treasury.
+    owner, with no queue: it cannot widen maximum loss, because the per-transaction
+    ceiling still binds above it (and is clamped to it at the read site). That ceiling
+    moves only through the guarded `budget.wallet_per_tx_usd` pref, which queues on chat.
     """
     from core.wallet.authority import owner_refusal
     refusal = owner_refusal(user_id)

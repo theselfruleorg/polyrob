@@ -3,7 +3,7 @@
 `group_admin` returns; nothing here touches a store directly.
 
 Role gating (044 proposal §4.7): `allow`/`deny`/`set`/`role`/`service`/`admins`
-are owner-only; `mode`/`tail` (and the sibling `/mute` command) are owner OR
+are owner-only; `mode`/`tail`/`roles` (and the sibling `/mute` command) are owner OR
 that room's own admin. The one carve-out inside `role`: an admin may grant
 exactly `blocked` (block a disruptive member) — never `admin`/`member`, which
 would let him promote himself or demote another admin.
@@ -18,12 +18,13 @@ from core.surfaces import group_admin
 
 logger = logging.getLogger(__name__)
 
-_OWNER_ONLY_VERBS = frozenset({"allow", "deny", "list", "set", "role", "service", "admins"})
+_OWNER_ONLY_VERBS = frozenset({"allow", "deny", "list", "set", "role", "service", "admins",
+                               "tools", "audit"})
 #: `use` is not an administrative act — it points THIS caller's `here` at a
 #: room. Anyone may focus; what they may then DO is re-checked per verb
 #: against their role in THAT room, so focusing widens nobody.
 _FOCUS_VERBS = frozenset({"use"})
-_OWNER_OR_ADMIN_VERBS = frozenset({"mode", "tail"})
+_OWNER_OR_ADMIN_VERBS = frozenset({"mode", "tail", "roles"})
 _KNOWN_VERBS = _OWNER_ONLY_VERBS | _OWNER_OR_ADMIN_VERBS | _FOCUS_VERBS
 
 _OWNER_ONLY_TEXT = "🔒 Owner only."
@@ -230,7 +231,7 @@ def _gate(verb: str, role: str, tail: List[str]) -> Optional[str]:
     """
     if verb not in _KNOWN_VERBS:
         return (f"Unknown /groups verb {verb!r}. Try: allow, deny, list, use, mode, "
-                f"set, role, tail, service, admins.")
+                f"set, role, roles, tools, audit, tail, service, admins.")
     if verb == "role":
         if role == "owner":
             return None
@@ -263,6 +264,14 @@ async def groups_reply(task_agent: Any, result: Any, args: List[str]) -> str:
             return _HERE_OUTSIDE_ROOM_TEXT
 
     role = _resolve_role(result, container, surface, chat_id)
+
+    # 101 Step 1.4: `/groups role here admin` in REPLY names the replied-to
+    # person. Normalized BEFORE the gate: the gate reads the list the grant reads.
+    if verb == "role" and len(tail_args) == 1:
+        reply_form = _role_by_reply(result, surface, chat_id, tail_args[0])
+        if isinstance(reply_form, str):
+            return reply_form
+        tail_args = reply_form or tail_args
 
     denial = _gate(verb, role, tail_args)
     if denial is not None:
@@ -322,10 +331,17 @@ async def groups_reply(task_agent: Any, result: Any, args: List[str]) -> str:
             # (the grant overwrites the target's row, so a block demotes).
             # The read fails closed to `blocked`, which an admin may re-block.
             current = group_admin.room_role(container, surface, chat_id, user_ref)
-            if current in ("admin", "owner"):
+            if current in ("admin", "owner") or _is_owner_id(user_ref):
                 return "🔒 Only the owner can block a room admin."
         by = result.inbound.identity.raw_user_id or result.inbound.identity.user_id
         return group_admin.set_role(container, surface, chat_id, user_ref, new_role, by=by)
+    if verb == "roles":
+        return group_admin.list_roles(container, surface, chat_id)
+    if verb == "audit":
+        n = int(tail_args[0]) if tail_args and tail_args[0].isdigit() else 30
+        return group_admin.audit(container, surface, chat_id, n)
+    if verb == "tools":
+        return _tools_reply(container, owner_uid, surface, chat_id, tail_args)
     if verb == "tail":
         n = 30
         if tail_args and tail_args[0].lstrip("-").isdigit():
@@ -365,11 +381,26 @@ async def groups_reply(task_agent: Any, result: Any, args: List[str]) -> str:
     return f"Unknown /groups verb {verb!r}."
 
 
+def _tools_reply(container: Any, owner_uid: str, surface: str, chat_id: str,
+                 args: List[str]) -> str:
+    """`/groups tools here [admin] [add|remove <name>]` — owner only (`_gate`)."""
+    words = [a.lower() for a in args]
+    admin = bool(words) and words[0] == "admin"
+    if admin:
+        words = words[1:]
+    if not words:
+        return group_admin.show_tools(container, owner_uid, surface, chat_id)
+    if len(words) != 2 or words[0] not in ("add", "remove"):
+        return "Usage: /groups tools here [admin] [add|remove <name>]"
+    return group_admin.set_tools(container, owner_uid, surface, chat_id, admin=admin,
+                                 add=words[0] == "add", name=words[1])
+
+
 async def _admins_reply(task_agent: Any, surface: str, chat_id: str) -> str:
     """044 T19: Telegram's own admin list, as SUGGESTIONS only — writes
     nothing. Each suggestion renders the exact `/groups role here <id> admin`
-    command so the owner confirms with a single copy-paste, never a silent
-    auto-grant."""
+    command, naming the room, so the owner confirms with a single copy-paste,
+    never a silent auto-grant."""
     container = getattr(task_agent, "container", None)
     harness = container.get_service("telegram_harness") if container is not None else None
     if harness is None or not hasattr(harness, "suggest_admins"):
@@ -378,8 +409,9 @@ async def _admins_reply(task_agent: Any, surface: str, chat_id: str) -> str:
     if not suggestions:
         return f"No (human) Telegram admins found for {surface}:{chat_id}."
     lines = [f"{len(suggestions)} Telegram admin(s) in {surface}:{chat_id} — confirm each:"]
+    where = group_admin.room_ref(surface, chat_id)   # works from a DM with no focus
     for s in suggestions:
-        lines.append(f"• {s['name']}|{s['id']} — /groups role here {s['id']} admin")
+        lines.append(f"• {s['name']}|{s['id']} — /groups role {where} {s['id']} admin")
     return "\n".join(lines)
 
 
@@ -403,12 +435,42 @@ def _reply_target(result: Any) -> Optional[Tuple[str, str, bool]]:
     """
     from surfaces.telegram.harness import _tg_message
     msg = _tg_message(getattr(result.inbound, "raw", None) or {}) or {}
-    frm = (msg.get("reply_to_message") or {}).get("from") or {}
+    reply = msg.get("reply_to_message") or {}
+    # ⚠️ 101 R3: every message in a forum topic "replies" to the topic root, so
+    # this read a line with no reply as a reply to whoever opened the topic.
+    if reply.get("forum_topic_created") is not None:
+        return None
+    frm = reply.get("from") or {}
     uid = frm.get("id")
     if not uid:
         return None
     name = frm.get("first_name") or frm.get("username") or str(uid)
     return str(uid), str(name), bool(frm.get("is_bot"))
+
+
+def _role_by_reply(result: Any, surface: Optional[str], chat_id: Optional[str], word: str):
+    """``[uid, role]`` when *word* is a role and this line is a reply in THAT room;
+    a refusal string for a bot target; else None (the ordinary grammar decides)."""
+    from core.surfaces.group_roles import ROLES
+    role = str(word).strip().lower()
+    if role not in ROLES or _is_dm(result) or not _targets_here(result, surface, chat_id):
+        return None
+    target = _reply_target(result)
+    if target is None:
+        return None
+    if target[2]:
+        return "❌ A bot cannot hold a room role."
+    return [target[0], role]
+
+
+def _is_owner_id(user_ref: Any) -> bool:
+    """Is this raw platform id the owner's? Fail closed: unknown reads as yes."""
+    try:
+        from core.instance import resolve_owner_telegram_id
+        return str(user_ref).strip() == str(resolve_owner_telegram_id() or "")
+    except Exception as e:
+        logger.warning("group_ops: owner id unresolved (%s)", e)
+        return True
 
 
 def _member_may_use(container: Any, surface: str, chat_id: str, verb: str) -> bool:

@@ -57,6 +57,11 @@ yours, typed in that message. The answer is handed to that work's next run,
 once. `send_message(wait_for_response=true)`
 from a background run is refused with this remedy.
 
+## What the agent did
+
+The agent reads exact counts and recent lines of every decision you made and each act outside from its
+stores. This survives compaction and `/new`, and never reaches a group or another person.
+
 ## Switches
 
 `OWNER_THREAD_INJECT` (on by default) reads the thread into sessions: the tail,

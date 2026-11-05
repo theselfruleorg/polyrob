@@ -257,6 +257,7 @@ goal or cron run moves funds unattended.
 |---|---|
 | A goal sits in `ready` and never starts | `/status` (or `polyrob autonomy status`) — master switch, posture, and whether a pause is active. |
 | "the goal board is durable, but no dispatcher will pick goals up" | `AUTONOMY_ENABLED`/`GOALS_ENABLED` is off. `polyrob autonomy on`. |
+| A goal or job is due but waits | `/status` names a hold. New work waits under 500 MB of free memory, at 90% of `memory.high`, or under 2 GB of free disk (less on a small machine). A hold of over an hour tells you. |
 | A job never runs | `/jobs` — is it paused, and when is its next run? `CRON_ENABLED` must be on. |
 | Goals run but you never hear about them | `goals.notify_on_done`, and `AUTONOMY_POSTURE` — `silent` means autonomous work is not reported. |
 | The agent keeps asking for the same thing | `/inbox`, then answer the decision (`/fulfill <id>` for an ask). |

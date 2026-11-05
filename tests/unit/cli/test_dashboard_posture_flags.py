@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 
 _POSTURE_ENV_KEYS = ("POLYROB_POSTURE", "WEBGATE_MULTITENANT", "WEBGATE_HOST",
-                      "WEBGATE_PORT", "WEBVIEW_HOST", "WEBVIEW_PORT")
+                      "WEBGATE_PORT", "WEBVIEW_HOST", "WEBVIEW_PORT", "POLYROB_LOCAL",
+                      "WEBVIEW_ALLOW_LOCAL_POSTURE")
 
 
 @pytest.fixture(autouse=True)
@@ -102,3 +103,27 @@ def test_dashboard_local_non_loopback_bind_allowed_by_override(monkeypatch):
         )
     assert result.exit_code == 0, result.output
     run.assert_called_once()
+
+
+def _run_dashboard(*args):
+    from cli.commands.dashboard import dashboard
+    with patch("uvicorn.run"):
+        return CliRunner().invoke(dashboard, ["--no-browser", *args])
+
+
+def test_a_console_on_the_owners_computer_has_the_terminals_abilities():
+    """104 D2."""
+    _run_dashboard()
+    assert os.environ.get("POLYROB_LOCAL") == "1"
+
+
+@pytest.mark.parametrize("args", [("--posture", "own_ops"), ("--multitenant",), ("--host", "0.0.0.0")])
+def test_a_served_console_never_sets_the_local_profile(args):
+    _run_dashboard(*args)
+    assert "POLYROB_LOCAL" not in os.environ
+
+
+def test_an_explicit_opt_out_stays(monkeypatch):
+    monkeypatch.setenv("POLYROB_LOCAL", "0")
+    _run_dashboard()
+    assert os.environ["POLYROB_LOCAL"] == "0"

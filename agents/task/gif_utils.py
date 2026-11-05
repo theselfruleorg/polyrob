@@ -17,6 +17,8 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+_TEMP_FRAME_PREFIX = "polyrob-gif-frame-"
+
 
 def create_history_gif(
     history_items: List,
@@ -42,6 +44,7 @@ def create_history_gif(
         logger.warning("No history items provided for GIF creation")
         return None
 
+    screenshot_paths: List[str] = []
     try:
         # Extract screenshots and captions from history
         screenshot_paths, caption_texts = _extract_screenshots_from_history(
@@ -70,6 +73,8 @@ def create_history_gif(
     except Exception as e:
         logger.error(f"Error creating history GIF: {e}", exc_info=True)
         return None
+    finally:
+        _remove_temp_frames(screenshot_paths)
 
 
 def get_conversation_screenshots(
@@ -279,6 +284,16 @@ def create_text_only_gif(output_path: str, texts: List[str], user_id: Optional[s
 # PRIVATE HELPER FUNCTIONS
 # ================================
 
+def _remove_temp_frames(paths: List[str]) -> None:
+    """Delete the frames decoded for one GIF; a session's own screenshot files stay."""
+    for path in paths:
+        if os.path.basename(path).startswith(_TEMP_FRAME_PREFIX):
+            try:
+                os.unlink(path)
+            except OSError as e:
+                logger.debug(f"Temp GIF frame not removed: {e}")
+
+
 def _extract_screenshots_from_history(history_items: List, max_screenshots: int) -> tuple[List[str], List[str]]:
     """
     Extract screenshot paths and captions from history items.
@@ -310,7 +325,7 @@ def _extract_screenshots_from_history(history_items: List, max_screenshots: int)
                 try:
                     import tempfile
                     import base64
-                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    with tempfile.NamedTemporaryFile(prefix=_TEMP_FRAME_PREFIX, suffix='.png', delete=False) as tmp:
                         tmp.write(base64.b64decode(item.state.screenshot))
                         screenshot_paths.append(tmp.name)
                         caption_texts.append(_extract_caption_from_item(item, i))

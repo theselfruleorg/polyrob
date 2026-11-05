@@ -79,7 +79,6 @@ def _build_agent(*, done=True, validate=True):
     a.message_manager = mm
 
     a._log_context_breakdown = MagicMock()
-    a.cleanup_memory = MagicMock()
     a._check_if_stopped = MagicMock()
     a._has_active_browser_usage = MagicMock(return_value=False)
     a._validate_model_output = MagicMock(return_value=validate)

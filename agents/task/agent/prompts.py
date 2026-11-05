@@ -494,6 +494,8 @@ class SystemPrompt:
 				lines.append(_p("surface.room_rules", rules=_room_rules))
 			# 046: what this room sells, rendered by core from the room's own
 			# prices (`room_actions.describe_for_model`) — a description, not a verb.
+			if s.get("chat_admin_session"):   # 101: a room+admin session
+				lines.append(_p("room_admin.session", **s["chat_admin_session"]))
 			_room_paid = str(s.get("chat_paid_actions") or "").strip()
 			if _room_paid:
 				lines.append(_room_paid)

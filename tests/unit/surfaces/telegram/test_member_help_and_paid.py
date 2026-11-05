@@ -116,10 +116,14 @@ def test_the_owners_help_is_byte_identical(env, priced):
     assert out == _help_text()
 
 
-def test_a_room_admins_help_is_byte_identical(env, priced):
+def test_a_room_admins_help_names_only_what_the_admin_can_do(env, priced):
     from surfaces.telegram.harness import _help_text
     out = _cmd(_Agent(str(env)), _result("/help", chat_role="admin"))
-    assert out == _help_text()
+    assert out != _help_text()
+    for verb in ("/mute", "/groups mode", "/cancel"):
+        assert verb in out
+    for owner_only in ("/wallet", "/trade", "/pay", "/config"):
+        assert owner_only not in out
 
 
 def test_a_dm_help_is_byte_identical(env, priced):

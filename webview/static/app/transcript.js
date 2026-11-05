@@ -31,6 +31,7 @@
 import { loadSocketIo } from './socket-client.js';
 import { postJson, serverAnswer } from './http.js';
 import { fmtUsd } from './format.js';
+import { appendRichText } from './rich-text.js';
 
 /** The feed event types this transcript draws, grouped by how it draws them. */
 const USER_TYPES = new Set(['user_message', 'user_message_during_execution']);
@@ -167,6 +168,13 @@ export function statusToState(raw) {
   if (FAILED_STATUS.has(s)) return 'failed';
   if (STOPPED_STATUS.has(s)) return 'stopped';
   return null; // a status we have never seen — leave the receipt be
+}
+
+/** Who wrote a line, as the person reading it says it. */
+function personLabel(sender, surface) {
+  const viewer = document.body?.dataset?.viewerId || '';
+  if (sender && viewer && sender === viewer) return 'You';
+  return sender ? `Person: ${sender}${surface ? ' on ' + surface : ''}` : 'Person (identity unavailable)';
 }
 
 function el(tag, className, text) {
@@ -308,6 +316,24 @@ export class Transcript {
     if (TOOL_TYPES.has(type)) return this._tool(data, event);
     if (COST_TYPES.has(type)) return this._cost(data, event);
     if (STATUS_TYPES.has(type)) return this._status(data, event);
+    if (type === 'provider_failure') {
+      if (data.error_type === 'LLMAuthenticationError' && !data.fallback_provider) {
+        this.keyRefusedBy = String(data.failed_provider || '');
+      }
+      return undefined;
+    }
+    // 104: a gate in this chat waits in the Inbox, and the chat says so.
+    if (type === 'awaiting_approval' && this.turn) {
+      this.turn.state = 'waiting';
+      this.turn.inbox = true;
+      return this._receipt();
+    }
+    if (type === 'approval_resolved' && this.turn && this.turn.inbox) {
+      this.turn.state = 'working';
+      this.turn.inbox = false;
+      return this._receipt();
+    }
+    if (type === 'session_completion' && data.success === false) return this._runFailed(event);
     if (TURN_CLOSE_TYPES.has(type)) return this._close(event, 'done');
     if (COMMAND_REPLY_TYPES.has(type)) {
       const text = String(data.text || '').trim();
@@ -368,11 +394,14 @@ export class Transcript {
     const key = `u:unknown:${line.replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
     if (this.userBubbles.has(key)) return;
     const turn = el('div', 'turn turn-person');
-    turn.appendChild(el('div', 'person-label', 'Person (identity unavailable)'));
+    // The template sets this only for a chat the signed-in person started from a seat.
+    const yours = document.body?.dataset?.firstLineYours === 'true';
+    const label = el('div', 'person-label', yours ? 'You' : personLabel('', ''));
+    turn.appendChild(label);
     const bubble = el('div', 'bubble', line);
     turn.appendChild(bubble);
     this.thread.appendChild(turn);
-    this.userBubbles.set(key, { at: 0, node: bubble, during: false, seed: true, typed: new Set() });
+    this.userBubbles.set(key, { at: 0, node: bubble, label, during: false, seed: true, typed: new Set() });
   }
 
   _user(data, ts, event, type) {
@@ -388,7 +417,14 @@ export class Transcript {
     const identity = sender ? JSON.stringify([surface, sender]) : 'unknown';
     const key = `u:${identity}:${text.replace(/…$/, '').replace(/\s+/g, ' ').slice(0, DURING_CUT)}`;
     const at = eventMs(event, this.now());
-    const prior = this.userBubbles.get(key);
+    // The during-execution copy has no sender and its `user_message` has one: without
+    // this they read as two people and the line was drawn twice.
+    const line = text.replace(/…$/, '').replace(/\s+/g, ' ').slice(0, DURING_CUT);
+    const prior = this.userBubbles.get(key) || this._sameLine(line, sender);
+    if (prior && sender && !prior.named && prior.label && !prior.seed) {
+      prior.label.textContent = personLabel(sender, surface);
+      prior.named = true;
+    }
     if (prior && prior.seed) {
       // The stored first line already drew this message: take its clock once.
       prior.seed = false;
@@ -416,13 +452,25 @@ export class Transcript {
     this._close(event, this.turn && this.turn.state === 'working' ? 'so_far'
       : (this.turn && this.turn.state));
     const turn = el('div', 'turn turn-person');
-    turn.appendChild(el('div', 'person-label', sender
-      ? `Person: ${sender}${surface ? ' on ' + surface : ''}` : 'Person (identity unavailable)'));
+    const label = el('div', 'person-label', personLabel(sender, surface));
+    turn.appendChild(label);
     const bubble = el('div', 'bubble', text);
     turn.appendChild(bubble);
     this.thread.appendChild(turn);
-    this.userBubbles.set(key, { at, node: bubble, during,
+    this.userBubbles.set(key, { at, node: bubble, label, line, named: Boolean(sender), during,
       typed: new Set(event && event._id ? [type] : []) });
+  }
+
+  /** The bubble of this line when one of the two copies does not name its sender. */
+  _sameLine(line, sender) {
+    if (sender) {
+      const unnamed = this.userBubbles.get(`u:unknown:${line}`);
+      return unnamed && !unnamed.seed ? unnamed : undefined;
+    }
+    for (const entry of this.userBubbles.values()) {
+      if (entry.line === line) return entry;
+    }
+    return undefined;
   }
 
   /** Close the open turn in *state*: its receipt drawn once more, without
@@ -487,7 +535,7 @@ export class Transcript {
     const norm = text.toLowerCase();
     if (turn.bubbles.has(norm)) return;
     turn.bubbles.add(norm);
-    turn.said.appendChild(el('p', null, text));
+    appendRichText(turn.said, text);
     this._receipt();
   }
 
@@ -581,13 +629,26 @@ export class Transcript {
     this.thread.appendChild(line);
   }
 
+  /** A run that ended on an error said nothing: the session status still reads
+   *  `completed`, so a refused key left an empty chat. Name the fix. */
+  _runFailed(event) {
+    if (this.turn) this._close(event, 'failed');
+    if (!this.keyRefusedBy) return this._failedLine();
+    const line = el('p', 'note is-failed',
+      String(this.copy.turn_key_refused || '').replaceAll('{provider}', this.keyRefusedBy));
+    line.setAttribute('role', 'status');
+    this.thread.appendChild(line);
+    this.keyRefusedBy = '';
+    return undefined;
+  }
+
   /** Redraw the current turn's receipt from its own counters. */
   _receipt(turn = this.turn) {
     if (!turn) return;
     const tpl = turn.state === 'done' ? this.copy.receipt_done
       : turn.state === 'stopped' ? this.copy.receipt_stopped
         : turn.state === 'so_far' ? this.copy.receipt_so_far
-          : turn.state === 'waiting' ? this.copy.receipt_waiting
+          : turn.state === 'waiting' ? ((turn.inbox && this.copy.receipt_waiting_inbox) || this.copy.receipt_waiting)
             : turn.state === 'failed' ? this.copy.receipt_failed
               : turn.state === 'ended' ? this.copy.receipt_ended
                 : this.copy.receipt_working;

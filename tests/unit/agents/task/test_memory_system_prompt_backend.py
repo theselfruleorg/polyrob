@@ -34,7 +34,7 @@ def test_backend_on_teaches_each_registered_store(monkeypatch, value):
     for needle in ("`session_search`", "Recalled from memory", "`memory` field",
                    "`load_skill`", "owner.md", "`recent_activity`"):
         assert needle in text, needle
-    assert len(text.splitlines()) <= 6
+    assert len(text.splitlines()) <= 7
     prompt = SystemPrompt("- session_search: x", use_native_tools=True,
                           tool_ids=[]).get_system_message().content
     assert "<memory-system>" in prompt

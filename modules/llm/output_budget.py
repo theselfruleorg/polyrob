@@ -10,8 +10,8 @@ Two things live here, both keyed off the same fact:
 1. :func:`output_token_cap` — the ONE answer to "how many output tokens may this
    request ask for". It is ``LLM_MAX_OUTPUT_TOKENS`` (the existing absolute
    ceiling: cost + the credit pre-authorisation a metered provider performs),
-   narrowed by ``AUTONOMOUS_MAX_OUTPUT_TOKENS`` for a cron/goal session that has
-   been stamped by :func:`apply_session_output_budget`. An owner's chat keeps the
+   narrowed by ``AUTONOMOUS_MAX_OUTPUT_TOKENS`` for a cron/goal session's task
+   (``agents.task.session_class.apply_session_output_budget``). An owner's chat keeps the
    old ceiling.
 2. :func:`finish_reason_of` / :func:`output_was_truncated` — whether the provider
    stopped because it ran out of budget. Nothing in the tree surfaced this
@@ -36,9 +36,6 @@ from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
-#: attribute stamped on a client/adapter by apply_session_output_budget.
-_ATTR = "_polyrob_session_output_cap"
-
 #: finish reasons that mean "I ran out of output budget", across providers.
 _TRUNCATED = frozenset({"length", "max_tokens", "MAX_TOKENS", "model_length"})
 
@@ -50,29 +47,23 @@ def autonomous_max_output_tokens() -> int:
     return value if value > 0 else 0
 
 
-def apply_output_budget(llm: Any, cap: int) -> int:
-    """Stamp an output cap onto *llm* (and its wrapped client). Returns the cap.
+#: This task's session output cap. A context variable, not a client stamp: the main
+#: client is shared per provider, so a stamp from one cron run narrowed every owner
+#: chat on that client (prod 2026-11-04: the owner's compaction summary was cut at
+#: 8,192 tokens, with a documented 16,384 ceiling and no ``LLM_MAX_OUTPUT_TOKENS``).
+_SESSION_CAP: ContextVar[int] = ContextVar("polyrob_session_output_cap", default=0)
 
-    Idempotent and cheap — call it once a step. Re-stamping each step is
-    deliberate: a provider fallback builds a NEW client mid-run, and a budget
-    that silently stopped applying after a fallback would be a budget nobody
-    could trust. Fail-open.
 
-    ⚠️ WHICH sessions get a budget is not decided here — ``modules`` may not
-    import ``agents`` (layering ratchet). The agents-tier wrapper is
-    ``agents.task.session_class.apply_session_output_budget``.
+def apply_output_budget(cap: int) -> int:
+    """Set this task's session output cap. Returns the cap in force, 0 = none.
+
+    Set once a step, for EVERY session class: 0 clears what a parent task's
+    context carried in. An asyncio task copies its parent's context, so a chat
+    spawned from a run must not inherit that run's budget.
     """
-    if llm is None or cap <= 0:
-        return 0
-    try:
-        setattr(llm, _ATTR, cap)
-        client = getattr(llm, "_client", None)
-        if client is not None:
-            setattr(client, _ATTR, cap)
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("session output budget not applied", exc_info=True)
-        return 0
-    return cap
+    value = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else 0
+    _SESSION_CAP.set(value)
+    return value
 
 
 #: 095 W1d: an output cap for the calls inside :func:`bounded_output` only — a
@@ -102,10 +93,7 @@ def output_token_cap(client: Any, default_cap: int) -> int:
     call_cap = _CALL_CAP.get()
     if call_cap > 0:
         cap = min(cap, call_cap)
-    # Only an int counts. `int(x)` on an arbitrary object is a trap — a MagicMock
-    # answers 1, which would silently pin every request to a 1-token ceiling.
-    raw = getattr(client, _ATTR, 0)
-    session_cap = raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
+    session_cap = _SESSION_CAP.get()
     if session_cap > 0:
         return min(cap, session_cap)
     return cap

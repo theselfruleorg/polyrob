@@ -187,8 +187,6 @@ class SettlementNotifyMixin:
         # for a refund — "fulfillment is queued" would be false.
         from core.commerce.orders import SOLD
         if status not in SOLD:
-            # Also an owner-attested invoice: the order stays awaiting_payment and
-            # `on_settled` already said it is NOT fulfilled automatically.
             return
         state = {"fulfilling": "fulfillment started",
                  "paid": "fulfillment is queued"}.get(status, f"the order is {status}")

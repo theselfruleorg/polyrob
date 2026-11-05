@@ -74,6 +74,44 @@ def third_party_address_refusal(controller: Any, text: str):
         include_in_memory=True)
 
 
+def send_text_refusal(controller: Any, text: str):
+    """A refusal ActionResult, or None when ``send_message`` may send this text."""
+    return third_party_address_refusal(controller, text) or _stale_verb_refusal(controller, text)
+
+
+def _stale_verb_refusal(controller: Any, text: str):
+    note = stale_verb_note(controller, text)
+    if not note:
+        return None
+    from agents.task.loop_types.controller_types import ActionResult
+    return ActionResult(extracted_content=f"send_message: {note}", include_in_memory=True)
+
+
+def stale_verb_note(controller: Any, text: str) -> str:
+    """103: what to tell the agent when *text* names a verb no seat routes, or "". Given
+    ONCE per verb, so that this check can never stop a reply. A second send with the same
+    word goes out: the word may be a path or a name. ``send_message`` and ``message`` both
+    ask here."""
+    try:
+        from core.surfaces.verb_check import unknown_verbs, verb_note
+        seen = getattr(controller, "_stale_verbs_refused", None)
+        if seen is None:
+            seen = set()
+            controller._stale_verbs_refused = seen
+        fresh = [verb for verb in unknown_verbs(text) if verb not in seen]
+    except Exception:
+        logger.debug("verb check skipped (fail-open)", exc_info=True)
+        return ""
+    if not fresh:
+        return ""
+    seen.update(fresh)
+    notes = " ".join(note for note in (verb_note(verb) for verb in fresh) if note)
+    return (f"NOT SENT. {', '.join(fresh)} is not a command of this agent. "
+            + (f"{notes} " if notes else "")
+            + "Rewrite the message without it, from what you read and not from memory. If the "
+            "word is a path or a name and not a command, send the same text again.")
+
+
 def annotate_decided_tokens(controller: Any, text: str, user_id: str) -> str:
     """Rewrite approval tokens the owner already decided (core.self_evolution).
 
@@ -102,9 +140,16 @@ async def route_autonomous_send(controller: Any, text: str) -> Optional[str]:
 
     Moved verbatim out of ``action_registration.py``. Fail-open — never fails
     the action.
+
+    104: a person's own chat in the console reads this text from the session feed, so it
+    was delivered. Routing it too told the agent and Health that it "reached nobody".
     """
     try:
         from core.surfaces.user_delivery import maybe_deliver_autonomous_send
+        from agents.task.session_class import is_autonomous_session
+        from tools.controller.approval import is_console_process
+        if is_console_process() and not is_autonomous_session(controller.session_id):
+            return None
         outcome = await maybe_deliver_autonomous_send(
             controller.orchestrator, controller.session_id, text)
         if outcome is not None:

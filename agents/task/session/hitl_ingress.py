@@ -170,7 +170,9 @@ class HITLIngressMixin:
 
         # C1: expand @file/@folder/@diff/@url references for trusted human intake only
         # (allowlist). Forged/system kinds are never expanded — see _TRUSTED_CONTEXT_REF_KINDS.
-        if kind in _TRUSTED_CONTEXT_REF_KINDS:
+        # ⚠️ 101: never in a PUBLIC session. A room line can quote a member's words, and
+        # expansion reads files and URLs with no tool call, so no room gate sees it.
+        if kind in _TRUSTED_CONTEXT_REF_KINDS and not getattr(self, "_public_session", False):
             try:
                 from core.config_policy import AutonomyConfig
                 if AutonomyConfig.context_references_enabled():

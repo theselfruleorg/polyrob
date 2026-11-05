@@ -17,9 +17,10 @@ from core.status_types import HealthItem, SEVERITY_WARN, Section
 
 
 def _posture_section() -> Section:
-    from core.config_policy.posture_card import build_posture_card, render_posture_card
+    from core.config_policy.posture_card import build_answers, build_posture_card
     rows = build_posture_card()
-    sec = Section(name="posture", lines=render_posture_card(rows), data={"rows": rows})
+    sec = Section(name="posture", lines=build_answers(rows=rows) + ["/mode all shows every setting."],
+                  data={"rows": rows})
     _member_env_health(sec)
     return sec
 

@@ -259,10 +259,7 @@ def _live_session_ids(task_agent):
 
     Duck-typed rather than imported: ``core/`` may not import ``agents.*``
     (tests/test_layering_ratchet.py), and this needs no more than "does the
-    object expose a registry that can list session ids". The agents-tier
-    ``session_registry.resident_session_ids`` stays for callers inside that
-    tier — it collapses the two cases to ``[]``, which is safe there and is not
-    safe here.
+    object expose a registry that can list session ids".
     """
     registry = getattr(task_agent, "_registry", None)
     lister = getattr(registry, "session_ids", None)
@@ -873,6 +870,8 @@ class AutonomyHandles:
         try:
             self._hb_stop = asyncio.Event()
             self._hb_task = asyncio.create_task(self._heartbeat_loop())
+            from core.loop_watch import start as start_loop_watch
+            start_loop_watch()
         except Exception as e:  # never let liveness reporting block startup
             logger.warning("autonomy heartbeat not started: %s", e)
 
@@ -1174,6 +1173,13 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     handles = AutonomyHandles()
     handles._task_agent = task_agent
     handles._data_dir = data_dir
+    from core import memory_pressure
+    from core.self_evolution import push_owner_message
+
+    async def _tell_owner_of_hold(text: str) -> None:
+        await push_owner_message(getattr(task_agent, "container", None), text,
+                                 source="resource_hold")
+    memory_pressure.set_owner_notifier(_tell_owner_of_hold)
 
     # 031: the owner pause record. Loops always start ARMED (a paused deployment
     # keeps its tickers so a resume takes effect without a restart); each tick

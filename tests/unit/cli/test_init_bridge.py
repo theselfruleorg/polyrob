@@ -66,17 +66,17 @@ def test_init_skip_keys_skips_section_one(monkeypatch, tmp_path):
     # --skip-keys + --quick: only the model prompt should appear.
     result = runner.invoke(init_mod.init_cmd, ["--skip-keys", "--quick"], input="\n")
     assert result.exit_code == 0, result.output
-    assert "Section 1/7" not in result.output
-    assert "Section 2/7" in result.output
+    assert "Section 1/2" not in result.output
+    assert "Section 2/2" in result.output
 
 
 def test_init_next_steps_block(monkeypatch, tmp_path):
     monkeypatch.setattr("core.paths.polyrob_home", lambda: tmp_path)
     runner = CliRunner()
     result = runner.invoke(init_mod.init_cmd, ["--quick", "--skip-keys"], input="\n")
-    assert "Next steps" in result.output
+    assert "Later, if you want them" in result.output
     assert "wallet init" in result.output
-    assert "polyrob avatar set" in result.output
+    assert "polyrob service install" in result.output
 
 
 def test_init_wallet_optin_prompt_wired(monkeypatch, tmp_path):

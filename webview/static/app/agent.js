@@ -260,6 +260,7 @@ export function renderFace(root, av, copy) {
 //: same axis twice in two vocabularies, which is the defect this replaces.
 const _POSTURE_AXES = [
   { key: "local", value: "posture_local" },
+  { key: "asks", value: "posture_asks" },
   { key: "mode", value: "posture_mode" },
   { key: "loop", value: "posture_loop" },
   { key: "compute", value: "posture_compute" },
@@ -273,8 +274,8 @@ export function postureEntries(copy) {
   return _POSTURE_AXES.map((axis) => {
     const entry = el("div", "entry");
     entry.dataset.axis = axis.key;
-    entry.appendChild(el("h3", "entry-title", (copy && copy[`ov_axis_${axis.key}_title`]) || ""));
-    entry.appendChild(el("p", "entry-body", (copy && copy[`ov_axis_${axis.key}_why`]) || ""));
+    entry.appendChild(el("h3", "entry-title", (copy && (copy[`ov_axis_${axis.key}_title`] || copy[`ov_${axis.key}_title`])) || ""));
+    entry.appendChild(el("p", "entry-body", (copy && (copy[`ov_axis_${axis.key}_why`] || copy[`ov_${axis.key}_why`])) || ""));
     const state = (copy && copy[axis.value]) || DASH;
     const meta = el("p", "entry-meta");
     const pill = el("span", "pill");

@@ -832,3 +832,9 @@ def pytest_collection_modifyitems(config, items):
         path = getattr(item, "path", None)
         if path is not None and path.suffix == ".py" and _module_is_slow(path):
             item.add_marker(slow)
+
+
+@pytest.fixture(autouse=True)
+def _console_process_mark_stays_per_test(monkeypatch):
+    """A test that boots the console marks the process (104); the next test must not inherit it."""
+    monkeypatch.setattr("tools.controller.approval._CONSOLE_PROCESS", False, raising=False)

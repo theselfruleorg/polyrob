@@ -75,3 +75,22 @@ def test_build_cli_container_runs_boot_migrations():
         "the CLI container must migrate bot.db at boot — otherwise `polyrob run` "
         "can hit 'no such column' on any upgraded install"
     )
+
+
+def test_migrate_upgrade_runs_without_the_crypto_extra(tmp_path):
+    """⚠️ `polyrob update --apply` runs this exact command, and a failure rolls the
+    whole update back. A table module imported a package whose __init__ needed
+    eth_account, so every install without the crypto extra could never update."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("POLYROB_", "DB_"))}
+    env.update(HOME=str(tmp_path), POLYROB_HOME=str(tmp_path / "home"),
+               POLYROB_DATA_DIR=str(tmp_path / "data"), DB_PATH=str(tmp_path / "data" / "bot.db"),
+               PYTHONPATH=str(REPO_ROOT))
+    blocked = ("import sys, runpy\n"
+               "for name in ('eth_account', 'web3', 'eth_keys', 'eth_utils'):\n"
+               "    sys.modules[name] = None\n"
+               "sys.argv = ['migrate', 'upgrade']\n"
+               "runpy.run_module('migrations.migrate', run_name='__main__')\n")
+    proc = subprocess.run([sys.executable, "-c", blocked], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stdout[-1500:] + proc.stderr[-1500:]
+

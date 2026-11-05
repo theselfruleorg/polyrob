@@ -398,13 +398,11 @@ class LLMRunnerMixin:
 			use_vision=self.use_vision
 		)
 		
-		# 057 WS-B: stamp this session's OUTPUT budget on the active client.
-		# Re-stamped every step on purpose — a provider fallback builds a new
-		# client mid-run, and a budget that silently stopped applying after a
-		# fallback would be a budget nobody could trust. No-op unless
-		# AUTONOMOUS_MAX_OUTPUT_TOKENS is set AND this is a cron/goal session.
+		# 057 WS-B: this task's OUTPUT budget. Set every step for every session class,
+		# so a task spawned from a cron run does not keep that run's cap. A cap only
+		# when AUTONOMOUS_MAX_OUTPUT_TOKENS is set AND this is a cron/goal session.
 		from agents.task.session_class import apply_session_output_budget
-		apply_session_output_budget(self.llm, self.session_id)
+		apply_session_output_budget(self.session_id)
 
 		# F4: stamp this session's Anthropic prompt-cache TTL on the same client,
 		# for the same reason — a provider fallback mid-run builds a new client.

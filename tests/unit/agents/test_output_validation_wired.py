@@ -82,7 +82,7 @@ async def test_non_browser_task_actually_invokes_judge():
     agent.use_vision = False
     agent.validate_output = True
     agent.logger = logging.getLogger("test-non-browser-validate")
-    agent.get_browser_context = AsyncMock(return_value=None)  # no browser at all
+    agent.get_used_browser_context = AsyncMock(return_value=None)  # no browser at all
 
     judge = MagicMock()
     judge.used = False
@@ -123,7 +123,7 @@ async def test_non_browser_judge_prompt_has_no_browser_framing():
     agent.use_vision = False
     agent.validate_output = True
     agent.logger = logging.getLogger("test-a2-prompt")
-    agent.get_browser_context = AsyncMock(return_value=None)  # no browser
+    agent.get_used_browser_context = AsyncMock(return_value=None)  # no browser
 
     captured = {}
 
@@ -180,7 +180,7 @@ async def test_validate_output_flag_off_never_provisions_judge():
     agent.validate_output = False
     agent._judge_llm = None
     agent.logger = logging.getLogger("test-flag-off")
-    agent.get_browser_context = AsyncMock(return_value=None)
+    agent.get_used_browser_context = AsyncMock(return_value=None)
 
     spy = MagicMock(return_value=MagicMock(with_structured_output=lambda *a, **k: None))
     agent._provision_aux_llm = spy
@@ -226,7 +226,7 @@ async def test_validate_output_flag_on_lazily_provisions_judge_once():
     agent.validate_output = True
     agent._judge_llm = None
     agent.logger = logging.getLogger("test-flag-on")
-    agent.get_browser_context = AsyncMock(return_value=None)
+    agent.get_used_browser_context = AsyncMock(return_value=None)
     agent.llm = MagicMock()
 
     provisioned_judge = MagicMock()

@@ -91,6 +91,7 @@ def test_clear():
 def _bare_agent():
     agent = object.__new__(TaskAgent)
     agent._registry = SessionRegistry()
+    agent._session_last_activity = {}
     return agent
 
 

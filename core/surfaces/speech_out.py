@@ -20,6 +20,8 @@ import shutil
 from dataclasses import dataclass
 from typing import Optional
 
+from core.async_bridge import communicate_or_kill
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,17 +66,7 @@ async def _run_audio_process(*args: str, audio: bytes) -> bytes:
     proc = await asyncio.create_subprocess_exec(
         *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL, env={"PATH": os.defpath})
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(audio), timeout=60)
-    except BaseException:
-        # wait_for cancels communicate(), not the underlying OS process.
-        if proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-        await proc.wait()
-        raise
+    out, _ = await communicate_or_kill(proc, 60, input=audio)
     if proc.returncode != 0 or not out:
         raise SpeechUnavailable(f"{os.path.basename(args[0])} exited {proc.returncode} with no usable audio")
     return out

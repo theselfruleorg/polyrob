@@ -209,9 +209,112 @@ def test_evm_lists_with_different_windows_drop_and_say_so():
     assert rep.partial and "different windows" in rep.not_read[0] and rep.more_exist
 
 
-def test_a_chain_without_a_keyless_explorer_says_not_available():
+def test_a_chain_without_a_keyless_explorer_says_not_available(monkeypatch):
+    monkeypatch.delenv("ALCHEMY_API_KEY", raising=False)
     rep = act.activity(EVM, "robinhood", 10)
     assert rep.available is False and "NOT AVAILABLE on robinhood" in rep.reason
+    assert "ALCHEMY_API_KEY is not set" in rep.reason
+
+
+# -- EVM rows (Alchemy transfers index) ----------------------------------------------
+
+INDEX_TOKEN = "0x" + "c" * 40
+PAYEE = "0x" + "d" * 40
+
+
+def _tr(ref, frm, to, category="erc20", raw="0x2a", address=INDEX_TOKEN, decimal="0x12", **extra):
+    return {"hash": ref, "from": frm, "to": to, "category": category, "asset": "TKN",
+            "rawContract": {"value": raw, "address": address, "decimal": decimal},
+            "metadata": {"blockTimestamp": "2026-11-04T07:07:37.000Z"}, **extra}
+
+
+def _index(sent=(), received=(), **sent_body):
+    def post(url, params):
+        if "fromAddress" in params:
+            return {"transfers": list(sent), **sent_body}
+        return {"transfers": list(received)}
+    return post
+
+
+def test_a_payment_on_a_chain_without_an_explorer_is_seen():
+    rep = act.activity(EVM, "robinhood", 10, post=_index(sent=[_tr("0xaa", EVM, PAYEE)]))
+    assert rep.available is True and "Alchemy" in rep.source
+    row = rep.rows[0]
+    assert (row.kind, row.counterparty, row.fee_raw) == ("send", PAYEE, None)  # fee unknown
+    assert (row.deltas[0].asset, row.deltas[0].raw, row.deltas[0].decimals) == (INDEX_TOKEN, -42, 18)
+    assert row.time == 1793776057
+
+
+def test_the_index_groups_a_swap_and_matches_the_owner_in_any_case():
+    rep = act.activity(EVM.upper().replace("0X", "0x"), "robinhood", 10, post=_index(
+        sent=[_tr("0xaa", EVM, PAYEE, "external", "0x5", None)],
+        received=[_tr("0xaa", PAYEE, EVM)]))
+    assert rep.rows[0].kind == "swap"
+    assert {d.asset for d in rep.rows[0].deltas} == {act.NATIVE, INDEX_TOKEN}
+
+
+def test_the_index_reads_nfts_as_items():
+    rep = act.activity(EVM, "robinhood", 10, post=_index(received=[
+        _tr("0xaa", PAYEE, EVM, "erc721", None, decimal=None, erc721TokenId="0x1"),
+        _tr("0xbb", PAYEE, EVM, "erc1155", None, decimal=None,
+            erc1155Metadata=[{"tokenId": "0x1", "value": "0x3"}])]))
+    assert sorted(r.deltas[0].raw for r in rep.rows) == [1, 3]
+    assert all(r.deltas[0].nft and r.deltas[0].decimals == 0 for r in rep.rows)
+
+
+def test_a_transfer_without_an_amount_is_counted_not_zero():
+    rep = act.activity(EVM, "robinhood", 10, post=_index(sent=[_tr("0xaa", EVM, PAYEE, raw=None)]))
+    assert rep.rows == [] and "1 transfers with no stated amount or contract" in rep.not_read
+
+
+def test_one_failed_direction_is_partial_and_both_are_not_available():
+    def half(url, params):
+        if "fromAddress" in params:
+            raise OSError("https://x.g.alchemy.com/v2/SECRET")
+        return {"transfers": [_tr("0xaa", PAYEE, EVM)]}
+    rep = act.activity(EVM, "robinhood", 10, post=half)
+    assert rep.available and rep.not_read == ["sent transfers (OSError)"]
+
+    def dead(url, params):
+        raise OSError("https://x.g.alchemy.com/v2/SECRET")
+    rep = act.activity(EVM, "robinhood", 10, post=dead)
+    assert rep.available is False and "SECRET" not in rep.reason
+
+
+def test_a_second_page_says_older_activity_exists():
+    rep = act.activity(EVM, "robinhood", 10, post=_index(
+        sent=[_tr("0xaa", EVM, PAYEE)], pageKey="next"))
+    assert rep.more_exist is True
+
+
+def test_the_index_reads_when_the_explorer_does_not_answer():
+    def dead(url):
+        raise OSError("down")
+    rep = act.activity(EVM, "base", 10, fetch=dead, post=_index(sent=[_tr("0xaa", EVM, PAYEE)]))
+    assert rep.available and "Alchemy" in rep.source and rep.rows[0].kind == "send"
+
+
+def test_the_explorer_failure_is_named_when_the_index_fails_too():
+    def dead_get(url):
+        raise OSError("down")
+
+    def dead_post(url, params):
+        raise OSError("down")
+    rep = act.activity(EVM, "base", 10, fetch=dead_get, post=dead_post)
+    assert rep.available is False
+    assert "explorer" in rep.reason and "transfers index" in rep.reason
+
+
+def test_the_key_in_the_endpoint_stays_out_of_the_report(monkeypatch):
+    monkeypatch.setenv("ALCHEMY_API_KEY", "SECRET")
+    seen = {}
+
+    def post(url, params):
+        seen["url"] = url
+        return {"transfers": []}
+    rep = act.evm_activity(EVM, "robinhood", 10, post=post)
+    assert seen["url"] == "https://robinhood-mainnet.g.alchemy.com/v2/SECRET"
+    assert "SECRET" not in str(rep.to_dict())
 
 
 def test_every_pinned_blockscout_host_is_https_v2():

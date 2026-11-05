@@ -105,6 +105,8 @@ def test_surface_profile_reads_capabilities_from_the_bound_surface():
         # 046: and no paid room actions — that note is rendered for ROOMS only.
         "chat_paid_actions": "",
         "correspondent": False,
+        # 101: an /admin session is a room session; a DM has none.
+        "chat_admin_session": None,
     }
 
 

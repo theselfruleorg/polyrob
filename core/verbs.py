@@ -158,7 +158,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/halt", "control", "Stop all autonomous work now", room_refused=True),
     Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True),
     Verb("/mode", "control",
-         "The effective autonomy posture and how to change it"),
+         "What I may do without you, what I do when you are away, and how to change it"),
     Verb("/dev", "control", "Pass a message to an operator-run maintenance script, if this host has one", room_refused=True),
     # 077: confirmed by a card; the restart drains first and reports back here.
     Verb("/restart", "control", "Restart me once my current work is done", room_refused=True),

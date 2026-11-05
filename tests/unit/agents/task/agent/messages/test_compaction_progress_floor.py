@@ -39,7 +39,7 @@ class _SummaryLLM:
 	async def ainvoke(self, messages, tools=None, **kwargs):
 		self.calls += 1
 		resp = MagicMock()
-		resp.content = "## Summary\nThe agent fetched pages."
+		resp.content = "## Summary\nThe agent fetched pages.\n## End of summary"
 		resp.usage_metadata = None
 		return resp
 

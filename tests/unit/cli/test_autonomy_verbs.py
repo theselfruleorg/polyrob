@@ -261,14 +261,14 @@ async def test_mode_routes_as_command_end_to_end(tg_env):
 async def test_mode_renders_card_and_change_hint(tg_env):
     from surfaces.telegram.harness import act_on_inbound
     out = await act_on_inbound(_Agent(str(tg_env)), _cmd("/mode", "/mode"))
-    for axis in ("autonomy master", "capability mode", "loop posture",
-                 "compute posture"):
-        assert axis in out, f"axis {axis!r} missing:\n{out}"
-    # how to change (A11): the master is chat-writable; mode/posture are not,
-    # and owner copy names no server CLI when a chat way exists.
-    assert "/config set AUTONOMY_ENABLED" in out
-    assert "need the server" in out
-    assert "prefs-only" not in out
+    # 104: the four answers, on the seat's own words.
+    for answer in ("You are the owner, in Telegram", "Without asking:", "Asks first:",
+                   "When you are away:", "To change from here: `/config set AUTONOMY_ENABLED"):
+        assert answer in out, f"answer {answer!r} missing:\n{out}"
+    assert "polyrob config set" not in out
+    # `/mode all` keeps the card for whoever wants the settings behind it.
+    full = await act_on_inbound(_Agent(str(tg_env)), _cmd("/mode", "/mode all"))
+    assert "compute posture" in full
 
 
 @pytest.mark.asyncio

@@ -67,13 +67,74 @@ def _doc_changes(writer, user_id: str) -> str:
 		return ""
 
 
-def _write_doc(writer, params, *, user_id: str, created_by: str):
-	"""One write path for both identity docs: update|patch, always a draft.
+#: 103 (D3): the size of one rule that may apply at once. A longer write is a draft.
+OWNER_RULE_NOW_MAX_CHARS = 1000
+_UNTRUSTED_OPEN = "<untrusted_tool_result"
 
-	A model-written line is never in force before the owner reviews it: an
-	owner conversation can carry untrusted tool results, so its origin is not
-	proof that the owner wrote the line (095 W10 deleted the dead "apply now"
-	branches).
+
+def _untrusted_since_owner_turn(controller) -> bool:
+	"""Did tool output from an external source enter the history after the owner's
+	latest message? True when that cannot be read (fail closed)."""
+	from modules.llm.messages import MessageOrigin
+	agents = getattr(getattr(controller, "orchestrator", None), "agents", None) or {}
+	found_owner_message = False
+	for agent in agents.values():
+		manager = getattr(agent, "message_manager", None)
+		if manager is None:
+			continue
+		# Compaction takes a result out of this history, and a page's state never enters
+		# it: the latch and the page mark outlive what the walk below can read.
+		if getattr(manager, "_untrusted_since_owner", False) or getattr(agent, "_browser_page_used", False):
+			return True
+		# The first message of a session sits in the foundation, not in the history.
+		found_owner_message = found_owner_message or bool(getattr(manager, "_initial_task_message", None))
+		for managed in reversed(list(manager.history.messages)):
+			message = managed.message
+			if _UNTRUSTED_OPEN in str(getattr(message, "content", "")):
+				return True
+			if (message.__class__.__name__ == "HumanMessage"
+					and getattr(message, "origin", MessageOrigin.USER) == MessageOrigin.USER):
+				found_owner_message = True
+				break
+	return not found_owner_message
+
+
+def _owner_rule_applies_now(controller, params, execution_context) -> bool:
+	"""103 (D3): the owner said it in this turn, so one short rule needs no second tap.
+
+	095 W10 made every write a draft because an owner conversation can carry untrusted
+	tool results. That reason still holds, so this is narrow and fails closed: a genuine
+	owner turn, no correspondent in the session, no external tool output since the
+	owner's message, a patch of one place (never a whole-document rewrite), one short
+	rule on both sides of the edit, and the identity scan passes. An empty replacement
+	retires the rule, so the owner can undo with no tap; the old text stays under
+	'## Superseded'. Anything else stays a draft.
+	"""
+	try:
+		from core.security.owner_turn import is_genuine_owner_turn
+		from core.security.taints import turn_tainted
+		from modules.memory.task.threat_scan import is_identity_suspicious
+		old = str(getattr(params, "old_string", "") or "")
+		new = str(getattr(params, "new_string", "") or "")
+		if params.action != "patch" or getattr(params, "replace_all", False):
+			return False
+		if not old.strip() or max(len(old), len(new)) > OWNER_RULE_NOW_MAX_CHARS:
+			return False
+		if not is_genuine_owner_turn(execution_context, controller):
+			return False
+		if turn_tainted(execution_context) or is_identity_suspicious(new):
+			return False
+		return not _untrusted_since_owner_turn(controller)
+	except Exception:
+		return False
+
+
+def _write_doc(writer, params, *, user_id: str, created_by: str, pending: bool = True):
+	"""One write path for both identity docs: update|patch, a draft by default.
+
+	A model-written line is not in force before the owner reviews it: an owner
+	conversation can carry untrusted tool results, so its origin is not proof that
+	the owner wrote the line. The one exception is ``_owner_rule_applies_now``.
 
 	057 WS-D: `source`/`observed_at` ride through to the writer, which stamps the
 	NEW or CHANGED lines ` [from: <source> <date>]`. Both are optional — with
@@ -90,7 +151,17 @@ def _write_doc(writer, params, *, user_id: str, created_by: str):
 		return None, "patch requires `old_string` and `new_string`."
 	return writer.patch(user_id=user_id, old_string=params.old_string,
 	                    new_string=params.new_string, replace_all=params.replace_all,
-	                    created_by=created_by, pending=True, **prov), None
+	                    created_by=created_by, pending=pending, **prov), None
+
+
+def _write_owner_rule(writer, params, *, user_id: str, created_by: str, now: bool):
+	"""``(result, error, applied_now)``. An at-once edit reads the ACTIVE doc; a rule that
+	only the draft holds cannot match there, so that edit goes to the draft."""
+	res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by, pending=not now)
+	if now and res is not None and not res.ok:
+		res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
+		now = False
+	return res, err, now
 
 
 #: F4 (prod review 2026-10-29): above this share of the cap a write tells the
@@ -655,8 +726,10 @@ class DocAuthoringMixin:
 			_no_reason = _missing_reason(params, is_forged)
 			if _no_reason:
 				return ActionResult(error=NOTHING_WRITTEN + _no_reason, include_in_memory=True)
+			_now = _owner_rule_applies_now(self, params, execution_context)
 			try:
-				res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
+				res, err, _now = _write_owner_rule(writer, params, user_id=user_id,
+				                                   created_by=created_by, now=_now)
 				if err:
 					return ActionResult(error=NOTHING_WRITTEN + err, include_in_memory=True)
 			except Exception as e:
@@ -673,6 +746,14 @@ class DocAuthoringMixin:
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
 			_swept = _sweep_new_rules(self, writer.read_active(user_id),
 			                          _draft_or_active(writer, user_id), user_id, data_dir)
+			if _now and not res.pending:
+				return ActionResult(
+					extracted_content=(
+						"Owner rule IN EFFECT now, with no tap: the owner gave it in this turn. "
+						"Tell the owner the rule as written. If they want it gone, use "
+						"action='replace_rule' with rule_start and no new_string; that also "
+						"needs no tap." + _room + _swept),
+					include_in_memory=True)
 			try:
 				from core import self_evolution as _se
 				await _se.maybe_notify_owner_pending(

@@ -1,16 +1,16 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/polyrob-logo.png" alt="POLYROB" width="440">
+<a href="https://polyrob.dev"><img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/polyrob-banner.png" alt="polyrob — polyrob.dev" width="100%"></a>
 
 ### A self-hosted AI agent that works toward your goals, on your own machine.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/theselfruleorg/polyrob/blob/main/LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/polyrob.svg)](https://pypi.org/project/polyrob/)
 [![CI](https://github.com/theselfruleorg/polyrob/actions/workflows/ci.yml/badge.svg)](https://github.com/theselfruleorg/polyrob/actions)
 [![Stars](https://img.shields.io/github/stars/theselfruleorg/polyrob?style=social)](https://github.com/theselfruleorg/polyrob)
 
-**[Quick Start](#quick-start) · [Docs](#documentation) · [Examples](docs/examples.md) · [Comparison](docs/comparison.md)**
+**[Quick Start](#quick-start) · [Docs](#documentation) · [Examples](https://github.com/theselfruleorg/polyrob/blob/main/docs/examples.md) · [Comparison](https://github.com/theselfruleorg/polyrob/blob/main/docs/comparison.md)**
 
 </div>
 
@@ -31,7 +31,7 @@ approval.
 
 ## Quick Start
 
-Python 3.11 or newer, on Linux, macOS or WSL2:
+On Linux, macOS or WSL2 (no Python 3.11+? The installer fetches a private copy):
 
 ```bash
 curl -fsSL https://polyrob.dev/install.sh | bash
@@ -70,9 +70,9 @@ polyrob service restart       # or /restart from chat; it finishes the current w
 
 Update a git install with `polyrob update --apply` (snapshot, migrate, verify, automatic rollback);
 for pip or pipx, `polyrob update` prints the command to run. Coming from 1.7.0? Read the
-[1.7.1 note](docs/guide/upgrading.md#upgrading-to-171) first. Remove it with `polyrob uninstall`.
-Full walkthrough: **[getting started](docs/guide/getting-started.md)** ·
-**[upgrading](docs/guide/upgrading.md)**.
+[1.7.1 note](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/upgrading.md#upgrading-to-171) first. Remove it with `polyrob uninstall`.
+Full walkthrough: **[getting started](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/getting-started.md)** ·
+**[upgrading](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/upgrading.md)**.
 
 ---
 
@@ -81,32 +81,35 @@ Full walkthrough: **[getting started](docs/guide/getting-started.md)** ·
 **Works toward goals.** A durable goal board and scheduled jobs (`"every monday 09:00"`, `30m`,
 cron syntax) keep work going between your messages and across restarts. Every unattended run stops
 at one step cap and one spend cap and says why it stopped. When it needs you, it raises an action
-card; once you decide, it carries on. → [Jobs, goals, decisions and pauses](docs/guide/streams.md)
+card; once you decide, it carries on. → [Jobs, goals, decisions and pauses](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/streams.md)
 
 **Learns from use.** It keeps cross-session memory, writes and retires its own skills, and wakes
 itself to follow up on unfinished work. The CLI turns on the interactive tools by itself; the
 learning and self-directed loops need one more switch, `polyrob autonomy on`. Every skill or
 identity edit the agent writes waits in quarantine for your review.
-→ [Skills](docs/guide/skills.md) · [the autonomy dial](docs/guide/configuration.md#6-the-autonomy-dial)
+→ [Skills](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/skills.md) · [the autonomy dial](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/configuration.md#6-the-autonomy-dial)
 
 **Uses real tools.** Core ships web reading (`web_fetch`, no browser needed) and Playwright
 automation, files, coding tools, git and GitHub, a persistent shell with background jobs, opt-in
 code execution, the agent's own mailbox, an MCP client, and sub-agents with a narrowed toolset.
 First-party **packs** add more and ship inside the same install: `discovery` (AnySite structured
 data, Perplexity search), `x` (the agent's X account), `markets` (Polymarket, Hyperliquid) and
-remote sandbox backends. → [Packs](docs/guide/packs.md) · [Architecture](docs/guide/architecture.md)
+remote sandbox backends. → [Packs](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/packs.md) · [Architecture](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/architecture.md)
+
+**You choose how much it may do.** `/mode` says what runs without asking; `/mode ask-first`,
+`standard` or `on-my-own` sets one level.
 
 **Meets you where you are.** The terminal (`polyrob`), a web console, a REST API with SSE, an
 OpenAI-compatible `/v1` endpoint, the A2A agent protocol, an MCP server (off by default), and chat
 surfaces: Telegram, email, WhatsApp, Discord, Slack, Signal, Feishu / Lark and DingTalk. Run every
 enabled chat surface in one process with `polyrob gateway`.
-→ [CLI](docs/guide/cli.md) · [Chat commands](docs/guide/chat-commands.md) · [API](docs/guide/api.md)
+→ [CLI](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/cli.md) · [Chat commands](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/chat-commands.md) · [API](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/api.md)
 
 **Any model.** OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter and NVIDIA NIM built in, plus
 a catalog of other providers, OAuth subscription plans and any OpenAI- or Anthropic-compatible
 endpoint you declare in `~/.polyrob/providers.yaml`. It fails over between providers, caches the
 stable prompt prefix, and switches model live with `/model <name>` from the next step.
-→ [Providers and models](docs/guide/configuration.md#4-providers-and-models)
+→ [Providers and models](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/configuration.md#4-providers-and-models)
 
 ### The console
 
@@ -117,7 +120,7 @@ stable prompt prefix, and switches model live with `/model <name>` from the next
 Chat, Inbox (only what needs you), Work (running, next, scheduled, apps), Money and Agent (identity,
 memory, capabilities, health) in one owner surface over the same goal board, approval queue and
 ledger as the CLI. Start it with `polyrob dashboard` and open `http://localhost:5050`.
-→ [Console guide](docs/guide/console.md)
+→ [Console guide](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/console.md)
 
 ---
 
@@ -128,8 +131,8 @@ ledger as the CLI. Start it with `polyrob dashboard` and open `http://localhost:
 - **Strangers cannot steer it.** On a chat surface only the owner steers. A third party the agent
   contacted can only return data, and while that data is in the session the high-impact tools
   (money, outbound messages, code execution, delegation) are off until the owner's next turn. Group
-  rooms get a read-only toolset. → [Owner controls](docs/guide/owner-controls.md) ·
-  [Groups](docs/guide/groups.md)
+  rooms get a read-only toolset unless you grant a bundle; money and owner data stay out. → [Owner controls](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/owner-controls.md) ·
+  [Groups](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/groups.md)
 - **Least-privilege sub-agents.** A delegated worker gets a narrowed toolset — no money, wallet,
   shell, code execution, raw HTTP or self-modification tools — and cannot delegate again.
 - **Self-edits wait for review.** New skills and identity edits go to quarantine first.
@@ -140,8 +143,8 @@ ledger as the CLI. Start it with `polyrob dashboard` and open `http://localhost:
   class that waits for you, and unattended runs refuse it.
 - **Bounded runs.** Step and spend caps on every autonomous run, sub-agents included.
 
-The full model, including what each gate does not do: **[security model](docs/guide/security-model.md)**.
-Defaults for every flag: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+The full model, including what each gate does not do: **[security model](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/security-model.md)**.
+Defaults for every flag: **[docs/CONFIGURATION.md](https://github.com/theselfruleorg/polyrob/blob/main/docs/CONFIGURATION.md)**.
 
 ---
 
@@ -154,9 +157,9 @@ approval rail you control.
 
 > ⚠️ **The crypto code is unaudited.** The wallet, signing and payment code (the `crypto` extra)
 > has had no independent security audit, ships with no warranty, and can lose funds. Prefer
-> testnets. See [SECURITY.md](SECURITY.md#crypto--wallet--payment-features).
+> testnets. See [SECURITY.md](https://github.com/theselfruleorg/polyrob/blob/main/SECURITY.md#crypto--wallet--payment-features).
 
-→ [Payments](docs/guide/payments.md) · [Wallet](docs/guide/wallet.md) · [On-chain](docs/guide/onchain.md)
+→ [Payments](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/payments.md) · [Wallet](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/wallet.md) · [On-chain](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/onchain.md)
 
 ---
 
@@ -165,7 +168,7 @@ approval rail you control.
 Three postures, chosen from how you bind the console: `local` (loopback), `own_ops` (a public host
 with owner login) and `multitenant` (wallet sign-in and billing). `docker compose up` builds the
 server, the browser and vector memory, and keeps data in a volume.
-→ [Self-hosting](docs/guide/self-hosting.md) · [Deployment postures](docs/guide/deployment-postures.md)
+→ [Self-hosting](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/self-hosting.md) · [Deployment postures](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/deployment-postures.md)
 
 ---
 
@@ -185,8 +188,8 @@ ruff check .
 The layers: `agents/` (the agent loop), `modules/` (LLM, memory, database), `tools/`, `surfaces/`
 (chat apps), `api/`, `cli/`, `webview/` (console), `cron/` (scheduled runs), `core/` (config,
 policy, identity), `packs/` (first-party packs) and `polyrob/` (the pack SDK).
-→ [Architecture](docs/guide/architecture.md) · [AGENTS.md](AGENTS.md) (contributor guide) ·
-[CONTRIBUTING.md](CONTRIBUTING.md)
+→ [Architecture](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/architecture.md) · [AGENTS.md](https://github.com/theselfruleorg/polyrob/blob/main/AGENTS.md) (contributor guide) ·
+[CONTRIBUTING.md](https://github.com/theselfruleorg/polyrob/blob/main/CONTRIBUTING.md)
 
 ---
 
@@ -196,66 +199,66 @@ policy, identity), `packs/` (first-party packs) and `polyrob/` (the pack SDK).
 
 | Page | What it covers |
 |---|---|
-| [Getting started](docs/guide/getting-started.md) | Install, first run, extras, where data lives |
-| [CLI](docs/guide/cli.md) | Every `polyrob` shell command |
-| [Chat commands](docs/guide/chat-commands.md) | Slash commands on the terminal, chat apps and the console |
-| [Configuration](docs/guide/configuration.md) | Providers, memory, the autonomy dial, tools, surfaces, preferences |
-| [FAQ](docs/guide/faq.md) | Short answers, and troubleshooting by the exact text you see |
+| [Getting started](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/getting-started.md) | Install, first run, extras, where data lives |
+| [CLI](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/cli.md) | Every `polyrob` shell command |
+| [Chat commands](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/chat-commands.md) | Slash commands on the terminal, chat apps and the console |
+| [Configuration](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/configuration.md) | Providers, memory, the autonomy dial, tools, surfaces, preferences |
+| [FAQ](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/faq.md) | Short answers, and troubleshooting by the exact text you see |
 
 **Use**
 
 | Page | What it covers |
 |---|---|
-| [Jobs, goals, decisions and pauses](docs/guide/streams.md) | Standing work, the goal board, the inbox |
-| [Owner controls](docs/guide/owner-controls.md) | Stop, pause, resume; approvals; first contact |
-| [Conversation](docs/guide/conversation.md) | One conversation across phone, console and terminal |
-| [Skills](docs/guide/skills.md) | Install, author and manage skills |
-| [Packs](docs/guide/packs.md) | First-party and third-party packs |
-| [Groups](docs/guide/groups.md) | Group chats: allowlist, roles, per-chat policy |
-| [X (Twitter)](docs/guide/x-twitter.md) | The agent's X account |
-| [Feishu / DingTalk](docs/guide/feishu-dingtalk.md) | The Feishu / Lark and DingTalk surfaces |
-| [Console](docs/guide/console.md) | The web console |
+| [Jobs, goals, decisions and pauses](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/streams.md) | Standing work, the goal board, the inbox |
+| [Owner controls](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/owner-controls.md) | Stop, pause, resume; approvals; first contact |
+| [Conversation](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/conversation.md) | One conversation across phone, console and terminal |
+| [Skills](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/skills.md) | Install, author and manage skills |
+| [Packs](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/packs.md) | First-party and third-party packs |
+| [Groups](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/groups.md) | Group chats: allowlist, roles, per-chat policy |
+| [X (Twitter)](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/x-twitter.md) | The agent's X account |
+| [Feishu / DingTalk](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/feishu-dingtalk.md) | The Feishu / Lark and DingTalk surfaces |
+| [Console](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/console.md) | The web console |
 
 **Run**
 
 | Page | What it covers |
 |---|---|
-| [Operate the service](docs/guide/operate-the-service.md) | Start, stop, restart and update the background service |
-| [Upgrading](docs/guide/upgrading.md) | Updates, snapshots, rollback, version notes |
-| [Self-hosting](docs/guide/self-hosting.md) | Servers, Docker, units |
-| [Deployment postures](docs/guide/deployment-postures.md) | `local`, `own_ops`, `multitenant` |
-| [Profiles](docs/guide/profiles.md) | Several isolated agents on one machine |
-| [Instances](docs/guide/instances.md) | Identity: SOUL, character, avatar |
-| [Migration](docs/guide/migration/README.md) | Moving from another agent framework |
+| [Operate the service](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/operate-the-service.md) | Start, stop, restart and update the background service |
+| [Upgrading](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/upgrading.md) | Updates, snapshots, rollback, version notes |
+| [Self-hosting](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/self-hosting.md) | Servers, Docker, units |
+| [Deployment postures](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/deployment-postures.md) | `local`, `own_ops`, `multitenant` |
+| [Profiles](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/profiles.md) | Several isolated agents on one machine |
+| [Instances](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/instances.md) | Identity: SOUL, character, avatar |
+| [Migration](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/migration/README.md) | Moving from another agent framework |
 
 **Money**
 
 | Page | What it covers |
 |---|---|
-| [Payments](docs/guide/payments.md) | Invoicing, settlement, credits, the ledger, the arming ladder |
-| [Wallet](docs/guide/wallet.md) | The agent wallet, signer, caps, paying over x402 |
-| [On-chain](docs/guide/onchain.md) | Token data, guarded transfers and swaps, the trading mandate |
+| [Payments](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/payments.md) | Invoicing, settlement, credits, the ledger, the arming ladder |
+| [Wallet](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/wallet.md) | The agent wallet, signer, caps, paying over x402 |
+| [On-chain](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/onchain.md) | Token data, guarded transfers and swaps, the trading mandate |
 
 **Reference**
 
 | Page | What it covers |
 |---|---|
-| [API](docs/guide/api.md) | REST, A2A, OpenAI-compatible `/v1`, MCP server |
-| [Architecture](docs/guide/architecture.md) | How the parts fit together |
-| [Security model](docs/guide/security-model.md) | Each gate, and the OS or container boundary behind it |
-| [Rails verification](docs/guide/rails-verification.md) | What counts as proof that a send landed |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every environment flag and its default |
-| [Comparison](docs/comparison.md) · [Examples](docs/examples.md) | Other frameworks; real usage |
-| [CHANGELOG](CHANGELOG.md) · [SECURITY](SECURITY.md) | Changes; reporting a vulnerability |
+| [API](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/api.md) | REST, A2A, OpenAI-compatible `/v1`, MCP server |
+| [Architecture](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/architecture.md) | How the parts fit together |
+| [Security model](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/security-model.md) | Each gate, and the OS or container boundary behind it |
+| [Rails verification](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/rails-verification.md) | What counts as proof that a send landed |
+| [docs/CONFIGURATION.md](https://github.com/theselfruleorg/polyrob/blob/main/docs/CONFIGURATION.md) | Every environment flag and its default |
+| [Comparison](https://github.com/theselfruleorg/polyrob/blob/main/docs/comparison.md) · [Examples](https://github.com/theselfruleorg/polyrob/blob/main/docs/examples.md) | Other frameworks; real usage |
+| [CHANGELOG](https://github.com/theselfruleorg/polyrob/blob/main/CHANGELOG.md) · [SECURITY](https://github.com/theselfruleorg/polyrob/blob/main/SECURITY.md) | Changes; reporting a vulnerability |
 
 ---
 
 ## Contributing and license
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities as
-[SECURITY.md](SECURITY.md) describes. MIT licensed ([LICENSE](LICENSE)); name and brand use in
-[TRADEMARK.md](TRADEMARK.md); third-party attributions in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Contributions are welcome — see [CONTRIBUTING.md](https://github.com/theselfruleorg/polyrob/blob/main/CONTRIBUTING.md). Report vulnerabilities as
+[SECURITY.md](https://github.com/theselfruleorg/polyrob/blob/main/SECURITY.md) describes. MIT licensed ([LICENSE](https://github.com/theselfruleorg/polyrob/blob/main/LICENSE)); name and brand use in
+[TRADEMARK.md](https://github.com/theselfruleorg/polyrob/blob/main/TRADEMARK.md); third-party attributions in
+[THIRD-PARTY-NOTICES.md](https://github.com/theselfruleorg/polyrob/blob/main/THIRD-PARTY-NOTICES.md).
 
 <div align="center">
 

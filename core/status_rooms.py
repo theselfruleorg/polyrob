@@ -58,6 +58,25 @@ def _apps_section(user_id: str, data_dir: str) -> Section:
 
 
 
+def _room_grants_row(caps, surfaces_db: str, surface: str, chat_id: str, pol, now: float) -> dict:
+    """101: who holds what in one room. An unreadable role store says so."""
+    from core.surfaces.room_grants import live_admin_bundles, live_room_tools
+    admins = []
+    if surfaces_db:
+        try:
+            from core.surfaces.group_roles import GroupRoles
+            admins = [r["user_id"] for r in GroupRoles(surfaces_db).list(surface, chat_id)
+                      if r["role"] == "admin"]
+        except Exception as e:
+            admins = [f"unknown ({type(e).__name__})"]
+    from core.surfaces.room_grants import ADMIN_SURFACES
+    bundles = list(live_admin_bundles(pol)) if surface in ADMIN_SURFACES else []
+    return {"admins": admins, "admin_bundles": bundles,
+            "settings_unreadable": bool(getattr(pol, "unreadable", False)),
+            "room_tools": list(live_room_tools(pol)),
+            "admin_turns_today": caps.admin_turns_since(surface, chat_id, now - 86400) if caps else 0}
+
+
 def _groups_section(user_id: str, data_dir: str) -> Section:
     """044 T18: rooms this instance is present in — allowlist + mode + traffic.
 
@@ -126,6 +145,7 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
             "name": room_name(r, pol),
             "label": render_room_label(r),
             "mode": pol.mode,
+            **_room_grants_row(caps, surfaces_db if caps is not None else "", surface, chat_id, pol, now),
             "replies_today": replies_today,
             "ledger_rows": ledger_rows,
             "last_write": last_write,
@@ -139,6 +159,11 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
                 f"last={_hhmm(row['last_write'])}")
         if row.get("label"):
             line += f" {row['label']}"
+        if row["admins"] or row["admin_bundles"] or row["room_tools"] or row["settings_unreadable"]:
+            line += (f" admins={','.join(row['admins']) or '-'} "
+                     f"bundles={'UNKNOWN' if row['settings_unreadable'] else ','.join(row['admin_bundles']) or '-'} "
+                     f"room_tools={','.join(row['room_tools']) or '-'} "
+                     f"admin_turns_today={row['admin_turns_today']}")
         if row["note"]:
             line += f" ({row['note']})"
         sec.lines.append(line)

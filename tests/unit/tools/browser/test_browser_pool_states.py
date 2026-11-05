@@ -45,7 +45,7 @@ async def test_concurrent_get_context_same_session_creates_once(mock_browser_cla
     gate.set()
     ca, cb = await asyncio.gather(a, b)
     assert len(made) == 1 and ca is cb is made[0]
-    assert m.session_contexts["s1"] == ["s1_agent"]
+    assert m.session_contexts["agent"] == ["s1_agent"]
 
 
 @patch('tools.browser.browser_manager.Browser')
@@ -114,3 +114,11 @@ async def test_cleanup_resets_initialized(mock_browser_class):
     assert not m.is_initialized
     assert await m.get_browser() is not None  # re-initializes
     await m.cleanup()
+
+
+async def test_two_sessions_of_one_agent_name_have_their_own_allowance():
+    from tools.browser.browser_manager import _session_key
+    assert _session_key("agent_sess-1") == "sess-1"
+    assert _session_key("agent_sess-2") != _session_key("agent_sess-1")
+    assert _session_key("sub-1-abc_sess-1") == "sess-1", "a child shares its parent's allowance"
+    assert _session_key("plain") == "plain"

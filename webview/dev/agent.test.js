@@ -69,8 +69,10 @@ const COPY = {
   ov_posture_aside: "one rule per axis",
   ov_axis_local_title: "Treat this computer as yours alone?",
   ov_axis_local_why: "A single owner's tools.",
-  ov_axis_mode_title: "Act without asking first?",
-  ov_axis_mode_why: "Money still asks.",
+  ov_asks_title: "Ask you first?",
+  ov_asks_why: "Actions that wait.",
+  ov_axis_mode_title: "Reach people and post on its own?",
+  ov_axis_mode_why: "Never money.",
   ov_axis_loop_title: "Start work on its own?",
   ov_axis_loop_why: "It starts its own goals.",
   ov_axis_compute_title: "Use the computer it runs on?",
@@ -88,7 +90,8 @@ const COPY = {
   memory_backend_none: "Off",
   ov_change: "Change settings",
   posture_local: "Yes",
-  posture_mode: "No, asks first",
+  posture_mode: "No",
+  posture_asks: "Nothing else is set to ask.",
   posture_loop: "No",
   posture_compute: "No, only in a sandbox",
   posture_compute_locked: "1",
@@ -204,9 +207,9 @@ describe("the copy crosses on data attributes", () => {
 describe("the posture axes render once, as one plain sentence each", () => {
   it("includes builder mode in order, each with a title and its consequence", () => {
     const entries = postureEntries(COPY);
-    expect(entries).toHaveLength(5);
+    expect(entries).toHaveLength(6);
     expect(entries.map((e) => e.dataset.axis)).toEqual(
-      ["local", "mode", "loop", "compute", "builder"]);
+      ["local", "asks", "mode", "loop", "compute", "builder"]);
     entries.forEach((e) => {
       expect(e.querySelector(".entry-title").textContent).toBeTruthy();
       expect(e.querySelector(".entry-body").textContent).toBeTruthy();
@@ -217,12 +220,14 @@ describe("the posture axes render once, as one plain sentence each", () => {
     const r = root();
     renderPosture(r, COPY);
     const axes = r.querySelectorAll("[data-axis]");
-    expect(axes).toHaveLength(5);
+    expect(axes).toHaveLength(6);
     // The state rides in the pill — one axis, one sentence, one state.
     const local = r.querySelector('[data-axis="local"] .pill');
     expect(local.textContent).toContain("Yes");
     const mode = r.querySelector('[data-axis="mode"] .pill');
-    expect(mode.textContent).toContain("No, asks first");
+    expect(mode.textContent).toContain("No");
+    const asks = r.querySelector('[data-axis="asks"] .pill');
+    expect(asks.textContent).toContain("Nothing else is set to ask.");
     const builder = r.querySelector('[data-axis="builder"]');
     expect(builder.querySelector(".pill").textContent).toBe("Yes, pages only");
     expect(builder.querySelector(".unknown-why").textContent).toBe(COPY.posture_builder_note);

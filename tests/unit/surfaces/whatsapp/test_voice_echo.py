@@ -53,7 +53,7 @@ def _patch_pipeline(monkeypatch, *, transcript="hello from voice"):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     async def fake_transcribe(container, media):
         return transcript
-    monkeypatch.setattr(wh, "transcribe_inbound_media", fake_transcribe)
+    monkeypatch.setattr("core.surfaces.transcription.transcribe_inbound_media", fake_transcribe)
     monkeypatch.setattr(wh, "voice_needs_guard", lambda m, t: False)
 
     async def fake_act(task_agent, result):

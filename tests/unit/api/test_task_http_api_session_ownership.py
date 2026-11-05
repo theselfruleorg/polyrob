@@ -191,3 +191,17 @@ async def test_owner_can_bind_own_pointer_to_own_session():
     await thp.switch_active_session("tenant-a", {"session_id": "shared-session-id"},
                                    _FakeRequest("tenant-a"), agent=agent)
     assert agent.user_sessions == {"tenant-a": "shared-session-id"}
+
+
+@pytest.mark.asyncio
+async def test_a_room_admin_session_takes_no_line_from_the_api(monkeypatch):
+    """101: the room gate reads that admin's line and taint; a line here would run as them."""
+    async def paid(*_a, **_k):
+        return "admin", {}
+    monkeypatch.setattr("api.payment_verification.verify_payment_for_request", paid)
+    agent = _FakeAgent("tenant-a")
+    agent._session["request"] = {"room_admin": {"chat_id": "-100", "uid": "77"}}
+    with pytest.raises(HTTPException) as e:
+        await thp.send_user_message("shared-session-id", UserMessageRequest(text="x"),
+                                    _FakeRequest("tenant-a"), agent=agent)
+    assert e.value.status_code == 409

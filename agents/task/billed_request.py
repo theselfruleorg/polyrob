@@ -63,8 +63,15 @@ def billed_session(info, balance_manager=None):
             reset_billed(token)
 
 
-def validate_billed_session(info) -> None:
-    """Old or operator-created sessions cannot become unrestricted tenant compute."""
+def validate_billed_session(info, *, inbound_line: bool = False) -> None:
+    """Old or operator-created sessions cannot become unrestricted tenant compute.
+
+    ``inbound_line``: an API is adding a line. A room admin's session takes lines only
+    from that admin's /admin: the room gate reads their line and taint, so this line would
+    run under their name (101). ⚠️ Only then: ``billed_session`` calls this for EVERY run,
+    and a run of that session must pass."""
+    if inbound_line and ((info or {}).get("request") or {}).get("room_admin"):
+        raise ValueError("This is a room admin's session. It takes lines only from /admin.")
     if is_billed() and (not info or info.get("billing_limited") is not True):
         raise ValueError("This session has no verified billing limits; create a new session")
 

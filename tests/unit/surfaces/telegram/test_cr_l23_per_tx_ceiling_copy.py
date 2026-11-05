@@ -15,7 +15,7 @@ def test_clamp_note_names_the_pref(monkeypatch, tmp_path):
     import core.runtime_paths as rp
     from core.wallet import tx_guard
     monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(prefs, "write_preference", lambda *a, **k: None)
+    monkeypatch.setattr(prefs, "write_preference", lambda *a, **k: (True, ""))
     monkeypatch.setattr(tx_guard, "autonomous_max_usd", lambda *a, **k: 5.0)
     out = _set_autonomous_ceiling(["50"], "owner-1", None)
     assert "not settable" not in out and "by design" not in out

@@ -144,6 +144,13 @@ from agents.task.agent.core.session_control import controlled_run, control_check
 _STOP_NOT_FAILURE = frozenset({"cancelled", "control", "wall_clock"})
 
 
+def _track_execution_task(tasks: list, task: Any) -> None:
+	"""Register a run's task for the session cleanup. A resident session runs many
+	turns, so a finished task leaves the list here (102 3.5)."""
+	tasks[:] = [t for t in tasks if not t.done()]
+	tasks.append(task)
+
+
 def _end_session_lane(agent: Any, start_time: float) -> None:
 	"""098 CL-02: a run that ends without its session_completion (cancelled by
 	a scheduler cap or ``/autonomy off``, or an exception) still sends one, so
@@ -220,6 +227,7 @@ class RunLoopMixin:
 			# from the body on a normal end, else from the finally below.
 			self._session_end_sent = False
 			
+			self.trim_step_history()  # before any ledger index of this run is taken
 			# The turn's start in the action ledger: done() compares what the turn
 			# CLAIMS was changed with the writes after this point (runtime/change_claims.py).
 			from agents.task.runtime.change_claims import start_turn as _claims_start_turn
@@ -374,7 +382,7 @@ class RunLoopMixin:
 					# Track task in orchestrator for proper cleanup
 					if hasattr(self, 'orchestrator') and self.orchestrator:
 						if hasattr(self.orchestrator, '_execution_tasks'):
-							self.orchestrator._execution_tasks.append(self._stall_check_task)
+							_track_execution_task(self.orchestrator._execution_tasks, self._stall_check_task)
 							self.logger.debug("Registered stall monitor task with orchestrator for cleanup")
 
 				# CRITICAL: Check for queued messages BEFORE starting execution loop
@@ -702,6 +710,11 @@ class RunLoopMixin:
 						if await check_at_done(self, final=_final_step):
 							continue
 
+						# An owner's chat message with no reply: done() reaches no chat.
+						from agents.task.runtime.owner_answer import check_owner_answered
+						if await check_owner_answered(self, final=_final_step):
+							continue
+
 						# CO-F1: judge the FINAL answer, not an intermediate step. This
 						# replaces the old top-of-loop check (which ran before step() on
 						# the previous step's result and could never see the true final
@@ -808,14 +821,8 @@ class RunLoopMixin:
 						
 				# RAM optimization: Final memory cleanup after session completion
 				try:
-					import gc
-
 					# Clean up telemetry buffers if available
 					self.telemetry_manager.flush_buffers()
-					
-					# Force garbage collection after session completion
-					gc.collect()
-					
 					self.logger.debug("Completed final memory cleanup")
 				except Exception as cleanup_error:
 					self.logger.debug(f"Error during final memory cleanup: {cleanup_error}")

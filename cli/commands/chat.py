@@ -494,6 +494,8 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         return
     clear_start_notice(_start_out, _start_transient)
     _logging.disable(_logging.NOTSET)
+    from polyrob.app.bootstrap import freeze_startup_heap
+    freeze_startup_heap()
     # 027 WP3 / A12: run-time errors stay one line (mirrors run.py:154-156;
     # unlike `polyrob run`, the REPL has no --verbose flag to opt back into
     # full tracebacks).

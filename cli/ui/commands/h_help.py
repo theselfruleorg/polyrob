@@ -32,8 +32,10 @@ from cli.ui.commands.registry import CommandContext, CommandRegistry, GROUP_ORDE
 
 
 def _width() -> int:
-    cols = shutil.get_terminal_size((80, 24)).columns
-    return max(60, cols)
+    # 4 = the panel's two borders and two padding columns. Wrapped at the full width,
+    # the panel wrapped each long row again and left one verb alone on its own line.
+    cols = shutil.get_terminal_size((80, 24)).columns - 4
+    return max(56, cols)
 
 
 _FOOTER = (

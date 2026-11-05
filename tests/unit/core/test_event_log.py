@@ -120,3 +120,70 @@ def test_aggregate_does_not_report_unreadable_as_empty(tmp_path):
     log._ready = False
     with pytest.raises(RuntimeError, match="unavailable"):
         log.aggregate()
+
+
+# --- a long string value is shortened; the row stays whole and valid (102 D-7) ---
+
+_LIMIT = 16 * 1024
+
+
+def _raw_attrs(log):
+    from core.sqlite_util import execute_retry
+    return execute_retry(log.db_path, "SELECT attrs FROM telemetry_events", fetch="one")["attrs"]
+
+
+def test_a_long_string_attr_is_shortened_and_says_so(tmp_path):
+    log = _log(tmp_path)
+    log.record("cron_run", output="x" * (_LIMIT + 1000), outcome="done", n=3)
+    attrs = log.query()[0]["attrs"]
+    assert attrs["output"].startswith("x" * _LIMIT)
+    assert len(attrs["output"]) < _LIMIT + 100
+    assert str(_LIMIT + 1000) in attrs["output"], "the full size stays on the row"
+    assert attrs["outcome"] == "done" and attrs["n"] == 3
+
+
+def test_a_string_at_the_limit_is_stored_whole(tmp_path):
+    log = _log(tmp_path)
+    log.record("cron_run", output="x" * _LIMIT)
+    assert log.query()[0]["attrs"]["output"] == "x" * _LIMIT
+
+
+def test_long_strings_in_nested_values_are_shortened_and_every_key_stays(tmp_path):
+    import json
+    log = _log(tmp_path)
+    long = "y" * (_LIMIT * 2)
+    log.record("cron_run", attrs={"a": {"b": [long, {"c": long}, 7, None, True, 1.5]},
+                                  "d": "short"})
+    stored = json.loads(_raw_attrs(log))
+    assert set(stored) == {"a", "d"} and stored["d"] == "short"
+    b = stored["a"]["b"]
+    assert len(b) == 6 and b[2:] == [7, None, True, 1.5]
+    assert len(b[0]) < _LIMIT + 100 and len(b[0]) > _LIMIT
+    assert set(b[1]) == {"c"} and len(b[1]["c"]) < _LIMIT + 100
+    assert len(_raw_attrs(log)) < 3 * _LIMIT
+
+
+def test_an_object_stringified_by_the_encoder_is_shortened_too(tmp_path):
+    class Big:
+        def __str__(self):
+            return "z" * (_LIMIT * 2)
+
+    log = _log(tmp_path)
+    log.record("cron_run", thing=Big())
+    assert len(log.query()[0]["attrs"]["thing"]) < _LIMIT + 100
+
+
+def test_a_long_memo_on_a_spend_row_leaves_the_money_rollup_exact(tmp_path):
+    from core.event_kinds import WALLET_SPEND
+    log = _log(tmp_path)
+    log.record(WALLET_SPEND, amount_usd=1.25, memo="m" * (_LIMIT * 2))
+    log.record(WALLET_SPEND, amount_usd=2, memo="ok")
+    assert log.aggregate()["wallet_spend_usd"] == pytest.approx(3.25)
+
+
+def test_a_malformed_spend_amount_still_raises_after_the_shortening(tmp_path):
+    from core.event_kinds import WALLET_SPEND
+    log = _log(tmp_path)
+    log.record(WALLET_SPEND, amount_usd="1" * (_LIMIT * 2))
+    with pytest.raises(ValueError):
+        log.aggregate()

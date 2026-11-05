@@ -12,7 +12,8 @@ const node = (tag, cls, text) => {
 export function settingControl(spec, copy, { flag = false, fetcher } = {}) {
   const root = node('div', 'setting-control');
   if (copy.read_only !== '0' || (flag && spec.console_writable !== true)) {
-    if (spec.write_reason) root.append(node('p', 'why', spec.write_reason));
+    const why = spec.write_reason || copy.control_readonly;  // a pref row carries no reason of its own
+    if (why) root.append(node('p', 'why', why));
     return root;
   }
   const key = spec.key || spec.name;
@@ -98,7 +99,7 @@ export function settingControl(spec, copy, { flag = false, fetcher } = {}) {
           syncValue(res.body.value);
           status.textContent = res.body.queued
             ? `${copy.control_queued || ''} ${res.body.queued.map(item => item.error ? `${item.entry}: ${item.error}` : item.entry).join('; ')}`.trim()
-            : copy.control_saved || status.textContent;
+            : `${copy.control_saved || status.textContent} ${(res.body.applies && copy[`control_applies_${String(res.body.applies).replace('-', '_')}`]) || ''}`.trim();
           const effective = root.closest('td')?.querySelector('[data-effective]');
           if (effective) effective.textContent = JSON.stringify(res.body.value);
           const source = root.closest('tr')?.querySelector('[data-source]');

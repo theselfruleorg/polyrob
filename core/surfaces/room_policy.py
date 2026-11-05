@@ -119,8 +119,10 @@ def _forbidden_tool_ids() -> frozenset:
     return (frozenset(forbidden) | ROOM_FORBIDDEN_TOOL_IDS) - {"web_fetch"}
 
 
-def room_tool_ids() -> list:
-    """The room toolset: env ``GROUP_TURN_TOOLS`` (comma list) else the default.
+def room_tool_ids(policy: Any = None) -> list:
+    """The room toolset: env ``GROUP_TURN_TOOLS`` (comma list) else the default,
+    then what the owner granted THIS room (``policy``, 101). A grant is additive and
+    comes from the closed :func:`core.surfaces.room_grants.member_grantable`.
 
     Two gates, in this order, and the env can only ever NARROW:
 
@@ -139,13 +141,13 @@ def room_tool_ids() -> list:
     for t in ids:
         if t in forbidden:
             logger.warning("GROUP_TURN_TOOLS: dropping %r — money/exec/host/"
-                           "owner-state tools are never room tools", t)
+                           "owner-state tools are never room tools; an owner grants "
+                           "one room's admins a bundle with /groups tools here", t)
             continue
         if t not in ROOM_ALLOWED_TOOL_IDS:
             logger.warning("GROUP_TURN_TOOLS: dropping %r — a room turn may only "
-                           "load %s; a tool must be named room-safe to be "
-                           "reachable from a public room",
-                           t, ", ".join(sorted(ROOM_ALLOWED_TOOL_IDS)))
+                           "load %s; an owner grants one room more with /groups "
+                           "tools here", t, ", ".join(sorted(ROOM_ALLOWED_TOOL_IDS)))
             continue
         kept.append(t)
     # Fix round 1 (review): an empty result is honest — NEVER floored back to
@@ -155,6 +157,9 @@ def room_tool_ids() -> list:
     if not kept:
         logger.warning("room toolset is empty: GROUP_TURN_TOOLS=%r — the room agent "
                        "can only chat", raw)
+    if policy is not None:
+        from core.surfaces.room_grants import live_room_tools
+        kept.extend(t for t in live_room_tools(policy) if t not in kept)
     return kept
 
 
@@ -204,10 +209,15 @@ def is_room_denied_call(action_name: Optional[str], tool_id: Optional[str]) -> b
 
 
 def make_room_gate_hook(get_public: Callable[[], bool],
-                        resolve_tool: Optional[Callable[[str], Optional[str]]] = None):
+                        resolve_tool: Optional[Callable[[str], Optional[str]]] = None,
+                        seat: Any = None):
     """Pre-tool-call hook ``(action_name, params, context) -> Optional[str]``.
     Denies every room-denied call while the session is PUBLIC. Fail-CLOSED: if
-    the public probe raises, the call is denied."""
+    the public probe raises, the call is denied.
+
+    101: ``seat`` (``core.surfaces.room_seat.RoomSeat``) answers FIRST for a grantable
+    tool. A call no bundle names, a money verb among them, gets the
+    room rule below unchanged."""
     def _hook(action_name: str, params, context) -> Optional[str]:
         try:
             public = bool(get_public())
@@ -222,8 +232,15 @@ def make_room_gate_hook(get_public: Callable[[], bool],
                 tool_id = resolve_tool(action_name)
             except Exception:
                 tool_id = None
+        from core.tool_gates import refusal_text
+        if seat is not None:
+            from core.surfaces.room_grants import seat_decision
+            decided = seat_decision(seat, action_name, tool_id, params)
+            if decided is not None:
+                allow, why = decided
+                return None if allow else refusal_text("seat:room_grant", action=action_name,
+                                                       detail=why)
         if is_room_denied_call(action_name, tool_id):
-            from core.tool_gates import refusal_text
             return refusal_text("seat:room", action=action_name)
         return None
 
@@ -233,6 +250,10 @@ def make_room_gate_hook(get_public: Callable[[], bool],
             public = bool(get_public())
         except Exception:
             public = True
+        if public and seat is not None and getattr(seat, "stamp", None):
+            from core.surfaces.room_grants import is_bundle_call
+            if is_bundle_call(tool_id, tool_id):
+                return None            # this session's gate decides each call, live
         return "room" if public and is_room_denied_call(tool_id, tool_id) else None
     _hook.seat_denies = _seat_denies
     return _hook

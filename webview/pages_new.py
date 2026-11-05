@@ -673,6 +673,12 @@ def _posture_axes() -> dict:
                                 autonomy=(by_env.get("AUTONOMY_ENABLED") or {}).get("effective"))
                for key, env in _POSTURE_AXES}
     posture["builder_note"] = str((by_env.get("AGENT_BUILDER_MODE") or {}).get("note") or "")
+    try:
+        from core.config_policy.posture_card import asks_first_answer
+        sentence, really = asks_first_answer()
+        posture["asks"] = t("agent.ov_asks_none") if sentence.startswith("nothing else") else sentence
+    except Exception as e:  # an unreadable list is not an empty one
+        posture["asks"] = f"{t('agent.axis_value.unknown')} ({type(e).__name__})"
     return posture
 
 
@@ -1288,7 +1294,7 @@ async def api_flags(request: Request, q: str = "", group: str = ""):
     from webview.pages import _effective_user_id
     _effective_user_id(request)
     from webview.pages import _owner_console_required
-    _owner_console_required()
+    _owner_console_required("the settings lists")
     return JSONResponse(_flags_body(q, group))
 
 

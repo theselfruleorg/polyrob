@@ -138,6 +138,8 @@ class TickResult:
     yielded: List[str] = field(default_factory=list)
     skipped_locked: bool = False
     skipped_busy: bool = False
+    #: 102 T-1: held for memory or disk. Not a failure: due jobs stay due.
+    skipped_pressure: bool = False
 
 
 
@@ -247,6 +249,7 @@ class CronScheduler:
 
     async def tick(self, now: Optional[datetime] = None) -> TickResult:
         from core.interactive_gate import is_interactive_busy
+        from core.memory_pressure import current_hold, note_hold
         now = now or datetime.now()
         # 057 WS-C (A3): the busy probe and the yield now run INSIDE the TickLock.
         # They used to run before it, so under workers>1 two processes could both
@@ -262,6 +265,15 @@ class CronScheduler:
                 # 077: this process is draining for a restart — start nothing
                 # new; due jobs stay due for the restarted process.
                 return TickResult(skipped_busy=True)
+            # 102 T-1: before the money yield, so a job that cannot start here
+            # never cancels a goal for its slot.
+            pressure = await asyncio.to_thread(
+                current_hold, os.path.dirname(self.store.db_path) or ".")
+            if pressure is not None:
+                due = self.store.due(now)
+                if due:
+                    note_hold("cron", pressure, waiting=len(due))
+                return TickResult(skipped_pressure=True)
             if is_interactive_busy():
                 # A human mid-turn (REPL / owner chat) or a goal run holds the shared
                 # workspace. 056 WS5: a due PRE-EMPTING job may pre-empt a GOAL (never
@@ -486,7 +498,8 @@ class CronScheduler:
                    else note.get("outcome") or ("done" if success else "failed"))
         try:
             self.store.record_outcome(job.id, outcome, now,
-                                      reason=None if deferred else note.get("reason"))
+                                      reason=None if deferred else note.get("reason"),
+                                      report=None if deferred else note.get("report"))
         except Exception:
             logger.debug("last-outcome write failed for %s", job.id, exc_info=True)
         if job.one_shot:

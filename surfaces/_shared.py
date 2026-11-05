@@ -9,6 +9,7 @@ Lives in the surfaces tier (not core/) because it reaches the shared inbound
 executor through ``surfaces._actor`` — core must never import surfaces
 (layering ratchet).
 """
+import asyncio
 import logging
 from typing import Any, Callable, List, Optional
 
@@ -179,11 +180,50 @@ class BaseHarness:
         await _hook(self.on_processing_start, inbound)
         ok = False
         try:
-            await route_and_act(self._container, self._task_agent, inbound, _deliver,
-                                fetch_media=self._fetch_media if inbound.media else None)
+            if await self._voice_to_text(inbound, _deliver):
+                await route_and_act(self._container, self._task_agent, inbound, _deliver,
+                                    fetch_media=self._media_bytes if inbound.media else None)
             ok = True
         finally:
             await _hook(self.on_processing_finish, inbound, ok)
+
+    async def _voice_to_text(self, inbound, deliver) -> bool:
+        """Transcribe a voice-only message through the shared seam. False = the sender
+        was told it failed, and no turn runs (the same guard as Telegram and WhatsApp).
+
+        A sender the media gate refuses costs no download and no transcription; the
+        message routes as before, and the router decides by tier."""
+        from core.surfaces.config import SurfaceConfig
+        from core.surfaces.media_access import paid_media_allowed, voice_bytes_too_large
+        from core.surfaces.transcription import (
+            VOICE_TIMEOUT_SECONDS, apply_voice_transcript, voice_present)
+        from core.surfaces.voice_echo import voice_echo_message, voice_transcript
+        from core.surfaces.voice_guard import voice_needs_guard, voice_unavailable_message
+
+        if not voice_present(inbound.media) or (inbound.text or "").strip():
+            return True
+        if not paid_media_allowed(self._container, inbound):
+            return True
+        note = next(m for m in inbound.media if m.kind in ("voice", "audio"))
+        try:
+            async with asyncio.timeout(VOICE_TIMEOUT_SECONDS):
+                if SurfaceConfig.voice_transcription_enabled() and not note.data:
+                    raw = await self._fetch_media(note)
+                    if raw and not voice_bytes_too_large(raw):
+                        note.data = raw
+                await apply_voice_transcript(self._container, inbound)
+        except Exception as e:  # a timeout too: the guard below tells the sender
+            logger.warning("%s voice transcription failed: %s", self.surface_id, e)
+        if voice_needs_guard(inbound.media, inbound.text):
+            await deliver(voice_unavailable_message(SurfaceConfig.voice_transcription_enabled()))
+            return False
+        if SurfaceConfig.voice_transcript_echo_enabled():
+            await deliver(voice_echo_message(voice_transcript(inbound.media) or ""))
+        return True
+
+    async def _media_bytes(self, media) -> Optional[bytes]:
+        """The bytes of one attachment; a transcribed note is not downloaded twice."""
+        return getattr(media, "data", None) or await self._fetch_media(media)
 
     async def on_processing_start(self, inbound) -> None:
         """064 F2: optional "seen" reaction (👀) when a message is accepted.

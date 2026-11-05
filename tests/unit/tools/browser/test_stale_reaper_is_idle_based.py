@@ -39,19 +39,19 @@ async def test_returning_the_existing_context_refreshes_the_idle_clock():
 
 async def test_reaper_skips_a_context_touched_within_the_timeout():
     m = _manager()
-    ctx = MagicMock()
+    ctx = MagicMock(close=AsyncMock())
     m.contexts_in_use["executor_s1"] = ctx
     m.context_allocation_times["executor_s1"] = time.time() - 500
-    m._release_context_internal = AsyncMock()
     await m.get_context("executor_s1")  # the session is busy → touched
     await m._reap_stale_contexts_once()
-    m._release_context_internal.assert_not_awaited()
+    ctx.close.assert_not_awaited()
 
 
 async def test_reaper_still_closes_a_genuinely_idle_context():
     m = _manager()
-    m.contexts_in_use["executor_s2"] = MagicMock()
+    ctx = MagicMock(close=AsyncMock())
+    m.contexts_in_use["executor_s2"] = ctx
     m.context_allocation_times["executor_s2"] = time.time() - 500
-    m._release_context_internal = AsyncMock()
     await m._reap_stale_contexts_once()
-    m._release_context_internal.assert_awaited_once_with("executor_s2", close=True)
+    ctx.close.assert_awaited_once()
+    assert "executor_s2" not in m.contexts_in_use

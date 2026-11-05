@@ -142,7 +142,8 @@ def _last_tool_error(agent: Any, since_steps: Optional[int]) -> str:
     (``core/surfaces/error_notices.py``)."""
     items = _steps(agent)
     if isinstance(since_steps, int) and since_steps >= 0:
-        items = items[since_steps:]
+        # An absolute index: the list may have dropped its oldest steps since then.
+        items = items[max(0, since_steps - trimmed_step_count(getattr(agent, "history", None))):]
     for item in reversed(items):
         actions = list(getattr(getattr(item, "model_output", None), "action", None) or [])
         if not actions:
@@ -192,6 +193,18 @@ def _main_agents(orchestrator: Any) -> list:
         return [a for a in agents if not getattr(a, "_is_sub_agent", False)]
     except Exception:
         return []
+
+
+def trimmed_step_count(history: Any) -> int:
+    """Steps a ledger has dropped from memory (0 for a holder that never trims)."""
+    trimmed = getattr(history, "trimmed_steps", 0)
+    return trimmed if isinstance(trimmed, int) else 0
+
+
+def absolute_step_count(history: Any) -> int:
+    """Every step the ledger has seen. Compare THIS across a turn, never ``len(history)``:
+    the list holds only the newest steps, so its length is not an absolute index."""
+    return trimmed_step_count(history) + len(getattr(history, "history", None) or ())
 
 
 def _steps(agent: Any) -> list:

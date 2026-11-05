@@ -59,6 +59,18 @@ anysite_api(endpoint='/api/linkedin/get_profile', params={"user": "..."})
 
 **Rule:** Skill bodies must never call anysite through `mcp_execute_tool` (the retired shape). The current shape is `anysite_api(endpoint=..., params={...})` after discovery. `mcp_execute_tool` itself is the live MCP action: a skill about an MCP server may name it.
 
+## 4a. A skill does not add an owner gate
+
+A skill never makes the agent wait for the owner: no approval file, no "wait for the owner's
+yes", no "post only after the owner approves". The runtime decides what needs the owner (money
+limits, tainted turns). Such a wait has no card and no `/pending` row, so the owner cannot find
+it (prod 2026-11-04: a scheduled post stopped on a line missing from an approvals file, while
+`/pending` was empty).
+
+When a step needs a decision, raise a card with `propose_action`. When the owner should see
+something first, send it ahead with the time it goes out, and let a pause be the brake.
+`tests/unit/skills/test_no_skill_owner_gate.py` checks the shipped skills.
+
 ## 5. No hardcoded absolute paths
 
 - No `/home/user/...`, no `/opt/polyrob/...`, no `~/.anysite/schema.json`.

@@ -51,7 +51,8 @@ class GroupRoles:
             self.db_path,
             """INSERT INTO group_roles(surface,chat_id,user_id,role,granted_by,note,created_at)
                VALUES(?,?,?,?,?,?,?) ON CONFLICT(surface,chat_id,user_id) DO UPDATE SET
-               role=excluded.role, granted_by=excluded.granted_by, note=excluded.note""",
+               role=excluded.role, granted_by=excluded.granted_by, note=excluded.note,
+               created_at=excluded.created_at""",
             (str(surface), str(chat_id), str(user_id), role, str(granted_by), str(note),
              time.time()))
 

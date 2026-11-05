@@ -62,6 +62,7 @@ def _make_agent(judge_llm, main_llm):
         return _FakeBrowserCtx()
 
     agent.get_browser_context = _get_browser_context
+    agent.get_used_browser_context = _get_browser_context
 
     # AgentMessagePrompt.get_user_message needs a usable content; patch the prompt build
     # to avoid pulling real browser state through. We replace the message list build by
@@ -254,9 +255,11 @@ def test_structured_parsed_none_fails_open(monkeypatch):
 
 def test_p2_8_cleanup_closes_judge_client():
     import inspect
+    from agents.task.agent.core import model_swap
     from agents.task.session import cleanup
-    src = inspect.getsource(cleanup)
-    assert "'_judge_llm'" in src, "M2 cleanup must close the cached judge client"
+    assert "close_agent_llms" in inspect.getsource(cleanup)
+    assert '"_judge_llm"' in inspect.getsource(model_swap.close_agent_llms), (
+        "M2 cleanup must close the cached judge client")
 
 
 def test_p2_8_background_review_reuses_cached_judge():

@@ -246,8 +246,9 @@ class TaskAgentChatMixin:
             agent = next(iter((getattr(orch, 'agents', None) or {}).values()), None)
             if agent is None:
                 return None
+            from agents.task.runtime.run_outcome import absolute_step_count
             hist = getattr(agent, 'history', None)
-            steps = len(getattr(hist, 'history', None) or [])
+            steps = absolute_step_count(hist)
             mm = getattr(agent, 'message_manager', None)
             # The message OBJECTS that predate the turn (held, so an id is never
             # reused): the history is a capped deque and compaction rewrites it,
@@ -295,8 +296,9 @@ class TaskAgentChatMixin:
             old_ids = frozenset()
             previous = None
             if since is not None:
+                from agents.task.runtime.run_outcome import absolute_step_count
                 base_steps, base_msgs, previous = since
-                new_steps = len(getattr(hist, 'history', None) or []) > base_steps
+                new_steps = absolute_step_count(hist) > base_steps
                 old_ids = frozenset(id(m) for m in base_msgs)
 
             # 0) C3: the reply this turn actually spoke, recorded where it was

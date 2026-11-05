@@ -61,6 +61,21 @@ class Turn:
     assistant: str = ""
 
 
+def _record_typed_line(agent: Any, text: str) -> None:
+    """104: the person's own line reaches the feed, so another seat that shows this chat
+    draws it (the console read "reply" with no question). Fail-open: it is a view."""
+    import logging
+    import time
+    try:
+        orchestrator = agent.orchestrator
+        orchestrator.session_manager.add_to_feed(
+            orchestrator.session_id, "user_message",
+            {"text": text, "sender_user_id": str(orchestrator.user_id), "sender_surface": "cli",
+             "timestamp": time.time()})
+    except Exception:
+        logging.getLogger(__name__).debug("typed line not in the feed", exc_info=True)
+
+
 @dataclass
 class Conversation:
     agent: Any
@@ -83,6 +98,7 @@ class Conversation:
         _reset_turn_state(self.agent, owner_line=True)  # recover; a fresh retry wall
         _mark_owner_turn(self.agent)                 # 098 AG-06: a REPL line is the owner
         _set_owner_turn_text(self.agent, text if typed_text is None else typed_text)
+        _record_typed_line(self.agent, text if typed_text is None else typed_text)
         _record_repl_line(self.agent, text)          # 061: the terminal is an owner seat
         self.agent.set_turn_input(text)              # append-as-turn (Task 7)
         history = await self.agent.run(

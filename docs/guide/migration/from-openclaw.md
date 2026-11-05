@@ -46,7 +46,7 @@ lists every flag. A rough translation of a typical `openclaw.json`:
 
 ```bash
 DEFAULT_PROVIDER=openrouter
-DEFAULT_MODEL=gpt-4o
+DEFAULT_MODEL=<model>
 OPENROUTER_API_KEY=sk-or-...
 
 TELEGRAM_BOT_TOKEN=...

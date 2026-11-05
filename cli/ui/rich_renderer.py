@@ -186,10 +186,13 @@ class RichRenderer(Renderer):
     def _handle_session_done(self, event: SessionDone) -> None:
         # Dialog layer: a failed session's error explains itself or it's noise.
         if not event.success and event.error_message:
+            # A known cause has a one-line fix, as `polyrob run` prints. The provider's
+            # raw reply stays in the log.
+            from cli.commands._errors import remedy_line
             self._console.print(
                 blocks.error_panel(
                     ErrorEvent(
-                        error_message=event.error_message,
+                        error_message=remedy_line(event.error_message) or event.error_message,
                         error_type="session failed",
                     )
                 )

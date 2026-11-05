@@ -8,7 +8,17 @@ six-prompt wall.
 
 import types
 
+import pytest
 from click.testing import CliRunner
+
+
+@pytest.fixture(autouse=True)
+def _no_connected_provider(tmp_path, monkeypatch):
+    """The wizard offers to keep a connected provider: start with none."""
+    monkeypatch.setattr("core.paths.polyrob_home", lambda: tmp_path)
+    for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                "NVIDIA_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
 
 
 def _run_wizard(input_text: str):

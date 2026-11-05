@@ -145,6 +145,44 @@ class RoomCaps:
                                  "DELETE FROM room_events WHERE ts < ?",
                                  (now - keep,)) or 0)
 
+    #: 101: the window of ``chat.admin_turns_per_day``.
+    _ADMIN_WINDOW_SEC = 86400
+
+    def may_admin_turn(self, surface, chat_id, *, now: Optional[float] = None) -> bool:
+        """Is this room under its daily ``/admin`` cap? Every ``/admin`` turn spends the
+        owner's LLM credit, so a store or policy fault refuses."""
+        now = time.time() if now is None else now
+        try:
+            pol = self._policy(surface, chat_id)
+            if pol is None:
+                return False
+            used = self._count(surface, chat_id, "admin_turn", now - self._ADMIN_WINDOW_SEC)
+            return used < int(pol.admin_turns_per_day)
+        except Exception as e:
+            logger.warning("room caps: admin turn count unreadable (%s)", e)
+            return False
+
+    def record_admin_turn(self, surface, chat_id, uid, *, now: Optional[float] = None) -> None:
+        self._record(surface, chat_id, "admin_turn", str(uid),
+                     time.time() if now is None else now)
+
+    def admin_turns_since(self, surface, chat_id, since: float) -> int:
+        return self._count(surface, chat_id, "admin_turn", since)
+
+    def record_admin_tool(self, surface, chat_id, action: str, uid,
+                          *, now: Optional[float] = None) -> None:
+        self._record(surface, chat_id, f"admin_tool:{action}", str(uid),
+                     time.time() if now is None else now)
+
+    def admin_tool_rows(self, surface, chat_id, *, limit: int = 30) -> list:
+        """Newest first: ``(ts, action, uid)`` of every admin tool call kept."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT ts, kind, actor FROM room_events WHERE surface=? AND chat_id=? "
+            "AND kind LIKE 'admin_tool:%' ORDER BY ts DESC LIMIT ?",
+            (surface, str(chat_id), int(limit)), fetch="all") or []
+        return [(float(r[0]), str(r[1]).split(":", 1)[1], str(r[2])) for r in rows]
+
     def replies_since(self, surface, chat_id, since: float) -> int:
         """044 T18: how many replies this room got since *since* (epoch
         seconds) — the public read the status section renders from. ``_count``

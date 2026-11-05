@@ -96,10 +96,9 @@ class SequenceGenerator:
 
     @classmethod
     def reset(cls, session_id: str) -> None:
-        """Reset sequence for session (for testing).
+        """Forget a session's generator (it left memory, or a test).
 
-        Removes the cached generator for a session, so next call
-        to get() will create a fresh generator starting at 0.
+        The next ``get()`` builds a fresh one, which reseeds from ``feed_dir``.
 
         Args:
             session_id: The session to reset

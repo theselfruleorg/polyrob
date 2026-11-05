@@ -14,7 +14,8 @@ must keep producing exactly one ``voice`` Media so ``voice_guard`` and
 import logging
 from typing import Any, List, Optional, Tuple
 
-from core.surfaces.inbound_attachments import owner_typed_text, with_typed_text
+from core.surfaces.inbound_attachments import (
+    TRANSCRIBED_KINDS, owner_typed_text, with_typed_text)
 from core.surfaces.media import Media
 
 logger = logging.getLogger(__name__)
@@ -105,14 +106,20 @@ async def absorb_for_session(task_agent: Any, result: Any, session_id: str,
     if not media:
         return base_text, None
     if fetch_media is None:
+        # A voice note is not a file to store: the transcript IS the turn. WhatsApp has
+        # no downloader, and telling the agent its note "could NOT be stored" sat next to
+        # the words of that note on every continued chat.
+        files = [m for m in media if getattr(m, "kind", None) not in TRANSCRIBED_KINDS]
+        if not files:
+            return base_text, with_typed_text(None, base_text)
         # ⚠️ D52: files arrived and this seat has no downloader wired. Saying
         # nothing leaves the agent answering a message whose attachments it has
         # no idea existed.
         logger.warning("telegram media: %d attachment(s) arrived with no "
                        "downloader wired — naming them on the turn instead",
-                       len(media))
+                       len(files))
         return _absorb_failure_text(
-            base_text, media, RuntimeError("no downloader on this seat")), \
+            base_text, files, RuntimeError("no downloader on this seat")), \
             with_typed_text(None, base_text)
 
     # A session with no on-disk metadata is about to be replaced by a fresh one (the

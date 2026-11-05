@@ -267,24 +267,16 @@ def create_llm_client(name: str, config, container=None, model_type=None):
             # Register new client
             container.register_service(service_name, client)
 
-        # Register as generic services if they don't exist yet
+        # The generic client name. NEVER 'llm': that name is the LLMManager, and every
+        # caller here runs inside one, which registers itself when it finishes.
         if not container.has_service('llm_client'):
             container.register_service('llm_client', client)
-            
-            # Also register as llm if not already registered
-            if not container.has_service('llm'):
-                container.register_service('llm', client)
-        
+
         # Special case for Anthropic - prefer it if available
-        elif name == 'anthropic' and container.has_service('llm_client'):
+        elif name == 'anthropic':
             current = container.get_service('llm_client')
             if current and current.__class__.__name__ != 'AnthropicClient':
-                # Unregister existing services and register Anthropic
                 container.unregister_service('llm_client')
                 container.register_service('llm_client', client)
-                
-                if container.has_service('llm'):
-                    container.unregister_service('llm')
-                container.register_service('llm', client)
         
     return client 

@@ -12,15 +12,21 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
 from core.base_component import BaseComponent
-from core.config import BotConfig
+from core.config import BotConfig, DEFAULT_MAX_BROWSER_CONTEXTS
 from tools.browser.browser import Browser
 from tools.browser.context import BrowserContext, BrowserContextConfig
+
+
+def _session_key(agent_id: str) -> str:
+    """The session of an ``agentname_sessionid`` id, for the per-session limit. The part
+    before ``_`` is the agent NAME, so every session of ``agent`` shared one allowance."""
+    return agent_id.split('_', 1)[-1]
 
 
 @dataclass
 class BrowserManagerConfig:
     """Configuration for BrowserManager."""
-    max_contexts: int = 25  # Support 25 concurrent browser sessions
+    max_contexts: int = DEFAULT_MAX_BROWSER_CONTEXTS
     max_contexts_per_session: int = 2  # Per-session limit
     context_timeout: float = 30.0
     headless: bool = True
@@ -67,7 +73,7 @@ class BrowserManager(BaseComponent):
 
         # Browser management configuration
         self.browser_config = BrowserManagerConfig(
-            max_contexts=getattr(self.config, 'max_browser_contexts', 3),
+            max_contexts=getattr(self.config, 'max_browser_contexts', DEFAULT_MAX_BROWSER_CONTEXTS),
             max_contexts_per_session=getattr(
                 self.config, 'max_contexts_per_session',
                 BrowserManagerConfig.max_contexts_per_session,
@@ -223,9 +229,9 @@ class BrowserManager(BaseComponent):
                     self.session_configs[session_id] = BrowserContextConfig(
                         allowed_domains=allowed_domains or []
                     )
-                base_session = session_id.split('_')[0]
+                base_session = _session_key(session_id)
                 held = len(self.session_contexts.get(base_session, ())) + sum(
-                    1 for s in self._creating if s.split('_')[0] == base_session)
+                    1 for s in self._creating if _session_key(s) == base_session)
                 if held >= self.browser_config.max_contexts_per_session:
                     if not wait:
                         self.logger.warning(
@@ -283,7 +289,7 @@ class BrowserManager(BaseComponent):
         """IN_USE (caller holds the pool lock)."""
         self.contexts_in_use[session_id] = context
         self.context_allocation_times[session_id] = time.time()
-        base = self.session_contexts.setdefault(session_id.split('_')[0], [])
+        base = self.session_contexts.setdefault(_session_key(session_id), [])
         if session_id not in base:
             base.append(session_id)
 
@@ -321,53 +327,60 @@ class BrowserManager(BaseComponent):
             self.logger.error(f"Failed to create context for {session_id}: {e}")
             return None
 
-    async def _release_context_internal(self, session_id: str, close: bool = False) -> None:
-        """
-        Internal release that assumes _pool_lock is already held by caller.
-
-        This method should ONLY be called from within async with self._pool_lock: blocks.
-        For external calls, use release_context() instead.
-
-        Args:
-            session_id: Session identifier releasing the context
-            close: Whether to close the context instead of pooling
-        """
+    def _detach_context(self, session_id: str) -> Optional[BrowserContext]:
+        """Take the session's context out of the pool (caller holds the lock). The slot is
+        free from here; the caller closes the context OUTSIDE the lock, because a close of
+        a dead browser takes seconds and every session waits on this lock."""
         if session_id not in self.contexts_in_use:
             self.logger.debug(f"No context to release for session {session_id} (already released or never allocated)")
-            return
+            return None
 
         context = self.contexts_in_use.pop(session_id)
         self.context_allocation_times.pop(session_id, None)
 
         # Remove from session tracking
-        base_session = session_id.split('_')[0]
+        base_session = _session_key(session_id)
         if base_session in self.session_contexts:
             if session_id in self.session_contexts[base_session]:
                 self.session_contexts[base_session].remove(session_id)
             # Clean up empty session entries
             if not self.session_contexts[base_session]:
                 del self.session_contexts[base_session]
+        return context
 
-        try:  # 098 TS-06: always closed, never pooled (``close`` is kept for callers)
-            await context.close()
-            self.logger.debug(f"Closed context for session {session_id}")
-        except Exception as e:
-            self.logger.error(f"Error closing context for {session_id}: {e}")
+    async def _release_context_internal(self, session_id: str, close: bool = False) -> None:
+        """
+        Release that closes UNDER the pool lock: for the shutdown only, where no other
+        session is served. Every other release uses release_context().
+
+        Args:
+            session_id: Session identifier releasing the context
+            close: Whether to close the context instead of pooling
+        """
+        context = self._detach_context(session_id)
+        if context is None:
+            return
+        await self._close_quietly(context, session_id)  # 098 TS-06: always closed, never pooled
 
         # Process wait queue after releasing (no lock needed - caller holds it)
         await self._notify_wait_queue()
 
     async def release_context(self, session_id: str, close: bool = False) -> None:
         """
-        Release a browser context back to the pool or close it.
+        Release a browser context and close it, outside the pool lock.
         This method is idempotent - calling it multiple times is safe.
 
         Args:
             session_id: Session identifier releasing the context
-            close: Whether to close the context instead of pooling
+            close: Kept for callers; a context is always closed, never pooled
         """
         async with self._pool_lock:
-            await self._release_context_internal(session_id, close)
+            context = self._detach_context(session_id)
+        if context is None:
+            return
+        await self._close_quietly(context, session_id)
+        async with self._pool_lock:
+            await self._notify_wait_queue()
 
     def forget_session_config(self, session_id: str) -> None:
         """Drop the cached per-session BrowserContextConfig, if any.
@@ -404,13 +417,21 @@ class BrowserManager(BaseComponent):
                 for session_id, last_used in self.context_allocation_times.items()
                 if current_time - last_used > self.browser_config.stale_context_timeout
             ]
-            # Use internal release while holding lock to avoid deadlock
+            detached = []
             for session_id in stale_sessions:
                 self.logger.warning(
                     f"Cleaning up stale context for session {session_id} "
                     f"(idle {current_time - self.context_allocation_times.get(session_id, current_time):.0f}s)"
                 )
-                await self._release_context_internal(session_id, close=True)
+                context = self._detach_context(session_id)
+                if context is not None:
+                    detached.append((context, session_id))
+        if detached:
+            # Shielded: these left the pool, so a cancel here would lose the rest for ever.
+            await asyncio.shield(asyncio.gather(
+                *(self._close_quietly(context, session_id) for context, session_id in detached)))
+            async with self._pool_lock:
+                await self._notify_wait_queue()
 
     def _enqueue_waiter(self, session_id: str) -> asyncio.Future:
         """
@@ -507,6 +528,7 @@ class BrowserManager(BaseComponent):
     async def _close_quietly(self, context: BrowserContext, session_id: str) -> None:
         try:
             await context.close()
+            self.logger.debug(f"Closed context for session {session_id}")
         except Exception as e:
             self.logger.error(f"Error closing context for {session_id}: {e}")
 

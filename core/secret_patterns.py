@@ -34,9 +34,12 @@ BEARER_RE = re.compile(
 #: (?<![A-Za-z0-9]) + prefix-capture instead of a leading \b so that
 #: ``<PREFIX>_API_KEY=`` (the most common real env-var shape) matches — a `\b`
 #: fails there because `_` is a word char. Key preserved; value (>=6 chars) redacted.
+#: The prefix repeat is BOUNDED: the lookbehind admits a start at every `-` or `_`, so
+#: an unbounded repeat is quadratic and 50 KB of `a-` stalled the event loop for 66 s.
+#: A longer prefix still redacts: the match starts on a later segment.
 KV_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])"
-    r"((?:[A-Za-z0-9]+[_-])*"
+    r"((?:[A-Za-z0-9]+[_-]){0,8}"
     r"(?:api[_-]?key|apikey|secret|client_secret|password|passwd|"
     r"access[_-]?token|auth[_-]?token|token|authorization|bearer|"
     # 2026-09-21 revalidation: the wallet-shaped keys were never claimed, so

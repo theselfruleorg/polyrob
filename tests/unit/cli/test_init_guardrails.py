@@ -103,7 +103,7 @@ def test_final_summary_mentions_self_capability(tmp_path, monkeypatch):
     piped = _full_flow_input()
     res, _proj = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
-    assert 'Ask me anything about myself — try "what can you do?"' in res.output
+    assert "Later, if you want them" in res.output
 
 
 # ---------------------------------------------------------------------------

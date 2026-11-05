@@ -142,3 +142,76 @@ def test_append_file_action_coerces_an_object_to_its_compact_line():
     from tools.controller.views import AppendFileAction
     a = AppendFileAction(file_path="c.jsonl", content={"id": "1", "x": "é"})
     assert a.content == '{"id":"1","x":"é"}\n'
+
+
+@pytest.mark.asyncio
+async def test_jsonl_append_does_not_hold_a_large_file_in_memory(_pm):
+    import tracemalloc
+    from tools.controller.views import JsonlAppendAction
+    tool = _fs_tool()
+    ws = _ws(_pm)
+    path = os.path.join(ws, "big.jsonl")
+    line = json.dumps({"k": "v" * 1000}) + "\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(line * 8192)  # about 8 MB
+    tracemalloc.start()
+    try:
+        out = await tool.jsonl_append(JsonlAppendAction(file_path="big.jsonl", record={"a": 1}))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert "8193 line(s)" in out
+    assert peak < 2 * 1024 * 1024, peak
+
+
+@pytest.mark.asyncio
+async def test_jsonl_append_adds_the_missing_newline_and_names_a_bad_line(_pm):
+    from tools.controller.views import JsonlAppendAction
+    tool = _fs_tool()
+    ws = _ws(_pm)
+    path = os.path.join(ws, "x.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"a":1}\nnot json\n[1]\n{"b":2}')
+    out = await tool.jsonl_append(JsonlAppendAction(file_path="x.jsonl", record={"c": 3}))
+    assert "5 line(s)" in out and "WARNING 2 pre-existing bad line(s) (first: 2)" in out
+    with open(path, encoding="utf-8") as f:
+        assert f.read().endswith('{"b":2}\n{"c":3}\n')
+
+
+@pytest.mark.asyncio
+async def test_copy_file_verb_does_not_hold_a_large_file_in_memory(_pm):
+    import tracemalloc
+    from tools.controller.views import CopyFileAction
+    tool = _fs_tool()
+    ws = _ws(_pm)
+    payload = b"x" * (8 * 1024 * 1024)
+    with open(os.path.join(ws, "a.bin"), "wb") as f:
+        f.write(payload)
+    tracemalloc.start()
+    try:
+        out = await tool.copy_file(CopyFileAction(source_path="a.bin", dest_path="b.bin"))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert f"({len(payload)} bytes)" in out
+    with open(os.path.join(ws, "b.bin"), "rb") as f:
+        assert f.read() == payload
+    assert peak < 3 * 1024 * 1024, peak
+
+
+@pytest.mark.asyncio
+async def test_a_large_source_cannot_replace_a_document(_pm, monkeypatch):
+    import tools.filesystem as fsmod
+    from core.exceptions import ServiceError
+    from tools.controller.views import CopyFileAction
+    monkeypatch.setattr(fsmod, "MAX_FILE_SIZE", 8)
+    tool = _fs_tool()
+    ws = _ws(_pm)
+    with open(os.path.join(ws, "a.md"), "w", encoding="utf-8") as f:
+        f.write("# much longer than eight bytes\n")
+    with open(os.path.join(ws, "DOC.md"), "w", encoding="utf-8") as f:
+        f.write("# old\n")
+    with pytest.raises(ServiceError, match="too large to replace a document"):
+        await tool.copy_file(CopyFileAction(source_path="a.md", dest_path="DOC.md", overwrite=True))
+    with open(os.path.join(ws, "DOC.md"), encoding="utf-8") as f:
+        assert f.read() == "# old\n"

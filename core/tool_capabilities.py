@@ -31,7 +31,8 @@ fully blocked):
 
 Per-tool POLICY FIELDS (067 P1) ride on the same rows as attributes of
 :class:`ToolRow` (a frozenset subclass, so the capability set is unchanged):
-``untrusted_output``, ``cli``, ``cli_registrar``, ``gate``. Views derived from them:
+``untrusted_output``, ``cli``, ``cli_registrar``, ``gate``, ``room_grantable`` (the owner
+may add the tool to one room, ``core.surfaces.room_grants``). Views derived from them:
 ``untrusted_wrap.UNTRUSTED_TOOL_NAMESPACES``; ``bootstrap._CLI_INCOMPATIBLE``,
 ``_CLI_STATIC_TOOLS``, ``_CLI_OPTIONAL_REGISTRARS``; ``tool_load_report.TOOL_GATE_FLAGS``,
 ``tool_availability.GATED_TOOL_REGISTRY``.
@@ -84,11 +85,11 @@ class ToolRow(frozenset):
     frozenset patched in by a test.
     """
 
-    __slots__ = ("untrusted_output", "cli", "cli_registrar", "gate")
+    __slots__ = ("untrusted_output", "cli", "cli_registrar", "gate", "room_grantable")
 
     def __new__(cls, caps: Iterable[str] = (), *, untrusted_output: bool = False,
                 cli: str = "none", cli_registrar: Optional[str] = None,
-                gate: Optional[ToolGate] = None):
+                gate: Optional[ToolGate] = None, room_grantable: bool = False):
         if cli not in CLI_MODES:
             raise ValueError(f"cli={cli!r} not in {sorted(CLI_MODES)}")
         if (cli == "optional") != bool(cli_registrar):
@@ -98,6 +99,7 @@ class ToolRow(frozenset):
         row.cli = cli
         row.cli_registrar = cli_registrar
         row.gate = gate
+        row.room_grantable = bool(room_grantable)
         return row
 
     def fields(self) -> Dict[str, object]:
@@ -119,6 +121,7 @@ def _make_row(caps, fields) -> "ToolRow":
 
 _ROW_DEFAULTS: Dict[str, object] = {
     "untrusted_output": False, "cli": "none", "cli_registrar": None, "gate": None,
+    "room_grantable": False,
 }
 
 # tool_id -> capability set. An explicit empty set IS a classification ("read-only /
@@ -127,7 +130,7 @@ _ROW_DEFAULTS: Dict[str, object] = {
 TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # -- core / read-only -----------------------------------------------------
     "filesystem": ToolRow(untrusted_output=True, cli="static"),
-    "task": ToolRow(cli="static"),   # the TODO tool, NOT delegation — never block
+    "task": ToolRow(cli="static", room_grantable=True),   # the TODO tool, NOT delegation — never block
     # No tool-id capability, but its four verbs are gated BY NAME while
     # correspondent-tainted (correspondent_gate._HIGH_IMPACT_NAMES, M03) — the
     # same shape as `memory`/`session_search`.
@@ -142,7 +145,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # correspondent_gate — holdings are pre-drain reconnaissance — while the
     # impersonal reads stay available while tainted.
     "defi_data": ToolRow(
-        untrusted_output=True, cli="optional", cli_registrar="tools.defi:register_defi_data_tool",
+        room_grantable=True, untrusted_output=True, cli="optional", cli_registrar="tools.defi:register_defi_data_tool",
         gate=ToolGate(flag="DEFI_DATA_ENABLED")),
     # -- egress / comms (delegable-but-high-impact: NOT delegate_blocked) ------
     "browser": ToolRow({"high_impact", "writes_network"},  # SSRF / exfil
@@ -151,7 +154,7 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
                       label="session tool_ids",
                       remedy="load_tool")),
     "web_fetch": ToolRow({"high_impact"},  # outbound fetch (SSRF / exfil)
-        untrusted_output=True, cli="static"),
+        room_grantable=True, untrusted_output=True, cli="static"),
     # 093 F1: an outbound WRITE (agent-controlled body to any public host) —
     # web_fetch's SSRF path, no ambient credentials. An autonomous run asks the
     # owner once per new domain (tools/http_request/tool.py, 093 D2).

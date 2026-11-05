@@ -239,7 +239,12 @@ def _probe_key(spec, key):
                 "messages": [{"role": "user", "content": "ping"}],
             }, timeout=15)
         else:
-            resp = httpx.get(f"{base}/models",
+            if "integrate.api.nvidia.com" in base:
+                return None, "this provider's model list is public, so it cannot test a key"
+            # OpenRouter serves /models to anybody, so a 200 there proves nothing:
+            # a dead key read as "verified" and failed on the first message.
+            path = "key" if "openrouter.ai" in base else "models"
+            resp = httpx.get(f"{base}/{path}",
                              headers={"Authorization": f"Bearer {key}"}, timeout=15)
         if resp.status_code in (401, 403):
             return False, f"HTTP {resp.status_code}: {resp.text[:200]}"

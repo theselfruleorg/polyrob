@@ -70,6 +70,14 @@ def _withheld_enabled(skip=frozenset()) -> list:
             if spec.id not in skip and parse_bool(flag_raw(spec.enabled_flag) or None, False)]
 
 
+def _no_surfaces_message() -> None:
+    click.echo(click.style("[gateway] ", fg="yellow")
+               + "No surfaces enabled, so there is nothing to run.\n"
+               + "  Add one:   polyrob surfaces add telegram\n"
+               + "  See all:   polyrob surfaces list\n"
+               + "  Or talk to the agent here:   polyrob")
+
+
 async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: str = "0.0.0.0",
                        skip=frozenset(), autonomy: bool = True,
                        idle_when_empty: bool = False) -> Optional[int]:
@@ -137,6 +145,11 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
         os.environ["GRPC_VERBOSITY"] = "ERROR"
         os.environ["GLOG_minloglevel"] = "3"
 
+    # Nothing to run: say so now, not after 100 log lines and a started runtime.
+    if not (idle_when_empty or telegram_token_opt or _enabled_specs(skip) or _withheld_enabled(skip)):
+        _no_surfaces_message()
+        return None
+
     try:
         container = await build_cli_container(log_level=log_level)
     except Exception as e:
@@ -170,6 +183,12 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
         from cli.commands._bootstrap import attach_dispatcher_event_log
         attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
+
+    from polyrob.app.bootstrap import freeze_startup_heap
+    freeze_startup_heap()
+    # 102 C-13: --no-autonomy has no heartbeat task, so here the watch only logs.
+    from core.loop_watch import start as start_loop_watch
+    start_loop_watch()
 
     # --- Autonomy background loops (cron / goals / curator / surface GC) ---
     autonomy_handles = None
@@ -209,10 +228,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool, *, host: st
 
     if not enabled:
         from core.remedy import flag_command
-        click.echo(click.style("[gateway] ", fg="yellow")
-                   + "No surfaces enabled. Enable at least one (takes effect: restart):\n"
-                   + "\n".join(f"  {flag_command(spec.enabled_flag)}"
-                               for spec in _catalog_surfaces()))
+        _no_surfaces_message()
         await _stop_runtime()
         return
 

@@ -227,17 +227,14 @@ def test_gateway_accepts_x_oauth2_user_token(monkeypatch):
 
 
 def test_gateway_no_surfaces_message_lists_all_flags(monkeypatch):
-    """The 'no surfaces enabled' guidance names every launchable surface flag."""
+    """The 'no surfaces enabled' guidance names the commands that add and list one."""
     from click.testing import CliRunner
     from cli.commands import gateway as gw_mod
 
     _patch_gateway_bootstrap(monkeypatch)
     res = CliRunner().invoke(gw_mod.gateway, [])
-    for flag in ("TELEGRAM_SURFACE_ENABLED", "WHATSAPP_SURFACE_ENABLED",
-                 "EMAIL_SURFACE_ENABLED", "DISCORD_SURFACE_ENABLED",
-                 "SLACK_SURFACE_ENABLED", "SIGNAL_SURFACE_ENABLED",
-                 "X_SURFACE_ENABLED"):
-        assert flag in res.output
+    assert "polyrob surfaces add telegram" in res.output
+    assert "polyrob surfaces list" in res.output
 
 
 def test_gateway_skips_email_without_credentials(monkeypatch):

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
+from core.event_kinds import RESOURCE_HOLD
 from core.status_types import (  # noqa: F401
     HealthItem, SEVERITY_CRIT, SEVERITY_WARN, Section, _K_AUTONOMY_STARTED,
     _K_AUTONOMY_TICK, _K_CRON_RUN, _K_GOAL_RUN, _K_SELF_WAKE, _K_WALLET_SPEND,
@@ -126,7 +128,43 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
         _loop_liveness_lines(sec, tele, now, data_dir)
     else:
         sec.lines.append(f"24h run/heartbeat counts unavailable ({tele.reason})")
+    _resource_pressure_lines(sec, tele, now, data_dir)
     return sec
+
+
+def _resource_pressure_lines(sec: Section, tele: Section, now: float,
+                             data_dir: Optional[str]) -> None:
+    """102 T-1: does this process see memory or disk pressure, and did it hold work? An
+    unreadable source allows the run, and it reads as such, never as no pressure."""
+    from core import memory_pressure
+    from core.runtime_paths import data_dir_or_home
+    pressure = memory_pressure.read_pressure(data_dir_or_home(data_dir))
+    sec.data["resource_pressure"] = {
+        "keys": list(pressure.keys), "unread": list(pressure.unread),
+        "mem_available_mb": pressure.mem_available_mb, "disk_free_mb": pressure.disk_free_mb}
+    # /proc exists only on Linux, and a home with no data dir has no disk to read yet.
+    # Neither is a failed read, so neither is a thing to report.
+    unread = [u for u in pressure.unread
+              if not (u == "MemAvailable" and sys.platform != "linux")
+              and not (u == "free disk" and not os.path.isdir(data_dir_or_home(data_dir)))]
+    if unread:
+        sec.lines.append("resource pressure: could not read " + ", ".join(unread))
+    if pressure.hold:
+        why = "; ".join(pressure.reasons)
+        sec.lines.append(f"resource pressure: new goals and cron jobs wait: {why}")
+        sec.health.append(HealthItem(
+            key="resource_hold", severity=SEVERITY_WARN,
+            text=f"new goals and cron jobs wait: {why}",
+            remedy="free memory or disk; the work stays due and starts by itself"))
+    elif not pressure.unread:
+        sec.lines.append("resource pressure: none")
+    holds = _tele_rows(tele, RESOURCE_HOLD) if tele.available else []
+    if holds:
+        attrs = holds[0]["attrs"] or {}
+        sec.lines.append(
+            f"resource pressure: {len(holds)} hold events in the window, the last "
+            f"{_age(holds[0]['ts'], now)} ago ({attrs.get('runner') or '?'}: "
+            f"{', '.join(attrs.get('keys') or []) or '?'})")
 
 
 def _pause_lines(sec: Section, user_id: str, tele: Section,
@@ -522,6 +560,24 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
                    "run, or narrow the job's rig (`--rig money_rail`) so its steps are shorter"))
 
 
+def _loop_lag_lines(sec: Section, latest: Dict[str, Dict[str, Any]]) -> None:
+    """102 C-13: the worst event-loop stall in the last heartbeat window. A row
+    with no value was NOT measured, and that never reads as no lag."""
+    lags = [hb["lag"] for hb in latest.values() if isinstance(hb.get("lag"), (int, float))]
+    if not lags:
+        if latest:
+            sec.lines.append("event-loop lag: not measured")
+        return
+    worst = int(max(lags))
+    sec.data["loop_lag_ms_max"] = worst
+    sec.lines.append(f"event-loop lag: max {worst} ms in the last heartbeat window")
+    if worst > 1000:
+        sec.health.append(HealthItem(
+            key="loop_lag", severity=SEVERITY_WARN,
+            text=f"the event loop stalled for {worst} ms: every session stops for that time",
+            remedy="find `event loop stuck` in the service log; it names the blocking call"))
+
+
 def _loop_liveness_lines(sec: Section, tele: Section, now: float,
                          data_dir: Optional[str]) -> None:
     """Loop liveness from the supervisor heartbeat, against the loops this
@@ -533,7 +589,8 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
     latest: Dict[str, Dict[str, Any]] = {}
     for r in _tele_rows(tele, _K_AUTONOMY_TICK):  # rows are newest-first
         loop = (r["attrs"] or {}).get("loop") or "?"
-        latest.setdefault(loop, {"ts": r["ts"], "alive": (r["attrs"] or {}).get("alive")})
+        latest.setdefault(loop, {"ts": r["ts"], "alive": (r["attrs"] or {}).get("alive"),
+                                 "lag": (r["attrs"] or {}).get("loop_lag_ms_max")})
     sec.data["heartbeats"] = latest
     sec.data["live_actors"]["loops_alive"] = {
         loop: bool(hb.get("alive")) for loop, hb in latest.items()}
@@ -647,3 +704,4 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
             hb_bits.append(f"{loop}: alive ({_age(hb['ts'], now)} ago)")
     if hb_bits:
         sec.lines.append("loops: " + "; ".join(hb_bits))
+    _loop_lag_lines(sec, latest)

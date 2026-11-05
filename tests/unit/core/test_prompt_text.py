@@ -41,6 +41,7 @@ BLOCK_MAX_CHARS = {
     "source_precedence": 3350,
     "subtask_delegation": 650,
     "surface": 2700,
+    "room_admin": 560,
     "using_your_tools": 750,
     "vision": 2000,
     "web_access": 1800,
@@ -100,6 +101,8 @@ def _render_matrix(monkeypatch):
           "supports_interactive_ask": True, "chat_type": "dm"}
     surfaces = (None, dm, {**dm, "media_out": False, "supports_interactive_ask": False},
                 {**dm, "chat_type": "group", "chat_instructions": "be kind"},
+                {**dm, "chat_type": "supergroup", "chat_admin_session": {
+                    "uid": "1", "bundles": "files", "surface_id": "telegram", "chat_id": "-1"}},
                 {"surface_id": "chat", "correspondent": True})
     toolsets = (None, [], ["web_fetch", "perplexity", "anysite"],
                 ["browser", "web_fetch", "perplexity", "anysite", "goal", "task"])

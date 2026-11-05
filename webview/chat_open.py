@@ -35,8 +35,8 @@ from webview.copy import t
 logger = logging.getLogger(__name__)
 
 #: The four things a cold console offers. Copy keys, in render order.
-STARTERS = ("chat.starter.away", "chat.starter.cost", "chat.starter.book",
-            "chat.starter.pause")
+STARTERS = ("chat.starter.can", "chat.starter.away", "chat.starter.cost",
+            "chat.starter.schedule")
 
 #: A session id as the path manager writes it. Anything else is not a session,
 #: and is refused before it can become a path.
@@ -191,6 +191,9 @@ def hero_sentence(facts) -> str:
     """
     if facts is None:
         return t("chat.open.hero_unreadable")
+    if not int(facts.get("goals_done") or 0) and not facts.get("runtime_usd") \
+            and not facts.get("income_usd") and not facts.get("ledger_note"):
+        return t("chat.open.hero_idle")
     goals = _goals_clause(int(facts.get("goals_done") or 0))
     runtime = facts.get("runtime_usd")
     income = facts.get("income_usd")
@@ -278,6 +281,22 @@ def first_line_context(session_id: str) -> dict:
             "run_head": t(f"chat.run_head.{creator}") if run else ""}
 
 
+def is_terminal_chat(session_id: str) -> bool:
+    """A chat the terminal owns (104 D1: one chat per seat). A console line to it used to
+    fail with no word to the person and mark the live chat ``failed``. Unreadable = False:
+    the send path keeps its own errors."""
+    return first_line_context(session_id).get("creator") == "cli"
+
+
+def terminal_chat_refusal(session_id: str):
+    """The 409 for a line to a terminal chat, or None. An owner verb ran before this."""
+    if not is_terminal_chat(session_id):
+        return None
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"success": False, "error": t("chat.terminal.note", id=session_id)},
+                        status_code=409)
+
+
 def run_live(session_id: str) -> str:
     """``"true"`` / ``"false"`` / ``""`` — is a live process running this session?
 
@@ -312,6 +331,21 @@ def run_live(session_id: str) -> str:
     return "" if live is None else ("true" if live else "false")
 
 
+def _is_local() -> bool:
+    from webview import webgate
+    return webgate.is_local()
+
+
+def _viewer_id(request: Request) -> str:
+    """The signed-in person's id, so a line they wrote reads "You"."""
+    try:
+        from webview.pages import _effective_user_id
+        return str(_effective_user_id(request) or "")
+    except Exception:
+        logger.debug("viewer id unavailable", exc_info=True)
+        return ""
+
+
 def chat_context(request: Request, session_id: str = "") -> dict:
     """The template's own half of the context; the frame adds the rest.
 
@@ -339,6 +373,8 @@ def chat_context(request: Request, session_id: str = "") -> dict:
         **first,
         "run_live": run_live(session_id) if bound and is_owner else "",
         "session_id": session_id,
+        "viewer_id": _viewer_id(request),
+        "no_model_key": "chat.open.no_key" if _is_local() else "chat.open.no_model",
         "is_new": not bound,
         "is_owner": is_owner,
         "is_authenticated": authed,

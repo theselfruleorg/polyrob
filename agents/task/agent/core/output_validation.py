@@ -115,7 +115,7 @@ class OutputValidationMixin:
 
 	async def _validate_output(self) -> bool:
 		"""Validate the output of the last action is what the user wanted"""
-		browser_context = await self.get_browser_context()
+		browser_context = await self.get_used_browser_context()
 		has_browser = bool(browser_context and browser_context.session)
 
 		# A2: task-type-neutral base prompt — this judge now runs for chat/coding/MCP

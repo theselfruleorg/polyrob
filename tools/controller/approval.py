@@ -90,6 +90,28 @@ def frozen_approval_provider() -> str:
     return _FROZEN_APPROVAL_PROVIDER
 
 
+#: 104: this process serves the web console. A prompt on its terminal reaches nobody who is
+#: in the browser, so an ``interactive_cli`` wait goes to the durable Inbox queue instead.
+_CONSOLE_PROCESS = False
+
+
+def mark_console_process() -> None:
+    """Called once by the console at boot, before any session controller exists."""
+    global _CONSOLE_PROCESS
+    _CONSOLE_PROCESS = True
+
+
+def is_console_process() -> bool:
+    return _CONSOLE_PROCESS
+
+
+def _is_owner(user_id: Optional[str]) -> bool:
+    from core.config_policy import local_mode_enabled
+    from core.instance import is_owner_local_safe, resolve_owner_principal
+    return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
+                               local_enabled=local_mode_enabled())
+
+
 def resolve_gated_actions() -> tuple:
     """WS-6: the effective ``(gated_action_names: set, provider_name: str)`` for a
     Controller, given the frozen operator config and the (frozen) compute posture.
@@ -200,6 +222,8 @@ def effective_approval_state(user_id: Optional[str], home_dir) -> tuple:
         )
     except Exception as e:
         logger.error(f"effective_approval_state: pref union skipped (non-fatal): {e}")
+    if _CONSOLE_PROCESS and provider == "interactive_cli" and _is_owner(user_id):
+        provider = "owner_queue"  # another tenant keeps the fail-closed denial
     return gates, provider
 
 

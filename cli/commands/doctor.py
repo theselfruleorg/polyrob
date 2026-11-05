@@ -489,7 +489,7 @@ def _credential_alert_lines_from(status_by_provider: dict, present_providers: se
         # Keep the words people actually search for ("no provider API key") in
         # the line, even though a credential need not be an API key any more.
         return ["  ! no provider credential found (no API key, no connected "
-                "account) — run `polyrob init` or `polyrob config set <KEY>`"]
+                "account) — run `polyrob setup` or `polyrob auth add <provider>`"]
     if not usable_providers:
         # Say WHICH problem: "malformed" and "expired" and "quota exhausted" send
         # the owner to three different fixes.
@@ -683,7 +683,9 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # webview /system page and Telegram /status render, so every seat gives one
     # answer to "what is this instance allowed to do right now, and why".
     try:
-        from core.config_policy.posture_card import render_posture_card
+        from core.config_policy.posture_card import build_answers, render_posture_card
+        lines.append("what the agent may do:")
+        lines.extend(f"  {ln}" for ln in build_answers())
         lines.append("posture:")
         lines.extend(render_posture_card(prefix="  "))
     except Exception:

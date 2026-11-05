@@ -37,18 +37,23 @@ def _wrap(text: str) -> str:
 
 
 def h_mode(ctx) -> None:
-    """Render the effective-posture card (all axes), read-only."""
+    """The four answers (104 §2); `/mode all` adds every setting behind them."""
+    from core.permission_levels import LEVELS, level_reply
     from surfaces.telegram.harness import _mode_reply
-    ctx.emit(_wrap(_mode_reply()), title="mode")
+    if ctx.args and ctx.args[0] in LEVELS:
+        ctx.emit(_wrap(level_reply(ctx.args[0], surface="local")), title="mode")
+        return
+    full = "all" in (ctx.args or ())
+    ctx.emit(_wrap(_mode_reply("terminal", full=full)), title="mode")
 
 
 HELP_MODE = (
-    "  What this instance may do right now, and why — the effective posture\n"
-    "  across every axis (trust, autonomy loops, compute, autonomy mode), read\n"
-    "  from the resolved flags, not a promise.\n"
+    "  Who you are talking to, what the agent may do without asking, what it does\n"
+    "  when you are away, and how to change that. Read from the resolved settings,\n"
+    "  not a promise.\n"
     "\n"
-    "  Read-only here. Mode and posture are env flags; /status embeds this same\n"
-    "  card inside its longer snapshot.",
+    "  /mode all adds every setting behind the answers. /mode ask-first, /mode standard\n"
+    "  and /mode on-my-own set one level, and never touch money or the computer.",
     "`/mode` on Telegram, `polyrob autonomy status`, and the console's Agent › Overview.",
 )
 
@@ -57,7 +62,7 @@ def register(reg, Command) -> None:
     """Register ``/mode``. Called from ``h_a23.register``."""
     reg.register(Command(
         "mode", h_mode,
-        "The effective-posture card: what this instance may do right now, and why",
+        "What the agent may do without you, and how to change it",
         group="control",
         help_long=HELP_MODE[0], elsewhere=HELP_MODE[1],
     ))

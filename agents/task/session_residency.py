@@ -42,15 +42,19 @@ def set_residency(task_agent: Any, session_id: str, to: str) -> bool:
     cur = states.get(session_id, "resident")
     if cur != to and not RESIDENCY_MACHINE.check(cur, to, ctx={"session_id": session_id}):
         return False
-    if to == "resident":
-        states.pop(session_id, None)
-    else:
+    if to == "evicting":
         states[session_id] = to
+    else:  # resident or evicted: the registry says which, so no row stays (102 3.5)
+        states.pop(session_id, None)
     return True
 
 
 def residency(task_agent: Any, session_id: str) -> str:
-    return task_agent.__dict__.get("_residency", {}).get(session_id, "resident")
+    state = task_agent.__dict__.get("_residency", {}).get(session_id)
+    if state:
+        return state
+    registry = getattr(task_agent, "_registry", None)
+    return "evicted" if registry is not None and registry.get(session_id) is None else "resident"
 
 
 def lock_is_idle(lock: Optional[asyncio.Lock]) -> bool:

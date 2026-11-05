@@ -34,7 +34,7 @@ class _RecordingLLM:
 
 	async def ainvoke(self, messages, tools=None, **kwargs):
 		self.requests.append(list(messages))
-		return AIMessage(content="## Active Task\nsummarised")
+		return AIMessage(content="## Active Task\nsummarised\n## End of summary")
 
 
 @pytest.fixture(autouse=True)
@@ -131,11 +131,11 @@ async def test_warm_prefix_flattens_a_tuple_slot(tmp_path):
 def test_an_owner_chat_gauges_history_against_the_chat_budget():
 	mm = _mm(session_id="s-g4-chat", max_input_tokens=200_000)
 	assert mm.max_input_tokens == 200_000, "the total safety cap is unchanged"
-	assert mm._history_budget_tokens == TC.CHAT_HISTORY_BUDGET_TOKENS == 80_000
-	# 93k fixed prefix + 69k history: the old gauge read 81 %; history now decides.
-	mm.set_tool_schema_tokens(55_000)
-	mm._self_context_tokens = 38_000
-	mm.history.total_tokens = 69_000
+	assert mm._history_budget_tokens == TC.CHAT_HISTORY_BUDGET_TOKENS == 120_000
+	# 45k fixed prefix + 103k history: the total reads 74 %; history decides.
+	mm.set_tool_schema_tokens(25_000)
+	mm._self_context_tokens = 20_000
+	mm.history.total_tokens = 103_000
 	assert mm.get_context_usage_percent() >= 85
 	mm.history.total_tokens = 40_000
 	assert mm.get_context_usage_percent() < 70

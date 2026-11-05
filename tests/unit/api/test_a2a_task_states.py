@@ -56,7 +56,7 @@ def _setup(monkeypatch, status, deliver="delivered", resident=None):
     import api.session_routing as sr
     monkeypatch.setattr(sr, "guard_remote", lambda agent, sid: None)
     import agents.task.billed_request as br
-    monkeypatch.setattr(br, "validate_billed_session", lambda info: None)
+    monkeypatch.setattr(br, "validate_billed_session", lambda info, **_k: None)
     spawned = []
     monkeypatch.setattr(th, "_spawn_session_task", lambda coro: (spawned.append(1), coro.close()))
     agent = _Agent(status, deliver)

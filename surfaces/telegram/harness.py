@@ -69,7 +69,7 @@ except Exception:  # pragma: no cover - aiogram always present in prod
     _TelegramConflictError = None
 
 
-async def _send_telegram_text(bot, chat_id, text: str, actions=None):
+async def _send_telegram_text(bot, chat_id, text: str, actions=None, thread_id=None):
     """Deliver ``text`` to ``chat_id`` through the ONE outbound seam.
 
     The post-run reply, the out-of-band sink and the surface's own send() all render
@@ -79,7 +79,8 @@ async def _send_telegram_text(bot, chat_id, text: str, actions=None):
     Returns the last Telegram ``message_id`` (061: the owner thread's referent key).
     """
     from surfaces.telegram.surface import TelegramSurface
-    return await TelegramSurface(bot).send_text(chat_id, text, actions=actions)
+    return await TelegramSurface(bot).send_text(chat_id, text, actions=actions,
+                                                thread_id=thread_id)
 
 
 #: Exception type names that mean "the network hiccuped", not "something is wrong
@@ -210,7 +211,7 @@ _USAGE = {
     "/identity": "register|set-uri [go]",
     "/allow": "<surface> <target>",
     "/deny": "<surface> <target>",
-    "/groups": "<allow|deny|list|use|mode|set|role|tail|service|admins> "
+    "/groups": "<allow|deny|list|use|mode|set|role|roles|tools|audit|tail|service|admins> "
                "here|<surface> <chat_id> [...]",
     "/mute": "here|<surface> <chat_id> <duration>",
     "/ban": "<duration> IN REPLY to a message",
@@ -385,13 +386,14 @@ def _welcome_text() -> str:
 
 
 def _unknown_command_text(cmd: str) -> str:
-    """Cheap teaching reply for a command-shaped token no handler owns (030 L9).
-
-    Before this, an unknown/typo verb fell through to the LLM as chat text —
-    a spawned session, typing indicator and tokens for `/statsu`. Suggest the
-    closest real verbs from the `_HELP_BODY` SSOT and point at /help.
-    """
+    """Cheap teaching reply for a command-shaped token no handler owns (030 L9): the
+    closest real verbs, or what replaced a retired one (103), and /help."""
     import difflib
+    from core.surfaces.verb_check import verb_note
+    if cmd == "/admin":
+        return room_help.admin_elsewhere(None).text
+    if verb_note(cmd):
+        return f"{cmd} is gone. {verb_note(cmd)} Send /help for the full list."
     known = [f"/{name}" for name, _ in help_commands()]
     matches = difflib.get_close_matches(cmd, known, n=2, cutoff=0.6)
     hint = f" Did you mean {' or '.join(matches)}?" if matches else ""
@@ -491,7 +493,7 @@ def _room_refused(cmd: str) -> bool:
 
 _TURN_KINDS = frozenset({RouteKind.STEER, RouteKind.TASK_AGENT,
                          RouteKind.CHAT_FASTPATH, RouteKind.CORRESPONDENT_DATA,
-                         RouteKind.GROUP_TURN})
+                         RouteKind.GROUP_TURN, RouteKind.ROOM_ADMIN_TURN})
 
 
 def _route_is_turn(decision) -> bool:
@@ -781,6 +783,8 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         return
     try:
         await _deliver_owner_aware(task_agent, notice_key, deliver, text)
+        if failed and not (reply or spoke):
+            await room_help.tell_admin_run_failed(notice_key, deliver)
     except Exception as e:
         logger.error("telegram reply delivery failed: %s", e, exc_info=True)
         return
@@ -847,6 +851,8 @@ def _room_reply_anchor(result: InboundResult) -> Optional[str]:
 #: module — this harness is already one of the tree's largest and new behaviour
 #: belongs in a new file, not in it. Imported by NAME so the call sites read the
 #: same as before the extraction.
+from surfaces.telegram import room_help  # noqa: E402 — 101: room /help + the admin DM note
+from surfaces.telegram.room_help import _is_owner_groups_line  # noqa: E402,F401
 from surfaces.telegram.room_turn import (  # noqa: E402
     attachment_description as _with_attachment,
     cold_start_request as _cold_start_request,
@@ -964,15 +970,18 @@ def _with_forwarded(result: Any, metadata: Optional[dict]) -> Optional[dict]:
 
 
 async def _start_task_session(task_agent: Any, result: InboundResult, spawn, deliver=None,
-                              fetch_media=None) -> None:
+                              fetch_media=None, *, room_admin: Any = None) -> None:
     """create_session with the binding kwargs, then run it AND deliver its reply."""
     inbound = result.inbound
     session_user_id = inbound.identity.user_id
     request_text = inbound.text
     room_turn = None
     if (inbound.identity.source.chat_type or "dm") != "dm":
-        from core.surfaces.room_policy import room_tool_ids
-        tool_ids = room_tool_ids()   # 044 T5: the audience bounds the power
+        if room_help.cold_start_held(result):
+            return
+        from surfaces.telegram.room_reconcile import room_session_tools
+        # 044 T5: the audience bounds the power; 101: the owner's grants add to it.
+        tool_ids = room_session_tools(task_agent, inbound.identity.source, room_admin)
         # 044 T14: a ROOM session belongs to the OWNER tenant whoever opened it.
         session_user_id = _room_session_owner(inbound.identity.user_id)
         # The session TASK is the framed addressed line ONLY. The context block
@@ -982,6 +991,9 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         # API-only" forbids (044 §4.4).
         room_turn, _role = _room_turn_text(task_agent, result)
         request_text = _cold_start_request(room_turn, _role)
+        if room_admin is not None:   # 101: no <group-context> in an admin session
+            from dataclasses import replace as _replace
+            room_turn = _replace(room_turn, context="", shown_message_ids=())
     else:
         # OWNER interactive sessions get the introspection + mission toolset
         # (goal/twitter/web_fetch) so "review your goals" uses goal_list instead of
@@ -996,9 +1008,11 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         from agents.task.model_switch_service import owner_chat_pin
         _pin = owner_chat_pin(result.decision.session_key, session_user_id)
     _request = request_text
-    if _pin:
+    if _pin or room_admin is not None:
         from agents.task.task_agent_support import SessionRequest
-        _request = SessionRequest(task=request_text, provider=_pin["provider"], model=_pin["model"])
+        _request = SessionRequest(task=request_text, room_admin=getattr(room_admin, "stamp", None),
+                                  provider=(_pin or {}).get("provider"),
+                                  model=(_pin or {}).get("model"))
     info = await task_agent.create_session(
         session_user_id,
         request=_request,
@@ -1010,6 +1024,8 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         typed_text=owner_typed_text(inbound),
     )
     session_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
+    if session_id and room_admin is not None:
+        room_admin.opened(task_agent, str(session_id))
     if session_id and _pin:
         from agents.task.model_switch_service import start_with_pin
         start_with_pin(task_agent, str(session_id), _pin)
@@ -1304,38 +1320,6 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         data_dir=data_dir, instance_id=instance_id, args=args, board=board))
 
 
-def _room_member_help(task_agent: Any, result: InboundResult):
-    """A room MEMBER's `/help`, rendered for the ROOM — or None for everyone else.
-
-    None means "not this case", so the owner and a room admin fall through to the
-    unchanged owner help. The role comes from ``room_turn.room_role``, the ONE
-    resolver: it reads the role the router already stamped and falls back to the
-    owner check, so this can never disagree with the tier that admitted the line.
-    """
-    from core.surfaces.room_keys import is_group_session_key
-    if not is_group_session_key(result.decision.session_key):
-        return None
-    from surfaces.telegram.room_turn import room_role
-    if room_role(result) in ("owner", "admin"):
-        return None
-    from core.surfaces.command_reply import CommandReply
-    from core.surfaces.room_actions import render_member_help
-    src = getattr(result.inbound.identity, "source", None)
-    surface = str(getattr(src, "surface_id", "") or "telegram")
-    chat_id = str(getattr(src, "chat_id", "") or "")
-    try:
-        text = render_member_help(getattr(task_agent, "container", None),
-                                  surface=surface, chat_id=chat_id,
-                                  agent_name=_agent_name())
-    except Exception as e:
-        # Fail-open to a true sentence, never to the owner catalog: a member
-        # must not be handed the admin verb list because a store was unreadable.
-        logger.warning("telegram: member help render failed (%s)", e)
-        text = ("I could not read this room's settings just now — try again in "
-                "a moment.")
-    return CommandReply(text, to_room=True)
-
-
 #: Strong refs for owner commands running off the poll loop (see _handle_command).
 _BACKGROUND_COMMANDS: set = set()
 
@@ -1373,19 +1357,18 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
     cmd = (result.decision.command or "").lower()
     if cmd == "/help":
         args = (result.inbound.text or "").split()[1:]
-        # 046: a plain MEMBER of a room asked what HE can do. Answering with the
-        # owner's whole verb catalog — every admin, money and control verb — and
-        # sending it to the OWNER's DM (the 044 owner-only redirect) meant the
-        # member who asked saw nothing at all. The owner's and a room admin's
-        # `/help` is byte-identical to before.
-        _member_help = _room_member_help(task_agent, result)
-        if _member_help is not None:
-            return _member_help
+        # A room MEMBER and a room ADMIN each read what THEY can do here, never
+        # the owner's verb catalog; the owner's `/help` is unchanged.
+        _room_help = room_help.room_help_reply(task_agent, result)
+        if _room_help is not None:
+            return _room_help
         if args:
             return _help_for(args[0])
         return _help_text()
     if cmd == "/start":
         return _welcome_text()
+    if cmd == "/admin":
+        return room_help.admin_elsewhere(result)
     if cmd not in _owner_verbs():
         # `/approve_tap_<hex>` arrives as its own command token, not as
         # `/approve` + an argument, so it must be mapped back before dispatch.
@@ -1599,6 +1582,10 @@ async def _act_on_inbound_locked(
     if kind == RouteKind.COMMAND:
         return await _handle_command(task_agent, result, spawn, deliver, fetch_media)
 
+    if kind == RouteKind.ROOM_ADMIN_TURN:
+        from surfaces.telegram import room_admin_turn
+        return await room_admin_turn.handle(task_agent, result, spawn, deliver, fetch_media)
+
     if kind == RouteKind.GROUP_TURN:
         # 044 T14: a line in an allowed ROOM, answered by the bound PUBLIC session.
         # The <group-context> block rides ONE call as an ephemeral control message;
@@ -1642,6 +1629,9 @@ async def _act_on_inbound_locked(
                 logger.warning("telegram GROUP_TURN touch_chat_binding failed "
                                "(%s): %s", _ctx, e)
         if status == "delivered":
+            from surfaces.telegram.room_reconcile import reconcile_room_toolset
+            await reconcile_room_toolset(task_agent, decision.session_id,
+                                         result.inbound.identity.source)   # 101
             # The OWNER uid comes from the SESSION, never from the speaker: a
             # member's uid must not become the tenant a room turn runs as.
             _spawn(_run_and_deliver(task_agent,
@@ -1743,42 +1733,6 @@ def _tg_message(update: dict) -> dict:
     _tg_chat_type resolve correctly for a channel update (which carries no `from`)."""
     return (update.get("message") or update.get("edited_message")
             or update.get("channel_post") or update.get("edited_channel_post") or {})
-
-
-def _is_owner_groups_line(update: dict) -> bool:
-    """044 C6: is this the OWNER's `/groups …` line? (raw update, pre-routing.)
-
-    The one thing `_room_is_allowed` admits from a room the owner has NOT
-    allowlisted yet — because `/groups allow here` is what CREATES that row.
-    Both halves must hold:
-
-    * the sender's raw Telegram id is the configured owner's. Resolved through
-      `owner_surface_alias`, the SAME seam `surfaces/telegram/inbound.py` uses to
-      map an authenticated owner onto the principal, so this gate and the
-      dispatcher's own `is_room_owner` check can never disagree about who the
-      owner is. A non-owner (or an unbound owner, or an unconfigured owner
-      telegram id) is None -> False.
-    * the first token, `@botname` suffix stripped, is exactly `/groups`. Read
-      from `text` only: a caption, a voice note and a forwarded body are not the
-      documented path and must keep costing nothing in an unlisted room.
-
-    Never raises — a probe fault reads as "not the owner" (the room stays shut).
-    """
-    try:
-        msg = _tg_message(update)
-        from surfaces.telegram.inbound import is_forwarded
-        if is_forwarded(msg):  # H06: a forwarded `/groups` is not the owner's verb
-            return False
-        text = str(msg.get("text") or "").strip()
-        if not text:
-            return False
-        if text.split(" ", 1)[0].lower().split("@", 1)[0] != "/groups":
-            return False
-        from core.instance import owner_surface_alias
-        return owner_surface_alias(_tg_user_id(update), "telegram") is not None
-    except Exception as e:
-        logger.debug("telegram owner-/groups probe failed (not the owner): %s", e)
-        return False
 
 
 def _tg_user_id(update: dict) -> Optional[str]:
@@ -2387,7 +2341,8 @@ class TelegramHarness:
 
             async def _deliver(text):
                 if _deliver_chat_id:
-                    await _send_telegram_text(self.bot, _deliver_chat_id, text)
+                    await _send_telegram_text(self.bot, _deliver_chat_id, text,
+                                              **room_help.admin_topic(result))
 
             try:
                 reply = await act_on_inbound(
@@ -2437,6 +2392,9 @@ class TelegramHarness:
             # TG1: an edit is never a new message. Routing it re-ran the
             # edited line — a money `go` included — under a fresh update_id.
             _record_drop(update, _tg_user_id(update), "edited_message")
+            return None
+        from surfaces.telegram import room_migration
+        if await room_migration.absorb(self, update):
             return None
         if "callback_query" in update:  # 064 F2: a button press = the presser typing it
             from surfaces.telegram.actions import accept_callback
@@ -2740,6 +2698,8 @@ class TelegramHarness:
             # DM with the bot at all.
             _room_chat_id = chat_id_from_session_key(
                 result.decision.session_key)
+        if _reply_kind == RouteKind.ROOM_ADMIN_TURN:
+            _room_chat_id = _deliver_chat_id    # its own lines belong to the room and topic
         return _deliver_chat_id, _room_chat_id
 
     async def _send_command_reply(self, update: dict, result: Any, reply: Any,
@@ -2773,8 +2733,13 @@ class TelegramHarness:
                     self.bot, reply_chat_id, send_text,
                     actions=(card_ops.reply_actions(reply)
                              or (actions_from_text(full_text)
-                                 if _cmd in DECISION_LIST_COMMANDS else None)))
+                                 if _cmd in DECISION_LIST_COMMANDS else None)),
+                    **room_help.topic_of(result, reply, _room_chat_id))
             except Exception as e:
+                # 101: an admin's DM refused: a short room note, never /missed.
+                if await room_help.admin_reply_failed(self.bot, result, _room_chat_id,
+                                                      reply, e):
+                    return
                 # TG12: the verb already RAN (a money `go` included);
                 # its answer must reach /missed, not only the log.
                 await reply_spill.hold_unsent_reply(

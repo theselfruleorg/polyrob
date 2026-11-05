@@ -20,6 +20,10 @@ AUTONOMY_TICK = "autonomy_tick"
 #: disabled gate) is never mistaken for a silently-dead one.
 AUTONOMY_STARTED = "autonomy_started"
 CRON_RUN = "cron_run"
+#: New goals or cron jobs wait for memory or disk (``core.memory_pressure``). Not a
+#: failure: the work stays due. One row per change of reason, per runner, and one per
+#: hour during a long hold. attrs: runner, waiting, keys, the values read.
+RESOURCE_HOLD = "resource_hold"
 #: 073 W1: one row per command the agent ran on the HOST (posture 3, the owner's
 #: terminal turn). attrs: cmd_sha256, exit_code, duration_ms, cwd, background —
 #: never the command text or its output.
@@ -50,9 +54,6 @@ RAIL_SKILL_MISSING = "rail_skill_missing"
 PROMPT_MANIFEST = "prompt_manifest"
 #: 056 WS9: an external-rail call outcome (anysite …): ok / empty / error / timeout.
 RAIL_PROBE = "rail_probe"
-#: 056 WS8: one stale-session-directory GC pass (dry-run or applied) — the
-#: candidate count / bytes the owner reads before flipping SESSION_DIR_GC_APPLY.
-SESSION_GC = "session_gc"
 #: 043 A29: the SERVICE-level cron domain events — a job was scheduled or
 #: cancelled through ``cron.service.CronService`` (the SSOT every surface calls).
 #: Distinct from the console-action audit ``CONSOLE_CRON_CANCEL`` below: these
@@ -280,6 +281,8 @@ MODEL_REASONING_SET = "model_reasoning_set"
 # 098 state machines: owner-visible outcomes of guarded lifecycles
 #: an inbound email failed N times and is quarantined (one owner notice)
 EMAIL_QUARANTINED = "email_quarantined"
+#: The server did not confirm a send after DATA: the mail may have gone out, and nothing retries it.
+EMAIL_DELIVERY_UNKNOWN = "email_delivery_unknown"
 #: a skill write that was cut half-way was rolled back / quarantined by the repair pass
 SKILL_UNCOMMITTED_ROLLED_BACK = "skill_uncommitted_rolled_back"
 SKILL_UNCOMMITTED_QUARANTINED = "skill_uncommitted_quarantined"

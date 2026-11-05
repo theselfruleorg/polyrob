@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
+import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -110,7 +113,6 @@ class PersistenceMixin:
 			if filepath:
 				# Atomic write
 				import tempfile
-				import os
 
 				filepath = Path(filepath)
 				filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -367,8 +369,17 @@ class PersistenceMixin:
 
 			# Save to disk
 			save_path.parent.mkdir(parents=True, exist_ok=True)
-			with open(save_path, 'w') as f:
-				json.dump(history_data, f, indent=2)
+			# 102 C-10: a crash in a direct dump truncated the only history copy.
+			tmp_path = save_path.with_name(f"{save_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+			try:
+				with open(tmp_path, 'w') as f:
+					json.dump(history_data, f, indent=2)
+				if save_path.exists():
+					shutil.copymode(save_path, tmp_path)
+				os.replace(tmp_path, save_path)
+			except BaseException:
+				tmp_path.unlink(missing_ok=True)
+				raise
 
 			self.logger.info(f"💾 Saved {len(self.history.messages)} messages to {save_path}")
 
@@ -379,7 +390,6 @@ class PersistenceMixin:
 			# parity (tool_call_id + metadata) and a JSON/DB reconciliation policy; that is
 			# scoped to a dedicated durable-store proposal. We keep the pre-staged write but
 			# emit a one-time WARN so enabling the flag is honest about being write-only.
-			import os
 			if os.getenv("MESSAGE_STORE_BACKEND", "").lower() == "sqlite":
 				global _warned_sqlite_mirror
 				if not _warned_sqlite_mirror:

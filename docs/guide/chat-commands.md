@@ -12,6 +12,7 @@ morning at 9", "what did you spend this week"), and the agent uses its own tools
 - `/help` lists the commands of your seat, grouped as below.
 - `/help <verb>` explains one command, with its current syntax and examples.
 - A command a pack adds (such as `/x`) exists only while that pack is loaded.
+- In a Telegram group, `/admin <what to do>` runs what the owner granted: see [Group chats](groups.md#admin-abilities-admin).
 
 Shell commands (`polyrob goals`, `polyrob owner`, …) are on
 [cli.md](cli.md).
@@ -104,7 +105,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/resume [word…]` | Lift the pause | every seat, not in a room |
 | `/halt` | Stop all autonomous work now | every seat, not in a room |
 | `/run [pause\|resume\|stop <n>]` | Pause, resume or stop one background run | every seat, not in a room |
-| `/mode` | The effective autonomy posture and how to change it | every seat |
+| `/mode` | What I may do without you, what I do when you are away, and how to change it | every seat |
 | `/dev [message]` | Pass a message to an operator-run maintenance script, if this host has one | every seat, not in a room |
 | `/restart [now]` | Restart me once my current work is done | every seat, not in a room |
 | `/update [pre]` | Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet) | every seat, not in a room |
@@ -149,7 +150,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/allow <surface> <target>` | Allow me to message a target | every seat, not in a room |
 | `/deny <surface> <target>` | Revoke a message permission | every seat, not in a room |
 | `/allowlist` | Who I am allowed to message | every seat |
-| `/groups <allow\|deny\|list\|use\|mode\|set\|role\|tail\|service\|admins> here\|<surface> <chat_id> [...]` | Room presence admin: allow, deny, mode, roles, and more | every seat |
+| `/groups <allow\|deny\|list\|use\|mode\|set\|role\|roles\|tools\|audit\|tail\|service\|admins> here\|<surface> <chat_id> [...]` | Room presence admin: allow, deny, mode, roles, and more | every seat |
 | `/mute here\|<surface> <chat_id> <duration>` | Silence a room, or mute a member for a while | every seat |
 | `/ban <duration> IN REPLY to a message` | Ban a member for a while | every seat |
 | `/unban IN REPLY to a message` | Lift a member's ban | every seat |

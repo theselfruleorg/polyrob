@@ -478,6 +478,10 @@ class StepExecutionMixin:
 				return blocked
 
 			# CRITICAL FIX: Actually execute the actions through controller
+			# 102 N-4: the step read no state because no page was used yet.
+			if browser_context is None and self.actions_need_browser(actions_list):
+				self._browser_page_used = True
+				browser_context = await self.get_browser_context()
 			execution_context = self._build_execution_context(browser_context)
 			# The run's LAST step: a done() here is final (no step is left to answer
 			# a turn-back such as the open-todo nudge).

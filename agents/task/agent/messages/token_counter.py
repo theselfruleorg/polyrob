@@ -77,7 +77,12 @@ def autonomous_context_budget() -> int:
 #: compacts at ~68k of HISTORY whatever the prefix weighs. ``max_input``
 #: (``TASK_MAX_INPUT_TOKENS``) stays the total safety cap — pre-call check and
 #: emergency prune — and is NOT what sizes the chat any more.
-CHAT_HISTORY_BUDGET_TOKENS = 80_000
+#:
+#: 103 (2026-11-05): 80k -> 120k. At 80k a busy chat compacted 5 times in 23 minutes
+#: with the prompt at 135k of 200k; each compaction stalled the turn 35-42 s and lost
+#: detail. The prefix measured 68.5k, so the 85 % trigger (102k of history) totals
+#: about 170k, under the 190k safe limit.
+CHAT_HISTORY_BUDGET_TOKENS = 120_000
 
 
 def _foundation_tokens(manager) -> int:
@@ -107,7 +112,7 @@ class TokenCounterMixin:
 		   85%/95% compaction thresholds are reachable within its real history
 		   size. ``0`` (default) = no clamp.
 		3. B-5 — an INTERACTIVE session (owner chat, room, correspondent) gauges
-		   its history against ``CHAT_HISTORY_BUDGET_TOKENS`` (80k) the same way,
+		   its history against ``CHAT_HISTORY_BUDGET_TOKENS`` the same way,
 		   so the fixed prefix no longer decides when a chat compacts.
 		   ``max_input`` stays the total safety cap.
 

@@ -663,6 +663,13 @@ class GoalDispatcher(GoalRunMixin):
             # Checked only when something is actually ready (an empty board must
             # not read cron.db and log a deferral every tick).
             if ready:
+                # 102 T-1: unclaimed, so the goal stays ready. Not a failure.
+                from core.memory_pressure import current_hold, note_hold
+                _pressure = await asyncio.to_thread(
+                    current_hold, os.path.dirname(self.board.db_path) or ".")
+                if _pressure is not None:
+                    note_hold("goals", _pressure, waiting=len(ready))
+                    return 0
                 _imminent = imminent_cron_job(
                     os.path.dirname(self.board.db_path), datetime.now(),
                     AutonomyConfig.goal_dispatch_cron_headroom_sec())
@@ -1067,7 +1074,12 @@ class GoalDispatcher(GoalRunMixin):
                 logger.warning(
                     "goal %s: payload.tools ignored — a room service run uses the "
                     "room toolset (%s)", goal.id, payload.get("tools"))
-            return room_tool_ids()
+            from core.surfaces.chat_policy import load_for_chat
+            from core.runtime_paths import data_dir_or_home
+            group = payload.get("group") if isinstance(payload.get("group"), dict) else {}
+            return room_tool_ids(policy=load_for_chat(
+                data_dir_or_home(None), str(group.get("surface") or ""),
+                str(group.get("chat_id") or "")))
         own = payload.get("tools")
         if own:
             return own

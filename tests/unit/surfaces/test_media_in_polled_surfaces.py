@@ -42,10 +42,10 @@ SIGNAL_ATTACHMENT = {
 }
 
 
-def test_kind_for_mime_never_uses_a_transcribed_kind():
+def test_kind_for_mime_names_each_kind():
     assert kind_for_mime("image/png") == "image"
     assert kind_for_mime("video/mp4") == "video"
-    assert kind_for_mime("audio/ogg") == "document"   # stored, never silently skipped
+    assert kind_for_mime("audio/ogg") == "audio"   # transcribed, and still stored
     assert kind_for_mime(None) == "document"
 
 
@@ -110,7 +110,7 @@ async def test_route_passes_the_downloader_only_with_media(monkeypatch):
     await h._route(parse_message_create(DISCORD_PHOTO_NO_CAPTION, "999"))
     await h._route(parse_message_create(
         dict(DISCORD_PHOTO_NO_CAPTION, content="hi", attachments=[]), "999"))
-    assert seen[0] is not None and seen[0].__func__ is DiscordHarness._fetch_media
+    assert seen[0] is not None and seen[0].__self__ is h
     assert seen[1] is None
 
 

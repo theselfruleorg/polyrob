@@ -204,3 +204,27 @@ def test_router_and_surface_profile_fall_back_by_session_key():
     assert "row_from_session_key" in router_src
     assert "row_from_session_key" in binding_src
     assert "def surface_profile(" in binding_src
+
+
+def test_no_admin_bundle_reaches_money_exec_recall_or_identity():
+    """101: the bundle table is a closed allowlist. Adding a row is a security
+    decision, and these never enter one."""
+    from core.surfaces.room_grants import ADMIN_BUNDLES
+    from core.tool_capabilities import TOOL_CAPABILITIES, ids_with
+    never = (set(ids_with("money")) | set(ids_with("exec")) | set(ids_with("shared_identity"))
+             | {"knowledge", "goal", "cronjob", "email", "self_env", "mcp", "memory",
+                "session_search", "wallet_sign", "tool_manage", "git", "shell", "process"})
+    for name, bundle in ADMIN_BUNDLES.items():
+        assert not (set(bundle.tools) & never), name
+        for tool in bundle.tools:
+            assert tool in TOOL_CAPABILITIES, f"{name}: {tool} has no capability row"
+    never_actions = {"load_tool", "message", "propose_setting", "owner_ask", "kb_search",
+                     "skill_manage"}
+    assert not any(set(b.actions) & never_actions for b in ADMIN_BUNDLES.values())
+
+
+def test_no_dangerous_core_row_is_member_grantable():
+    from core.surfaces.room_grants import member_grantable
+    assert {"task", "web_fetch", "defi_data"} <= member_grantable()
+    for tool in ("filesystem", "browser", "http_request", "knowledge", "email"):
+        assert tool not in member_grantable()

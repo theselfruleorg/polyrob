@@ -192,3 +192,28 @@ def test_telegram_absorb_stamps_only_the_typed_words(tmp_path, monkeypatch):
     inbound.forwarded = True
     asyncio.run(tg_media.queue_attachments_for_new_session(task_agent, result, "s1", _fetch))
     assert delivered[TYPED_TEXT_KEY] == ""
+
+
+def test_a_public_session_expands_no_reference(monkeypatch):
+    """101: a room line can quote a member, and expansion reads with no tool call."""
+    monkeypatch.setenv("CONTEXT_REFERENCES_ENABLED", "true")
+    calls = []
+    monkeypatch.setattr("agents.task.agent.messages.context_references."
+                        "preprocess_context_references",
+                        lambda text, **_k: calls.append(text) or text)
+
+    class _Session(HITLIngressMixin):
+        session_id, user_id, agents = "s1", "u1", {}
+        logger = types.SimpleNamespace(warning=print, info=print, debug=print, error=print)
+    private, public = _Session(), _Session()
+    public._public_session = True
+
+    async def turn(orch):
+        try:
+            await orch.submit_user_message(None, "see @file:notes.md", kind="comment")
+        except Exception:      # only the expansion matters: the rest needs a real session
+            pass
+    asyncio.run(turn(public))
+    assert not calls
+    asyncio.run(turn(private))
+    assert calls

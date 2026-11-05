@@ -134,3 +134,31 @@ def service(container: Any, owner_uid: str, surface: str, chat_id: str, *,
 
 
 __all__ = ["service"]
+
+
+def migrate_service_jobs(data_dir: str, surface: str, old: str, new: str) -> int:
+    """101: a room's service jobs follow its new chat id. Returns how many moved."""
+    import json
+    import os
+
+    from core.runtime_paths import cron_db_path
+    from core.sqlite_util import execute_retry
+    db = cron_db_path(data_dir)
+    if not os.path.isfile(db):
+        return 0
+    moved = 0
+    rows = execute_retry(db, "SELECT id, payload FROM cron_jobs", fetch="all") or []
+    for job_id, raw in rows:
+        try:
+            payload = json.loads(raw or "{}")
+        except ValueError:
+            continue
+        group = payload.get("group") if isinstance(payload, dict) else None
+        if (isinstance(group, dict) and group.get("surface") == surface
+                and str(group.get("chat_id")) == str(old)):
+            # A migration only ever makes a supergroup, and the job's fork key reads this.
+            execute_retry(db, "UPDATE cron_jobs SET payload=json_set(payload,"
+                              "'$.group.chat_id',?,'$.group.chat_type','supergroup') "
+                              "WHERE id=?", (str(new), job_id))
+            moved += 1
+    return moved

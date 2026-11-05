@@ -27,3 +27,27 @@ def test_fulfiller_writes_the_goal_the_dispatcher_runs(tmp_path, monkeypatch):
                          buyer="43", inputs={"delivery_address": "0x" + "cd" * 20, "brief": "x"},
                          amount_usd="5.00", spend_budget=0.5)
     assert make_fulfiller(board=board)(order2, st.live_version(o.id), "claim:y")
+
+
+def test_the_goal_canceller_stops_the_goal_on_the_real_board(tmp_path):
+    from agents.task.goals.board import GoalBoard
+    from polyrob.app.commerce_wiring import make_goal_canceller
+    board = GoalBoard(str(tmp_path / "goals.db"))
+    goal = board.create(user_id="owner", title="order o1", body="b", payload={},
+                        actor="owner_seat", force=True, max_retries=0)
+    cancel = make_goal_canceller(board=board)
+    assert cancel(goal.id) is True
+    assert board.get(goal.id).status == "cancelled"
+    assert cancel(goal.id) is False            # already stopped: nothing to do
+
+
+def test_wire_registers_the_goal_canceller(monkeypatch, tmp_path):
+    from core.commerce import hooks
+    from polyrob.app import commerce_wiring
+    monkeypatch.setattr("tools.commerce.market_adapter.register", lambda *a, **k: [])
+    try:
+        commerce_wiring.wire(None, str(tmp_path))
+        assert hooks.goal_canceller() is not None
+    finally:
+        hooks.register_goal_canceller(None)
+        hooks.register_fulfiller(None)

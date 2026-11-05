@@ -75,7 +75,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/resume` — Lift the pause (not inside a group)
 - `/halt` — Stop all autonomous work now (not inside a group)
 - `/run` — Pause, resume or stop one background run (not inside a group)
-- `/mode` — The effective autonomy posture and how to change it
+- `/mode` — What I may do without you, what I do when you are away, and how to change it
 - `/dev` — Pass a message to an operator-run maintenance script, if this host has one (not inside a group)
 - `/restart` — Restart me once my current work is done (not inside a group)
 - `/update` — Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet) (not inside a group)

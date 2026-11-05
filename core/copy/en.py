@@ -54,6 +54,7 @@ STRINGS = {
 
     # A tool that did not finish. Never the raw error, which can carry a repr.
     "chat.act.failed": "An action did not finish",
+    "chat.act.refused": "An ability is not available here",
 
     # ------------------------------------------------------------- 070 E.23
     # A status-snapshot section id in words, for "I could not check: …" on any

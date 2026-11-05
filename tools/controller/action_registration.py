@@ -48,7 +48,7 @@ from tools.controller.emit import (  # noqa: E402
 	_ROUTE_OUTCOME_NOT_DELIVERED,  # noqa: F401  (re-export for existing importers)
 )
 from tools.controller.send_message_route import (  # noqa: E402
-	route_autonomous_send, route_status, third_party_address_refusal, annotate_decided_tokens,
+	route_autonomous_send, route_status, send_text_refusal, annotate_decided_tokens,
 )
 
 
@@ -98,7 +98,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					self.logger.debug(f"💬 Sub-agent message (captured in result): {params.text[:100]}...")
 					return ActionResult(extracted_content=f"Message: {params.text}", include_in_memory=True)
 				params.text = annotate_decided_tokens(self, params.text, getattr(execution_context, 'user_id', '') or '')  # 10-17 stale /approve_p; 10-09 @handle guard below
-				_misaddressed = third_party_address_refusal(self, params.text)
+				_misaddressed = send_text_refusal(self, params.text)
 				if _misaddressed is not None:
 					return _misaddressed
 				# 2026-10-06: never deliver the identical reply twice in one turn.
@@ -687,11 +687,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			return await _run_session_search(params, execution_context)
 
 	def _register_recent_activity_action(self):
-		"""Register `recent_activity`: time-ordered recall of the agent's OWN runs
-		(chat/goal/cron), tenant-scoped. Answers 'what did I do since X'. Only surfaced
-		when EPISODIC_MEMORY_ENABLED and an external provider is active (byte-identical
-		default config otherwise). NO `from __future__` in this module (registry-closure
-		landmine)."""
+		"""`recent_activity`: the agent's OWN runs. Needs episodic memory + an external provider."""
 		try:
 			from core.config_policy import AutonomyConfig
 			if not AutonomyConfig.episodic_memory_enabled():
@@ -708,15 +704,19 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			until: Optional[str] = None
 			kind: Optional[str] = None       # "chat" | "goal" | "cron"
 			limit: int = 20
+			scope: Optional[str] = None      # "actions" => every card and outward act, last 48 h
 
 		_DESC = (
 			"Recall YOUR OWN recent activity — the goals, cron jobs, and chats you ran, "
-			"newest-first, with outcome and spend. USE THIS (not the filesystem, not notes) "
-			"for 'what did I do', 'what ran since X', 'what have I been up to'. Optional "
-			"`since` ('8h'/'2d'/ISO), `kind` ('goal'/'cron'/'chat'), `limit` (1-20)."
+			"newest-first, with outcome and spend. USE THIS (not the filesystem, not notes) for 'what did I do', 'what ran since X', 'what have I been up to'. Optional "
+			"`since` ('8h'/'2d'/ISO), `kind` ('goal'/'cron'/'chat'), `limit` (1-20). `scope='actions'`: "
+			"every card, payment, post and send of the last 48 h, exact counts."
 		)
 
 		async def _run_recent_activity(params, execution_context=None) -> ActionResult:
+			if params.scope == "actions":
+				from tools.controller.recent_actions import recent_actions_result
+				return recent_actions_result(execution_context, self)
 			from modules.memory.registry import memory_recall_episodes
 			from modules.memory.episodic import parse_since
 			import time as _t

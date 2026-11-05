@@ -45,6 +45,7 @@ _LAZY_SUBCOMMANDS = {
     "auth": "cli.commands.auth:auth",
     "keys": "cli.commands.keys:keys",  # 043 A30: the owner's API-key seat
     "doctor": "cli.commands.doctor:doctor",
+    "status": "cli.commands.doctor:doctor",  # what /status is called in the chat
     "owner": "cli.commands.owner:owner",
     "kb": "cli.commands.kb:kb",
     "serve": "cli.commands.serve:serve",
@@ -103,6 +104,7 @@ _COMMAND_ALIASES = {
     "owner": ("approvals",),
     "skills": ("skill",),
     "setup": ("init",),
+    "doctor": ("status",),
     "job": ("cron",),
 }
 _RELATED_COMMANDS = {name: _COMMAND_ALIASES.pop(name) for name in ("identity", "owner", "skills")}
@@ -222,7 +224,8 @@ class _LazyGroup(click.Group):
                     formatter.write_dl(rows)
 
 
-@click.group(cls=_LazyGroup, lazy_subcommands=_LAZY_SUBCOMMANDS, invoke_without_command=True)
+@click.group(cls=_LazyGroup, lazy_subcommands=_LAZY_SUBCOMMANDS, invoke_without_command=True,
+             context_settings={"max_content_width": 120})
 @click.version_option(VERSION, "-V", "--version", prog_name="polyrob", message="polyrob v%(version)s")
 @click.option("--plain", is_flag=True, help="Force plain, line-oriented output (no ANSI / toolbar)")
 @click.option("--project", "project", default=None, metavar="PATH",
@@ -333,15 +336,29 @@ def _refuse_agent_child_owner_verb() -> None:
         sys.exit(1)
 
 
+#: The commands that run for a long time, where the INFO stream is what an operator
+#: reads. The log file gets every level for every command.
+_DAEMON_VERBS = frozenset({"gateway", "serve", *_surface_commands()})
+
+
+def _console_log_level(args) -> str:
+    """INFO for a daemon; WARNING for a command a person reads the output of, where
+    INFO lines push the answer off the screen (`skills list` opened on log lines, and
+    `dashboard` buried its one-run password under 80)."""
+    verb = next((a for a in args if not a.startswith("-")), "")
+    return "INFO" if verb in _DAEMON_VERBS else "WARNING"
+
+
 def main():
     """Entry point for [project.scripts]."""
     # D6: `import core` no longer configures the root logger; the process
     # entry point does (bootstrap_local re-levels the console to ERROR later).
     from core.logging import setup_logging
-    setup_logging(log_level="INFO")
+    setup_logging(log_level="INFO", console_level=_console_log_level(sys.argv[1:]))
     _register_pack_policies()
     _refuse_agent_child_owner_verb()
-    cli()
+    # Without prog_name, every usage line says `python -m cli.polyrob`: the shim runs -m.
+    cli(prog_name="polyrob")
 
 
 if __name__ == "__main__":

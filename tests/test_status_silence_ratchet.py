@@ -43,6 +43,7 @@ CEILINGS = {
     "core/status_money.py": 0,  # 067 P5a (moved from status_snapshot.py)
     "core/trading_report.py": 0,  # 086 W6: the one trading renderer
     "core/status_room_actions.py": 0,  # 067 P5a (moved from status_snapshot.py)
+    "core/memory_pressure.py": 1,  # 102 T-1: an unreadable source is named; the 1 is the owner notice, logged, never a render
     "tools/controller/agent_status_action.py": 0,
     "tools/status_harness.py": 0,  # 093 D1: the snapshot's harness slot
     # the ONE outer fail-open guard around the injection itself (protects the

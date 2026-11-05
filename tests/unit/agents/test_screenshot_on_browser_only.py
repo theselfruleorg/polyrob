@@ -28,15 +28,16 @@ def _clean(monkeypatch):
     monkeypatch.delenv("AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY", raising=False)
 
 
-def test_off_by_default():
-    assert _screenshot_on_browser_only() is False
+def test_on_by_default():
+    assert _screenshot_on_browser_only() is True
 
 
 def test_vision_off_never_captures():
     assert _should_capture_screenshot(_Agent(used=True), False) is False
 
 
-def test_default_captures_whenever_vision_is_on():
+def test_flag_off_captures_whenever_vision_is_on(monkeypatch):
+    monkeypatch.setenv("AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY", "false")
     assert _should_capture_screenshot(_Agent(used=False), True) is True
 
 

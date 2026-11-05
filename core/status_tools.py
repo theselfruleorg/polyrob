@@ -55,7 +55,7 @@ def _append_absent_extras(sec) -> None:
         if absent:
             sec.lines.append(
                 "not installed: " + ", ".join(e for e, _c, _r in absent)
-                + " — `polyrob doctor` names the command for each")
+                + " — `polyrob doctor --full` names the command for each")
     except Exception as exc:
         sec.data["absent_extras"] = None
         sec.lines.append(f"optional extras unreadable ({type(exc).__name__})")

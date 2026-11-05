@@ -43,6 +43,8 @@ VALID_EVENT_TYPES = (
     # 070 W0.10: the types the transcript draws that were refused with a 400.
     "agent_message", "task_complete", "tool_started", "document_uploaded",
     "user_message_during_execution", "session_completion", "llm_started",
+    # 104: a gate in the chat says it waits in the Inbox.
+    "awaiting_approval", "approval_resolved",
 )
 
 _NO_STORE = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}

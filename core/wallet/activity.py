@@ -8,7 +8,9 @@ Read-only and keyless:
   filtered by ``owner``.
 * **EVM** — the chain row's keyless Blockscout v2 API
   (``ChainRow.blockscout_api``): ``/transactions``, ``/token-transfers`` and
-  ``/internal-transactions`` of the address, grouped by transaction hash.
+  ``/internal-transactions`` of the address, grouped by transaction hash. When
+  the chain has no such host or the host does not answer, ``ALCHEMY_API_KEY``
+  and the row's ``alchemy_slug`` read ``alchemy_getAssetTransfers`` instead.
 
 Rules this module keeps:
 
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import concurrent.futures as _cf
 import logging
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -395,8 +398,132 @@ def _int(raw, default: Optional[int] = 0) -> Optional[int]:
         return default
 
 
+# -- EVM (Alchemy transfers index) ---------------------------------------------
+
+#: One page of each direction. A second page is reported, never silently absent.
+_ALCHEMY_PAGE = 100
+_ALCHEMY_CATEGORIES = ["external", "internal", "erc20", "erc721", "erc1155"]
+ALCHEMY_SOURCE = ("Alchemy transfers index (lists completed transfers only: a failed "
+                  "transaction is not listed and fees are not read)")
+
+
+def _alchemy_url(chain: str) -> Optional[str]:
+    """The keyed endpoint, or None. ⚠️ It holds the key: never log or render it."""
+    from core.wallet import chains
+    row = chains.get(chain)
+    key = os.getenv("ALCHEMY_API_KEY", "").strip()
+    slug = getattr(row, "alchemy_slug", None) if row is not None else None
+    return f"https://{slug}.g.alchemy.com/v2/{key}" if key and slug else None
+
+
+def _alchemy_post(url: str, params: dict, timeout: float = 15.0) -> dict:
+    """The ONE network entry for the Alchemy reads (blocked in unit tests)."""
+    from core.wallet.onchain import _rpc as evm_rpc
+    return evm_rpc(url, "alchemy_getAssetTransfers", [params], timeout=timeout) or {}
+
+
+def _hex(raw) -> Optional[int]:
+    try:
+        return int(raw, 16)
+    except (TypeError, ValueError):
+        return None
+
+
+def _transfer_raw(tr: dict) -> Optional[int]:
+    """The transfer's smallest units; an NFT without a stated amount is one item."""
+    category = tr.get("category")
+    if category == "erc1155":
+        items = tr.get("erc1155Metadata") or []
+        values = [_hex(i.get("value")) for i in items if isinstance(i, dict)]
+        return sum(values) if values and None not in values else None
+    raw = _hex((tr.get("rawContract") or {}).get("value"))
+    return 1 if raw is None and category == "erc721" else raw
+
+
+def alchemy_activity(rep: ActivityReport, limit: int, *,
+                     post: Optional[Callable] = None) -> ActivityReport:
+    """Fill *rep* from the transfers index: one list per direction, grouped by hash."""
+    owner = rep.owner
+    url = _alchemy_url(rep.chain)
+    base = {"fromBlock": "0x0", "toBlock": "latest", "category": _ALCHEMY_CATEGORIES,
+            "order": "desc", "withMetadata": True, "maxCount": hex(_ALCHEMY_PAGE)}
+    sides = {"sent": {**base, "fromAddress": owner}, "received": {**base, "toAddress": owner}}
+    with _cf.ThreadPoolExecutor(max_workers=2) as pool:
+        futs = {name: pool.submit(post or _alchemy_post, url, p) for name, p in sides.items()}
+        lists: Dict[str, Optional[dict]] = {}
+        failed: List[str] = []
+        for name, fut in futs.items():
+            try:
+                lists[name] = fut.result()
+            except Exception as exc:  # the type only: the message can hold the keyed URL
+                lists[name] = None
+                failed.append(f"{name} transfers ({type(exc).__name__})")
+    if all(body is None for body in lists.values()):
+        rep.reason = "the transfers index did not answer (" + "; ".join(failed) + ")"
+        return rep
+    rep.available, rep.source = True, ALCHEMY_SOURCE
+    rep.not_read += failed
+    # As with the explorer lists: two lists that each stop at one page cover different windows.
+    cut = None
+    for body in lists.values():
+        items = (body or {}).get("transfers") or []
+        if (body or {}).get("pageKey") and items:
+            oldest = min(_iso_to_unix((i.get("metadata") or {}).get("blockTimestamp")) or 0
+                         for i in items)
+            cut = oldest if cut is None else max(cut, oldest)
+    rows: Dict[str, ActivityRow] = {}
+    tally: Dict[str, Dict[str, Delta]] = {}
+    others: Dict[str, List[Optional[str]]] = {}
+    unreadable = 0
+    for body in lists.values():
+        for tr in (body or {}).get("transfers") or []:
+            ref = tr.get("hash")
+            frm, to = tr.get("from"), tr.get("to")
+            sign = (1 if _same(to, owner) else 0) - (1 if _same(frm, owner) else 0)
+            if not ref or not sign:
+                continue
+            raw = _transfer_raw(tr)
+            if raw is None:
+                unreadable += 1
+                continue
+            ts = _iso_to_unix((tr.get("metadata") or {}).get("blockTimestamp"))
+            contract = tr.get("rawContract") or {}
+            nft = tr.get("category") in ("erc721", "erc1155")
+            native = tr.get("category") in ("external", "internal")
+            asset = NATIVE if native else contract.get("address")
+            if not asset:
+                unreadable += 1
+                continue
+            # fee_raw stays None (unknown): the index names no fee and no transaction sender.
+            rows.setdefault(ref, ActivityRow(ref=ref, time=ts, kind="other"))
+            dec = rep.native_decimals if native else 0 if nft else _hex(contract.get("decimal"))
+            cur = tally.setdefault(ref, {}).get(asset)
+            tally[ref][asset] = Delta(asset, (cur.raw if cur else 0) + sign * raw, dec,
+                                      rep.native_symbol if native else tr.get("asset"), nft)
+            others.setdefault(ref, []).append(frm if sign > 0 else to)
+    if unreadable:
+        rep.not_read.append(f"{unreadable} transfers with no stated amount or contract")
+    for ref, row in rows.items():
+        row.deltas = [d for d in tally.get(ref, {}).values() if d.raw]
+        row.kind = classify_kind(row.deltas)
+        if row.kind in ("receive", "send") and len(set(others.get(ref, []))) == 1:
+            row.counterparty = others[ref][0]
+    ordered = sorted(rows.values(), key=lambda r: -(r.time or 0))
+    if cut is not None:
+        kept = [r for r in ordered if (r.time or 0) >= cut]
+        if len(kept) < len(ordered):
+            rep.not_read.append(f"{len(ordered) - len(kept)} older rows: the two transfer lists "
+                                f"cover different windows, so their other half may be missing")
+        ordered = kept
+    rep.listed = len(ordered)
+    rep.more_exist = cut is not None or len(ordered) > limit
+    rep.rows = ordered[:limit]
+    return rep
+
+
 def evm_activity(owner: str, chain: str, limit: int = 20, *,
-                 fetch: Optional[Callable] = None) -> ActivityReport:
+                 fetch: Optional[Callable] = None,
+                 post: Optional[Callable] = None) -> ActivityReport:
     from core.wallet import chains
     row = chains.get(chain)
     limit = max(1, min(int(limit or 20), MAX_TX))
@@ -404,9 +531,16 @@ def evm_activity(owner: str, chain: str, limit: int = 20, *,
                          source="Blockscout v2 (keyless)",
                          native_symbol=getattr(row, "native_symbol", "") or "native",
                          native_decimals=getattr(row, "native_decimals", 18) or 18)
+    indexed = post is not None or _alchemy_url(chain) is not None
     if not blockscout_api(chain):
-        rep.reason = (f"history: NOT AVAILABLE on {chain} — no keyless explorer API "
-                      f"is pinned for this chain")
+        if indexed:
+            rep.source = ALCHEMY_SOURCE
+            return alchemy_activity(rep, limit, post=post)
+        rep.source = "none"
+        rep.reason = (f"history: NOT AVAILABLE on {chain} — no keyless explorer API is "
+                      f"pinned for this chain"
+                      + (" and ALCHEMY_API_KEY is not set"
+                         if getattr(row, "alchemy_slug", None) else ""))
         return rep
     lists: Dict[str, Optional[dict]] = {}
     paths = ("transactions", "token-transfers", "internal-transactions")
@@ -422,6 +556,11 @@ def evm_activity(owner: str, chain: str, limit: int = 20, *,
     if lists["transactions"] is None and lists["token-transfers"] is None:
         rep.reason = "the explorer did not answer (" + "; ".join(rep.not_read) + ")"
         rep.not_read = []
+        if indexed:
+            explorer_failure = rep.reason
+            rep = alchemy_activity(rep, limit, post=post)
+            if not rep.available:
+                rep.reason = f"{explorer_failure}; {rep.reason}"
         return rep
     rep.available = True
     # Two lists that each stop at one page cover DIFFERENT time windows; a row
@@ -536,14 +675,14 @@ def evm_activity(owner: str, chain: str, limit: int = 20, *,
 
 
 def activity(owner: str, chain: str, limit: int = 20, *, rpc: Optional[Callable] = None,
-             fetch: Optional[Callable] = None) -> ActivityReport:
+             fetch: Optional[Callable] = None, post: Optional[Callable] = None) -> ActivityReport:
     """Family dispatch. Never raises."""
     from core.wallet import chains
     row = chains.get(chain)
     try:
         if row is not None and row.family == "svm":
             return solana_activity(owner, limit, rpc=rpc, chain=chain)
-        return evm_activity(owner, chain, limit, fetch=fetch)
+        return evm_activity(owner, chain, limit, fetch=fetch, post=post)
     except Exception as exc:
         logger.debug("activity read failed for %s on %s", owner, chain, exc_info=True)
         return ActivityReport(chain=chain, owner=owner, available=False,

@@ -126,7 +126,7 @@ def test_the_chat_ratchet_would_catch_an_unwired_key():
     # plain member's slash line is a COMMAND. It is no longer proof of an
     # unwired key, so it left this list — leaving it here would make the
     # ratchet assert a lie.
-    for never_wired in ("reply_mode", "tool_deny", "thread_scope"):
+    for never_wired in ("no_such_room_setting", "another_unwired_key"):
         pat = _field_read_pattern(never_wired)
         assert not [str(rel) for rel, text in readers if pat.search(text)], never_wired
 

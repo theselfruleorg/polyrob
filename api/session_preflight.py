@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 def no_model(agent) -> bool:
     """True only when this process's container answers that it has NO ``llm``.
 
-    The console process on prod (and at local posture) has no language model, so
-    an auto-started session would be an empty chat that nothing answers. Any
+    A server console holds no language model, and a local console has none until
+    a provider key is set, so an auto-started session would be an empty chat that nothing answers. Any
     failure of the probe answers False: a failed probe never blocks a run.
     """
     try:

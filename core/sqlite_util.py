@@ -17,6 +17,8 @@ from typing import Optional
 
 _MAX_RETRIES = 15
 _BUSY_TIMEOUT_S = 1.0
+#: The -wal file stays at its peak size after a checkpoint unless a limit is set.
+_WAL_SIZE_LIMIT_BYTES = 67108864
 
 
 def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Connection:
@@ -50,6 +52,7 @@ def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Conne
         conn.execute("PRAGMA journal_mode=WAL")
     except sqlite3.OperationalError:
         conn.execute("PRAGMA journal_mode=DELETE")
+    conn.execute(f"PRAGMA journal_size_limit={int(_WAL_SIZE_LIMIT_BYTES)}")
     return conn
 
 

@@ -74,6 +74,8 @@ class _FakeIMAP:
                               b")",
                               (b"2 (UID 40 FLAGS (\\Seen) BODY[HEADER.FIELDS (FROM SUBJECT DATE)] {80}", hdr),
                               b")"]
+            if args[1] == "(RFC822.SIZE)":
+                return "OK", [b"1 (UID 42 RFC822.SIZE 999)"]
             assert args[1] == "(BODY.PEEK[])", "a read must never set \\Seen"
             if args[0] != "42":
                 return "OK", [None]

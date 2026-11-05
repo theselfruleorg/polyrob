@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -246,3 +247,20 @@ async def test_cancellation_cannot_release_inflight_submission(rig):
         assert (row['sweep_state'], row['sweep_tx_hash']) == ('sweeping', None)
     finally:
         release_receipt.set()
+
+
+@pytest.mark.asyncio
+async def test_the_chain_id_read_leaves_the_event_loop(rig):
+    """A hung RPC blocked every session for up to the 15 s request timeout."""
+    sweeper, w3, account, deposit = rig
+    readers = []
+
+    class _Eth(SimpleNamespace):
+        @property
+        def chain_id(self):
+            readers.append(threading.current_thread())
+            return 1
+
+    w3.eth = _Eth(**{k: v for k, v in vars(w3.eth).items() if k != 'chain_id'})
+    await sweeper._sweep_deposit(deposit)
+    assert readers and threading.main_thread() not in readers

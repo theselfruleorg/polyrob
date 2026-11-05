@@ -193,6 +193,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_workspace_message',     # 081 WS-3.3: the session's workspace path (after the catalogs)
 		'_workspace_tokens',      # its token cost
 		'_ephemeral_pending',     # P2-14: ephemerals held until the LLM responded
+		'_untrusted_since_owner', # external output entered since the owner's last line
+		'action_ledger_source',   # 103: () -> the <session-actions> text, set by the agent
+		'last_summary_report',    # 103: complete / retried / chars of the last summary
+		'_last_summary_output_tokens',  # 103: the last summary call's output, for that report
 		'_history_budget_tokens', # 057 WS-B autonomous history budget (0 = off)
 		'_history_secret_scrub',  # HISTORY_SECRET_SCRUB, resolved once
 		'_hmem_token_memo',       # P7: (key, tokens) for the last H-MEM string
@@ -738,6 +742,9 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			position: Optional position to insert at
 			_internal: If True, bypass single-writer enforcement for AI/Tool messages (used internally)
 		"""
+		# The at-once rule gate reads this: it outlives a compaction. The owner's drain clears it.
+		if "<untrusted_tool_result" in str(getattr(message, "content", "")):
+			self._untrusted_since_owner = True
 
 		# filter out sensitive data from the message. Run when an allowlist is
 		# registered OR the HISTORY_SECRET_SCRUB backstop is on (default) — the
@@ -1007,9 +1014,22 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			"</state-delta>\nThis is the current state; it supersedes every earlier "
 			"copy of these parts.", MessageOrigin.SYSTEM_NOTE))
 		managed = self.history.messages[-1] if self.history.messages else None
+		self._keep_owner_turn_last()
 		for name, text in changed.items():
 			state[name] = (_state_hash(text), managed)
 		return True
+
+	def _keep_owner_turn_last(self) -> None:
+		"""The owner's new message stays the newest message when a note lands after it.
+
+		Prod 2026-11-05 11:35: a 3,475-char state note sat after the owner's voice note,
+		and the model answered "No new owner request in this step". Nothing is cached
+		past this point yet, so the swap costs no cache."""
+		with self._history_lock:
+			messages = self.history.messages
+			if len(messages) >= 2 and isinstance(messages[-2].message, HumanMessage) and getattr(
+					messages[-2].message, "origin", None) == MessageOrigin.USER:
+				messages[-2], messages[-1] = messages[-1], messages[-2]
 
 	def _scrub_state_delta_part(self, name: str) -> None:
 		"""Remove part ``name`` from every ``<state-delta>`` in the history."""
