@@ -702,6 +702,8 @@ Who may command the agent, and who it may talk to.
 polyrob owner show                              # the bound owner and per-surface posture
 polyrob owner correspondents                    # third parties the agent is bound to
 polyrob owner invite <surface> <address> <session_id>   # register a correspondent of a session
+polyrob owner invite … --rebind                 # re-point a bound correspondent to another session
+polyrob owner revoke <surface> <address>        # stop routing an active correspondent
 polyrob owner approve …                         # approve a pending correspondent (--all [surface])
 polyrob owner allow <surface> <target>          # outbound send permission
 polyrob owner deny <surface> <target>
