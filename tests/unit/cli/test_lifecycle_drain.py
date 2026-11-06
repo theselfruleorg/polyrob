@@ -207,6 +207,18 @@ def test_boot_starts_the_old_code_when_the_update_fails(home):
     assert did == "not_applied" and not calls
 
 
+def test_boot_passes_the_confirmed_target_version_to_the_apply(home):
+    from cli.commands._lifecycle_boot import boot_step
+    lc.request_restart(kind=lc.KIND_UPDATE, requested_by="owner", channel="stable",
+                       target_version="v1.6.0", data_home=home)
+    lc.set_request_state(lc.STATE_EXITING, data_home=home)
+    seen = []
+    boot_step("gateway", data_home=home,
+              apply=lambda ch, **kw: seen.append((ch, kw)) or {"ok": False},
+              reexec=lambda: None, echo=lambda *_: None)
+    assert seen == [("stable", {"target_version": "v1.6.0"})]
+
+
 def test_boot_rolls_back_new_code_that_never_starts(home):
     from cli.commands._lifecycle_boot import boot_step
     _exiting_update(home, ok=True, old_sha="abc", snapshot="s1")

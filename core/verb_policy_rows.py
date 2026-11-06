@@ -638,6 +638,5 @@ RESERVED_VERB_ROWS = {
     "defi_data_balances": dict(room_denied=True),
     # Special names tools/controller/approval_queue.py treats as money/individual-tap actions
     # (its literal moves with the P1b money kernel).
-    "release_publish": dict(),
     "subscription_renewal": dict(),
 }

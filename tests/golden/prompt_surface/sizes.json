@@ -78,11 +78,11 @@
       "tokens": 7393
     },
     "tools": {
-      "chars": 83261,
+      "chars": 83250,
       "count": 93,
-      "tokens": 20815
+      "tokens": 20812
     },
-    "total_tokens": 28208
+    "total_tokens": 28206
   },
   "goal": {
     "layers": {
@@ -128,11 +128,11 @@
       "tokens": 7389
     },
     "tools": {
-      "chars": 83261,
+      "chars": 83250,
       "count": 93,
-      "tokens": 20815
+      "tokens": 20812
     },
-    "total_tokens": 28204
+    "total_tokens": 28202
   },
   "leaf": {
     "layers": {
@@ -224,11 +224,11 @@
       "tokens": 7382
     },
     "tools": {
-      "chars": 65728,
+      "chars": 65717,
       "count": 81,
-      "tokens": 16432
+      "tokens": 16429
     },
-    "total_tokens": 23814
+    "total_tokens": 23811
   },
   "owner_telegram_dm": {
     "layers": {
@@ -274,11 +274,11 @@
       "tokens": 7559
     },
     "tools": {
-      "chars": 67287,
+      "chars": 67276,
       "count": 61,
-      "tokens": 16821
+      "tokens": 16819
     },
-    "total_tokens": 24381
+    "total_tokens": 24378
   },
   "prod_owner_telegram_dm": {
     "layers": {
@@ -324,11 +324,11 @@
       "tokens": 8899
     },
     "tools": {
-      "chars": 118847,
+      "chars": 118836,
       "count": 87,
-      "tokens": 29711
+      "tokens": 29709
     },
-    "total_tokens": 38611
+    "total_tokens": 38608
   },
   "room": {
     "layers": {
@@ -400,10 +400,10 @@
       "tokens": 7828
     },
     "tools": {
-      "chars": 33123,
+      "chars": 33112,
       "count": 37,
-      "tokens": 8280
+      "tokens": 8278
     },
-    "total_tokens": 16109
+    "total_tokens": 16106
   }
 }

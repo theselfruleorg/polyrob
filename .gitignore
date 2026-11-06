@@ -267,26 +267,14 @@ config/.env.production
 # M19 (2026-07-15): retired legacy SaaS env backups must never be committable
 config/.env.production.*
 
-# Portal docs are staged at deploy time by scripts/sync_portal_docs.sh — a build
-# artifact, regenerated every deploy. The source of truth is docs/.
-web/portal/docs/
-
 # A local Fly config is an operator artefact (the Fly kit was retired 2026-10-10).
 fly.toml
 
-# Brand renders produced ad hoc at the repo root by web/portal/brand/*.py — local
-# design artefacts, never repo content. The committed sources live in web/portal/brand/.
+# Brand renders produced ad hoc at the repo root — local design artefacts, never repo content.
 /polyrob-icon-*.png
 /polyrob-header-*.png
 /mindprint-wall-*.png
 /polyrob-logo-render.py
 
-# 062: generated at deploy from the repo-root install.sh (ONE file)
-web/portal/install.sh
-web/portal/install.sh.sha256
-
 # The ops loop's per-tick log (untracked; scripts/tick_rollup.py lands one commit a day).
 /.ops/
-
-# wrangler state for the portal Functions
-deployment/portal_edge/.wrangler/

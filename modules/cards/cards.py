@@ -41,7 +41,7 @@ _FONT_BOLD = _FONTS_DIR / "DejaVuSans-Bold.ttf"
 # The non-avatar fallback for the card header (the brand mark, not a face).
 _BRAND_MARK = Path(__file__).resolve().parents[2] / "assets" / "brand" / "polyrob-mark-256.png"
 
-# --- Brand palette (matches web/portal/brand/render_og_card.py) -------------
+# --- Brand palette -------------------------------------------------------
 _BG = (10, 10, 12)
 _GREEN = (86, 226, 194)
 _WHITE = (235, 235, 235)

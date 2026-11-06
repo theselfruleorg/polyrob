@@ -54,8 +54,6 @@ MACHINE_MODULES = [
     "core.commerce.store",
     "core.commerce.orders",
 ]
-# The private release-train machine (scripts/release_train.py, never shipped)
-# is checked in ops/tests/scripts/test_release_train_machine_table.py.
 
 
 def _load(entry):

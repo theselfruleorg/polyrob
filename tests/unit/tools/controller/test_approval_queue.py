@@ -839,7 +839,6 @@ import pytest as _pytest
     ({"kind": "pref_change", "id": "ui.theme"}, False),
     ({"kind": "skill", "id": "some-skill"}, False),
     # 064 D1: the release tap is never bulk-approved; 066 P2: nor a signer ask.
-    ({"kind": "tool_approval", "tool": "release_publish"}, True),
     ({"kind": "signer_approval", "id": "sig-1"}, True),
 ])
 def test_needs_individual_decision(item, held):

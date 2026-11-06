@@ -39,11 +39,11 @@ LEGACY_FACETS: Tuple[Tuple[str, str], ...] = (
 )
 
 SCOPES: Tuple[str, ...] = ("all", "trading", "cron",
-                           "social", "oversight", "pings", "apps", "release")
+                           "social", "oversight", "pings", "apps")
 
 #: 080 WS-6: scopes an older record may still name. Their work is deleted, so a
 #: record that names ONLY these pauses nothing (it must never widen to ``all``).
-_DELETED_SCOPES = frozenset({"streams", "planner"})
+_DELETED_SCOPES = frozenset({"streams", "planner", "release"})
 
 #: activity kind -> the scopes whose pause denies it ("all" always denies).
 KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
@@ -88,12 +88,6 @@ KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
     # silent default on an obligation — the same reasoning that leaves the 031
     # cold-start requeue ungated.
     "room_action_offer": ("all", "social"),
-    # 064 phase 2: the release train (`scripts/release_train.py`). `/pause
-    # release` holds the cut and the publish; `/pause all` holds them too. The
-    # train reads this FRESH at every step (never cached at cut). A pause is not
-    # the release gate — the owner's tap (045 D1) still is; this is the stop.
-    "release_cut": ("all", "release"),
-    "release_publish": ("all", "release"),
     # The daily factory build session (`scripts/factory_build.sh`). Its shell
     # reads the record itself today, so no Python caller exists yet.
     "factory_build": ("all", "oversight"),
