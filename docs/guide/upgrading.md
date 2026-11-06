@@ -105,6 +105,12 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.6
+
+No database migration.
+
+- **`/pause release` is gone.** The word now refuses with the list of scopes, and an older pause that names only it pauses nothing.
+
 ### Upgrading to 1.7.5
 
 No database migration.

@@ -50,7 +50,7 @@ Five plain words cover most of it: `everything` (= `all`), `trading`,
 escalations) and `deploying` (the durable app service — no new deploys, and live
 app containers are stopped until resume). A raw scope still works for anything a
 plain word does not cover: `all`, `trading`, `cron`,
-`social`, `oversight`, `pings`, `apps`, `release`. An unrecognized word refuses — it never
+`social`, `oversight`, `pings`, `apps`. An unrecognized word refuses — it never
 silently widens to "everything". Durations are `90m`, `6h`, `2d`. The CLI form
 is `polyrob autonomy pause trading --for 6h`.
 

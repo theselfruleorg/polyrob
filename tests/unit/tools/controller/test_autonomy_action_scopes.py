@@ -37,7 +37,7 @@ def test_the_agent_offers_no_scope_the_record_would_refuse():
 
 def test_the_scan_is_not_vacuous():
     values = _literal_values(_SCOPE)
-    assert len(values) >= 8
+    assert len(values) >= 7
     assert "all" in values and "apps" in values
 
 

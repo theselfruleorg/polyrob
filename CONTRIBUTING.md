@@ -139,6 +139,12 @@ large sweeping ones.
 
 ---
 
+### What to expect
+
+We aim to reply to an issue or a pull request within 3 days, and to decide within 7 days. The public
+tree is exported from a private development tree, so a merged change can reach `main` with the next
+release, with credit to you.
+
 ## Documentation
 
 - **Architecture overview:** `docs/guide/architecture.md`

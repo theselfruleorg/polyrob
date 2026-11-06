@@ -37,8 +37,7 @@
               "social",
               "oversight",
               "pings",
-              "apps",
-              "release"
+              "apps"
             ],
             "type": "string"
           },

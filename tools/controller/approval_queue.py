@@ -419,12 +419,6 @@ def _is_money_action(action_name: str) -> bool:
         return True
 
 
-#: Tool asks that are never money but must still be tapped one by one: the 064
-#: release tap (``scripts/release_train.py`` ``TAP_TOOL``) publishes a public OSS
-#: release, and the owner's D1 is "every release waits for THE owner's tap".
-_INDIVIDUAL_TAP_TOOLS = frozenset({"release_publish"})
-
-
 def needs_individual_decision(item: Dict[str, Any]) -> Optional[str]:
     """M08 (security analysis 2026-09-23): why ``item`` may NOT ride a bulk
     APPROVE, or None. A guarded preference proposal (``budget.*`` raises the
@@ -440,8 +434,6 @@ def needs_individual_decision(item: Dict[str, Any]) -> Optional[str]:
         return "a decision about which token is real"
     if kind == TOOL_APPROVAL_ASK_KIND:
         tool = item.get("tool")
-        if tool is not None and str(tool).strip() in _INDIVIDUAL_TAP_TOOLS:
-            return "a public release publish"
         if tool is None or _is_money_action(tool):
             return "a money ask"
         return None

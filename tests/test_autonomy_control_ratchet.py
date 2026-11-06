@@ -69,8 +69,6 @@ def test_no_starter_reads_a_legacy_sentinel_directly():
 # --- 043 A8/A42: every declared kind has a caller, or is honestly dormant ---
 
 #: the top-level trees a kind-caller may live in, matching the brief's scope.
-#: 064 phase 2: `scripts` too — the release train (`scripts/release_train.py`)
-#: is the one caller of `release_cut` / `release_publish`.
 _KIND_SEARCH_DIRS = ("core", "polyrob", "agents", "tools", "cron", "modules", "surfaces",
                      "cli", "webview", "scripts")
 #: the file that DECLARES the kinds (KIND_SCOPES / DORMANT_KINDS) — excluded

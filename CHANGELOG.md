@@ -10,6 +10,19 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.6] — 2026-11-06
+
+### Removed
+
+- The `release` pause scope (`/pause release`): nothing used it. An older pause record that names it pauses nothing.
+
+### Fixed
+
+- `update --apply` and `/update` work on a git checkout run by a `systemctl --user` unit: it now counts as a git install.
+
+- `polyrob update` no longer cancels when GitHub briefly returns an empty release list: it retries, reads the latest
+  release if the list stays empty, and the boot-time apply keeps the version the owner confirmed.
+
 ## [1.7.5] — 2026-11-05
 
 ### Added

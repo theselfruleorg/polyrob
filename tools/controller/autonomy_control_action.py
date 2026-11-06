@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 #: together: a scope the record accepts but this Literal rejects is a pause the
 #: owner can write from every seat EXCEPT by asking the agent.
 _SCOPE = Literal["all", "trading", "cron", "social",
-                 "oversight", "pings", "apps", "release"]
+                 "oversight", "pings", "apps"]
 
 
 class AutonomyControlAction(BaseModel):
