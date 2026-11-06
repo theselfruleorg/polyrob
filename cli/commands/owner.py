@@ -85,8 +85,8 @@ def _data_dir(write: "bool | None" = None) -> str:
 # D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
 _OWNER_HELP_SECTIONS = [
     ("Access & pairing",
-     ["correspondents", "invite", "approve", "allow", "deny", "allowlist",
-      "pair", "groups"]),
+     ["correspondents", "invite", "revoke", "approve", "allow", "deny",
+      "allowlist", "pair", "groups"]),
     ("Pending & asks",
      # 043 D1: `inbox` LEADS this section — it is the union the other five are
      # pieces of, and a person looking for "what needs me" should meet it first.
@@ -287,12 +287,16 @@ def _echo_contact_history(tenant: str, surface: str, address: str, *,
 @click.argument("session_id")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 @click.option("--thread", default=None, help="Thread anchor (default: address-keyed)")
+@click.option("--rebind", is_flag=True, default=False,
+              help="Re-point every existing binding of ADDRESS (and its stored "
+                   "conversation) to SESSION_ID.")
 @as_root_option
-def invite(surface, address, session_id, user, thread):
+def invite(surface, address, session_id, user, thread, rebind):
     """Register a third party as a correspondent of SESSION_ID (owner-driven seed).
 
     Their replies then route to that session as DATA. Honours the approval gate +
-    per-day cap (a pending invite needs `polyrob owner approve`).
+    per-day cap (a pending invite needs `polyrob owner approve`). An address that
+    is already bound keeps its session unless `--rebind` is passed.
     """
     # C6: this used to `os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED",
     # "true")` — one owner verb silently switching on the capability flag that
@@ -314,13 +318,33 @@ def invite(surface, address, session_id, user, thread):
     # invite landed in one tenant and the decision queue read another — a
     # confident zero over a real item, the 035 P0-3 class.
     tenant = _owner_tenant(user)
+    registry = _registry(_data_dir(write=True))
 
     class _C:
         def get_service(self, name):
-            return (_registry(_data_dir(write=True))
-                    if name == "correspondent_registry" else None)
+            return registry if name == "correspondent_registry" else None
 
     address = _canon(address)   # C22: the key every routing seat reads
+    _warn_unknown_session(session_id)
+    existing = _binding_row(registry, surface, address, thread, tenant)
+    if existing is not None and existing["session_id"] != session_id:
+        # The seed is idempotent and keeps the stored row, so echoing SESSION_ID
+        # here used to claim a binding that never happened.
+        bound = existing["session_id"]
+        if existing["state"] == "expired":
+            raise click.ClickException(
+                f"{surface}:{address} was rejected or revoked (bound to session "
+                f"{bound}); nothing changed.")
+        if not rebind:
+            raise click.ClickException(
+                f"{surface}:{address} is already bound to session {bound} "
+                f"({existing['state']}); nothing changed. Re-point it with:\n"
+                f"    polyrob owner invite {surface} {address} {session_id} --rebind")
+        n = _rebind(registry, surface, address, tenant, session_id)
+        click.echo(click.style(
+            f"rebound {surface}:{address} from session {bound} -> {session_id} "
+            f"({n} binding row(s), state {existing['state']})", fg="green"))
+        return
     state = maybe_seed_correspondent(
         _C(), surface=surface, address=address, session_id=session_id,
         user_id=tenant, thread_id=thread, provenance="owner")
@@ -328,6 +352,88 @@ def invite(surface, address, session_id, user, thread):
     click.echo(click.style(f"invite {surface}:{address} -> session {session_id}: {state}",
                            fg=color)
                + ("  (run `polyrob owner approve` to activate)" if state == "pending" else ""))
+
+
+@owner.command("revoke")
+@click.argument("surface")
+@click.argument("address")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+@as_root_option
+def revoke(surface, address, user):
+    """Revoke an ACTIVE correspondent: their messages stop routing to the agent.
+
+    Every active binding for SURFACE ADDRESS in the tenant is revoked, thread
+    anchors included, so a reply to an older message cannot still route. A
+    pending one is declined with `polyrob owner reject`.
+    """
+    from core.surfaces.correspondents import STATE_ACTIVE, STATE_PENDING, _norm_addr
+    tenant = _owner_tenant(user)
+    registry = _registry(_data_dir(write=True))
+    addr = _norm_addr(_canon(address))
+    def _rows():
+        return [r for r in registry.list(user_id=tenant)
+                if r["surface"] == surface and r["address"] == addr]
+    rows = _rows()
+    was_active = {r["thread_id"] for r in rows if r["state"] == STATE_ACTIVE}
+    # An address-level revoke also takes its thread anchors; any anchor left
+    # active (no base row) is revoked on its own.
+    for tid in sorted(was_active):
+        registry.deactivate(surface=surface, address=addr, thread_id=tid, user_id=tenant)
+    n = sum(1 for r in _rows() if r["thread_id"] in was_active and r["state"] != STATE_ACTIVE)
+    if not n:
+        hint = (f"; it is pending, decline it with `polyrob owner reject "
+                f"correspondent {surface}:{addr}`"
+                if any(r["state"] == STATE_PENDING for r in rows) else "")
+        click.echo(click.style(
+            f"no active correspondent {surface}:{addr} in tenant {tenant}{hint}",
+            fg="yellow"))
+        raise SystemExit(1)
+    click.echo(click.style(f"revoked {surface}:{addr} ({n} binding row(s))", fg="green"))
+
+
+def _binding_row(registry, surface, address, thread, tenant):
+    """The stored row for this exact invite key, or None."""
+    from core.surfaces.correspondents import _norm_addr
+    addr, tid = _norm_addr(address), thread or ""
+    for r in registry.list(user_id=tenant):
+        if r["surface"] == surface and r["address"] == addr and r["thread_id"] == tid:
+            return r
+    return None
+
+
+def _rebind(registry, surface, address, tenant, session_id) -> int:
+    """Re-point the bindings AND the stored conversation, as the runtime's
+    dead-session resume does (``agents/task/conversation_resume.py``)."""
+    n = registry.rebind_session(surface=surface, address=address, user_id=tenant,
+                                new_session_id=session_id)
+    db = os.path.join(_data_dir(write=True), "conversations.db")
+    if os.path.exists(db):
+        from core.surfaces.conversations import ConversationStore
+        ConversationStore(db).rebind_session(tenant, surface, address, session_id)
+    return n
+
+
+def _warn_unknown_session(session_id) -> None:
+    """Warn when SESSION_ID names no session on disk. Never refuses: the
+    runtime replaces a dead session on the correspondent's next message, and a
+    store that cannot be read is not evidence the session is missing."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", session_id or ""):
+        click.echo(click.style(f"warning: {session_id!r} is not a session id",
+                               fg="yellow"), err=True)
+        return
+    try:
+        from cli.commands.session import _data_root
+        root = _data_root()
+        if not root.is_dir():
+            return
+        known = any(p.is_dir() for pattern in (f"*/{session_id}", f"*/sessions/{session_id}")
+                    for p in root.glob(pattern))
+    except (ImportError, OSError, ValueError):
+        return
+    if not known:
+        click.echo(click.style(
+            f"warning: no session {session_id} under {root}; check the id with "
+            "`polyrob session list`", fg="yellow"), err=True)
 
 
 def _instance_id() -> str:
